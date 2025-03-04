@@ -57,17 +57,25 @@ async def create_thread() -> str:
 
 def _make_request(thread_id: str, user_input: str, config: dict) -> str:
     """Make synchronous request to graph service"""
-    response = requests.post(
-        f"{GRAPH_SERVICE_URL}/invoke",
-        json={
-            "message": user_input,
-            "thread_id": thread_id,
-            "is_first_message": not active_threads[thread_id],
-            "config": config
-    }
-    )
-    response.raise_for_status()
-    return response.json()
+    try:
+        response = requests.post(
+            f"{GRAPH_SERVICE_URL}/invoke",
+            json={
+                "message": user_input,
+                "thread_id": thread_id,
+                "is_first_message": not active_threads[thread_id],
+                "config": config
+            },
+            timeout=300  # 5 minute timeout for long-running operations
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.Timeout:
+        write_to_log(f"Request timed out for thread {thread_id}")
+        raise TimeoutError("Request to graph service timed out. The operation took longer than expected.")
+    except requests.exceptions.RequestException as e:
+        write_to_log(f"Request failed for thread {thread_id}: {str(e)}")
+        raise
 
 
 @mcp.tool()
