@@ -172,12 +172,9 @@ async def route_user_message(state: AgentState):
     """
 
     result = await router_agent.run(prompt)
-    next_action = result.data
-
-    if next_action == "finish_conversation":
-        return "finish_conversation"
-    else:
-        return "coder_agent"
+    
+    if result.data == "finish_conversation": return "finish_conversation"
+    return "coder_agent"
 
 # End of conversation agent to give instructions for executing the agent
 async def finish_conversation(state: AgentState, writer):    
