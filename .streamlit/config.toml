@@ -4,3 +4,6 @@ showErrorDetails = "none"
 [theme]
 primaryColor = "#EB2D8C"
 base="dark"
+
+[browser]
+gatherUsageStats = false

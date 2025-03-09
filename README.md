@@ -31,7 +31,7 @@ Through its iterative development, Archon showcases the power of planning, feedb
 Archon demonstrates three key principles in modern AI development:
 
 1. **Agentic Reasoning**: Planning, iterative feedback, and self-evaluation overcome the limitations of purely reactive systems
-2. **Domain Knowledge Integration**: Seamless embedding of frameworks like Pydantic AI and LangGraph within autonomous workflows
+2. **Domain Knowledge Integration**: Seamless embedding of frameworks like Pydantic AI, Supabase and LangGraph within autonomous workflows
 3. **Scalable Architecture**: Modular design supporting maintainability, cost optimization, and ethical AI practices
 
 ## Getting Started with V4 (current version)
@@ -168,7 +168,9 @@ There are a good amount of steps for the setup but it goes quick!
 - `archon/`: Core agent and workflow implementation
   - `archon_graph.py`: LangGraph workflow definition and agent coordination
   - `pydantic_ai_coder.py`: Main coding agent with RAG capabilities
+  - `supabase_coder.py`: Coding agent with RAG capabilities
   - `crawl_pydantic_ai_docs.py`: Documentation crawler and processor
+  - `crawl_supabase_docs.py`: Documentation crawler and processor
 
 ### Utilities
 - `utils/`: Utility functions and database setup
@@ -221,9 +223,6 @@ The Streamlit UI provides an interface to set up this database structure automat
 
 We welcome contributions! Whether you're fixing bugs, adding features, or improving documentation, please feel free to submit a Pull Request.
 
-## License
-
-[MIT License](LICENSE)
 
 ---
 
@@ -232,3 +231,21 @@ For version-specific details:
 - [V2 Documentation](iterations/v2-agentic-workflow/README.md)
 - [V3 Documentation](iterations/v3-mcp-support/README.md)
 - [V4 Documentation](iterations/v4-streamlit-ui-overhaul/README.md)
+
+## Creating New Agents
+
+Archon supports the creation of custom agents and coders that can access different documentation sources. If you want to create a new specialized agent (beyond the existing Pydantic AI and Supabase agents), we've provided a detailed guide and templates to help you.
+
+Check out the [NEW_AGENT_GUIDE.md](docs/NEW_AGENT_GUIDE.md) in the `docs` directory for step-by-step instructions on:
+
+- Creating an agent implementation
+- Setting up a documentation crawler
+- Integrating with the Archon Graph
+- Adding your agent to the UI
+
+The `docs/agent_template/` directory contains template files you can use as a starting point for your own agents.
+
+
+## License
+
+[MIT License](LICENSE)

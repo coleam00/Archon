@@ -39,6 +39,10 @@ async def invoke_agent(request: InvokeRequest):
             }
         }
 
+        # Maximum response size to prevent cut-offs in MCP
+        MAX_RESPONSE_SIZE = 15000  # Characters
+
+        # Simple string concatenation like in the original
         response = ""
         if request.is_first_message:
             write_to_log(f"Processing first message for thread {request.thread_id}")
@@ -57,7 +61,18 @@ async def invoke_agent(request: InvokeRequest):
             ):
                 response += str(msg)
 
-        write_to_log(f"Final response for thread {request.thread_id}: {response}")
+        # Log only a preview of the response to avoid huge logs
+        response_length = len(response)
+        preview = response[:100] + "..." if response_length > 100 else response
+        write_to_log(f"Response size: {response_length} chars. Preview: {preview}")
+        
+        # Check if response is too large and truncate if necessary
+        if response_length > MAX_RESPONSE_SIZE:
+            truncated_response = response[:MAX_RESPONSE_SIZE]
+            truncated_response += "\n\n[Response truncated due to size limitations. Please ask for continuation.]"
+            write_to_log(f"Response truncated (original size: {response_length})")
+            return {"response": truncated_response}
+        
         return {"response": response}
         
     except Exception as e:
