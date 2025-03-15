@@ -1,5 +1,5 @@
 from supabase import Client, create_client
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, AsyncAzureOpenAI
 from dotenv import load_dotenv
 from datetime import datetime
 from functools import wraps
@@ -193,7 +193,6 @@ def get_all_profiles() -> list:
         List of profile names
     """
     env_file_path = os.path.join(workbench_dir, "env_vars.json")
-    
     if os.path.exists(env_file_path):
         try:
             with open(env_file_path, "r") as f:
@@ -381,10 +380,13 @@ def get_clients():
     embedding_client = None
     base_url = get_env_var('EMBEDDING_BASE_URL') or 'https://api.openai.com/v1'
     api_key = get_env_var('EMBEDDING_API_KEY') or 'no-api-key-provided'
+    api_version = get_env_var('EMBEDDING_API_VERSION') or ''
     provider = get_env_var('EMBEDDING_PROVIDER') or 'OpenAI'
     
     # Setup OpenAI client for LLM
-    if provider == "Ollama":
+    if provider == "AzureOpenAI":
+        embedding_client = AsyncAzureOpenAI(api_key=api_key, azure_endpoint=base_url, api_version=api_version)
+    elif provider == "Ollama":
         if api_key == "NOT_REQUIRED":
             api_key = "ollama"  # Use a dummy key for Ollama
         embedding_client = AsyncOpenAI(base_url=base_url, api_key=api_key)

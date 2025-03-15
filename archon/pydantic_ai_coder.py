@@ -9,6 +9,7 @@ import os
 import sys
 import json
 from typing import Dict, Any, List, Optional
+from openai import AsyncOpenAI, AsyncAzureOpenAI
 from pydantic import BaseModel
 from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.models.anthropic import AnthropicModel
@@ -26,8 +27,26 @@ provider = get_env_var('LLM_PROVIDER') or 'OpenAI'
 llm = get_env_var('PRIMARY_MODEL') or 'gpt-4o-mini'
 base_url = get_env_var('BASE_URL') or 'https://api.openai.com/v1'
 api_key = get_env_var('LLM_API_KEY') or 'no-llm-api-key-provided'
+api_version = get_env_var('LLM_API_VERSION') or ''
 
-model = AnthropicModel(llm, api_key=api_key) if provider == "Anthropic" else OpenAIModel(llm, base_url=base_url, api_key=api_key)
+is_anthropic = provider == "Anthropic"
+is_openai = provider == "OpenAI"
+is_azure_openai = provider == "AzureOpenAI"
+is_ollama= provider == "Ollama"
+is_open_router= provider == "OpenRouter"
+
+if is_azure_openai:
+    llm_client=AsyncAzureOpenAI(api_key=api_key, azure_endpoint=base_url, api_version=api_version)
+elif is_openai:
+    llm_client=AsyncOpenAI(base_url=base_url, api_key=api_key)
+elif is_anthropic:
+    llm_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+elif is_open_router:
+    llm_client=AsyncOpenAI(base_url=base_url, api_key=api_key)
+elif is_ollama:
+    llm_client=AsyncOpenAI(base_url=base_url, api_key=api_key)
+
+model = OpenAIModel(llm, openai_client=llm_client)
 embedding_model = get_env_var('EMBEDDING_MODEL') or 'text-embedding-3-small'
 
 logfire.configure(send_to_logfire='if-token-present')
@@ -297,7 +316,6 @@ async def retrieve_relevant_documentation(ctx: RunContext[PydanticAIDeps], user_
     try:
         # Get the embedding for the query
         query_embedding = await get_embedding(user_query, ctx.deps.embedding_client)
-        
         # Query Supabase for relevant documents
         result = ctx.deps.supabase.rpc(
             'match_site_pages',
@@ -319,8 +337,7 @@ async def retrieve_relevant_documentation(ctx: RunContext[PydanticAIDeps], user_
 
 {doc['content']}
 """
-            formatted_chunks.append(chunk_text)
-            
+            formatted_chunks.append(chunk_text)   
         # Join all chunks with a separator
         return "\n\n---\n\n".join(formatted_chunks)
         

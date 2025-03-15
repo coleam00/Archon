@@ -82,10 +82,10 @@ def environment_tab():
 
     # Get current profile's environment variables
     profile_env_vars = get_profile_env_vars()
-    
     # Define default URLs for providers
     llm_default_urls = {
         "OpenAI": "https://api.openai.com/v1",
+        "AzureOpenAI": "https://api.openai.azure.com",
         "Anthropic": "https://api.anthropic.com/v1",
         "OpenRouter": "https://openrouter.ai/api/v1",
         "Ollama": "http://localhost:11434/v1"
@@ -93,12 +93,16 @@ def environment_tab():
     
     embedding_default_urls = {
         "OpenAI": "https://api.openai.com/v1",
+        "AzureOpenAI": "https://api.openai.azure.com",
         "Ollama": "http://localhost:11434/v1"
     }
     
     # Initialize session state for provider selections if not already set
     if "llm_provider" not in st.session_state:
         st.session_state.llm_provider = profile_env_vars.get("LLM_PROVIDER", "OpenAI")
+
+    if "reasoning_llm_provider" not in st.session_state:
+        st.session_state.reasoning_llm_provider = profile_env_vars.get("Reasoning_LLM_PROVIDER", "OpenAI")
     
     if "embedding_provider" not in st.session_state:
         st.session_state.embedding_provider = profile_env_vars.get("EMBEDDING_PROVIDER", "OpenAI")
@@ -107,8 +111,7 @@ def environment_tab():
     st.subheader("1. Select Your LLM Provider")
     
     # LLM Provider dropdown
-    llm_providers = ["OpenAI", "Anthropic", "OpenRouter", "Ollama"]
-    
+    llm_providers = ["OpenAI", "AzureOpenAI", "Anthropic", "OpenRouter", "Ollama"]
     selected_llm_provider = st.selectbox(
         "LLM Provider",
         options=llm_providers,
@@ -120,12 +123,29 @@ def environment_tab():
     if selected_llm_provider != st.session_state.llm_provider:
         st.session_state.llm_provider = selected_llm_provider
         st.rerun()  # Force a rerun to update the form
+
+    # 1. Large Language Models Section - Provider Selection (outside form)
+    st.subheader("2. Select Your Reasoning LLM Provider")
+    
+    # LLM Provider dropdown
+    reasoning_llm_providers = ["OpenAI", "AzureOpenAI", "Anthropic", "OpenRouter", "Ollama"]
+    selected_reasoning_llm_provider = st.selectbox(
+        "Reasoning_LLM Provider",
+        options=reasoning_llm_providers,
+        index=llm_providers.index(st.session_state.reasoning_llm_provider) if st.session_state.reasoning_llm_provider in reasoning_llm_providers else 0,
+        key="reasoning_llm_provider_selector"
+    )
+    
+    # Update session state if provider changed
+    if selected_reasoning_llm_provider != st.session_state.reasoning_llm_provider:
+        st.session_state.reasoning_llm_provider = selected_reasoning_llm_provider
+        st.rerun()  # Force a rerun to update the form
     
     # 2. Embedding Models Section - Provider Selection (outside form)
-    st.subheader("2. Select Your Embedding Model Provider")
+    st.subheader("3. Select Your Embedding Model Provider")
     
     # Embedding Provider dropdown
-    embedding_providers = ["OpenAI", "Ollama"]
+    embedding_providers = ["OpenAI", "AzureOpenAI", "Ollama"]
     
     selected_embedding_provider = st.selectbox(
         "Embedding Provider",
@@ -140,7 +160,7 @@ def environment_tab():
         st.rerun()  # Force a rerun to update the form
 
     # 3. Set environment variables (within the form)
-    st.subheader("3. Set All Environment Variables")        
+    st.subheader("4. Set All Environment Variables")        
     
     # Create a form for the environment variables
     with st.form("env_vars_form"):
@@ -148,10 +168,11 @@ def environment_tab():
         
         # Store the selected providers in the updated values
         updated_values["LLM_PROVIDER"] = selected_llm_provider
+        updated_values["Reasoning_LLM_PROVIDER"] = selected_reasoning_llm_provider
         updated_values["EMBEDDING_PROVIDER"] = selected_embedding_provider
         
         # 1. Large Language Models Section - Settings
-        st.subheader("LLM Settings")
+        st.subheader("Primary LLM Settings")
         
         # BASE_URL
         base_url_help = "Base URL for your LLM provider:\n\n" + \
@@ -204,6 +225,24 @@ def environment_tab():
         elif selected_llm_provider == "Ollama" and (not current_api_key or current_api_key == "NOT_REQUIRED"):
             updated_values["LLM_API_KEY"] = "NOT_REQUIRED"
         
+        # API VERSION
+        api_version_help = "API version for your LLM provider:\n\n" + \
+                        "For OpenAI: Refer to https://platform.openai.com/docs/models for the latest supported versions.\n\n" + \
+                        "For Anthropic: API versions are managed automatically; check https://docs.anthropic.com/claude/docs for details.\n\n" + \
+                        "For OpenRouter: OpenRouter does not require an API version; it handles model updates automatically.\n\n" + \
+                        "For Azure OpenAI: Set this to the appropriate version from https://learn.microsoft.com/en-us/azure/cognitive-services/openai/release-notes."
+
+
+        if selected_llm_provider=="AzureOpenAI":
+            current_api_version = profile_env_vars.get("LLM_API_VERSION", "")
+            api_version = st.text_input(
+                "API_VERSION:",
+                value=current_api_version,
+                help=api_version_help,
+                key="input_API_VERSION"
+            )
+            updated_values["LLM_API_VERSION"] = api_version
+
         # PRIMARY_MODEL
         primary_model_help = "The LLM you want to use for the primary agent/coder\n\n" + \
                             "Example: gpt-4o-mini\n\n" + \
@@ -217,6 +256,76 @@ def environment_tab():
         )
         updated_values["PRIMARY_MODEL"] = primary_model
         
+        st.subheader("Reasoning LLM Settings")
+        # BASE_URL
+        base_url_help = "Base URL for your LLM provider:\n\n" + \
+                        "OpenAI: https://api.openai.com/v1\n\n" + \
+                        "Anthropic: https://api.anthropic.com/v1\n\n" + \
+                        "OpenRouter: https://openrouter.ai/api/v1\n\n" + \
+                        "Ollama: http://localhost:11434/v1"
+        
+        # Get current BASE_URL or use default for selected provider
+        current_reasoning_base_url = profile_env_vars.get("Reasoning_BASE_URL", llm_default_urls.get(selected_reasoning_llm_provider, ""))
+        
+        # If provider changed or BASE_URL is empty, use the default
+        if not current_reasoning_base_url or profile_env_vars.get("Reasoning_LLM_PROVIDER", "") != selected_reasoning_llm_provider:
+            current_reasoning_base_url = llm_default_urls.get(selected_reasoning_llm_provider, "")
+        
+        llm_reasoning_base_url = st.text_input(
+            "Reasoning_BASE_URL:",
+            value=current_reasoning_base_url,
+            help=base_url_help,
+            key="input_Reasoning_BASE_URL"
+        )
+        updated_values["Reasoning_BASE_URL"] = llm_reasoning_base_url
+        
+        # API_KEY
+        api_key_help = "API key for your LLM provider:\n\n" + \
+                       "For OpenAI: https://help.openai.com/en/articles/4936850-where-do-i-find-my-openai-api-key\n\n" + \
+                       "For Anthropic: https://console.anthropic.com/account/keys\n\n" + \
+                       "For OpenRouter: https://openrouter.ai/keys\n\n" + \
+                       "For Ollama, no need to set this unless you specifically configured an API key"
+        
+        # Get current API_KEY or set default for Ollama
+        current_reasoning_api_key = profile_env_vars.get("Reasoning_LLM_API_KEY", "")
+        
+        # If provider is Ollama and LLM_API_KEY is empty or provider changed, set to NOT_REQUIRED
+        if selected_reasoning_llm_provider == "Ollama" and (not current_reasoning_api_key or profile_env_vars.get("Reasoning_LLM_PROVIDER", "") != selected_reasoning_llm_provider):
+            current_reasoning_api_key = "NOT_REQUIRED"
+        
+        # If there's already a value, show asterisks in the placeholder
+        placeholder = current_reasoning_api_key if current_reasoning_api_key == "NOT_REQUIRED" else "Set but hidden" if current_reasoning_api_key else ""
+        reasoning_api_key = st.text_input(
+            "Reasoning_API_KEY:",
+            type="password" if current_reasoning_api_key != "NOT_REQUIRED" else "default",
+            help=api_key_help,
+            key="input_ReasoningLLM_API_KEY",
+            placeholder=placeholder
+        )
+        # Only update if user entered something (to avoid overwriting with empty string)
+        if reasoning_api_key:
+            updated_values["Reasoning_LLM_API_KEY"] = reasoning_api_key
+        elif selected_reasoning_llm_provider == "Ollama" and (not current_reasoning_api_key or current_reasoning_api_key == "NOT_REQUIRED"):
+            updated_values["Reasoning_LLM_API_KEY"] = "NOT_REQUIRED"
+        
+        # API VERSION
+        api_version_help = "API version for your LLM provider:\n\n" + \
+                        "For OpenAI: Refer to https://platform.openai.com/docs/models for the latest supported versions.\n\n" + \
+                        "For Anthropic: API versions are managed automatically; check https://docs.anthropic.com/claude/docs for details.\n\n" + \
+                        "For OpenRouter: OpenRouter does not require an API version; it handles model updates automatically.\n\n" + \
+                        "For Azure OpenAI: Set this to the appropriate version from https://learn.microsoft.com/en-us/azure/cognitive-services/openai/release-notes."
+
+
+        if selected_reasoning_llm_provider=="AzureOpenAI":
+            current_reasoning_api_version = profile_env_vars.get("Reasoning_LLM_API_VERSION", "")
+            reasoning_api_version = st.text_input(
+                "Reasoning_API_VERSION:",
+                value=current_reasoning_api_version,
+                help=api_version_help,
+                key="input_Reasoning_API_VERSION"
+            )
+            updated_values["Reasoning_LLM_API_VERSION"] = reasoning_api_version
+
         # REASONER_MODEL
         reasoner_model_help = "The LLM you want to use for the reasoner\n\n" + \
                              "Example: o3-mini\n\n" + \
@@ -294,6 +403,24 @@ def environment_tab():
             key="input_EMBEDDING_MODEL"
         )
         updated_values["EMBEDDING_MODEL"] = embedding_model
+
+        # API VERSION
+        api_version_help = "API version for your LLM provider:\n\n" + \
+                        "For OpenAI: Refer to https://platform.openai.com/docs/models for the latest supported versions.\n\n" + \
+                        "For Anthropic: API versions are managed automatically; check https://docs.anthropic.com/claude/docs for details.\n\n" + \
+                        "For OpenRouter: OpenRouter does not require an API version; it handles model updates automatically.\n\n" + \
+                        "For Azure OpenAI: Set this to the appropriate version from https://learn.microsoft.com/en-us/azure/cognitive-services/openai/release-notes."
+
+
+        if selected_embedding_provider=="AzureOpenAI":
+            current_embedding_api_version = profile_env_vars.get("EMBEDDING_API_VERSION", "")
+            embedding_api_version = st.text_input(
+                "EMBEDDING_API_VERSION:",
+                value=current_embedding_api_version,
+                help=api_version_help,
+                key="input_embedding_API_VERSION"
+            )
+            updated_values["EMBEDDING_API_VERSION"] = embedding_api_version
         
         st.markdown("---")
         

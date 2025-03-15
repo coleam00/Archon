@@ -4,6 +4,7 @@ from pydantic_ai import Agent, RunContext
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 from typing import TypedDict, Annotated, List, Any
+from openai import AsyncOpenAI, AsyncAzureOpenAI
 from langgraph.config import get_stream_writer
 from langgraph.types import interrupt
 from dotenv import load_dotenv
@@ -33,28 +34,62 @@ logfire.configure(send_to_logfire='never')
 provider = get_env_var('LLM_PROVIDER') or 'OpenAI'
 base_url = get_env_var('BASE_URL') or 'https://api.openai.com/v1'
 api_key = get_env_var('LLM_API_KEY') or 'no-llm-api-key-provided'
+api_version = get_env_var('LLM_API_VERSION') or ''
+# Reasoning Model
+reasoning_provider = get_env_var('Reasoning_LLM_PROVIDER') or 'OpenAI'
+reasoning_base_url = get_env_var('Reasoning_BASE_URL') or 'https://api.openai.com/v1'
+reasoning_api_key = get_env_var('Reasoning_LLM_API_KEY') or 'no-llm-api-key-provided'
+reasoning_api_version = get_env_var('Reasoning_LLM_API_VERSION') or ''
 
 is_anthropic = provider == "Anthropic"
 is_openai = provider == "OpenAI"
+is_azure_openai = provider == "AzureOpenAI"
+is_ollama= provider == "Ollama"
+is_open_router= provider == "OpenRouter"
+
+is_reasoning_anthropic = reasoning_provider == "Anthropic"
+is_reasoning_openai = reasoning_provider == "OpenAI"
+is_reasoning_azure_openai = reasoning_provider == "AzureOpenAI"
+is_reasoning_ollama= reasoning_provider == "Ollama"
+is_reasoning_open_router= reasoning_provider == "OpenRouter"
 
 reasoner_llm_model_name = get_env_var('REASONER_MODEL') or 'o3-mini'
-reasoner_llm_model = AnthropicModel(reasoner_llm_model_name, api_key=api_key) if is_anthropic else OpenAIModel(reasoner_llm_model_name, base_url=base_url, api_key=api_key)
+if is_reasoning_azure_openai:
+    reasoning_llm_client=AsyncAzureOpenAI(api_key=reasoning_api_key, azure_endpoint=reasoning_base_url, api_version=reasoning_api_version)
+elif is_reasoning_openai:
+    reasoning_llm_client=AsyncOpenAI(base_url=reasoning_base_url, api_key=reasoning_api_key)
+elif is_reasoning_anthropic:
+    reasoning_llm_client = AsyncOpenAI(base_url=reasoning_base_url, api_key=reasoning_api_key)
+elif is_reasoning_open_router:
+    reasoning_llm_client=AsyncOpenAI(base_url=reasoning_base_url, api_key=reasoning_api_key)
+elif is_reasoning_ollama:
+    reasoning_llm_client=AsyncOpenAI(base_url=reasoning_base_url, api_key=reasoning_api_key)
+
 
 reasoner = Agent(  
-    reasoner_llm_model,
+    OpenAIModel(reasoner_llm_model_name, openai_client=reasoning_llm_client),
     system_prompt='You are an expert at coding AI agents with Pydantic AI and defining the scope for doing so.',  
 )
 
 primary_llm_model_name = get_env_var('PRIMARY_MODEL') or 'gpt-4o-mini'
-primary_llm_model = AnthropicModel(primary_llm_model_name, api_key=api_key) if is_anthropic else OpenAIModel(primary_llm_model_name, base_url=base_url, api_key=api_key)
+if is_azure_openai:
+    llm_client=AsyncAzureOpenAI(api_key=api_key, azure_endpoint=base_url, api_version=api_version)
+elif is_openai:
+    llm_client=AsyncOpenAI(base_url=base_url, api_key=api_key)
+elif is_anthropic:
+    llm_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+elif is_open_router:
+    llm_client=AsyncOpenAI(base_url=base_url, api_key=api_key)
+elif is_ollama:
+    llm_client=AsyncOpenAI(base_url=base_url, api_key=api_key)
 
 router_agent = Agent(  
-    primary_llm_model,
+    OpenAIModel(primary_llm_model_name, openai_client=llm_client),
     system_prompt='Your job is to route the user message either to the end of the conversation or to continue coding the AI agent.',  
 )
 
 end_conversation_agent = Agent(  
-    primary_llm_model,
+    OpenAIModel(primary_llm_model_name, openai_client=llm_client),
     system_prompt='Your job is to end a conversation for creating an AI agent by giving instructions for how to execute the agent and they saying a nice goodbye to the user.',  
 )
 
