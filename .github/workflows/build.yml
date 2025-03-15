@@ -1,0 +1,100 @@
+name: Build Archon
+
+on:
+  push:
+    branches:
+      [ main, master ]
+  pull_request:
+    branches:
+      [ main, master ]
+
+permissions:
+  contents: read
+
+jobs:
+  build-locally:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+        include:
+          - python-version: '3.10'
+            experimental: true
+          - python-version: '3.12'
+            experimental: true
+          - python-version: '3.13'
+            experimental: true
+      fail-fast: false
+
+    # Test on newer Python versions
+    continue-on-error: ${{ matrix.experimental || false }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+          pip install -r requirements.txt
+
+      - name: Verify code compilation
+        run: |
+          source venv/bin/activate
+          python -m compileall -f .
+
+  build-docker:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+        include:
+          - python-version: '3.10'
+            experimental: true
+          - python-version: '3.13'
+            experimental: true
+      fail-fast: false
+
+    # Test on newer Python versions
+    continue-on-error: ${{ matrix.experimental || false }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Modify run_docker.py for CI environment
+        run: |
+          cp run_docker.py run_docker_ci.py
+          # Modify the script to just build and verify containers without running them indefinitely
+          sed -i 's/"-d",/"-d", "--rm",/g' run_docker_ci.py
+          
+      - name: Run Docker setup script
+        run: |
+          chmod +x run_docker_ci.py
+          python run_docker_ci.py
+          
+      - name: Verify containers are built
+        run: |
+          docker images | grep archon
+          docker images | grep archon-mcp
+          
+      - name: Test container running status
+        run: |
+          docker ps -a | grep archon-container
+          
+      - name: Stop containers
+        run: |
+          docker stop archon-container || true
+          docker rm archon-container || true
+          docker stop archon-mcp || true
+          docker rm archon-mcp || true
+          docker ps -a | grep archon || echo "All containers successfully removed"
