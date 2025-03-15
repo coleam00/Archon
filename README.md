@@ -90,6 +90,42 @@ streamlit run streamlit_ui.py
 
 4. Access the Streamlit UI at http://localhost:8501.
 
+### Updating Archon
+
+#### Option 1: Docker
+To get the latest updates for Archon when using Docker:
+
+```bash
+# Pull the latest changes from the repository (from within the archon directory)
+git pull
+
+# Rebuild and restart the containers with the latest changes
+python run_docker.py
+```
+
+The `run_docker.py` script will automatically:
+- Detect and remove any existing Archon containers (whether running or stopped)
+- Rebuild the containers with the latest code
+- Start fresh containers with the updated version
+
+#### Option 2: Local Python Installation
+To get the latest updates for Archon when using local Python installation:
+
+```bash
+# Pull the latest changes from the repository (from within the archon directory)
+git pull
+
+# Install any new dependencies
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+
+# Restart the Streamlit UI
+# (If you're already running it, stop with Ctrl+C first)
+streamlit run streamlit_ui.py
+```
+
+This ensures you're always running the most recent version of Archon with all the latest features and bug fixes.
+
 ### Setup Process
 
 After installation, follow the guided setup process in the Intro section of the Streamlit UI:

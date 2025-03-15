@@ -75,19 +75,45 @@ def main():
         print("Error building main Archon container")
         return 1
     
-    # Check if the container is already running
+    # Check if the container exists (running or stopped)
     try:
         result = subprocess.run(
-            ["docker", "ps", "-q", "--filter", "name=archon-container"],
+            ["docker", "ps", "-a", "-q", "--filter", "name=archon-container"],
             check=True,
             capture_output=True,
             text=True
         )
         if result.stdout.strip():
-            print("\n=== Stopping existing Archon container ===")
-            run_command(["docker", "stop", "archon-container"])
-            run_command(["docker", "rm", "archon-container"])
-    except subprocess.SubprocessError:
+            print("\n=== Removing existing Archon container ===")
+            container_id = result.stdout.strip()
+            print(f"Found container with ID: {container_id}")
+            
+            # Check if the container is running
+            running_check = subprocess.run(
+                ["docker", "ps", "-q", "--filter", "id=" + container_id],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            
+            # If running, stop it first
+            if running_check.stdout.strip():
+                print("Container is running. Stopping it first...")
+                stop_result = run_command(["docker", "stop", container_id])
+                if stop_result != 0:
+                    print("Warning: Failed to stop container gracefully, will try force removal")
+            
+            # Remove the container with force flag to ensure it's removed
+            print("Removing container...")
+            rm_result = run_command(["docker", "rm", "-f", container_id])
+            if rm_result != 0:
+                print("Error: Failed to remove container. Please remove it manually with:")
+                print(f"  docker rm -f {container_id}")
+                return 1
+            
+            print("Container successfully removed")
+    except subprocess.SubprocessError as e:
+        print(f"Error checking for existing containers: {e}")
         pass
     
     # Run the Archon container
