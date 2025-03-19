@@ -18,7 +18,7 @@ click==8.1.8
 cohere==5.13.12
 colorama==0.4.6
 Crawl4AI==0.4.247
-cryptography==43.0.3
+cryptography==44.0.1
 Deprecated==1.2.15
 deprecation==2.1.0
 distro==1.9.0
