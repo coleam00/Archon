@@ -83,6 +83,33 @@ async def list_documentation_pages_tool(supabase: Client) -> List[str]:
         print(f"Error retrieving documentation pages: {e}")
         return []
 
+async def list_crawl4ai_documentation_pages_tool(supabase: Client) -> List[str]:
+    """
+    Function to retrieve a list of all available Crawl4AI documentation pages.
+    This is called by the list_crawl4ai_documentation_pages tool and also externally
+    to fetch Crawl4AI documentation pages.
+    
+    Returns:
+        List[str]: List of unique URLs for all Crawl4AI documentation pages
+    """
+    try:
+        # Query Supabase for unique URLs where source is crawl4ai_docs
+        result = supabase.from_('site_pages') \
+            .select('url') \
+            .eq('metadata->>source', 'crawl4ai_docs') \
+            .execute()
+        
+        if not result.data:
+            return []
+            
+        # Extract unique URLs
+        urls = sorted(set(doc['url'] for doc in result.data))
+        return urls
+        
+    except Exception as e:
+        print(f"Error retrieving Crawl4AI documentation pages: {e}")
+        return []
+
 async def get_page_content_tool(supabase: Client, url: str) -> str:
     """
     Retrieve the full content of a specific documentation page by combining all its chunks.

@@ -23,6 +23,7 @@ from archon.agent_prompts import tools_refiner_prompt
 from archon.agent_tools import (
     retrieve_relevant_documentation_tool,
     list_documentation_pages_tool,
+    list_crawl4ai_documentation_pages_tool,
     get_page_content_tool
 )
 
@@ -75,6 +76,17 @@ async def list_documentation_pages(ctx: RunContext[ToolsRefinerDeps]) -> List[st
         List[str]: List of unique URLs for all documentation pages
     """
     return await list_documentation_pages_tool(ctx.deps.supabase)
+
+@tools_refiner_agent.tool
+async def list_crawl4ai_documentation_pages(ctx: RunContext[ToolsRefinerDeps]) -> List[str]:
+    """
+    Retrieve a list of all available Crawl4AI documentation pages.
+    This will give you all pages available, but focus on the ones related to tools.
+    
+    Returns:
+        List[str]: List of unique URLs for all Crawl4AI documentation pages
+    """
+    return await list_crawl4ai_documentation_pages_tool(ctx.deps.supabase)
 
 @tools_refiner_agent.tool
 async def get_page_content(ctx: RunContext[ToolsRefinerDeps], url: str) -> str:

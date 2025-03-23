@@ -23,6 +23,7 @@ from archon.agent_prompts import primary_coder_prompt
 from archon.agent_tools import (
     retrieve_relevant_documentation_tool,
     list_documentation_pages_tool,
+    list_crawl4ai_documentation_pages_tool,
     get_page_content_tool
 )
 
@@ -81,6 +82,16 @@ async def list_documentation_pages(ctx: RunContext[PydanticAIDeps]) -> List[str]
         List[str]: List of unique URLs for all documentation pages
     """
     return await list_documentation_pages_tool(ctx.deps.supabase)
+
+@pydantic_ai_coder.tool
+async def list_crawl4ai_documentation_pages(ctx: RunContext[PydanticAIDeps]) -> List[str]:
+    """
+    Retrieve a list of all available Crawl4AI documentation pages.
+    
+    Returns:
+        List[str]: List of unique URLs for all Crawl4AI documentation pages
+    """
+    return await list_crawl4ai_documentation_pages_tool(ctx.deps.supabase)
 
 @pydantic_ai_coder.tool
 async def get_page_content(ctx: RunContext[PydanticAIDeps], url: str) -> str:
