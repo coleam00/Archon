@@ -44,6 +44,18 @@ def check_docker():
         print("Error: Docker is not installed or not in PATH")
         return False
 
+def load_env_vars():
+    """Load environment variables from .env file if it exists"""
+    env_vars = {}
+    if os.path.exists('.env'):
+        with open('.env', 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    env_vars[key] = value
+    return env_vars
+
 def main():
     """Main function to build and run Archon containers."""
     # Check if Docker is available
@@ -126,9 +138,14 @@ def main():
         "--add-host", "host.docker.internal:host-gateway"
     ]
     
-    # Add environment variables if .env exists
-    if env_args:
-        cmd.extend(env_args)
+    # Add environment variables from .env file
+    env_vars = load_env_vars()
+    env_params = []
+    for key, value in env_vars.items():
+        env_params.extend(["-e", f"{key}={value}"])
+    
+    # Add these env_params to the Docker run command
+    cmd.extend(env_params)
     
     # Add image name
     cmd.append("archon:latest")
