@@ -68,7 +68,7 @@ langchain-core==0.3.33
 langgraph==0.2.69
 langgraph-checkpoint==2.0.10
 langgraph-cli==0.1.71
-langgraph-sdk==0.1.51
+langgraph-sdk==0.1.58
 langsmith==0.3.6
 litellm==1.57.8
 logfire==3.1.0
