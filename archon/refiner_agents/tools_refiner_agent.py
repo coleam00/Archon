@@ -102,3 +102,18 @@ async def get_page_content(ctx: RunContext[ToolsRefinerDeps], url: str) -> str:
         str: The complete page content with all chunks combined in order
     """
     return await get_page_content_tool(ctx.deps.supabase, url)
+
+@tools_refiner_agent.tool
+async def get_crawl4ai_page_content(ctx: RunContext[ToolsRefinerDeps], url: str) -> str:
+    """
+    Retrieve the full content of a specific documentation page by combining all its chunks.
+    Only use this tool to get pages related to user requests for webscraping tools with the framework crawl4ai.
+    
+    Args:
+        ctx: The context including the Supabase client
+        url: The URL of the page to retrieve
+        
+    Returns:
+        str: The complete page content with all chunks combined in order
+    """
+    return await get_page_content_tool(ctx.deps.supabase, url, "crawl4ai_docs")

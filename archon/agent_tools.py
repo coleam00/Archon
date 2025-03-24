@@ -110,13 +110,14 @@ async def list_crawl4ai_documentation_pages_tool(supabase: Client) -> List[str]:
         print(f"Error retrieving Crawl4AI documentation pages: {e}")
         return []
 
-async def get_page_content_tool(supabase: Client, url: str) -> str:
+async def get_page_content_tool(supabase: Client, url: str, source: str = "pydantic_ai_docs") -> str:
     """
     Retrieve the full content of a specific documentation page by combining all its chunks.
     
     Args:
-        ctx: The context including the Supabase client
+        supabase: The Supabase client
         url: The URL of the page to retrieve
+        source: The documentation source ('pydantic_ai_docs' or 'crawl4ai_docs')
         
     Returns:
         str: The complete page content with all chunks combined in order
@@ -126,7 +127,7 @@ async def get_page_content_tool(supabase: Client, url: str) -> str:
         result = supabase.from_('site_pages') \
             .select('title, content, chunk_number') \
             .eq('url', url) \
-            .eq('metadata->>source', 'pydantic_ai_docs') \
+            .eq('metadata->>source', source) \
             .order('chunk_number') \
             .execute()
         
