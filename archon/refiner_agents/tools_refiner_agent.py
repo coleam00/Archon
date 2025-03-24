@@ -23,6 +23,7 @@ from archon.agent_prompts import tools_refiner_prompt
 from archon.agent_tools import (
     retrieve_relevant_documentation_tool,
     list_documentation_pages_tool,
+    list_crawl4ai_documentation_pages_tool,
     get_page_content_tool
 )
 
@@ -77,6 +78,17 @@ async def list_documentation_pages(ctx: RunContext[ToolsRefinerDeps]) -> List[st
     return await list_documentation_pages_tool(ctx.deps.supabase)
 
 @tools_refiner_agent.tool
+async def list_crawl4ai_documentation_pages(ctx: RunContext[ToolsRefinerDeps]) -> List[str]:
+    """
+    Retrieve a list of all available Crawl4AI documentation pages.
+    This will give you all pages available, but focus on the ones related to tools.
+    
+    Returns:
+        List[str]: List of unique URLs for all Crawl4AI documentation pages
+    """
+    return await list_crawl4ai_documentation_pages_tool(ctx.deps.supabase)
+
+@tools_refiner_agent.tool
 async def get_page_content(ctx: RunContext[ToolsRefinerDeps], url: str) -> str:
     """
     Retrieve the full content of a specific documentation page by combining all its chunks.
@@ -90,3 +102,18 @@ async def get_page_content(ctx: RunContext[ToolsRefinerDeps], url: str) -> str:
         str: The complete page content with all chunks combined in order
     """
     return await get_page_content_tool(ctx.deps.supabase, url)
+
+@tools_refiner_agent.tool
+async def get_crawl4ai_page_content(ctx: RunContext[ToolsRefinerDeps], url: str) -> str:
+    """
+    Retrieve the full content of a specific documentation page by combining all its chunks.
+    Only use this tool to get pages related to user requests for webscraping tools with the framework crawl4ai.
+    
+    Args:
+        ctx: The context including the Supabase client
+        url: The URL of the page to retrieve
+        
+    Returns:
+        str: The complete page content with all chunks combined in order
+    """
+    return await get_page_content_tool(ctx.deps.supabase, url, "crawl4ai_docs")

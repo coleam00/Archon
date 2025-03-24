@@ -1,0 +1,14 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+# @pydantic_ai_coder.py YOU MUST use MCP tool invoke ARCHON for this part and all listed pages below as you are not trained on PYDANTIC.ai NOT to be confused with pydantic typesetting freamework. It is very very important you always use all archons code and never change what is provided.
+
+- [pydantic_ai_coder.py](mdc:archon/pydantic_ai_coder.py)
+- [agent_prompts.py](mdc:archon/agent_prompts.py)
+- [agent_refiner_agent.py](mdc:archon/refiner_agents/agent_refiner_agent.py)
+- [agent_tools.py](mdc:archon/agent_tools.py)
+- @
+- 

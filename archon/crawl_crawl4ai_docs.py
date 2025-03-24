@@ -292,7 +292,7 @@ async def process_chunk(chunk: str, chunk_number: int, url: str) -> ProcessedChu
     
     # Create metadata
     metadata = {
-        "source": "pydantic_ai_docs",
+        "source": "crawl4ai_docs",
         "chunk_size": len(chunk),
         "crawled_at": datetime.now(timezone.utc).isoformat(),
         "url_path": urlparse(url).path
@@ -464,9 +464,9 @@ async def crawl_parallel_with_requests(urls: List[str], tracker: Optional[CrawlP
         print(f"Processing {len(urls)} URLs with concurrency {max_concurrent}")
     await asyncio.gather(*[process_url(url) for url in urls])
 
-def get_pydantic_ai_docs_urls() -> List[str]:
-    """Get URLs from Pydantic AI docs sitemap."""
-    sitemap_url = "https://ai.pydantic.dev/sitemap.xml"
+def get_crawl4ai_docs_urls() -> List[str]:
+    """Get URLs from crawl4ai sitemap."""
+    sitemap_url = "https://docs.crawl4ai.com/sitemap.xml"
     try:
         response = requests.get(sitemap_url)
         response.raise_for_status()
@@ -484,10 +484,10 @@ def get_pydantic_ai_docs_urls() -> List[str]:
         return []
 
 def clear_existing_records():
-    """Clear all existing records with source='pydantic_ai_docs' from the site_pages table."""
+    """Clear all existing records with source='crawl4ai_docs' from the site_pages table."""
     try:
-        result = supabase.table("site_pages").delete().eq("metadata->>source", "pydantic_ai_docs").execute()
-        print("Cleared existing pydantic_ai_docs records from site_pages")
+        result = supabase.table("site_pages").delete().eq("metadata->>source", "crawl4ai_docs").execute()
+        print("Cleared existing crawl4ai_docs records from site_pages")
         return result
     except Exception as e:
         print(f"Error clearing existing records: {e}")
@@ -504,9 +504,9 @@ async def main_with_requests(tracker: Optional[CrawlProgressTracker] = None):
         
         # Clear existing records first
         if tracker:
-            tracker.log("Clearing existing Pydantic AI docs records...")
+            tracker.log("Clearing existing crawl4ai docs records...")
         else:
-            print("Clearing existing Pydantic AI docs records...")
+            print("Clearing existing crawl4ai docs records...")
         clear_existing_records()
         if tracker:
             tracker.log("Existing records cleared")
@@ -515,10 +515,10 @@ async def main_with_requests(tracker: Optional[CrawlProgressTracker] = None):
         
         # Get URLs from Pydantic AI docs
         if tracker:
-            tracker.log("Fetching URLs from Pydantic AI sitemap...")
+            tracker.log("Fetching URLs from crawl4ai sitemap...")
         else:
-            print("Fetching URLs from Pydantic AI sitemap...")
-        urls = get_pydantic_ai_docs_urls()
+            print("Fetching URLs from crawl4ai sitemap...")
+        urls = get_crawl4ai_docs_urls()
         
         if not urls:
             if tracker:
@@ -568,6 +568,19 @@ def start_crawl_with_requests(progress_callback: Optional[Callable[[Dict[str, An
     thread.start()
     
     return tracker
+
+def start_crawl(progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None) -> CrawlProgressTracker:
+    """
+    Wrapper function to call start_crawl_with_requests().
+    This facilitates consistent naming across modules.
+    
+    Args:
+        progress_callback: Function to call with progress updates
+        
+    Returns:
+        CrawlProgressTracker: A tracker object for monitoring the crawl progress
+    """
+    return start_crawl_with_requests(progress_callback)
 
 if __name__ == "__main__":    
     # Run the main function directly

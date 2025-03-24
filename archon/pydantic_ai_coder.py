@@ -23,6 +23,7 @@ from archon.agent_prompts import primary_coder_prompt
 from archon.agent_tools import (
     retrieve_relevant_documentation_tool,
     list_documentation_pages_tool,
+    list_crawl4ai_documentation_pages_tool,
     get_page_content_tool
 )
 
@@ -83,6 +84,16 @@ async def list_documentation_pages(ctx: RunContext[PydanticAIDeps]) -> List[str]
     return await list_documentation_pages_tool(ctx.deps.supabase)
 
 @pydantic_ai_coder.tool
+async def list_crawl4ai_documentation_pages(ctx: RunContext[PydanticAIDeps]) -> List[str]:
+    """
+    Retrieve a list of all available Crawl4AI documentation pages.
+    
+    Returns:
+        List[str]: List of unique URLs for all Crawl4AI documentation pages
+    """
+    return await list_crawl4ai_documentation_pages_tool(ctx.deps.supabase)
+
+@pydantic_ai_coder.tool
 async def get_page_content(ctx: RunContext[PydanticAIDeps], url: str) -> str:
     """
     Retrieve the full content of a specific documentation page by combining all its chunks.
@@ -95,3 +106,17 @@ async def get_page_content(ctx: RunContext[PydanticAIDeps], url: str) -> str:
         str: The complete page content with all chunks combined in order
     """
     return await get_page_content_tool(ctx.deps.supabase, url)
+
+@pydantic_ai_coder.tool
+async def get_crawl4ai_page_content(ctx: RunContext[PydanticAIDeps], url: str) -> str:
+    """
+    Retrieve content from a specific Crawl4AI documentation page.
+
+    Args:
+        ctx: The run context containing dependencies.
+        url: The URL of the Crawl4AI documentation page to retrieve.
+
+    Returns:
+        The content of the specified Crawl4AI documentation page.
+    """
+    return await get_page_content_tool(ctx.deps.supabase, url, "crawl4ai_docs")
