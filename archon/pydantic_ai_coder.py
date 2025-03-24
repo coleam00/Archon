@@ -106,3 +106,17 @@ async def get_page_content(ctx: RunContext[PydanticAIDeps], url: str) -> str:
         str: The complete page content with all chunks combined in order
     """
     return await get_page_content_tool(ctx.deps.supabase, url)
+
+@pydantic_ai_coder.tool
+async def get_crawl4ai_page_content(ctx: RunContext[PydanticAIDeps], url: str) -> str:
+    """
+    Retrieve content from a specific Crawl4AI documentation page.
+
+    Args:
+        ctx: The run context containing dependencies.
+        url: The URL of the Crawl4AI documentation page to retrieve.
+
+    Returns:
+        The content of the specified Crawl4AI documentation page.
+    """
+    return await get_page_content_tool(ctx.deps.supabase, url, "crawl4ai_docs")
