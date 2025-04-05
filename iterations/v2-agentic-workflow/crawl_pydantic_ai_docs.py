@@ -116,14 +116,22 @@ async def get_title_and_summary(chunk: str, url: str) -> Dict[str, str]:
 async def get_embedding(text: str) -> List[float]:
     """Get embedding vector from OpenAI."""
     try:
-        response = await openai_client.embeddings.create(
-            model= embedding_model,
-            input=text
-        )
+        # Check if using Ollama and use the correct parameter name
+        if is_ollama:
+            response = await openai_client.embeddings.create(
+                model=embedding_model,
+                prompt=text  # Use 'prompt' for Ollama
+            )
+        else:
+            response = await openai_client.embeddings.create(
+                model=embedding_model,
+                input=text  # Use 'input' for OpenAI
+            )
         return response.data[0].embedding
     except Exception as e:
         print(f"Error getting embedding: {e}")
         return [0] * 1536  # Return zero vector on error
+
 
 async def process_chunk(chunk: str, chunk_number: int, url: str) -> ProcessedChunk:
     """Process a single chunk of text."""
