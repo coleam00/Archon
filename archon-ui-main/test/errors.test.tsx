@@ -1,6 +1,7 @@
 import { render, screen, fireEvent } from '@testing-library/react'
-import { describe, test, expect, vi } from 'vitest'
+import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest'
 import React from 'react'
+import { credentialsService } from '../src/services/credentialsService'
 
 describe('Error Handling Tests', () => {
   test('api error simulation', () => {
@@ -195,5 +196,41 @@ describe('Error Handling Tests', () => {
     
     fireEvent.click(screen.getByText('500 Error'))
     expect(screen.getByRole('alert')).toHaveTextContent('Something went wrong on our end')
+  })
+})
+
+describe('CredentialsService Error Handling', () => {
+  const originalFetch = global.fetch
+
+  beforeEach(() => {
+    global.fetch = vi.fn() as any
+  })
+
+  afterEach(() => {
+    global.fetch = originalFetch
+  })
+
+  test('should handle network errors with context', async () => {
+    const mockError = new Error('Network request failed')
+    ;(global.fetch as any).mockRejectedValueOnce(mockError)
+    
+    await expect(credentialsService.createCredential({
+      key: 'TEST_KEY',
+      value: 'test',
+      is_encrypted: false,
+      category: 'test'
+    })).rejects.toThrow(/Network error while creating credential 'test_key'/)
+  })
+
+  test('should preserve context in error messages', async () => {
+    const mockError = new Error('database error')
+    ;(global.fetch as any).mockRejectedValueOnce(mockError)
+    
+    await expect(credentialsService.updateCredential({
+      key: 'OPENAI_API_KEY',
+      value: 'sk-test',
+      is_encrypted: true,
+      category: 'api_keys'
+    })).rejects.toThrow(/Updating credential 'OPENAI_API_KEY' failed/)
   })
 })

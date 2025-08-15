@@ -2,6 +2,9 @@ import { expect, afterEach, vi } from 'vitest'
 import { cleanup } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 
+// Set required environment variables for tests
+process.env.ARCHON_SERVER_PORT = '8181'
+
 // Clean up after each test
 afterEach(() => {
   cleanup()
@@ -15,7 +18,7 @@ global.fetch = vi.fn(() =>
     text: () => Promise.resolve(''),
     status: 200,
   } as Response)
-)
+) as any
 
 // Mock WebSocket
 class MockWebSocket {

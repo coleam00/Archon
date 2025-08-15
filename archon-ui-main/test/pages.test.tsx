@@ -74,7 +74,7 @@ describe('Onboarding Detection Tests', () => {
       { key: 'LLM_PROVIDER', value: 'openai', category: 'rag_strategy' }
     ]
     const apiKeyCreds: NormalizedCredential[] = [
-      { key: 'OPENAI_API_KEY', is_encrypted: true, category: 'api_keys' }
+      { key: 'OPENAI_API_KEY', is_encrypted: true, encrypted_value: 'encrypted_sk-test123', category: 'api_keys' }
     ]
     
     expect(isLmConfigured(ragCreds, apiKeyCreds)).toBe(true)

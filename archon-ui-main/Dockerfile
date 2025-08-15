@@ -21,5 +21,9 @@ COPY . .
 # Expose Vite's default port
 EXPOSE 5173
 
+# Add a small startup script to wait a moment before starting Vite
+# This helps ensure the backend is fully ready even after healthcheck passes
+RUN echo '#!/bin/sh\nsleep 3\nexec npm run dev -- --host 0.0.0.0' > /app/start.sh && chmod +x /app/start.sh
+
 # Start Vite dev server with host binding for Docker
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"] 
+CMD ["/app/start.sh"] 

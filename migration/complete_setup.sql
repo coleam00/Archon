@@ -3,7 +3,7 @@
 -- =====================================================
 -- This script combines all migrations into a single file
 -- for easy one-time database initialization
--- 
+--
 -- Run this script in your Supabase SQL Editor to set up
 -- the complete Archon database schema and initial data
 -- =====================================================
@@ -47,9 +47,9 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
-CREATE TRIGGER update_archon_settings_updated_at 
-    BEFORE UPDATE ON archon_settings 
-    FOR EACH ROW 
+CREATE TRIGGER update_archon_settings_updated_at
+    BEFORE UPDATE ON archon_settings
+    FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
 -- Create RLS (Row Level Security) policies for settings
@@ -197,10 +197,10 @@ CREATE TABLE IF NOT EXISTS archon_crawled_pages (
     source_id TEXT NOT NULL,
     embedding VECTOR(1536),  -- OpenAI embeddings are 1536 dimensions
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
-    
+
     -- Add a unique constraint to prevent duplicate chunks for the same URL
     UNIQUE(url, chunk_number),
-    
+
     -- Add foreign key constraint to sources table
     FOREIGN KEY (source_id) REFERENCES archon_sources(source_id)
 );
@@ -221,10 +221,10 @@ CREATE TABLE IF NOT EXISTS archon_code_examples (
     source_id TEXT NOT NULL,
     embedding VECTOR(1536),  -- OpenAI embeddings are 1536 dimensions
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
-    
+
     -- Add a unique constraint to prevent duplicate chunks for the same URL
     UNIQUE(url, chunk_number),
-    
+
     -- Add foreign key constraint to sources table
     FOREIGN KEY (source_id) REFERENCES archon_sources(source_id)
 );
@@ -416,7 +416,7 @@ CREATE TABLE IF NOT EXISTS archon_document_versions (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   -- Ensure we have either project_id OR task_id, not both
   CONSTRAINT chk_project_or_task CHECK (
-    (project_id IS NOT NULL AND task_id IS NULL) OR 
+    (project_id IS NOT NULL AND task_id IS NULL) OR
     (project_id IS NULL AND task_id IS NOT NULL)
   ),
   -- Unique constraint to prevent duplicate version numbers per field
@@ -439,51 +439,51 @@ CREATE INDEX IF NOT EXISTS idx_archon_document_versions_version_number ON archon
 CREATE INDEX IF NOT EXISTS idx_archon_document_versions_created_at ON archon_document_versions(created_at);
 
 -- Apply triggers to tables
-CREATE OR REPLACE TRIGGER update_archon_projects_updated_at 
-    BEFORE UPDATE ON archon_projects 
+CREATE OR REPLACE TRIGGER update_archon_projects_updated_at
+    BEFORE UPDATE ON archon_projects
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE OR REPLACE TRIGGER update_archon_tasks_updated_at 
-    BEFORE UPDATE ON archon_tasks 
+CREATE OR REPLACE TRIGGER update_archon_tasks_updated_at
+    BEFORE UPDATE ON archon_tasks
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Soft delete function for tasks
 CREATE OR REPLACE FUNCTION archive_task(
     task_id_param UUID,
     archived_by_param TEXT DEFAULT 'system'
-) 
+)
 RETURNS BOOLEAN AS $$
 DECLARE
     task_exists BOOLEAN;
 BEGIN
     -- Check if task exists and is not already archived
     SELECT EXISTS(
-        SELECT 1 FROM archon_tasks 
+        SELECT 1 FROM archon_tasks
         WHERE id = task_id_param AND archived = FALSE
     ) INTO task_exists;
-    
+
     IF NOT task_exists THEN
         RETURN FALSE;
     END IF;
-    
+
     -- Archive the task
-    UPDATE archon_tasks 
-    SET 
+    UPDATE archon_tasks
+    SET
         archived = TRUE,
         archived_at = NOW(),
         archived_by = archived_by_param,
         updated_at = NOW()
     WHERE id = task_id_param;
-    
+
     -- Also archive all subtasks
-    UPDATE archon_tasks 
-    SET 
+    UPDATE archon_tasks
+    SET
         archived = TRUE,
-        archived_at = NOW(), 
+        archived_at = NOW(),
         archived_by = archived_by_param,
         updated_at = NOW()
     WHERE parent_task_id = task_id_param AND archived = FALSE;
-    
+
     RETURN TRUE;
 END;
 $$ LANGUAGE plpgsql;
@@ -520,8 +520,8 @@ CREATE TABLE IF NOT EXISTS archon_prompts (
 CREATE INDEX IF NOT EXISTS idx_archon_prompts_name ON archon_prompts(prompt_name);
 
 -- Add trigger to automatically update updated_at timestamp
-CREATE OR REPLACE TRIGGER update_archon_prompts_updated_at 
-    BEFORE UPDATE ON archon_prompts 
+CREATE OR REPLACE TRIGGER update_archon_prompts_updated_at
+    BEFORE UPDATE ON archon_prompts
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- =====================================================
@@ -787,7 +787,7 @@ Remember: Create production-ready data models.', 'System prompt for creating dat
 -- SETUP COMPLETE
 -- =====================================================
 -- Your Archon database is now fully configured!
--- 
+--
 -- Next steps:
 -- 1. Add your OpenAI API key via the Settings UI
 -- 2. Enable Projects feature if needed
