@@ -17,6 +17,7 @@ interface RAGSettingsProps {
     USE_RERANKING: boolean;
     LLM_PROVIDER?: string;
     LLM_BASE_URL?: string;
+    EMBEDDING_PROVIDER?: string;
     EMBEDDING_MODEL?: string;
     // Crawling Performance Settings
     CRAWL_BATCH_SIZE?: number;
@@ -67,6 +68,7 @@ export const RAGSettings = ({
               options={[
                 { value: 'openai', label: 'OpenAI' },
                 { value: 'google', label: 'Google Gemini' },
+                { value: 'openrouter', label: 'OpenRouter' },
                 { value: 'ollama', label: 'Ollama (Coming Soon)' },
               ]}
             />
@@ -113,19 +115,50 @@ export const RAGSettings = ({
 
         {/* Model Settings Row */}
         <div className="grid grid-cols-2 gap-4 mb-6">
-          <div>
-            <Input 
-              label="Chat Model" 
-              value={ragSettings.MODEL_CHOICE} 
+          <div className="space-y-4">
+            <Input
+              label="Agent Model"
+              value={ragSettings.MODEL_CHOICE}
               onChange={e => setRagSettings({
                 ...ragSettings,
                 MODEL_CHOICE: e.target.value
-              })} 
+              })}
               placeholder={getModelPlaceholder(ragSettings.LLM_PROVIDER || 'openai')}
-              accentColor="green" 
+              accentColor="green"
             />
+
+            {/* Use Contextual Embeddings */}
+            <div className="bg-transparent border border-green-500/20 rounded-lg p-4 shadow-[0_2px_8px_rgba(34,197,94,0.1)]">
+              <CustomCheckbox
+                id="contextualEmbeddings"
+                checked={ragSettings.USE_CONTEXTUAL_EMBEDDINGS}
+                onChange={e => setRagSettings({
+                  ...ragSettings,
+                  USE_CONTEXTUAL_EMBEDDINGS: e.target.checked
+                })}
+                label="Use Contextual Embeddings"
+                description="Enhances embeddings with contextual information for better retrieval"
+              />
+            </div>
           </div>
-          <div>
+
+          <div className="space-y-2">
+            <Select
+              label="Embedding Provider"
+              value={ragSettings.EMBEDDING_PROVIDER || 'openai'}
+              onChange={e => setRagSettings({
+                ...ragSettings,
+                EMBEDDING_PROVIDER: e.target.value,
+                // Reset embedding model when provider changes
+                EMBEDDING_MODEL: ''
+              })}
+              accentColor="green"
+              options={[
+                { value: 'openai', label: 'OpenAI' },
+                { value: 'ollama', label: 'Ollama' },
+                { value: 'google', label: 'Google' },
+              ]}
+            />
             <Input
               label="Embedding Model"
               value={ragSettings.EMBEDDING_MODEL || ''}
@@ -133,102 +166,16 @@ export const RAGSettings = ({
                 ...ragSettings,
                 EMBEDDING_MODEL: e.target.value
               })}
-              placeholder={getEmbeddingPlaceholder(ragSettings.LLM_PROVIDER || 'openai')}
+              placeholder={getEmbeddingPlaceholder(ragSettings.EMBEDDING_PROVIDER || 'openai')}
               accentColor="green"
             />
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Separate from agent provider. OpenRouter doesn't offer embedding models.
+            </p>
           </div>
         </div>
-        
-        {/* Second row: Contextual Embeddings, Max Workers, and description */}
-        <div className="grid grid-cols-8 gap-4 mb-4 p-4 rounded-lg border border-green-500/20 shadow-[0_2px_8px_rgba(34,197,94,0.1)]">
-          <div className="col-span-4">
-            <CustomCheckbox 
-              id="contextualEmbeddings" 
-              checked={ragSettings.USE_CONTEXTUAL_EMBEDDINGS} 
-              onChange={e => setRagSettings({
-                ...ragSettings,
-                USE_CONTEXTUAL_EMBEDDINGS: e.target.checked
-              })} 
-              label="Use Contextual Embeddings" 
-              description="Enhances embeddings with contextual information for better retrieval" 
-            />
-          </div>
-                      <div className="col-span-1">
-              {ragSettings.USE_CONTEXTUAL_EMBEDDINGS && (
-                <div className="flex flex-col items-center">
-                  <div className="relative ml-2 mr-6">
-                    <input
-                      type="number"
-                      min="1"
-                      max="10"
-                      value={ragSettings.CONTEXTUAL_EMBEDDINGS_MAX_WORKERS}
-                      onChange={e => setRagSettings({
-                        ...ragSettings,
-                        CONTEXTUAL_EMBEDDINGS_MAX_WORKERS: parseInt(e.target.value, 10) || 3
-                      })}
-                      className="w-14 h-10 pl-1 pr-7 text-center font-medium rounded-md 
-                        bg-gradient-to-b from-gray-100 to-gray-200 dark:from-gray-900 dark:to-black 
-                        border border-green-500/30 
-                        text-gray-900 dark:text-white
-                        focus:border-green-500 focus:shadow-[0_0_15px_rgba(34,197,94,0.4)]
-                        transition-all duration-200
-                        [appearance:textfield] 
-                        [&::-webkit-outer-spin-button]:appearance-none 
-                        [&::-webkit-inner-spin-button]:appearance-none"
-                    />
-                    <div className="absolute right-1 top-1 bottom-1 flex flex-col">
-                      <button
-                        type="button"
-                        onClick={() => setRagSettings({
-                          ...ragSettings,
-                          CONTEXTUAL_EMBEDDINGS_MAX_WORKERS: Math.min(ragSettings.CONTEXTUAL_EMBEDDINGS_MAX_WORKERS + 1, 10)
-                        })}
-                        className="flex-1 px-1 rounded-t-sm 
-                          bg-gradient-to-b from-green-500/20 to-green-600/10
-                          hover:from-green-500/30 hover:to-green-600/20
-                          border border-green-500/30 border-b-0
-                          transition-all duration-200 group"
-                      >
-                        <svg className="w-2.5 h-2.5 text-green-500 group-hover:filter group-hover:drop-shadow-[0_0_4px_rgba(34,197,94,0.8)]" 
-                          viewBox="0 0 10 6" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="M1 5L5 1L9 5" />
-                        </svg>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setRagSettings({
-                          ...ragSettings,
-                          CONTEXTUAL_EMBEDDINGS_MAX_WORKERS: Math.max(ragSettings.CONTEXTUAL_EMBEDDINGS_MAX_WORKERS - 1, 1)
-                        })}
-                        className="flex-1 px-1 rounded-b-sm 
-                          bg-gradient-to-b from-green-500/20 to-green-600/10
-                          hover:from-green-500/30 hover:to-green-600/20
-                          border border-green-500/30 border-t-0
-                          transition-all duration-200 group"
-                      >
-                        <svg className="w-2.5 h-2.5 text-green-500 group-hover:filter group-hover:drop-shadow-[0_0_4px_rgba(34,197,94,0.8)]" 
-                          viewBox="0 0 10 6" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="M1 1L5 5L9 1" />
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                  <label className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    Max
-                  </label>
-                </div>
-              )}
-            </div>
-          <div className="col-span-3">
-            {ragSettings.USE_CONTEXTUAL_EMBEDDINGS && (
-              <p className="text-xs text-green-900 dark:text-blue-600 mt-2">
-                Controls parallel processing for embeddings (1-10)
-              </p>
-            )}
-          </div>
-        </div>
-        
-        {/* Third row: Hybrid Search and Agentic RAG */}
+
+        {/* RAG Options */}
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div>
             <CustomCheckbox 
@@ -484,6 +431,8 @@ function getModelPlaceholder(provider: string): string {
       return 'e.g., llama2, mistral';
     case 'google':
       return 'e.g., gemini-1.5-flash';
+    case 'openrouter':
+      return 'e.g., anthropic/claude-3.5-sonnet, openai/gpt-4o';
     default:
       return 'e.g., gpt-4o-mini';
   }

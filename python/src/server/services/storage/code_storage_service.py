@@ -18,6 +18,7 @@ from supabase import Client
 from ...config.logfire_config import search_logger
 from ..embeddings.contextual_embedding_service import generate_contextual_embeddings_batch
 from ..embeddings.embedding_service import create_embeddings_batch
+from ..llm_provider_service import get_llm_client
 
 
 def _get_model_choice() -> str:
@@ -489,7 +490,7 @@ def extract_code_blocks(markdown_content: str, min_length: int = None) -> list[d
     return grouped_blocks
 
 
-def generate_code_example_summary(
+async def generate_code_example_summary(
     code: str, context_before: str, context_after: str, language: str = "", provider: str = None
 ) -> dict[str, str]:
     """
@@ -535,57 +536,23 @@ Format your response as JSON:
 """
 
     try:
-        # Get LLM client using fallback
-        try:
-            import os
-
-            import openai
-
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                # Try to get from credential service with direct fallback
-                from ..credential_service import credential_service
-
-                if (
-                    credential_service._cache_initialized
-                    and "OPENAI_API_KEY" in credential_service._cache
-                ):
-                    cached_key = credential_service._cache["OPENAI_API_KEY"]
-                    if isinstance(cached_key, dict) and cached_key.get("is_encrypted"):
-                        api_key = credential_service._decrypt_value(cached_key["encrypted_value"])
-                    else:
-                        api_key = cached_key
-                else:
-                    api_key = os.getenv("OPENAI_API_KEY", "")
-
-            if not api_key:
-                raise ValueError("No OpenAI API key available")
-
-            client = openai.OpenAI(api_key=api_key)
-        except Exception as e:
-            search_logger.error(
-                f"Failed to create LLM client fallback: {e} - returning default values"
+        # Use the provider-aware LLM client
+        async with get_llm_client(provider=provider) as client:
+            search_logger.debug(
+                f"Calling LLM API with model: {model_choice}, language: {language}, code length: {len(code)}"
             )
-            return {
-                "example_name": f"Code Example{f' ({language})' if language else ''}",
-                "summary": "Code example for demonstration purposes.",
-            }
 
-        search_logger.debug(
-            f"Calling OpenAI API with model: {model_choice}, language: {language}, code length: {len(code)}"
-        )
-
-        response = client.chat.completions.create(
-            model=model_choice,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant that analyzes code examples and provides JSON responses with example names and summaries.",
-                },
-                {"role": "user", "content": prompt},
-            ],
-            response_format={"type": "json_object"},
-        )
+            response = await client.chat.completions.create(
+                model=model_choice,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a helpful assistant that analyzes code examples and provides JSON responses with example names and summaries.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={"type": "json_object"},
+            )
 
         response_content = response.choices[0].message.content.strip()
         search_logger.debug(f"OpenAI API response: {repr(response_content[:200])}...")
@@ -671,11 +638,8 @@ async def generate_code_summaries_batch(
             # Add delay between requests to avoid rate limiting
             await asyncio.sleep(0.5)  # 500ms delay between requests
 
-            # Run the synchronous function in a thread
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                generate_code_example_summary,
+            # Call the async function directly
+            result = await generate_code_example_summary(
                 block["code"],
                 block["context_before"],
                 block["context_after"],

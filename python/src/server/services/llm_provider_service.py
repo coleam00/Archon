@@ -2,7 +2,7 @@
 LLM Provider Service
 
 Provides a unified interface for creating OpenAI-compatible clients for different LLM providers.
-Supports OpenAI, Ollama, and Google Gemini.
+Supports OpenAI, Ollama, Google Gemini, and OpenRouter.
 """
 
 import time
@@ -118,6 +118,16 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
             )
             logger.info("Google Gemini client created successfully")
 
+        elif provider_name == "openrouter":
+            if not api_key:
+                raise ValueError("OpenRouter API key not found")
+
+            client = openai.AsyncOpenAI(
+                api_key=api_key,
+                base_url=base_url or "https://openrouter.ai/api/v1",
+            )
+            logger.info("OpenRouter client created successfully")
+
         else:
             raise ValueError(f"Unsupported LLM provider: {provider_name}")
 
@@ -178,6 +188,9 @@ async def get_embedding_model(provider: str | None = None) -> str:
         elif provider_name == "google":
             # Google's embedding model
             return "text-embedding-004"
+        elif provider_name == "openrouter":
+            # OpenRouter supports OpenAI embedding models
+            return "text-embedding-3-small"
         else:
             # Fallback to OpenAI's model
             return "text-embedding-3-small"

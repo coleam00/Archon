@@ -33,7 +33,7 @@ Access RAG settings in the **Web Interface** → **Settings** → **RAG Settings
 |---------|-------------|---------|--------|
 | **MODEL_CHOICE** | Chat model for query enhancement | `gpt-4o-mini` | Response quality |
 | **EMBEDDING_MODEL** | Model for vector embeddings | `text-embedding-3-small` | Search accuracy |
-| **LLM_PROVIDER** | Provider (openai/google/ollama/) | `openai` | Model availability |
+| **LLM_PROVIDER** | Provider (openai/google/openrouter/ollama) | `openai` | Model availability |
 
 ### Advanced Strategies
 
@@ -316,6 +316,25 @@ EMBEDDING_MODEL=text-embedding-004
 # Pros: Good performance, competitive pricing
 # Cons: Different API patterns
 ```
+
+### OpenRouter (Multi-Provider Access)
+```bash
+LLM_PROVIDER=openrouter
+MODEL_CHOICE=anthropic/claude-3.5-sonnet
+EMBEDDING_PROVIDER=openai
+EMBEDDING_MODEL=text-embedding-3-small
+# Pros: Access to 200+ models, competitive pricing
+# Cons: Requires separate embedding provider
+```
+
+<Admonition type="info" title="OpenRouter + Embeddings">
+OpenRouter provides access to chat models from multiple providers (OpenAI, Anthropic, Meta, Google, etc.) but doesn't offer embedding models. For embeddings, use a separate provider like OpenAI, Google, or Ollama.
+
+**Recommended Setup:**
+- **LLM Provider**: OpenRouter (for chat models)
+- **Embedding Provider**: OpenAI (for embeddings)
+- **API Keys**: Both OpenRouter and OpenAI keys required
+</Admonition>
 
 ### Ollama (Local/Private)
 ```bash

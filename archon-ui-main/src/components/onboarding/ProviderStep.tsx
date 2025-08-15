@@ -25,18 +25,21 @@ export const ProviderStep = ({ onSaved, onSkip }: ProviderStepProps) => {
 
     setSaving(true);
     try {
+      // Determine the correct API key name based on provider
+      const keyName = provider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'OPENAI_API_KEY';
+
       // Save the API key
       await credentialsService.createCredential({
-        key: 'OPENAI_API_KEY',
+        key: keyName,
         value: apiKey,
         is_encrypted: true,
         category: 'api_keys'
       });
 
-      // Update the provider setting if needed
+      // Update the provider setting
       await credentialsService.updateCredential({
         key: 'LLM_PROVIDER',
-        value: 'openai',
+        value: provider,
         is_encrypted: false,
         category: 'rag_strategy'
       });
@@ -105,6 +108,7 @@ export const ProviderStep = ({ onSaved, onSkip }: ProviderStepProps) => {
           options={[
             { value: 'openai', label: 'OpenAI' },
             { value: 'google', label: 'Google Gemini' },
+            { value: 'openrouter', label: 'OpenRouter' },
             { value: 'ollama', label: 'Ollama (Local)' },
           ]}
           accentColor="green"
@@ -112,20 +116,21 @@ export const ProviderStep = ({ onSaved, onSkip }: ProviderStepProps) => {
         <p className="mt-2 text-sm text-gray-600 dark:text-zinc-400">
           {provider === 'openai' && 'OpenAI provides powerful models like GPT-4. You\'ll need an API key from OpenAI.'}
           {provider === 'google' && 'Google Gemini offers advanced AI capabilities. Configure in Settings after setup.'}
+          {provider === 'openrouter' && 'OpenRouter provides access to 200+ models from multiple providers. You\'ll need an API key from OpenRouter.'}
           {provider === 'ollama' && 'Ollama runs models locally on your machine. Configure in Settings after setup.'}
         </p>
       </div>
 
-      {/* OpenAI API Key Input */}
-      {provider === 'openai' && (
+      {/* API Key Input for OpenAI and OpenRouter */}
+      {(provider === 'openai' || provider === 'openrouter') && (
         <>
           <div>
             <Input
-              label="OpenAI API Key"
+              label={provider === 'openai' ? 'OpenAI API Key' : 'OpenRouter API Key'}
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
-              placeholder="sk-..."
+              placeholder={provider === 'openai' ? 'sk-...' : 'sk-or-v1-...'}
               accentColor="green"
               icon={<Key className="w-4 h-4" />}
             />
@@ -136,12 +141,12 @@ export const ProviderStep = ({ onSaved, onSkip }: ProviderStepProps) => {
 
           <div className="flex items-center gap-2 text-sm">
             <a
-              href="https://platform.openai.com/api-keys"
+              href={provider === 'openai' ? 'https://platform.openai.com/api-keys' : 'https://openrouter.ai/keys'}
               target="_blank"
               rel="noopener noreferrer"
               className="text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 flex items-center gap-1"
             >
-              Get an API key from OpenAI
+              Get an API key from {provider === 'openai' ? 'OpenAI' : 'OpenRouter'}
               <ExternalLink className="w-3 h-3" />
             </a>
           </div>
@@ -170,8 +175,8 @@ export const ProviderStep = ({ onSaved, onSkip }: ProviderStepProps) => {
         </>
       )}
 
-      {/* Non-OpenAI Provider Message */}
-      {provider !== 'openai' && (
+      {/* Non-API Key Provider Message */}
+      {provider !== 'openai' && provider !== 'openrouter' && (
         <div className="space-y-4">
           <div className="p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
             <p className="text-sm text-blue-800 dark:text-blue-200">

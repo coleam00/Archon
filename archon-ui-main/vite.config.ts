@@ -19,7 +19,11 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
   const internalHost = 'archon-server';  // Docker service name for internal communication
   const externalHost = process.env.HOST || 'localhost';  // Host for external access
   const host = isDocker ? internalHost : externalHost;
-  const port = process.env.ARCHON_SERVER_PORT || env.ARCHON_SERVER_PORT || '8181';
+  const serverPort = process.env.ARCHON_SERVER_PORT || env.ARCHON_SERVER_PORT || '8181';
+
+  // UI port configuration - use 5173 in Docker (mapped to 3737 externally),
+  // or ARCHON_UI_PORT for local development
+  const uiPort = isDocker ? 5173 : parseInt(process.env.ARCHON_UI_PORT || env.ARCHON_UI_PORT || '3737', 10);
   
   return {
     plugins: [
@@ -278,28 +282,28 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
     ],
     server: {
       host: '0.0.0.0', // Listen on all network interfaces with explicit IP
-      port: 5173, // Match the port expected in Docker
+      port: uiPort, // Use dynamic port based on environment
       strictPort: true, // Exit if port is in use
       proxy: {
         '/api': {
-          target: `http://${host}:${port}`,
+          target: `http://${host}:${serverPort}`,
           changeOrigin: true,
           secure: false,
           ws: true,
-          configure: (proxy, options) => {
+          configure: (proxy) => {
             proxy.on('error', (err, req, res) => {
               console.log('🚨 [VITE PROXY ERROR]:', err.message);
-              console.log('🚨 [VITE PROXY ERROR] Target:', `http://${host}:${port}`);
+              console.log('🚨 [VITE PROXY ERROR] Target:', `http://${host}:${serverPort}`);
               console.log('🚨 [VITE PROXY ERROR] Request:', req.url);
             });
             proxy.on('proxyReq', (proxyReq, req, res) => {
-              console.log('🔄 [VITE PROXY] Forwarding:', req.method, req.url, 'to', `http://${host}:${port}${req.url}`);
+              console.log('🔄 [VITE PROXY] Forwarding:', req.method, req.url, 'to', `http://${host}:${serverPort}${req.url}`);
             });
           }
         },
         // Socket.IO specific proxy configuration
         '/socket.io': {
-          target: `http://${host}:${port}`,
+          target: `http://${host}:${serverPort}`,
           changeOrigin: true,
           ws: true
         }
@@ -307,7 +311,7 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
     },
     define: {
       'import.meta.env.VITE_HOST': JSON.stringify(host),
-      'import.meta.env.VITE_PORT': JSON.stringify(port),
+      'import.meta.env.VITE_PORT': JSON.stringify(serverPort),
     },
     resolve: {
       alias: {
@@ -329,7 +333,7 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
       ],
       env: {
         VITE_HOST: host,
-        VITE_PORT: port,
+        VITE_PORT: serverPort,
       },
       coverage: {
         provider: 'v8',

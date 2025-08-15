@@ -408,8 +408,28 @@ class CredentialService:
             # Get RAG strategy settings (where UI saves provider selection)
             rag_settings = await self.get_credentials_by_category("rag_strategy")
 
-            # Get the selected provider
-            provider = rag_settings.get("LLM_PROVIDER", "openai")
+            # Get the selected provider based on service type
+            if service_type == "embedding":
+                provider = rag_settings.get("EMBEDDING_PROVIDER", "openai")
+                # Ensure provider is a valid string, not a boolean or other type
+                if not isinstance(provider, str) or provider.lower() in ("true", "false", "none", "null"):
+                    provider = "openai"
+                    # Auto-create the missing EMBEDDING_PROVIDER setting
+                    try:
+                        await self.set_credential(
+                            "EMBEDDING_PROVIDER",
+                            "openai",
+                            category="rag_strategy",
+                            description="Embedding provider to use: openai, ollama, or google"
+                        )
+                        logger.info("Auto-created missing EMBEDDING_PROVIDER setting")
+                    except Exception as e:
+                        logger.warning(f"Failed to auto-create EMBEDDING_PROVIDER setting: {e}")
+            else:
+                provider = rag_settings.get("LLM_PROVIDER", "openai")
+                # Ensure provider is a valid string, not a boolean or other type
+                if not isinstance(provider, str) or provider.lower() in ("true", "false", "none", "null"):
+                    provider = "openai"
 
             # Get API key for this provider
             api_key = await self._get_provider_api_key(provider)
@@ -446,6 +466,7 @@ class CredentialService:
         key_mapping = {
             "openai": "OPENAI_API_KEY",
             "google": "GOOGLE_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY",
             "ollama": None,  # No API key needed
         }
 
@@ -460,6 +481,8 @@ class CredentialService:
             return rag_settings.get("LLM_BASE_URL", "http://localhost:11434/v1")
         elif provider == "google":
             return "https://generativelanguage.googleapis.com/v1beta/openai/"
+        elif provider == "openrouter":
+            return "https://openrouter.ai/api/v1"
         return None  # Use default for OpenAI
 
     async def set_active_provider(self, provider: str, service_type: str = "llm") -> bool:

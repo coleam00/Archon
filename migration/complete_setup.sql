@@ -94,6 +94,7 @@ INSERT INTO archon_settings (key, encrypted_value, is_encrypted, category, descr
 INSERT INTO archon_settings (key, value, is_encrypted, category, description) VALUES
 ('LLM_PROVIDER', 'openai', false, 'rag_strategy', 'LLM provider to use: openai, ollama, or google'),
 ('LLM_BASE_URL', NULL, false, 'rag_strategy', 'Custom base URL for LLM provider (mainly for Ollama, e.g., http://localhost:11434/v1)'),
+('EMBEDDING_PROVIDER', 'openai', false, 'rag_strategy', 'Embedding provider to use: openai, ollama, or google'),
 ('EMBEDDING_MODEL', 'text-embedding-3-small', false, 'rag_strategy', 'Embedding model for vector search and similarity matching (required for all embedding operations)')
 ON CONFLICT (key) DO NOTHING;
 
@@ -162,6 +163,12 @@ ON CONFLICT (key) DO UPDATE SET
 
 -- Add a comment to document when this migration was added
 COMMENT ON TABLE archon_settings IS 'Stores application configuration including API keys, RAG settings, and code extraction parameters';
+
+-- Added EMBEDDING_PROVIDER setting
+INSERT INTO archon_settings (key, value, is_encrypted, category, description) VALUES
+('EMBEDDING_PROVIDER', 'openai', false, 'rag_strategy', 'Embedding provider to use: openai, ollama, or google')
+ON CONFLICT (key) DO NOTHING;
+
 
 -- =====================================================
 -- SECTION 4: KNOWLEDGE BASE TABLES

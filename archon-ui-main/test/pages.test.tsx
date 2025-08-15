@@ -74,9 +74,9 @@ describe('Onboarding Detection Tests', () => {
       { key: 'LLM_PROVIDER', value: 'openai', category: 'rag_strategy' }
     ]
     const apiKeyCreds: NormalizedCredential[] = [
-      { key: 'OPENAI_API_KEY', is_encrypted: true, category: 'api_keys' }
+      { key: 'OPENAI_API_KEY', is_encrypted: true, encrypted_value: 'encrypted-key-data', category: 'api_keys' }
     ]
-    
+
     expect(isLmConfigured(ragCreds, apiKeyCreds)).toBe(true)
   })
 
@@ -110,7 +110,36 @@ describe('Onboarding Detection Tests', () => {
   test('isLmConfigured returns false when no provider and no OPENAI_API_KEY', () => {
     const ragCreds: NormalizedCredential[] = []
     const apiKeyCreds: NormalizedCredential[] = []
-    
+
     expect(isLmConfigured(ragCreds, apiKeyCreds)).toBe(false)
+  })
+
+  test('isLmConfigured returns true when provider is openrouter and OPENROUTER_API_KEY exists', () => {
+    const ragCreds: NormalizedCredential[] = [
+      { key: 'LLM_PROVIDER', value: 'openrouter', category: 'rag_strategy' }
+    ]
+    const apiKeyCreds: NormalizedCredential[] = [
+      { key: 'OPENROUTER_API_KEY', value: 'sk-or-test123', category: 'api_keys' }
+    ]
+
+    expect(isLmConfigured(ragCreds, apiKeyCreds)).toBe(true)
+  })
+
+  test('isLmConfigured returns false when provider is openrouter and no OPENROUTER_API_KEY', () => {
+    const ragCreds: NormalizedCredential[] = [
+      { key: 'LLM_PROVIDER', value: 'openrouter', category: 'rag_strategy' }
+    ]
+    const apiKeyCreds: NormalizedCredential[] = []
+
+    expect(isLmConfigured(ragCreds, apiKeyCreds)).toBe(false)
+  })
+
+  test('isLmConfigured returns true when no provider but OPENROUTER_API_KEY exists', () => {
+    const ragCreds: NormalizedCredential[] = []
+    const apiKeyCreds: NormalizedCredential[] = [
+      { key: 'OPENROUTER_API_KEY', value: 'sk-or-test123', category: 'api_keys' }
+    ]
+
+    expect(isLmConfigured(ragCreds, apiKeyCreds)).toBe(true)
   })
 })
