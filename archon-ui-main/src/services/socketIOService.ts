@@ -158,7 +158,7 @@ export class WebSocketService {
         reconnectionDelay: this.config.reconnectInterval,
         reconnectionDelayMax: 30000,
         timeout: 10000,
-        transports: ['websocket', 'polling'],
+        transports: ['polling', 'websocket'],
         path: socketPath,
         query: {
           session_id: this.sessionId

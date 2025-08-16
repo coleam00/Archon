@@ -1,0 +1,53 @@
+# Production overrides for HTTPS support with Caddy reverse proxy
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+services:
+  # Frontend - Override for production HTTPS routing
+  frontend:
+    # Remove direct port mapping - Caddy handles external access
+    ports: !reset []
+    expose:
+      - "5173"
+    environment:
+      - VITE_API_URL=/api
+      - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
+      - HOST=${HOST:-localhost}
+      - DOMAIN=${DOMAIN:-localhost}
+
+  # HTTPS Reverse Proxy with automatic Let's Encrypt certificates
+  caddy:
+    image: caddy:2-alpine
+    container_name: Archon-Caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"   # HTTP (redirects to HTTPS)
+      - "443:443" # HTTPS
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+      - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - caddy_logs:/var/log/caddy
+    networks:
+      - app-network
+    depends_on:
+      frontend:
+        condition: service_healthy
+      archon-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  # Caddy data for Let's Encrypt certificates and configuration
+  caddy_data:
+    driver: local
+  caddy_config:
+    driver: local
+  caddy_logs:
+    driver: local

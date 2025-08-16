@@ -1,0 +1,65 @@
+# Caddyfile - Automatic HTTPS with Let's Encrypt
+# Simple reverse proxy configuration for Archon
+
+{$DOMAIN} {
+    # Automatic HTTPS with Let's Encrypt
+    # Caddy automatically requests and renews SSL certificates
+    
+    # Main UI (React frontend)
+    handle /* {
+        reverse_proxy frontend:5173 {
+            header_up Host {host}
+            header_up X-Real-IP {remote}
+            header_up X-Forwarded-For {remote}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+    
+    # API endpoints
+    handle /api/* {
+        reverse_proxy archon-server:{$ARCHON_SERVER_PORT} {
+            header_up Host {host}
+            header_up X-Real-IP {remote}
+            header_up X-Forwarded-For {remote}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+    
+    # Socket.IO websockets
+    handle /socket.io/* {
+        reverse_proxy archon-server:{$ARCHON_SERVER_PORT} {
+            header_up Host {host}
+            header_up X-Real-IP {remote}
+            header_up X-Forwarded-For {remote}
+            header_up X-Forwarded-Proto {scheme}
+            header_up Connection {>Connection}
+            header_up Upgrade {>Upgrade}
+        }
+    }
+    
+    # Security headers
+    header {
+        # Remove server information
+        -Server
+        
+        # Security headers
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy strict-origin-when-cross-origin
+        
+        # HTTPS enforcement
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    }
+    
+    # Logging
+    log {
+        output file /var/log/caddy/access.log
+        level INFO
+    }
+}
+
+# Optional: Redirect www to non-www (only if you have www DNS record)
+# www.{$DOMAIN} {
+#     redir https://{$DOMAIN}{uri} permanent
+# }

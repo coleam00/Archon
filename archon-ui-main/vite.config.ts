@@ -21,6 +21,12 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
   const host = isDocker ? internalHost : externalHost;
   const port = process.env.ARCHON_SERVER_PORT || env.ARCHON_SERVER_PORT || '8181';
   
+  // Build allowed hosts list - include common hosts and production domain
+  const allowedHosts = ['localhost', '127.0.0.1'];
+  if (process.env.DOMAIN && process.env.DOMAIN !== 'localhost') {
+    allowedHosts.push(process.env.DOMAIN);
+  }
+  
   return {
     plugins: [
       react(),
@@ -280,6 +286,7 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
       host: '0.0.0.0', // Listen on all network interfaces with explicit IP
       port: 5173, // Match the port expected in Docker
       strictPort: true, // Exit if port is in use
+      allowedHosts, // Dynamically built list including DOMAIN from environment
       proxy: {
         '/api': {
           target: `http://${host}:${port}`,
