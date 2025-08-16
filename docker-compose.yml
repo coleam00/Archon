@@ -100,7 +100,10 @@ services:
 
   # Frontend
   frontend:
-    build: ./archon-ui-main
+    build:
+      context: ./archon-ui-main
+      args:
+        - CACHE_BUSTER=1
     container_name: Archon-UI
     ports:
       - "${ARCHON_UI_PORT:-3737}:5173"

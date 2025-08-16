@@ -40,6 +40,7 @@ export interface TestStatus {
 }
 
 import { getApiUrl, getWebSocketUrl } from '../config/api';
+import { v4 as uuidv4 } from 'uuid';
 
 // Use unified API configuration
 const API_BASE_URL = getApiUrl();
@@ -159,7 +160,7 @@ class TestService {
     onError?: (error: Error) => void,
     onComplete?: () => void
   ): Promise<string> {
-    const execution_id = crypto.randomUUID();
+    const execution_id = uuidv4();
     
     try {
       // Send initial status

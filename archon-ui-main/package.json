@@ -12,7 +12,7 @@
     "test:ui": "vitest --ui",
     "test:coverage": "npm run test:coverage:run && npm run test:coverage:summary",
     "test:coverage:run": "vitest run --coverage --reporter=dot --reporter=json",
-    "test:coverage:stream": "vitest run --coverage --reporter=default --reporter=json --bail=false || true",
+    "test:coverage:stream": "vitest run --coverage --reporter=default --reporter=json --bail=false",
     "test:coverage:summary": "echo '\\n📊 ARCHON TEST & COVERAGE SUMMARY\\n═══════════════════════════════════════\\n' && node -e \"try { const data = JSON.parse(require('fs').readFileSync('coverage/test-results.json', 'utf8')); const passed = data.numPassedTests || 0; const failed = data.numFailedTests || 0; const total = data.numTotalTests || 0; const suites = data.numTotalTestSuites || 0; console.log('Test Suites: ' + (failed > 0 ? '\\x1b[31m' + failed + ' failed\\x1b[0m, ' : '') + '\\x1b[32m' + (suites - failed) + ' passed\\x1b[0m, ' + suites + ' total'); console.log('Tests:       ' + (failed > 0 ? '\\x1b[31m' + failed + ' failed\\x1b[0m, ' : '') + '\\x1b[32m' + passed + ' passed\\x1b[0m, ' + total + ' total'); console.log('\\n✨ Results saved to coverage/test-results.json'); } catch(e) { console.log('⚠️  No test results found. Run tests first!'); }\" || true",
     "test:coverage:force": "vitest run --coverage --passWithNoTests || true",
     "seed:projects": "node --loader ts-node/esm ../scripts/seed-project-data.ts"
@@ -36,6 +36,7 @@
     "react-router-dom": "^6.26.2",
     "socket.io-client": "^4.8.1",
     "tailwind-merge": "latest",
+    "uuid": "^11.1.0",
     "zod": "^3.25.46"
   },
   "devDependencies": {
@@ -45,6 +46,7 @@
     "@types/node": "^20.19.0",
     "@types/react": "^18.3.1",
     "@types/react-dom": "^18.3.1",
+    "@types/uuid": "^10.0.0",
     "@typescript-eslint/eslint-plugin": "^5.54.0",
     "@typescript-eslint/parser": "^5.54.0",
     "@vitejs/plugin-react": "^4.2.1",

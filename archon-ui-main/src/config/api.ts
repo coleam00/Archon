@@ -12,25 +12,10 @@ export function getApiUrl(): string {
     return import.meta.env.VITE_API_URL;
   }
 
-  // For relative URLs in production (goes through proxy)
-  if (import.meta.env.PROD) {
-    return '';
-  }
-
-  // For development, construct from window location
-  const protocol = window.location.protocol;
-  const host = window.location.hostname;
-  const port = import.meta.env.ARCHON_SERVER_PORT;
-  
-  if (!port) {
-    throw new Error(
-      'ARCHON_SERVER_PORT environment variable is required. ' +
-      'Please set it in your environment variables. ' +
-      'Default value: 8181'
-    );
-  }
-  
-  return `${protocol}//${host}:${port}`;
+  // In both development (via Vite proxy) and production, we use a relative path.
+  // This ensures that requests are proxied correctly by the dev server or
+  // sent to the same origin in production.
+  return '';
 }
 
 // Get the base path for API endpoints
