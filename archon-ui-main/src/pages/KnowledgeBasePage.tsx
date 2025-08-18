@@ -19,7 +19,7 @@ import { KnowledgeItemCard } from '../components/knowledge-base/KnowledgeItemCar
 import { GroupedKnowledgeItemCard } from '../components/knowledge-base/GroupedKnowledgeItemCard';
 import { KnowledgeGridSkeleton, KnowledgeTableSkeleton } from '../components/knowledge-base/KnowledgeItemSkeleton';
 import { GroupCreationModal } from '../components/knowledge-base/GroupCreationModal';
-import { RAGChatSection } from '../components/knowledge-base/RAGChatSection';
+import { IntegratedRAGChat, IntegratedRAGChatRef } from '../components/knowledge-base/IntegratedRAGChat';
 
 const extractDomain = (url: string): string => {
   try {
@@ -65,6 +65,8 @@ export const KnowledgeBasePage = () => {
   const [loading, setLoading] = useState(true);
   const [totalItems, setTotalItems] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
+  const [isChatExpanded, setIsChatExpanded] = useState(false);
+  const chatRef = useRef<IntegratedRAGChatRef>(null);
   
   // Selection state
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
@@ -887,10 +889,13 @@ export const KnowledgeBasePage = () => {
     }
   };
 
-  return <div>
-      {/* RAG Chat Section - Always visible at the top */}
-      <RAGChatSection />
-      
+  const handleAskAI = (item: KnowledgeItem) => {
+    chatRef.current?.askAboutItem(item);
+  };
+
+  return <div className="flex gap-4">
+      {/* Main Content Area */}
+      <div className="flex-1">
       {/* Header with animation - stays static when changing views */}
       <motion.div className="flex justify-between items-center mb-8" initial="hidden" animate="visible" variants={headerContainerVariants}>
         <motion.h1 className="text-3xl font-bold text-gray-800 dark:text-white flex items-center gap-3" variants={titleVariants}>
@@ -1065,6 +1070,7 @@ export const KnowledgeBasePage = () => {
                               onDelete={handleDeleteItem} 
                               onUpdate={loadKnowledgeItems} 
                               onRefresh={handleRefreshItem}
+                              onAskAI={handleAskAI}
                               isSelectionMode={isSelectionMode}
                               isSelected={selectedItems.has(item.id)}
                               onToggleSelection={(e) => toggleItemSelection(item.id, index, e)}
@@ -1135,6 +1141,7 @@ export const KnowledgeBasePage = () => {
                           onDelete={handleDeleteItem} 
                           onUpdate={loadKnowledgeItems} 
                           onRefresh={handleRefreshItem}
+                          onAskAI={handleAskAI}
                           isSelectionMode={isSelectionMode}
                           isSelected={selectedItems.has(item.id)}
                           onToggleSelection={(e) => toggleItemSelection(item.id, index, e)}
@@ -1158,6 +1165,7 @@ export const KnowledgeBasePage = () => {
                         onDelete={handleDeleteItem} 
                         onUpdate={loadKnowledgeItems} 
                         onRefresh={handleRefreshItem}
+                        onAskAI={handleAskAI}
                         isSelectionMode={isSelectionMode}
                         isSelected={selectedItems.has(item.id)}
                         onToggleSelection={(e) => toggleItemSelection(item.id, index, e)}
@@ -1198,6 +1206,15 @@ export const KnowledgeBasePage = () => {
           }}
         />
       )}
+    </div>
+      
+      {/* Integrated Chat Sidebar */}
+      <IntegratedRAGChat
+        ref={chatRef}
+        isExpanded={isChatExpanded}
+        onToggleExpand={() => setIsChatExpanded(!isChatExpanded)}
+        className="sticky top-4 h-[calc(100vh-2rem)]"
+      />
     </div>;
 };
 
