@@ -513,6 +513,11 @@ async def upload_document(
 ):
     """Upload and process a document with progress tracking."""
     try:
+        # DETAILED LOGGING: Track knowledge_type parameter flow
+        safe_logfire_info(
+            f"📋 UPLOAD: Starting document upload | filename={file.filename} | content_type={file.content_type} | knowledge_type={knowledge_type}"
+        )
+        
         safe_logfire_info(
             f"Starting document upload | filename={file.filename} | content_type={file.content_type} | knowledge_type={knowledge_type}"
         )

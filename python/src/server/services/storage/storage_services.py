@@ -45,6 +45,8 @@ class DocumentStorageService(BaseStorageService):
         Returns:
             Tuple of (success, result_dict)
         """
+        logger.info(f"Document upload starting: {filename} as {knowledge_type} knowledge")
+        
         with safe_span(
             "upload_document",
             filename=filename,
@@ -102,6 +104,7 @@ class DocumentStorageService(BaseStorageService):
                             "source": source_id,
                             "source_id": source_id,
                             "knowledge_type": knowledge_type,
+                            "source_type": "file",  # FIX: Mark as file upload
                             "filename": filename,
                         },
                     )
@@ -127,12 +130,16 @@ class DocumentStorageService(BaseStorageService):
                     extract_source_summary, source_id, file_content[:5000]
                 )
 
+                logger.info(f"Updating source info for {source_id} with knowledge_type={knowledge_type}")
                 await self.threading_service.run_io_bound(
                     update_source_info,
                     self.supabase_client,
                     source_id,
                     source_summary,
                     total_word_count,
+                    file_content[:1000],  # content for title generation
+                    knowledge_type,      # FIX: Pass knowledge_type parameter!
+                    tags,               # FIX: Pass tags parameter!
                 )
 
                 await report_progress("Storing document chunks...", 70)
