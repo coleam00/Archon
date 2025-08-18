@@ -158,7 +158,38 @@ class BaseAgent(ABC, Generic[DepsT, OutputT]):
         enable_rate_limiting: bool = True,
         **agent_kwargs,
     ):
-        self.model = model
+        # Handle Ollama models specially since they have colons in their names
+        if model.startswith("ollama:"):
+            # Extract model name and create OpenAIModel with custom base URL
+            from pydantic_ai.models.openai import OpenAIModel
+            
+            ollama_model = model[7:]  # Remove "ollama:" prefix
+            
+            # Detect if running in Docker
+            import os
+            if os.path.exists('/.dockerenv') or os.getenv('RUNNING_IN_DOCKER'):
+                base_url = 'http://host.docker.internal:11434/v1'
+            else:
+                base_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434/v1')
+            
+            logger.info(f"Initializing Ollama model {ollama_model} at {base_url}")
+            
+            # Create OpenAI-compatible model with Ollama endpoint
+            from pydantic_ai.providers.openai import OpenAIProvider
+            
+            provider = OpenAIProvider(
+                base_url=base_url,
+                api_key='ollama'  # Ollama doesn't need a real API key
+            )
+            self.model = OpenAIModel(
+                model_name=ollama_model,
+                provider=provider
+            )
+            self.model_str = model  # Keep original string for reference
+        else:
+            self.model = model
+            self.model_str = model
+            
         self.name = name or self.__class__.__name__
         self.retries = retries
         self.enable_rate_limiting = enable_rate_limiting
@@ -214,8 +245,16 @@ class BaseAgent(ABC, Generic[DepsT, OutputT]):
                 timeout=120.0,  # 2 minute timeout for agent operations
             )
             self.logger.info(f"Agent {self.name} completed successfully")
-            # PydanticAI returns a RunResult with data attribute
-            return result.data
+            # PydanticAI returns an AgentRunResult
+            # In newer versions (0.7+), the field is 'output', not 'data'
+            if hasattr(result, 'output'):
+                return result.output
+            elif hasattr(result, 'data'):
+                return result.data
+            else:
+                self.logger.error(f"Unknown result structure: {type(result)}")
+                self.logger.error(f"Available attributes: {[a for a in dir(result) if not a.startswith('_')]}")
+                raise AttributeError(f"Result has neither 'output' nor 'data' attribute")
         except TimeoutError:
             self.logger.error(f"Agent {self.name} timed out after 120 seconds")
             raise Exception(f"Agent {self.name} operation timed out - taking too long to respond")

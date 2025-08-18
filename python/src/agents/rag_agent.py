@@ -64,6 +64,15 @@ class RagAgent(BaseAgent[RagDependencies, str]):
         if model is None:
             model = os.getenv("RAG_AGENT_MODEL", "openai:gpt-4o-mini")
 
+        # Log model usage for visibility
+        if model.startswith("ollama:"):
+            logger.info(f"Using Ollama model for RAG agent: {model}")
+            logger.info("Ensure Ollama server is running at http://localhost:11434")
+        elif model.startswith("openrouter:"):
+            logger.info(f"Using OpenRouter model for RAG agent: {model}")
+        elif model.startswith("deepseek:"):
+            logger.info(f"Using DeepSeek model for RAG agent: {model}")
+
         super().__init__(
             model=model, name="RagAgent", retries=3, enable_rate_limiting=True, **kwargs
         )

@@ -20,6 +20,7 @@ from typing import Any
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -82,11 +83,11 @@ async def fetch_credentials_from_server():
                 response.raise_for_status()
                 credentials = response.json()
 
-                # Set credentials as environment variables
+                # Set credentials as environment variables (always use database values)
                 for key, value in credentials.items():
                     if value is not None:
                         os.environ[key] = str(value)
-                        logger.info(f"Set credential: {key}")
+                        logger.info(f"Set credential from database: {key} = {value}")
 
                 # Store credentials globally for agent initialization
                 global AGENT_CREDENTIALS
@@ -124,12 +125,15 @@ async def lifespan(app: FastAPI):
     app.state.agents = {}
     for name, agent_class in AVAILABLE_AGENTS.items():
         try:
-            # Pass model configuration from credentials
+            # Pass model configuration from credentials for agents
+            # Check environment variable first, then fall back to credentials
             model_key = f"{name.upper()}_AGENT_MODEL"
-            model = AGENT_CREDENTIALS.get(model_key, "openai:gpt-4o-mini")
+            model = os.getenv(model_key) or AGENT_CREDENTIALS.get(model_key, "openai:gpt-4o-mini")
 
-            app.state.agents[name] = agent_class(model=model)
-            logger.info(f"Initialized {name} agent with model: {model}")
+            agent_instance = agent_class(model=model)
+            app.state.agents[name] = agent_instance
+            model_display = getattr(agent_instance, 'model_str', str(agent_instance.model))
+            logger.info(f"Initialized {name} agent with model: {model_display}")
         except Exception as e:
             logger.error(f"Failed to initialize {name} agent: {e}")
 
@@ -145,6 +149,15 @@ app = FastAPI(
     description="Lightweight service hosting PydanticAI agents",
     version="1.0.0",
     lifespan=lifespan,
+)
+
+# Add CORS middleware to allow frontend access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3737", "http://localhost:5173", "*"],  # Allow frontend origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods
+    allow_headers=["*"],  # Allow all headers
 )
 
 
@@ -173,12 +186,28 @@ async def run_agent(request: AgentRequest):
 
         agent = app.state.agents[request.agent_type]
 
-        # Prepare dependencies for the agent
-        deps = {
-            "context": request.context or {},
-            "options": request.options or {},
-            "mcp_endpoint": os.getenv("MCP_SERVICE_URL", "http://archon-mcp:8051"),
-        }
+        # Prepare dependencies for the agent based on type
+        if request.agent_type == "rag":
+            from .rag_agent import RagDependencies
+            
+            context = request.context or {}
+            deps = RagDependencies(
+                source_filter=context.get("source_filter"),
+                match_count=context.get("match_count", 5),
+                user_id=context.get("user_id"),
+            )
+        elif request.agent_type == "document":
+            from .document_agent import DocumentDependencies
+            
+            context = request.context or {}
+            deps = DocumentDependencies(
+                project_id=context.get("project_id"),
+                user_id=context.get("user_id"),
+            )
+        else:
+            # Default dependencies
+            from .base_agent import ArchonDependencies
+            deps = ArchonDependencies()
 
         # Run the agent
         result = await agent.run(request.prompt, deps)
@@ -186,7 +215,7 @@ async def run_agent(request: AgentRequest):
         return AgentResponse(
             success=True,
             result=result,
-            metadata={"agent_type": request.agent_type, "model": agent.model},
+            metadata={"agent_type": request.agent_type, "model": getattr(agent, 'model_str', str(agent.model))},
         )
 
     except Exception as e:
@@ -202,12 +231,18 @@ async def list_agents():
     for name, agent in app.state.agents.items():
         agents_info[name] = {
             "name": agent.name,
-            "model": agent.model,
+            "model": getattr(agent, 'model_str', str(agent.model)),
             "description": agent.__class__.__doc__ or "No description available",
             "available": True,
         }
 
     return {"agents": agents_info, "total": len(agents_info)}
+
+
+@app.options("/agents/{agent_type}/stream")
+async def stream_agent_options(agent_type: str):
+    """Handle preflight requests for CORS"""
+    return {"message": "OK"}
 
 
 @app.post("/agents/{agent_type}/stream")
