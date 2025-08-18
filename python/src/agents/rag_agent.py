@@ -62,7 +62,7 @@ class RagAgent(BaseAgent[RagDependencies, str]):
     def __init__(self, model: str = None, **kwargs):
         # Use provided model or fall back to default
         if model is None:
-            model = os.getenv("RAG_AGENT_MODEL", "openai:gpt-4o-mini")
+            model = os.getenv("RAG_AGENT_MODEL", "ollama:qwen3:0.6b")
 
         # Log model usage for visibility
         if model.startswith("ollama:"):

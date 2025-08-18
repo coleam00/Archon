@@ -19,6 +19,7 @@ import { KnowledgeItemCard } from '../components/knowledge-base/KnowledgeItemCar
 import { GroupedKnowledgeItemCard } from '../components/knowledge-base/GroupedKnowledgeItemCard';
 import { KnowledgeGridSkeleton, KnowledgeTableSkeleton } from '../components/knowledge-base/KnowledgeItemSkeleton';
 import { GroupCreationModal } from '../components/knowledge-base/GroupCreationModal';
+import { RAGChatSection } from '../components/knowledge-base/RAGChatSection';
 
 const extractDomain = (url: string): string => {
   try {
@@ -887,6 +888,9 @@ export const KnowledgeBasePage = () => {
   };
 
   return <div>
+      {/* RAG Chat Section - Always visible at the top */}
+      <RAGChatSection />
+      
       {/* Header with animation - stays static when changing views */}
       <motion.div className="flex justify-between items-center mb-8" initial="hidden" animate="visible" variants={headerContainerVariants}>
         <motion.h1 className="text-3xl font-bold text-gray-800 dark:text-white flex items-center gap-3" variants={titleVariants}>
