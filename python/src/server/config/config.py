@@ -1,6 +1,8 @@
 """
 Environment configuration management for the MCP server.
 """
+from cryptography.fernet import Fernet
+from typing import Optional
 
 import os
 from dataclasses import dataclass
@@ -203,3 +205,23 @@ def get_rag_strategy_config() -> RAGStrategyConfig:
         use_agentic_rag=str_to_bool(os.getenv("USE_AGENTIC_RAG")),
         use_reranking=str_to_bool(os.getenv("USE_RERANKING")),
     )
+    class SecureConfig:
+    def __init__(self):
+        self.cipher = Fernet(self._get_or_create_key())
+    
+    def _get_or_create_key(self) -> bytes:
+        key_file = ".archon_key"
+        if os.path.exists(key_file):
+            with open(key_file, 'rb') as f:
+                return f.read()
+        else:
+            key = Fernet.generate_key()
+            with open(key_file, 'wb') as f:
+                f.write(key)
+            return key
+    
+    def encrypt_api_key(self, api_key: str) -> str:
+        return self.cipher.encrypt(api_key.encode()).decode()
+    
+    def decrypt_api_key(self, encrypted_key: str) -> str:
+        return self.cipher.decrypt(encrypted_key.encode()).decode()
