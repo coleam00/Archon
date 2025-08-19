@@ -97,8 +97,15 @@ def validate_supabase_url(url: str) -> bool:
         raise ConfigurationError("Supabase URL cannot be empty")
 
     parsed = urlparse(url)
-    if parsed.scheme != "https":
-        raise ConfigurationError("Supabase URL must use HTTPS")
+    # Allow HTTP for local development (host.docker.internal or localhost)
+    if parsed.scheme not in ("http", "https"):
+        raise ConfigurationError("Supabase URL must use HTTP or HTTPS")
+    
+    # Require HTTPS for production (non-local) URLs
+    if parsed.scheme == "http":
+        hostname = parsed.hostname or ""
+        if not any(local in hostname for local in ["localhost", "127.0.0.1", "host.docker.internal", "0.0.0.0"]):
+            raise ConfigurationError("Supabase URL must use HTTPS for non-local environments")
 
     if not parsed.netloc:
         raise ConfigurationError("Invalid Supabase URL format")
