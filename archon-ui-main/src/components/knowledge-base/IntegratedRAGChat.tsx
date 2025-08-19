@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { Send, Bot, User, Sparkles, Loader2, X, MessageSquare, ChevronLeft, ChevronRight, Maximize2, Minimize2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
@@ -193,7 +195,7 @@ export const IntegratedRAGChat = forwardRef<IntegratedRAGChatRef, IntegratedRAGC
         <motion.div
           initial={{ width: isExpanded ? 0 : 80 }}
           animate={{ 
-            width: isExpanded ? (isFullscreen ? '100%' : 420) : 80,
+            width: isExpanded ? (isFullscreen ? '100%' : 500) : 80,
             height: isFullscreen ? '100vh' : 'auto'
           }}
           exit={{ width: 0 }}
@@ -254,7 +256,7 @@ export const IntegratedRAGChat = forwardRef<IntegratedRAGChatRef, IntegratedRAGC
             {isExpanded && (
               <>
                 {/* Messages Area */}
-                <div className={`flex-1 overflow-y-auto p-4 ${isFullscreen ? 'max-h-[calc(100vh-180px)]' : 'h-[500px]'}`}>
+                <div className={`flex-1 overflow-y-auto p-4 ${isFullscreen ? 'max-h-[calc(100vh-180px)]' : 'h-[600px]'}`}>
                   {messages.length === 0 && !streamingContent ? (
                     <div className="flex items-center justify-center h-full text-gray-500 dark:text-gray-400">
                       <div className="text-center">
@@ -284,14 +286,41 @@ export const IntegratedRAGChat = forwardRef<IntegratedRAGChatRef, IntegratedRAGC
                           )}
                           
                           <div
-                            className={`max-w-[75%] rounded-lg px-3 py-2 ${
+                            className={`max-w-[85%] rounded-lg px-4 py-3 ${
                               message.sender === 'user'
                                 ? 'bg-blue-500 text-white'
                                 : 'bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200'
                             }`}
                           >
-                            <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
-                            <p className={`text-xs mt-1 ${
+                            {message.sender === 'agent' ? (
+                              <div className="prose prose-sm dark:prose-invert max-w-none">
+                                <ReactMarkdown 
+                                  remarkPlugins={[remarkGfm]}
+                                  components={{
+                                    p: ({children}) => <p className="mb-2 text-sm leading-relaxed">{children}</p>,
+                                    ul: ({children}) => <ul className="list-disc pl-4 mb-2 space-y-1">{children}</ul>,
+                                    ol: ({children}) => <ol className="list-decimal pl-4 mb-2 space-y-1">{children}</ol>,
+                                    li: ({children}) => <li className="text-sm">{children}</li>,
+                                    strong: ({children}) => <strong className="font-semibold text-gray-900 dark:text-gray-100">{children}</strong>,
+                                    code: ({inline, children}) => 
+                                      inline ? 
+                                        <code className="px-1 py-0.5 bg-gray-200 dark:bg-gray-700 rounded text-xs font-mono">{children}</code> :
+                                        <pre className="p-2 bg-gray-200 dark:bg-gray-700 rounded overflow-x-auto"><code className="text-xs font-mono">{children}</code></pre>,
+                                    a: ({href, children}) => 
+                                      <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline">{children}</a>,
+                                    h1: ({children}) => <h1 className="text-lg font-bold mb-2 mt-3">{children}</h1>,
+                                    h2: ({children}) => <h2 className="text-base font-bold mb-2 mt-3">{children}</h2>,
+                                    h3: ({children}) => <h3 className="text-sm font-bold mb-1 mt-2">{children}</h3>,
+                                    blockquote: ({children}) => <blockquote className="border-l-4 border-gray-300 dark:border-gray-600 pl-3 italic my-2">{children}</blockquote>,
+                                  }}
+                                >
+                                  {message.content}
+                                </ReactMarkdown>
+                              </div>
+                            ) : (
+                              <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
+                            )}
+                            <p className={`text-xs mt-2 ${
                               message.sender === 'user' ? 'text-blue-100' : 'text-gray-500 dark:text-gray-400'
                             }`}>
                               {new Date(message.timestamp).toLocaleTimeString()}
@@ -320,10 +349,27 @@ export const IntegratedRAGChat = forwardRef<IntegratedRAGChatRef, IntegratedRAGC
                               <Bot className="w-4 h-4 text-white" />
                             </div>
                           </div>
-                          <div className="max-w-[75%] rounded-lg px-3 py-2 bg-gray-100 dark:bg-gray-800">
-                            <p className="text-sm whitespace-pre-wrap break-words text-gray-800 dark:text-gray-200">
-                              {streamingContent}
-                            </p>
+                          <div className="max-w-[85%] rounded-lg px-4 py-3 bg-gray-100 dark:bg-gray-800">
+                            <div className="prose prose-sm dark:prose-invert max-w-none">
+                              <ReactMarkdown 
+                                remarkPlugins={[remarkGfm]}
+                                components={{
+                                  p: ({children}) => <p className="mb-2 text-sm leading-relaxed">{children}</p>,
+                                  ul: ({children}) => <ul className="list-disc pl-4 mb-2 space-y-1">{children}</ul>,
+                                  ol: ({children}) => <ol className="list-decimal pl-4 mb-2 space-y-1">{children}</ol>,
+                                  li: ({children}) => <li className="text-sm">{children}</li>,
+                                  strong: ({children}) => <strong className="font-semibold text-gray-900 dark:text-gray-100">{children}</strong>,
+                                  code: ({inline, children}) => 
+                                    inline ? 
+                                      <code className="px-1 py-0.5 bg-gray-200 dark:bg-gray-700 rounded text-xs font-mono">{children}</code> :
+                                      <pre className="p-2 bg-gray-200 dark:bg-gray-700 rounded overflow-x-auto"><code className="text-xs font-mono">{children}</code></pre>,
+                                  a: ({href, children}) => 
+                                    <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline">{children}</a>,
+                                }}
+                              >
+                                {streamingContent}
+                              </ReactMarkdown>
+                            </div>
                           </div>
                         </motion.div>
                       )}
