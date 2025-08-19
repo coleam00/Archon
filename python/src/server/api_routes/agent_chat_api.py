@@ -160,67 +160,137 @@ async def process_agent_response(session_id: str, message: str, context: dict):
     await sio.emit("typing", {"type": "typing", "is_typing": True}, room=room)
 
     try:
-        # Call agents service with SSE streaming
         agents_port = os.getenv("ARCHON_AGENTS_PORT")
         if not agents_port:
             raise ValueError(
                 "ARCHON_AGENTS_PORT environment variable is required. "
                 "Please set it in your .env file or environment."
             )
+        
+        # First, get agent info to determine if we're using Ollama
         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
-            async with client.stream(
-                "POST",
-                f"http://archon-agents:{agents_port}/agents/{agent_type}/stream",
+            # Quick call to get the agent metadata
+            response = await client.post(
+                f"http://archon-agents:{agents_port}/agents/run",
                 json={"agent_type": agent_type, "prompt": message, "context": context},
-            ) as response:
-                if response.status_code != 200:
+            )
+            
+            if response.status_code != 200:
+                await sio.emit(
+                    "error",
+                    {"type": "error", "error": f"Agent service error: {response.status_code}"},
+                    room=room,
+                )
+                return
+            
+            result = response.json()
+            
+            if not result.get("success", False):
+                error_msg = result.get("error", "Unknown error from agent")
+                await sio.emit(
+                    "error",
+                    {"type": "error", "error": error_msg},
+                    room=room,
+                )
+                return
+            
+            # Check if we're using Ollama based on the model in metadata
+            metadata = result.get("metadata", {})
+            model = metadata.get("model", "")
+            is_ollama = model.startswith("ollama:")
+            
+            # Get the full content
+            full_content = result.get("result", "")
+            
+            if is_ollama:
+                # For Ollama, simulate streaming by chunking the response
+                # This gives a better UX even though we have the full response
+                logger.info(f"Using simulated streaming for Ollama model: {model}")
+                chunk_size = 50  # Characters per chunk
+                chunks = [full_content[i:i + chunk_size] for i in range(0, len(full_content), chunk_size)]
+                
+                for chunk in chunks:
                     await sio.emit(
-                        "error",
-                        {"type": "error", "error": f"Agent service error: {response.status_code}"},
+                        "stream_chunk",
+                        {"type": "stream_chunk", "content": chunk},
                         room=room,
                     )
-                    return
+                    # Small delay to simulate typing
+                    await asyncio.sleep(0.05)
+            else:
+                # For OpenAI/other models, try to use real streaming
+                logger.info(f"Attempting real streaming for model: {model}")
+                try:
+                    # Try the streaming endpoint
+                    async with client.stream(
+                        "POST",
+                        f"http://archon-agents:{agents_port}/agents/stream",
+                        json={"agent_type": agent_type, "prompt": message, "context": context},
+                        headers={"Accept": "text/event-stream"},
+                    ) as stream_response:
+                        if stream_response.status_code == 200:
+                            # Successfully using streaming endpoint
+                            accumulated_content = ""
+                            async for line in stream_response.aiter_lines():
+                                if line.startswith("data: "):
+                                    try:
+                                        chunk_data = json.loads(line[6:])
+                                        content = chunk_data.get("content", "")
+                                        accumulated_content += content
+                                        
+                                        await sio.emit(
+                                            "stream_chunk",
+                                            {"type": "stream_chunk", "content": content},
+                                            room=room,
+                                        )
+                                    except json.JSONDecodeError:
+                                        continue
+                            full_content = accumulated_content
+                        else:
+                            # Streaming endpoint failed, we already have the full content from the first call
+                            logger.warning(f"Streaming endpoint returned {stream_response.status_code}, using full response")
+                            # Send the full content in chunks for consistency
+                            chunk_size = 100  # Larger chunks for non-Ollama
+                            chunks = [full_content[i:i + chunk_size] for i in range(0, len(full_content), chunk_size)]
+                            
+                            for chunk in chunks:
+                                await sio.emit(
+                                    "stream_chunk",
+                                    {"type": "stream_chunk", "content": chunk},
+                                    room=room,
+                                )
+                                await asyncio.sleep(0.02)  # Faster for non-Ollama
+                except Exception as stream_error:
+                    # If streaming fails, fall back to chunking the full response
+                    logger.warning(f"Streaming failed: {stream_error}, using chunked response")
+                    chunk_size = 100  # Larger chunks for non-Ollama
+                    chunks = [full_content[i:i + chunk_size] for i in range(0, len(full_content), chunk_size)]
+                    
+                    for chunk in chunks:
+                        await sio.emit(
+                            "stream_chunk",
+                            {"type": "stream_chunk", "content": chunk},
+                            room=room,
+                        )
+                        await asyncio.sleep(0.02)
+            
+            # Create complete agent message
+            agent_msg = {
+                "id": str(uuid.uuid4()),
+                "content": full_content,
+                "sender": "agent",
+                "agent_type": agent_type,
+                "timestamp": datetime.now().isoformat(),
+            }
 
-                # Collect chunks for complete message
-                full_content = ""
+            # Store in session
+            sessions[session_id]["messages"].append(agent_msg)
 
-                # Stream SSE chunks to Socket.IO
-                async for line in response.aiter_lines():
-                    if line.startswith("data: "):
-                        try:
-                            chunk_data = json.loads(line[6:])
-                            chunk_content = chunk_data.get("content", "")
+            # Emit complete message
+            await sio.emit("message", {"type": "message", "data": agent_msg}, room=room)
 
-                            # Accumulate content
-                            full_content += chunk_content
-
-                            # Emit streaming chunk
-                            await sio.emit(
-                                "stream_chunk",
-                                {"type": "stream_chunk", "content": chunk_content},
-                                room=room,
-                            )
-
-                        except json.JSONDecodeError:
-                            logger.warning(f"Failed to parse SSE chunk: {line}")
-
-                # Create complete agent message
-                agent_msg = {
-                    "id": str(uuid.uuid4()),
-                    "content": full_content,
-                    "sender": "agent",
-                    "agent_type": agent_type,
-                    "timestamp": datetime.now().isoformat(),
-                }
-
-                # Store in session
-                sessions[session_id]["messages"].append(agent_msg)
-
-                # Emit complete message
-                await sio.emit("message", {"type": "message", "data": agent_msg}, room=room)
-
-                # Emit stream complete
-                await sio.emit("stream_complete", {"type": "stream_complete"}, room=room)
+            # Emit stream complete
+            await sio.emit("stream_complete", {"type": "stream_complete"}, room=room)
 
     except Exception as e:
         logger.error(f"Error processing agent response: {e}")

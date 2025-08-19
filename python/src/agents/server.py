@@ -26,7 +26,8 @@ from pydantic import BaseModel
 
 # Import our PydanticAI agents
 from .document_agent import DocumentAgent
-from .rag_agent import RagAgent
+from .rag_agent import RagAgent  # MCP-based version
+from .ollama_rag_agent import OllamaRagAgent  # Direct API version
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -52,10 +53,10 @@ class AgentResponse(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
-# Agent registry
+# Agent registry - will be populated dynamically based on model configuration
 AVAILABLE_AGENTS = {
     "document": DocumentAgent,
-    "rag": RagAgent,
+    # RAG agent will be chosen dynamically based on model provider
 }
 
 # Global credentials storage
@@ -123,7 +124,32 @@ async def lifespan(app: FastAPI):
 
     # Initialize agents with fetched credentials
     app.state.agents = {}
+    
+    # Special handling for RAG agent - choose based on model provider
+    rag_model = os.getenv("RAG_AGENT_MODEL") or AGENT_CREDENTIALS.get("RAG_AGENT_MODEL", "ollama:llama3.2:latest")
+    
+    # Determine which RAG agent to use based on the model
+    if rag_model.startswith("ollama:"):
+        # Use direct API version for Ollama models
+        logger.info(f"Using OllamaRagAgent (direct API) for model: {rag_model}")
+        try:
+            app.state.agents["rag"] = OllamaRagAgent(model=rag_model)
+            logger.info(f"Initialized RAG agent (direct API mode) with model: {rag_model}")
+        except Exception as e:
+            logger.error(f"Failed to initialize OllamaRagAgent: {e}")
+    else:
+        # Use MCP version for OpenAI/other models (when MCP is fixed)
+        logger.info(f"Using RagAgent (MCP) for model: {rag_model}")
+        try:
+            app.state.agents["rag"] = RagAgent(model=rag_model)
+            logger.info(f"Initialized RAG agent (MCP mode) with model: {rag_model}")
+        except Exception as e:
+            logger.error(f"Failed to initialize RagAgent: {e}")
+    
+    # Initialize other agents from the registry
     for name, agent_class in AVAILABLE_AGENTS.items():
+        if name == "rag":
+            continue  # Already handled above
         try:
             # Pass model configuration from credentials for agents
             # Check environment variable first, then fall back to credentials
@@ -188,7 +214,12 @@ async def run_agent(request: AgentRequest):
 
         # Prepare dependencies for the agent based on type
         if request.agent_type == "rag":
-            from .rag_agent import RagDependencies
+            # Check which RAG agent is being used and import appropriate dependencies
+            agent = app.state.agents.get("rag")
+            if agent and "OllamaRagAgent" in str(type(agent)):
+                from .ollama_rag_agent import RagDependencies
+            else:
+                from .rag_agent import RagDependencies
             
             context = request.context or {}
             deps = RagDependencies(
@@ -264,7 +295,12 @@ async def stream_agent(agent_type: str, request: AgentRequest):
             # Prepare dependencies based on agent type
             # Import dependency classes
             if agent_type == "rag":
-                from .rag_agent import RagDependencies
+                # Check which RAG agent is being used and import appropriate dependencies
+                agent_instance = app.state.agents.get("rag")
+                if agent_instance and "OllamaRagAgent" in str(type(agent_instance)):
+                    from .ollama_rag_agent import RagDependencies
+                else:
+                    from .rag_agent import RagDependencies
 
                 deps = RagDependencies(
                     source_filter=request.context.get("source_filter") if request.context else None,
