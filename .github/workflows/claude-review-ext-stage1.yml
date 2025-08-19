@@ -28,7 +28,7 @@ jobs:
     
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write  # Need write to post comments
     
     steps:
       - name: Checkout PR code
@@ -196,6 +196,7 @@ jobs:
       - name: Post Status Comment
         if: github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment'
         uses: actions/github-script@v7
+        continue-on-error: true  # Don't fail the workflow if comment posting fails
         with:
           script: |
             const prNumber = ${{ steps.pr-info.outputs.pr_number }};
@@ -210,13 +211,19 @@ jobs:
             statusMessage += `📋 Stage 2 (Claude Review) will run automatically after this workflow completes.\n`;
             statusMessage += `This two-stage process ensures secure handling of forked PRs.`;
             
-            // Post comment
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: prNumber,
-              body: statusMessage
-            });
+            try {
+              // Post comment on the PR
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: statusMessage
+              });
+              console.log(`Successfully posted status comment on PR #${prNumber}`);
+            } catch (error) {
+              console.log(`Warning: Could not post comment on PR #${prNumber}: ${error.message}`);
+              console.log('This is expected for some permission scenarios. Stage 2 will still run.');
+            }
       
       - name: Job Summary
         run: |
