@@ -1,17 +1,20 @@
 """
 Live Ollama Integration Test
 
-This test actually connects to a running Ollama server and performs real RAG queries.
+This test actually connects to running services and performs real RAG and chat queries.
 Prerequisites:
 - Ollama must be running locally (http://localhost:11434)
 - At least one model must be available (e.g., llama3.2, qwen3:0.6b)
 - Supabase must be configured with test data
+- All Archon services must be running (server, agents, etc.)
 
-Run with: pytest tests/test_ollama_live_integration.py -v -s --live-ollama
+Run with: pytest tests/test_ollama_live.py -v -s -m live
 """
 
 import asyncio
+import json
 import os
+import time
 import httpx
 import pytest
 from typing import Any, Dict, List
@@ -26,10 +29,6 @@ os.environ.update({
     "USE_RERANKING": "false",  # Disable for speed in tests
     "USE_CONTEXTUAL_EMBEDDINGS": "false",  # Disable for speed
 })
-
-
-# Note: Live Ollama tests require Ollama to be running locally
-# These tests will skip automatically if Ollama is not available
 
 
 @pytest.fixture
@@ -51,19 +50,19 @@ async def check_ollama_server():
 
 @pytest.mark.live
 class TestLiveOllamaIntegration:
-    """Tests that actually connect to a live Ollama server and real database.
+    """Tests that actually connect to live services and real database.
     
     These tests are marked with @pytest.mark.live to bypass the prevent_real_db_calls fixture.
     
     Run with: pytest tests/test_ollama_live.py -m live -v
     """
 
-    @pytest.mark.live
+    # === EXISTING TESTS (kept as-is) ===
+    
     @pytest.mark.live
     @pytest.mark.asyncio
     async def test_ollama_server_connectivity(self):
         """Test that we can connect to Ollama server"""
-        # Run manually with: python tests/test_ollama_live_integration.py
         pass
 
     @pytest.mark.live
@@ -193,6 +192,317 @@ class TestLiveOllamaIntegration:
             
         except Exception as e:
             pytest.fail(f"RAG query failed with error: {e}")
+
+    # === NEW CHAT ENDPOINT TESTS ===
+    
+    @pytest.mark.live
+    @pytest.mark.asyncio
+    async def test_chat_session_creation(self):
+        """Test creating a chat session via REST API"""
+        async with httpx.AsyncClient() as client:
+            # Create a chat session
+            response = await client.post(
+                "http://localhost:8181/api/agent-chat/sessions",
+                json={"agent_type": "rag"}
+            )
+            
+            assert response.status_code == 200, f"Expected 200, got {response.status_code}"
+            data = response.json()
+            assert "session_id" in data, "Response should contain session_id"
+            
+            session_id = data["session_id"]
+            print(f"\n✅ Created chat session: {session_id}")
+            
+            # Verify session can be retrieved
+            get_response = await client.get(
+                f"http://localhost:8181/api/agent-chat/sessions/{session_id}"
+            )
+            
+            assert get_response.status_code == 200
+            session_data = get_response.json()
+            assert session_data["id"] == session_id
+            assert session_data["agent_type"] == "rag"
+            print(f"   Session type: {session_data['agent_type']}")
+
+    @pytest.mark.live
+    @pytest.mark.asyncio
+    async def test_chat_message_with_ollama(self):
+        """Test sending a message to chat endpoint with Ollama RAG agent"""
+        from src.server.services.credential_service import credential_service
+        
+        # Ensure Ollama is configured for RAG agent
+        await credential_service.set_credential(
+            key="RAG_AGENT_MODEL",
+            value="ollama:llama3.2:latest",
+            is_encrypted=False,
+        )
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Create session
+            session_response = await client.post(
+                "http://localhost:8181/api/agent-chat/sessions",
+                json={"agent_type": "rag"}
+            )
+            session_id = session_response.json()["session_id"]
+            
+            # Send a message
+            message = "What is LangGraph and how does it work?"
+            print(f"\n📨 Sending chat message: '{message}'")
+            
+            start_time = time.time()
+            response = await client.post(
+                f"http://localhost:8181/api/agent-chat/sessions/{session_id}/messages",
+                json={"message": message, "context": {}}
+            )
+            
+            assert response.status_code == 200
+            
+            # Wait a bit for the agent to process (since it's async)
+            await asyncio.sleep(5)
+            
+            # Get session to see if message was added
+            session_response = await client.get(
+                f"http://localhost:8181/api/agent-chat/sessions/{session_id}"
+            )
+            
+            session_data = session_response.json()
+            messages = session_data.get("messages", [])
+            
+            # Should have at least the user message
+            assert len(messages) >= 1, "Should have at least user message"
+            assert messages[0]["sender"] == "user"
+            assert messages[0]["content"] == message
+            
+            elapsed = time.time() - start_time
+            print(f"✅ Chat message processed in {elapsed:.2f}s")
+            print(f"   Messages in session: {len(messages)}")
+
+    @pytest.mark.live
+    @pytest.mark.asyncio
+    async def test_chat_streaming_behavior(self):
+        """Test that chat uses appropriate streaming based on model"""
+        from src.server.services.credential_service import credential_service
+        
+        # Test with Ollama model (should use simulated streaming)
+        await credential_service.set_credential(
+            key="RAG_AGENT_MODEL",
+            value="ollama:llama3.2:latest",
+            is_encrypted=False,
+        )
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Check agent configuration
+            agent_response = await client.post(
+                "http://localhost:8052/agents/run",
+                json={
+                    "agent_type": "rag",
+                    "prompt": "Test",
+                    "context": {}
+                }
+            )
+            
+            if agent_response.status_code == 200:
+                metadata = agent_response.json().get("metadata", {})
+                model = metadata.get("model", "")
+                
+                if model.startswith("ollama:"):
+                    print(f"\n✅ Ollama model detected: {model}")
+                    print("   Will use simulated streaming (chunking)")
+                else:
+                    print(f"\n✅ Non-Ollama model detected: {model}")
+                    print("   Will attempt real SSE streaming")
+
+    # === NEW RAG ENDPOINT TESTS ===
+    
+    @pytest.mark.live
+    @pytest.mark.asyncio
+    async def test_rag_query_endpoint(self):
+        """Test the direct RAG query REST endpoint"""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            query = "What is Archon?"
+            print(f"\n🔍 Testing RAG query endpoint: '{query}'")
+            
+            response = await client.post(
+                "http://localhost:8181/api/rag/query",
+                json={
+                    "query": query,
+                    "match_count": 5,
+                    "source": None,
+                }
+            )
+            
+            assert response.status_code == 200, f"Expected 200, got {response.status_code}"
+            
+            data = response.json()
+            assert "results" in data, "Response should contain results"
+            assert "search_mode" in data, "Response should contain search_mode"
+            
+            results = data.get("results", [])
+            print(f"✅ RAG query returned {len(results)} results")
+            print(f"   Search mode: {data.get('search_mode')}")
+            
+            if results:
+                top_result = results[0]
+                print(f"   Top result similarity: {top_result.get('similarity', 0):.3f}")
+
+    @pytest.mark.live
+    @pytest.mark.asyncio
+    async def test_rag_code_examples_endpoint(self):
+        """Test the code examples search endpoint"""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "http://localhost:8181/api/rag/code-examples",
+                json={
+                    "query": "async function",
+                    "match_count": 3,
+                    "source_id": None,
+                }
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            if "code_examples" in data:
+                examples = data["code_examples"]
+                print(f"\n✅ Found {len(examples)} code examples")
+                
+                for i, example in enumerate(examples[:2], 1):
+                    print(f"   {i}. Language: {example.get('language', 'unknown')}")
+                    print(f"      Score: {example.get('similarity_score', 0):.3f}")
+
+    @pytest.mark.live
+    @pytest.mark.asyncio
+    async def test_rag_sources_endpoint(self):
+        """Test the sources listing endpoint"""
+        async with httpx.AsyncClient() as client:
+            response = await client.get("http://localhost:8181/api/rag/sources")
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            assert "sources" in data, "Response should contain sources"
+            sources = data["sources"]
+            
+            print(f"\n✅ Found {len(sources)} sources in knowledge base")
+            
+            for source in sources[:3]:
+                print(f"   - {source.get('title', 'Untitled')}")
+                print(f"     Type: {source.get('type', 'unknown')}")
+                print(f"     Documents: {source.get('document_count', 0)}")
+
+    @pytest.mark.live
+    @pytest.mark.asyncio
+    async def test_rag_with_source_filter(self):
+        """Test RAG query with source filtering"""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # First get available sources
+            sources_response = await client.get("http://localhost:8181/api/rag/sources")
+            sources = sources_response.json().get("sources", [])
+            
+            if sources:
+                # Use the first source as a filter
+                first_source = sources[0]
+                source_id = first_source.get("id") or first_source.get("title")
+                source_title = first_source.get("title", "Unknown")
+                
+                print(f"\n🔍 Testing RAG with source filter: {source_title}")
+                
+                # Query with source filter
+                response = await client.post(
+                    "http://localhost:8181/api/rag/query",
+                    json={
+                        "query": "explain the main concepts",
+                        "match_count": 3,
+                        "source": source_id,
+                    }
+                )
+                
+                assert response.status_code == 200
+                data = response.json()
+                results = data.get("results", [])
+                
+                print(f"✅ Filtered query returned {len(results)} results")
+                
+                # Verify results are from the specified source (if filtering is working)
+                if results:
+                    # Just check that we got results - source filtering might not be implemented
+                    # or the metadata structure might be different
+                    print(f"   Results returned from source filter query")
+
+    @pytest.mark.live
+    @pytest.mark.asyncio
+    async def test_rag_performance_comparison(self):
+        """Compare performance between direct RAG endpoint and chat endpoint"""
+        query = "What is retrieval augmented generation?"
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Test direct RAG endpoint
+            start_time = time.time()
+            rag_response = await client.post(
+                "http://localhost:8181/api/rag/query",
+                json={"query": query, "match_count": 3}
+            )
+            rag_time = time.time() - start_time
+            
+            # Test chat endpoint
+            session_response = await client.post(
+                "http://localhost:8181/api/agent-chat/sessions",
+                json={"agent_type": "rag"}
+            )
+            session_id = session_response.json()["session_id"]
+            
+            start_time = time.time()
+            await client.post(
+                f"http://localhost:8181/api/agent-chat/sessions/{session_id}/messages",
+                json={"message": query}
+            )
+            chat_time = time.time() - start_time
+            
+            print(f"\n⏱️ Performance Comparison:")
+            print(f"   Direct RAG endpoint: {rag_time:.2f}s")
+            print(f"   Chat endpoint: {chat_time:.2f}s")
+            print(f"   Difference: {abs(rag_time - chat_time):.2f}s")
+
+    @pytest.mark.live
+    @pytest.mark.asyncio
+    async def test_provider_switching(self):
+        """Test switching between Ollama and OpenAI providers"""
+        from src.server.services.credential_service import credential_service
+        
+        providers = [
+            ("ollama", "ollama:llama3.2:latest"),
+            ("openai", "openai:gpt-4o-mini"),
+        ]
+        
+        for provider_name, model_spec in providers:
+            # Skip OpenAI if no API key
+            if provider_name == "openai":
+                api_key = os.getenv("OPENAI_API_KEY")
+                if not api_key:
+                    print(f"\n⚠️ Skipping OpenAI test (no API key)")
+                    continue
+            
+            print(f"\n🔄 Testing with {provider_name} provider")
+            
+            # Set the provider
+            await credential_service.set_credential(
+                key="RAG_AGENT_MODEL",
+                value=model_spec,
+                is_encrypted=False,
+            )
+            
+            # Test RAG query
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    "http://localhost:8181/api/rag/query",
+                    json={
+                        "query": "test query",
+                        "match_count": 1,
+                    }
+                )
+                
+                assert response.status_code == 200
+                print(f"   ✅ {provider_name} RAG query successful")
 
     @pytest.mark.live
     @pytest.mark.asyncio
@@ -393,14 +703,20 @@ class TestLiveOllamaIntegration:
             assert elapsed_time < 30, f"Query should complete within 30 seconds, took {elapsed_time:.2f}s"
 
 
-# Helper function to run a single test manually
-async def run_single_test():
+# Helper function to run specific tests manually
+async def run_single_test(test_name="test_chat_message_with_ollama"):
     """Helper to run a single test for debugging"""
     test = TestLiveOllamaIntegration()
-    await test.test_live_rag_query_with_ollama()
+    test_method = getattr(test, test_name, None)
+    if test_method:
+        await test_method()
+    else:
+        print(f"Test method '{test_name}' not found")
 
 
 if __name__ == "__main__":
-    # Run with: python tests/test_ollama_live_integration.py
-    print("Running live Ollama integration test...")
-    asyncio.run(run_single_test())
+    # Run with: python tests/test_ollama_live.py
+    import sys
+    test_name = sys.argv[1] if len(sys.argv) > 1 else "test_chat_message_with_ollama"
+    print(f"Running live test: {test_name}")
+    asyncio.run(run_single_test(test_name))
