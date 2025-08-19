@@ -601,17 +601,15 @@ export const DocsTab = ({
     try {
       setIsSaving(true);
       
-      // Create a new document with a unique ID
-      const newDocument: ProjectDoc = {
-        id: `doc-${Date.now()}`,
+      // Create the document in the database first
+      const newDocument = await projectService.createDocument(project.id, {
         title: template.name,
         content: template.content,
         document_type: template.document_type,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      };
+        tags: []
+      });
       
-      // Add to documents list
+      // Add to documents list with the real document from the database
       setDocuments(prev => [...prev, newDocument]);
       setSelectedDocument(newDocument);
       
@@ -636,12 +634,19 @@ export const DocsTab = ({
     try {
       setIsSaving(true);
       
-      // Update the document in local state
-      const updatedDocument = { 
-        ...selectedDocument, 
-        updated_at: new Date().toISOString() 
-      };
+      // Call backend API to persist changes
+      const updatedDocument = await projectService.updateDocument(
+        project.id,
+        selectedDocument.id,
+        {
+          title: selectedDocument.title,
+          content: selectedDocument.content,
+          tags: selectedDocument.tags,
+          author: selectedDocument.author
+        }
+      );
       
+      // Update local state with backend response
       setDocuments(prev => prev.map(doc => 
         doc.id === selectedDocument.id ? updatedDocument : doc
       ));
@@ -984,16 +989,22 @@ export const DocsTab = ({
                 try {
                   setIsSaving(true);
                   
-                  // Update document with timestamp
-                  const docWithTimestamp = {
-                    ...updatedDocument,
-                    updated_at: new Date().toISOString()
-                  };
+                  // Call backend API to persist changes
+                  const savedDocument = await projectService.updateDocument(
+                    project.id,
+                    updatedDocument.id,
+                    {
+                      title: updatedDocument.title,
+                      content: updatedDocument.content,
+                      tags: updatedDocument.tags,
+                      author: updatedDocument.author
+                    }
+                  );
                   
-                  // Update local state
-                  setSelectedDocument(docWithTimestamp);
+                  // Update local state with backend response
+                  setSelectedDocument(savedDocument);
                   setDocuments(prev => prev.map(doc => 
-                    doc.id === updatedDocument.id ? docWithTimestamp : doc
+                    doc.id === updatedDocument.id ? savedDocument : doc
                   ));
                   
                   console.log('Document saved via MilkdownEditor');
