@@ -196,7 +196,7 @@ class OllamaRagAgent(BaseAgent[RagDependencies, str]):
                         f"Content: {content}\n"
                     )
 
-                search_mode = result.get("search_mode", "vector")
+                search_mode = result.get("search_mode", "hybrid")
                 reranked = result.get("reranking_applied", False)
                 
                 header = f"Found {len(results)} relevant results"

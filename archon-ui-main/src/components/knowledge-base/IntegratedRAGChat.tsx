@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
-import { Send, Bot, User, Sparkles, Loader2, X, MessageSquare, ChevronLeft, ChevronRight, Maximize2, Minimize2 } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Loader2, ChevronRight, Maximize2, Minimize2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -22,6 +22,7 @@ interface Message {
 interface IntegratedRAGChatProps {
   isExpanded: boolean;
   onToggleExpand: () => void;
+  onUnreadCountChange?: (count: number) => void;
   className?: string;
 }
 
@@ -30,8 +31,7 @@ export interface IntegratedRAGChatRef {
   sendMessage: (message: string, context?: any) => void;
 }
 
-export const IntegratedRAGChat = forwardRef<IntegratedRAGChatRef, IntegratedRAGChatProps>(
-  ({ isExpanded, onToggleExpand, className = '' }, ref) => {
+const IntegratedRAGChat = forwardRef<IntegratedRAGChatRef, IntegratedRAGChatProps>(({ isExpanded, onToggleExpand, onUnreadCountChange, className = '' }, ref) => {
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
@@ -79,7 +79,11 @@ export const IntegratedRAGChat = forwardRef<IntegratedRAGChatRef, IntegratedRAGC
               setStreamingContent('');
               // Increment unread count if chat is collapsed
               if (!isExpanded) {
-                setUnreadCount(prev => prev + 1);
+                setUnreadCount(prev => {
+                  const newCount = prev + 1;
+                  onUnreadCountChange?.(newCount);
+                  return newCount;
+                });
               }
             }
           });
@@ -123,8 +127,9 @@ export const IntegratedRAGChat = forwardRef<IntegratedRAGChatRef, IntegratedRAGC
     useEffect(() => {
       if (isExpanded) {
         setUnreadCount(0);
+        onUnreadCountChange?.(0);
       }
-    }, [isExpanded]);
+    }, [isExpanded, onUnreadCountChange]);
 
     // Auto-scroll to bottom
     useEffect(() => {
@@ -193,34 +198,33 @@ export const IntegratedRAGChat = forwardRef<IntegratedRAGChatRef, IntegratedRAGC
     return (
       <AnimatePresence mode="wait">
         <motion.div
-          initial={{ width: isExpanded ? 0 : 80 }}
+          initial={{ height: isExpanded ? 0 : 80 }}
           animate={{ 
-            width: isExpanded ? (isFullscreen ? '100%' : 500) : 80,
-            height: isFullscreen ? '100vh' : 'auto'
+            height: isExpanded ? (isFullscreen ? '100vh' : '66vh') : 80,
+            width: '100%'
           }}
-          exit={{ width: 0 }}
+          exit={{ height: 0 }}
           transition={{ duration: 0.3, ease: 'easeInOut' }}
           className={`${isFullscreen ? 'fixed inset-0 z-50' : 'relative'} ${className}`}
         >
           <Card className={`h-full flex flex-col bg-gradient-to-br from-purple-500/5 via-blue-500/5 to-purple-500/5 border-purple-500/20 ${isFullscreen ? '' : 'rounded-lg'}`}>
-            {/* Header */}
-            <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
-              {isExpanded ? (
-                <>
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="w-5 h-5 text-purple-500" />
-                    <h3 className="font-semibold text-gray-800 dark:text-white">RAG Assistant</h3>
-                    <Badge color="green" variant="outline" size="sm">Online</Badge>
-                    {unreadCount > 0 && (
-                      <Badge color="red" variant="solid" size="sm">{unreadCount}</Badge>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2">
+            {/* Header - Only show when expanded */}
+            {isExpanded && (
+              <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-purple-500" />
+                  <h3 className="font-semibold text-gray-800 dark:text-white">RAG Assistant</h3>
+                  <Badge color="green" variant="outline">Online</Badge>
+                  {unreadCount > 0 && (
+                    <Badge color="orange" variant="solid">{unreadCount}</Badge>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
                     <Button
                       onClick={toggleFullscreen}
                       variant="ghost"
                       size="sm"
-                      accentColor="gray"
+                      accentColor="blue"
                     >
                       {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
                     </Button>
@@ -228,35 +232,19 @@ export const IntegratedRAGChat = forwardRef<IntegratedRAGChatRef, IntegratedRAGC
                       onClick={onToggleExpand}
                       variant="ghost"
                       size="sm"
-                      accentColor="gray"
+                      accentColor="blue"
                     >
-                      <ChevronRight className="w-4 h-4" />
-                    </Button>
-                  </div>
-                </>
-              ) : (
-                <div className="w-full flex flex-col items-center gap-2">
-                  <Button
-                    onClick={onToggleExpand}
-                    variant="ghost"
-                    className="p-2"
-                    accentColor="purple"
-                  >
-                    <MessageSquare className="w-5 h-5" />
+                    <ChevronRight className="w-4 h-4" />
                   </Button>
-                  {unreadCount > 0 && (
-                    <Badge color="red" variant="solid" size="sm">{unreadCount}</Badge>
-                  )}
-                  <span className="text-xs text-gray-500 dark:text-gray-400 writing-mode-vertical">Chat</span>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
 
             {/* Chat Content - Only visible when expanded */}
             {isExpanded && (
               <>
                 {/* Messages Area */}
-                <div className={`flex-1 overflow-y-auto p-4 ${isFullscreen ? 'max-h-[calc(100vh-180px)]' : 'h-[600px]'}`}>
+                <div className={`flex-1 overflow-y-auto p-4 ${isFullscreen ? 'max-h-[calc(100vh-180px)]' : 'h-[calc(66vh-180px)]'}`}>
                   {messages.length === 0 && !streamingContent ? (
                     <div className="flex items-center justify-center h-full text-gray-500 dark:text-gray-400">
                       <div className="text-center">
@@ -302,10 +290,10 @@ export const IntegratedRAGChat = forwardRef<IntegratedRAGChatRef, IntegratedRAGC
                                     ol: ({children}) => <ol className="list-decimal pl-4 mb-2 space-y-1">{children}</ol>,
                                     li: ({children}) => <li className="text-sm">{children}</li>,
                                     strong: ({children}) => <strong className="font-semibold text-gray-900 dark:text-gray-100">{children}</strong>,
-                                    code: ({inline, children}) => 
-                                      inline ? 
-                                        <code className="px-1 py-0.5 bg-gray-200 dark:bg-gray-700 rounded text-xs font-mono">{children}</code> :
-                                        <pre className="p-2 bg-gray-200 dark:bg-gray-700 rounded overflow-x-auto"><code className="text-xs font-mono">{children}</code></pre>,
+                                    code: ({children}) => 
+                                        <code className="px-1 py-0.5 bg-gray-200 dark:bg-gray-700 rounded text-xs font-mono">{children}</code>,
+                                    pre: ({children}) => 
+                                        <pre className="p-2 bg-gray-200 dark:bg-gray-700 rounded overflow-x-auto">{children}</pre>,
                                     a: ({href, children}) => 
                                       <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline">{children}</a>,
                                     h1: ({children}) => <h1 className="text-lg font-bold mb-2 mt-3">{children}</h1>,
@@ -359,10 +347,10 @@ export const IntegratedRAGChat = forwardRef<IntegratedRAGChatRef, IntegratedRAGC
                                   ol: ({children}) => <ol className="list-decimal pl-4 mb-2 space-y-1">{children}</ol>,
                                   li: ({children}) => <li className="text-sm">{children}</li>,
                                   strong: ({children}) => <strong className="font-semibold text-gray-900 dark:text-gray-100">{children}</strong>,
-                                  code: ({inline, children}) => 
-                                    inline ? 
-                                      <code className="px-1 py-0.5 bg-gray-200 dark:bg-gray-700 rounded text-xs font-mono">{children}</code> :
-                                      <pre className="p-2 bg-gray-200 dark:bg-gray-700 rounded overflow-x-auto"><code className="text-xs font-mono">{children}</code></pre>,
+                                  code: ({children}) => 
+                                      <code className="px-1 py-0.5 bg-gray-200 dark:bg-gray-700 rounded text-xs font-mono">{children}</code>,
+                                  pre: ({children}) => 
+                                      <pre className="p-2 bg-gray-200 dark:bg-gray-700 rounded overflow-x-auto">{children}</pre>,
                                   a: ({href, children}) => 
                                     <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline">{children}</a>,
                                 }}
@@ -408,7 +396,7 @@ export const IntegratedRAGChat = forwardRef<IntegratedRAGChatRef, IntegratedRAGC
                       type="text"
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
-                      onKeyPress={handleKeyPress}
+                      onKeyDown={handleKeyPress}
                       placeholder="Ask about your knowledge base..."
                       disabled={loading || !sessionId}
                       className="flex-1 px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 dark:text-white placeholder-gray-400"
@@ -438,3 +426,5 @@ export const IntegratedRAGChat = forwardRef<IntegratedRAGChatRef, IntegratedRAGC
 );
 
 IntegratedRAGChat.displayName = 'IntegratedRAGChat';
+
+export { IntegratedRAGChat };

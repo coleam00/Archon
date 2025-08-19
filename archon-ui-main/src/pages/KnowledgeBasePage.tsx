@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from 'react';
-import { Search, Grid, Plus, Upload, Link as LinkIcon, Brain, Filter, BoxIcon, List, BookOpen, CheckSquare } from 'lucide-react';
+import { Search, Grid, Plus, Upload, Link as LinkIcon, Brain, Filter, BoxIcon, List, BookOpen, CheckSquare, MessageSquare } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -66,6 +66,7 @@ export const KnowledgeBasePage = () => {
   const [totalItems, setTotalItems] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [isChatExpanded, setIsChatExpanded] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
   const chatRef = useRef<IntegratedRAGChatRef>(null);
   
   // Selection state
@@ -893,11 +894,9 @@ export const KnowledgeBasePage = () => {
     chatRef.current?.askAboutItem(item);
   };
 
-  return <div className="flex gap-4">
-      {/* Main Content Area */}
-      <div className="flex-1">
+  return <div className="flex flex-col gap-6">
       {/* Header with animation - stays static when changing views */}
-      <motion.div className="flex justify-between items-center mb-8" initial="hidden" animate="visible" variants={headerContainerVariants}>
+      <motion.div className="flex justify-between items-center" initial="hidden" animate="visible" variants={headerContainerVariants}>
         <motion.h1 className="text-3xl font-bold text-gray-800 dark:text-white flex items-center gap-3" variants={titleVariants}>
           <BookOpen className="w-7 h-7 text-green-500 filter drop-shadow-[0_0_8px_rgba(34,197,94,0.8)]" />
           Knowledge Base
@@ -937,6 +936,19 @@ export const KnowledgeBasePage = () => {
           >
             <CheckSquare className="w-4 h-4 mr-2 inline" />
             <span>{isSelectionMode ? 'Cancel' : 'Select'}</span>
+          </Button>
+          {/* Chat Button */}
+          <Button 
+            onClick={() => setIsChatExpanded(!isChatExpanded)} 
+            variant={isChatExpanded ? "secondary" : "ghost"} 
+            accentColor="purple"
+            className={isChatExpanded ? "bg-purple-500/10 border-purple-500/40" : ""}
+          >
+            <MessageSquare className="w-4 h-4 mr-2 inline" />
+            <span>RAG Chat</span>
+            {unreadCount > 0 && (
+              <Badge color="red" variant="solid" size="sm" className="ml-2">{unreadCount}</Badge>
+            )}
           </Button>
           {/* Add Button */}
           <Button onClick={handleAddKnowledge} variant="primary" accentColor="purple" className="shadow-lg shadow-purple-500/20">
@@ -1002,7 +1014,7 @@ export const KnowledgeBasePage = () => {
       </AnimatePresence>
       
       {/* Main Content */}
-      <div className="relative">
+      <div className="relative mb-6">
         {loading ? (
           viewMode === 'grid' ? <KnowledgeGridSkeleton /> : <KnowledgeTableSkeleton />
         ) : viewMode === 'table' ? (
@@ -1184,6 +1196,16 @@ export const KnowledgeBasePage = () => {
           </>
         )}
       </div>
+      
+      {/* Integrated RAG Chat Below Content */}
+      <IntegratedRAGChat
+        ref={chatRef}
+        isExpanded={isChatExpanded}
+        onToggleExpand={() => setIsChatExpanded(!isChatExpanded)}
+        onUnreadCountChange={setUnreadCount}
+        className="w-full"
+      />
+      
       {/* Add Knowledge Modal */}
       {isAddModalOpen && <AddKnowledgeModal 
         onClose={() => setIsAddModalOpen(false)} 
@@ -1206,15 +1228,6 @@ export const KnowledgeBasePage = () => {
           }}
         />
       )}
-    </div>
-      
-      {/* Integrated Chat Sidebar */}
-      <IntegratedRAGChat
-        ref={chatRef}
-        isExpanded={isChatExpanded}
-        onToggleExpand={() => setIsChatExpanded(!isChatExpanded)}
-        className="sticky top-4 h-[calc(100vh-2rem)]"
-      />
     </div>;
 };
 
