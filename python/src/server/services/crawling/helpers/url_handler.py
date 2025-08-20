@@ -150,6 +150,15 @@ class URLHandler:
             domain = parsed.netloc
             path = parsed.path.strip('/')
 
+            # Normalize scheme-less inputs and domain casing
+            if not domain and "://" not in url:
+                parsed = urlparse("https://" + url)
+                domain = parsed.netloc
+                path = parsed.path.strip('/')
+            domain = domain.lower()
+            if domain.startswith("www."):
+                domain = domain[4:]
+
             # Generate hash for absolute uniqueness
             url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()[:8]
 

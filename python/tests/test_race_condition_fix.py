@@ -218,13 +218,140 @@ class TestRaceConditionFix:
                 if readable_part.startswith('github.com/'):
                     assert False, f"Non-GitHub URL incorrectly processed as GitHub: {readable_part} from {url}"
 
+    def test_url_normalization_scheme_less(self):
+        """Test URL normalization for scheme-less inputs."""
+        scheme_variations = [
+            # GitHub repos - with and without schemes should produce same ID
+            ("https://github.com/microsoft/typescript", "github.com/microsoft/typescript"),
+            ("http://github.com/microsoft/typescript", "github.com/microsoft/typescript"),
+            ("github.com/microsoft/typescript", "github.com/microsoft/typescript"),
+            
+            # Other domains
+            ("https://docs.python.org/3/", "docs.python.org/3/"),
+            ("docs.python.org/3/", "docs.python.org/3/"),
+            
+            # API endpoints
+            ("https://api.github.com/repos/owner/repo", "api.github.com/repos/owner/repo"),
+            ("api.github.com/repos/owner/repo", "api.github.com/repos/owner/repo"),
+        ]
+        
+        for url_with_scheme, url_without_scheme in scheme_variations:
+            id_with_scheme = URLHandler.generate_unique_source_id(url_with_scheme)
+            id_without_scheme = URLHandler.generate_unique_source_id(url_without_scheme)
+            
+            # The readable parts should be identical after normalization
+            readable_with = id_with_scheme.split('-')[0]
+            readable_without = id_without_scheme.split('-')[0]
+            
+            assert readable_with == readable_without, \
+                f"Scheme normalization failed: {readable_with} != {readable_without} for {url_with_scheme} vs {url_without_scheme}"
+
+    def test_url_normalization_case_insensitive(self):
+        """Test URL normalization for case insensitive domain handling."""
+        case_variations = [
+            # GitHub variations
+            ("https://github.com/owner/repo", "https://GITHUB.COM/owner/repo"),
+            ("https://github.com/owner/repo", "https://GitHub.Com/owner/repo"),
+            ("https://api.github.com/repos/owner/repo", "https://API.GITHUB.COM/repos/owner/repo"),
+            
+            # Other domains
+            ("https://docs.python.org/3/", "https://DOCS.PYTHON.ORG/3/"),
+            ("https://fastapi.tiangolo.com/", "https://FastAPI.Tiangolo.Com/"),
+        ]
+        
+        for url_lower, url_mixed in case_variations:
+            id_lower = URLHandler.generate_unique_source_id(url_lower)
+            id_mixed = URLHandler.generate_unique_source_id(url_mixed)
+            
+            # The readable parts should be identical after case normalization
+            readable_lower = id_lower.split('-')[0]
+            readable_mixed = id_mixed.split('-')[0]
+            
+            assert readable_lower == readable_mixed, \
+                f"Case normalization failed: {readable_lower} != {readable_mixed} for {url_lower} vs {url_mixed}"
+            
+            # Both should be lowercase in the final result
+            assert readable_lower.islower(), f"Result not lowercase: {readable_lower}"
+            assert readable_mixed.islower(), f"Result not lowercase: {readable_mixed}"
+
+    def test_url_normalization_www_prefix(self):
+        """Test URL normalization for www prefix removal."""
+        www_variations = [
+            # GitHub with www
+            ("https://github.com/owner/repo", "https://www.github.com/owner/repo"),
+            ("https://api.github.com/repos/owner/repo", "https://www.api.github.com/repos/owner/repo"),
+            
+            # Other domains with www
+            ("https://docs.python.org/3/", "https://www.docs.python.org/3/"),
+            ("https://fastapi.tiangolo.com/", "https://www.fastapi.tiangolo.com/"),
+            ("https://example.com/docs/api", "https://www.example.com/docs/api"),
+        ]
+        
+        for url_no_www, url_with_www in www_variations:
+            id_no_www = URLHandler.generate_unique_source_id(url_no_www)
+            id_with_www = URLHandler.generate_unique_source_id(url_with_www)
+            
+            # The readable parts should be identical after www normalization
+            readable_no_www = id_no_www.split('-')[0]
+            readable_with_www = id_with_www.split('-')[0]
+            
+            assert readable_no_www == readable_with_www, \
+                f"WWW normalization failed: {readable_no_www} != {readable_with_www} for {url_no_www} vs {url_with_www}"
+            
+            # Neither should contain www
+            assert "www." not in readable_no_www, f"WWW found in result: {readable_no_www}"
+            assert "www." not in readable_with_www, f"WWW found in result: {readable_with_www}"
+
+    def test_url_normalization_combined(self):
+        """Test URL normalization with multiple variations combined."""
+        base_url = "github.com/microsoft/typescript"
+        variations = [
+            "https://github.com/microsoft/typescript",      # Standard
+            "http://github.com/microsoft/typescript",       # Different scheme
+            "github.com/microsoft/typescript",              # No scheme
+            "GITHUB.COM/microsoft/typescript",              # Upper case, no scheme
+            "https://GITHUB.COM/microsoft/typescript",      # Upper case with scheme
+            "https://www.github.com/microsoft/typescript",  # With www
+            "www.github.com/microsoft/typescript",          # www, no scheme
+            "https://WWW.GITHUB.COM/microsoft/typescript",  # www + upper case
+            "WWW.GITHUB.COM/microsoft/typescript",          # www + upper, no scheme
+        ]
+        
+        source_ids = []
+        readable_parts = []
+        
+        for url in variations:
+            source_id = URLHandler.generate_unique_source_id(url)
+            readable_part = source_id.split('-')[0]
+            source_ids.append(source_id)
+            readable_parts.append(readable_part)
+        
+        # All readable parts should be identical after normalization
+        first_readable = readable_parts[0]
+        for i, readable in enumerate(readable_parts):
+            assert readable == first_readable, \
+                f"Combined normalization failed at index {i}: {readable} != {first_readable} for {variations[i]}"
+        
+        # Should be in normalized form: lowercase, no www
+        assert first_readable == "github.com/microsoft/typescript", \
+            f"Final normalized form incorrect: {first_readable}"
+        
+        # Hash parts should differ (since original URLs are different)
+        # But that's expected - same logical URL with different formatting
+        
+        # All should be valid source IDs
+        for source_id in source_ids:
+            assert source_id is not None, f"Invalid source ID: {source_id}"
+            assert len(source_id) > 0, f"Empty source ID: {source_id}"
+            assert '-' in source_id, f"Missing hash in source ID: {source_id}"
+
     def test_error_handling(self):
         """Test error handling for malformed URLs."""
         malformed_urls = [
             "not-a-url",
             "",
             "https://",
-            "github.com/owner/repo",  # Missing protocol
+            # Note: "github.com/owner/repo" is now valid (scheme-less support)
         ]
         
         for url in malformed_urls:
@@ -232,6 +359,28 @@ class TestRaceConditionFix:
             source_id = URLHandler.generate_unique_source_id(url)
             assert source_id is not None, f"Failed to generate fallback ID for: {url}"
             assert len(source_id) > 0, f"Empty source ID for: {url}"
+
+    def test_scheme_less_github_support(self):
+        """Test that scheme-less GitHub URLs now work correctly."""
+        scheme_less_github_urls = [
+            "github.com/microsoft/typescript",
+            "api.github.com/repos/owner/repo", 
+            "GitHub.Com/Owner/Repo",  # Case variations
+            "www.github.com/facebook/react",
+        ]
+        
+        for url in scheme_less_github_urls:
+            source_id = URLHandler.generate_unique_source_id(url)
+            readable_part = source_id.split('-')[0]
+            
+            # Should be treated as GitHub and have proper structure
+            assert 'github.com' in readable_part, \
+                f"Scheme-less GitHub URL not properly handled: {readable_part} from {url}"
+            
+            # Should have owner/repo structure for main GitHub domain
+            if not url.lower().startswith(('api.', 'raw.', 'gist.')):
+                assert readable_part.count('/') >= 2, \
+                    f"GitHub URL missing owner/repo structure: {readable_part} from {url}"
 
 
 if __name__ == "__main__":
