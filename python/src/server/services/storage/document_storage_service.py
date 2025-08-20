@@ -302,7 +302,7 @@ async def add_documents_to_supabase(
                     cancellation_check()
 
                 try:
-                    client.table("archon_crawled_pages").upsert(batch_data).execute()
+                    client.table("archon_crawled_pages").upsert(batch_data, on_conflict="url,chunk_number").execute()
 
                     # Increment completed batches and report simple progress
                     completed_batches += 1
@@ -346,7 +346,7 @@ async def add_documents_to_supabase(
                                 cancellation_check()
 
                             try:
-                                client.table("archon_crawled_pages").upsert(record).execute()
+                                client.table("archon_crawled_pages").upsert(batch_data, on_conflict="url,chunk_number").execute()
                                 successful_inserts += 1
                             except Exception as individual_error:
                                 search_logger.error(
