@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from 'react';
-import { Search, Grid, Plus, Upload, Link as LinkIcon, Brain, Filter, BoxIcon, List, BookOpen, CheckSquare, MessageSquare } from 'lucide-react';
+import { Search, Grid, Plus, Upload, Link as LinkIcon, Brain, Filter, BoxIcon, List, BookOpen, CheckSquare } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -19,7 +19,7 @@ import { KnowledgeItemCard } from '../components/knowledge-base/KnowledgeItemCar
 import { GroupedKnowledgeItemCard } from '../components/knowledge-base/GroupedKnowledgeItemCard';
 import { KnowledgeGridSkeleton, KnowledgeTableSkeleton } from '../components/knowledge-base/KnowledgeItemSkeleton';
 import { GroupCreationModal } from '../components/knowledge-base/GroupCreationModal';
-import { IntegratedRAGChat, IntegratedRAGChatRef } from '../components/knowledge-base/IntegratedRAGChat';
+import { RAGChatPopup, RAGChatPopupRef } from '../components/knowledge-base/RAGChatPopup';
 
 const extractDomain = (url: string): string => {
   try {
@@ -65,9 +65,7 @@ export const KnowledgeBasePage = () => {
   const [loading, setLoading] = useState(true);
   const [totalItems, setTotalItems] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
-  const [isChatExpanded, setIsChatExpanded] = useState(false);
-  const [unreadCount, setUnreadCount] = useState(0);
-  const chatRef = useRef<IntegratedRAGChatRef>(null);
+  const chatRef = useRef<RAGChatPopupRef>(null);
   
   // Selection state
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
@@ -937,19 +935,7 @@ export const KnowledgeBasePage = () => {
             <CheckSquare className="w-4 h-4 mr-2 inline" />
             <span>{isSelectionMode ? 'Cancel' : 'Select'}</span>
           </Button>
-          {/* Chat Button */}
-          <Button 
-            onClick={() => setIsChatExpanded(!isChatExpanded)} 
-            variant={isChatExpanded ? "secondary" : "ghost"} 
-            accentColor="purple"
-            className={isChatExpanded ? "bg-purple-500/10 border-purple-500/40" : ""}
-          >
-            <MessageSquare className="w-4 h-4 mr-2 inline" />
-            <span>RAG Chat</span>
-            {unreadCount > 0 && (
-              <Badge color="red" variant="solid" size="sm" className="ml-2">{unreadCount}</Badge>
-            )}
-          </Button>
+
           {/* Add Button */}
           <Button onClick={handleAddKnowledge} variant="primary" accentColor="purple" className="shadow-lg shadow-purple-500/20">
             <Plus className="w-4 h-4 mr-2 inline" />
@@ -1197,14 +1183,8 @@ export const KnowledgeBasePage = () => {
         )}
       </div>
       
-      {/* Integrated RAG Chat Below Content */}
-      <IntegratedRAGChat
-        ref={chatRef}
-        isExpanded={isChatExpanded}
-        onToggleExpand={() => setIsChatExpanded(!isChatExpanded)}
-        onUnreadCountChange={setUnreadCount}
-        className="w-full"
-      />
+      {/* RAG Chat Popup */}
+      <RAGChatPopup ref={chatRef} />
       
       {/* Add Knowledge Modal */}
       {isAddModalOpen && <AddKnowledgeModal 
