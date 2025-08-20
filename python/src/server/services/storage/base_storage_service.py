@@ -191,7 +191,7 @@ class BaseStorageService(ABC):
         """
         try:
             # Import URLHandler for unique source ID generation to prevent race conditions
-            from ...crawling.helpers.url_handler import URLHandler
+            from ..crawling.helpers.url_handler import URLHandler
             return URLHandler.generate_unique_source_id(url)
         except Exception as e:
             logger.warning(f"Error generating unique source ID for {url}: {e}")

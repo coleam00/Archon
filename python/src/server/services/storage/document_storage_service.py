@@ -278,7 +278,7 @@ async def add_documents_to_supabase(
                     source_id = batch_metadatas[j]["source_id"]
                 else:
                     # Fallback: Generate unique source_id from URL to prevent race conditions
-                    from ...crawling.helpers.url_handler import URLHandler
+                    from ..crawling.helpers.url_handler import URLHandler
                     source_id = URLHandler.generate_unique_source_id(batch_urls[j])
 
                 data = {
