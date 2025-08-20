@@ -81,3 +81,11 @@ global.ResizeObserver = vi.fn().mockImplementation(() => ({
   unobserve: vi.fn(),
   disconnect: vi.fn(),
 }))
+
+const originalConsoleError = console.error;
+console.error = vi.fn((...args) => {
+  if (args[0] === 'ONBOARDING_CHECK_FAILED:') {
+    return;
+  }
+  originalConsoleError.apply(console, args);
+});
