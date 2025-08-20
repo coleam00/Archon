@@ -242,18 +242,6 @@ class TestService {
     }
   }
 
-  /**
-   * Check if test results are available
-   */
-  async hasTestResults(): Promise<boolean> {
-    try {
-      // Check for latest test results via API
-      const response = await fetch(`${API_BASE_URL}/api/tests/latest-results`);
-      return response.ok;
-    } catch {
-      return false;
-    }
-  }
 
   /**
    * Get coverage data for Test Results Modal from new API endpoints with fallback

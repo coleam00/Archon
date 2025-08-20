@@ -59,7 +59,7 @@ class RerankingStrategy:
         """
         return cls(model_name=model_name, model_instance=model)
 
-    def _load_model(self) -> CrossEncoder | None:
+    def _load_model(self) -> CrossEncoder:
         """Load the CrossEncoder model for reranking."""
         if not CROSSENCODER_AVAILABLE:
             logger.warning("sentence-transformers not available - reranking disabled")

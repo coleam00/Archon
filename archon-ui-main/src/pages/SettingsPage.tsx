@@ -1,19 +1,35 @@
-import { useState, useEffect } from 'react';
-import { Loader, Settings, ChevronDown, ChevronUp, Palette, Key, Brain, Code, Activity, FileCode, Bug } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { useToast } from '../contexts/ToastContext';
-import { useSettings } from '../contexts/SettingsContext';
-import { useStaggeredEntrance } from '../hooks/useStaggeredEntrance';
-import { FeaturesSection } from '../components/settings/FeaturesSection';
-import { APIKeysSection } from '../components/settings/APIKeysSection';
-import { RAGSettings } from '../components/settings/RAGSettings';
-import { CodeExtractionSettings } from '../components/settings/CodeExtractionSettings';
-import { TestStatus } from '../components/settings/TestStatus';
-import { IDEGlobalRules } from '../components/settings/IDEGlobalRules';
-import { ButtonPlayground } from '../components/settings/ButtonPlayground';
-import { CollapsibleSettingsCard } from '../components/ui/CollapsibleSettingsCard';
-import { BugReportButton } from '../components/bug-report/BugReportButton';
-import { credentialsService, RagSettings, CodeExtractionSettings as CodeExtractionSettingsType } from '../services/credentialsService';
+import { useState, useEffect } from "react";
+import {
+  Loader,
+  Settings,
+  ChevronDown,
+  ChevronUp,
+  Palette,
+  Key,
+  Brain,
+  Code,
+  Activity,
+  FileCode,
+  Bug,
+} from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { useToast } from "../contexts/ToastContext";
+import { useSettings } from "../contexts/SettingsContext";
+import { useStaggeredEntrance } from "../hooks/useStaggeredEntrance";
+import { FeaturesSection } from "../components/settings/FeaturesSection";
+import { APIKeysSection } from "../components/settings/APIKeysSection";
+import { RAGSettings } from "../components/settings/RAGSettings";
+import { CodeExtractionSettings } from "../components/settings/CodeExtractionSettings";
+import { TestStatus } from "../components/settings/TestStatus";
+import { IDEGlobalRules } from "../components/settings/IDEGlobalRules";
+import { ButtonPlayground } from "../components/settings/ButtonPlayground";
+import { CollapsibleSettingsCard } from "../components/ui/CollapsibleSettingsCard";
+import { BugReportButton } from "../components/bug-report/BugReportButton";
+import {
+  credentialsService,
+  RagSettings,
+  CodeExtractionSettings as CodeExtractionSettingsType,
+} from "../services/credentialsService";
 
 export const SettingsPage = () => {
   const [ragSettings, setRagSettings] = useState<RagSettings>({
@@ -22,56 +38,56 @@ export const SettingsPage = () => {
     USE_HYBRID_SEARCH: true,
     USE_AGENTIC_RAG: true,
     USE_RERANKING: true,
-    MODEL_CHOICE: 'gpt-4.1-nano'
+    MODEL_CHOICE: "gpt-4.1-nano",
   });
-  const [codeExtractionSettings, setCodeExtractionSettings] = useState<CodeExtractionSettingsType>({
-    MIN_CODE_BLOCK_LENGTH: 250,
-    MAX_CODE_BLOCK_LENGTH: 5000,
-    ENABLE_COMPLETE_BLOCK_DETECTION: true,
-    ENABLE_LANGUAGE_SPECIFIC_PATTERNS: true,
-    ENABLE_PROSE_FILTERING: true,
-    MAX_PROSE_RATIO: 0.15,
-    MIN_CODE_INDICATORS: 3,
-    ENABLE_DIAGRAM_FILTERING: true,
-    ENABLE_CONTEXTUAL_LENGTH: true,
-    CODE_EXTRACTION_MAX_WORKERS: 3,
-    CONTEXT_WINDOW_SIZE: 1000,
-    ENABLE_CODE_SUMMARIES: true
-  });
+  const [codeExtractionSettings, setCodeExtractionSettings] =
+    useState<CodeExtractionSettingsType>({
+      MIN_CODE_BLOCK_LENGTH: 250,
+      MAX_CODE_BLOCK_LENGTH: 5000,
+      ENABLE_COMPLETE_BLOCK_DETECTION: true,
+      ENABLE_LANGUAGE_SPECIFIC_PATTERNS: true,
+      ENABLE_PROSE_FILTERING: true,
+      MAX_PROSE_RATIO: 0.15,
+      MIN_CODE_INDICATORS: 3,
+      ENABLE_DIAGRAM_FILTERING: true,
+      ENABLE_CONTEXTUAL_LENGTH: true,
+      CODE_EXTRACTION_MAX_WORKERS: 3,
+      CONTEXT_WINDOW_SIZE: 1000,
+      ENABLE_CODE_SUMMARIES: true,
+    });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showButtonPlayground, setShowButtonPlayground] = useState(false);
 
   const { showToast } = useToast();
   const { projectsEnabled } = useSettings();
-  
+
   // Use staggered entrance animation
-  const { isVisible, containerVariants, itemVariants, titleVariants } = useStaggeredEntrance(
-    [1, 2, 3, 4],
-    0.15
-  );
+  const { isVisible, containerVariants, itemVariants, titleVariants } =
+    useStaggeredEntrance([1, 2, 3, 4], 0.15);
 
   // Load settings on mount
   useEffect(() => {
     loadSettings();
   }, []);
 
-  const loadSettings = async () => {
+  const loadSettings = async (isRetry = false) => {
     try {
       setLoading(true);
       setError(null);
-      
+
       // Load RAG settings
       const ragSettingsData = await credentialsService.getRagSettings();
       setRagSettings(ragSettingsData);
-      
+
       // Load Code Extraction settings
-      const codeExtractionSettingsData = await credentialsService.getCodeExtractionSettings();
+      const codeExtractionSettingsData =
+        await credentialsService.getCodeExtractionSettings();
       setCodeExtractionSettings(codeExtractionSettingsData);
     } catch (err) {
-      setError('Failed to load settings');
+      setError("Failed to load settings");
       console.error(err);
-      showToast('Failed to load settings', 'error');
+      showToast("Failed to load settings", "error");
     } finally {
       setLoading(false);
     }
@@ -88,12 +104,15 @@ export const SettingsPage = () => {
   return (
     <motion.div
       initial="hidden"
-      animate={isVisible ? 'visible' : 'hidden'}
+      animate={isVisible ? "visible" : "hidden"}
       variants={containerVariants}
       className="w-full"
     >
       {/* Header */}
-      <motion.div className="flex justify-between items-center mb-8" variants={itemVariants}>
+      <motion.div
+        className="flex justify-between items-center mb-8"
+        variants={itemVariants}
+      >
         <motion.h1
           className="text-3xl font-bold text-gray-800 dark:text-white flex items-center gap-3"
           variants={titleVariants}
@@ -102,6 +121,7 @@ export const SettingsPage = () => {
           Settings
         </motion.h1>
       </motion.div>
+
 
       {/* Main content with two-column layout */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -165,7 +185,10 @@ export const SettingsPage = () => {
               storageKey="rag-settings"
               defaultExpanded={true}
             >
-              <RAGSettings ragSettings={ragSettings} setRagSettings={setRagSettings} />
+              <RAGSettings
+                ragSettings={ragSettings}
+                setRagSettings={setRagSettings}
+              />
             </CollapsibleSettingsCard>
           </motion.div>
           <motion.div variants={itemVariants}>
@@ -176,9 +199,9 @@ export const SettingsPage = () => {
               storageKey="code-extraction"
               defaultExpanded={true}
             >
-              <CodeExtractionSettings 
-                codeExtractionSettings={codeExtractionSettings} 
-                setCodeExtractionSettings={setCodeExtractionSettings} 
+              <CodeExtractionSettings
+                codeExtractionSettings={codeExtractionSettings}
+                setCodeExtractionSettings={setCodeExtractionSettings}
               />
             </CollapsibleSettingsCard>
           </motion.div>
@@ -194,7 +217,8 @@ export const SettingsPage = () => {
             >
               <div className="space-y-4">
                 <p className="text-sm text-gray-600 dark:text-gray-400">
-                  Found a bug or issue? Report it to help improve Archon V2 Alpha.
+                  Found a bug or issue? Report it to help improve Archon V2
+                  Alpha.
                 </p>
                 <div className="flex justify-start">
                   <BugReportButton variant="secondary" size="md">
@@ -234,7 +258,7 @@ export const SettingsPage = () => {
         {showButtonPlayground && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
+            animate={{ opacity: 1, height: "auto" }}
             exit={{ opacity: 0, height: 0 }}
             transition={{ duration: 0.3 }}
             className="overflow-hidden"

@@ -49,6 +49,54 @@ class URLHandler:
             return False
     
     @staticmethod
+    def is_binary_file(url: str) -> bool:
+        """
+        Check if a URL points to a binary file that shouldn't be crawled.
+        
+        Args:
+            url: URL to check
+            
+        Returns:
+            True if URL is a binary file, False otherwise
+        """
+        try:
+            # Remove query parameters and fragments for cleaner extension checking
+            parsed = urlparse(url)
+            path = parsed.path.lower()
+            
+            # Comprehensive list of binary and non-HTML file extensions
+            binary_extensions = {
+                # Archives
+                '.zip', '.tar', '.gz', '.rar', '.7z', '.bz2', '.xz', '.tgz',
+                # Executables and installers
+                '.exe', '.dmg', '.pkg', '.deb', '.rpm', '.msi', '.app', '.appimage',
+                # Documents (non-HTML)
+                '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods',
+                # Images
+                '.jpg', '.jpeg', '.png', '.gif', '.svg', '.webp', '.ico', '.bmp', '.tiff',
+                # Audio/Video
+                '.mp3', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.mkv', '.wav', '.flac',
+                # Data files
+                '.csv', '.sql', '.db', '.sqlite',
+                # Binary data
+                '.iso', '.img', '.bin', '.dat',
+                # Development files (usually not meant to be crawled as pages)
+                '.wasm', '.pyc', '.jar', '.war', '.class', '.dll', '.so', '.dylib'
+            }
+            
+            # Check if the path ends with any binary extension
+            for ext in binary_extensions:
+                if path.endswith(ext):
+                    logger.debug(f"Skipping binary file: {url} (matched extension: {ext})")
+                    return True
+                    
+            return False
+        except Exception as e:
+            logger.warning(f"Error checking if URL is binary file: {e}")
+            # In case of error, don't skip the URL (safer to attempt crawl than miss content)
+            return False
+    
+    @staticmethod
     def transform_github_url(url: str) -> str:
         """
         Transform GitHub URLs to raw content URLs for better content extraction.

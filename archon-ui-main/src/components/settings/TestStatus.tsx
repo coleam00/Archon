@@ -70,23 +70,15 @@ export const TestStatus = () => {
     };
   }, []);
 
-  // Check for test results availability
+  // Test results availability - not implemented yet
   useEffect(() => {
-    const checkResults = async () => {
-      const hasTestResults = await testService.hasTestResults();
-      setHasResults(hasTestResults);
-    };
-    checkResults();
+    setHasResults(false);
   }, []);
 
   // Check for results when UI tests complete
   useEffect(() => {
     if (!uiTest.isRunning && uiTest.exitCode === 0) {
-      // Small delay to ensure files are written
-      setTimeout(async () => {
-        const hasTestResults = await testService.hasTestResults();
-        setHasResults(hasTestResults);
-      }, 2000);
+      setHasResults(false);
     }
   }, [uiTest.isRunning, uiTest.exitCode]);
 

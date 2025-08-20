@@ -12,7 +12,7 @@ export const getAssigneeIcon = (assigneeName: 'User' | 'Archon' | 'AI IDE Agent'
     case 'AI IDE Agent':
       return <Bot className="w-4 h-4 text-purple-400" />;
     case 'Archon':
-      return <img src="/logo-neon.svg" alt="Archon" className="w-4 h-4" />;
+      return <img src="/logo-neon.png" alt="Archon" className="w-4 h-4" />;
     default:
       return <User className="w-4 h-4 text-blue-400" />;
   }

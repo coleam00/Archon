@@ -6,6 +6,7 @@ import { X } from 'lucide-react';
 import { useToast } from '../../contexts/ToastContext';
 import { credentialsService } from '../../services/credentialsService';
 import { isLmConfigured } from '../../utils/onboarding';
+import { BackendStartupError } from '../BackendStartupError';
 /**
  * Props for the MainLayout component
  */
@@ -29,13 +30,14 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
   const navigate = useNavigate();
   const location = useLocation();
   const [backendReady, setBackendReady] = useState(false);
+  const [backendStartupFailed, setBackendStartupFailed] = useState(false);
 
   // Check backend readiness
   useEffect(() => {
     
     const checkBackendHealth = async (retryCount = 0) => {
-      const maxRetries = 10; // Increased retries for initialization
-      const retryDelay = 1000;
+      const maxRetries = 3; // 3 retries total
+      const retryDelay = 1500; // 1.5 seconds between retries
       
       try {
         // Create AbortController for proper timeout handling
@@ -58,6 +60,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
           if (healthData.ready === true) {
             console.log('✅ Backend is fully initialized');
             setBackendReady(true);
+            setBackendStartupFailed(false);
           } else {
             // Backend is starting up but not ready yet
             console.log(`🔄 Backend initializing... (attempt ${retryCount + 1}/${maxRetries}):`, healthData.message || 'Loading credentials...');
@@ -66,9 +69,10 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
             if (retryCount < maxRetries) {
               setTimeout(() => {
                 checkBackendHealth(retryCount + 1);
-              }, retryDelay); // Constant 1s retry during initialization
+              }, retryDelay); // Constant 1.5s retry during initialization
             } else {
-              console.warn('Backend initialization taking too long - skipping credential check');
+              console.warn('Backend initialization taking too long - proceeding anyway');
+              // Don't mark as failed yet, just not fully ready
               setBackendReady(false);
             }
           }
@@ -80,7 +84,10 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
         const errorMessage = error instanceof Error 
           ? (error.name === 'AbortError' ? 'Request timeout (5s)' : error.message)
           : 'Unknown error';
-        console.log(`Backend not ready yet (attempt ${retryCount + 1}/${maxRetries}):`, errorMessage);
+        // Only log after first attempt to reduce noise during normal startup
+        if (retryCount > 0) {
+          console.log(`Backend not ready yet (attempt ${retryCount + 1}/${maxRetries}):`, errorMessage);
+        }
         
         // Retry if we haven't exceeded max retries
         if (retryCount < maxRetries) {
@@ -88,8 +95,9 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
             checkBackendHealth(retryCount + 1);
           }, retryDelay * Math.pow(1.5, retryCount)); // Exponential backoff for connection errors
         } else {
-          console.warn('Backend not ready after maximum retries - skipping credential check');
+          console.error('Backend startup failed after maximum retries - showing error message');
           setBackendReady(false);
+          setBackendStartupFailed(true);
         }
       }
     };
@@ -99,11 +107,16 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
     setTimeout(() => {
       checkBackendHealth();
     }, 1000); // Wait 1 second for initial app startup
-  }, [showToast, navigate]); // Removed backendReady from dependencies to prevent double execution
+  }, []); // Empty deps - only run once on mount
 
   // Check for onboarding redirect after backend is ready
   useEffect(() => {
     const checkOnboarding = async () => {
+      // Skip if backend failed to start
+      if (backendStartupFailed) {
+        return;
+      }
+      
       // Skip if not ready, already on onboarding, or already dismissed
       if (!backendReady || location.pathname === '/onboarding') {
         return;
@@ -152,9 +165,12 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
     };
 
     checkOnboarding();
-  }, [backendReady, location.pathname, navigate, showToast]);
+  }, [backendReady, backendStartupFailed, location.pathname, navigate, showToast]);
 
   return <div className="relative min-h-screen bg-white dark:bg-black overflow-hidden">
+      {/* Show backend startup error if backend failed to start */}
+      {backendStartupFailed && <BackendStartupError />}
+      
       {/* Fixed full-page background grid that doesn't scroll */}
       <div className="fixed inset-0 neon-grid pointer-events-none z-0"></div>
       {/* Floating Navigation */}
@@ -174,7 +190,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
             disabled
             className="w-14 h-14 rounded-full flex items-center justify-center backdrop-blur-md bg-gradient-to-b from-gray-100/80 to-gray-50/60 dark:from-gray-700/30 dark:to-gray-800/30 shadow-[0_0_10px_rgba(156,163,175,0.3)] dark:shadow-[0_0_10px_rgba(156,163,175,0.3)] cursor-not-allowed opacity-60 overflow-hidden border border-gray-300 dark:border-gray-600" 
             aria-label="Knowledge Assistant - Coming Soon">
-            <img src="/logo-neon.svg" alt="Archon" className="w-7 h-7 grayscale opacity-50" />
+            <img src="/logo-neon.png" alt="Archon" className="w-7 h-7 grayscale opacity-50" />
           </button>
           {/* Tooltip */}
           <div className="absolute bottom-full right-0 mb-2 px-3 py-2 bg-gray-800 dark:bg-gray-900 text-white text-sm rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap">

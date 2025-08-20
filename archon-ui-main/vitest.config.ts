@@ -13,7 +13,10 @@ export default defineConfig({
       'test/components.test.tsx',
       'test/pages.test.tsx', 
       'test/user_flows.test.tsx',
-      'test/errors.test.tsx'
+      'test/errors.test.tsx',
+      'test/services/projectService.test.ts',
+      'test/components/project-tasks/DocsTab.integration.test.tsx',
+      'test/config/api.test.ts'
     ],
     exclude: ['node_modules', 'dist', '.git', '.cache', 'test.backup', '*.backup/**', 'test-backups'],
     reporters: ['dot', 'json'],

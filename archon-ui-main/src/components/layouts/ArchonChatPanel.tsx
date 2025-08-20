@@ -280,7 +280,7 @@ export const ArchonChatPanel: React.FC<ArchonChatPanelProps> = props => {
             <div className="flex items-center">
               {/* Archon Logo - No animation in header */}
               <div className="relative w-8 h-8 mr-3 flex items-center justify-center">
-                <img src="/logo-neon.svg" alt="Archon" className="w-6 h-6 z-10 relative" />
+                <img src="/logo-neon.png" alt="Archon" className="w-6 h-6 z-10 relative" />
               </div>
               <h2 className="text-gray-800 dark:text-white font-medium z-10 relative">
                 Knowledge Base Assistant
@@ -347,7 +347,7 @@ export const ArchonChatPanel: React.FC<ArchonChatPanelProps> = props => {
                 <div className="flex items-center mb-1">
                   {message.sender === 'agent' ? (
                     <div className="w-4 h-4 mr-1 flex items-center justify-center">
-                      <img src="/logo-neon.svg" alt="Archon" className="w-full h-full" />
+                      <img src="/logo-neon.png" alt="Archon" className="w-full h-full" />
                     </div>
                   ) : (
                     <User className="w-4 h-4 text-purple-500 mr-1" />
@@ -391,7 +391,7 @@ export const ArchonChatPanel: React.FC<ArchonChatPanelProps> = props => {
               <div className="max-w-[80%] bg-blue-100/80 dark:bg-blue-500/20 border border-blue-200 dark:border-blue-500/30 mr-auto rounded-lg p-3">
                 <div className="flex items-center mb-1">
                   <div className="w-4 h-4 mr-1 flex items-center justify-center">
-                    <img src="/logo-neon.svg" alt="Archon" className="w-full h-full" />
+                    <img src="/logo-neon.png" alt="Archon" className="w-full h-full" />
                   </div>
                   <span className="text-xs text-gray-500 dark:text-zinc-400">
                     {formatTime(new Date())}

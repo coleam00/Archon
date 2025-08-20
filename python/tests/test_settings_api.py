@@ -56,3 +56,5 @@ def test_existing_credential_returns_normally(client, mock_supabase_client):
         assert data["is_encrypted"] is False
         # Should not have is_default flag for real credentials
         assert "is_default" not in data
+
+

@@ -48,12 +48,10 @@ from .socketio_app import create_socketio_app
 # Import missing dependencies that the modular APIs need
 try:
     from crawl4ai import AsyncWebCrawler, BrowserConfig
-    from sentence_transformers import CrossEncoder
 except ImportError:
     # These are optional dependencies for full functionality
     AsyncWebCrawler = None
     BrowserConfig = None
-    CrossEncoder = None
 
 # Logger will be initialized after credentials are loaded
 logger = logging.getLogger(__name__)
@@ -80,6 +78,11 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 Starting Archon backend...")
 
     try:
+        # Validate configuration FIRST - check for anon vs service key
+        from .config.config import get_config
+
+        get_config()  # This will raise ConfigurationError if anon key detected
+
         # Initialize credentials from database FIRST - this is the foundation for everything else
         await initialize_credentials()
 

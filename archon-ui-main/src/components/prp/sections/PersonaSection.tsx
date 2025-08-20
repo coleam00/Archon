@@ -94,7 +94,7 @@ const PersonaCard: React.FC<PersonaCardProps> = ({ persona, personaKey }) => {
             )}
             
             {/* Always visible goals */}
-            {persona.goals && persona.goals.length > 0 && (
+            {persona.goals && Array.isArray(persona.goals) && persona.goals.length > 0 && (
               <div className="mb-3">
                 <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-2">
                   <Target className="w-4 h-4 text-green-500" />
@@ -119,7 +119,7 @@ const PersonaCard: React.FC<PersonaCardProps> = ({ persona, personaKey }) => {
             {/* Expandable content */}
             {isExpanded && (
               <>
-                {persona.pain_points && persona.pain_points.length > 0 && (
+                {persona.pain_points && Array.isArray(persona.pain_points) && persona.pain_points.length > 0 && (
                   <div className="mb-3">
                     <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-2">
                       <Zap className="w-4 h-4 text-orange-500" />

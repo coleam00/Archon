@@ -939,13 +939,17 @@ export const DocsTab = ({
                 onSelect={setSelectedDocument}
                 onDelete={async (docId) => {
                   try {
-                    // Remove from local state
+                    // Call API to delete from database first
+                    await projectService.deleteDocument(project.id, docId);
+                    
+                    // Then remove from local state
                     setDocuments(prev => prev.filter(d => d.id !== docId));
                     if (selectedDocument?.id === docId) {
                       setSelectedDocument(documents.find(d => d.id !== docId) || null);
                     }
                     showToast('Document deleted', 'success');
                   } catch (error) {
+                    console.error('Failed to delete document:', error);
                     showToast('Failed to delete document', 'error');
                   }
                 }}

@@ -15,11 +15,6 @@ Multiple strategies can be enabled simultaneously and work together.
 import os
 from typing import Any
 
-try:
-    from sentence_transformers import CrossEncoder
-except ImportError:
-    CrossEncoder = None
-
 from ...config.logfire_config import get_logger, safe_span
 from ...utils import get_supabase_client
 from ..embeddings.embedding_service import create_embedding
