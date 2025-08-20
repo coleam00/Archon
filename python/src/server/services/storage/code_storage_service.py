@@ -890,8 +890,9 @@ async def add_code_examples_to_supabase(
             if metadatas[idx] and "source_id" in metadatas[idx]:
                 source_id = metadatas[idx]["source_id"]
             else:
-                parsed_url = urlparse(urls[idx])
-                source_id = parsed_url.netloc or parsed_url.path
+                # Import URLHandler for unique source ID generation to prevent race conditions
+                from ...crawling.helpers.url_handler import URLHandler
+                source_id = URLHandler.generate_unique_source_id(urls[idx])
 
             batch_data.append({
                 "url": urls[idx],

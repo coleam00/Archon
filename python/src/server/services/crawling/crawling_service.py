@@ -304,10 +304,9 @@ class CrawlingService:
             url = str(request.get("url", ""))
             safe_logfire_info(f"Starting async crawl orchestration | url={url} | task_id={task_id}")
 
-            # Extract source_id from the original URL
-            parsed_original_url = urlparse(url)
-            original_source_id = parsed_original_url.netloc or parsed_original_url.path
-            safe_logfire_info(f"Using source_id '{original_source_id}' from original URL '{url}'")
+            # Generate unique source_id from the original URL to prevent race conditions
+            original_source_id = self.url_handler.generate_unique_source_id(url)
+            safe_logfire_info(f"Generated unique source_id '{original_source_id}' from original URL '{url}'")
 
             # Helper to update progress with mapper
             async def update_mapped_progress(

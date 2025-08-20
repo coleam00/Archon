@@ -181,20 +181,24 @@ class BaseStorageService(ABC):
 
     def extract_source_id(self, url: str) -> str:
         """
-        Extract source ID from URL.
+        Extract unique source ID from URL to prevent race conditions.
 
         Args:
             url: URL to extract source ID from
 
         Returns:
-            Source ID (typically the domain)
+            Unique source ID combining readable path + hash
         """
         try:
-            parsed_url = urlparse(url)
-            return parsed_url.netloc or parsed_url.path or url
+            # Import URLHandler for unique source ID generation to prevent race conditions
+            from ...crawling.helpers.url_handler import URLHandler
+            return URLHandler.generate_unique_source_id(url)
         except Exception as e:
-            logger.warning(f"Error parsing URL {url}: {e}")
-            return url
+            logger.warning(f"Error generating unique source ID for {url}: {e}")
+            # Fallback: use hash of full URL if generation fails
+            import hashlib
+            url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()[:12]
+            return f"fallback-{url_hash}"
 
     async def batch_process_with_progress(
         self,
