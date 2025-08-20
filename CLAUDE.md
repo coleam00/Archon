@@ -277,6 +277,3 @@ When connected to Cursor/Windsurf:
 - Frontend uses Vite proxy for API calls in development
 - Python backend uses `uv` for dependency management
 - Docker Compose handles service orchestration
-
-ADDITIONAL CONTEXT FOR SPECIFICALLY HOW TO USE ARCHON ITSELF:
-@CLAUDE-ARCHON.md

@@ -78,6 +78,11 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 Starting Archon backend...")
 
     try:
+        # Validate configuration FIRST - check for anon vs service key
+        from .config.config import get_config
+
+        get_config()  # This will raise ConfigurationError if anon key detected
+
         # Initialize credentials from database FIRST - this is the foundation for everything else
         await initialize_credentials()
 

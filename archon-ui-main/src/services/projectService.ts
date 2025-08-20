@@ -24,6 +24,20 @@ import {
 
 import { dbTaskToUITask, uiStatusToDBStatus } from '../types/project';
 
+// Document interface for type safety
+export interface Document {
+  id: string;
+  project_id: string;
+  title: string;
+  content: any;
+  document_type: string;
+  metadata?: Record<string, any>;
+  tags?: string[];
+  author?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // API configuration - use relative URL to go through Vite proxy
 const API_BASE_URL = '/api';
 
@@ -548,9 +562,9 @@ export const projectService = {
   /**
    * List all documents for a project
    */
-  async listProjectDocuments(projectId: string): Promise<any[]> {
+  async listProjectDocuments(projectId: string): Promise<Document[]> {
     try {
-      const response = await callAPI<{documents: any[]}>(`/api/projects/${projectId}/docs`);
+      const response = await callAPI<{documents: Document[]}>(`/api/projects/${projectId}/docs`);
       return response.documents || [];
     } catch (error) {
       console.error(`Failed to list documents for project ${projectId}:`, error);
@@ -561,12 +575,12 @@ export const projectService = {
   /**
    * Get a specific document with full content
    */
-  async getDocument(docId: string): Promise<any> {
+  async getDocument(projectId: string, docId: string): Promise<Document> {
     try {
-      const response = await callAPI<{document: any}>(`/api/docs/${docId}`);
+      const response = await callAPI<{document: Document}>(`/api/projects/${projectId}/docs/${docId}`);
       return response.document;
     } catch (error) {
-      console.error(`Failed to get document ${docId}:`, error);
+      console.error(`Failed to get document ${docId} from project ${projectId}:`, error);
       throw error;
     }
   },
@@ -574,9 +588,9 @@ export const projectService = {
   /**
    * Create a new document for a project
    */
-  async createDocument(projectId: string, documentData: any): Promise<any> {
+  async createDocument(projectId: string, documentData: Partial<Document>): Promise<Document> {
     try {
-      const response = await callAPI<{document: any}>(`/api/projects/${projectId}/docs`, {
+      const response = await callAPI<{document: Document}>(`/api/projects/${projectId}/docs`, {
         method: 'POST',
         body: JSON.stringify(documentData)
       });
@@ -590,15 +604,15 @@ export const projectService = {
   /**
    * Update an existing document
    */
-  async updateDocument(docId: string, updates: any): Promise<any> {
+  async updateDocument(projectId: string, docId: string, updates: Partial<Document>): Promise<Document> {
     try {
-      const response = await callAPI<{document: any}>(`/api/docs/${docId}`, {
+      const response = await callAPI<{document: Document}>(`/api/projects/${projectId}/docs/${docId}`, {
         method: 'PUT',
         body: JSON.stringify(updates)
       });
       return response.document;
     } catch (error) {
-      console.error(`Failed to update document ${docId}:`, error);
+      console.error(`Failed to update document ${docId} in project ${projectId}:`, error);
       throw error;
     }
   },
@@ -606,11 +620,11 @@ export const projectService = {
   /**
    * Delete a document
    */
-  async deleteDocument(docId: string): Promise<void> {
+  async deleteDocument(projectId: string, docId: string): Promise<void> {
     try {
-      await callAPI<void>(`/api/docs/${docId}`, { method: 'DELETE' });
+      await callAPI<void>(`/api/projects/${projectId}/docs/${docId}`, { method: 'DELETE' });
     } catch (error) {
-      console.error(`Failed to delete document ${docId}:`, error);
+      console.error(`Failed to delete document ${docId} from project ${projectId}:`, error);
       throw error;
     }
   },

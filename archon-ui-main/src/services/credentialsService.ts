@@ -53,56 +53,81 @@ export interface CodeExtractionSettings {
   ENABLE_CODE_SUMMARIES: boolean;
 }
 
-import { getApiUrl } from '../config/api';
+import { getApiUrl } from "../config/api";
 
 class CredentialsService {
   private baseUrl = getApiUrl();
 
+  private handleCredentialError(error: any, context: string): Error {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    // Check for network errors
+    if (
+      errorMessage.toLowerCase().includes("network") ||
+      errorMessage.includes("fetch") ||
+      errorMessage.includes("Failed to fetch")
+    ) {
+      return new Error(
+        `Network error while ${context.toLowerCase()}: ${errorMessage}. ` +
+          `Please check your connection and server status.`,
+      );
+    }
+
+    // Return original error with context
+    return new Error(`${context} failed: ${errorMessage}`);
+  }
+
   async getAllCredentials(): Promise<Credential[]> {
     const response = await fetch(`${this.baseUrl}/api/credentials`);
     if (!response.ok) {
-      throw new Error('Failed to fetch credentials');
+      throw new Error("Failed to fetch credentials");
     }
     return response.json();
   }
 
   async getCredentialsByCategory(category: string): Promise<Credential[]> {
-    const response = await fetch(`${this.baseUrl}/api/credentials/categories/${category}`);
+    const response = await fetch(
+      `${this.baseUrl}/api/credentials/categories/${category}`,
+    );
     if (!response.ok) {
       throw new Error(`Failed to fetch credentials for category: ${category}`);
     }
     const result = await response.json();
-    
+
     // The API returns {credentials: {...}} where credentials is a dict
     // Convert to array format expected by frontend
-    if (result.credentials && typeof result.credentials === 'object') {
-      return Object.entries(result.credentials).map(([key, value]: [string, any]) => {
-        if (value && typeof value === 'object' && value.is_encrypted) {
-          return {
-            key,
-            value: undefined,
-            encrypted_value: value.encrypted_value,
-            is_encrypted: true,
-            category,
-            description: value.description
-          };
-        } else {
-          return {
-            key,
-            value: value,
-            encrypted_value: undefined,
-            is_encrypted: false,
-            category,
-            description: ''
-          };
-        }
-      });
+    if (result.credentials && typeof result.credentials === "object") {
+      return Object.entries(result.credentials).map(
+        ([key, value]: [string, any]) => {
+          if (value && typeof value === "object" && value.is_encrypted) {
+            return {
+              key,
+              value: undefined,
+              encrypted_value: value.encrypted_value,
+              is_encrypted: true,
+              category,
+              description: value.description,
+            };
+          } else {
+            return {
+              key,
+              value: value,
+              encrypted_value: undefined,
+              is_encrypted: false,
+              category,
+              description: "",
+            };
+          }
+        },
+      );
     }
-    
+
     return [];
   }
 
-  async getCredential(key: string): Promise<{ key: string; value?: string; is_encrypted?: boolean }> {
+  async getCredential(
+    key: string,
+  ): Promise<{ key: string; value?: string; is_encrypted?: boolean }> {
     const response = await fetch(`${this.baseUrl}/api/credentials/${key}`);
     if (!response.ok) {
       if (response.status === 404) {
@@ -115,24 +140,24 @@ class CredentialsService {
   }
 
   async getRagSettings(): Promise<RagSettings> {
-    const ragCredentials = await this.getCredentialsByCategory('rag_strategy');
-    const apiKeysCredentials = await this.getCredentialsByCategory('api_keys');
-    
+    const ragCredentials = await this.getCredentialsByCategory("rag_strategy");
+    const apiKeysCredentials = await this.getCredentialsByCategory("api_keys");
+
     const settings: RagSettings = {
       USE_CONTEXTUAL_EMBEDDINGS: false,
       CONTEXTUAL_EMBEDDINGS_MAX_WORKERS: 3,
       USE_HYBRID_SEARCH: true,
       USE_AGENTIC_RAG: true,
       USE_RERANKING: true,
-      MODEL_CHOICE: 'gpt-4.1-nano',
-      LLM_PROVIDER: 'openai',
-      LLM_BASE_URL: '',
-      EMBEDDING_MODEL: '',
+      MODEL_CHOICE: "gpt-4.1-nano",
+      LLM_PROVIDER: "openai",
+      LLM_BASE_URL: "",
+      EMBEDDING_MODEL: "",
       // Crawling Performance Settings defaults
       CRAWL_BATCH_SIZE: 50,
       CRAWL_MAX_CONCURRENT: 10,
-      CRAWL_WAIT_STRATEGY: 'domcontentloaded',
-      CRAWL_PAGE_TIMEOUT: 60000,  // Increased from 30s to 60s for documentation sites
+      CRAWL_WAIT_STRATEGY: "domcontentloaded",
+      CRAWL_PAGE_TIMEOUT: 60000, // Increased from 30s to 60s for documentation sites
       CRAWL_DELAY_BEFORE_HTML: 0.5,
       // Storage Performance Settings defaults
       DOCUMENT_STORAGE_BATCH_SIZE: 50,
@@ -143,30 +168,50 @@ class CredentialsService {
       MEMORY_THRESHOLD_PERCENT: 80,
       DISPATCHER_CHECK_INTERVAL: 30,
       CODE_EXTRACTION_BATCH_SIZE: 50,
-      CODE_SUMMARY_MAX_WORKERS: 3
+      CODE_SUMMARY_MAX_WORKERS: 3,
     };
 
     // Map credentials to settings
-    [...ragCredentials, ...apiKeysCredentials].forEach(cred => {
+    [...ragCredentials, ...apiKeysCredentials].forEach((cred) => {
       if (cred.key in settings) {
         // String fields
-        if (['MODEL_CHOICE', 'LLM_PROVIDER', 'LLM_BASE_URL', 'EMBEDDING_MODEL', 'CRAWL_WAIT_STRATEGY'].includes(cred.key)) {
-          (settings as any)[cred.key] = cred.value || '';
-        } 
+        if (
+          [
+            "MODEL_CHOICE",
+            "LLM_PROVIDER",
+            "LLM_BASE_URL",
+            "EMBEDDING_MODEL",
+            "CRAWL_WAIT_STRATEGY",
+          ].includes(cred.key)
+        ) {
+          (settings as any)[cred.key] = cred.value || "";
+        }
         // Number fields
-        else if (['CONTEXTUAL_EMBEDDINGS_MAX_WORKERS', 'CRAWL_BATCH_SIZE', 'CRAWL_MAX_CONCURRENT', 
-                  'CRAWL_PAGE_TIMEOUT', 'DOCUMENT_STORAGE_BATCH_SIZE', 'EMBEDDING_BATCH_SIZE', 
-                  'DELETE_BATCH_SIZE', 'MEMORY_THRESHOLD_PERCENT', 'DISPATCHER_CHECK_INTERVAL',
-                  'CODE_EXTRACTION_BATCH_SIZE', 'CODE_SUMMARY_MAX_WORKERS'].includes(cred.key)) {
-          (settings as any)[cred.key] = parseInt(cred.value || '0', 10) || (settings as any)[cred.key];
+        else if (
+          [
+            "CONTEXTUAL_EMBEDDINGS_MAX_WORKERS",
+            "CRAWL_BATCH_SIZE",
+            "CRAWL_MAX_CONCURRENT",
+            "CRAWL_PAGE_TIMEOUT",
+            "DOCUMENT_STORAGE_BATCH_SIZE",
+            "EMBEDDING_BATCH_SIZE",
+            "DELETE_BATCH_SIZE",
+            "MEMORY_THRESHOLD_PERCENT",
+            "DISPATCHER_CHECK_INTERVAL",
+            "CODE_EXTRACTION_BATCH_SIZE",
+            "CODE_SUMMARY_MAX_WORKERS",
+          ].includes(cred.key)
+        ) {
+          (settings as any)[cred.key] =
+            parseInt(cred.value || "0", 10) || (settings as any)[cred.key];
         }
         // Float fields
-        else if (cred.key === 'CRAWL_DELAY_BEFORE_HTML') {
-          settings[cred.key] = parseFloat(cred.value || '0.5') || 0.5;
+        else if (cred.key === "CRAWL_DELAY_BEFORE_HTML") {
+          settings[cred.key] = parseFloat(cred.value || "0.5") || 0.5;
         }
         // Boolean fields
         else {
-          (settings as any)[cred.key] = cred.value === 'true';
+          (settings as any)[cred.key] = cred.value === "true";
         }
       }
     });
@@ -175,71 +220,96 @@ class CredentialsService {
   }
 
   async updateCredential(credential: Credential): Promise<Credential> {
-    const response = await fetch(`${this.baseUrl}/api/credentials/${credential.key}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(credential),
-    });
-    
-    if (!response.ok) {
-      throw new Error('Failed to update credential');
+    try {
+      const response = await fetch(
+        `${this.baseUrl}/api/credentials/${credential.key}`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(credential),
+        },
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errorText}`);
+      }
+
+      return response.json();
+    } catch (error) {
+      throw this.handleCredentialError(
+        error,
+        `Updating credential '${credential.key}'`,
+      );
     }
-    
-    return response.json();
   }
 
   async createCredential(credential: Credential): Promise<Credential> {
-    const response = await fetch(`${this.baseUrl}/api/credentials`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(credential),
-    });
-    
-    if (!response.ok) {
-      throw new Error('Failed to create credential');
+    try {
+      const response = await fetch(`${this.baseUrl}/api/credentials`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(credential),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errorText}`);
+      }
+
+      return response.json();
+    } catch (error) {
+      throw this.handleCredentialError(
+        error,
+        `Creating credential '${credential.key}'`,
+      );
     }
-    
-    return response.json();
   }
 
   async deleteCredential(key: string): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/api/credentials/${key}`, {
-      method: 'DELETE',
-    });
-    
-    if (!response.ok) {
-      throw new Error('Failed to delete credential');
+    try {
+      const response = await fetch(`${this.baseUrl}/api/credentials/${key}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errorText}`);
+      }
+    } catch (error) {
+      throw this.handleCredentialError(error, `Deleting credential '${key}'`);
     }
   }
 
   async updateRagSettings(settings: RagSettings): Promise<void> {
     const promises = [];
-    
+
     // Update all RAG strategy settings
     for (const [key, value] of Object.entries(settings)) {
       // Skip undefined values
       if (value === undefined) continue;
-      
+
       promises.push(
         this.updateCredential({
           key,
           value: value.toString(),
           is_encrypted: false,
-          category: 'rag_strategy',
-        })
+          category: "rag_strategy",
+        }),
       );
     }
-    
+
     await Promise.all(promises);
   }
 
   async getCodeExtractionSettings(): Promise<CodeExtractionSettings> {
-    const codeExtractionCredentials = await this.getCredentialsByCategory('code_extraction');
-    
+    const codeExtractionCredentials =
+      await this.getCredentialsByCategory("code_extraction");
+
     const settings: CodeExtractionSettings = {
       MIN_CODE_BLOCK_LENGTH: 250,
       MAX_CODE_BLOCK_LENGTH: 5000,
@@ -252,21 +322,24 @@ class CredentialsService {
       ENABLE_CONTEXTUAL_LENGTH: true,
       CODE_EXTRACTION_MAX_WORKERS: 3,
       CONTEXT_WINDOW_SIZE: 1000,
-      ENABLE_CODE_SUMMARIES: true
+      ENABLE_CODE_SUMMARIES: true,
     };
 
     // Map credentials to settings
-    codeExtractionCredentials.forEach(cred => {
+    codeExtractionCredentials.forEach((cred) => {
       if (cred.key in settings) {
         const key = cred.key as keyof CodeExtractionSettings;
-        if (typeof settings[key] === 'number') {
-          if (key === 'MAX_PROSE_RATIO') {
-            settings[key] = parseFloat(cred.value || '0.15');
+        if (typeof settings[key] === "number") {
+          if (key === "MAX_PROSE_RATIO") {
+            settings[key] = parseFloat(cred.value || "0.15");
           } else {
-            settings[key] = parseInt(cred.value || settings[key].toString(), 10);
+            settings[key] = parseInt(
+              cred.value || settings[key].toString(),
+              10,
+            );
           }
-        } else if (typeof settings[key] === 'boolean') {
-          settings[key] = cred.value === 'true';
+        } else if (typeof settings[key] === "boolean") {
+          settings[key] = cred.value === "true";
         }
       }
     });
@@ -274,9 +347,11 @@ class CredentialsService {
     return settings;
   }
 
-  async updateCodeExtractionSettings(settings: CodeExtractionSettings): Promise<void> {
+  async updateCodeExtractionSettings(
+    settings: CodeExtractionSettings,
+  ): Promise<void> {
     const promises = [];
-    
+
     // Update all code extraction settings
     for (const [key, value] of Object.entries(settings)) {
       promises.push(
@@ -284,13 +359,13 @@ class CredentialsService {
           key,
           value: value.toString(),
           is_encrypted: false,
-          category: 'code_extraction',
-        })
+          category: "code_extraction",
+        }),
       );
     }
-    
+
     await Promise.all(promises);
   }
 }
 
-export const credentialsService = new CredentialsService(); 
+export const credentialsService = new CredentialsService();

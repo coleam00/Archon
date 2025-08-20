@@ -8,10 +8,10 @@ COPY requirements.mcp.txt .
 RUN pip install --no-cache-dir -r requirements.mcp.txt
 
 # Create minimal directory structure
-RUN mkdir -p src/mcp/modules src/server/services src/server/config
+RUN mkdir -p src/mcp_server/features/projects src/mcp_server/features/tasks src/mcp_server/features/documents src/server/services src/server/config
 
 # Copy only MCP-specific files (lightweight protocol wrapper)
-COPY src/mcp/ src/mcp/
+COPY src/mcp_server/ src/mcp_server/
 COPY src/__init__.py src/
 
 # Copy only the minimal server files MCP needs for HTTP communication
@@ -34,4 +34,4 @@ ENV ARCHON_MCP_PORT=${ARCHON_MCP_PORT}
 EXPOSE ${ARCHON_MCP_PORT}
 
 # Run the MCP server
-CMD ["python", "-m", "src.mcp.mcp_server"]
+CMD ["python", "-m", "src.mcp_server.mcp_server"]

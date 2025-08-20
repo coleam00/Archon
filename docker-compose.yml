@@ -23,12 +23,29 @@ services:
     networks:
       - app-network
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock  # Docker socket for MCP container control
-      - ./python/src:/app/src  # Mount source code for hot reload
-      - ./python/tests:/app/tests  # Mount tests for UI test execution
-    command: ["python", "-m", "uvicorn", "src.server.main:socket_app", "--host", "0.0.0.0", "--port", "${ARCHON_SERVER_PORT:-8181}", "--reload"]
+      - /var/run/docker.sock:/var/run/docker.sock # Docker socket for MCP container control
+      - ./python/src:/app/src # Mount source code for hot reload
+      - ./python/tests:/app/tests # Mount tests for UI test execution
+    command:
+      [
+        "python",
+        "-m",
+        "uvicorn",
+        "src.server.main:socket_app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "${ARCHON_SERVER_PORT:-8181}",
+        "--reload",
+      ]
     healthcheck:
-      test: ["CMD", "sh", "-c", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:${ARCHON_SERVER_PORT:-8181}/health')\""]
+      test:
+        [
+          "CMD",
+          "sh",
+          "-c",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:${ARCHON_SERVER_PORT:-8181}/health'')"',
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -64,11 +81,17 @@ services:
       - archon-server
       - archon-agents
     healthcheck:
-      test: ["CMD", "sh", "-c", "python -c \"import socket; s=socket.socket(); s.connect(('localhost', ${ARCHON_MCP_PORT:-8051})); s.close()\""]
+      test:
+        [
+          "CMD",
+          "sh",
+          "-c",
+          'python -c "import socket; s=socket.socket(); s.connect((''localhost'', ${ARCHON_MCP_PORT:-8051})); s.close()"',
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s  # Give dependencies time to start
+      start_period: 60s # Give dependencies time to start
 
   # AI Agents Service (ML/Reranking)
   archon-agents:
@@ -92,7 +115,13 @@ services:
     networks:
       - app-network
     healthcheck:
-      test: ["CMD", "sh", "-c", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:${ARCHON_AGENTS_PORT:-8052}/health')\""]
+      test:
+        [
+          "CMD",
+          "sh",
+          "-c",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:${ARCHON_AGENTS_PORT:-8052}/health'')"',
+        ]
       interval: 30s
       timeout: 10s
       retries: 3

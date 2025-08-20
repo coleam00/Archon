@@ -1,5 +1,5 @@
 name: 🐛 Bug Report
-description: Report a bug to help us improve Archon V2 Alpha
+description: Report a bug to help us improve Archon Beta
 title: "🐛 [Bug]: "
 labels: ["bug", "needs-triage"]
 assignees: []
@@ -8,7 +8,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        # 🐛 Bug Report for Archon V2 Alpha
+        # 🐛 Bug Report for Archon Beta
         
         Thank you for taking the time to report a bug! This helps us improve Archon for everyone.
 

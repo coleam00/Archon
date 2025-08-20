@@ -645,7 +645,7 @@ export function ProjectPage({
       {/* Page Header with New Project Button */}
       <motion.div className="flex items-center justify-between mb-8" variants={itemVariants}>
         <motion.h1 className="text-3xl font-bold text-gray-800 dark:text-white flex items-center gap-3" variants={titleVariants}>
-          <img src="/logo-neon.svg" alt="Projects" className="w-7 h-7 filter drop-shadow-[0_0_8px_rgba(59,130,246,0.8)]" />
+          <img src="/logo-neon.png" alt="Projects" className="w-7 h-7 filter drop-shadow-[0_0_8px_rgba(59,130,246,0.8)]" />
           Projects
         </motion.h1>
         <Button 
@@ -688,7 +688,7 @@ export function ProjectPage({
       {/* Project Cards - Horizontally Scrollable */}
       {!isLoadingProjects && !projectsError && (
         <motion.div className="relative mb-10" variants={itemVariants}>
-          <div className="overflow-x-auto pb-4 hide-scrollbar">
+          <div className="overflow-x-auto pb-4 scrollbar-thin">
             <div className="flex gap-4 min-w-max">
               {projects.map(project => (
                 project.creationProgress ? (
