@@ -91,7 +91,6 @@ class BatchCrawlStrategy:
                 cache_mode=CacheMode.BYPASS,
                 stream=True,  # Enable streaming for faster parallel processing
                 markdown_generator=self.markdown_generator,
-                wait_for="body",  # Simple selector for batch
                 wait_until=settings.get("CRAWL_WAIT_STRATEGY", "domcontentloaded"),
                 page_timeout=int(settings.get("CRAWL_PAGE_TIMEOUT", "30000")),
                 delay_before_return_html=float(settings.get("CRAWL_DELAY_BEFORE_HTML", "1.0")),
