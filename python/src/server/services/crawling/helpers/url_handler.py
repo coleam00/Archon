@@ -154,7 +154,7 @@ class URLHandler:
             url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()[:8]
 
             # For GitHub repos, extract meaningful path components
-            if 'github.com' in domain and path:
+            if (domain == "github.com" or domain.endswith(".github.com")) and path:
                 # Extract owner/repo from paths like: /owner/repo/... or /owner/repo
                 path_parts = path.split('/')
                 if len(path_parts) >= 2:

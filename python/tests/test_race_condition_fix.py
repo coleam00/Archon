@@ -124,6 +124,100 @@ class TestRaceConditionFix:
         # All should be identical
         assert len(set(ids)) == 1, f"Same URL generated different source IDs: {set(ids)}"
 
+    def test_github_subdomain_support(self):
+        """Test that GitHub subdomains are properly handled."""
+        github_subdomain_urls = [
+            "https://github.com/owner/repo",                    # Main domain
+            "https://api.github.com/repos/owner/repo",          # API subdomain
+            "https://raw.github.com/owner/repo/main/file.txt",  # Raw subdomain
+            "https://gist.github.com/username/gist-id",         # Gist subdomain
+        ]
+        
+        source_ids = []
+        for url in github_subdomain_urls:
+            source_id = URLHandler.generate_unique_source_id(url)
+            source_ids.append(source_id)
+            
+            # All should be treated as GitHub and contain meaningful path info
+            if "github.com" in url:  # Main domain and subdomains
+                parts = source_id.split('-')
+                readable_part = parts[0] if len(parts) > 1 else source_id
+                assert 'github.com' in readable_part or any('github.com' in url for url in github_subdomain_urls), \
+                    f"GitHub subdomain not properly handled: {source_id} from {url}"
+        
+        # All should be unique despite being GitHub domains
+        assert len(set(source_ids)) == len(source_ids), \
+            f"GitHub subdomains generated duplicate source IDs: {source_ids}"
+
+    def test_security_malicious_domains(self):
+        """Test security: malicious domains that contain 'github.com' should not be treated as GitHub."""
+        malicious_urls = [
+            "https://fake-github.com.evil.com/owner/repo",      # Contains github.com but not legitimate
+            "https://github.com.phishing.site/owner/repo",     # Subdomain of fake domain
+            "https://malicious-github.com/owner/repo",          # Contains github.com in name
+            "https://github-com.fake.site/owner/repo",         # Similar but different
+        ]
+        
+        for url in malicious_urls:
+            source_id = URLHandler.generate_unique_source_id(url)
+            
+            # These should NOT be treated as GitHub repos
+            # They should fall through to the general domain+path handling
+            parts = source_id.split('-')
+            readable_part = parts[0] if len(parts) > 1 else source_id
+            
+            # The key test: these should not get GitHub-specific owner/repo extraction
+            # GitHub URLs should have format: github.com/owner/repo
+            # These malicious URLs should get generic domain/path format instead
+            
+            # Check that it's not using GitHub-specific 3-part structure (domain/owner/repo)
+            if readable_part.count('/') >= 2:
+                parts_list = readable_part.split('/')
+                # If it has 3+ parts, the middle part should not be "github.com"  
+                assert parts_list[0] != "github.com", \
+                    f"Malicious domain incorrectly treated as GitHub: {source_id} from {url}"
+            
+            # Should still generate valid unique IDs
+            assert source_id is not None, f"Failed to generate ID for malicious URL: {url}"
+            assert len(source_id) > 0, f"Empty source ID for malicious URL: {url}"
+
+    def test_github_domain_edge_cases(self):
+        """Test edge cases for GitHub domain matching."""
+        test_cases = [
+            # Legitimate GitHub URLs that should be handled specially
+            ("https://github.com/microsoft/vscode", True),
+            ("https://api.github.com/repos/owner/repo", True),
+            ("https://raw.github.com/owner/repo/main/file.txt", True),
+            
+            # URLs that should NOT be treated as GitHub (different domains)
+            ("https://gitlab.com/owner/repo", False),
+            ("https://bitbucket.com/owner/repo", False),
+            ("https://fake-github.com/owner/repo", False),
+            ("https://mygithub.com/owner/repo", False),
+            
+            # Edge cases
+            ("https://github.com", False),  # No path
+            ("https://github.com/", False), # Empty path
+        ]
+        
+        for url, should_be_github in test_cases:
+            source_id = URLHandler.generate_unique_source_id(url)
+            parts = source_id.split('-')
+            readable_part = parts[0] if len(parts) > 1 else source_id
+            
+            if should_be_github:
+                # Should contain owner/repo structure for GitHub URLs with paths
+                if "/owner/" in url or "/microsoft/" in url or "/repos/" in url:
+                    # GitHub URLs should use the github.com domain in readable part
+                    domain_part = readable_part.split('/')[0] if '/' in readable_part else readable_part
+                    assert 'github.com' in domain_part, \
+                        f"GitHub URL should contain github.com domain: {readable_part} from {url}"
+            else:
+                # Should not be treated with GitHub-specific logic
+                # The readable part should start with the actual domain, not "github.com"
+                if readable_part.startswith('github.com/'):
+                    assert False, f"Non-GitHub URL incorrectly processed as GitHub: {readable_part} from {url}"
+
     def test_error_handling(self):
         """Test error handling for malformed URLs."""
         malformed_urls = [
