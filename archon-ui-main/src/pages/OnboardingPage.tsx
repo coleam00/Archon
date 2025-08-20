@@ -1,17 +1,39 @@
-import { useState } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { databaseService } from '../services/databaseService';
 import { motion } from 'framer-motion';
 import { Sparkles, Key, Check, ArrowRight } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { ProviderStep } from '../components/onboarding/ProviderStep';
+import { DatabaseSetupStep } from '../components/onboarding/DatabaseSetupStep';
 
 export const OnboardingPage = () => {
   const [currentStep, setCurrentStep] = useState(1);
+  const [databaseSetupNeeded, setDatabaseSetupNeeded] = useState(true);
   const navigate = useNavigate();
 
-  const handleProviderSaved = () => {
+  useEffect(() => {
+    const checkDatabaseStatus = async () => {
+      try {
+        const status = await databaseService.getStatus();
+        setDatabaseSetupNeeded(status.setup_required);
+      } catch (error) {
+        console.error('Failed to check database status:', error);
+        setDatabaseSetupNeeded(true);
+      }
+    };
+
+    checkDatabaseStatus();
+  }, []);
+
+  const handleDatabaseSetupComplete = () => {
     setCurrentStep(3);
+  };
+
+
+  const handleProviderSaved = () => {
+    setCurrentStep(4);
   };
 
   const handleProviderSkip = () => {
@@ -19,13 +41,13 @@ export const OnboardingPage = () => {
     navigate('/settings');
   };
 
-  const handleComplete = () => {
+  const handleComplete = useCallback(() => {
     // Mark onboarding as dismissed and navigate to home
     localStorage.setItem('onboardingDismissed', 'true');
     navigate('/');
-  };
+  }, [navigate]);
 
-  const containerVariants = {
+  const containerVariants = useMemo(() => ({
     hidden: { opacity: 0 },
     visible: {
       opacity: 1,
@@ -33,16 +55,24 @@ export const OnboardingPage = () => {
         staggerChildren: 0.1
       }
     }
-  };
+  }), []);
 
-  const itemVariants = {
+  const itemVariants = useMemo(() => ({
     hidden: { opacity: 0, y: 20 },
     visible: {
       opacity: 1,
       y: 0,
       transition: { duration: 0.5 }
     }
-  };
+  }), []);
+
+  const progressSteps = useMemo(() => 
+    databaseSetupNeeded ? [1, 2, 3, 4] : [1, 3, 4]
+  , [databaseSetupNeeded]);
+
+  const handleGetStarted = useCallback(() => {
+    setCurrentStep(databaseSetupNeeded ? 2 : 3);
+  }, [databaseSetupNeeded]);
 
   return (
     <div className="min-h-screen flex items-center justify-center p-8">
@@ -54,7 +84,7 @@ export const OnboardingPage = () => {
       >
         {/* Progress Indicators */}
         <motion.div variants={itemVariants} className="flex justify-center mb-8 gap-3">
-          {[1, 2, 3].map((step) => (
+          {progressSteps.map((step) => (
             <div
               key={step}
               className={`h-2 w-16 rounded-full transition-colors duration-300 ${
@@ -81,7 +111,7 @@ export const OnboardingPage = () => {
               </h1>
               
               <p className="text-lg text-gray-600 dark:text-zinc-400 mb-8 max-w-md mx-auto">
-                Let's get you set up with your AI provider in just a few steps. This will enable intelligent knowledge retrieval and code assistance.
+                Let's get you set up with Supabase and your AI provider for intelligent knowledge retrieval and code assistance.
               </p>
               
               <Button
@@ -89,7 +119,7 @@ export const OnboardingPage = () => {
                 size="lg"
                 icon={<ArrowRight className="w-5 h-5 ml-2" />}
                 iconPosition="right"
-                onClick={() => setCurrentStep(2)}
+                onClick={handleGetStarted}
                 className="min-w-[200px]"
               >
                 Get Started
@@ -98,8 +128,17 @@ export const OnboardingPage = () => {
           </motion.div>
         )}
 
-        {/* Step 2: Provider Setup */}
-        {currentStep === 2 && (
+        {/* Step 2: Database Setup */}
+        {currentStep === 2 && databaseSetupNeeded && (
+          <motion.div variants={itemVariants}>
+            <DatabaseSetupStep
+              onComplete={handleDatabaseSetupComplete}
+            />
+          </motion.div>
+        )}
+
+        {/* Step 3: Provider Setup */}
+        {currentStep === 3 && (
           <motion.div variants={itemVariants}>
             <Card className="p-12">
               <div className="flex items-center mb-6">
@@ -119,8 +158,8 @@ export const OnboardingPage = () => {
           </motion.div>
         )}
 
-        {/* Step 3: All Set */}
-        {currentStep === 3 && (
+        {/* Step 4: All Set */}
+        {currentStep === 4 && (
           <motion.div variants={itemVariants}>
             <Card className="p-12 text-center">
               <div className="flex justify-center mb-6">

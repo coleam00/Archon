@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { credentialsService } from '../services/credentialsService';
 
 interface SettingsContextType {
@@ -71,10 +71,10 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({ children }) 
       throw error;
     }
   };
-
-  const refreshSettings = async () => {
+  // Required for stable reference
+  const refreshSettings = useCallback(async () => {
     await loadSettings();
-  };
+  }, []);
 
   const value: SettingsContextType = {
     projectsEnabled,

@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { SideNavigation } from './SideNavigation';
 import { ArchonChatPanel } from './ArchonChatPanel';
 import { X } from 'lucide-react';
 import { useToast } from '../../contexts/ToastContext';
+import { useSettings } from '../../contexts/SettingsContext';
 import { credentialsService } from '../../services/credentialsService';
+import { databaseService } from '../../services/databaseService';
 import { isLmConfigured } from '../../utils/onboarding';
 import { BackendStartupError } from '../BackendStartupError';
 /**
@@ -27,35 +29,42 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
   // State to track if chat panel is open
   const [isChatOpen, setIsChatOpen] = useState(false);
   const { showToast } = useToast();
+  const { refreshSettings } = useSettings();
   const navigate = useNavigate();
   const location = useLocation();
   const [backendReady, setBackendReady] = useState(false);
   const [backendStartupFailed, setBackendStartupFailed] = useState(false);
+  const healthCheckTimeoutsRef = useRef<Set<NodeJS.Timeout>>(new Set());
 
   // Check backend readiness
   useEffect(() => {
-    
+    if (location.pathname === '/onboarding') {
+      return;
+    }
+
     const checkBackendHealth = async (retryCount = 0) => {
-      const maxRetries = 3; // 3 retries total
-      const retryDelay = 1500; // 1.5 seconds between retries
+      const maxRetries = 10; // Increased retries for initialization
+      const retryDelay = 1000;
       
       try {
         // Create AbortController for proper timeout handling
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000);
+        healthCheckTimeoutsRef.current.add(timeoutId);
         
         // Check if backend is responding with a simple health check
         const response = await fetch(`${credentialsService['baseUrl']}/health`, {
-          method: 'GET',
+            method: 'GET',
           signal: controller.signal
         });
-        
+
         clearTimeout(timeoutId);
-        
+        healthCheckTimeoutsRef.current.delete(timeoutId);
+
         if (response.ok) {
           const healthData = await response.json();
           console.log('📋 Backend health check:', healthData);
-          
+
           // Check if backend is truly ready (not just started)
           if (healthData.ready === true) {
             console.log('✅ Backend is fully initialized');
@@ -64,12 +73,12 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
           } else {
             // Backend is starting up but not ready yet
             console.log(`🔄 Backend initializing... (attempt ${retryCount + 1}/${maxRetries}):`, healthData.message || 'Loading credentials...');
-            
+
             // Retry with shorter interval during initialization
             if (retryCount < maxRetries) {
-              setTimeout(() => {
+              const retryTimeout = setTimeout(() => {
                 checkBackendHealth(retryCount + 1);
-              }, retryDelay); // Constant 1.5s retry during initialization
+              }, retryDelay); // Constant 1s retry during initialization
             } else {
               console.warn('Backend initialization taking too long - proceeding anyway');
               // Don't mark as failed yet, just not fully ready
@@ -91,9 +100,10 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
         
         // Retry if we haven't exceeded max retries
         if (retryCount < maxRetries) {
-          setTimeout(() => {
+          const retryTimeout = setTimeout(() => {
             checkBackendHealth(retryCount + 1);
           }, retryDelay * Math.pow(1.5, retryCount)); // Exponential backoff for connection errors
+          healthCheckTimeoutsRef.current.add(retryTimeout);
         } else {
           console.error('Backend startup failed after maximum retries - showing error message');
           setBackendReady(false);
@@ -104,19 +114,22 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
 
 
     // Start the health check process
-    setTimeout(() => {
+    const initialTimeout = setTimeout(() => {
       checkBackendHealth();
     }, 1000); // Wait 1 second for initial app startup
-  }, []); // Empty deps - only run once on mount
+    healthCheckTimeoutsRef.current.add(initialTimeout);
+
+    return () => {
+      healthCheckTimeoutsRef.current.forEach(timeoutId => {
+        clearTimeout(timeoutId);
+      });
+      healthCheckTimeoutsRef.current.clear();
+    };
+  }, [location.pathname]); // Run when pathname changes
 
   // Check for onboarding redirect after backend is ready
   useEffect(() => {
     const checkOnboarding = async () => {
-      // Skip if backend failed to start
-      if (backendStartupFailed) {
-        return;
-      }
-      
       // Skip if not ready, already on onboarding, or already dismissed
       if (!backendReady || location.pathname === '/onboarding') {
         return;
@@ -131,41 +144,42 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
         // Fetch credentials in parallel
         const [ragCreds, apiKeyCreds] = await Promise.all([
           credentialsService.getCredentialsByCategory('rag_strategy'),
-          credentialsService.getCredentialsByCategory('api_keys')
+          credentialsService.getCredentialsByCategory('api_keys'),
         ]);
 
         // Check if LM is configured
         const configured = isLmConfigured(ragCreds, apiKeyCreds);
-        
+
         if (!configured) {
           // Redirect to onboarding
           navigate('/onboarding', { replace: true });
         }
       } catch (error) {
         // Detailed error handling per alpha principles - fail loud but don't block
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        const errorMessage =
+          error instanceof Error ? error.message : 'Unknown error';
         const errorDetails = {
           context: 'Onboarding configuration check',
           pathname: location.pathname,
           error: errorMessage,
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
         };
-        
+
         // Log with full context and stack trace
         console.error('ONBOARDING_CHECK_FAILED:', errorDetails, error);
-        
+
         // Make error visible to user but don't block app functionality
         showToast(
           `Configuration check failed: ${errorMessage}. You can manually configure in Settings.`,
           'warning'
         );
-        
+
         // Let user continue - onboarding is optional, they can configure manually
       }
     };
 
     checkOnboarding();
-  }, [backendReady, backendStartupFailed, location.pathname, navigate, showToast]);
+  }, [backendReady, location.pathname, navigate, showToast]);
 
   return <div className="relative min-h-screen bg-white dark:bg-black overflow-hidden">
       {/* Show backend startup error if backend failed to start */}
