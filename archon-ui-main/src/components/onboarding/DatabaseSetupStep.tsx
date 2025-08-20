@@ -83,20 +83,30 @@ const DatabaseSetupStepComponent = ({
       }
     } catch (err) {
       if (err instanceof DatabaseError) {
-        let errorMessage = `${err.message}\n\nError Code: ${
-          err.code
-        }\nCorrelation ID: ${err.context.correlationId || 'N/A'}`;
-
-        if (err.remediation) {
-          errorMessage += `\n\nSuggested Fix: ${err.remediation}`;
+        let errorMessage = '';
+        
+        if (err.code === 'DATABASE_CONNECTION_ERROR') {
+          errorMessage = 'Unable to connect to your Supabase database. Please check:';
+          errorMessage += '\n\n• Supabase URL and Service Key are correct';
+          errorMessage += '\n• Your Supabase project is active and running';
+          errorMessage += '\n• Network connectivity to Supabase';
+          
+          if (err.context.serverContext?.supabase_url?.includes('localhost') || 
+              err.context.serverContext?.supabase_url?.includes('127.0.0.1')) {
+            errorMessage += '\n\nNote: You\'re using a local Supabase URL. Make sure:';
+            errorMessage += '\n• Local Supabase is running (supabase start)';
+            errorMessage += '\n• URL uses host.docker.internal instead of localhost for Docker';
+          }
+        } else {
+          errorMessage = `${err.message}`;
+          if (err.remediation) {
+            errorMessage += `\n\nSuggested Fix: ${err.remediation}`;
+          }
         }
-
-        if (err.context.serverContext) {
-          errorMessage += `\n\nServer Details: ${JSON.stringify(
-            err.context.serverContext,
-            null,
-            2
-          )}`;
+        
+        errorMessage += `\n\nError Code: ${err.code}`;
+        if (err.context.correlationId) {
+          errorMessage += `\nCorrelation ID: ${err.context.correlationId}`;
         }
 
         setError(errorMessage);
@@ -264,10 +274,21 @@ const DatabaseSetupStepComponent = ({
       }
     } catch (err) {
       if (err instanceof DatabaseError) {
-        let errorMessage = `${err.message}\n\nError Code: ${err.code}`;
-        if (err.remediation) {
-          errorMessage += `\n\nSuggested Fix: ${err.remediation}`;
+        let errorMessage = '';
+        
+        if (err.code === 'DATABASE_CONNECTION_ERROR') {
+          errorMessage = 'Database connection failed during verification. Please ensure:';
+          errorMessage += '\n\n• Your Supabase credentials are valid';
+          errorMessage += '\n• The database is accessible';
+          errorMessage += '\n• You have run the setup SQL correctly';
+        } else {
+          errorMessage = `${err.message}`;
+          if (err.remediation) {
+            errorMessage += `\n\nSuggested Fix: ${err.remediation}`;
+          }
         }
+        
+        errorMessage += `\n\nError Code: ${err.code}`;
         setError(errorMessage);
 
         console.error('Database verification error:', err.toJSON());
@@ -500,24 +521,33 @@ const DatabaseSetupStepComponent = ({
 
   if (error) {
     return (
-      <Card className='p-12 text-center'>
-        <div className='flex justify-center mb-6'>
-          <div className='w-20 h-20 rounded-full bg-gradient-to-br from-red-500 to-orange-600 flex items-center justify-center'>
-            <AlertCircle className='w-10 h-10 text-white' />
+      <Card className='p-12'>
+        <div className='flex items-center justify-between mb-6'>
+          <div className='flex items-center'>
+            <div className='w-12 h-12 rounded-full bg-gradient-to-br from-red-500 to-orange-600 flex items-center justify-center mr-4'>
+              <AlertCircle className='w-6 h-6 text-white' />
+            </div>
+            <h2 className='text-2xl font-bold text-gray-800 dark:text-white'>
+              Database Connection Error
+            </h2>
           </div>
         </div>
 
-        <h2 className='text-3xl font-bold text-gray-800 dark:text-white mb-4'>
-          Setup Error
-        </h2>
-
-        <p className='text-lg text-gray-600 dark:text-zinc-400 mb-8 max-w-md mx-auto'>
-          {error}
-        </p>
+        <div className='bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-6 mb-6'>
+          <div className='flex items-start'>
+            <AlertCircle className='w-5 h-5 text-red-600 dark:text-red-400 mt-0.5 mr-3 flex-shrink-0' />
+            <div className='flex-1'>
+              <pre className='text-red-700 dark:text-red-300 whitespace-pre-wrap font-sans text-sm leading-relaxed'>
+                {error}
+              </pre>
+            </div>
+          </div>
+        </div>
 
         <div className='flex gap-4 justify-center'>
           <Button variant='outline' onClick={checkDatabaseStatus}>
-            Retry
+            <RefreshCw className='w-4 h-4 mr-2' />
+            Retry Connection
           </Button>
           {onSkip && (
             <Button variant='secondary' onClick={onSkip}>

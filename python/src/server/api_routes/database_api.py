@@ -52,6 +52,44 @@ async def get_database_status():
     correlation_id = str(uuid.uuid4())
     logger.info("Database status check started", extra={"correlation_id": correlation_id})
 
+    # Check for simulation mode
+    simulate_mode = os.getenv("ARCHON_SIMULATE_DB_STATE")
+    if simulate_mode:
+        logger.info(f"Database simulation mode active: {simulate_mode}", extra={"correlation_id": correlation_id})
+        
+        if simulate_mode == "CONNECTION_ERROR":
+            error_context = {
+                "timestamp": datetime.now().isoformat(),
+                "supabase_url_configured": True,
+                "service_key_configured": True,
+                "service_key_length": 22,
+                "supabase_url": os.getenv("SUPABASE_URL", "http://localhost:54321"),
+                "error_details": "Simulated connection failure for testing"
+            }
+            raise DatabaseConnectionError(
+                "Database connection failed: [Simulated Error]",
+                context=error_context,
+                remediation="Check database connectivity and credentials"
+            )
+        elif simulate_mode == "MISSING_ENV":
+            return DatabaseStatus(
+                initialized=False,
+                setup_required=True,
+                message="Supabase environment variables not configured. Missing: SUPABASE_URL, SUPABASE_SERVICE_KEY. Please add them to your .env file and restart the server.",
+            )
+        elif simulate_mode == "SETUP_REQUIRED":
+            return DatabaseStatus(
+                initialized=False, 
+                setup_required=True, 
+                message="Database tables are missing and need to be created"
+            )
+        elif simulate_mode == "READY":
+            return DatabaseStatus(
+                initialized=True, 
+                setup_required=False, 
+                message="Database is properly initialized"
+            )
+
     try:
         if not credential_service.is_supabase_configured():
             missing_vars = []
@@ -192,6 +230,37 @@ async def verify_database_setup():
     """Verify that the database has been properly set up after running SQL."""
     correlation_id = str(uuid.uuid4())
     logger.info("Database setup verification started", extra={"correlation_id": correlation_id})
+
+    # Check for simulation mode
+    simulate_mode = os.getenv("ARCHON_SIMULATE_DB_STATE")
+    if simulate_mode:
+        logger.info(f"Database verification simulation mode: {simulate_mode}", extra={"correlation_id": correlation_id})
+        
+        if simulate_mode == "CONNECTION_ERROR":
+            error_context = {
+                "timestamp": datetime.now().isoformat(),
+                "supabase_url": os.getenv("SUPABASE_URL", "http://localhost:54321"),
+                "error_details": "Simulated verification failure for testing"
+            }
+            raise DatabaseConnectionError(
+                "Database connection failed during verification: [Simulated Error]",
+                context=error_context,
+                remediation="Check database connectivity and credentials"
+            )
+        elif simulate_mode == "SETUP_REQUIRED":
+            return {
+                "success": False,
+                "message": "Database tables still not found - please run the setup SQL",
+                "correlation_id": correlation_id,
+                "remediation": "Execute the provided SQL in your Supabase SQL editor",
+            }
+        elif simulate_mode == "READY":
+            return {
+                "success": True,
+                "message": "Database setup verified successfully",
+                "verification_duration": 0.1,
+                "correlation_id": correlation_id,
+            }
 
     try:
         credential_service.reset_cache()
