@@ -141,6 +141,14 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
       }
 
       try {
+        // Check database setup first
+        const databaseStatus = await databaseService.getStatus();
+        if (databaseStatus.setup_required) {
+          // Database setup required - redirect to onboarding
+          navigate('/onboarding', { replace: true });
+          return;
+        }
+
         // Fetch credentials in parallel
         const [ragCreds, apiKeyCreds] = await Promise.all([
           credentialsService.getCredentialsByCategory('rag_strategy'),

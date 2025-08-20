@@ -214,7 +214,8 @@ describe('MainLayout Database Integration', () => {
       });
 
       expect(localStorage.getItem).toHaveBeenCalledWith('onboardingDismissed');
-      expect(mockDatabaseService.getStatus).toHaveBeenCalled();
+      // When onboarding is dismissed, we should NOT check database status
+      expect(mockDatabaseService.getStatus).not.toHaveBeenCalled();
       expect(mockNavigate).not.toHaveBeenCalled();
     });
 
@@ -344,7 +345,8 @@ describe('MainLayout Database Integration', () => {
       });
 
       expect(global.fetch).toHaveBeenCalled();
-      expect(mockDatabaseService.getStatus).toHaveBeenCalled();
+      // When health check fails, backend never becomes ready, so onboarding check doesn't run
+      expect(mockDatabaseService.getStatus).not.toHaveBeenCalled();
     });
   });
 
