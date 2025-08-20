@@ -67,10 +67,7 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
 
    OPTIONAL: If you want to enable the reranking RAG strategy, uncomment lines 20-22 in `python\requirements.server.txt`. This will significantly increase the size of the Archon Server container which is why it's off by default.
 
-3. **Database Setup**: In your [Supabase project](https://supabase.com/dashboard) SQL Editor, copy, paste, and execute the contents of `migration/complete_setup.sql`
-
-4. **Start Services**:
-
+3. **Start Services**:
    ```bash
    docker-compose up --build -d
    ```
@@ -83,10 +80,15 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
 
    Ports are configurable in your .env as well!
 
-5. **Configure API Keys**:
-   - Open http://localhost:3737
-   - Go to **Settings** → Select your LLM/embedding provider and set the API key (OpenAI is default)
+ 4. **Complete Onboarding**
+ - Open [http://localhost:3737/onboarding](http://localhost:3737/onboarding)
+ - Follow the onboarding process to complete the setup
+   - **Complete database setup** **( ⚠️ required )**
+   - Select your LLM/embedding provider and set the API key (OpenAI is default)
    - Test by uploading a document or crawling a website
+
+> [!tip] 
+> Test by uploading a document or crawling a website
 
 ## 🔄 Database Reset (Start Fresh if Needed)
 

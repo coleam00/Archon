@@ -23,23 +23,13 @@ services:
     networks:
       - app-network
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock # Docker socket for MCP container control
-      - ./python/src:/app/src # Mount source code for hot reload
-      - ./python/tests:/app/tests # Mount tests for UI test execution
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker socket for MCP container control
+      - ./python/src:/app/src  # Mount source code for hot reload
+      - ./python/tests:/app/tests  # Mount tests for UI test execution
+      - ./migration:/app/migration  # Mount migration files for database setup
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    command:
-      [
-        "python",
-        "-m",
-        "uvicorn",
-        "src.server.main:socket_app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "${ARCHON_SERVER_PORT:-8181}",
-        "--reload",
-      ]
+    command: ["python", "-m", "uvicorn", "src.server.main:socket_app", "--host", "0.0.0.0", "--port", "${ARCHON_SERVER_PORT:-8181}", "--reload"]
     healthcheck:
       test:
         [
@@ -141,6 +131,7 @@ services:
       - VITE_API_URL=http://${HOST:-localhost}:${ARCHON_SERVER_PORT:-8181}
       - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
       - HOST=${HOST:-localhost}
+      - VITE_DB_SETUP_TIMEOUT_MS=${VITE_DB_SETUP_TIMEOUT_MS:-}
     networks:
       - app-network
     healthcheck:
