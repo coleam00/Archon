@@ -37,6 +37,14 @@ class RAGStrategyConfig:
     use_reranking: bool = True
 
 
+@dataclass
+class DatabaseConfig:
+    """Configuration for database operations."""
+
+    setup_sql_path: str = "/app/migration/complete_setup.sql"
+    setup_timeout_seconds: int = 180
+
+
 def validate_openai_api_key(api_key: str) -> bool:
     """Validate OpenAI API key format."""
     if not api_key:
@@ -209,4 +217,12 @@ def get_rag_strategy_config() -> RAGStrategyConfig:
         use_hybrid_search=str_to_bool(os.getenv("USE_HYBRID_SEARCH")),
         use_agentic_rag=str_to_bool(os.getenv("USE_AGENTIC_RAG")),
         use_reranking=str_to_bool(os.getenv("USE_RERANKING")),
+    )
+
+
+def load_database_config() -> DatabaseConfig:
+    """Load database configuration from environment variables."""
+    return DatabaseConfig(
+        setup_sql_path=os.getenv("DATABASE_SETUP_SQL_PATH", "/app/migration/complete_setup.sql"),
+        setup_timeout_seconds=int(os.getenv("DATABASE_SETUP_TIMEOUT", "300")),
     )
