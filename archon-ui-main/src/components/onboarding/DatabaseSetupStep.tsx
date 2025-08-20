@@ -609,16 +609,20 @@ const DatabaseSetupStepComponent = ({
             isAnimating={step2Animating}
           />
           <span className='flex-1 text-gray-700 dark:text-zinc-300'>
-            Paste and Run the SQL in Supabase SQL Editor
+            {setupData?.sql_editor_url 
+              ? 'Paste and Run the SQL in Supabase SQL Editor'
+              : 'Open your local Supabase Studio and run the SQL in the SQL Editor tab'
+            }
           </span>
-          <Button
-            variant='outline'
-            size='sm'
-            icon={<ExternalLink className='w-4 h-4' />}
-            onClick={openSqlEditor}
-            disabled={!setupData?.sql_editor_url}>
-            Open Editor
-          </Button>
+          {setupData?.sql_editor_url && (
+            <Button
+              variant='outline'
+              size='sm'
+              icon={<ExternalLink className='w-4 h-4' />}
+              onClick={openSqlEditor}>
+              Open Editor
+            </Button>
+          )}
         </div>
 
         {(autoVerifying || pollingTimeoutReached) && (
