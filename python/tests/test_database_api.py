@@ -9,6 +9,7 @@ This file contains tests for database API endpoints including:
 Tests cover success cases, error handling, edge cases, and integration scenarios.
 """
 
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock, mock_open, patch
 
 import pytest
@@ -232,8 +233,9 @@ class TestSetupSQLEndpoint:
 
     def test_setup_sql_matches_migration_file(self, client):
         """Test that SQL content returned matches complete_setup.sql"""
-        # Read the actual migration file
-        with open("/Users/daniel/archon/migration/complete_setup.sql", encoding="utf-8") as f:
+        # Read the actual migration file using repository-relative path
+        migration_file = Path(__file__).parent.parent.parent / "migration" / "complete_setup.sql"
+        with open(migration_file, encoding="utf-8") as f:
             expected_sql = f.read()
 
         with (

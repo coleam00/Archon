@@ -262,7 +262,7 @@ describe('DatabaseSetupStep', () => {
       await vi.runAllTimersAsync();
     });
 
-    expect(screen.getByText(/setup error/i)).toBeInTheDocument();
+    expect(screen.getByText(/unexpected error/i)).toBeInTheDocument();
     expect(screen.getByText(/network connection failed/i)).toBeInTheDocument();
 
     await act(async () => {
