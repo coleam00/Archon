@@ -196,7 +196,7 @@ MCP_INSTRUCTIONS = """
    - Combine with your local TODO tools for granular tracking
    - First TODO: Update Archon task status
    - Last TODO: Update Archon with findings/completion
-   
+
 2. **Research First**: Before implementing, use perform_rag_query and search_code_examples
 3. **Task-Driven Development**: Never code without checking current tasks first
 
@@ -205,7 +205,7 @@ MCP_INSTRUCTIONS = """
 ### Task Management Cycle
 1. **Get current task**: `get_task(task_id="...")`
 2. **Mark as doing**: `update_task(task_id="...", status="doing")`
-3. **Research phase**: 
+3. **Research phase**:
    - `perform_rag_query(query="...", match_count=5)`
    - `search_code_examples(query="...", match_count=3)`
 4. **Implementation**: Code based on research findings
