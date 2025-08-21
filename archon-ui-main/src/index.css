@@ -298,6 +298,15 @@
   }
 }
 
+.animate-spin-twice {
+  animation: spin-twice 700ms linear 1 both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-spin-twice {
+    animation: none;
+  }
+}
+
 .animate-pulse-glow {
   animation: pulse-glow 2s ease-in-out infinite;
 }

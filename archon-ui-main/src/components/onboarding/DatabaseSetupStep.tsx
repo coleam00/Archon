@@ -685,9 +685,7 @@ const DatabaseSetupStepComponent = ({
                 }`}>
                 <RefreshCw
                   className={`w-4 h-4 absolute left-3 ${
-                    checkingManually
-                      ? 'animate-[spin-twice_0.8s_ease-in-out_1_forwards]'
-                      : ''
+                    checkingManually ? 'animate-spin-twice' : ''
                   }`}
                 />
                 <span
