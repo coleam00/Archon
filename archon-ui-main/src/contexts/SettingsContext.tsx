@@ -52,8 +52,9 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({ children }) 
   }, [loadSettings]);
 
   const setProjectsEnabled = async (enabled: boolean) => {
+    const prev = projectsEnabled;
     try {
-      // Update local state immediately
+      // Update optimistically
       setProjectsEnabledState(enabled);
 
       // Save to backend
@@ -67,7 +68,7 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({ children }) 
     } catch (error) {
       console.error('Failed to update projects setting:', error);
       // Revert on error
-      setProjectsEnabledState(!enabled);
+      setProjectsEnabledState(prev);
       throw error;
     }
   };
