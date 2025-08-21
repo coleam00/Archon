@@ -2,13 +2,13 @@ import React, { memo, useCallback, useMemo, useState, useEffect, useRef } from '
 import { X } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { ArchonLoadingSpinner } from '../animations/Animations';
-import { DebouncedInput, FeatureInput } from './TaskInputComponents';
+import { DebouncedInput, FeatureInput, AssigneeTypeaheadInput } from './TaskInputComponents';
 import type { Task } from './TaskTableView';
 
 interface EditTaskModalProps {
   isModalOpen: boolean;
   editingTask: Task | null;
-  projectFeatures: any[];
+  projectFeatures: import('../types/jsonb').ProjectFeature[];
   isLoadingFeatures: boolean;
   isSavingTask: boolean;
   onClose: () => void;
@@ -16,7 +16,15 @@ interface EditTaskModalProps {
   getTasksForPrioritySelection: (status: Task['status']) => Array<{value: number, label: string}>;
 }
 
-const ASSIGNEE_OPTIONS = ['User', 'Archon', 'AI IDE Agent'] as const;
+// Assignee options - expanded to include all agent types
+const ASSIGNEE_OPTIONS = [
+  'User', 
+  'Archon', 
+  'AI IDE Agent',
+  'IDE Agent',
+  'prp-executor',
+  'prp-validator'
+] as const;
 
 // Removed debounce utility - now using DebouncedInput component
 
@@ -82,10 +90,10 @@ export const EditTaskModal = memo(({
     setLocalTask(prev => prev ? { ...prev, task_order: parseInt(e.target.value) } : null);
   }, []);
   
-  const handleAssigneeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
+  const handleAssigneeChange = useCallback((value: string) => {
     setLocalTask(prev => prev ? {
       ...prev,
-      assignee: { name: e.target.value as 'User' | 'Archon' | 'AI IDE Agent', avatar: '' }
+      assignee: { name: value, avatar: '' }
     } : null);
   }, []);
   
@@ -167,15 +175,12 @@ export const EditTaskModal = memo(({
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-gray-700 dark:text-gray-300 mb-1">Assignee</label>
-                <select 
-                  value={localTask?.assignee?.name || 'User'} 
+                <AssigneeTypeaheadInput
+                  value={localTask?.assignee?.name || 'User'}
                   onChange={handleAssigneeChange}
+                  placeholder="Type or select assignee..."
                   className="w-full bg-white/50 dark:bg-black/70 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-white rounded-md py-2 px-3 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.2)] transition-all duration-300"
-                >
-                  {ASSIGNEE_OPTIONS.map(option => (
-                    <option key={option} value={option}>{option}</option>
-                  ))}
-                </select>
+                />
               </div>
 
               <div>

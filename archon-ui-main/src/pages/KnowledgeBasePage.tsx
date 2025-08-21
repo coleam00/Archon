@@ -18,6 +18,7 @@ import { KnowledgeTable } from '../components/knowledge-base/KnowledgeTable';
 import { KnowledgeItemCard } from '../components/knowledge-base/KnowledgeItemCard';
 import { GroupedKnowledgeItemCard } from '../components/knowledge-base/GroupedKnowledgeItemCard';
 import { KnowledgeGridSkeleton, KnowledgeTableSkeleton } from '../components/knowledge-base/KnowledgeItemSkeleton';
+import { DeleteConfirmModal } from '../components/ui/DeleteConfirmModal';
 import { GroupCreationModal } from '../components/knowledge-base/GroupCreationModal';
 
 const extractDomain = (url: string): string => {
@@ -69,6 +70,10 @@ export const KnowledgeBasePage = () => {
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
+  
+  // Delete confirmation modal state
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [itemsToDelete, setItemsToDelete] = useState<{ count: number; items: Set<string> } | null>(null);
   
   const { showToast } = useToast();
 
@@ -360,30 +365,41 @@ export const KnowledgeBasePage = () => {
     if (selectedItems.size === 0) return;
     
     const count = selectedItems.size;
-    const confirmed = window.confirm(`Are you sure you want to delete ${count} selected item${count > 1 ? 's' : ''}?`);
-    
-    if (!confirmed) return;
+    setItemsToDelete({ count, items: new Set(selectedItems) });
+    setShowDeleteConfirm(true);
+  };
+  
+  const confirmDeleteItems = async () => {
+    if (!itemsToDelete) return;
     
     try {
       // Delete each selected item
-      const deletePromises = Array.from(selectedItems).map(itemId => 
+      const deletePromises = Array.from(itemsToDelete.items).map(itemId => 
         knowledgeBaseService.deleteKnowledgeItem(itemId)
       );
       
       await Promise.all(deletePromises);
       
       // Remove deleted items from state
-      setKnowledgeItems(prev => prev.filter(item => !selectedItems.has(item.id)));
+      setKnowledgeItems(prev => prev.filter(item => !itemsToDelete.items.has(item.id)));
       
       // Clear selection
       setSelectedItems(new Set());
       setIsSelectionMode(false);
       
-      showToast(`Successfully deleted ${count} item${count > 1 ? 's' : ''}`, 'success');
+      showToast(`Successfully deleted ${itemsToDelete.count} item${itemsToDelete.count > 1 ? 's' : ''}`, 'success');
     } catch (error) {
       console.error('Failed to delete selected items:', error);
       showToast('Failed to delete some items', 'error');
+    } finally {
+      setShowDeleteConfirm(false);
+      setItemsToDelete(null);
     }
+  };
+  
+  const cancelDeleteItems = () => {
+    setShowDeleteConfirm(false);
+    setItemsToDelete(null);
   };
   
   // Keyboard shortcuts
@@ -1192,6 +1208,16 @@ export const KnowledgeBasePage = () => {
             toggleSelectionMode(); // Exit selection mode
             loadKnowledgeItems(); // Reload to show groups
           }}
+        />
+      )}
+      
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && itemsToDelete && (
+        <DeleteConfirmModal
+          itemName={`${itemsToDelete.count} selected item${itemsToDelete.count > 1 ? 's' : ''}`}
+          onConfirm={confirmDeleteItems}
+          onCancel={cancelDeleteItems}
+          type="knowledge-items"
         />
       )}
     </div>;

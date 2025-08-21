@@ -30,11 +30,11 @@ export const IDEGlobalRules = () => {
 
 **MANDATORY: Always complete the full Archon specific task cycle before any coding:**
 
-1. **Check Current Task** → \`archon:manage_task(action="get", task_id="...")\`
+1. **Check Current Task** → \`archon:get_task(task_id="...")\`
 2. **Research for Task** → \`archon:search_code_examples()\` + \`archon:perform_rag_query()\`
 3. **Implement the Task** → Write code based on research
-4. **Update Task Status** → \`archon:manage_task(action="update", task_id="...", update_fields={"status": "review"})\`
-5. **Get Next Task** → \`archon:manage_task(action="list", filter_by="status", filter_value="todo")\`
+4. **Update Task Status** → \`archon:update_task(task_id="...", status="review")\`
+5. **Get Next Task** → \`archon:list_tasks(filter_by="status", filter_value="todo")\`
 6. **Repeat Cycle**
 
 **NEVER skip task updates with the Archon MCP server. NEVER code without checking current tasks first.**
@@ -45,8 +45,7 @@ export const IDEGlobalRules = () => {
 
 \`\`\`bash
 # Create project container
-archon:manage_project(
-  action="create",
+archon:create_project(
   title="Descriptive Project Name",
   github_repo="github.com/user/repo-name"
 )
@@ -60,7 +59,7 @@ archon:manage_project(
 # First, analyze existing codebase thoroughly
 # Read all major files, understand architecture, identify current state
 # Then create project container
-archon:manage_project(action="create", title="Existing Project Name")
+archon:create_project(title="Existing Project Name")
 
 # Research current tech stack and create tasks for remaining work
 # Focus on what needs to be built, not what already exists
@@ -70,7 +69,7 @@ archon:manage_project(action="create", title="Existing Project Name")
 
 \`\`\`bash
 # Check existing project status
-archon:manage_task(action="list", filter_by="project", filter_value="[project_id]")
+archon:list_tasks(filter_by="project", filter_value="[project_id]")
 
 # Pick up where you left off - no new project creation needed
 # Continue with standard development iteration workflow
@@ -101,16 +100,14 @@ archon:search_code_examples(query="[specific feature] implementation", match_cou
 
 \`\`\`bash
 # Get current project status
-archon:manage_task(
-  action="list",
+archon:list_tasks(
   filter_by="project", 
   filter_value="[project_id]",
   include_closed=false
 )
 
 # Get next priority task
-archon:manage_task(
-  action="list",
+archon:list_tasks(
   filter_by="status",
   filter_value="todo",
   project_id="[project_id]"
@@ -150,15 +147,14 @@ archon:search_code_examples(
 
 **1. Get Task Details:**
 \`\`\`bash
-archon:manage_task(action="get", task_id="[current_task_id]")
+archon:get_task(task_id="[current_task_id]")
 \`\`\`
 
 **2. Update to In-Progress:**
 \`\`\`bash
-archon:manage_task(
-  action="update",
+archon:update_task(
   task_id="[current_task_id]",
-  update_fields={"status": "doing"}
+  status="doing"
 )
 \`\`\`
 
@@ -170,10 +166,9 @@ archon:manage_task(
 **4. Complete Task:**
 - When you complete a task mark it under review so that the user can confirm and test.
 \`\`\`bash
-archon:manage_task(
-  action="update", 
+archon:update_task(
   task_id="[current_task_id]",
-  update_fields={"status": "review"}
+  status="review"
 )
 \`\`\`
 
@@ -225,7 +220,7 @@ archon:search_code_examples(query="PostgreSQL connection pooling Node.js", match
 **Start of each coding session:**
 
 1. Check available sources: \`archon:get_available_sources()\`
-2. Review project status: \`archon:manage_task(action="list", filter_by="project", filter_value="...")\`
+2. Review project status: \`archon:list_tasks(filter_by="project", filter_value="...")\`
 3. Identify next priority task: Find highest \`task_order\` in "todo" status
 4. Conduct task-specific research
 5. Begin implementation
@@ -247,17 +242,15 @@ archon:search_code_examples(query="PostgreSQL connection pooling Node.js", match
 **Status Update Examples:**
 \`\`\`bash
 # Move to review when implementation complete but needs testing
-archon:manage_task(
-  action="update",
+archon:update_task(
   task_id="...",
-  update_fields={"status": "review"}
+  status="review"
 )
 
 # Complete task after review passes
-archon:manage_task(
-  action="update", 
+archon:update_task(
   task_id="...",
-  update_fields={"status": "done"}
+  status="done"
 )
 \`\`\`
 
@@ -291,8 +284,7 @@ archon:manage_task(
 archon:get_project_features(project_id="...")
 
 # Create tasks aligned with features
-archon:manage_task(
-  action="create",
+archon:create_task(
   project_id="...",
   title="...",
   feature="Authentication",  # Align with project features

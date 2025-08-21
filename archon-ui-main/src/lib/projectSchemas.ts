@@ -6,8 +6,8 @@ export const UITaskStatusSchema = z.enum(['backlog', 'in-progress', 'review', 'c
 export const TaskPrioritySchema = z.enum(['low', 'medium', 'high', 'critical']);
 export const ProjectColorSchema = z.enum(['cyan', 'purple', 'pink', 'blue', 'orange', 'green']);
 
-// Assignee schema - simplified to predefined options
-export const AssigneeSchema = z.enum(['User', 'Archon', 'AI IDE Agent']);
+// Assignee schema - allow any string value (backend no longer restricts this)
+export const AssigneeSchema = z.string();
 
 // Project schemas
 export const CreateProjectSchema = z.object({

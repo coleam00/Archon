@@ -252,20 +252,23 @@ async def add_documents_to_supabase(
                 search_logger.warning(
                     f"Skipping batch {batch_num} - no successful embeddings created"
                 )
-                completed_batches += 1
+                # Don't increment completed_batches when skipping - this causes progress to jump
                 continue
 
             # Prepare batch data - only for successful embeddings
             batch_data = []
+            used_indices = set()  # Track which indices have been mapped to prevent duplicates
+            
             # Map successful texts back to their original indices
             for j, (embedding, text) in enumerate(
                 zip(batch_embeddings, successful_texts, strict=False)
             ):
-                # Find the original index of this text
+                # Find the original index of this text (skip already used indices)
                 orig_idx = None
                 for idx, orig_text in enumerate(contextual_contents):
-                    if orig_text == text:
+                    if orig_text == text and idx not in used_indices:
                         orig_idx = idx
+                        used_indices.add(idx)  # Mark this index as used
                         break
 
                 if orig_idx is None:
@@ -356,6 +359,9 @@ async def add_documents_to_supabase(
                         search_logger.info(
                             f"Individual inserts: {successful_inserts}/{len(batch_data)} successful"
                         )
+                        # Even if we had to fall back to individual inserts, count this batch as processed
+                        if successful_inserts > 0:
+                            completed_batches += 1
 
             # Minimal delay between batches to prevent overwhelming
             if i + batch_size < len(contents):

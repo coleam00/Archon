@@ -14,6 +14,7 @@ import { MilkdownEditor } from './MilkdownEditor';
 import { VersionHistoryModal } from './VersionHistoryModal';
 import { PRPViewer } from '../prp';
 import { DocumentCard, NewDocumentCard } from './DocumentCard';
+import { DeleteConfirmModal } from '../ui/DeleteConfirmModal';
 
 
 
@@ -24,7 +25,7 @@ interface ProjectDoc {
   created_at: string;
   updated_at: string;
   // Content field stores markdown or structured data
-  content?: any;
+  content: any;
   document_type?: string;
 }
 
@@ -514,6 +515,10 @@ export const DocsTab = ({
   // Document state
   const [documents, setDocuments] = useState<ProjectDoc[]>([]);
   const [selectedDocument, setSelectedDocument] = useState<ProjectDoc | null>(null);
+  
+  // Delete confirmation modal state
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [documentToDelete, setDocumentToDelete] = useState<{ id: string; title: string } | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -569,13 +574,20 @@ export const DocsTab = ({
       const projectDocuments: ProjectDoc[] = project.docs.map((doc: any) => ({
         id: doc.id,
         title: doc.title || 'Untitled Document',
-        created_at: doc.created_at,
-        updated_at: doc.updated_at,
-        content: doc.content,
+        created_at: doc.created_at || new Date().toISOString(),
+        updated_at: doc.updated_at || new Date().toISOString(),
+        content: doc.content || {},
         document_type: doc.document_type || 'document'
       }));
       
-      setDocuments(projectDocuments);
+      // Merge with existing documents, preserving any temporary documents
+      setDocuments(prev => {
+        // Keep any temporary documents (ones with temp- prefix)
+        const tempDocs = prev.filter(doc => doc.id.startsWith('temp-'));
+        
+        // Merge temporary docs with loaded docs
+        return [...projectDocuments, ...tempDocs];
+      });
       
       // Auto-select first document if available and no document is currently selected
       if (projectDocuments.length > 0 && !selectedDocument) {
@@ -598,28 +610,69 @@ export const DocsTab = ({
     const template = DOCUMENT_TEMPLATES[templateKey as keyof typeof DOCUMENT_TEMPLATES];
     if (!template) return;
 
+    // Create a temporary document for optimistic update
+    const tempDocument: ProjectDoc = {
+      id: `temp-${Date.now()}`,
+      title: template.name,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      content: template.content,
+      document_type: template.document_type
+    };
+    
+    // Optimistically add the document to the UI immediately
+    console.log('[DocsTab] Adding temporary document:', tempDocument);
+    setDocuments(prev => {
+      const updated = [...prev, tempDocument];
+      console.log('[DocsTab] Documents after optimistic add:', updated);
+      return updated;
+    });
+    setSelectedDocument(tempDocument);
+    setShowTemplateModal(false);
+    setIsSaving(false); // Allow UI to show the temp document
+    
     try {
       setIsSaving(true);
       
-      // Create a new document with a unique ID
-      const newDocument: ProjectDoc = {
-        id: `doc-${Date.now()}`,
+      // Create document via backend API
+      const createdDoc = await projectService.createDocument(project.id, {
         title: template.name,
         content: template.content,
-        document_type: template.document_type,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
+        document_type: template.document_type
+      });
+      
+      // Ensure the created document has all required fields
+      const newDocument: ProjectDoc = {
+        id: createdDoc.id,
+        title: createdDoc.title || template.name,
+        created_at: createdDoc.created_at || new Date().toISOString(),
+        updated_at: createdDoc.updated_at || new Date().toISOString(),
+        content: createdDoc.content || template.content,
+        document_type: createdDoc.document_type || template.document_type
       };
       
-      // Add to documents list
-      setDocuments(prev => [...prev, newDocument]);
+      // Replace temp document with real one - same pattern as tasks
+      setDocuments(prev => {
+        // Find and replace the temp document
+        const updated = prev.map(doc => 
+          doc.id === tempDocument.id ? newDocument : doc
+        );
+        return updated;
+      });
+      
+      // Select the newly created document
       setSelectedDocument(newDocument);
       
-      console.log('Document created successfully:', newDocument);
+      console.log('Document created successfully via API:', newDocument);
       showToast('Document created successfully', 'success');
-      setShowTemplateModal(false);
     } catch (error) {
       console.error('Failed to create document:', error);
+      
+      // Remove the temporary document on error
+      setDocuments(prev => prev.filter(doc => doc.id !== tempDocument.id));
+      setSelectedDocument(null);
+      setShowTemplateModal(true); // Re-open the modal
+      
       showToast(
         error instanceof Error ? error.message : 'Failed to create document', 
         'error'
@@ -636,18 +689,19 @@ export const DocsTab = ({
     try {
       setIsSaving(true);
       
-      // Update the document in local state
-      const updatedDocument = { 
-        ...selectedDocument, 
-        updated_at: new Date().toISOString() 
-      };
+      // Update the document via backend API
+      const updatedDocument = await projectService.updateDocument(project.id, selectedDocument.id, {
+        ...selectedDocument,
+        updated_at: new Date().toISOString()
+      });
       
+      // Update local state with the response from backend
       setDocuments(prev => prev.map(doc => 
         doc.id === selectedDocument.id ? updatedDocument : doc
       ));
       setSelectedDocument(updatedDocument);
       
-      console.log('Document saved successfully:', updatedDocument);
+      console.log('Document saved successfully via API:', updatedDocument);
       showToast('Document saved successfully', 'success');
       setIsEditing(false);
     } catch (error) {
@@ -783,6 +837,34 @@ export const DocsTab = ({
       console.error('Failed to save business sources:', error);
       showToast('Failed to update business sources', 'error');
     }
+  };
+
+  // Delete confirmation handlers
+  const confirmDeleteDocument = async () => {
+    if (!documentToDelete || !project?.id) return;
+    
+    try {
+      // Call API to delete from database first
+      await projectService.deleteDocument(project.id, documentToDelete.id);
+      
+      // Then remove from local state
+      setDocuments(prev => prev.filter(d => d.id !== documentToDelete.id));
+      if (selectedDocument?.id === documentToDelete.id) {
+        setSelectedDocument(documents.find(d => d.id !== documentToDelete.id) || null);
+      }
+      showToast('Document deleted', 'success');
+    } catch (error) {
+      console.error('Failed to delete document:', error);
+      showToast('Failed to delete document', 'error');
+    } finally {
+      setShowDeleteConfirm(false);
+      setDocumentToDelete(null);
+    }
+  };
+  
+  const cancelDeleteDocument = () => {
+    setShowDeleteConfirm(false);
+    setDocumentToDelete(null);
   };
 
   const handleProgressComplete = (data: CrawlProgressData) => {
@@ -937,20 +1019,11 @@ export const DocsTab = ({
                 document={doc}
                 isActive={selectedDocument?.id === doc.id}
                 onSelect={setSelectedDocument}
-                onDelete={async (docId) => {
-                  try {
-                    // Call API to delete from database first
-                    await projectService.deleteDocument(project.id, docId);
-                    
-                    // Then remove from local state
-                    setDocuments(prev => prev.filter(d => d.id !== docId));
-                    if (selectedDocument?.id === docId) {
-                      setSelectedDocument(documents.find(d => d.id !== docId) || null);
-                    }
-                    showToast('Document deleted', 'success');
-                  } catch (error) {
-                    console.error('Failed to delete document:', error);
-                    showToast('Failed to delete document', 'error');
+                onDelete={(docId) => {
+                  const doc = documents.find(d => d.id === docId);
+                  if (doc) {
+                    setDocumentToDelete({ id: docId, title: doc.title });
+                    setShowDeleteConfirm(true);
                   }
                 }}
                 isDarkMode={isDarkMode}
@@ -981,22 +1054,24 @@ export const DocsTab = ({
               document={selectedDocument}
               isDarkMode={isDarkMode}
               onSave={async (updatedDocument) => {
+                if (!project?.id) return;
+                
                 try {
                   setIsSaving(true);
                   
-                  // Update document with timestamp
-                  const docWithTimestamp = {
+                  // Update document via backend API
+                  const savedDocument = await projectService.updateDocument(project.id, updatedDocument.id, {
                     ...updatedDocument,
                     updated_at: new Date().toISOString()
-                  };
+                  });
                   
-                  // Update local state
-                  setSelectedDocument(docWithTimestamp);
+                  // Update local state with the response from backend
+                  setSelectedDocument(savedDocument);
                   setDocuments(prev => prev.map(doc => 
-                    doc.id === updatedDocument.id ? docWithTimestamp : doc
+                    doc.id === updatedDocument.id ? savedDocument : doc
                   ));
                   
-                  console.log('Document saved via MilkdownEditor');
+                  console.log('Document saved via MilkdownEditor API:', savedDocument);
                   showToast('Document saved successfully', 'success');
                 } catch (error) {
                   console.error('Failed to save document:', error);
@@ -1097,6 +1172,16 @@ export const DocsTab = ({
           }}
         />
       )}
+      
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && documentToDelete && (
+        <DeleteConfirmModal
+          itemName={documentToDelete.title}
+          onConfirm={confirmDeleteDocument}
+          onCancel={cancelDeleteDocument}
+          type="document"
+        />
+      )}
     </div>
   );
 };
@@ -1190,7 +1275,7 @@ const TemplateModal: React.FC<{
 const KnowledgeSection: React.FC<{
   title: string;
   color: 'blue' | 'purple' | 'pink' | 'orange';
-  sources: any[];
+  sources: Array<{id: string; title: string; type: string; lastUpdated: string} | undefined>;
   onAddClick: () => void;
 }> = ({
   title,
@@ -1273,7 +1358,7 @@ const KnowledgeSection: React.FC<{
 
 const SourceSelectionModal: React.FC<{
   title: string;
-  sources: any[];
+  sources: Array<{id: string; title: string; type: string; lastUpdated: string}>;
   selectedSources: string[];
   onToggleSource: (id: string) => void;
   onSave: () => void;

@@ -6,7 +6,7 @@
  * approach that avoids conflicts and connection issues.
  */
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { taskSocketService, TaskSocketEvents } from '../services/taskSocketService';
 import { WebSocketState } from '../services/socketIOService';
 
@@ -36,6 +36,10 @@ export function useTaskSocket(options: UseTaskSocketOptions) {
   const componentIdRef = useRef<string>(`task-socket-${Math.random().toString(36).substring(7)}`);
   const currentProjectIdRef = useRef<string | null>(null);
   const isInitializedRef = useRef<boolean>(false);
+  
+  // Add reactive state for connection status
+  const [isConnected, setIsConnected] = useState<boolean>(false);
+  const [connectionState, setConnectionState] = useState<WebSocketState>(WebSocketState.DISCONNECTED);
 
   // Memoized handlers to prevent unnecessary re-registrations
   const memoizedHandlers = useCallback((): Partial<TaskSocketEvents> => {
@@ -58,6 +62,44 @@ export function useTaskSocket(options: UseTaskSocketOptions) {
     onConnectionStateChange
   ]);
 
+  // Subscribe to connection state changes
+  useEffect(() => {
+    const checkConnection = () => {
+      const connected = taskSocketService.isConnected();
+      const state = taskSocketService.getConnectionState();
+      setIsConnected(connected);
+      setConnectionState(state);
+    };
+
+    // Check initial state
+    checkConnection();
+
+    // Poll for connection state changes (since the service doesn't expose event emitters)
+    const interval = setInterval(checkConnection, 500);
+
+    // Also trigger when connection state handler is called
+    const wrappedOnConnectionStateChange = onConnectionStateChange ? (state: WebSocketState) => {
+      setConnectionState(state);
+      setIsConnected(state === WebSocketState.CONNECTED);
+      onConnectionStateChange(state);
+    } : (state: WebSocketState) => {
+      setConnectionState(state);
+      setIsConnected(state === WebSocketState.CONNECTED);
+    };
+
+    // Update the handler
+    if (componentIdRef.current && taskSocketService) {
+      taskSocketService.registerHandlers(componentIdRef.current, {
+        ...memoizedHandlers(),
+        onConnectionStateChange: wrappedOnConnectionStateChange
+      });
+    }
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, []); // No dependencies - only run once on mount
+
   // Initialize connection once and register handlers
   useEffect(() => {
     if (!projectId || isInitializedRef.current) return;
@@ -65,6 +107,7 @@ export function useTaskSocket(options: UseTaskSocketOptions) {
     const initializeConnection = async () => {
       try {
         console.log(`[USE_TASK_SOCKET] Initializing connection for project: ${projectId}`);
+        setConnectionState(WebSocketState.CONNECTING);
         
         // Register handlers first
         taskSocketService.registerHandlers(componentIdRef.current, memoizedHandlers());
@@ -76,22 +119,20 @@ export function useTaskSocket(options: UseTaskSocketOptions) {
         isInitializedRef.current = true;
         console.log(`[USE_TASK_SOCKET] Successfully initialized for project: ${projectId}`);
         
+        // Update connection state after successful connection
+        setIsConnected(taskSocketService.isConnected());
+        setConnectionState(taskSocketService.getConnectionState());
+        
       } catch (error) {
         console.error(`[USE_TASK_SOCKET] Failed to initialize for project ${projectId}:`, error);
+        setConnectionState(WebSocketState.DISCONNECTED);
+        setIsConnected(false);
       }
     };
 
     initializeConnection();
 
-  }, [projectId, memoizedHandlers]);
-
-  // Update handlers when they change (without reconnecting)
-  useEffect(() => {
-    if (isInitializedRef.current && currentProjectIdRef.current === projectId) {
-      console.log(`[USE_TASK_SOCKET] Updating handlers for component: ${componentIdRef.current}`);
-      taskSocketService.registerHandlers(componentIdRef.current, memoizedHandlers());
-    }
-  }, [memoizedHandlers, projectId]);
+  }, [projectId]); // Only depend on projectId
 
   // Handle project change (different project)
   useEffect(() => {
@@ -103,6 +144,8 @@ export function useTaskSocket(options: UseTaskSocketOptions) {
       
       const switchProject = async () => {
         try {
+          setConnectionState(WebSocketState.CONNECTING);
+          
           // Update handlers for new project
           taskSocketService.registerHandlers(componentIdRef.current, memoizedHandlers());
           
@@ -112,14 +155,20 @@ export function useTaskSocket(options: UseTaskSocketOptions) {
           currentProjectIdRef.current = projectId;
           console.log(`[USE_TASK_SOCKET] Successfully switched to project: ${projectId}`);
           
+          // Update connection state
+          setIsConnected(taskSocketService.isConnected());
+          setConnectionState(taskSocketService.getConnectionState());
+          
         } catch (error) {
           console.error(`[USE_TASK_SOCKET] Failed to switch to project ${projectId}:`, error);
+          setConnectionState(WebSocketState.DISCONNECTED);
+          setIsConnected(false);
         }
       };
 
       switchProject();
     }
-  }, [projectId, memoizedHandlers]);
+  }, [projectId]); // Only depend on projectId
 
   // Cleanup on unmount
   useEffect(() => {
@@ -132,10 +181,10 @@ export function useTaskSocket(options: UseTaskSocketOptions) {
     };
   }, []);
 
-  // Return utility functions
+  // Return reactive state and utility functions
   return {
-    isConnected: taskSocketService.isConnected(),
-    connectionState: taskSocketService.getConnectionState(),
+    isConnected,  // Now reactive!
+    connectionState,  // Now reactive!
     reconnect: taskSocketService.reconnect.bind(taskSocketService),
     getCurrentProjectId: taskSocketService.getCurrentProjectId.bind(taskSocketService)
   };

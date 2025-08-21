@@ -870,14 +870,17 @@ async def add_code_examples_to_supabase(
 
         # Prepare batch data - only for successful embeddings
         batch_data = []
+        used_indices = set()  # Track which indices have been mapped to prevent duplicates
+        
         for j, (embedding, text) in enumerate(
             zip(valid_embeddings, successful_texts, strict=False)
         ):
-            # Find the original index
+            # Find the original index (skip already used indices)
             orig_idx = None
             for k, orig_text in enumerate(batch_texts):
-                if orig_text == text:
+                if orig_text == text and k not in used_indices:
                     orig_idx = k
+                    used_indices.add(k)  # Mark this index as used
                     break
 
             if orig_idx is None:

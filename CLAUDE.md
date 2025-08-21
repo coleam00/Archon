@@ -265,9 +265,10 @@ When connected to Cursor/Windsurf:
 
 - `archon:perform_rag_query` - Search knowledge base
 - `archon:search_code_examples` - Find code snippets
-- `archon:manage_project` - Project operations
-- `archon:manage_task` - Task management
+- `archon:create_project`, `archon:list_projects`, `archon:get_project`, `archon:update_project`, `archon:delete_project` - Project operations
+- `archon:create_task`, `archon:list_tasks`, `archon:get_task`, `archon:update_task`, `archon:delete_task` - Task management
 - `archon:get_available_sources` - List knowledge sources
+- `archon:get_project_features` - Get project features
 
 ## Important Notes
 

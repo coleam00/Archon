@@ -149,7 +149,7 @@ interface FeaturesTabProps {
   project?: {
     id: string;
     title: string;
-    features?: any[];
+    features?: import('../types/jsonb').ProjectFeature[];
   } | null;
 }
 

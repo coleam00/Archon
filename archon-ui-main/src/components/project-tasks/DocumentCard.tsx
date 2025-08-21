@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Rocket, Code, Briefcase, Users, FileText, X, Plus, Clipboard } from 'lucide-react';
 import { useToast } from '../../contexts/ToastContext';
+import { copyToClipboard } from '../../utils/clipboard';
 
 export interface ProjectDoc {
   id: string;
@@ -49,18 +50,22 @@ export const DocumentCard: React.FC<DocumentCardProps> = ({
     }
   };
 
-  const handleCopyId = (e: React.MouseEvent) => {
+  const handleCopyId = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(document.id);
-    showToast('Document ID copied to clipboard', 'success');
-    
-    // Visual feedback
-    const button = e.currentTarget;
-    const originalHTML = button.innerHTML;
-    button.innerHTML = '<div class="flex items-center gap-1"><span class="w-3 h-3 text-green-500">✓</span><span class="text-green-500 text-xs">Copied</span></div>';
-    setTimeout(() => {
-      button.innerHTML = originalHTML;
-    }, 2000);
+    const success = await copyToClipboard(document.id);
+    if (success) {
+      showToast('Document ID copied to clipboard', 'success');
+      
+      // Visual feedback
+      const button = e.currentTarget;
+      const originalHTML = button.innerHTML;
+      button.innerHTML = '<div class="flex items-center gap-1"><span class="w-3 h-3 text-green-500">✓</span><span class="text-green-500 text-xs">Copied</span></div>';
+      setTimeout(() => {
+        button.innerHTML = originalHTML;
+      }, 2000);
+    } else {
+      showToast('Failed to copy Document ID', 'error');
+    }
   };
   
   return (
@@ -112,9 +117,7 @@ export const DocumentCard: React.FC<DocumentCardProps> = ({
         <button
           onClick={(e) => {
             e.stopPropagation();
-            if (confirm(`Delete "${document.title}"?`)) {
-              onDelete(document.id);
-            }
+            onDelete(document.id);
           }}
           className="absolute top-2 right-2 p-1 rounded-md bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 transition-colors"
           aria-label={`Delete ${document.title}`}

@@ -1,7 +1,7 @@
 import React, { useRef, useState, useCallback } from 'react';
 import { useDrag, useDrop } from 'react-dnd';
 import { useToast } from '../../contexts/ToastContext';
-import { DeleteConfirmModal } from '../../pages/ProjectPage';
+import { DeleteConfirmModal } from '../ui/DeleteConfirmModal';
 import { CheckSquare, Square, Trash2, ArrowRight } from 'lucide-react';
 import { projectService } from '../../services/projectService';
 import { Task } from './TaskTableView'; // Import Task interface

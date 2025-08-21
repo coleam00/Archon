@@ -11,13 +11,10 @@ from datetime import datetime
 from typing import Any
 
 from ...config.logfire_config import get_logger
-from ...socketio_app import get_socketio_instance
+from ...socketio_app import sio
 
 logger = get_logger(__name__)
 
-# Get Socket.IO instance
-sio = get_socketio_instance()
-logger.info(f"🔗 [PROGRESS] Socket.IO instance ID: {id(sio)}")
 
 
 class ProgressService:

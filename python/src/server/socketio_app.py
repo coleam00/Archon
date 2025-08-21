@@ -26,17 +26,6 @@ sio = socketio.AsyncServer(
     ping_interval=60,  # 1 minute - check connection every minute
 )
 
-# Global Socket.IO instance for use across modules
-_socketio_instance: socketio.AsyncServer | None = None
-
-
-def get_socketio_instance() -> socketio.AsyncServer:
-    """Get the global Socket.IO server instance."""
-    global _socketio_instance
-    if _socketio_instance is None:
-        _socketio_instance = sio
-    return _socketio_instance
-
 
 def create_socketio_app(app: FastAPI) -> socketio.ASGIApp:
     """
@@ -63,3 +52,24 @@ def create_socketio_app(app: FastAPI) -> socketio.ASGIApp:
     sio.app = app
 
     return socket_app
+    
+# Default Socket.IO event handlers
+@sio.event
+async def connect(sid, environ):
+    """Handle new client connections."""
+    logger.info(f"Client connected: {sid}")
+    safe_logfire_info(f"Client connected: {sid}")
+
+
+@sio.event
+async def disconnect(sid):
+    """Handle client disconnections."""
+    logger.info(f"Client disconnected: {sid}")
+    safe_logfire_info(f"Client disconnected: {sid}")
+
+
+@sio.event
+async def message(sid, data):
+    """Handle incoming messages."""
+    logger.info(f"Received message from {sid}: {data}")
+    await sio.emit("response", {"data": "Message received!"}, to=sid)

@@ -22,6 +22,7 @@
     "@milkdown/kit": "^7.5.0",
     "@milkdown/plugin-history": "^7.5.0",
     "@milkdown/preset-commonmark": "^7.5.0",
+    "@types/uuid": "^10.0.0",
     "@xyflow/react": "^12.3.0",
     "clsx": "latest",
     "date-fns": "^4.1.0",
@@ -36,6 +37,7 @@
     "react-router-dom": "^6.26.2",
     "socket.io-client": "^4.8.1",
     "tailwind-merge": "latest",
+    "uuid": "^11.1.0",
     "zod": "^3.25.46"
   },
   "devDependencies": {

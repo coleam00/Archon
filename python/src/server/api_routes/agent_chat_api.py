@@ -18,9 +18,7 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 # Import Socket.IO instance
-from ..socketio_app import get_socketio_instance
-
-sio = get_socketio_instance()
+from ..socketio_app import sio
 
 # Create router
 router = APIRouter(prefix="/api/agent-chat", tags=["agent-chat"])

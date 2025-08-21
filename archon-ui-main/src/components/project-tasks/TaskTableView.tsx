@@ -2,10 +2,12 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useDrag, useDrop } from 'react-dnd';
 import { Check, Trash2, Edit, Tag, User, Bot, Clipboard, Save, Plus } from 'lucide-react';
 import { useToast } from '../../contexts/ToastContext';
-import { DeleteConfirmModal } from '../../pages/ProjectPage';
+import { DeleteConfirmModal } from '../ui/DeleteConfirmModal';
 import { projectService } from '../../services/projectService';
 import { ItemTypes, getAssigneeIcon, getAssigneeGlow, getOrderColor, getOrderGlow } from '../../lib/task-utils';
 import { DraggableTaskCard } from './DraggableTaskCard';
+import { copyToClipboard } from '../../utils/clipboard';
+import { AssigneeTypeaheadInput } from './TaskInputComponents';
 
 export interface Task {
   id: string;
@@ -13,7 +15,7 @@ export interface Task {
   description: string;
   status: 'backlog' | 'in-progress' | 'review' | 'complete';
   assignee: {
-    name: 'User' | 'Archon' | 'AI IDE Agent';
+    name: string; // Allow any assignee name for MCP subagents
     avatar: string;
   };
   feature: string;
@@ -31,7 +33,7 @@ interface TaskTableViewProps {
   onTaskUpdate?: (taskId: string, updates: Partial<Task>) => Promise<void>;
 }
 
-const getAssigneeGlassStyle = (assigneeName: 'User' | 'Archon' | 'AI IDE Agent') => {
+const getAssigneeGlassStyle = (assigneeName: string) => {
   switch (assigneeName) {
     case 'User':
       return 'backdrop-blur-md bg-gradient-to-b from-white/80 to-white/60 dark:from-white/10 dark:to-black/30 border-blue-400 dark:border-blue-500'; // blue glass
@@ -78,7 +80,7 @@ const reorderTasks = (tasks: Task[], fromIndex: number, toIndex: number): Task[]
 interface EditableCellProps {
   value: string;
   onSave: (value: string) => void;
-  type?: 'text' | 'textarea' | 'select';
+  type?: 'text' | 'textarea' | 'select' | 'typeahead';
   options?: string[];
   placeholder?: string;
   isEditing: boolean;
@@ -139,7 +141,37 @@ const EditableCell = ({
 
   return (
     <div className="flex items-center w-full">
-      {type === 'select' ? (
+      {type === 'typeahead' ? (
+        <div className="relative">
+          <AssigneeTypeaheadInput
+            value={editValue}
+            onChange={(value) => {
+              setEditValue(value);
+              // Update the value but don't auto-save yet
+            }}
+            onKeyPress={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleSave();
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                handleCancel();
+              }
+            }}
+            placeholder={placeholder}
+            className="w-full bg-white/90 dark:bg-black/90 border border-cyan-300 dark:border-cyan-600 rounded px-2 py-1 text-sm focus:outline-none focus:border-cyan-500 focus:shadow-[0_0_5px_rgba(34,211,238,0.3)]"
+            autoFocus
+          />
+          {/* Save button for explicit save */}
+          <button
+            onClick={handleSave}
+            className="absolute right-0 top-0 h-full px-2 text-cyan-600 hover:text-cyan-700 dark:text-cyan-400 dark:hover:text-cyan-300"
+            title="Save (Enter)"
+          >
+            ✓
+          </button>
+        </div>
+      ) : type === 'select' ? (
         <select
           value={editValue}
           onChange={(e) => {
@@ -208,6 +240,7 @@ const DraggableTaskRow = ({
 }: DraggableTaskRowProps) => {
   const [editingField, setEditingField] = useState<string | null>(null);
   const [isHovering, setIsHovering] = useState(false);
+  const { showToast } = useToast();
   
   const [{ isDragging }, drag] = useDrag({
     type: ItemTypes.TASK,
@@ -252,7 +285,7 @@ const DraggableTaskRow = ({
       } else if (field === 'status') {
         updates.status = value as Task['status'];
       } else if (field === 'assignee') {
-        updates.assignee = { name: value as 'User' | 'Archon' | 'AI IDE Agent', avatar: '' };
+        updates.assignee = { name: value || 'AI IDE Agent', avatar: '' };
       } else if (field === 'feature') {
         updates.feature = value;
       }
@@ -336,32 +369,15 @@ const DraggableTaskRow = ({
         </div>
       </td>
       <td className="p-3">
-        <div className="flex items-center justify-center">
-          <div 
-            className={`flex items-center justify-center w-8 h-8 rounded-full border-2 transition-all duration-300 cursor-pointer hover:scale-110 ${getAssigneeGlassStyle(task.assignee?.name || 'User')} ${getAssigneeGlow(task.assignee?.name || 'User')}`}
-            onClick={() => setEditingField('assignee')}
-            title={`Assignee: ${task.assignee?.name || 'User'}`}
-          >
-            {getAssigneeIcon(task.assignee?.name || 'User')}
-          </div>
-          {editingField === 'assignee' && (
-            <div className="absolute z-50 mt-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg p-2">
-              <select
-                value={task.assignee?.name || 'User'}
-                onChange={(e) => {
-                  handleUpdateField('assignee', e.target.value);
-                  setEditingField(null);
-                }}
-                className="bg-white/90 dark:bg-black/90 border border-cyan-300 dark:border-cyan-600 rounded px-2 py-1 text-sm focus:outline-none focus:border-cyan-500"
-                autoFocus
-              >
-                <option value="User">User</option>
-                <option value="Archon">Archon</option>
-                <option value="AI IDE Agent">AI IDE Agent</option>
-              </select>
-            </div>
-          )}
-        </div>
+        <EditableCell
+          value={task.assignee?.name || 'AI IDE Agent'}
+          onSave={(value) => handleUpdateField('assignee', value || 'AI IDE Agent')}
+          type="typeahead"
+          isEditing={editingField === 'assignee'}
+          onEdit={() => setEditingField('assignee')}
+          onCancel={() => setEditingField(null)}
+          placeholder="AI IDE Agent"
+        />
       </td>
       <td className="p-3">
         <div className="flex justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -385,16 +401,21 @@ const DraggableTaskRow = ({
           </button>
           {/* Copy Task ID Button - Matching Board View */}
           <button 
-            onClick={(e) => {
+            onClick={async (e) => {
               e.stopPropagation();
-              navigator.clipboard.writeText(task.id);
-              // Visual feedback like in board view
-              const button = e.currentTarget;
-              const originalHTML = button.innerHTML;
-              button.innerHTML = '<div class="flex items-center gap-1"><span class="w-3 h-3 text-green-500">✓</span><span class="text-green-500 text-xs">Copied</span></div>';
-              setTimeout(() => {
-                button.innerHTML = originalHTML;
-              }, 2000);
+              const success = await copyToClipboard(task.id);
+              if (success) {
+                showToast('Task ID copied to clipboard', 'success');
+                // Visual feedback like in board view
+                const button = e.currentTarget;
+                const originalHTML = button.innerHTML;
+                button.innerHTML = '<div class="flex items-center gap-1"><span class="w-3 h-3 text-green-500">✓</span><span class="text-green-500 text-xs">Copied</span></div>';
+                setTimeout(() => {
+                  button.innerHTML = originalHTML;
+                }, 2000);
+              } else {
+                showToast('Failed to copy Task ID', 'error');
+              }
             }}
             className="p-1.5 rounded-full bg-gray-500/20 text-gray-500 hover:bg-gray-500/30 hover:shadow-[0_0_10px_rgba(107,114,128,0.3)] transition-all duration-300"
             title="Copy Task ID to clipboard"
@@ -524,18 +545,16 @@ const AddTaskRow = ({ onTaskCreate, tasks, statusFilter }: AddTaskRowProps) => {
         />
       </td>
       <td className="p-3">
-        <select
+        <AssigneeTypeaheadInput
           value={newTask.assignee.name}
-          onChange={(e) => setNewTask(prev => ({ 
+          onChange={(value) => setNewTask(prev => ({ 
             ...prev, 
-            assignee: { name: e.target.value as 'User' | 'Archon' | 'AI IDE Agent', avatar: '' }
+            assignee: { name: value || 'AI IDE Agent', avatar: '' }
           }))}
+          onKeyPress={handleKeyPress}
+          placeholder="AI IDE Agent"
           className="w-full bg-white/90 dark:bg-black/90 border border-cyan-300 dark:border-cyan-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-cyan-500 focus:shadow-[0_0_5px_rgba(34,211,238,0.3)]"
-        >
-          <option value="AI IDE Agent">AI IDE Agent</option>
-          <option value="User">User</option>
-          <option value="Archon">Archon</option>
-        </select>
+        />
       </td>
       <td className="p-3">
         <div className="flex justify-center">

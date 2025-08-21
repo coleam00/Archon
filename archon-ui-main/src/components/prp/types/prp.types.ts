@@ -60,7 +60,7 @@ export interface PRPPersona {
 export interface PRPPhase {
   duration?: string;
   deliverables?: string[];
-  tasks?: any[];
+  tasks?: Array<{title: string; files: string[]; details: string}>;
   [key: string]: any;
 }
 

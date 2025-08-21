@@ -5,7 +5,7 @@ import { ToolTestingPanel } from './ToolTestingPanel';
 import { Button } from '../ui/Button';
 import { mcpClientService, MCPClient, MCPClientConfig } from '../../services/mcpClientService';
 import { useToast } from '../../contexts/ToastContext';
-import { DeleteConfirmModal } from '../../pages/ProjectPage';
+import { DeleteConfirmModal } from '../ui/DeleteConfirmModal';
 
 // Client interface (keeping for backward compatibility)
 export interface Client {
@@ -710,17 +710,30 @@ const EditClientDrawer: React.FC<EditClientDrawerProps> = ({ client, isOpen, onC
     }
   };
 
-  const handleDelete = async () => {
-    if (confirm(`Are you sure you want to delete "${client.name}"?`)) {
-      try {
-        await mcpClientService.deleteClient(client.id);
-        onClose();
-        // Trigger a reload of the clients list
-        window.location.reload();
-      } catch (error) {
-        setError(error instanceof Error ? error.message : 'Failed to delete client');
-      }
+  const handleDelete = () => {
+    setClientToDelete(client);
+    setShowDeleteConfirm(true);
+  };
+  
+  const confirmDeleteClient = async () => {
+    if (!clientToDelete) return;
+    
+    try {
+      await mcpClientService.deleteClient(clientToDelete.id);
+      onClose();
+      // Trigger a reload of the clients list
+      window.location.reload();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to delete client');
+    } finally {
+      setShowDeleteConfirm(false);
+      setClientToDelete(null);
     }
+  };
+  
+  const cancelDeleteClient = () => {
+    setShowDeleteConfirm(false);
+    setClientToDelete(null);
   };
 
   if (!isOpen) return null;
@@ -853,6 +866,16 @@ const EditClientDrawer: React.FC<EditClientDrawerProps> = ({ client, isOpen, onC
           </div>
         </form>
       </div>
+      
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && clientToDelete && (
+        <DeleteConfirmModal
+          itemName={clientToDelete.name}
+          onConfirm={confirmDeleteClient}
+          onCancel={cancelDeleteClient}
+          type="client"
+        />
+      )}
     </div>
   );
 };

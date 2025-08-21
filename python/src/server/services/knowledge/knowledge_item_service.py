@@ -128,7 +128,7 @@ class KnowledgeItemService:
                         code_example_counts[source_id] = 0
                     chunk_counts[source_id] = 0  # Default to 0 to avoid timeout
 
-                safe_logfire_info(f"Code example counts: {code_example_counts}")
+                safe_logfire_info("Code example counts", code_counts=code_example_counts)
 
             # Transform sources to items with batched data
             items = []
@@ -138,16 +138,18 @@ class KnowledgeItemService:
 
                 # Use batched data instead of individual queries
                 first_page_url = first_urls.get(source_id, f"source://{source_id}")
+                # Use original crawl URL instead of first page URL
+                original_url = source_metadata.get("original_url") or first_page_url
                 code_examples_count = code_example_counts.get(source_id, 0)
                 chunks_count = chunk_counts.get(source_id, 0)
 
                 # Determine source type
-                source_type = self._determine_source_type(source_metadata, first_page_url)
+                source_type = self._determine_source_type(source_metadata, original_url)
 
                 item = {
                     "id": source_id,
                     "title": source.get("title", source.get("summary", "Untitled")),
-                    "url": first_page_url,
+                    "url": original_url,
                     "source_id": source_id,
                     "code_examples": [{"count": code_examples_count}]
                     if code_examples_count > 0

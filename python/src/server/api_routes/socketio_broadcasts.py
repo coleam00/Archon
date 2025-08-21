@@ -8,12 +8,10 @@ No other modules should import from this file.
 import asyncio
 
 from ..config.logfire_config import get_logger
-from ..socketio_app import get_socketio_instance
+from ..socketio_app import sio
 
 logger = get_logger(__name__)
 
-# Get Socket.IO instance
-sio = get_socketio_instance()
 
 
 # Core broadcast functions

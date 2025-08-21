@@ -13,6 +13,7 @@
  */
 
 import { io, Socket } from 'socket.io-client';
+import { OperationTracker, OperationResult } from '../utils/operationTracker';
 
 export enum WebSocketState {
   CONNECTING = 'CONNECTING',
@@ -33,9 +34,9 @@ export interface WebSocketConfig {
 
 export interface WebSocketMessage {
   type: string;
-  data?: any;
+  data?: unknown;
   timestamp?: string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 type MessageHandler = (message: WebSocketMessage) => void;
@@ -57,8 +58,12 @@ export class WebSocketService {
   private _state: WebSocketState = WebSocketState.DISCONNECTED;
   
   // Deduplication support
-  private lastMessages: Map<string, { data: any; timestamp: number }> = new Map();
+  private lastMessages: Map<string, { data: unknown; timestamp: number }> = new Map();
   private deduplicationWindow = 100; // 100ms window
+  
+  // Operation tracking support
+  private operationTracker: OperationTracker | null = null;
+  private operationHandlers: Map<string, (result: OperationResult) => void> = new Map();
 
   constructor(config: WebSocketConfig = {}) {
     this.config = {
@@ -215,9 +220,9 @@ export class WebSocketService {
 
     this.socket.on('connect_error', (error: Error) => {
       console.error('❌ Socket.IO connection error:', error);
-      console.error('❌ Error type:', (error as any).type);
+      console.error('❌ Error type:', (error as unknown as Record<string, unknown>).type);
       console.error('❌ Error message:', error.message);
-      console.error('❌ Socket transport:', this.socket?.io?.engine?.transport?.name);
+      console.error('❌ Socket transport:', (this.socket as unknown as { io?: { engine?: { transport?: { name?: string } } } })?.io?.engine?.transport?.name);
       this.notifyError(error);
       
       // Reject connection promise if still pending
@@ -244,10 +249,17 @@ export class WebSocketService {
     });
 
     // Handle incoming messages
-    this.socket.onAny((eventName: string, ...args: any[]) => {
+    this.socket.onAny((eventName: string, ...args: unknown[]) => {
       // Skip internal Socket.IO events
       if (eventName.startsWith('connect') || eventName.startsWith('disconnect') || 
           eventName.startsWith('reconnect') || eventName === 'error') {
+        return;
+      }
+      
+      // Check for operation responses
+      if (eventName === 'operation_response' && args[0]) {
+        const response = args[0] as { operationId: string; success: boolean; data?: unknown; error?: string };
+        this.handleOperationResponse(response);
         return;
       }
       
@@ -264,11 +276,16 @@ export class WebSocketService {
         Object.assign(message, args[0]);
       }
       
+      // Use unified message processing check
+      if (!this.shouldProcessMessage(message)) {
+        return;
+      }
+      
       this.handleMessage(message);
     });
   }
 
-  private isDuplicateMessage(type: string, data: any): boolean {
+  private isDuplicateMessage(type: string, data: unknown): boolean {
     const lastMessage = this.lastMessages.get(type);
     if (!lastMessage) return false;
     
@@ -288,11 +305,6 @@ export class WebSocketService {
   }
 
   private handleMessage(message: WebSocketMessage): void {
-    // Add deduplication check
-    if (this.isDuplicateMessage(message.type, message.data)) {
-      return;
-    }
-    
     // Store message for deduplication
     this.lastMessages.set(message.type, {
       data: message.data,
@@ -394,27 +406,168 @@ export class WebSocketService {
   }
 
   /**
-   * Send a message via Socket.IO
+   * Send a message via Socket.IO with optional operation tracking
    */
-  send(data: any): boolean {
+  send(data: unknown, trackOperation?: boolean): boolean | string {
     if (!this.isConnected()) {
       console.warn('Cannot send message: Socket.IO not connected');
       return false;
     }
     
     try {
+      let operationId: string | undefined;
+      
+      // Track operation if requested
+      if (trackOperation && this.operationTracker) {
+        const messageData = data as { type?: string };
+        operationId = this.operationTracker.createOperation(
+          messageData.type || 'message',
+          data
+        );
+        
+        // Add operation ID to the message
+        const trackedData = { ...messageData, operationId };
+        data = trackedData;
+      }
+      
       // For Socket.IO, we emit events based on message type
-      if (data.type) {
-        this.socket!.emit(data.type, data.data || data);
+      const messageData = data as { type?: string; data?: unknown };
+      if (messageData.type) {
+        this.socket!.emit(messageData.type, messageData.data || data);
       } else {
         // Default message event
         this.socket!.emit('message', data);
       }
-      return true;
+      
+      return operationId || true;
     } catch (error) {
       console.error('Failed to send message:', error);
       return false;
     }
+  }
+
+  // Enhanced emit method with automatic operation ID tracking for echo suppression
+  private pendingOperations = new Map<string, NodeJS.Timeout>();
+  
+  emit(event: string, data: unknown): string {
+    const operationId = crypto.randomUUID();
+    const payload = { ...(typeof data === 'object' && data !== null ? data : {}), operationId };
+    
+    // Track pending operation
+    const timeout = setTimeout(() => {
+      this.pendingOperations.delete(operationId);
+    }, 5000);
+    this.pendingOperations.set(operationId, timeout);
+    
+    // Emit with operation ID
+    if (this.socket) {
+      this.socket.emit(event, payload);
+    }
+    
+    return operationId;
+  }
+
+  /**
+   * Send a tracked operation and wait for response
+   */
+  async sendTrackedOperation(data: unknown, timeout?: number): Promise<OperationResult> {
+    if (!this.operationTracker) {
+      throw new Error('Operation tracking not enabled');
+    }
+    
+    const messageData = data as { type?: string };
+    const operationId = this.operationTracker.createOperation(
+      messageData.type || 'message',
+      data
+    );
+    
+    return new Promise((resolve, reject) => {
+      // Set up operation handler
+      const timeoutId = setTimeout(() => {
+        this.operationHandlers.delete(operationId);
+        const result = this.operationTracker!.failOperation(
+          operationId,
+          'Operation timed out'
+        );
+        reject(new Error(result.error));
+      }, timeout || 30000);
+      
+      this.operationHandlers.set(operationId, (result: OperationResult) => {
+        clearTimeout(timeoutId);
+        this.operationHandlers.delete(operationId);
+        
+        if (result.success) {
+          resolve(result);
+        } else {
+          reject(new Error(result.error || 'Operation failed'));
+        }
+      });
+      
+      // Send the tracked message
+      const trackedData = { ...messageData, operationId };
+      const sent = this.send(trackedData, false); // Don't double-track
+      
+      if (!sent) {
+        clearTimeout(timeoutId);
+        this.operationHandlers.delete(operationId);
+        reject(new Error('Failed to send message'));
+      }
+    });
+  }
+
+  /**
+   * Handle operation response from server
+   */
+  private handleOperationResponse(response: {
+    operationId: string;
+    success: boolean;
+    data?: unknown;
+    error?: string;
+  }): void {
+    if (!this.operationTracker) return;
+    
+    const result = response.success
+      ? this.operationTracker.completeOperation(response.operationId, response.data)
+      : this.operationTracker.failOperation(response.operationId, response.error || 'Unknown error');
+    
+    // Notify handler if exists
+    const handler = this.operationHandlers.get(response.operationId);
+    if (handler) {
+      handler(result);
+    }
+  }
+
+  /**
+   * Unified method to check if a message should be processed
+   * Consolidates echo suppression and deduplication logic
+   */
+  private shouldProcessMessage(message: WebSocketMessage): boolean {
+    // Check for operation ID echo suppression
+    if (message.data && typeof message.data === 'object' && 'operationId' in message.data) {
+      const operationId = (message.data as Record<string, unknown>).operationId as string;
+      
+      // Check pending operations map first (for immediate echoes)
+      if (this.pendingOperations.has(operationId)) {
+        const timeout = this.pendingOperations.get(operationId);
+        if (timeout) clearTimeout(timeout);
+        this.pendingOperations.delete(operationId);
+        console.log(`[Socket] Suppressing echo for pending operation ${operationId}`);
+        return false;
+      }
+      
+      // Check operation tracker (for tracked operations)
+      if (this.operationTracker?.shouldSuppress(operationId)) {
+        console.log(`[Socket] Suppressing tracked operation ${operationId}`);
+        return false;
+      }
+    }
+    
+    // Check for duplicate messages
+    if (this.isDuplicateMessage(message.type, message.data)) {
+      return false;
+    }
+    
+    return true;
   }
 
   /**
@@ -462,6 +615,38 @@ export class WebSocketService {
     this.deduplicationWindow = windowMs;
   }
 
+  /**
+   * Enable operation tracking
+   */
+  enableOperationTracking(timeout?: number): void {
+    if (!this.operationTracker) {
+      this.operationTracker = new OperationTracker(timeout);
+    }
+  }
+
+  /**
+   * Disable operation tracking
+   */
+  disableOperationTracking(): void {
+    if (this.operationTracker) {
+      this.operationTracker.destroy();
+      this.operationTracker = null;
+      this.operationHandlers.clear();
+    }
+  }
+
+  /**
+   * Get operation tracking statistics
+   */
+  getOperationStats(): {
+    total: number;
+    pending: number;
+    completed: number;
+    failed: number;
+  } | null {
+    return this.operationTracker?.getStats() || null;
+  }
+
   disconnect(): void {
     this.setState(WebSocketState.DISCONNECTED);
     
@@ -478,6 +663,13 @@ export class WebSocketService {
     this.connectionResolver = null;
     this.connectionRejector = null;
     this.lastMessages.clear(); // Clear deduplication cache
+    
+    // Clean up operation tracking
+    if (this.operationTracker) {
+      this.operationTracker.destroy();
+      this.operationTracker = null;
+    }
+    this.operationHandlers.clear();
   }
 }
 
@@ -486,9 +678,15 @@ export function createWebSocketService(config?: WebSocketConfig): WebSocketServi
   return new WebSocketService(config);
 }
 
-// Export singleton instances for different features
-export const knowledgeSocketIO = new WebSocketService();
+// Create a SINGLE shared WebSocket instance to prevent multiple connections
+// This fixes the socket disconnection issue when switching tabs
+const sharedSocketInstance = new WebSocketService();
 
-// Export instances for backward compatibility
-export const taskUpdateSocketIO = new WebSocketService();
-export const projectListSocketIO = new WebSocketService();
+// Export the SAME instance with different names for backward compatibility
+// This ensures only ONE Socket.IO connection is created and shared across all features
+export const knowledgeSocketIO = sharedSocketInstance;
+export const taskUpdateSocketIO = sharedSocketInstance;
+export const projectListSocketIO = sharedSocketInstance;
+
+// Export as default for new code
+export default sharedSocketInstance;

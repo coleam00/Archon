@@ -17,9 +17,7 @@ logger = get_logger(__name__)
 
 # Import Socket.IO instance directly to avoid circular imports
 try:
-    from ...socketio_app import get_socketio_instance
-    
-    _sio = get_socketio_instance()
+    from ...socketio_app import sio as _sio
     _broadcast_available = True
     logger.info("✅ Socket.IO broadcasting is AVAILABLE - real-time updates enabled")
     

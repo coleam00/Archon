@@ -35,7 +35,7 @@ from ..utils.document_processing import extract_text_from_document
 
 # Get logger for this module
 logger = get_logger(__name__)
-from ..socketio_app import get_socketio_instance
+from ..socketio_app import sio
 from .socketio_handlers import (
     complete_crawl_progress,
     error_crawl_progress,
@@ -46,8 +46,6 @@ from .socketio_handlers import (
 # Create router
 router = APIRouter(prefix="/api", tags=["knowledge"])
 
-# Get Socket.IO instance
-sio = get_socketio_instance()
 
 # Create a semaphore to limit concurrent crawls
 # This prevents the server from becoming unresponsive during heavy crawling

@@ -13,7 +13,8 @@
  * - Proper session identification
  */
 
-import { WebSocketService, WebSocketState } from './socketIOService';
+import { WebSocketState } from './socketIOService';
+import sharedSocketInstance from './socketIOService';
 
 export interface Task {
   id: string;
@@ -38,7 +39,7 @@ export interface TaskSocketEvents {
 
 class TaskSocketService {
   private static instance: TaskSocketService | null = null;
-  private socketService: WebSocketService;
+  private socketService: typeof sharedSocketInstance;
   private currentProjectId: string | null = null;
   private eventHandlers: Map<string, TaskSocketEvents> = new Map();
   private connectionPromise: Promise<void> | null = null;
@@ -47,13 +48,11 @@ class TaskSocketService {
   private connectionCooldown = 1000; // 1 second cooldown between connection attempts
 
   private constructor() {
-    this.socketService = new WebSocketService({
-      maxReconnectAttempts: 5,
-      reconnectInterval: 1000,
-      heartbeatInterval: 30000,
-      enableAutoReconnect: true,
-      enableHeartbeat: true
-    });
+    // Use the shared socket instance instead of creating a new one
+    this.socketService = sharedSocketInstance;
+
+    // Enable operation tracking for echo suppression
+    this.socketService.enableOperationTracking();
 
     // Set up global event handlers
     this.setupGlobalHandlers();
@@ -191,7 +190,7 @@ class TaskSocketService {
       const joinSuccess = this.socketService.send({
         type: 'join_project',
         project_id: projectId
-      });
+      }, true); // Enable operation tracking
 
       if (!joinSuccess) {
         throw new Error('Failed to send join_project message');
@@ -214,7 +213,7 @@ class TaskSocketService {
     this.socketService.send({
       type: 'leave_project',
       project_id: this.currentProjectId
-    });
+    }, true); // Enable operation tracking
 
     this.currentProjectId = null;
   }

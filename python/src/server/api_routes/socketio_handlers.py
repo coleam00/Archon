@@ -13,13 +13,10 @@ from ..config.logfire_config import get_logger
 from ..services.background_task_manager import get_task_manager
 from ..services.projects.project_service import ProjectService
 from ..services.projects.source_linking_service import SourceLinkingService
-from ..socketio_app import get_socketio_instance
+from ..socketio_app import sio
 
 logger = get_logger(__name__)
 
-# Get Socket.IO instance
-sio = get_socketio_instance()
-logger.info(f"🔗 [SOCKETIO] Socket.IO instance ID: {id(sio)}")
 
 # Rate limiting for Socket.IO broadcasts
 _last_broadcast_times: dict[str, float] = {}

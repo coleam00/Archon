@@ -11,17 +11,17 @@ export type UITaskStatus = 'backlog' | 'in-progress' | 'review' | 'complete';
 export type TaskPriority = 'low' | 'medium' | 'high' | 'critical';
 
 
-// Assignee type - simplified to predefined options
-export type Assignee = 'User' | 'Archon' | 'AI IDE Agent';
+// Assignee type - flexible string to support MCP subagents
+export type Assignee = string;
 
 // Base Project interface (matches database schema)
 export interface Project {
   id: string;
   title: string;
   prd?: Record<string, any>; // JSONB field
-  docs?: any[]; // JSONB field
-  features?: any[]; // JSONB field  
-  data?: any[]; // JSONB field
+  docs?: import('./jsonb').ProjectDocument[]; // Typed JSONB field
+  features?: import('./jsonb').ProjectFeature[]; // Typed JSONB field  
+  data?: import('./jsonb').ProjectData[]; // Typed JSONB field
   github_repo?: string;
   created_at: string;
   updated_at: string;
@@ -59,8 +59,8 @@ export interface Task {
   assignee: Assignee; // Now a database column with enum constraint
   task_order: number; // New database column for priority ordering
   feature?: string; // New database column for feature name
-  sources?: any[]; // JSONB field
-  code_examples?: any[]; // JSONB field
+  sources?: import('./jsonb').TaskSource[]; // Typed JSONB field
+  code_examples?: import('./jsonb').TaskCodeExample[]; // Typed JSONB field
   created_at: string;
   updated_at: string;
   
@@ -85,9 +85,9 @@ export interface CreateProjectRequest {
   pinned?: boolean;
   // Note: PRD data should be stored as a document in the docs array with document_type="prd"
   // not as a direct 'prd' field since this column doesn't exist in the database
-  docs?: any[];
-  features?: any[];
-  data?: any[];
+  docs?: import('./jsonb').ProjectDocument[];
+  features?: import('./jsonb').ProjectFeature[];
+  data?: import('./jsonb').ProjectData[];
   technical_sources?: string[];
   business_sources?: string[];
 }
@@ -98,9 +98,9 @@ export interface UpdateProjectRequest {
   description?: string;
   github_repo?: string;
   prd?: Record<string, any>;
-  docs?: any[];
-  features?: any[];
-  data?: any[];
+  docs?: import('./jsonb').ProjectDocument[];
+  features?: import('./jsonb').ProjectFeature[];
+  data?: import('./jsonb').ProjectData[];
   technical_sources?: string[];
   business_sources?: string[];
   pinned?: boolean;
@@ -117,8 +117,8 @@ export interface CreateTaskRequest {
   feature?: string;
   featureColor?: string;
   priority?: TaskPriority;
-  sources?: any[];
-  code_examples?: any[];
+  sources?: import('./jsonb').TaskSource[];
+  code_examples?: import('./jsonb').TaskCodeExample[];
 }
 
 // Update task request
@@ -131,8 +131,8 @@ export interface UpdateTaskRequest {
   feature?: string;
   featureColor?: string;
   priority?: TaskPriority;
-  sources?: any[];
-  code_examples?: any[];
+  sources?: import('./jsonb').TaskSource[];
+  code_examples?: import('./jsonb').TaskCodeExample[];
 }
 
 // MCP tool response types
@@ -195,7 +195,13 @@ export const statusMappings = {
 export function dbTaskToUITask(dbTask: Task): Task {
   return {
     ...dbTask,
-    uiStatus: statusMappings.dbToUI[dbTask.status]
+    uiStatus: statusMappings.dbToUI[dbTask.status || 'todo'],
+    // Ensure all required fields have defaults
+    title: dbTask.title || '',
+    description: dbTask.description || '',
+    assignee: dbTask.assignee || 'User',
+    feature: dbTask.feature || 'General',
+    task_order: dbTask.task_order || 0
   };
 }
 

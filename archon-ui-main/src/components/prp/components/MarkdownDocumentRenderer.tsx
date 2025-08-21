@@ -92,7 +92,7 @@ function formatSectionContent(value: any): string {
 /**
  * Formats array content as markdown list or nested structure
  */
-function formatArrayContent(array: any[]): string {
+function formatArrayContent(array: unknown[]): string {
   if (array.length === 0) {
     return '_No items_';
   }

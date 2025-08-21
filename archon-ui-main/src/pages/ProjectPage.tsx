@@ -9,6 +9,8 @@ import { DocsTab } from '../components/project-tasks/DocsTab';
 import { TasksTab } from '../components/project-tasks/TasksTab';
 import { Button } from '../components/ui/Button';
 import { ChevronRight, ShoppingCart, Code, Briefcase, Layers, Plus, X, AlertCircle, Loader2, Heart, BarChart3, Trash2, Pin, ListTodo, Activity, CheckCircle2, Clipboard } from 'lucide-react';
+import { copyToClipboard } from '../utils/clipboard';
+import { DeleteConfirmModal } from '../components/ui/DeleteConfirmModal';
 
 // Import our service layer and types
 import { projectService } from '../services/projectService';
@@ -365,12 +367,12 @@ export function ProjectPage({
       
       const tasksData = await projectService.getTasksByProject(projectId);
       
-             // Convert backend tasks to UI format
+             // Convert backend tasks to UI format with proper defaults
        const uiTasks: Task[] = tasksData.map(task => ({
          id: task.id,
-         title: task.title,
-         description: task.description,
-         status: (task.uiStatus || 'backlog') as Task['status'],
+         title: task.title || '',
+         description: task.description || '',
+         status: (task.uiStatus || task.status || 'backlog') as Task['status'],
          assignee: {
            name: (task.assignee || 'User') as 'User' | 'Archon' | 'AI IDE Agent',
            avatar: ''
@@ -844,17 +846,21 @@ export function ProjectPage({
                       
                       {/* Copy Project ID Button */}
                       <button 
-                        onClick={(e) => {
+                        onClick={async (e) => {
                           e.stopPropagation();
-                          navigator.clipboard.writeText(project.id);
-                          showToast('Project ID copied to clipboard', 'success');
-                          // Visual feedback
-                          const button = e.currentTarget;
-                          const originalHTML = button.innerHTML;
-                          button.innerHTML = '<svg class="w-3 h-3 mr-1 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>Copied!';
-                          setTimeout(() => {
-                            button.innerHTML = originalHTML;
-                          }, 2000);
+                          const success = await copyToClipboard(project.id);
+                          if (success) {
+                            showToast('Project ID copied to clipboard', 'success');
+                            // Visual feedback
+                            const button = e.currentTarget;
+                            const originalHTML = button.innerHTML;
+                            button.innerHTML = '<svg class="w-3 h-3 mr-1 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>Copied!';
+                            setTimeout(() => {
+                              button.innerHTML = originalHTML;
+                            }, 2000);
+                          } else {
+                            showToast('Failed to copy Project ID', 'error');
+                          }
                         }}
                         className="flex-1 flex items-center justify-center gap-1 text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors py-1"
                         title="Copy Project ID to clipboard"
@@ -1057,76 +1063,3 @@ export function ProjectPage({
   );
 }
 
-// Reusable Delete Confirmation Modal Component
-export interface DeleteConfirmModalProps {
-  itemName: string;
-  onConfirm: () => void;
-  onCancel: () => void;
-  type: 'project' | 'task' | 'client';
-}
-
-export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({ itemName, onConfirm, onCancel, type }) => {
-  const getTitle = () => {
-    switch (type) {
-      case 'project': return 'Delete Project';
-      case 'task': return 'Delete Task';
-      case 'client': return 'Delete MCP Client';
-    }
-  };
-
-  const getMessage = () => {
-    switch (type) {
-      case 'project': return `Are you sure you want to delete the "${itemName}" project? This will also delete all associated tasks and documents and cannot be undone.`;
-      case 'task': return `Are you sure you want to delete the "${itemName}" task? This action cannot be undone.`;
-      case 'client': return `Are you sure you want to delete the "${itemName}" client? This will permanently remove its configuration and cannot be undone.`;
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="relative p-6 rounded-md backdrop-blur-md w-full max-w-md
-          bg-gradient-to-b from-white/80 to-white/60 dark:from-white/10 dark:to-black/30
-          border border-gray-200 dark:border-zinc-800/50
-          shadow-[0_10px_30px_-15px_rgba(0,0,0,0.1)] dark:shadow-[0_10px_30px_-15px_rgba(0,0,0,0.7)]
-          before:content-[''] before:absolute before:top-0 before:left-0 before:right-0 before:h-[2px] 
-          before:rounded-t-[4px] before:bg-red-500 
-          before:shadow-[0_0_10px_2px_rgba(239,68,68,0.4)] dark:before:shadow-[0_0_20px_5px_rgba(239,68,68,0.7)]">
-        
-        <div className="relative z-10">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
-              <Trash2 className="w-6 h-6 text-red-600 dark:text-red-400" />
-            </div>
-            <div>
-              <h3 className="text-lg font-semibold text-gray-800 dark:text-white">
-                {getTitle()}
-              </h3>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                This action cannot be undone
-              </p>
-            </div>
-          </div>
-          
-          <p className="text-gray-700 dark:text-gray-300 mb-6">
-            {getMessage()}
-          </p>
-          
-          <div className="flex justify-end gap-3">
-            <button
-              onClick={onCancel}
-              className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={onConfirm}
-              className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors shadow-lg shadow-red-600/25 hover:shadow-red-700/25"
-            >
-              Delete
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};

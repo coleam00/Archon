@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, Clock, RotateCcw, Eye, Calendar, User, FileText, Diff, GitBranch, Layers, Plus, Minus, AlertTriangle } from 'lucide-react';
-import projectService from '../../services/projectService';
+import { projectService } from '../../services/projectService';
 import { Button } from '../ui/Button';
 import { useToast } from '../../contexts/ToastContext';
 

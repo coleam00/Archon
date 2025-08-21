@@ -149,7 +149,7 @@ export const KnowledgeItemCard = ({
   const [showPageTooltip, setShowPageTooltip] = useState(false);
   const [isRemoving, setIsRemoving] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
-  const [loadedCodeExamples, setLoadedCodeExamples] = useState<any[] | null>(null);
+  const [loadedCodeExamples, setLoadedCodeExamples] = useState<Array<{id: string; summary: string; code: string; language?: string}> | null>(null);
   const [isLoadingCodeExamples, setIsLoadingCodeExamples] = useState(false);
 
   const statusColorMap = {

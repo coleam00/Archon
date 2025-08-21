@@ -211,14 +211,21 @@ class CodeExtractionService:
         Returns:
             List of code blocks with metadata
         """
+        import asyncio
+        import time
+        
         # Progress will be reported during the loop below
 
         all_code_blocks = []
         total_docs = len(crawl_results)
         completed_docs = 0
+        
+        # PERFORMANCE: Track extraction time per document
+        MAX_EXTRACTION_TIME_PER_DOC = 5.0  # 5 seconds max per document
 
         for doc in crawl_results:
             try:
+                doc_start_time = time.time()
                 source_url = doc["url"]
                 html_content = doc.get("html", "")
                 md = doc.get("markdown", "")
@@ -228,9 +235,7 @@ class CodeExtractionService:
                     f"Document content check | url={source_url} | has_html={bool(html_content)} | has_markdown={bool(md)} | html_len={len(html_content) if html_content else 0} | md_len={len(md) if md else 0}"
                 )
 
-                # Get dynamic minimum length based on document context
-                # Extract some context from the document for analysis
-                doc_context = md[:1000] if md else html_content[:1000] if html_content else ""
+                # Dynamic minimum length is handled inside the extraction methods
 
                 # Check markdown first to see if it has code blocks
                 if md:
@@ -281,15 +286,32 @@ class CodeExtractionService:
 
                 # If not a text file or no code blocks found, try HTML extraction first
                 if len(code_blocks) == 0 and html_content and not is_text_file:
-                    safe_logfire_info(
-                        f"Trying HTML extraction first | url={source_url} | html_length={len(html_content)}"
-                    )
-                    html_code_blocks = await self._extract_html_code_blocks(html_content)
-                    if html_code_blocks:
-                        code_blocks = html_code_blocks
+                    # PERFORMANCE: Check if we've already spent too much time on this document
+                    elapsed_time = time.time() - doc_start_time
+                    if elapsed_time > MAX_EXTRACTION_TIME_PER_DOC:
                         safe_logfire_info(
-                            f"Found {len(code_blocks)} code blocks from HTML | url={source_url}"
+                            f"⏱️ Skipping HTML extraction for {source_url} - already spent {elapsed_time:.1f}s"
                         )
+                    else:
+                        safe_logfire_info(
+                            f"Trying HTML extraction first | url={source_url} | html_length={len(html_content)}"
+                        )
+                        # Create a timeout for HTML extraction
+                        remaining_time = MAX_EXTRACTION_TIME_PER_DOC - elapsed_time
+                        try:
+                            html_code_blocks = await asyncio.wait_for(
+                                self._extract_html_code_blocks(html_content, source_url),
+                                timeout=remaining_time
+                            )
+                            if html_code_blocks:
+                                code_blocks = html_code_blocks
+                                safe_logfire_info(
+                                    f"Found {len(code_blocks)} code blocks from HTML | url={source_url}"
+                                )
+                        except asyncio.TimeoutError:
+                            safe_logfire_info(
+                                f"⏱️ HTML extraction timed out after {remaining_time:.1f}s for {source_url}"
+                            )
 
                 # If still no code blocks, try markdown extraction as fallback
                 if len(code_blocks) == 0 and md and "```" in md:
@@ -319,6 +341,14 @@ class CodeExtractionService:
 
                 # Update progress only after completing document extraction
                 completed_docs += 1
+                extraction_time = time.time() - doc_start_time
+                if extraction_time > 2.0:  # Log slow extractions
+                    safe_logfire_info(
+                        f"⏱️ Document extraction took {extraction_time:.1f}s | url={source_url} | "
+                        f"html_size={len(html_content) if html_content else 0} | "
+                        f"blocks_found={len([b for b in all_code_blocks if b['source_url'] == source_url])}"
+                    )
+                    
                 if progress_callback and total_docs > 0:
                     # Calculate progress within the specified range
                     raw_progress = completed_docs / total_docs
@@ -340,13 +370,14 @@ class CodeExtractionService:
 
         return all_code_blocks
 
-    async def _extract_html_code_blocks(self, content: str) -> list[dict[str, Any]]:
+    async def _extract_html_code_blocks(self, content: str, source_url: str = "") -> list[dict[str, Any]]:
         """
         Extract code blocks from HTML patterns in content.
         This is a fallback when markdown conversion didn't preserve code blocks.
 
         Args:
             content: The content to search for HTML code patterns
+            source_url: The URL of the document being processed
             min_length: Minimum length for code blocks
 
         Returns:
@@ -356,6 +387,20 @@ class CodeExtractionService:
 
         # Add detailed logging
         safe_logfire_info(f"Processing HTML of length {len(content)} for code extraction")
+        
+        # PERFORMANCE OPTIMIZATION: Skip extremely large HTML files or chunk them
+        MAX_HTML_SIZE = 1_000_000  # 1MB limit for single-pass processing (increased from 500KB)
+        if len(content) > MAX_HTML_SIZE:
+            safe_logfire_info(
+                f"⚠️ HTML content is very large ({len(content)} bytes). "
+                f"Limiting to first {MAX_HTML_SIZE} bytes to prevent timeout."
+            )
+            # For very large files, focus on the first portion where code examples are likely to be
+            content = content[:MAX_HTML_SIZE]
+            # Try to find a good cutoff point (end of a tag)
+            last_tag_end = content.rfind('>')
+            if last_tag_end > MAX_HTML_SIZE - 1000:
+                content = content[:last_tag_end + 1]
 
         # Check if we have actual content
         if len(content) < 1000:
@@ -507,9 +552,71 @@ class CodeExtractionService:
             ),
         ]
 
-        for pattern_tuple in patterns:
+        # PERFORMANCE: Early exit checks to avoid unnecessary regex processing
+        # Check more content (20KB instead of 5KB) and add URL-based exceptions
+        check_size = min(20000, len(content))  # Check first 20KB or entire content if smaller
+        has_code_indicators = any(indicator in content[:check_size] for indicator in 
+                                 ['<pre', '<code', 'language-', 'hljs', 'prism', 'shiki', 'highlight'])
+        
+        # Never skip certain documentation sites that we know have code
+        is_known_code_site = any(domain in source_url.lower() for domain in 
+                                ['milkdown', 'github.com', 'gitlab', 'docs.', 'dev.', 'api.'])
+        
+        if not has_code_indicators and not is_known_code_site:
+            safe_logfire_info(f"No code indicators found in first {check_size} chars and not a known code site, skipping HTML extraction | url={source_url}")
+            return []
+        
+        if is_known_code_site and not has_code_indicators:
+            safe_logfire_info(f"Known code site but no indicators in first {check_size} chars, continuing anyway | url={source_url}")
+        
+        # PERFORMANCE: Limit number of patterns to check based on detected libraries
+        patterns_to_check = []
+        content_lower = content[:10000].lower()  # Check first 10KB for library detection
+        
+        # Selectively add patterns based on what's detected
+        if 'milkdown' in content_lower:
+            patterns_to_check.extend([p for p in patterns if 'milkdown' in p[1]])
+        if 'monaco' in content_lower:
+            patterns_to_check.extend([p for p in patterns if 'monaco' in p[1]])
+        if 'codemirror' in content_lower or 'cm-' in content_lower:
+            patterns_to_check.extend([p for p in patterns if 'codemirror' in p[1]])
+        if 'prism' in content_lower:
+            patterns_to_check.extend([p for p in patterns if 'prism' in p[1]])
+        if 'hljs' in content_lower or 'highlight' in content_lower:
+            patterns_to_check.extend([p for p in patterns if 'hljs' in p[1] or 'highlight' in p[1]])
+        if 'shiki' in content_lower or 'astro' in content_lower:
+            patterns_to_check.extend([p for p in patterns if 'shiki' in p[1] or 'astro' in p[1]])
+        
+        # Always include standard patterns as fallback (get ALL standard/generic patterns, not just last 5)
+        standard_patterns = [p for p in patterns if any(tag in p[1] for tag in ['standard', 'generic', 'prism', 'hljs'])]
+        patterns_to_check.extend(standard_patterns)
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_patterns = []
+        for p in patterns_to_check:
+            if p[1] not in seen:
+                unique_patterns.append(p)
+                seen.add(p[1])
+        patterns_to_check = unique_patterns
+        
+        # If we have very few patterns and it's a known code site, add more generic patterns
+        if len(patterns_to_check) < 5 and is_known_code_site:
+            safe_logfire_info(f"Known code site with few patterns ({len(patterns_to_check)}), adding more generic patterns")
+            patterns_to_check = patterns  # Use all patterns for known code sites
+        
+        safe_logfire_info(f"Checking {len(patterns_to_check)} relevant patterns out of {len(patterns)} total")
+        
+        for pattern_tuple in patterns_to_check:
             pattern_str, source_type = pattern_tuple
-            matches = list(re.finditer(pattern_str, content, re.DOTALL | re.IGNORECASE))
+            
+            # PERFORMANCE: Use re.finditer with smaller chunks for very long content
+            # Only use DOTALL for patterns that really need it (multi-line blocks)
+            flags = re.IGNORECASE
+            if 'monaco' in source_type or 'codemirror' in source_type:
+                flags |= re.DOTALL  # These need DOTALL for multi-line matching
+            
+            matches = list(re.finditer(pattern_str, content, flags))
 
             # Log pattern matches for Milkdown patterns and CodeMirror
             if matches and (

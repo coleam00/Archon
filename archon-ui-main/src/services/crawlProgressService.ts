@@ -36,7 +36,7 @@ export interface CrawlProgressData {
   currentStep?: string;
   logs?: string[];
   log?: string;
-  workers?: WorkerProgress[] | any[];  // Updated to support new worker format
+  workers?: WorkerProgress[];  // Updated to support new worker format
   error?: string;
   completed?: boolean;
   // Additional properties for document upload and crawling
@@ -50,6 +50,7 @@ export interface CrawlProgressData {
   wordCount?: number;
   duration?: string;
   sourceId?: string;
+  codeExamplesCount?: number;
   // Original crawl parameters for retry functionality
   originalCrawlParams?: {
     url: string;
@@ -98,7 +99,7 @@ interface StreamProgressOptions {
   connectionTimeout?: number;
 }
 
-type ProgressCallback = (data: any) => void;
+type ProgressCallback = (data: CrawlProgressData) => void;
 
 class CrawlProgressService {
   private wsService: WebSocketService = knowledgeSocketIO;
@@ -115,6 +116,9 @@ class CrawlProgressService {
     options: StreamProgressOptions = {}
   ): Promise<void> {
     console.log(`🚀 Starting Socket.IO progress stream for ${progressId}`);
+    
+    // Store the active crawl progress ID in localStorage for reconnection
+    localStorage.setItem('activeCrawlProgressId', progressId);
 
     try {
       // Ensure we're connected to Socket.IO
@@ -141,7 +145,7 @@ class CrawlProgressService {
         }, 5000); // 5 second timeout for acknowledgment
 
         // Listen for subscription acknowledgment
-        const ackHandler = (message: any) => {
+        const ackHandler = (message: { data?: Record<string, unknown>; progress_id?: string; status?: string }) => {
           const data = message.data || message;
           console.log(`📨 Received acknowledgment:`, data);
           if (data.progress_id === progressId && data.status === 'subscribed') {
@@ -156,7 +160,7 @@ class CrawlProgressService {
       });
 
       // Create a specific handler for this progressId
-      const progressHandler = (message: any) => {
+      const progressHandler = (message: { data?: CrawlProgressData; progressId?: string }) => {
         console.log(`📨 [${progressId}] Raw message received:`, message);
         const data = message.data || message;
         console.log(`📨 [${progressId}] Extracted data:`, data);
@@ -185,6 +189,8 @@ class CrawlProgressService {
         console.log(`✅ Crawl completed for ${progressId}`);
         if (data.progressId === progressId) {
           onMessage({ ...data, completed: true });
+          // Clear the stored progress ID when crawl completes
+          localStorage.removeItem('activeCrawlProgressId');
         }
       });
 
@@ -197,6 +203,8 @@ class CrawlProgressService {
             error: message.data?.message || message.error || 'Unknown error',
             percentage: 0
           });
+          // Clear the stored progress ID on error
+          localStorage.removeItem('activeCrawlProgressId');
         }
       });
 
@@ -298,6 +306,12 @@ class CrawlProgressService {
     
     // Remove from active subscriptions
     this.activeSubscriptions.delete(progressId);
+    
+    // Clear from localStorage if this is the active crawl
+    const storedId = localStorage.getItem('activeCrawlProgressId');
+    if (storedId === progressId) {
+      localStorage.removeItem('activeCrawlProgressId');
+    }
   }
 
   /**
@@ -378,8 +392,8 @@ class CrawlProgressService {
     progressId: string,
     callbacks: {
       onMessage: ProgressCallback;
-      onStateChange?: (state: any) => void;
-      onError?: (error: any) => void;
+      onStateChange?: (state: string) => void;
+      onError?: (error: Error) => void;
     },
     options: StreamProgressOptions = {}
   ): Promise<void> {

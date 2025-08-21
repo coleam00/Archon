@@ -428,6 +428,9 @@ class CrawlingService:
             )
 
             # Complete - send both the progress update and completion event
+            # CRITICAL: This is the ONLY place that should send status="completed"!
+            # All crawl strategies (batch, recursive, etc.) should use "finished" or other words.
+            # The frontend disconnects when it sees status="completed", so this must be the final step.
             await update_mapped_progress(
                 "completed",
                 100,
