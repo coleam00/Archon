@@ -81,13 +81,12 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
    Ports are configurable in your .env as well!
 
  4. **Complete Onboarding**
- - Open [http://localhost:3737/onboarding](http://localhost:3737/onboarding)
- - Follow the onboarding process to complete the setup
-   - **Complete database setup** **( ⚠️ required )** - For local Supabase instances, manually open your Studio and run the SQL
-   - Select your LLM/embedding provider and set the API key (OpenAI is default)
-   - Test by uploading a document or crawling a website
+   - Open [http://localhost:3737/onboarding](http://localhost:3737/onboarding)
+   - Follow the onboarding process to complete the setup
+     - **Complete database setup** **( ⚠️ required )** - For local Supabase instances, manually open your Studio and run the SQL
+     - Select your LLM/embedding provider and set the API key (OpenAI is default)
 
-> [!tip] 
+> [!TIP]
 > Test by uploading a document or crawling a website
 
 ## 🔄 Database Reset (Start Fresh if Needed)
