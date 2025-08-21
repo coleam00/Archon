@@ -290,6 +290,27 @@ cd docs && npm start
 
 **Note**: The backend services are configured with `--reload` flag in their uvicorn commands and have source code mounted as volumes for automatic hot reloading when you make changes.
 
+### 🧪 Testing Database States
+
+For testing and development, you can simulate different database states using the `ARCHON_SIMULATE_DB_STATE` environment variable:
+
+```bash
+# Add to your .env file for testing
+ARCHON_SIMULATE_DB_STATE=missing
+
+# Or set temporarily via command line
+export ARCHON_SIMULATE_DB_STATE=missing
+docker-compose up -d
+unset ARCHON_SIMULATE_DB_STATE
+```
+
+**Valid Values:**
+- `missing`: Simulates database not yet set up - useful for testing onboarding flow
+- `partial`: Simulates incomplete database setup (missing tables/extensions) - tests error handling
+- `ready`: Simulates fully configured database - bypasses actual database checks
+- `error`: Simulates database connection errors - tests error recovery flows
+
+
 ## 📄 License
 
 Archon Community License (ACL) v1.2 - see [LICENSE](LICENSE) file for details.

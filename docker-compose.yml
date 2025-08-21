@@ -20,6 +20,11 @@ services:
       - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
       - ARCHON_MCP_PORT=${ARCHON_MCP_PORT:-8051}
       - ARCHON_AGENTS_PORT=${ARCHON_AGENTS_PORT:-8052}
+      # Database simulation for testing - valid values: 'missing', 'partial', 'ready', 'error'
+      # 'missing': Simulates database not yet set up
+      # 'partial': Simulates incomplete database setup (missing tables/extensions)
+      # 'ready': Simulates fully configured database
+      # 'error': Simulates database connection errors
       - ARCHON_SIMULATE_DB_STATE=${ARCHON_SIMULATE_DB_STATE:-}
     networks:
       - app-network
