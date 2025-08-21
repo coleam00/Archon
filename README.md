@@ -310,6 +310,13 @@ unset ARCHON_SIMULATE_DB_STATE
 - `ready`: Simulates fully configured database - bypasses actual database checks
 - `error`: Simulates database connection errors - tests error recovery flows
 
+## 📈 Progress
+
+<p align="center">
+  <a href="https://star-history.com/#coleam00/Archon&Date">
+    <img src="https://api.star-history.com/svg?repos=coleam00/Archon&type=Date" width="500" alt="Star History Chart">
+  </a>
+</p>
 
 ## 📄 License
 
