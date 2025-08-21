@@ -3,6 +3,7 @@ Environment configuration management for the MCP server.
 """
 
 import os
+import ipaddress
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -104,8 +105,28 @@ def validate_supabase_url(url: str) -> bool:
     # Require HTTPS for production (non-local) URLs
     if parsed.scheme == "http":
         hostname = parsed.hostname or ""
-        if not any(local in hostname for local in ["localhost", "127.0.0.1", "host.docker.internal", "0.0.0.0"]):
-            raise ConfigurationError("Supabase URL must use HTTPS for non-local environments")
+        
+        # Check for localhost and Docker internal hosts
+        local_hosts = ["localhost", "127.0.0.1", "host.docker.internal", "0.0.0.0"]
+        if any(local in hostname for local in local_hosts):
+            return True
+            
+        # Check if hostname is a private IP address
+        try:
+            ip = ipaddress.ip_address(hostname)
+            # Allow HTTP for private IP addresses (RFC 1918)
+            # Class A: 10.0.0.0/8
+            # Class B: 172.16.0.0/12
+            # Class C: 192.168.0.0/16
+            # Also includes link-local (169.254.0.0/16) and loopback
+            if ip.is_private or ip.is_loopback or ip.is_link_local:
+                return True
+        except ValueError:
+            # hostname is not a valid IP address, could be a domain name
+            pass
+            
+        # If not a local host or private IP, require HTTPS
+        raise ConfigurationError("Supabase URL must use HTTPS for non-local environments")
 
     if not parsed.netloc:
         raise ConfigurationError("Invalid Supabase URL format")
