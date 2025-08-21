@@ -289,6 +289,14 @@ cd docs && npm start
 
 **Note**: The backend services are configured with `--reload` flag in their uvicorn commands and have source code mounted as volumes for automatic hot reloading when you make changes.
 
+## 📈 Progress
+
+<p align="center">
+  <a href="https://star-history.com/#coleam00/Archon&Date">
+    <img src="https://api.star-history.com/svg?repos=coleam00/Archon&type=Date" width="500" alt="Star History Chart">
+  </a>
+</p>
+
 ## 📄 License
 
 Archon Community License (ACL) v1.2 - see [LICENSE](LICENSE) file for details.
