@@ -169,6 +169,14 @@ class RecursiveCrawlStrategy:
                 batch_urls = urls_to_crawl[batch_idx : batch_idx + batch_size]
                 batch_end_idx = min(batch_idx + batch_size, len(urls_to_crawl))
 
+                # Transform URLs and create mapping for this batch
+                url_mapping = {}
+                transformed_batch_urls = []
+                for url in batch_urls:
+                    transformed = transform_url_func(url)
+                    transformed_batch_urls.append(transformed)
+                    url_mapping[transformed] = url
+
                 # Calculate progress for this batch within the depth
                 batch_progress = depth_start + int(
                     (batch_idx / len(urls_to_crawl)) * (depth_end - depth_start)
@@ -183,18 +191,14 @@ class RecursiveCrawlStrategy:
                 # Use arun_many for native parallel crawling with streaming
                 logger.info(f"Starting parallel crawl of {len(batch_urls)} URLs with arun_many")
                 batch_results = await self.crawler.arun_many(
-                    urls=batch_urls, config=run_config, dispatcher=dispatcher
+                    urls=transformed_batch_urls, config=run_config, dispatcher=dispatcher
                 )
 
                 # Handle streaming results from arun_many
                 i = 0
                 async for result in batch_results:
-                    # Map back to original URL if transformed
-                    original_url = result.url
-                    for orig_url in batch_urls:
-                        if transform_url_func(orig_url) == result.url:
-                            original_url = orig_url
-                            break
+                    # Map back to original URL using the mapping dict
+                    original_url = url_mapping.get(result.url, result.url)
 
                     norm_url = normalize_url(original_url)
                     visited.add(norm_url)
@@ -209,14 +213,14 @@ class RecursiveCrawlStrategy:
                         depth_successful += 1
 
                         # Find internal links for next depth
-                        for link in result.links.get("internal", []):
+                        links = getattr(result, "links", {}) or {}
+                        for link in links.get("internal", []):
                             next_url = normalize_url(link["href"])
                             # Skip binary files and already visited URLs
-                            if next_url not in visited and not self.url_handler.is_binary_file(
-                                next_url
-                            ):
+                            is_binary = self.url_handler.is_binary_file(next_url)
+                            if next_url not in visited and not is_binary:
                                 next_level_urls.add(next_url)
-                            elif self.url_handler.is_binary_file(next_url):
+                            elif is_binary:
                                 logger.debug(f"Skipping binary file from crawl queue: {next_url}")
                     else:
                         logger.warning(
