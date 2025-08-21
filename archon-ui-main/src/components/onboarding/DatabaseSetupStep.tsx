@@ -150,8 +150,11 @@ const DatabaseSetupStepComponent = ({
     setPollingTimeoutReached(false);
     setError(null);
 
-    const timeoutMs = import.meta.env.VITE_DB_SETUP_TIMEOUT_MS
+    const parsedTimeout = import.meta.env.VITE_DB_SETUP_TIMEOUT_MS
       ? parseInt(import.meta.env.VITE_DB_SETUP_TIMEOUT_MS)
+      : null;
+    const timeoutMs = parsedTimeout && Number.isFinite(parsedTimeout)
+      ? parsedTimeout
       : 180000;
 
     pollTimeoutRef.current = setTimeout(() => {
@@ -247,7 +250,7 @@ const DatabaseSetupStepComponent = ({
 
   const openSqlEditor = () => {
     if (setupData?.sql_editor_url) {
-      window.open(setupData.sql_editor_url, '_blank');
+      window.open(setupData.sql_editor_url, '_blank', 'noopener,noreferrer');
 
       if (!step2Completed) {
         setStep2Completed(true);
