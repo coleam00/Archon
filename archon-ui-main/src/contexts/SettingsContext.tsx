@@ -26,7 +26,7 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({ children }) 
   const [projectsEnabled, setProjectsEnabledState] = useState(true);
   const [loading, setLoading] = useState(true);
 
-  const loadSettings = async () => {
+  const loadSettings = useCallback(async () => {
     try {
       setLoading(true);
       
@@ -45,11 +45,11 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({ children }) 
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     loadSettings();
-  }, []);
+  }, [loadSettings]);
 
   const setProjectsEnabled = async (enabled: boolean) => {
     try {
@@ -74,7 +74,7 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({ children }) 
   // Required for stable reference
   const refreshSettings = useCallback(async () => {
     await loadSettings();
-  }, []);
+  }, [loadSettings]);
 
   const value: SettingsContextType = {
     projectsEnabled,

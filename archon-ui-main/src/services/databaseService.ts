@@ -79,18 +79,24 @@ export class DatabaseService {
    * @throws DatabaseError variants based on error type
    */
   async getStatus(): Promise<DatabaseStatus> {
-    const correlationId = crypto.randomUUID();
+    const correlationId = (globalThis.crypto?.randomUUID?.() ??
+      Math.random().toString(36).slice(2));
     const startTime = Date.now();
 
     this.logger
       .withCorrelationId(correlationId)
       .debug('Checking database status');
 
+    let abortId: ReturnType<typeof setTimeout> | null = null;
+    const controller = new AbortController();
     try {
+      abortId = setTimeout(() => controller.abort(), 10000); // 10s safeguard
       const response = await fetch(`${API_BASE_URL}/api/database/status`, {
         headers: {
           'X-Correlation-ID': correlationId,
+          'Accept': 'application/json',
         },
+        signal: controller.signal,
       });
 
       const context: ErrorContext = {
@@ -188,6 +194,8 @@ export class DatabaseService {
         context,
         'Check network connectivity and server status'
       );
+    } finally {
+      if (abortId) clearTimeout(abortId);
     }
   }
 
@@ -197,18 +205,24 @@ export class DatabaseService {
    * @throws DatabaseError variants based on error type
    */
   async getSetupSQL(): Promise<SetupSQLResponse> {
-    const correlationId = crypto.randomUUID();
+    const correlationId = (globalThis.crypto?.randomUUID?.() ??
+      Math.random().toString(36).slice(2));
     const startTime = Date.now();
 
     this.logger
       .withCorrelationId(correlationId)
       .debug('Fetching setup SQL content');
 
+    let abortId: ReturnType<typeof setTimeout> | null = null;
+    const controller = new AbortController();
     try {
+      abortId = setTimeout(() => controller.abort(), 10000); // 10s safeguard
       const response = await fetch(`${API_BASE_URL}/api/database/setup-sql`, {
         headers: {
           'X-Correlation-ID': correlationId,
+          'Accept': 'application/json',
         },
+        signal: controller.signal,
       });
 
       const context: ErrorContext = {
@@ -300,6 +314,8 @@ export class DatabaseService {
         context,
         'Check network connectivity and server status'
       );
+    } finally {
+      if (abortId) clearTimeout(abortId);
     }
   }
 
@@ -309,21 +325,27 @@ export class DatabaseService {
    * @throws DatabaseError variants based on error type
    */
   async verifySetup(): Promise<VerifySetupResponse> {
-    const correlationId = crypto.randomUUID();
+    const correlationId = (globalThis.crypto?.randomUUID?.() ??
+      Math.random().toString(36).slice(2));
     const startTime = Date.now();
 
     this.logger
       .withCorrelationId(correlationId)
       .debug('Verifying database setup');
 
+    let abortId: ReturnType<typeof setTimeout> | null = null;
+    const controller = new AbortController();
     try {
+      abortId = setTimeout(() => controller.abort(), 10000); // 10s safeguard
       const response = await fetch(
         `${API_BASE_URL}/api/database/verify-setup`,
         {
           method: 'POST',
           headers: {
             'X-Correlation-ID': correlationId,
+            'Accept': 'application/json',
           },
+          signal: controller.signal,
         }
       );
 
@@ -415,6 +437,8 @@ export class DatabaseService {
         context,
         'Check network connectivity and server status'
       );
+    } finally {
+      if (abortId) clearTimeout(abortId);
     }
   }
 }

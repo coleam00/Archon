@@ -46,20 +46,17 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
       const maxRetries = 10; // Increased retries for initialization
       const retryDelay = 1000;
       
+      // Create AbortController for proper timeout handling
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      healthCheckTimeoutsRef.current.add(timeoutId);
+      
       try {
-        // Create AbortController for proper timeout handling
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
-        healthCheckTimeoutsRef.current.add(timeoutId);
-        
         // Check if backend is responding with a simple health check
         const response = await fetch(`${credentialsService['baseUrl']}/health`, {
             method: 'GET',
           signal: controller.signal
         });
-
-        clearTimeout(timeoutId);
-        healthCheckTimeoutsRef.current.delete(timeoutId);
 
         if (response.ok) {
           const healthData = await response.json();
@@ -79,6 +76,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
               const retryTimeout = setTimeout(() => {
                 checkBackendHealth(retryCount + 1);
               }, retryDelay); // Constant 1s retry during initialization
+              healthCheckTimeoutsRef.current.add(retryTimeout);
             } else {
               console.warn('Backend initialization taking too long - proceeding anyway');
               // Don't mark as failed yet, just not fully ready
@@ -109,6 +107,9 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
           setBackendReady(false);
           setBackendStartupFailed(true);
         }
+      } finally {
+        clearTimeout(timeoutId);
+        healthCheckTimeoutsRef.current.delete(timeoutId);
       }
     };
 
