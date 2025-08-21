@@ -7,7 +7,7 @@ Mirrors the functionality of the original manage_task tool but with individual t
 
 import json
 import logging
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
 
 import httpx
@@ -18,19 +18,6 @@ from src.mcp_server.utils.timeout_config import get_default_timeout
 from src.server.config.service_discovery import get_api_url
 
 logger = logging.getLogger(__name__)
-
-
-class TaskUpdateFields(TypedDict, total=False):
-    """Valid fields that can be updated on a task."""
-
-    title: str
-    description: str
-    status: str  # "todo" | "doing" | "review" | "done"
-    assignee: str  # "User" | "Archon" | "AI IDE Agent" | "prp-executor" | "prp-validator"
-    task_order: int  # 0-100, higher = more priority
-    feature: Optional[str]
-    sources: Optional[List[Dict[str, str]]]
-    code_examples: Optional[List[Dict[str, str]]]
 
 
 def register_task_tools(mcp: FastMCP):
@@ -315,25 +302,65 @@ def register_task_tools(mcp: FastMCP):
     async def update_task(
         ctx: Context,
         task_id: str,
-        update_fields: TaskUpdateFields,
+        title: Optional[str] = None,
+        description: Optional[str] = None,
+        status: Optional[str] = None,
+        assignee: Optional[str] = None,
+        task_order: Optional[int] = None,
+        feature: Optional[str] = None,
+        sources: Optional[List[Dict[str, str]]] = None,
+        code_examples: Optional[List[Dict[str, str]]] = None,
     ) -> str:
         """
         Update a task's properties.
 
         Args:
             task_id: UUID of the task to update
-            update_fields: Dict of fields to update (e.g., {"status": "doing", "assignee": "AI IDE Agent"})
+            title: New title (optional)
+            description: New description (optional)
+            status: New status - "todo" | "doing" | "review" | "done" (optional)
+            assignee: New assignee (optional)
+            task_order: New priority order (optional)
+            feature: New feature label (optional)
+            sources: New source references (optional)
+            code_examples: New code examples (optional)
 
         Returns:
             JSON with updated task details
 
         Examples:
-            update_task(task_id="uuid", update_fields={"status": "doing"})
-            update_task(task_id="uuid", update_fields={"title": "New Title", "description": "Updated description"})
+            update_task(task_id="uuid", status="doing")
+            update_task(task_id="uuid", title="New Title", description="Updated description")
         """
         try:
             api_url = get_api_url()
             timeout = get_default_timeout()
+
+            # Build update_fields dict from provided parameters
+            update_fields = {}
+            if title is not None:
+                update_fields["title"] = title
+            if description is not None:
+                update_fields["description"] = description
+            if status is not None:
+                update_fields["status"] = status
+            if assignee is not None:
+                update_fields["assignee"] = assignee
+            if task_order is not None:
+                update_fields["task_order"] = task_order
+            if feature is not None:
+                update_fields["feature"] = feature
+            if sources is not None:
+                update_fields["sources"] = sources
+            if code_examples is not None:
+                update_fields["code_examples"] = code_examples
+
+            if not update_fields:
+                return MCPErrorFormatter.format_error(
+                    error_type="validation_error",
+                    message="No fields to update",
+                    suggestion="Provide at least one field to update",
+                )
 
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.put(
