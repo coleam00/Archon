@@ -96,7 +96,7 @@ global.ResizeObserver = vi.fn().mockImplementation(() => ({
 
 const originalConsoleError = console.error;
 console.error = vi.fn((...args) => {
-  if (args[0] === 'ONBOARDING_CHECK_FAILED:') {
+  if (typeof args[0] === 'string' && args[0].startsWith('ONBOARDING_CHECK_FAILED')) {
     return;
   }
   originalConsoleError.apply(console, args);
