@@ -481,7 +481,7 @@ def create_mock_credential_service_with_error(error_type: str):
     mock = AsyncMock()
 
     if error_type == "database_not_initialized":
-        from src.server.services.credential_service import DatabaseNotInitializedException
+        from src.server.services.database_exceptions import DatabaseNotInitializedException
 
         mock.load_all_credentials.side_effect = DatabaseNotInitializedException("Tables not found")
     elif error_type in DATABASE_ERROR_SCENARIOS:
