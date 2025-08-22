@@ -515,6 +515,49 @@ class CrawlingService:
                 end_progress=20,
             )
             crawl_type = "text_file"
+            
+            # Check if this is a link collection file and extract links
+            if crawl_results and len(crawl_results) > 0:
+                content = crawl_results[0].get('markdown', '')
+                if self.url_handler.is_link_collection_file(url, content):
+                    if self.progress_id:
+                        self.progress_state.update({
+                            "status": "extracting_links",
+                            "percentage": 25,
+                            "log": "Link collection file detected, extracting embedded links...",
+                        })
+                        await update_crawl_progress(self.progress_id, self.progress_state)
+                    
+                    # Extract links from the content
+                    extracted_links = self.url_handler.extract_markdown_links(content, url)
+                    
+                    if extracted_links:
+                        if self.progress_id:
+                            self.progress_state.update({
+                                "status": "crawling_links",
+                                "percentage": 30,
+                                "log": f"Found {len(extracted_links)} links to crawl from {url}",
+                            })
+                            await update_crawl_progress(self.progress_id, self.progress_state)
+                        
+                        # Crawl the extracted links using batch crawling
+                        logger.info(f"Crawling {len(extracted_links)} extracted links from {url}")
+                        batch_results = await self.crawl_batch_with_progress(
+                            extracted_links,
+                            max_concurrent=request.get('max_concurrent', 3),
+                            progress_callback=await self._create_crawl_progress_callback("crawling"),
+                            start_progress=30,
+                            end_progress=70,
+                        )
+                        
+                        # Combine original text file results with batch results
+                        crawl_results.extend(batch_results)
+                        crawl_type = "link_collection_with_crawled_links"
+                        
+                        logger.info(f"Link collection crawling completed: {len(crawl_results)} total results (1 text file + {len(batch_results)} extracted links)")
+                    else:
+                        logger.info(f"No valid links found in link collection file: {url}")
+                        logger.info(f"Text file crawling completed: {len(crawl_results)} results")
 
         elif self.url_handler.is_sitemap(url):
             # Handle sitemaps
