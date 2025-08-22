@@ -19,8 +19,20 @@ os.environ.setdefault("ARCHON_AGENTS_PORT", "8052")
 
 
 @pytest.fixture(autouse=True)
-def prevent_real_db_calls():
-    """Automatically prevent any real database calls in all tests."""
+def prevent_real_db_calls(request):
+    """Automatically prevent any real database calls in all tests (except those marked with 'live')."""
+    # Skip this fixture for tests marked with @pytest.mark.live
+    if request.node.get_closest_marker("live"):
+        # For live tests, set up real database credentials
+        os.environ["SUPABASE_URL"] = "http://localhost:8000"
+        os.environ["SUPABASE_SERVICE_KEY"] = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJzZXJ2aWNlX3JvbGUiLAogICAgImlzcyI6ICJzdXBhYmFzZS1kZW1vIiwKICAgICJpYXQiOiAxNjQxNzY5MjAwLAogICAgImV4cCI6IDE3OTk1MzU2MDAKfQ.DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q"
+        os.environ["EMBEDDING_PROVIDER"] = "ollama"
+        os.environ["OLLAMA_BASE_URL"] = "http://localhost:11434"
+        os.environ["OLLAMA_EMBEDDING_MODEL"] = "nomic-embed-text"
+        os.environ["OLLAMA_MODEL"] = "qwen2.5:3b"
+        yield
+        return
+    
     with patch("supabase.create_client") as mock_create:
         # Make create_client raise an error if called without our mock
         mock_create.side_effect = Exception("Real database calls are not allowed in tests!")
@@ -122,3 +134,18 @@ def test_knowledge_item():
         "content": "This is test content for knowledge base",
         "source_id": "test-source",
     }
+
+
+@pytest.fixture
+def live_client():
+    """FastAPI test client for live integration tests with real database."""
+    # Set up real database environment
+    os.environ["SUPABASE_URL"] = "http://localhost:8000"
+    os.environ["SUPABASE_SERVICE_KEY"] = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJzZXJ2aWNlX3JvbGUiLAogICAgImlzcyI6ICJzdXBhYmFzZS1kZW1vIiwKICAgICJpYXQiOiAxNjQxNzY5MjAwLAogICAgImV4cCI6IDE3OTk1MzU2MDAKfQ.DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q"
+    os.environ["EMBEDDING_PROVIDER"] = "ollama"
+    os.environ["OLLAMA_BASE_URL"] = "http://localhost:11434"
+    os.environ["OLLAMA_EMBEDDING_MODEL"] = "nomic-embed-text"
+    os.environ["OLLAMA_MODEL"] = "qwen2.5:3b"
+    
+    from src.server.main import app
+    return TestClient(app)

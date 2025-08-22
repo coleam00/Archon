@@ -1,22 +1,23 @@
 """
-RAG Agent - Conversational Search and Retrieval with PydanticAI
+Ollama RAG Agent - Direct API Version
 
 This agent enables users to search and chat with documents stored in the RAG system.
-It uses the perform_rag_query functionality to retrieve relevant content and provide
-intelligent responses based on the retrieved information.
+Instead of using MCP, it directly calls the main server's API endpoints for better
+reliability and performance.
 """
 
+import json
 import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+import httpx
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
 
 from .base_agent import ArchonDependencies, BaseAgent
-from .mcp_client import get_mcp_client
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ class RagDependencies(ArchonDependencies):
     source_filter: str | None = None
     match_count: int = 5
     progress_callback: Any | None = None  # Callback for progress updates
+    api_base_url: str = "http://archon-server:8181"  # Main server URL
 
 
 class RagQueryResult(BaseModel):
@@ -47,9 +49,12 @@ class RagQueryResult(BaseModel):
     message: str = Field(description="Status message or error description")
 
 
-class RagAgent(BaseAgent[RagDependencies, str]):
+class OllamaRagAgent(BaseAgent[RagDependencies, str]):
     """
     Conversational agent for RAG-based document search and retrieval.
+    
+    This version directly calls the main server's API endpoints instead of using MCP,
+    providing better reliability and performance with Ollama embeddings.
 
     Capabilities:
     - Search documents using natural language queries
@@ -59,25 +64,25 @@ class RagAgent(BaseAgent[RagDependencies, str]):
     - Explain concepts found in documentation
     """
 
-    def __init__(self, model: str = None, **kwargs):
+    def __init__(self, model: str | None = None, **kwargs):
         # Use provided model or fall back to default
         if model is None:
-            model = os.getenv("RAG_AGENT_MODEL", "ollama:qwen3:0.6b")
+            model = os.getenv("RAG_AGENT_MODEL", "ollama:llama3.2:latest")
 
         # Log model usage for visibility
         if model.startswith("ollama:"):
             logger.info(f"Using Ollama model for RAG agent: {model}")
-            logger.info("Ensure Ollama server is running at http://localhost:11434")
+            logger.info("Direct API mode - bypassing MCP for better performance")
         elif model.startswith("openrouter:"):
             logger.info(f"Using OpenRouter model for RAG agent: {model}")
         elif model.startswith("deepseek:"):
             logger.info(f"Using DeepSeek model for RAG agent: {model}")
 
         super().__init__(
-            model=model, name="RagAgent", retries=3, enable_rate_limiting=True, **kwargs
+            model=model, name="OllamaRagAgent", retries=3, enable_rate_limiting=True, **kwargs
         )
 
-    def _create_agent(self, **kwargs) -> Agent:
+    def _create_agent(self, **kwargs) -> Agent[RagDependencies, str]:
         """Create the PydanticAI agent with tools and prompts."""
 
         agent = Agent(
@@ -137,7 +142,7 @@ class RagAgent(BaseAgent[RagDependencies, str]):
 - Timestamp: {datetime.now().isoformat()}
 """
 
-        # Register tools for RAG operations
+        # Register tools for RAG operations using direct API calls
         @agent.tool
         async def search_documents(
             ctx: RunContext[RagDependencies], query: str, source_filter: str | None = None
@@ -148,16 +153,21 @@ class RagAgent(BaseAgent[RagDependencies, str]):
                 if source_filter is None:
                     source_filter = ctx.deps.source_filter
 
-                # Use MCP client to perform RAG query
-                mcp_client = await get_mcp_client()
-                result_json = await mcp_client.perform_rag_query(
-                    query=query, source=source_filter, match_count=ctx.deps.match_count
-                )
+                # Call the main server's RAG API directly
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(
+                        f"{ctx.deps.api_base_url}/api/rag/query",
+                        json={
+                            "query": query,
+                            "source": source_filter,
+                            "match_count": ctx.deps.match_count,
+                        },
+                    )
 
-                # Parse the JSON response
-                import json
+                    if response.status_code != 200:
+                        return f"Search failed: HTTP {response.status_code}"
 
-                result = json.loads(result_json)
+                    result = response.json()
 
                 if not result.get("success", False):
                     return f"Search failed: {result.get('error', 'Unknown error')}"
@@ -169,10 +179,10 @@ class RagAgent(BaseAgent[RagDependencies, str]):
                 # Format results for display
                 formatted_results = []
                 for i, res in enumerate(results, 1):
-                    similarity = res.get("similarity_score", res.get("similarity", 0))
+                    similarity = res.get("similarity_score", 0)
                     metadata = res.get("metadata", {})
                     source = metadata.get("source", "Unknown")
-                    url = metadata.get("url", res.get("url", ""))
+                    url = metadata.get("url", "")
                     content = res.get("content", "")
 
                     # Truncate content if too long
@@ -186,10 +196,20 @@ class RagAgent(BaseAgent[RagDependencies, str]):
                         f"Content: {content}\n"
                     )
 
-                return f"Found {len(results)} relevant results:\n\n" + "\n---\n".join(
-                    formatted_results
-                )
+                search_mode = result.get("search_mode", "hybrid")
+                reranked = result.get("reranking_applied", False)
+                
+                header = f"Found {len(results)} relevant results"
+                if search_mode == "hybrid":
+                    header += " (hybrid search)"
+                if reranked:
+                    header += " [reranked]"
+                    
+                return f"{header}:\n\n" + "\n---\n".join(formatted_results)
 
+            except httpx.TimeoutException:
+                logger.error("Search timeout")
+                return "Search timed out. Please try again with a simpler query."
             except Exception as e:
                 logger.error(f"Error searching documents: {e}")
                 return f"Error performing search: {str(e)}"
@@ -198,17 +218,14 @@ class RagAgent(BaseAgent[RagDependencies, str]):
         async def list_available_sources(ctx: RunContext[RagDependencies]) -> str:
             """List all available sources that can be searched."""
             try:
-                # Use MCP client to get available sources
-                mcp_client = await get_mcp_client()
-                result_json = await mcp_client.get_available_sources()
+                # Call the main server's sources API directly
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.get(f"{ctx.deps.api_base_url}/api/rag/sources")
 
-                # Parse the JSON response
-                import json
+                    if response.status_code != 200:
+                        return f"Failed to get sources: HTTP {response.status_code}"
 
-                result = json.loads(result_json)
-
-                if not result.get("success", False):
-                    return f"Failed to get sources: {result.get('error', 'Unknown error')}"
+                    result = response.json()
 
                 sources = result.get("sources", [])
                 if not sources:
@@ -218,18 +235,24 @@ class RagAgent(BaseAgent[RagDependencies, str]):
                 for source in sources:
                     source_id = source.get("source_id", "Unknown")
                     title = source.get("title", "Untitled")
-                    description = source.get("description", "")
+                    word_count = source.get("total_word_count", 0)
                     created = source.get("created_at", "")
 
-                    # Format the description if available
-                    desc_text = f" - {description}" if description else ""
+                    # Format word count nicely
+                    if word_count > 1000:
+                        word_str = f"{word_count // 1000}k words"
+                    else:
+                        word_str = f"{word_count} words"
 
                     source_list.append(
-                        f"- **{source_id}**: {title}{desc_text} (added {created[:10]})"
+                        f"- **{source_id}**: {title} ({word_str}, added {created[:10]})"
                     )
 
                 return f"Available sources ({len(sources)} total):\n" + "\n".join(source_list)
 
+            except httpx.TimeoutException:
+                logger.error("Sources request timeout")
+                return "Request timed out. Please try again."
             except Exception as e:
                 logger.error(f"Error listing sources: {e}")
                 return f"Error retrieving sources: {str(e)}"
@@ -244,21 +267,26 @@ class RagAgent(BaseAgent[RagDependencies, str]):
                 if source_filter is None:
                     source_filter = ctx.deps.source_filter
 
-                # Use MCP client to search code examples
-                mcp_client = await get_mcp_client()
-                result_json = await mcp_client.search_code_examples(
-                    query=query, source_id=source_filter, match_count=ctx.deps.match_count
-                )
+                # Call the main server's code examples API directly
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(
+                        f"{ctx.deps.api_base_url}/api/rag/code-examples",
+                        json={
+                            "query": query,
+                            "source": source_filter,
+                            "match_count": ctx.deps.match_count,
+                        },
+                    )
 
-                # Parse the JSON response
-                import json
+                    if response.status_code != 200:
+                        return f"Code search failed: HTTP {response.status_code}"
 
-                result = json.loads(result_json)
+                    result = response.json()
 
                 if not result.get("success", False):
                     return f"Code search failed: {result.get('error', 'Unknown error')}"
 
-                examples = result.get("results", result.get("code_examples", []))
+                examples = result.get("results", [])
                 if not examples:
                     return "No code examples found for your query."
 
@@ -266,15 +294,12 @@ class RagAgent(BaseAgent[RagDependencies, str]):
                 for i, example in enumerate(examples, 1):
                     similarity = example.get("similarity", 0)
                     summary = example.get("summary", "No summary")
-                    code = example.get("code", example.get("code_block", ""))
+                    code = example.get("code", "")
                     url = example.get("url", "")
-
-                    # Extract language from code block if available
-                    lang = "code"
-                    if code.startswith("```"):
-                        first_line = code.split("\n")[0]
-                        if len(first_line) > 3:
-                            lang = first_line[3:].strip()
+                    metadata = example.get("metadata", {})
+                    
+                    # Get language from metadata
+                    lang = metadata.get("language", "code")
 
                     formatted_examples.append(
                         f"**Example {i}** (Relevance: {similarity:.2%})\n"
@@ -283,10 +308,16 @@ class RagAgent(BaseAgent[RagDependencies, str]):
                         f"```{lang}\n{code}\n```"
                     )
 
-                return f"Found {len(examples)} code examples:\n\n" + "\n---\n".join(
-                    formatted_examples
-                )
+                reranked = result.get("reranked", False)
+                header = f"Found {len(examples)} code examples"
+                if reranked:
+                    header += " [reranked]"
+                    
+                return f"{header}:\n\n" + "\n---\n".join(formatted_examples)
 
+            except httpx.TimeoutException:
+                logger.error("Code search timeout")
+                return "Search timed out. Please try again with a simpler query."
             except Exception as e:
                 logger.error(f"Error searching code examples: {e}")
                 return f"Error searching code: {str(e)}"
@@ -324,16 +355,7 @@ class RagAgent(BaseAgent[RagDependencies, str]):
 
     def get_system_prompt(self) -> str:
         """Get the base system prompt for this agent."""
-        try:
-            from ..services.prompt_service import prompt_service
-
-            return prompt_service.get_prompt(
-                "rag_assistant",
-                default="RAG Assistant for intelligent document search and retrieval.",
-            )
-        except Exception as e:
-            logger.warning(f"Could not load prompt from service: {e}")
-            return "RAG Assistant for intelligent document search and retrieval."
+        return "RAG Assistant for intelligent document search and retrieval using direct API access."
 
     async def run_conversation(
         self,
@@ -341,7 +363,7 @@ class RagAgent(BaseAgent[RagDependencies, str]):
         project_id: str | None = None,
         source_filter: str | None = None,
         match_count: int = 5,
-        user_id: str = None,
+        user_id: str | None = None,
         progress_callback: Any = None,
     ) -> RagQueryResult:
         """
@@ -425,5 +447,5 @@ class RagAgent(BaseAgent[RagDependencies, str]):
             )
 
 
-# Note: RagAgent instances should be created on-demand in API endpoints
+# Note: OllamaRagAgent instances should be created on-demand in API endpoints
 # to avoid initialization issues during module import

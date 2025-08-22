@@ -81,6 +81,7 @@ async def get_agent_credentials(request: Request) -> dict[str, Any]:
                 "OPENAI_MODEL", default="gpt-4o-mini"
             ),
             # Model configurations
+            # Supports formats: openai:gpt-4o, ollama:llama3.2, openrouter:model-name, deepseek:model-name
             "DOCUMENT_AGENT_MODEL": await credential_service.get_credential(
                 "DOCUMENT_AGENT_MODEL", default="openai:gpt-4o"
             ),

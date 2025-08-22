@@ -19,6 +19,7 @@ import { KnowledgeItemCard } from '../components/knowledge-base/KnowledgeItemCar
 import { GroupedKnowledgeItemCard } from '../components/knowledge-base/GroupedKnowledgeItemCard';
 import { KnowledgeGridSkeleton, KnowledgeTableSkeleton } from '../components/knowledge-base/KnowledgeItemSkeleton';
 import { GroupCreationModal } from '../components/knowledge-base/GroupCreationModal';
+import { RAGChatPopup, RAGChatPopupRef } from '../components/knowledge-base/RAGChatPopup';
 
 const extractDomain = (url: string): string => {
   try {
@@ -64,6 +65,7 @@ export const KnowledgeBasePage = () => {
   const [loading, setLoading] = useState(true);
   const [totalItems, setTotalItems] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
+  const chatRef = useRef<RAGChatPopupRef>(null);
   
   // Selection state
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
@@ -886,9 +888,13 @@ export const KnowledgeBasePage = () => {
     }
   };
 
-  return <div>
+  const handleAskAI = (item: KnowledgeItem) => {
+    chatRef.current?.askAboutItem(item);
+  };
+
+  return <div className="flex flex-col gap-6">
       {/* Header with animation - stays static when changing views */}
-      <motion.div className="flex justify-between items-center mb-8" initial="hidden" animate="visible" variants={headerContainerVariants}>
+      <motion.div className="flex justify-between items-center" initial="hidden" animate="visible" variants={headerContainerVariants}>
         <motion.h1 className="text-3xl font-bold text-gray-800 dark:text-white flex items-center gap-3" variants={titleVariants}>
           <BookOpen className="w-7 h-7 text-green-500 filter drop-shadow-[0_0_8px_rgba(34,197,94,0.8)]" />
           Knowledge Base
@@ -929,6 +935,7 @@ export const KnowledgeBasePage = () => {
             <CheckSquare className="w-4 h-4 mr-2 inline" />
             <span>{isSelectionMode ? 'Cancel' : 'Select'}</span>
           </Button>
+
           {/* Add Button */}
           <Button onClick={handleAddKnowledge} variant="primary" accentColor="purple" className="shadow-lg shadow-purple-500/20">
             <Plus className="w-4 h-4 mr-2 inline" />
@@ -993,7 +1000,7 @@ export const KnowledgeBasePage = () => {
       </AnimatePresence>
       
       {/* Main Content */}
-      <div className="relative">
+      <div className="relative mb-6">
         {loading ? (
           viewMode === 'grid' ? <KnowledgeGridSkeleton /> : <KnowledgeTableSkeleton />
         ) : viewMode === 'table' ? (
@@ -1061,6 +1068,7 @@ export const KnowledgeBasePage = () => {
                               onDelete={handleDeleteItem} 
                               onUpdate={loadKnowledgeItems} 
                               onRefresh={handleRefreshItem}
+                              onAskAI={handleAskAI}
                               isSelectionMode={isSelectionMode}
                               isSelected={selectedItems.has(item.id)}
                               onToggleSelection={(e) => toggleItemSelection(item.id, index, e)}
@@ -1131,6 +1139,7 @@ export const KnowledgeBasePage = () => {
                           onDelete={handleDeleteItem} 
                           onUpdate={loadKnowledgeItems} 
                           onRefresh={handleRefreshItem}
+                          onAskAI={handleAskAI}
                           isSelectionMode={isSelectionMode}
                           isSelected={selectedItems.has(item.id)}
                           onToggleSelection={(e) => toggleItemSelection(item.id, index, e)}
@@ -1154,6 +1163,7 @@ export const KnowledgeBasePage = () => {
                         onDelete={handleDeleteItem} 
                         onUpdate={loadKnowledgeItems} 
                         onRefresh={handleRefreshItem}
+                        onAskAI={handleAskAI}
                         isSelectionMode={isSelectionMode}
                         isSelected={selectedItems.has(item.id)}
                         onToggleSelection={(e) => toggleItemSelection(item.id, index, e)}
@@ -1172,6 +1182,10 @@ export const KnowledgeBasePage = () => {
           </>
         )}
       </div>
+      
+      {/* RAG Chat Popup */}
+      <RAGChatPopup ref={chatRef} />
+      
       {/* Add Knowledge Modal */}
       {isAddModalOpen && <AddKnowledgeModal 
         onClose={() => setIsAddModalOpen(false)} 

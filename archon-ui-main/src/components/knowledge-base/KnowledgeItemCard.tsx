@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link as LinkIcon, Upload, Trash2, RefreshCw, Code, FileText, Brain, BoxIcon, Pencil } from 'lucide-react';
+import { Link as LinkIcon, Upload, Trash2, RefreshCw, Code, FileText, Brain, BoxIcon, Pencil, MessageSquare } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Badge } from '../ui/Badge';
 import { Checkbox } from '../ui/Checkbox';
@@ -129,6 +129,7 @@ interface KnowledgeItemCardProps {
   onDelete: (sourceId: string) => void;
   onUpdate?: () => void;
   onRefresh?: (sourceId: string) => void;
+  onAskAI?: (item: KnowledgeItem) => void;
   isSelectionMode?: boolean;
   isSelected?: boolean;
   onToggleSelection?: (event: React.MouseEvent) => void;
@@ -139,6 +140,7 @@ export const KnowledgeItemCard = ({
   onDelete,
   onUpdate,
   onRefresh,
+  onAskAI,
   isSelectionMode = false,
   isSelected = false,
   onToggleSelection
@@ -348,6 +350,18 @@ export const KnowledgeItemCard = ({
               >
                 <Trash2 className="w-3 h-3" />
                 </button>
+                {onAskAI && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onAskAI(item);
+                    }}
+                    className="p-1 text-gray-500 hover:text-purple-500"
+                    title="Ask AI about this"
+                  >
+                    <MessageSquare className="w-3 h-3" />
+                  </button>
+                )}
               </div>
             )}
           </div>

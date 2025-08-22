@@ -67,7 +67,7 @@ export const RAGSettings = ({
               options={[
                 { value: 'openai', label: 'OpenAI' },
                 { value: 'google', label: 'Google Gemini' },
-                { value: 'ollama', label: 'Ollama (Coming Soon)' },
+                { value: 'ollama', label: 'Ollama' },
               ]}
             />
           </div>
@@ -95,8 +95,58 @@ export const RAGSettings = ({
               onClick={async () => {
                 try {
                   setSaving(true);
+                  
+                  // Save the RAG settings
                   await credentialsService.updateRagSettings(ragSettings);
-                  showToast('RAG settings saved successfully!', 'success');
+                  
+                  // Also save the RAG_AGENT_MODEL credential for the agent service
+                  // Format the model string properly for PydanticAI
+                  let ragAgentModel = ragSettings.MODEL_CHOICE;
+                  const provider = ragSettings.LLM_PROVIDER || 'openai';
+                  
+                  // Add provider prefix if not already present (check for provider: prefix, not just any colon)
+                  if (!ragAgentModel.startsWith(`${provider}:`)) {
+                    if (provider === 'ollama') {
+                      ragAgentModel = `ollama:${ragAgentModel}`;
+                    } else if (provider === 'google') {
+                      ragAgentModel = `google:${ragAgentModel}`;
+                    } else {
+                      ragAgentModel = `openai:${ragAgentModel}`;
+                    }
+                  }
+                  
+                  // Check if RAG_AGENT_MODEL credential exists
+                  try {
+                    const existing = await credentialsService.getCredential('RAG_AGENT_MODEL');
+                    if (existing) {
+                      await credentialsService.updateCredential({
+                        key: 'RAG_AGENT_MODEL',
+                        value: ragAgentModel,
+                        description: 'Model for RAG agent',
+                        is_encrypted: false,
+                        category: 'agent_models'
+                      });
+                    } else {
+                      await credentialsService.createCredential({
+                        key: 'RAG_AGENT_MODEL',
+                        value: ragAgentModel,
+                        description: 'Model for RAG agent',
+                        is_encrypted: false,
+                        category: 'agent_models'
+                      });
+                    }
+                  } catch (e) {
+                    // If credential doesn't exist, create it
+                    await credentialsService.createCredential({
+                      key: 'RAG_AGENT_MODEL',
+                      value: ragAgentModel,
+                      description: 'Model for RAG agent',
+                      is_encrypted: false,
+                      category: 'agent_models'
+                    });
+                  }
+                  
+                  showToast('RAG settings saved successfully! Restart agents service to apply model change.', 'success');
                 } catch (err) {
                   console.error('Failed to save RAG settings:', err);
                   showToast('Failed to save settings', 'error');
@@ -114,16 +164,30 @@ export const RAGSettings = ({
         {/* Model Settings Row */}
         <div className="grid grid-cols-2 gap-4 mb-6">
           <div>
-            <Input 
-              label="Chat Model" 
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Chat Model (RAG Agent)
+            </label>
+            <input 
               value={ragSettings.MODEL_CHOICE} 
               onChange={e => setRagSettings({
                 ...ragSettings,
                 MODEL_CHOICE: e.target.value
               })} 
               placeholder={getModelPlaceholder(ragSettings.LLM_PROVIDER || 'openai')}
-              accentColor="green" 
+              className="w-full px-3 py-2 rounded-md bg-white dark:bg-gray-900 border border-green-500/30 text-sm focus:border-green-500 focus:ring-1 focus:ring-green-500"
             />
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              This model is used for RAG search and chat operations
+              {ragSettings.LLM_PROVIDER === 'ollama' && 
+                ". Examples: llama3.2, qwen3:0.6b, qwen2.5-coder:1.5b, mistral:latest, gemma3:270m"
+              }
+              {ragSettings.LLM_PROVIDER === 'google' && 
+                ". Examples: gemini-1.5-flash, gemini-1.5-pro, gemini-2.0-flash"
+              }
+              {(!ragSettings.LLM_PROVIDER || ragSettings.LLM_PROVIDER === 'openai') && 
+                ". Examples: gpt-4o, gpt-4o-mini, gpt-3.5-turbo"
+              }
+            </p>
           </div>
           <div>
             <Input
