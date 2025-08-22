@@ -250,13 +250,13 @@ def update_source_info(
 ):
     """
     Update or insert source information in the sources table with race condition protection.
-    
+
     Uses PostgreSQL UPSERT (INSERT ... ON CONFLICT) to prevent race conditions
     when multiple concurrent crawls create the same source_id.
 
     Args:
         client: Supabase client
-        source_id: The unique source ID  
+        source_id: The unique source ID
         summary: Summary of the source
         word_count: Total word count for the source
         content: Sample content for title generation
@@ -274,12 +274,12 @@ def update_source_info(
         }
         if original_url:
             metadata["original_url"] = original_url
-        
+
         # For new sources, generate title. For existing ones, this will be ignored due to the conflict handling
         title, generated_metadata = generate_source_title_and_metadata(
             source_id, content, knowledge_type, tags
         )
-        
+
         # Merge generated metadata
         metadata.update(generated_metadata)
 
@@ -292,12 +292,12 @@ def update_source_info(
             "total_word_count": word_count,
             "metadata": metadata
         }
-        
+
         result = client.table("archon_sources").upsert(
-            upsert_data, 
+            upsert_data,
             on_conflict="source_id"
         ).execute()
-        
+
         if result.data:
             search_logger.info(f"Source {source_id} upserted successfully with title: {title}")
         else:
