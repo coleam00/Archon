@@ -18,8 +18,8 @@ RUN mkdir -p /app/coverage && chmod 777 /app/coverage
 # Copy source code
 COPY . .
 
-# Expose Vite's default port
-EXPOSE 5173
+# Expose the port configured in package.json (3737)
+EXPOSE 3737
 
-# Start Vite dev server with host binding for Docker
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+# Start Vite dev server (already configured with --port 3737 --host in package.json)
+CMD ["npm", "run", "dev"]
