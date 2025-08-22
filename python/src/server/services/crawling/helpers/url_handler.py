@@ -132,6 +132,8 @@ class URLHandler:
         match = re.match(github_file_pattern, url)
         if match:
             owner, repo, branch, path = match.groups()
+            # Strip query parameters and fragments that break raw URLs
+            path = path.split('?', 1)[0].split('#', 1)[0]
             raw_url = f'https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}'
             logger.info(f"Transformed GitHub file URL to raw: {url} -> {raw_url}")
             return raw_url
@@ -162,23 +164,33 @@ class URLHandler:
             if not content:
                 return []
             
-            # Combined pattern to preserve document order:
+            # Ultimate URL pattern with comprehensive format support:
             #  1) [text](url) - markdown links
             #  2) <https://...> - autolinks  
-            #  3) https://... - bare URLs
+            #  3) https://... - bare URLs with protocol
+            #  4) //example.com - protocol-relative URLs
+            #  5) www.example.com - scheme-less www URLs
             combined_pattern = re.compile(
-                r'\[([^\]]*)\]\(([^)]+)\)'          # group 2: markdown URL
-                r'|<\s*(https?://[^>\s]+)\s*>'      # group 3: autolink URL
-                r'|(https?://[^\s<>()\[\]"]+)'      # group 4: bare URL
+                r'\[(?P<text>[^\]]*)\]\((?P<md>[^)]+)\)'      # named: md
+                r'|<\s*(?P<auto>https?://[^>\s]+)\s*>'        # named: auto
+                r'|(?P<bare>https?://[^\s<>()\[\]"]+)'        # named: bare
+                r'|(?P<proto>//[^\s<>()\[\]"]+)'              # named: protocol-relative
+                r'|(?P<www>www\.[^\s<>()\[\]"]+)'             # named: www.* without scheme
             )
 
             def _clean_url(u: str) -> str:
-                # Trim whitespace and common trailing punctuation
-                return u.strip().rstrip('.,;:)')
+                # Trim whitespace and comprehensive trailing punctuation
+                return u.strip().rstrip('.,;:)]>')
 
             urls = []
             for match in re.finditer(combined_pattern, content):
-                url = match.group(2) or match.group(3) or match.group(4)
+                url = (
+                    match.group('md')
+                    or match.group('auto')
+                    or match.group('bare')
+                    or match.group('proto')
+                    or match.group('www')
+                )
                 if not url:
                     continue
                 url = _clean_url(url)
@@ -187,9 +199,11 @@ class URLHandler:
                 if not url or url.startswith('#') or url.startswith('mailto:'):
                     continue
 
-                # Normalize protocol-relative URLs to https
+                # Normalize all URL formats to https://
                 if url.startswith('//'):
                     url = f'https:{url}'
+                elif url.startswith('www.'):
+                    url = f'https://{url}'
 
                 # Convert relative URLs to absolute if base_url provided
                 if base_url and not url.startswith(('http://', 'https://')):
@@ -250,22 +264,17 @@ class URLHandler:
                 logger.info(f"Detected link collection file by filename: {filename}")
                 return True
             
-            # Pattern-based detection for variations
-            if any(pattern in filename for pattern in ['llms', 'links', 'resources']):
+            # Pattern-based detection for variations (complete coverage)
+            if any(pattern in filename for pattern in ['llms', 'links', 'resources', 'references']):
                 if filename.endswith(('.txt', '.md', '.mdx', '.markdown')):
                     logger.info(f"Detected potential link collection file: {filename}")
                     return True
             
             # Content-based detection if content is provided
             if content:
-                # Count markdown links + autolinks + bare URLs
-                markdown_link_pattern = r'\[([^\]]*)\]\(([^)]+)\)'
-                autolink_pattern = r'<\s*(https?://[^>\s]+)\s*>'
-                bare_url_pattern = r'(https?://[^\s<>()\[\]"]+)'
-                md_links = re.findall(markdown_link_pattern, content)
-                auto_links = re.findall(autolink_pattern, content)
-                bare_links = re.findall(bare_url_pattern, content)
-                total_links = len(md_links) + len(auto_links) + len(bare_links)
+                # Reuse extractor to avoid regex divergence and maintain consistency
+                extracted_links = URLHandler.extract_markdown_links(content)
+                total_links = len(extracted_links)
                 
                 # Calculate link density (links per 100 characters)
                 content_length = len(content.strip())

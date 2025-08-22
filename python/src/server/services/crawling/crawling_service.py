@@ -552,7 +552,7 @@ class CrawlingService:
                         logger.info(f"Crawling {len(extracted_links)} extracted links from {url}")
                         batch_results = await self.crawl_batch_with_progress(
                             extracted_links,
-                            max_concurrent=request.get('max_concurrent', 3),
+                            max_concurrent=request.get('max_concurrent'),  # None -> use DB settings
                             progress_callback=await self._create_crawl_progress_callback("crawling"),
                             start_progress=30,
                             end_progress=70,
