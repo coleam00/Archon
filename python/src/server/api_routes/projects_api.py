@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 # Removed direct logging import - using unified config
 # Set up standard logger for background tasks
-from ..config.logfire_config import get_logger, logfire
+from ..config.logfire_config import get_logger
 from ..utils import get_supabase_client
 
 logger = get_logger(__name__)
@@ -77,7 +77,7 @@ class CreateTaskRequest(BaseModel):
 async def list_projects():
     """List all projects."""
     try:
-        logfire.info("Listing all projects")
+        logger.info("Listing all projects")
 
         # Use ProjectService to get projects
         project_service = ProjectService()
@@ -90,14 +90,14 @@ async def list_projects():
         source_service = SourceLinkingService()
         formatted_projects = source_service.format_projects_with_sources(result["projects"])
 
-        logfire.info(f"Projects listed successfully | count={len(formatted_projects)}")
+        logger.info(f"Projects listed successfully | count={len(formatted_projects)}")
 
         return formatted_projects
 
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(f"Failed to list projects | error={str(e)}")
+        logger.error(f"Failed to list projects | error={str(e)}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -112,7 +112,7 @@ async def create_project(request: CreateProjectRequest):
         raise HTTPException(status_code=422, detail="Title cannot be empty")
 
     try:
-        logfire.info(
+        logger.info(
             f"Creating new project | title={request.title} | github_repo={request.github_repo}"
         )
 
@@ -133,7 +133,7 @@ async def create_project(request: CreateProjectRequest):
         # Start background task to create the project with AI assistance
         asyncio.create_task(_create_project_with_ai(progress_id, request))
 
-        logfire.info(
+        logger.info(
             f"Project creation started | progress_id={progress_id} | title={request.title}"
         )
 
@@ -145,7 +145,7 @@ async def create_project(request: CreateProjectRequest):
         }
 
     except Exception as e:
-        logfire.error(f"Failed to start project creation | error={str(e)} | title={request.title}")
+        logger.error(f"Failed to start project creation | error={str(e)} | title={request.title}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -186,7 +186,7 @@ async def _create_project_with_ai(progress_id: str, request: CreateProjectReques
             )
 
     except Exception as e:
-        logfire.error(f"Project creation failed: {str(e)}")
+        logger.error(f"Project creation failed: {str(e)}")
         await progress_service.error_operation(progress_id, str(e))
 
 
@@ -194,7 +194,7 @@ async def _create_project_with_ai(progress_id: str, request: CreateProjectReques
 async def projects_health():
     """Health check for projects API and database schema validation."""
     try:
-        logfire.info("Projects health check requested")
+        logger.info("Projects health check requested")
         supabase_client = get_supabase_client()
 
         # Check if projects table exists by testing ProjectService
@@ -204,12 +204,12 @@ async def projects_health():
             success, _ = project_service.list_projects()
             projects_table_exists = success
             if success:
-                logfire.info("Projects table detected successfully")
+                logger.info("Projects table detected successfully")
             else:
-                logfire.warning("Projects table access failed")
+                logger.warning("Projects table access failed")
         except Exception as e:
             projects_table_exists = False
-            logfire.warning(f"Projects table not found | error={str(e)}")
+            logger.warning(f"Projects table not found | error={str(e)}")
 
         # Check if tasks table exists by testing TaskService
         try:
@@ -218,12 +218,12 @@ async def projects_health():
             success, _ = task_service.list_tasks(include_closed=True)
             tasks_table_exists = success
             if success:
-                logfire.info("Tasks table detected successfully")
+                logger.info("Tasks table detected successfully")
             else:
-                logfire.warning("Tasks table access failed")
+                logger.warning("Tasks table access failed")
         except Exception as e:
             tasks_table_exists = False
-            logfire.warning(f"Tasks table not found | error={str(e)}")
+            logger.warning(f"Tasks table not found | error={str(e)}")
 
         schema_valid = projects_table_exists and tasks_table_exists
 
@@ -237,14 +237,14 @@ async def projects_health():
             },
         }
 
-        logfire.info(
+        logger.info(
             f"Projects health check completed | status={result['status']} | schema_valid={schema_valid}"
         )
 
         return result
 
     except Exception as e:
-        logfire.error(f"Projects health check failed | error={str(e)}")
+        logger.error(f"Projects health check failed | error={str(e)}")
         return {
             "status": "error",
             "service": "projects",
@@ -257,7 +257,7 @@ async def projects_health():
 async def get_project(project_id: str):
     """Get a specific project."""
     try:
-        logfire.info(f"Getting project | project_id={project_id}")
+        logger.info(f"Getting project | project_id={project_id}")
 
         # Use ProjectService to get the project
         project_service = ProjectService()
@@ -265,14 +265,14 @@ async def get_project(project_id: str):
 
         if not success:
             if "not found" in result.get("error", "").lower():
-                logfire.warning(f"Project not found | project_id={project_id}")
+                logger.warning(f"Project not found | project_id={project_id}")
                 raise HTTPException(status_code=404, detail=result)
             else:
                 raise HTTPException(status_code=500, detail=result)
 
         project = result["project"]
 
-        logfire.info(
+        logger.info(
             f"Project retrieved successfully | project_id={project_id} | title={project['title']}"
         )
 
@@ -289,7 +289,7 @@ async def get_project(project_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(f"Failed to get project | error={str(e)} | project_id={project_id}")
+        logger.error(f"Failed to get project | error={str(e)} | project_id={project_id}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -350,11 +350,11 @@ async def update_project(project_id: str, request: UpdateProjectRequest):
                                 if v_success:
                                     version_count += 1
 
-                    logfire.info(f"Created {version_count} version snapshots before update")
+                    logger.info(f"Created {version_count} version snapshots before update")
             except ImportError:
-                logfire.warning("VersioningService not available - skipping version snapshots")
+                logger.warning("VersioningService not available - skipping version snapshots")
             except Exception as e:
-                logfire.warning(f"Failed to create version snapshots: {e}")
+                logger.warning(f"Failed to create version snapshots: {e}")
                 # Don't fail the update, just log the warning
 
         # Use ProjectService to update the project
@@ -382,11 +382,11 @@ async def update_project(project_id: str, request: UpdateProjectRequest):
             )
 
             if source_success:
-                logfire.info(
+                logger.info(
                     f"Project sources updated | project_id={project_id} | technical_success={source_result.get('technical_success', 0)} | technical_failed={source_result.get('technical_failed', 0)} | business_success={source_result.get('business_success', 0)} | business_failed={source_result.get('business_failed', 0)}"
                 )
             else:
-                logfire.warning(f"Failed to update some sources: {source_result}")
+                logger.warning(f"Failed to update some sources: {source_result}")
 
         # Format project response with sources using SourceLinkingService
         formatted_project = source_service.format_project_with_sources(project)
@@ -394,7 +394,7 @@ async def update_project(project_id: str, request: UpdateProjectRequest):
         # Broadcast project list update to Socket.IO clients
         await broadcast_project_update()
 
-        logfire.info(
+        logger.info(
             f"Project updated successfully | project_id={project_id} | title={project.get('title')} | technical_sources={len(formatted_project.get('technical_sources', []))} | business_sources={len(formatted_project.get('business_sources', []))}"
         )
 
@@ -403,7 +403,7 @@ async def update_project(project_id: str, request: UpdateProjectRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(f"Project update failed | project_id={project_id} | error={str(e)}")
+        logger.error(f"Project update failed | project_id={project_id} | error={str(e)}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -411,7 +411,7 @@ async def update_project(project_id: str, request: UpdateProjectRequest):
 async def delete_project(project_id: str):
     """Delete a project and all its tasks."""
     try:
-        logfire.info(f"Deleting project | project_id={project_id}")
+        logger.info(f"Deleting project | project_id={project_id}")
 
         # Use ProjectService to delete the project
         project_service = ProjectService()
@@ -426,7 +426,7 @@ async def delete_project(project_id: str):
         # Broadcast project list update to Socket.IO clients
         await broadcast_project_update()
 
-        logfire.info(
+        logger.info(
             f"Project deleted successfully | project_id={project_id} | deleted_tasks={result.get('deleted_tasks', 0)}"
         )
 
@@ -438,7 +438,7 @@ async def delete_project(project_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(f"Failed to delete project | error={str(e)} | project_id={project_id}")
+        logger.error(f"Failed to delete project | error={str(e)} | project_id={project_id}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -446,7 +446,7 @@ async def delete_project(project_id: str):
 async def get_project_features(project_id: str):
     """Get features from a project's features JSONB field."""
     try:
-        logfire.info(f"Getting project features | project_id={project_id}")
+        logger.info(f"Getting project features | project_id={project_id}")
 
         # Use ProjectService to get features
         project_service = ProjectService()
@@ -454,12 +454,12 @@ async def get_project_features(project_id: str):
 
         if not success:
             if "not found" in result.get("error", "").lower():
-                logfire.warning(f"Project not found for features | project_id={project_id}")
+                logger.warning(f"Project not found for features | project_id={project_id}")
                 raise HTTPException(status_code=404, detail=result)
             else:
                 raise HTTPException(status_code=500, detail=result)
 
-        logfire.info(
+        logger.info(
             f"Project features retrieved | project_id={project_id} | feature_count={result.get('count', 0)}"
         )
 
@@ -468,7 +468,7 @@ async def get_project_features(project_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(f"Failed to get project features | error={str(e)} | project_id={project_id}")
+        logger.error(f"Failed to get project features | error={str(e)} | project_id={project_id}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -476,7 +476,7 @@ async def get_project_features(project_id: str):
 async def list_project_tasks(project_id: str, include_archived: bool = False):
     """List all tasks for a specific project. By default, filters out archived tasks."""
     try:
-        logfire.info(
+        logger.info(
             f"Listing project tasks | project_id={project_id} | include_archived={include_archived}"
         )
 
@@ -501,7 +501,7 @@ async def list_project_tasks(project_id: str, include_archived: bool = False):
 
             filtered_tasks.append(task)
 
-        logfire.info(
+        logger.info(
             f"Project tasks retrieved | project_id={project_id} | task_count={len(filtered_tasks)}"
         )
 
@@ -510,7 +510,7 @@ async def list_project_tasks(project_id: str, include_archived: bool = False):
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(f"Failed to list project tasks | error={str(e)} | project_id={project_id}")
+        logger.error(f"Failed to list project tasks | error={str(e)} | project_id={project_id}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -537,7 +537,7 @@ async def create_task(request: CreateTaskRequest):
 
         created_task = result["task"]
 
-        logfire.info(
+        logger.info(
             f"Task created successfully | task_id={created_task['id']} | project_id={request.project_id}"
         )
 
@@ -546,7 +546,7 @@ async def create_task(request: CreateTaskRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(f"Failed to create task | error={str(e)} | project_id={request.project_id}")
+        logger.error(f"Failed to create task | error={str(e)} | project_id={request.project_id}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -561,7 +561,7 @@ async def list_tasks(
 ):
     """List tasks with optional filters including status and project."""
     try:
-        logfire.info(
+        logger.info(
             f"Listing tasks | status={status} | project_id={project_id} | include_closed={include_closed} | page={page} | per_page={per_page}"
         )
 
@@ -605,7 +605,7 @@ async def list_tasks(
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(f"Failed to list tasks | error={str(e)}")
+        logger.error(f"Failed to list tasks | error={str(e)}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -625,7 +625,7 @@ async def get_task(task_id: str):
 
         task = result["task"]
 
-        logfire.info(
+        logger.info(
             f"Task retrieved successfully | task_id={task_id} | project_id={task.get('project_id')}"
         )
 
@@ -634,7 +634,7 @@ async def get_task(task_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(f"Failed to get task | error={str(e)} | task_id={task_id}")
+        logger.error(f"Failed to get task | error={str(e)} | task_id={task_id}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -706,7 +706,7 @@ async def update_task(task_id: str, request: UpdateTaskRequest):
 
         updated_task = result["task"]
 
-        logfire.info(
+        logger.info(
             f"Task updated successfully | task_id={task_id} | project_id={updated_task.get('project_id')} | updated_fields={list(update_fields.keys())}"
         )
 
@@ -715,7 +715,7 @@ async def update_task(task_id: str, request: UpdateTaskRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(f"Failed to update task | error={str(e)} | task_id={task_id}")
+        logger.error(f"Failed to update task | error={str(e)} | task_id={task_id}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -735,14 +735,14 @@ async def delete_task(task_id: str):
             else:
                 raise HTTPException(status_code=500, detail=result)
 
-        logfire.info(f"Task archived successfully | task_id={task_id}")
+        logger.info(f"Task archived successfully | task_id={task_id}")
 
         return {"message": result.get("message", "Task archived successfully")}
 
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(f"Failed to archive task | error={str(e)} | task_id={task_id}")
+        logger.error(f"Failed to archive task | error={str(e)} | task_id={task_id}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -756,7 +756,7 @@ async def delete_task(task_id: str):
 async def mcp_update_task_status_with_socketio(task_id: str, status: str):
     """Update task status via MCP tools with Socket.IO broadcasting using RAG pattern."""
     try:
-        logfire.info(f"MCP task status update | task_id={task_id} | status={status}")
+        logger.info(f"MCP task status update | task_id={task_id} | status={status}")
 
         # Use TaskService to update the task
         task_service = TaskService()
@@ -773,7 +773,7 @@ async def mcp_update_task_status_with_socketio(task_id: str, status: str):
         updated_task = result["task"]
         project_id = updated_task["project_id"]
 
-        logfire.info(
+        logger.info(
             f"Task status updated with Socket.IO broadcast | task_id={task_id} | project_id={project_id} | status={status}"
         )
 
@@ -782,7 +782,7 @@ async def mcp_update_task_status_with_socketio(task_id: str, status: str):
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(
+        logger.error(
             f"Failed to update task status with Socket.IO | error={str(e)} | task_id={task_id}"
         )
         raise HTTPException(status_code=500, detail=str(e))
@@ -798,7 +798,7 @@ async def mcp_update_task_status_with_socketio(task_id: str, status: str):
 async def list_project_documents(project_id: str):
     """List all documents for a specific project."""
     try:
-        logfire.info(f"Listing documents for project | project_id={project_id}")
+        logger.info(f"Listing documents for project | project_id={project_id}")
 
         # Use DocumentService to list documents
         document_service = DocumentService()
@@ -810,7 +810,7 @@ async def list_project_documents(project_id: str):
             else:
                 raise HTTPException(status_code=500, detail=result)
 
-        logfire.info(
+        logger.info(
             f"Documents listed successfully | project_id={project_id} | count={result.get('total_count', 0)}"
         )
 
@@ -819,7 +819,7 @@ async def list_project_documents(project_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(f"Failed to list documents | error={str(e)} | project_id={project_id}")
+        logger.error(f"Failed to list documents | error={str(e)} | project_id={project_id}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -827,7 +827,7 @@ async def list_project_documents(project_id: str):
 async def create_project_document(project_id: str, request: CreateDocumentRequest):
     """Create a new document for a project."""
     try:
-        logfire.info(
+        logger.info(
             f"Creating document for project | project_id={project_id} | title={request.title}"
         )
 
@@ -848,7 +848,7 @@ async def create_project_document(project_id: str, request: CreateDocumentReques
             else:
                 raise HTTPException(status_code=400, detail=result)
 
-        logfire.info(
+        logger.info(
             f"Document created successfully | project_id={project_id} | doc_id={result['document']['id']}"
         )
 
@@ -857,7 +857,7 @@ async def create_project_document(project_id: str, request: CreateDocumentReques
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(f"Failed to create document | error={str(e)} | project_id={project_id}")
+        logger.error(f"Failed to create document | error={str(e)} | project_id={project_id}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -865,7 +865,7 @@ async def create_project_document(project_id: str, request: CreateDocumentReques
 async def get_project_document(project_id: str, doc_id: str):
     """Get a specific document from a project."""
     try:
-        logfire.info(f"Getting document | project_id={project_id} | doc_id={doc_id}")
+        logger.info(f"Getting document | project_id={project_id} | doc_id={doc_id}")
 
         # Use DocumentService to get document
         document_service = DocumentService()
@@ -877,14 +877,14 @@ async def get_project_document(project_id: str, doc_id: str):
             else:
                 raise HTTPException(status_code=500, detail=result)
 
-        logfire.info(f"Document retrieved successfully | project_id={project_id} | doc_id={doc_id}")
+        logger.info(f"Document retrieved successfully | project_id={project_id} | doc_id={doc_id}")
 
         return result["document"]
 
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(
+        logger.error(
             f"Failed to get document | error={str(e)} | project_id={project_id} | doc_id={doc_id}"
         )
         raise HTTPException(status_code=500, detail={"error": str(e)})
@@ -894,7 +894,7 @@ async def get_project_document(project_id: str, doc_id: str):
 async def update_project_document(project_id: str, doc_id: str, request: UpdateDocumentRequest):
     """Update a document in a project."""
     try:
-        logfire.info(f"Updating document | project_id={project_id} | doc_id={doc_id}")
+        logger.info(f"Updating document | project_id={project_id} | doc_id={doc_id}")
 
         # Build update fields
         update_fields = {}
@@ -917,14 +917,14 @@ async def update_project_document(project_id: str, doc_id: str, request: UpdateD
             else:
                 raise HTTPException(status_code=500, detail=result)
 
-        logfire.info(f"Document updated successfully | project_id={project_id} | doc_id={doc_id}")
+        logger.info(f"Document updated successfully | project_id={project_id} | doc_id={doc_id}")
 
         return {"message": "Document updated successfully", "document": result["document"]}
 
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(
+        logger.error(
             f"Failed to update document | error={str(e)} | project_id={project_id} | doc_id={doc_id}"
         )
         raise HTTPException(status_code=500, detail={"error": str(e)})
@@ -934,7 +934,7 @@ async def update_project_document(project_id: str, doc_id: str, request: UpdateD
 async def delete_project_document(project_id: str, doc_id: str):
     """Delete a document from a project."""
     try:
-        logfire.info(f"Deleting document | project_id={project_id} | doc_id={doc_id}")
+        logger.info(f"Deleting document | project_id={project_id} | doc_id={doc_id}")
 
         # Use DocumentService to delete document
         document_service = DocumentService()
@@ -946,14 +946,14 @@ async def delete_project_document(project_id: str, doc_id: str):
             else:
                 raise HTTPException(status_code=500, detail=result)
 
-        logfire.info(f"Document deleted successfully | project_id={project_id} | doc_id={doc_id}")
+        logger.info(f"Document deleted successfully | project_id={project_id} | doc_id={doc_id}")
 
         return {"message": "Document deleted successfully"}
 
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(
+        logger.error(
             f"Failed to delete document | error={str(e)} | project_id={project_id} | doc_id={doc_id}"
         )
         raise HTTPException(status_code=500, detail={"error": str(e)})
@@ -966,7 +966,7 @@ async def delete_project_document(project_id: str, doc_id: str):
 async def list_project_versions(project_id: str, field_name: str = None):
     """List version history for a project's JSONB fields."""
     try:
-        logfire.info(
+        logger.info(
             f"Listing versions for project | project_id={project_id} | field_name={field_name}"
         )
 
@@ -980,7 +980,7 @@ async def list_project_versions(project_id: str, field_name: str = None):
             else:
                 raise HTTPException(status_code=500, detail=result)
 
-        logfire.info(
+        logger.info(
             f"Versions listed successfully | project_id={project_id} | count={result.get('total_count', 0)}"
         )
 
@@ -989,7 +989,7 @@ async def list_project_versions(project_id: str, field_name: str = None):
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(f"Failed to list versions | error={str(e)} | project_id={project_id}")
+        logger.error(f"Failed to list versions | error={str(e)} | project_id={project_id}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -997,7 +997,7 @@ async def list_project_versions(project_id: str, field_name: str = None):
 async def create_project_version(project_id: str, request: CreateVersionRequest):
     """Create a version snapshot for a project's JSONB field."""
     try:
-        logfire.info(
+        logger.info(
             f"Creating version for project | project_id={project_id} | field_name={request.field_name}"
         )
 
@@ -1019,7 +1019,7 @@ async def create_project_version(project_id: str, request: CreateVersionRequest)
             else:
                 raise HTTPException(status_code=400, detail=result)
 
-        logfire.info(
+        logger.info(
             f"Version created successfully | project_id={project_id} | version_number={result['version_number']}"
         )
 
@@ -1028,7 +1028,7 @@ async def create_project_version(project_id: str, request: CreateVersionRequest)
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(f"Failed to create version | error={str(e)} | project_id={project_id}")
+        logger.error(f"Failed to create version | error={str(e)} | project_id={project_id}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -1036,7 +1036,7 @@ async def create_project_version(project_id: str, request: CreateVersionRequest)
 async def get_project_version(project_id: str, field_name: str, version_number: int):
     """Get a specific version's content."""
     try:
-        logfire.info(
+        logger.info(
             f"Getting version | project_id={project_id} | field_name={field_name} | version_number={version_number}"
         )
 
@@ -1052,7 +1052,7 @@ async def get_project_version(project_id: str, field_name: str, version_number: 
             else:
                 raise HTTPException(status_code=500, detail=result)
 
-        logfire.info(
+        logger.info(
             f"Version retrieved successfully | project_id={project_id} | field_name={field_name} | version_number={version_number}"
         )
 
@@ -1061,7 +1061,7 @@ async def get_project_version(project_id: str, field_name: str, version_number: 
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(
+        logger.error(
             f"Failed to get version | error={str(e)} | project_id={project_id} | field_name={field_name} | version_number={version_number}"
         )
         raise HTTPException(status_code=500, detail={"error": str(e)})
@@ -1073,7 +1073,7 @@ async def restore_project_version(
 ):
     """Restore a project's JSONB field to a specific version."""
     try:
-        logfire.info(
+        logger.info(
             f"Restoring version | project_id={project_id} | field_name={field_name} | version_number={version_number}"
         )
 
@@ -1092,7 +1092,7 @@ async def restore_project_version(
             else:
                 raise HTTPException(status_code=500, detail=result)
 
-        logfire.info(
+        logger.info(
             f"Version restored successfully | project_id={project_id} | field_name={field_name} | version_number={version_number}"
         )
 
@@ -1104,7 +1104,7 @@ async def restore_project_version(
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(
+        logger.error(
             f"Failed to restore version | error={str(e)} | project_id={project_id} | field_name={field_name} | version_number={version_number}"
         )
         raise HTTPException(status_code=500, detail={"error": str(e)})
