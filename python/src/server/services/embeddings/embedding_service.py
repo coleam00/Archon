@@ -17,6 +17,7 @@ from ..llm_provider_service import get_embedding_model, get_llm_client
 from ..threading_service import get_threading_service
 from .embedding_exceptions import (
     EmbeddingAPIError,
+    EmbeddingAuthenticationError,
     EmbeddingError,
     EmbeddingQuotaExhaustedError,
     EmbeddingRateLimitError,
@@ -225,6 +226,37 @@ async def create_embeddings_batch(
                                         result.add_success(item.embedding, text)
 
                                     break  # Success, exit retry loop
+
+                                except openai.AuthenticationError as e:
+                                    # Authentication failure is critical - stop everything
+                                    error_message = str(e)
+                                    # Extract API key prefix if present (e.g., "sk-XXXX" or "ssk-XXXX")
+                                    import re
+                                    key_match = re.search(r'(s+k-[A-Za-z0-9]{4})', error_message)
+                                    api_key_prefix = key_match.group(1) if key_match else None
+                                    
+                                    search_logger.error(
+                                        f"⚠️ AUTHENTICATION FAILED at batch {batch_index}! "
+                                        f"Invalid or expired API key. "
+                                        f"Processed {result.success_count} texts successfully before failure.",
+                                        exc_info=True,
+                                    )
+
+                                    # Add remaining texts as failures
+                                    for text in texts[i:]:
+                                        result.add_failure(
+                                            text,
+                                            EmbeddingAuthenticationError(
+                                                "OpenAI API authentication failed - invalid or expired API key",
+                                                api_key_prefix=api_key_prefix,
+                                            ),
+                                            batch_index,
+                                        )
+
+                                    # Return what we have so far
+                                    span.set_attribute("authentication_failed", True)
+                                    span.set_attribute("partial_success", result.success_count > 0)
+                                    return result
 
                                 except openai.RateLimitError as e:
                                     error_message = str(e)

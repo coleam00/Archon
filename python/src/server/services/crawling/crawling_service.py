@@ -418,6 +418,10 @@ class CrawlingService:
                 # Send heartbeat after code extraction
                 await send_heartbeat_if_needed()
 
+            # Check if there were embedding failures
+            embedding_failures = storage_results.get("embedding_failures", 0)
+            has_errors = embedding_failures > 0
+            
             # Finalization
             await update_mapped_progress(
                 "finalization",
@@ -425,32 +429,57 @@ class CrawlingService:
                 "Finalizing crawl results...",
                 chunks_stored=storage_results["chunk_count"],
                 code_examples_found=code_examples_count,
+                embedding_failures=embedding_failures,
             )
 
-            # Complete - send both the progress update and completion event
-            await update_mapped_progress(
-                "completed",
-                100,
-                f"Crawl completed: {storage_results['chunk_count']} chunks, {code_examples_count} code examples",
-                chunks_stored=storage_results["chunk_count"],
-                code_examples_found=code_examples_count,
-                processed_pages=len(crawl_results),
-                total_pages=len(crawl_results),
-            )
+            # Complete - send status based on whether there were errors
+            if has_errors:
+                # Report partial success with errors
+                await update_mapped_progress(
+                    "error",
+                    100,
+                    f"Crawl completed with errors: {embedding_failures} embedding failures. "
+                    f"Stored {storage_results['chunk_count']} chunks, {code_examples_count} code examples",
+                    chunks_stored=storage_results["chunk_count"],
+                    code_examples_found=code_examples_count,
+                    embedding_failures=embedding_failures,
+                    processed_pages=len(crawl_results),
+                    total_pages=len(crawl_results),
+                )
+                
+                # Send error completion event
+                _ensure_socketio_imports()
+                from ...api_routes.socketio_handlers import error_crawl_progress
+                await error_crawl_progress(
+                    task_id,
+                    f"Crawl completed with {embedding_failures} embedding failures. "
+                    f"Please check your OpenAI API key and try again."
+                )
+            else:
+                # Success - all good
+                await update_mapped_progress(
+                    "completed",
+                    100,
+                    f"Crawl completed successfully: {storage_results['chunk_count']} chunks, {code_examples_count} code examples",
+                    chunks_stored=storage_results["chunk_count"],
+                    code_examples_found=code_examples_count,
+                    processed_pages=len(crawl_results),
+                    total_pages=len(crawl_results),
+                )
 
-            # Also send the completion event that frontend expects
-            _ensure_socketio_imports()
-            await complete_crawl_progress(
-                task_id,
-                {
-                    "chunks_stored": storage_results["chunk_count"],
-                    "code_examples_found": code_examples_count,
-                    "processed_pages": len(crawl_results),
-                    "total_pages": len(crawl_results),
-                    "sourceId": storage_results.get("source_id", ""),
-                    "log": "Crawl completed successfully!",
-                },
-            )
+                # Also send the completion event that frontend expects
+                _ensure_socketio_imports()
+                await complete_crawl_progress(
+                    task_id,
+                    {
+                        "chunks_stored": storage_results["chunk_count"],
+                        "code_examples_found": code_examples_count,
+                        "processed_pages": len(crawl_results),
+                        "total_pages": len(crawl_results),
+                        "sourceId": storage_results.get("source_id", ""),
+                        "log": "Crawl completed successfully!",
+                    },
+                )
 
             # Unregister after successful completion
             if self.progress_id:

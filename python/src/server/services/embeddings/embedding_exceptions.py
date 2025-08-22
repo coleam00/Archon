@@ -72,6 +72,21 @@ class EmbeddingRateLimitError(EmbeddingError):
         self.metadata["retry_count"] = retry_count
 
 
+class EmbeddingAuthenticationError(EmbeddingError):
+    """
+    Raised when API authentication fails (invalid API key, expired key, etc).
+
+    This is a CRITICAL error that should stop the entire process
+    as continuing would be pointless without valid authentication.
+    """
+
+    def __init__(self, message: str, api_key_prefix: str | None = None, **kwargs):
+        super().__init__(message, **kwargs)
+        self.api_key_prefix = api_key_prefix
+        if api_key_prefix:
+            self.metadata["api_key_prefix"] = api_key_prefix
+
+
 class EmbeddingAsyncContextError(EmbeddingError):
     """
     Raised when sync embedding function is called from async context.

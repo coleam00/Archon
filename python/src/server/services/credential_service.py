@@ -239,6 +239,17 @@ class CredentialService:
                 self._rag_cache_timestamp = None
                 logger.debug(f"Invalidated RAG settings cache due to update of {key}")
 
+            # Invalidate LLM provider cache when API keys are updated
+            # This fixes the issue where OpenAI API key changes weren't reflected immediately
+            if key in ["OPENAI_API_KEY", "GOOGLE_API_KEY"] or category == "rag_strategy":
+                try:
+                    # Use late import to avoid circular dependency
+                    from .llm_provider_service import invalidate_provider_cache
+                    invalidate_provider_cache()
+                    logger.debug(f"Invalidated LLM provider cache due to update of {key}")
+                except ImportError as import_err:
+                    logger.warning(f"Could not invalidate LLM provider cache: {import_err}")
+
             logger.info(
                 f"Successfully {'encrypted and ' if is_encrypted else ''}stored credential: {key}"
             )

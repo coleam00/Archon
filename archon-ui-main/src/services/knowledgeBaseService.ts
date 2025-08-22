@@ -72,6 +72,7 @@ export interface SearchOptions {
 
 // Use relative URL to go through Vite proxy
 import { API_BASE_URL } from '../config/api';
+import { parseKnowledgeBaseError } from './knowledgeBaseErrorHandler';
 // const API_BASE_URL = '/api'; // Now imported from config
 
 // Helper function for API requests with timeout
@@ -110,7 +111,14 @@ async function apiRequest<T>(
       console.error(`❌ [KnowledgeBase] Response not OK: ${response.status} ${response.statusText}`);
       const error = await response.json();
       console.error(`❌ [KnowledgeBase] API error response:`, error);
-      throw new Error(error.error || `HTTP ${response.status}`);
+      
+      // Use enhanced error handling for better user experience
+      const enhancedError = parseKnowledgeBaseError({
+        status: response.status,
+        error: error.error,
+        detail: error.detail
+      });
+      throw enhancedError;
     }
 
     const data = await response.json();
@@ -125,10 +133,16 @@ async function apiRequest<T>(
     
     // Check if it's a timeout error
     if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error('Request timed out after 10 seconds');
+      throw parseKnowledgeBaseError(new Error('Request timed out after 10 seconds'));
     }
     
-    throw error;
+    // If it's already an enhanced error, re-throw it
+    if (error && typeof error === 'object' && 'isOpenAIError' in error) {
+      throw error;
+    }
+    
+    // Parse other errors through the error handler for consistency
+    throw parseKnowledgeBaseError(error);
   }
 }
 

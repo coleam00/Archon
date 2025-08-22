@@ -18,6 +18,11 @@ from typing import Any
 from ...config.logfire_config import get_logger, safe_span
 from ...utils import get_supabase_client
 from ..embeddings.embedding_service import create_embedding
+from ..embeddings.embedding_exceptions import (
+    EmbeddingAPIError,
+    EmbeddingQuotaExhaustedError,
+    EmbeddingRateLimitError,
+)
 from .agentic_rag_strategy import AgenticRAGStrategy
 
 # Import all strategies
@@ -104,6 +109,11 @@ class RAGService:
 
         Returns:
             List of matching documents
+
+        Raises:
+            EmbeddingQuotaExhaustedError: When OpenAI quota is exhausted
+            EmbeddingRateLimitError: When rate limited
+            EmbeddingAPIError: For other embedding API errors
         """
         with safe_span(
             "rag_search_documents",
@@ -117,7 +127,8 @@ class RAGService:
 
                 if not query_embedding:
                     logger.error("Failed to create embedding for query")
-                    return []
+                    # Follow alpha "fail fast" principle - embedding failure should not return empty results
+                    raise RuntimeError("Failed to create embedding for query - this indicates a configuration or API issue")
 
                 if use_hybrid_search:
                     # Use hybrid strategy
@@ -140,10 +151,14 @@ class RAGService:
                 span.set_attribute("results_found", len(results))
                 return results
 
+            except (EmbeddingQuotaExhaustedError, EmbeddingRateLimitError, EmbeddingAPIError):
+                # Re-raise embedding errors so they propagate to the API layer with specific error info
+                raise
             except Exception as e:
                 logger.error(f"Document search failed: {e}")
                 span.set_attribute("error", str(e))
-                return []
+                # Follow alpha "fail fast" principle - don't return empty results for legitimate failures
+                raise RuntimeError(f"Document search failed: {str(e)}") from e
 
     async def search_code_examples(
         self,
@@ -202,7 +217,6 @@ class RAGService:
 
                 # Check which strategies are enabled
                 use_hybrid_search = self.get_bool_setting("USE_HYBRID_SEARCH", False)
-                use_reranking = self.get_bool_setting("USE_RERANKING", False)
 
                 # Step 1 & 2: Get results (with hybrid search if enabled)
                 results = await self.search_documents(
@@ -311,7 +325,6 @@ class RAGService:
 
                 # Check which strategies are enabled
                 use_hybrid_search = self.get_bool_setting("USE_HYBRID_SEARCH", False)
-                use_reranking = self.get_bool_setting("USE_RERANKING", False)
 
                 # Prepare filter
                 filter_metadata = {"source": source_id} if source_id and source_id.strip() else None
