@@ -2,6 +2,9 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -ec
 
+# Docker compose command - prefer newer 'docker compose' plugin over standalone 'docker-compose'
+COMPOSE ?= $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
+
 .PHONY: help dev dev-docker stop test test-fe test-be lint lint-fe lint-be clean install check
 
 help:
@@ -30,24 +33,31 @@ install:
 # Check environment
 check:
 	@echo "Checking environment..."
+	@node -v >/dev/null 2>&1 || { echo "✗ Node.js not found (require Node 18+)."; exit 1; }
 	@node check-env.js
 	@echo "Checking Docker..."
-	@docker --version > /dev/null 2>&1 && echo "✓ Docker installed" || echo "✗ Docker not found"
-	@docker-compose --version > /dev/null 2>&1 && echo "✓ Docker Compose installed" || echo "✗ Docker Compose not found"
+	@docker --version > /dev/null 2>&1 || { echo "✗ Docker not found"; exit 1; }
+	@$(COMPOSE) version > /dev/null 2>&1 || { echo "✗ Docker Compose not found"; exit 1; }
+	@echo "✓ Environment OK"
+
 
 # Hybrid development (recommended)
 dev: check
 	@echo "Starting hybrid development..."
 	@echo "Backend: Docker | Frontend: Local with hot reload"
-	@docker-compose --profile backend up -d --build
-	@echo "Backend running at http://localhost:8181"
+	@$(COMPOSE) --profile backend up -d --build
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	echo "Backend running at http://$${HOST:-localhost}:$${ARCHON_SERVER_PORT:-8181}"
 	@echo "Starting frontend..."
-	@cd archon-ui-main && npm run dev
+	@cd archon-ui-main && \
+	VITE_ARCHON_SERVER_PORT=$${ARCHON_SERVER_PORT:-8181} \
+	VITE_ARCHON_SERVER_HOST=$${HOST:-} \
+	npm run dev
 
 # Full Docker development
 dev-docker: check
 	@echo "Starting full Docker environment..."
-	@docker-compose --profile full up -d --build
+	@$(COMPOSE) --profile full up -d --build
 	@echo "✓ All services running"
 	@echo "Frontend: http://localhost:3737"
 	@echo "API: http://localhost:8181"
@@ -55,7 +65,7 @@ dev-docker: check
 # Stop all services
 stop:
 	@echo "Stopping all services..."
-	@docker-compose --profile backend --profile frontend --profile full down
+	@$(COMPOSE) --profile backend --profile frontend --profile full down
 	@echo "✓ Services stopped"
 
 # Run all tests
@@ -90,7 +100,7 @@ clean:
 	@read -p "Are you sure? (y/N) " -n 1 -r; \
 	echo; \
 	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
-		docker-compose down -v --remove-orphans; \
+		$(COMPOSE) down -v --remove-orphans; \
 		echo "✓ Cleaned"; \
 	else \
 		echo "Cancelled"; \

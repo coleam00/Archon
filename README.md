@@ -46,7 +46,7 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
 - [Node.js 18+](https://nodejs.org/) (for hybrid development mode)
 - [Supabase](https://supabase.com/) account (free tier or local Supabase both work)
 - [OpenAI API key](https://platform.openai.com/api-keys) (Gemini and Ollama are supported too!)
-- [Make](https://www.gnu.org/software/make/) (see [Installing Make](#installing-make) below)
+- (OPTIONAL) [Make](https://www.gnu.org/software/make/) (see [Installing Make](#installing-make) below)
 
 ### Setup Instructions
 
@@ -77,9 +77,9 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
    **Full Docker Mode (Recommended for Normal Archon Usage)**
 
    ```bash
-   docker-compose --profile full up --build -d
+   docker compose --profile full up --build -d
    # or
-   make dev-docker
+   make dev-docker # (Alternative: Requires make installed )
    ```
 
    This starts all core microservices in Docker:
@@ -124,7 +124,7 @@ If you need to completely reset your database and start fresh:
 3. **Restart Services**:
 
    ```bash
-   docker-compose --profile full up -d
+   docker compose --profile full up -d
    ```
 
 4. **Reconfigure**:
@@ -135,9 +135,9 @@ The reset script safely removes all tables, functions, triggers, and policies wi
 
 </details>
 
-## 🛠️ Installing Make
+## 🛠️ Installing Make (OPTIONAL)
 
-Make is required for the development workflow. Installation varies by platform:
+Make is required for the local development workflow. Installation varies by platform:
 
 ### Windows
 
@@ -323,7 +323,7 @@ This is useful when:
 
 After changing hostname or ports:
 
-1. Restart Docker containers: `docker-compose down && docker-compose --profile full up -d`
+1. Restart Docker containers: `docker compose down && docker compose --profile full up -d`
 2. Access the UI at: `http://${HOST}:${ARCHON_UI_PORT}`
 3. Update your AI client configuration with the new hostname and MCP port
 
@@ -368,9 +368,13 @@ For all services in Docker environment:
 ```bash
 # Run tests
 make test       # Run all tests
+make test-fe    # Run frontend tests
+make test-be    # Run backend tests
 
 # Run linters
 make lint       # Lint all code
+make lint-fe    # Lint frontend code
+make lint-be    # Lint backend code
 
 # Check environment
 make check      # Verify environment setup
@@ -383,10 +387,10 @@ make clean      # Remove containers and volumes (asks for confirmation)
 
 ```bash
 # View logs using Docker Compose directly
-docker-compose logs -f              # All services
-docker-compose logs -f archon-server # API server
-docker-compose logs -f archon-mcp    # MCP server
-docker-compose logs -f archon-ui     # Frontend
+docker compose logs -f              # All services
+docker compose logs -f archon-server # API server
+docker compose logs -f archon-mcp    # MCP server
+docker compose logs -f archon-ui     # Frontend
 ```
 
 **Note**: The backend services are configured with `--reload` flag in their uvicorn commands and have source code mounted as volumes for automatic hot reloading when you make changes.
@@ -437,11 +441,11 @@ newgrp docker
 
 #### Docker Compose Hangs
 
-If `docker-compose` commands hang:
+If `docker compose` commands hang:
 
 ```bash
 # Reset Docker Compose
-docker-compose down --remove-orphans
+docker compose down --remove-orphans
 docker system prune -f
 
 # Restart Docker Desktop (if applicable)

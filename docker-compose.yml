@@ -2,9 +2,9 @@
 # - "backend": Starts only backend services (server, mcp, agents) for hybrid development
 # - "frontend": Starts only the frontend UI service  
 # - "full": Starts all services for complete Docker deployment
-# Use --profile flag with docker-compose to control which services start:
-#   docker-compose --profile backend up    # Backend only for hybrid dev
-#   docker-compose --profile full up       # Everything in Docker
+# Use --profile flag to control which services start:
+#   docker compose --profile backend up    # Backend only for hybrid dev (or docker-compose)
+#   docker compose --profile full up       # Everything in Docker (or docker-compose)
 
 services:
   # Server Service (FastAPI + Socket.IO + Crawling)
