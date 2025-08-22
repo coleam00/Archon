@@ -368,18 +368,21 @@ const DraggableTaskRow = ({
           <button 
             onClick={() => onTaskDelete(task)}
             className="p-1.5 rounded-full bg-red-500/20 text-red-500 hover:bg-red-500/30 hover:shadow-[0_0_10px_rgba(239,68,68,0.3)] transition-all duration-300"
+            title="Delete task"
           >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
           <button 
             onClick={() => onTaskComplete(task.id)} 
             className="p-1.5 rounded-full bg-green-500/20 text-green-500 hover:bg-green-500/30 hover:shadow-[0_0_10px_rgba(34,197,94,0.3)] transition-all duration-300"
+            title="Mark task as complete"
           >
             <Check className="w-3.5 h-3.5" />
           </button>
           <button 
             onClick={() => onTaskView(task)} 
             className="p-1.5 rounded-full bg-cyan-500/20 text-cyan-500 hover:bg-cyan-500/30 hover:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all duration-300"
+            title="Edit task"
           >
             <Edit className="w-3.5 h-3.5" />
           </button>
