@@ -5,6 +5,18 @@ import '@testing-library/jest-dom/vitest'
 // Set required environment variables for tests
 process.env.ARCHON_SERVER_PORT = '8181'
 
+// Set Vite environment variables for tests
+Object.defineProperty(import.meta, 'env', {
+  value: {
+    ...import.meta.env,
+    ARCHON_SERVER_PORT: '8181',
+    VITE_API_URL: undefined,
+    PROD: false,
+  },
+  writable: true,
+  configurable: true,
+})
+
 // Clean up after each test
 afterEach(() => {
   cleanup()
@@ -81,3 +93,11 @@ global.ResizeObserver = vi.fn().mockImplementation(() => ({
   unobserve: vi.fn(),
   disconnect: vi.fn(),
 }))
+
+const originalConsoleError = console.error;
+console.error = vi.fn((...args) => {
+  if (typeof args[0] === 'string' && args[0].startsWith('ONBOARDING_CHECK_FAILED')) {
+    return;
+  }
+  originalConsoleError.apply(console, args);
+});

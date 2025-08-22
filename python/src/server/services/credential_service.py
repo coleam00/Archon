@@ -9,7 +9,9 @@ import base64
 import os
 import re
 import time
+import uuid
 from dataclasses import dataclass
+from datetime import datetime
 
 # Removed direct logging import - using unified config
 from typing import Any
@@ -20,8 +22,16 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from supabase import Client, create_client
 
 from ..config.logfire_config import get_logger
+from .database_exceptions import (
+    DatabaseConnectionError,
+    DatabaseConfigurationError,
+    DatabaseNotInitializedException,
+    gather_diagnostic_context,
+)
 
 logger = get_logger(__name__)
+
+
 
 
 @dataclass
@@ -43,23 +53,25 @@ class CredentialService:
         self._supabase: Client | None = None
         self._cache: dict[str, Any] = {}
         self._cache_initialized = False
+        self._database_tables_exist = True  # Assume tables exist until proven otherwise
         self._rag_settings_cache: dict[str, Any] | None = None
         self._rag_cache_timestamp: float | None = None
         self._rag_cache_ttl = 300  # 5 minutes TTL for RAG settings cache
 
-    def _get_supabase_client(self) -> Client:
+    def _get_supabase_client(self) -> Client | None:
         """
         Get or create a properly configured Supabase client using environment variables.
-        Uses the standard Supabase client initialization.
+        Returns None if environment variables are not configured.
         """
         if self._supabase is None:
             url = os.getenv("SUPABASE_URL")
             key = os.getenv("SUPABASE_SERVICE_KEY")
 
             if not url or not key:
-                raise ValueError(
-                    "SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in environment variables"
+                logger.warning(
+                    "Supabase not configured - SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in environment variables."
                 )
+                return None
 
             try:
                 # Initialize with standard Supabase client - no need for custom headers
@@ -94,6 +106,12 @@ class CredentialService:
         key = base64.urlsafe_b64encode(kdf.derive(service_key.encode()))
         return key
 
+    def is_supabase_configured(self) -> bool:
+        """Check if Supabase environment variables are configured."""
+        url = os.getenv("SUPABASE_URL")
+        key = os.getenv("SUPABASE_SERVICE_KEY")
+        return bool(url and key)
+
     def _encrypt_value(self, value: str) -> str:
         """Encrypt a sensitive value using Fernet encryption."""
         if not value:
@@ -123,11 +141,36 @@ class CredentialService:
 
     async def load_all_credentials(self) -> dict[str, Any]:
         """Load all credentials from database and cache them."""
+        correlation_id = str(uuid.uuid4())
+        logger.info(f"Loading credentials from database", extra={"correlation_id": correlation_id})
+        
         try:
             supabase = self._get_supabase_client()
+            
+            if supabase is None:
+                # This is a configuration issue - expected during setup
+                missing_config = []
+                if not os.getenv("SUPABASE_URL"):
+                    missing_config.append("SUPABASE_URL")
+                if not os.getenv("SUPABASE_SERVICE_KEY"):
+                    missing_config.append("SUPABASE_SERVICE_KEY")
+                
+                logger.info(f"Supabase not configured - missing {missing_config}")
+                self._cache = {}
+                self._cache_initialized = True
+                self._database_tables_exist = False
+                
+                raise DatabaseConfigurationError(
+                    "Supabase environment variables not configured",
+                    missing_config=missing_config,
+                    setup_guide="Add SUPABASE_URL and SUPABASE_SERVICE_KEY to your .env file",
+                    correlation_id=correlation_id,
+                )
 
-            # Fetch all credentials
+            # Fetch all credentials with timeout
+            start_time = time.time()
             result = supabase.table("archon_settings").select("*").execute()
+            load_duration = time.time() - start_time
 
             credentials = {}
             for item in result.data:
@@ -147,13 +190,85 @@ class CredentialService:
 
             self._cache = credentials
             self._cache_initialized = True
-            logger.info(f"Loaded {len(credentials)} credentials from database")
+            self._database_tables_exist = True
+            
+            logger.info(
+                f"Successfully loaded {len(credentials)} credentials",
+                extra={
+                    "correlation_id": correlation_id,
+                    "load_duration": load_duration,
+                    "credential_count": len(credentials),
+                }
+            )
 
             return credentials
 
-        except Exception as e:
-            logger.error(f"Error loading credentials: {e}")
+        except DatabaseConfigurationError:
+            # Re-raise configuration errors - these are expected during setup
             raise
+        except Exception as e:
+            error_message = str(e).lower()
+            
+            # Check for missing tables - this is expected during initial setup
+            if any(keyword in error_message for keyword in ["table", "relation", "does not exist", "not found"]):
+                logger.info(
+                    "Database tables not found - this is expected for new installations",
+                    extra={"correlation_id": correlation_id}
+                )
+                self._database_tables_exist = False
+                self._cache = {}
+                self._cache_initialized = True
+                
+                raise DatabaseNotInitializedException(
+                    "Database tables not found - setup required",
+                    correlation_id=correlation_id,
+                )
+            
+            # Infrastructure failures - fail fast with detailed context
+            diagnostic_context = gather_diagnostic_context()
+            diagnostic_context["correlation_id"] = correlation_id
+            diagnostic_context["error_type"] = type(e).__name__
+            diagnostic_context["original_error"] = str(e)
+            
+            logger.error(
+                f"Database connection failed during credential loading: {e}",
+                extra=diagnostic_context,
+                exc_info=True
+            )
+            
+            raise DatabaseConnectionError(
+                f"Failed to connect to database during credential loading: {e}",
+                context=diagnostic_context,
+                correlation_id=correlation_id,
+                remediation="Check database connectivity and credentials",
+            ) from e
+
+    def database_tables_exist(self) -> bool:
+        """Check if database tables exist. Only accurate after load_all_credentials has been called."""
+        return self._database_tables_exist
+
+    def reset_cache(self) -> None:
+        """Reset credential cache and force reload on next access."""
+        logger.info("Resetting credential service cache")
+        self._cache_initialized = False
+        self._cache = {}
+        self._database_tables_exist = None  # Will be re-checked
+
+    def force_database_reload(self) -> None:
+        """Force reload of database connection and table verification."""
+        logger.info("Forcing database reload and table verification")
+        self._database_tables_exist = None
+        self._supabase = None
+        # Will be re-initialized on next database operation
+
+    def get_cache_status(self) -> dict[str, Any]:
+        """Get current cache status for debugging."""
+        return {
+            "cache_initialized": bool(self._cache_initialized),
+            "cache_size": len(self._cache) if isinstance(self._cache, dict) else 0,
+            "database_tables_exist": bool(self._database_tables_exist) if self._database_tables_exist is not None else None,
+            "supabase_client_initialized": self._supabase is not None,
+        }
 
     async def get_credential(self, key: str, default: Any = None, decrypt: bool = True) -> Any:
         """Get a credential value by key."""
@@ -196,6 +311,10 @@ class CredentialService:
         """Set a credential value."""
         try:
             supabase = self._get_supabase_client()
+            
+            if supabase is None:
+                logger.warning(f"Cannot set credential '{key}' - Supabase not configured")
+                return False
 
             if is_encrypted:
                 encrypted_value = self._encrypt_value(value)
@@ -252,6 +371,10 @@ class CredentialService:
         """Delete a credential."""
         try:
             supabase = self._get_supabase_client()
+            
+            if supabase is None:
+                logger.warning(f"Cannot delete credential '{key}' - Supabase not configured")
+                return False
 
             # Since we validate service key at startup, we can directly execute
             supabase.table("archon_settings").delete().eq("key", key).execute()
@@ -294,6 +417,11 @@ class CredentialService:
 
         try:
             supabase = self._get_supabase_client()
+            
+            if supabase is None:
+                logger.warning(f"Cannot get credentials for category '{category}' - Supabase not configured")
+                return {}
+            
             result = (
                 supabase.table("archon_settings").select("*").eq("category", category).execute()
             )
@@ -326,6 +454,11 @@ class CredentialService:
         """Get all credentials as a list of CredentialItem objects (for Settings UI)."""
         try:
             supabase = self._get_supabase_client()
+            
+            if supabase is None:
+                logger.warning("Cannot list credentials - Supabase not configured")
+                return []
+            
             result = supabase.table("archon_settings").select("*").execute()
 
             credentials = []

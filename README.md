@@ -68,10 +68,7 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
 
    OPTIONAL: If you want to enable the reranking RAG strategy, uncomment lines 20-22 in `python\requirements.server.txt`. This will significantly increase the size of the Archon Server container which is why it's off by default.
 
-3. **Database Setup**: In your [Supabase project](https://supabase.com/dashboard) SQL Editor, copy, paste, and execute the contents of `migration/complete_setup.sql`
-
-4. **Start Services**:
-
+3. **Start Services**:
    ```bash
    docker-compose up --build -d
    ```
@@ -84,10 +81,14 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
 
    Ports are configurable in your .env as well!
 
-5. **Configure API Keys**:
-   - Open http://localhost:3737
-   - Go to **Settings** → Select your LLM/embedding provider and set the API key (OpenAI is default)
-   - Test by uploading a document or crawling a website
+ 4. **Complete Onboarding**
+   - Open [http://localhost:3737/onboarding](http://localhost:3737/onboarding)
+   - Follow the onboarding process to complete the setup
+     - **Complete database setup** **( ⚠️ required )** - For local Supabase instances, manually open your Studio and run the SQL
+     - Select your LLM/embedding provider and set the API key (OpenAI is default)
+
+> [!TIP]
+> Test by uploading a document or crawling a website
 
 ## 🔄 Database Reset (Start Fresh if Needed)
 
@@ -289,6 +290,26 @@ cd docs && npm start
 ```
 
 **Note**: The backend services are configured with `--reload` flag in their uvicorn commands and have source code mounted as volumes for automatic hot reloading when you make changes.
+
+### 🧪 Testing Database States
+
+For testing and development, you can simulate different database states using the `ARCHON_SIMULATE_DB_STATE` environment variable:
+
+```bash
+# Add to your .env file for testing
+ARCHON_SIMULATE_DB_STATE=missing
+
+# Or set temporarily via command line
+export ARCHON_SIMULATE_DB_STATE=missing
+docker-compose up -d
+unset ARCHON_SIMULATE_DB_STATE
+```
+
+**Valid Values:**
+- `missing`: Simulates database not yet set up - useful for testing onboarding flow
+- `partial`: Simulates incomplete database setup (missing tables/extensions) - tests error handling
+- `ready`: Simulates fully configured database - bypasses actual database checks
+- `error`: Simulates database connection errors - tests error recovery flows
 
 ## 📈 Progress
 

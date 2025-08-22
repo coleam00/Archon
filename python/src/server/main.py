@@ -22,6 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .api_routes.agent_chat_api import router as agent_chat_router
 from .api_routes.bug_report_api import router as bug_report_router
 from .api_routes.coverage_api import router as coverage_router
+from .api_routes.database_api import router as database_router
 from .api_routes.internal_api import router as internal_router
 from .api_routes.knowledge_api import router as knowledge_router
 from .api_routes.mcp_api import router as mcp_router
@@ -66,6 +67,14 @@ uvicorn_logger.setLevel(logging.WARNING)  # Only log warnings and errors, not ev
 
 # Global flag to track if initialization is complete
 _initialization_complete = False
+_database_initialized = False
+
+
+def update_database_initialized(initialized: bool):
+    """Update the global database initialization flag."""
+    global _database_initialized
+    _database_initialized = initialized
+    logger.debug(f"Database initialization flag updated to: {initialized}")
 
 
 @asynccontextmanager
@@ -84,14 +93,24 @@ async def lifespan(app: FastAPI):
         get_config()  # This will raise ConfigurationError if anon key detected
 
         # Initialize credentials from database FIRST - this is the foundation for everything else
-        await initialize_credentials()
+        try:
+            await initialize_credentials()
+            from .services.credential_service import credential_service
+
+            if credential_service.is_supabase_configured():
+                logger.info("✅ Credentials initialized with database")
+            else:
+                logger.warning(
+                    "⚠️ Running without database - please configure SUPABASE_URL and SUPABASE_SERVICE_KEY in your .env file"
+                )
+        except Exception as e:
+            logger.warning(f"Credential initialization failed - running in limited mode: {str(e)}")
 
         # Now that credentials are loaded, we can properly initialize logging
         # This must happen AFTER credentials so LOGFIRE_ENABLED is set from database
         setup_logfire(service_name="archon-backend")
 
         # Now we can safely use the logger
-        logger.info("✅ Credentials initialized")
         api_logger.info("🔥 Logfire initialized for backend")
 
         # Initialize crawling context
@@ -206,6 +225,7 @@ async def skip_health_check_logs(request, call_next):
 
 # Include API routers
 app.include_router(settings_router)
+app.include_router(database_router)
 app.include_router(mcp_router)
 # app.include_router(mcp_client_router)  # Removed - not part of new architecture
 app.include_router(knowledge_router)

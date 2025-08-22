@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { credentialsService } from '../services/credentialsService';
 
 interface SettingsContextType {
@@ -26,7 +26,7 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({ children }) 
   const [projectsEnabled, setProjectsEnabledState] = useState(true);
   const [loading, setLoading] = useState(true);
 
-  const loadSettings = async () => {
+  const loadSettings = useCallback(async () => {
     try {
       setLoading(true);
       
@@ -45,15 +45,16 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({ children }) 
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     loadSettings();
-  }, []);
+  }, [loadSettings]);
 
   const setProjectsEnabled = async (enabled: boolean) => {
+    const prev = projectsEnabled;
     try {
-      // Update local state immediately
+      // Update optimistically
       setProjectsEnabledState(enabled);
 
       // Save to backend
@@ -67,14 +68,14 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({ children }) 
     } catch (error) {
       console.error('Failed to update projects setting:', error);
       // Revert on error
-      setProjectsEnabledState(!enabled);
+      setProjectsEnabledState(prev);
       throw error;
     }
   };
-
-  const refreshSettings = async () => {
+  // Required for stable reference
+  const refreshSettings = useCallback(async () => {
     await loadSettings();
-  };
+  }, [loadSettings]);
 
   const value: SettingsContextType = {
     projectsEnabled,
