@@ -44,10 +44,12 @@ def register_rag_tools(mcp: FastMCP):
         """
         Get list of available sources in the knowledge base.
 
-        This tool uses HTTP call to the API service.
-
         Returns:
-            JSON string with list of sources
+            JSON string with structure:
+            - success: bool - Operation success status
+            - sources: list[dict] - Array of source objects
+            - count: int - Number of sources
+            - error: str - Error description if success=false
         """
         try:
             api_url = get_api_url()
@@ -76,22 +78,23 @@ def register_rag_tools(mcp: FastMCP):
 
     @mcp.tool()
     async def perform_rag_query(
-        ctx: Context, query: str, source: str = None, match_count: int = 5
+        ctx: Context, query: str, source_domain: str = None, match_count: int = 5
     ) -> str:
         """
-        Perform a RAG (Retrieval Augmented Generation) query on stored content.
-
-        This tool searches the vector database for content relevant to the query and returns
-        the matching documents. Optionally filter by source domain.
-        Get the source by using the get_available_sources tool before calling this search!
+        Search knowledge base for relevant content using RAG.
 
         Args:
-            query: The search query
-            source: Optional source domain to filter results (e.g., 'example.com')
-            match_count: Maximum number of results to return (default: 5)
+            query: Search query
+            source_domain: Optional domain filter (e.g., 'docs.anthropic.com').
+                          Note: This is a domain name, not the source_id from get_available_sources.
+            match_count: Max results (default: 5)
 
         Returns:
-            JSON string with search results
+            JSON string with structure:
+            - success: bool - Operation success status
+            - results: list[dict] - Array of matching documents with content and metadata
+            - reranked: bool - Whether results were reranked
+            - error: str|null - Error description if success=false
         """
         try:
             api_url = get_api_url()
@@ -99,8 +102,8 @@ def register_rag_tools(mcp: FastMCP):
 
             async with httpx.AsyncClient(timeout=timeout) as client:
                 request_data = {"query": query, "match_count": match_count}
-                if source:
-                    request_data["source"] = source
+                if source_domain:
+                    request_data["source"] = source_domain
 
                 response = await client.post(urljoin(api_url, "/api/rag/query"), json=request_data)
 
@@ -132,24 +135,23 @@ def register_rag_tools(mcp: FastMCP):
 
     @mcp.tool()
     async def search_code_examples(
-        ctx: Context, query: str, source_id: str = None, match_count: int = 5
+        ctx: Context, query: str, source_domain: str = None, match_count: int = 5
     ) -> str:
         """
-        Search for code examples relevant to the query.
-
-        This tool searches the vector database for code examples relevant to the query and returns
-        the matching examples with their summaries. Optionally filter by source_id.
-        Get the source_id by using the get_available_sources tool before calling this search!
-
-        Use the get_available_sources tool first to see what sources are available for filtering.
+        Search for relevant code examples in the knowledge base.
 
         Args:
-            query: The search query
-            source_id: Optional source ID to filter results (e.g., 'example.com')
-            match_count: Maximum number of results to return (default: 5)
+            query: Search query
+            source_domain: Optional domain filter (e.g., 'docs.anthropic.com').
+                          Note: This is a domain name, not the source_id from get_available_sources.
+            match_count: Max results (default: 5)
 
         Returns:
-            JSON string with search results
+            JSON string with structure:
+            - success: bool - Operation success status
+            - results: list[dict] - Array of code examples with content and summaries
+            - reranked: bool - Whether results were reranked
+            - error: str|null - Error description if success=false
         """
         try:
             api_url = get_api_url()
@@ -157,8 +159,8 @@ def register_rag_tools(mcp: FastMCP):
 
             async with httpx.AsyncClient(timeout=timeout) as client:
                 request_data = {"query": query, "match_count": match_count}
-                if source_id:
-                    request_data["source"] = source_id
+                if source_domain:
+                    request_data["source"] = source_domain
 
                 # Call the dedicated code examples endpoint
                 response = await client.post(
