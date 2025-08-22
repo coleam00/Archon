@@ -499,13 +499,13 @@ class CrawlingService:
         crawl_results = []
         crawl_type = None
 
-        if self.url_handler.is_txt(url):
+        if self.url_handler.is_txt(url) or self.url_handler.is_markdown(url):
             # Handle text files
             if self.progress_id:
                 self.progress_state.update({
                     "status": "crawling",
                     "percentage": 10,
-                    "log": "Detected text file, fetching content...",
+                    "log": "Detected text/markdown file, fetching content...",
                 })
                 await update_crawl_progress(self.progress_id, self.progress_state)
             crawl_results = await self.crawl_markdown_file(
@@ -530,6 +530,14 @@ class CrawlingService:
                     
                     # Extract links from the content
                     extracted_links = self.url_handler.extract_markdown_links(content, url)
+                    
+                    # Filter out binary files (PDFs, images, archives, etc.) to avoid wasteful crawling
+                    if extracted_links:
+                        original_count = len(extracted_links)
+                        extracted_links = [link for link in extracted_links if not self.url_handler.is_binary_file(link)]
+                        filtered_count = original_count - len(extracted_links)
+                        if filtered_count > 0:
+                            logger.info(f"Filtered out {filtered_count} binary files from {original_count} extracted links")
                     
                     if extracted_links:
                         if self.progress_id:

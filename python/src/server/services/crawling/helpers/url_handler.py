@@ -32,6 +32,25 @@ class URLHandler:
             logger.warning(f"Error checking if URL is sitemap: {e}")
             return False
     
+    @staticmethod  
+    def is_markdown(url: str) -> bool:
+        """
+        Check if a URL points to a markdown file (.md, .mdx, .markdown).
+        
+        Args:
+            url: URL to check
+            
+        Returns:
+            True if URL is a markdown file, False otherwise
+        """
+        try:
+            parsed = urlparse(url)
+            path = parsed.path.lower()
+            return path.endswith(('.md', '.mdx', '.markdown'))
+        except Exception as e:
+            logger.warning(f"Error checking if URL is markdown file: {e}", exc_info=True)
+            return False
+
     @staticmethod
     def is_txt(url: str) -> bool:
         """
@@ -143,19 +162,35 @@ class URLHandler:
             if not content:
                 return []
             
-            # Regex pattern to match markdown links: [text](url)
-            markdown_link_pattern = r'\[([^\]]*)\]\(([^)]+)\)'
-            matches = re.findall(markdown_link_pattern, content)
-            
+            # Combined pattern to preserve document order:
+            #  1) [text](url) - markdown links
+            #  2) <https://...> - autolinks  
+            #  3) https://... - bare URLs
+            combined_pattern = re.compile(
+                r'\[([^\]]*)\]\(([^)]+)\)'          # group 2: markdown URL
+                r'|<\s*(https?://[^>\s]+)\s*>'      # group 3: autolink URL
+                r'|(https?://[^\s<>()\[\]"]+)'      # group 4: bare URL
+            )
+
+            def _clean_url(u: str) -> str:
+                # Trim whitespace and common trailing punctuation
+                return u.strip().rstrip('.,;:)')
+
             urls = []
-            for _, url in matches:
-                # Clean up the URL
-                url = url.strip()
-                
+            for match in re.finditer(combined_pattern, content):
+                url = match.group(2) or match.group(3) or match.group(4)
+                if not url:
+                    continue
+                url = _clean_url(url)
+
                 # Skip empty URLs, anchors, and mailto links
                 if not url or url.startswith('#') or url.startswith('mailto:'):
                     continue
-                
+
+                # Normalize protocol-relative URLs to https
+                if url.startswith('//'):
+                    url = f'https:{url}'
+
                 # Convert relative URLs to absolute if base_url provided
                 if base_url and not url.startswith(('http://', 'https://')):
                     try:
@@ -163,7 +198,7 @@ class URLHandler:
                     except Exception as e:
                         logger.warning(f"Failed to resolve relative URL {url} with base {base_url}: {e}")
                         continue
-                
+
                 # Only include HTTP/HTTPS URLs
                 if url.startswith(('http://', 'https://')):
                     urls.append(url)
@@ -180,7 +215,7 @@ class URLHandler:
             return unique_urls
             
         except Exception as e:
-            logger.error(f"Error extracting markdown links: {e}")
+            logger.error(f"Error extracting markdown links: {e}", exc_info=True)
             return []
     
     @staticmethod
@@ -202,11 +237,12 @@ class URLHandler:
             
             # Check for specific link collection filenames
             link_collection_patterns = [
-                'llms.txt',
-                'full-llms.txt', 
-                'links.txt',
-                'resources.txt',
-                'references.txt'
+                # .txt variants
+                'llms.txt', 'full-llms.txt', 'links.txt', 'resources.txt', 'references.txt',
+                # .md/.mdx/.markdown variants
+                'llms.md', 'full-llms.md', 'links.md', 'resources.md', 'references.md',
+                'llms.mdx', 'links.mdx', 'resources.mdx', 'references.mdx',
+                'llms.markdown', 'links.markdown', 'resources.markdown', 'references.markdown',
             ]
             
             # Direct filename match
@@ -216,28 +252,33 @@ class URLHandler:
             
             # Pattern-based detection for variations
             if any(pattern in filename for pattern in ['llms', 'links', 'resources']):
-                if filename.endswith('.txt'):
+                if filename.endswith(('.txt', '.md', '.mdx', '.markdown')):
                     logger.info(f"Detected potential link collection file: {filename}")
                     return True
             
             # Content-based detection if content is provided
             if content:
-                # Count markdown links in content
+                # Count markdown links + autolinks + bare URLs
                 markdown_link_pattern = r'\[([^\]]*)\]\(([^)]+)\)'
-                links = re.findall(markdown_link_pattern, content)
+                autolink_pattern = r'<\s*(https?://[^>\s]+)\s*>'
+                bare_url_pattern = r'(https?://[^\s<>()\[\]"]+)'
+                md_links = re.findall(markdown_link_pattern, content)
+                auto_links = re.findall(autolink_pattern, content)
+                bare_links = re.findall(bare_url_pattern, content)
+                total_links = len(md_links) + len(auto_links) + len(bare_links)
                 
                 # Calculate link density (links per 100 characters)
                 content_length = len(content.strip())
                 if content_length > 0:
-                    link_density = (len(links) * 100) / content_length
+                    link_density = (total_links * 100) / content_length
                     
                     # If more than 2% of content is links, likely a link collection
-                    if link_density > 2.0 and len(links) > 3:
-                        logger.info(f"Detected link collection by content analysis: {len(links)} links, density {link_density:.2f}%")
+                    if link_density > 2.0 and total_links > 3:
+                        logger.info(f"Detected link collection by content analysis: {total_links} links, density {link_density:.2f}%")
                         return True
             
             return False
             
         except Exception as e:
-            logger.warning(f"Error checking if file is link collection: {e}")
+            logger.warning(f"Error checking if file is link collection: {e}", exc_info=True)
             return False
