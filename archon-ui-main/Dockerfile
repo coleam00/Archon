@@ -22,4 +22,4 @@ COPY . .
 EXPOSE 5173
 
 # Start Vite dev server with host binding for Docker
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"] 
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]

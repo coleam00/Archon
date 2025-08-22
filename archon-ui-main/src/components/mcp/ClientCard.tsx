@@ -312,7 +312,7 @@ export const ClientCard = ({
           <div className="flex items-start">
             {isArchonClient ? (
               <div className="p-3 rounded-lg bg-gradient-to-br from-blue-500/20 to-purple-500/20 mr-3 relative pulse-soft">
-                <img src="/logo-neon.svg" alt="Archon" className="w-6 h-6 drop-shadow-[0_0_8px_rgba(59,130,246,0.8)] animate-glow-pulse" />
+                <img src="/logo-neon.png" alt="Archon" className="w-6 h-6 drop-shadow-[0_0_8px_rgba(59,130,246,0.8)] animate-glow-pulse" />
                 <div className="absolute inset-0 rounded-lg bg-blue-500/10 animate-pulse opacity-60"></div>
               </div>
             ) : (

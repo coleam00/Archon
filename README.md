@@ -16,12 +16,12 @@
 
 ## 🎯 What is Archon?
 
-> Archon is currently in beta! Expect things to not work 100%, and please feel free to share any feedback and contribute with fixes/new features!
+> Archon is currently in beta! Expect things to not work 100%, and please feel free to share any feedback and contribute with fixes/new features! Thank you to everyone for all the excitement we have for Archon already, as well as the bug reports, PRs, and discussions. It's a lot for our small team to get through but we're committed to addressing everything and making Archon into the best tool it possibly can be!
 
 Archon is the **command center** for AI coding assistants. For you, it's a sleek interface to manage knowledge, context, and tasks for your projects. For the AI coding assistant(s), it's a **Model Context Protocol (MCP) server** to collaborate on and leverage the same knowledge, context, and tasks. Connect Claude Code, Kiro, Cursor, Windsurf, etc. to give your AI agents access to:
 
 - **Your documentation** (crawled websites, uploaded PDFs/docs)
-- **Smart search capabilities** with advanced RAG strategies  
+- **Smart search capabilities** with advanced RAG strategies
 - **Task management** integrated with your knowledge base
 - **Real-time updates** as you add new content and collaborate with your coding assistant on tasks
 - **Much more** coming soon to build Archon into an integrated environment for all context engineering
@@ -34,12 +34,14 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
 
 - **[GitHub Discussions](https://github.com/coleam00/Archon/discussions)** - Join the conversation and share ideas about Archon
 - **[Contributing Guide](CONTRIBUTING.md)** - How to get involved and contribute to Archon
-- **[Introduction Video](https://youtu.be/8pRc_s2VQIo)** - Getting Started Guide and Vision for Archon
+- **[Introduction Video](https://youtu.be/8pRc_s2VQIo)** - Getting started guide and vision for Archon
+- **[Archon Kanban Board](https://github.com/users/coleam00/projects/1)** - Where maintainers are managing issues/features
 - **[Dynamous AI Mastery](https://dynamous.ai)** - The birthplace of Archon - come join a vibrant community of other early AI adopters all helping each other transform their careers and businesses!
 
 ## Quick Start
 
 ### Prerequisites
+
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/)
 - [Supabase](https://supabase.com/) account (free tier or local Supabase both work)
 - [OpenAI API key](https://platform.openai.com/api-keys) (Gemini and Ollama are supported too!)
@@ -49,10 +51,12 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
 1. **Clone Repository**:
    ```bash
    git clone https://github.com/coleam00/archon.git
+   ```
+   ```bash
    cd archon
    ```
-
 2. **Environment Configuration**:
+
    ```bash
    cp .env.example .env
    # Edit .env and add your Supabase credentials:
@@ -62,13 +66,16 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
 
    NOTE: Supabase introduced a new type of service key but use the legacy one (the longer one).
 
+   OPTIONAL: If you want to enable the reranking RAG strategy, uncomment lines 20-22 in `python\requirements.server.txt`. This will significantly increase the size of the Archon Server container which is why it's off by default.
+
 3. **Database Setup**: In your [Supabase project](https://supabase.com/dashboard) SQL Editor, copy, paste, and execute the contents of `migration/complete_setup.sql`
 
 4. **Start Services**:
+
    ```bash
    docker-compose up --build -d
    ```
-   
+
    This starts the core microservices:
    - **Server**: Core API and business logic (Port: 8181)
    - **MCP Server**: Protocol interface for AI clients (Port: 8051)
@@ -90,17 +97,18 @@ If you need to completely reset your database and start fresh:
 <summary>⚠️ <strong>Reset Database - This will delete ALL data for Archon!</strong></summary>
 
 1. **Run Reset Script**: In your Supabase SQL Editor, run the contents of `migration/RESET_DB.sql`
-   
+
    ⚠️ WARNING: This will delete all Archon specific tables and data! Nothing else will be touched in your DB though.
 
 2. **Rebuild Database**: After reset, run `migration/complete_setup.sql` to create all the tables again.
 
 3. **Restart Services**:
+
    ```bash
    docker-compose up -d
    ```
 
-4. **Reconfigure**: 
+4. **Reconfigure**:
    - Select your LLM/embedding provider and set the API key again
    - Re-upload any documents or re-crawl websites
 
@@ -121,23 +129,25 @@ Once everything is running:
 
 ### Core Services
 
-| Service | Container Name | Default URL | Purpose |
-|---------|---------------|-------------|---------|
-| **Web Interface** | archon-ui | http://localhost:3737 | Main dashboard and controls |
-| **API Service** | archon-server | http://localhost:8181 | Web crawling, document processing |
-| **MCP Server** | archon-mcp | http://localhost:8051 | Model Context Protocol interface |
-| **Agents Service** | archon-agents | http://localhost:8052 | AI/ML operations, reranking |
+| Service            | Container Name | Default URL           | Purpose                           |
+| ------------------ | -------------- | --------------------- | --------------------------------- |
+| **Web Interface**  | archon-ui      | http://localhost:3737 | Main dashboard and controls       |
+| **API Service**    | archon-server  | http://localhost:8181 | Web crawling, document processing |
+| **MCP Server**     | archon-mcp     | http://localhost:8051 | Model Context Protocol interface  |
+| **Agents Service** | archon-agents  | http://localhost:8052 | AI/ML operations, reranking       |
 
 ## What's Included
 
 ### 🧠 Knowledge Management
+
 - **Smart Web Crawling**: Automatically detects and crawls entire documentation sites, sitemaps, and individual pages
 - **Document Processing**: Upload and process PDFs, Word docs, markdown files, and text documents with intelligent chunking
 - **Code Example Extraction**: Automatically identifies and indexes code examples from documentation for enhanced search
 - **Vector Search**: Advanced semantic search with contextual embeddings for precise knowledge retrieval
 - **Source Management**: Organize knowledge by source, type, and tags for easy filtering
 
-### 🤖 AI Integration  
+### 🤖 AI Integration
+
 - **Model Context Protocol (MCP)**: Connect any MCP-compatible client (Claude Code, Cursor, even non-AI coding assistants like Claude Desktop)
 - **10 MCP Tools**: Comprehensive yet simple set of tools for RAG queries, task management, and project operations
 - **Multi-LLM Support**: Works with OpenAI, Ollama, and Google Gemini models
@@ -145,12 +155,14 @@ Once everything is running:
 - **Real-time Streaming**: Live responses from AI agents with progress tracking
 
 ### 📋 Project & Task Management
+
 - **Hierarchical Projects**: Organize work with projects, features, and tasks in a structured workflow
-- **AI-Assisted Creation**: Generate project requirements and tasks using integrated AI agents  
+- **AI-Assisted Creation**: Generate project requirements and tasks using integrated AI agents
 - **Document Management**: Version-controlled documents with collaborative editing capabilities
 - **Progress Tracking**: Real-time updates and status management across all project activities
 
 ### 🔄 Real-time Collaboration
+
 - **WebSocket Updates**: Live progress tracking for crawling, processing, and AI operations
 - **Multi-user Support**: Collaborative knowledge building and project management
 - **Background Processing**: Asynchronous operations that don't block the user interface
@@ -184,17 +196,17 @@ Archon uses true microservices architecture with clear separation of concerns:
 
 ### Service Responsibilities
 
-| Service | Location | Purpose | Key Features |
-|---------|----------|---------|--------------|
-| **Frontend** | `archon-ui-main/` | Web interface and dashboard | React, TypeScript, TailwindCSS, Socket.IO client |
-| **Server** | `python/src/server/` | Core business logic and APIs | FastAPI, service layer, Socket.IO broadcasts, all ML/AI operations |
-| **MCP Server** | `python/src/mcp/` | MCP protocol interface | Lightweight HTTP wrapper, 10 MCP tools, session management |
-| **Agents** | `python/src/agents/` | PydanticAI agent hosting | Document and RAG agents, streaming responses |
+| Service        | Location             | Purpose                      | Key Features                                                       |
+| -------------- | -------------------- | ---------------------------- | ------------------------------------------------------------------ |
+| **Frontend**   | `archon-ui-main/`    | Web interface and dashboard  | React, TypeScript, TailwindCSS, Socket.IO client                   |
+| **Server**     | `python/src/server/` | Core business logic and APIs | FastAPI, service layer, Socket.IO broadcasts, all ML/AI operations |
+| **MCP Server** | `python/src/mcp/`    | MCP protocol interface       | Lightweight HTTP wrapper, 10 MCP tools, session management         |
+| **Agents**     | `python/src/agents/` | PydanticAI agent hosting     | Document and RAG agents, streaming responses                       |
 
 ### Communication Patterns
 
 - **HTTP-based**: All inter-service communication uses HTTP APIs
-- **Socket.IO**: Real-time updates from Server to Frontend  
+- **Socket.IO**: Real-time updates from Server to Frontend
 - **MCP Protocol**: AI clients connect to MCP Server via SSE or stdio
 - **No Direct Imports**: Services are truly independent with no shared code dependencies
 
@@ -208,8 +220,9 @@ Archon uses true microservices architecture with clear separation of concerns:
 ## 🔧 Configuring Custom Ports & Hostname
 
 By default, Archon services run on the following ports:
+
 - **Archon-UI**: 3737
-- **Archon-Server**: 8181  
+- **Archon-Server**: 8181
 - **Archon-MCP**: 8051
 - **Archon-Agents**: 8052
 - **Archon-Docs**: 3838 (optional)
@@ -228,6 +241,7 @@ ARCHON_DOCS_PORT=3838
 ```
 
 Example: Running on different ports:
+
 ```bash
 ARCHON_SERVER_PORT=8282
 ARCHON_MCP_PORT=8151
@@ -248,11 +262,13 @@ HOST=myserver.com      # Use public domain
 ```
 
 This is useful when:
+
 - Running Archon on a different machine and accessing it remotely
 - Using a custom domain name for your installation
 - Deploying in a network environment where `localhost` isn't accessible
 
 After changing hostname or ports:
+
 1. Restart Docker containers: `docker-compose down && docker-compose up -d`
 2. Access the UI at: `http://${HOST}:${ARCHON_UI_PORT}`
 3. Update your AI client configuration with the new hostname and MCP port
@@ -265,7 +281,7 @@ For development with hot reload:
 # Backend services (with auto-reload)
 docker-compose up archon-server archon-mcp archon-agents --build
 
-# Frontend (with hot reload) 
+# Frontend (with hot reload)
 cd archon-ui-main && npm run dev
 
 # Documentation (with hot reload)
@@ -273,6 +289,14 @@ cd docs && npm start
 ```
 
 **Note**: The backend services are configured with `--reload` flag in their uvicorn commands and have source code mounted as volumes for automatic hot reloading when you make changes.
+
+## 📈 Progress
+
+<p align="center">
+  <a href="https://star-history.com/#coleam00/Archon&Date">
+    <img src="https://api.star-history.com/svg?repos=coleam00/Archon&type=Date" width="500" alt="Star History Chart">
+  </a>
+</p>
 
 ## 📄 License
 

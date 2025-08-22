@@ -17,9 +17,9 @@ asyncpg>=0.29.0
 
 # AI/ML libraries (ALL ML models belong here)
 openai==1.71.0
-sentence-transformers>=4.1.0  # For reranking and advanced embeddings
-torch>=2.0.0  # Required by sentence-transformers
-transformers>=4.30.0  # Required by sentence-transformers
+# sentence-transformers>=4.1.0  # For reranking and advanced embeddings
+# torch>=2.0.0  # Required by sentence-transformers
+# transformers>=4.30.0  # Required by sentence-transformers
 
 # Document processing
 pypdf2>=3.0.1

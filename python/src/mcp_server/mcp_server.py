@@ -187,6 +187,81 @@ async def lifespan(server: FastMCP) -> AsyncIterator[ArchonContext]:
             logger.info("✅ MCP server shutdown complete")
 
 
+# Define MCP instructions for Claude Code and other clients
+MCP_INSTRUCTIONS = """
+# Archon MCP Server Instructions
+
+## 🚨 CRITICAL RULES (ALWAYS FOLLOW)
+1. **Task Management**: ALWAYS use Archon MCP tools for task management.
+   - Combine with your local TODO tools for granular tracking
+   - First TODO: Update Archon task status
+   - Last TODO: Update Archon with findings/completion
+
+2. **Research First**: Before implementing, use perform_rag_query and search_code_examples
+3. **Task-Driven Development**: Never code without checking current tasks first
+
+## 📋 Core Workflow
+
+### Task Management Cycle
+1. **Get current task**: `get_task(task_id="...")`
+2. **Mark as doing**: `update_task(task_id="...", status="doing")`
+3. **Research phase**:
+   - `perform_rag_query(query="...", match_count=5)`
+   - `search_code_examples(query="...", match_count=3)`
+4. **Implementation**: Code based on research findings
+5. **Mark for review**: `update_task(task_id="...", status="review")`
+6. **Get next task**: `list_tasks(filter_by="status", filter_value="todo")`
+
+### Available Task Functions
+- `create_task(project_id, title, description, assignee="User", ...)`
+- `list_tasks(filter_by="status", filter_value="todo", project_id=None)`
+- `get_task(task_id)`
+- `update_task(task_id, title=None, status=None, assignee=None, ...)`
+- `delete_task(task_id)`
+
+## 🏗️ Project Management
+
+### Project Functions
+- `create_project(title, description, github_repo=None)`
+- `list_projects()`
+- `get_project(project_id)`
+- `update_project(project_id, title=None, description=None, ...)`
+- `delete_project(project_id)`
+
+### Document Functions
+- `create_document(project_id, title, document_type, content=None, ...)`
+- `list_documents(project_id)`
+- `get_document(project_id, doc_id)`
+- `update_document(project_id, doc_id, title=None, content=None, ...)`
+- `delete_document(project_id, doc_id)`
+
+## 🔍 Research Patterns
+- **Architecture patterns**: `perform_rag_query(query="[tech] architecture patterns", match_count=5)`
+- **Code examples**: `search_code_examples(query="[feature] implementation", match_count=3)`
+- **Source discovery**: `get_available_sources()`
+- Keep match_count around 3-5 for focused results
+
+## 📊 Task Status Flow
+`todo` → `doing` → `review` → `done`
+- Only ONE task in 'doing' status at a time
+- Use 'review' for completed work awaiting validation
+- Mark tasks 'done' only after verification
+
+## 💾 Version Management
+- `create_version(project_id, field_name, content, change_summary)`
+- `list_versions(project_id, field_name=None)`
+- `get_version(project_id, field_name, version_number)`
+- `restore_version(project_id, field_name, version_number)`
+- Field names: "docs", "features", "data", "prd"
+
+## 🎯 Best Practices
+1. **Atomic Tasks**: Create tasks that take 1-4 hours
+2. **Clear Descriptions**: Include acceptance criteria in task descriptions
+3. **Use Features**: Group related tasks with feature labels
+4. **Add Sources**: Link relevant documentation to tasks
+5. **Track Progress**: Update task status as you work
+"""
+
 # Initialize the main FastMCP server with fixed configuration
 try:
     logger.info("🏗️ MCP SERVER INITIALIZATION:")
@@ -196,6 +271,7 @@ try:
     mcp = FastMCP(
         "archon-mcp-server",
         description="MCP server for Archon - uses HTTP calls to other services",
+        instructions=MCP_INSTRUCTIONS,
         lifespan=lifespan,
         host=server_host,
         port=server_port,
@@ -212,10 +288,10 @@ except Exception as e:
 @mcp.tool()
 async def health_check(ctx: Context) -> str:
     """
-    Perform a health check on the MCP server and its dependencies.
+    Check health status of MCP server and dependencies.
 
     Returns:
-        JSON string with current health status
+        JSON with health status, uptime, and service availability
     """
     try:
         # Try to get the lifespan context
@@ -261,10 +337,10 @@ async def health_check(ctx: Context) -> str:
 @mcp.tool()
 async def session_info(ctx: Context) -> str:
     """
-    Get information about the current session and all active sessions.
+    Get current and active session information.
 
     Returns:
-        JSON string with session information
+        JSON with active sessions count and server uptime
     """
     try:
         session_manager = get_session_manager()
@@ -304,7 +380,7 @@ def register_modules():
 
     # Import and register RAG module (HTTP-based version)
     try:
-        from src.mcp.modules.rag_module import register_rag_tools
+        from src.mcp_server.modules.rag_module import register_rag_tools
 
         register_rag_tools(mcp)
         modules_registered += 1
@@ -315,22 +391,96 @@ def register_modules():
         logger.error(f"✗ Error registering RAG module: {e}")
         logger.error(traceback.format_exc())
 
-    # Import and register Project module - only if Projects are enabled
-    projects_enabled = os.getenv("PROJECTS_ENABLED", "true").lower() == "true"
-    if projects_enabled:
-        try:
-            from src.mcp.modules.project_module import register_project_tools
+    # Import and register all feature tools - separated and focused
 
-            register_project_tools(mcp)
-            modules_registered += 1
-            logger.info("✓ Project module registered (HTTP-based)")
-        except ImportError as e:
-            logger.warning(f"⚠ Project module not available: {e}")
-        except Exception as e:
-            logger.error(f"✗ Error registering Project module: {e}")
-            logger.error(traceback.format_exc())
-    else:
-        logger.info("⚠ Project module skipped - Projects are disabled")
+    # Project Management Tools
+    try:
+        from src.mcp_server.features.projects import register_project_tools
+
+        register_project_tools(mcp)
+        modules_registered += 1
+        logger.info("✓ Project tools registered")
+    except ImportError as e:
+        # Module not found - this is acceptable in modular architecture
+        logger.warning(f"⚠ Project tools module not available (optional): {e}")
+    except (SyntaxError, NameError, AttributeError) as e:
+        # Code errors that should not be ignored
+        logger.error(f"✗ Code error in project tools - MUST FIX: {e}")
+        logger.error(traceback.format_exc())
+        raise  # Re-raise to prevent running with broken code
+    except Exception as e:
+        # Unexpected errors during registration
+        logger.error(f"✗ Failed to register project tools: {e}")
+        logger.error(traceback.format_exc())
+        # Don't raise - allow other modules to register
+
+    # Task Management Tools
+    try:
+        from src.mcp_server.features.tasks import register_task_tools
+
+        register_task_tools(mcp)
+        modules_registered += 1
+        logger.info("✓ Task tools registered")
+    except ImportError as e:
+        logger.warning(f"⚠ Task tools module not available (optional): {e}")
+    except (SyntaxError, NameError, AttributeError) as e:
+        logger.error(f"✗ Code error in task tools - MUST FIX: {e}")
+        logger.error(traceback.format_exc())
+        raise
+    except Exception as e:
+        logger.error(f"✗ Failed to register task tools: {e}")
+        logger.error(traceback.format_exc())
+
+    # Document Management Tools
+    try:
+        from src.mcp_server.features.documents import register_document_tools
+
+        register_document_tools(mcp)
+        modules_registered += 1
+        logger.info("✓ Document tools registered")
+    except ImportError as e:
+        logger.warning(f"⚠ Document tools module not available (optional): {e}")
+    except (SyntaxError, NameError, AttributeError) as e:
+        logger.error(f"✗ Code error in document tools - MUST FIX: {e}")
+        logger.error(traceback.format_exc())
+        raise
+    except Exception as e:
+        logger.error(f"✗ Failed to register document tools: {e}")
+        logger.error(traceback.format_exc())
+
+    # Version Management Tools
+    try:
+        from src.mcp_server.features.documents import register_version_tools
+
+        register_version_tools(mcp)
+        modules_registered += 1
+        logger.info("✓ Version tools registered")
+    except ImportError as e:
+        logger.warning(f"⚠ Version tools module not available (optional): {e}")
+    except (SyntaxError, NameError, AttributeError) as e:
+        logger.error(f"✗ Code error in version tools - MUST FIX: {e}")
+        logger.error(traceback.format_exc())
+        raise
+    except Exception as e:
+        logger.error(f"✗ Failed to register version tools: {e}")
+        logger.error(traceback.format_exc())
+
+    # Feature Management Tools
+    try:
+        from src.mcp_server.features.feature_tools import register_feature_tools
+
+        register_feature_tools(mcp)
+        modules_registered += 1
+        logger.info("✓ Feature tools registered")
+    except ImportError as e:
+        logger.warning(f"⚠ Feature tools module not available (optional): {e}")
+    except (SyntaxError, NameError, AttributeError) as e:
+        logger.error(f"✗ Code error in feature tools - MUST FIX: {e}")
+        logger.error(traceback.format_exc())
+        raise
+    except Exception as e:
+        logger.error(f"✗ Failed to register feature tools: {e}")
+        logger.error(traceback.format_exc())
 
     logger.info(f"📦 Total modules registered: {modules_registered}")
 

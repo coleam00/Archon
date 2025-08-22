@@ -66,7 +66,7 @@ export const SideNavigation: React.FC<SideNavigationProps> = ({
     label: 'Settings'
   }];
   // Logo configuration
-  const logoSrc = "/logo-neon.svg";
+  const logoSrc = "/logo-neon.png";
   const logoAlt = 'Knowledge Base Logo';
   // Get current location to determine active route
   const location = useLocation();

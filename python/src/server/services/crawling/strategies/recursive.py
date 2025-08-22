@@ -10,6 +10,7 @@ from urllib.parse import urldefrag
 from crawl4ai import CrawlerRunConfig, CacheMode, MemoryAdaptiveDispatcher
 from ....config.logfire_config import get_logger
 from ...credential_service import credential_service
+from ..helpers.url_handler import URLHandler
 
 logger = get_logger(__name__)
 
@@ -27,6 +28,7 @@ class RecursiveCrawlStrategy:
         """
         self.crawler = crawler
         self.markdown_generator = markdown_generator
+        self.url_handler = URLHandler()
     
     async def crawl_recursive_with_progress(
         self,
@@ -61,7 +63,7 @@ class RecursiveCrawlStrategy:
                 await progress_callback('error', 0, 'Crawler not available')
             return []
         
-        # Load settings from database
+        # Load settings from database - fail fast on configuration errors
         try:
             settings = await credential_service.get_credentials_by_category("rag_strategy")
             batch_size = int(settings.get("CRAWL_BATCH_SIZE", "50"))
@@ -69,11 +71,16 @@ class RecursiveCrawlStrategy:
                 max_concurrent = int(settings.get("CRAWL_MAX_CONCURRENT", "10"))
             memory_threshold = float(settings.get("MEMORY_THRESHOLD_PERCENT", "80"))
             check_interval = float(settings.get("DISPATCHER_CHECK_INTERVAL", "0.5"))
+        except (ValueError, KeyError, TypeError) as e:
+            # Critical configuration errors should fail fast in alpha
+            logger.error(f"Invalid crawl settings format: {e}", exc_info=True)
+            raise ValueError(f"Failed to load crawler configuration: {e}")
         except Exception as e:
-            logger.warning(f"Failed to load crawl settings: {e}, using defaults")
+            # For non-critical errors (e.g., network issues), use defaults but log prominently
+            logger.error(f"Failed to load crawl settings from database: {e}, using defaults", exc_info=True)
             batch_size = 50
             if max_concurrent is None:
-                max_concurrent = 10
+                max_concurrent = 10  # Safe default to prevent memory issues
             memory_threshold = 80.0
             check_interval = 0.5
             settings = {}  # Empty dict for defaults
@@ -190,8 +197,11 @@ class RecursiveCrawlStrategy:
                         # Find internal links for next depth
                         for link in result.links.get("internal", []):
                             next_url = normalize_url(link["href"])
-                            if next_url not in visited:
+                            # Skip binary files and already visited URLs
+                            if next_url not in visited and not self.url_handler.is_binary_file(next_url):
                                 next_level_urls.add(next_url)
+                            elif self.url_handler.is_binary_file(next_url):
+                                logger.debug(f"Skipping binary file from crawl queue: {next_url}")
                     else:
                         logger.warning(f"Failed to crawl {original_url}: {getattr(result, 'error_message', 'Unknown error')}")
                     

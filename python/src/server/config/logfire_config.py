@@ -110,14 +110,22 @@ def setup_logfire(
     if not handlers:
         handlers.append(logging.StreamHandler())
 
+    # Read LOG_LEVEL from environment
+    log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+
     # Configure root logging
     logging.basicConfig(
-        level=logging.INFO,
+        level=getattr(logging, log_level, logging.INFO),
         format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=handlers,
         force=True,
     )
+
+    # Suppress noisy third-party library logs
+    # These libraries log low-level details that are rarely useful
+    logging.getLogger("hpack").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     _logfire_configured = True
     logging.info(
