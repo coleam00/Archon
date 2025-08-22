@@ -192,57 +192,74 @@ MCP_INSTRUCTIONS = """
 # Archon MCP Server Instructions
 
 ## 🚨 CRITICAL RULES (ALWAYS FOLLOW)
-1. **Task Management**: ALWAYS use Archon MCP tools for task management,
-You can combine them with your TODO tools but always make sure that the first todo is to update archon
-and the last todo is to update archon.
-
-Example: Use TodoWrite to create a set of new todos
-[]Create the task in archon
-[]Research deeply using archon rag
-[]Research on the web using websearch tools
-[]Deeply look into the codebase patterns and integration points
-[]Update Archon tasks with the findings
-[]Create implementation tasks in Archon
-
-This is to ensure efficient task management and collaboration.
-Making sure all critical details are in Archon.
-
-You can think of it as Archon is where you manage the task that needs to be shared with the team
-And your todo is your internal subtasks/todos that does not need to be shared with the team.
+1. **Task Management**: ALWAYS use Archon MCP tools for task management.
+   - Combine with your local TODO tools for granular tracking
+   - First TODO: Update Archon task status
+   - Last TODO: Update Archon with findings/completion
 
 2. **Research First**: Before implementing, use perform_rag_query and search_code_examples
 3. **Task-Driven Development**: Never code without checking current tasks first
 
 ## 📋 Core Workflow
-For every coding task, follow this cycle:
-1. Check current task: manage_task(action="get", task_id="...")
-2. Research: perform_rag_query() + search_code_examples()
-3. Update to doing: manage_task(action="update", update_fields={"status": "doing"})
-4. Implement based on research findings
-5. Mark for review: manage_task(action="update", update_fields={"status": "review"})
-6. Get next task: manage_task(action="list", filter_by="status", filter_value="todo")
 
-## 🏗️ Project Initialization
-- New project: manage_project(action="create", title="...", prd={...})
-- Existing project: manage_task(action="list", filter_by="project", filter_value="...")
-- Always create atomic tasks (1-4 hours of work each)
+### Task Management Cycle
+1. **Get current task**: `get_task(task_id="...")`
+2. **Mark as doing**: `update_task(task_id="...", status="doing")`
+3. **Research phase**:
+   - `perform_rag_query(query="...", match_count=5)`
+   - `search_code_examples(query="...", match_count=3)`
+4. **Implementation**: Code based on research findings
+5. **Mark for review**: `update_task(task_id="...", status="review")`
+6. **Get next task**: `list_tasks(filter_by="status", filter_value="todo")`
+
+### Available Task Functions
+- `create_task(project_id, title, description, assignee="User", ...)`
+- `list_tasks(filter_by="status", filter_value="todo", project_id=None)`
+- `get_task(task_id)`
+- `update_task(task_id, title=None, status=None, assignee=None, ...)`
+- `delete_task(task_id)`
+
+## 🏗️ Project Management
+
+### Project Functions
+- `create_project(title, description, github_repo=None)`
+- `list_projects()`
+- `get_project(project_id)`
+- `update_project(project_id, title=None, description=None, ...)`
+- `delete_project(project_id)`
+
+### Document Functions
+- `create_document(project_id, title, document_type, content=None, ...)`
+- `list_documents(project_id)`
+- `get_document(project_id, doc_id)`
+- `update_document(project_id, doc_id, title=None, content=None, ...)`
+- `delete_document(project_id, doc_id)`
 
 ## 🔍 Research Patterns
-- Architecture: perform_rag_query(query="[tech] patterns", match_count=5)
-- Implementation: search_code_examples(query="[feature] example", match_count=3)
-- Keep match_count around (5) for focused results
-- Combine RAG with websearch tools for better results
+- **Architecture patterns**: `perform_rag_query(query="[tech] architecture patterns", match_count=5)`
+- **Code examples**: `search_code_examples(query="[feature] implementation", match_count=3)`
+- **Source discovery**: `get_available_sources()`
+- Keep match_count around 3-5 for focused results
 
 ## 📊 Task Status Flow
-todo → doing → review → done
-- Only one task in 'doing' at a time
+`todo` → `doing` → `review` → `done`
+- Only ONE task in 'doing' status at a time
 - Use 'review' for completed work awaiting validation
-- Archive obsolete tasks
+- Mark tasks 'done' only after verification
 
-## 💾 Version Control
-- All documents auto-versioned on update
-- Use manage_versions to view history or restore
-- Deletions preserve version history
+## 💾 Version Management
+- `create_version(project_id, field_name, content, change_summary)`
+- `list_versions(project_id, field_name=None)`
+- `get_version(project_id, field_name, version_number)`
+- `restore_version(project_id, field_name, version_number)`
+- Field names: "docs", "features", "data", "prd"
+
+## 🎯 Best Practices
+1. **Atomic Tasks**: Create tasks that take 1-4 hours
+2. **Clear Descriptions**: Include acceptance criteria in task descriptions
+3. **Use Features**: Group related tasks with feature labels
+4. **Add Sources**: Link relevant documentation to tasks
+5. **Track Progress**: Update task status as you work
 """
 
 # Initialize the main FastMCP server with fixed configuration

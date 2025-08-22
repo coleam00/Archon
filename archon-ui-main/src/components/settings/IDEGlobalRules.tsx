@@ -555,6 +555,7 @@ archon:manage_task(
           </p>
           <ul className="text-sm text-gray-600 dark:text-gray-400 mt-2 ml-4 list-disc">
             <li><strong>Claude Code:</strong> Create a CLAUDE.md file in your project root</li>
+            <li><strong>Gemini CLI:</strong> Create a GEMINI.md file in your project root</li>
             <li><strong>Cursor:</strong> Create .cursorrules file or add to Settings → Rules</li>
             <li><strong>Windsurf:</strong> Create .windsurfrules file in project root</li>
             <li><strong>Other IDEs:</strong> Add to your IDE's AI assistant configuration</li>

@@ -369,9 +369,11 @@ class KnowledgeItemService:
             "source_id": source_id,
             "code_examples": code_examples,
             "metadata": {
+                # Spread source_metadata first, then override with computed values
+                **source_metadata,
                 "knowledge_type": source_metadata.get("knowledge_type", "technical"),
                 "tags": source_metadata.get("tags", []),
-                "source_type": source_type,
+                "source_type": source_type,  # This should be the correctly determined source_type
                 "status": "active",
                 "description": source_metadata.get("description", source.get("summary", "")),
                 "chunks_count": await self._get_chunks_count(source_id),  # Get actual chunk count
@@ -385,7 +387,6 @@ class KnowledgeItemService:
                 "file_type": source_metadata.get("file_type"),
                 "update_frequency": source.get("update_frequency", 7),
                 "code_examples_count": len(code_examples),
-                **source_metadata,
             },
             "created_at": source.get("created_at"),
             "updated_at": source.get("updated_at"),

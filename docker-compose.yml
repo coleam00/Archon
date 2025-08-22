@@ -1,13 +1,22 @@
+# Docker Compose Profiles Strategy:
+# - "backend": Starts only backend services (server, mcp, agents) for hybrid development
+# - "frontend": Starts only the frontend UI service  
+# - "full": Starts all services for complete Docker deployment
+# Use --profile flag to control which services start:
+#   docker compose --profile backend up    # Backend only for hybrid dev (or docker-compose)
+#   docker compose --profile full up       # Everything in Docker (or docker-compose)
+
 services:
   # Server Service (FastAPI + Socket.IO + Crawling)
   archon-server:
+    profiles: ["backend", "full"]
     build:
       context: ./python
       dockerfile: Dockerfile.server
       args:
         BUILDKIT_INLINE_CACHE: 1
         ARCHON_SERVER_PORT: ${ARCHON_SERVER_PORT:-8181}
-    container_name: Archon-Server
+    container_name: archon-server
     ports:
       - "${ARCHON_SERVER_PORT:-8181}:${ARCHON_SERVER_PORT:-8181}"
     environment:
@@ -55,13 +64,14 @@ services:
 
   # Lightweight MCP Server Service (HTTP-based)
   archon-mcp:
+    profiles: ["backend", "full"]
     build:
       context: ./python
       dockerfile: Dockerfile.mcp
       args:
         BUILDKIT_INLINE_CACHE: 1
         ARCHON_MCP_PORT: ${ARCHON_MCP_PORT:-8051}
-    container_name: Archon-MCP
+    container_name: archon-mcp
     ports:
       - "${ARCHON_MCP_PORT:-8051}:${ARCHON_MCP_PORT:-8051}"
     environment:
@@ -99,13 +109,14 @@ services:
 
   # AI Agents Service (ML/Reranking)
   archon-agents:
+    profiles: ["backend", "full"]
     build:
       context: ./python
       dockerfile: Dockerfile.agents
       args:
         BUILDKIT_INLINE_CACHE: 1
         ARCHON_AGENTS_PORT: ${ARCHON_AGENTS_PORT:-8052}
-    container_name: Archon-Agents
+    container_name: archon-agents
     ports:
       - "${ARCHON_AGENTS_PORT:-8052}:${ARCHON_AGENTS_PORT:-8052}"
     environment:
@@ -132,19 +143,21 @@ services:
       start_period: 40s
 
   # Frontend
-  frontend:
+  archon-frontend:
+    profiles: ["frontend", "full"]
     build: ./archon-ui-main
-    container_name: Archon-UI
+    container_name: archon-ui
     ports:
-      - "${ARCHON_UI_PORT:-3737}:5173"
+      - "${ARCHON_UI_PORT:-3737}:3737"
     environment:
       - VITE_API_URL=http://${HOST:-localhost}:${ARCHON_SERVER_PORT:-8181}
+      - VITE_ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
       - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
       - HOST=${HOST:-localhost}
     networks:
       - app-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5173"]
+      test: ["CMD", "curl", "-f", "http://localhost:3737"]
       interval: 30s
       timeout: 10s
       retries: 3

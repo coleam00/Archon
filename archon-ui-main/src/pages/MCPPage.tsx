@@ -10,7 +10,7 @@ import { IDEGlobalRules } from '../components/settings/IDEGlobalRules';
 // import { MCPClients } from '../components/mcp/MCPClients'; // Commented out - feature not implemented
 
 // Supported IDE/Agent types
-type SupportedIDE = 'windsurf' | 'cursor' | 'claudecode' | 'cline' | 'kiro' | 'augment';
+type SupportedIDE = 'windsurf' | 'cursor' | 'claudecode' | 'cline' | 'kiro' | 'augment' | 'gemini';
 
 /**
  * MCP Dashboard Page Component
@@ -265,6 +265,14 @@ export const MCPPage = () => {
         
       default:
         return '';
+      case 'gemini':
+        return JSON.stringify({
+          mcpServers: {
+            archon: {
+              httpUrl: mcpUrl
+            }
+          }
+        }, null, 2);
     }
   };
 
@@ -328,6 +336,16 @@ export const MCPPage = () => {
             '2. Navigate to Extensions > MCP',
             '3. Add the configuration shown below',
             '4. Reload configuration'
+          ]
+        };
+      case 'gemini':
+        return {
+          title: 'Gemini CLI Configuration',
+          steps: [
+            '1. Locate or create the settings file at ~/.gemini/settings.json',
+            '2. Add the configuration shown below to the file',
+            '3. Launch Gemini CLI in your terminal',
+            '4. Test the connection by typing /mcp to list available tools'
           ]
         };
       default:
@@ -550,6 +568,16 @@ export const MCPPage = () => {
                           } cursor-pointer`}
                         >
                           Claude Code
+                        </button>
+                        <button
+                          onClick={() => setSelectedIDE('gemini')}
+                          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                            selectedIDE === 'gemini'
+                              ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                              : 'border-transparent text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-300'
+                          } cursor-pointer`}
+                        >
+                          Gemini CLI
                         </button>
                         <button
                           onClick={() => setSelectedIDE('cursor')}

@@ -168,12 +168,39 @@ async def test_update_task_status(mock_mcp, mock_context):
         mock_client.return_value.__aenter__.return_value = mock_async_client
 
         result = await update_task(
-            mock_context, task_id="task-123", update_fields={"status": "doing", "assignee": "User"}
+            mock_context, task_id="task-123", status="doing", assignee="User"
         )
 
         result_data = json.loads(result)
         assert result_data["success"] is True
         assert "Task updated successfully" in result_data["message"]
+        
+        # Verify the PUT request was made with correct data
+        call_args = mock_async_client.put.call_args
+        sent_data = call_args[1]["json"]
+        assert sent_data["status"] == "doing"
+        assert sent_data["assignee"] == "User"
+
+
+@pytest.mark.asyncio
+async def test_update_task_no_fields(mock_mcp, mock_context):
+    """Test updating task with no fields returns validation error."""
+    register_task_tools(mock_mcp)
+
+    # Get the update_task function
+    update_task = mock_mcp._tools.get("update_task")
+
+    assert update_task is not None, "update_task tool not registered"
+
+    # Call update_task with no optional fields
+    result = await update_task(mock_context, task_id="task-123")
+
+    result_data = json.loads(result)
+    assert result_data["success"] is False
+    assert "error" in result_data
+    assert isinstance(result_data["error"], dict)
+    assert result_data["error"]["type"] == "validation_error"
+    assert "No fields to update" in result_data["error"]["message"]
 
 
 @pytest.mark.asyncio

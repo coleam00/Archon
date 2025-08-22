@@ -230,8 +230,14 @@ Provide only the title, nothing else."""
         except Exception as e:
             search_logger.error(f"Error generating title for {source_id}: {e}")
 
-    # Build metadata
-    metadata = {"knowledge_type": knowledge_type, "tags": tags or [], "auto_generated": True}
+    # Build metadata - determine source_type from source_id pattern
+    source_type = "file" if source_id.startswith("file_") else "url"
+    metadata = {
+        "knowledge_type": knowledge_type, 
+        "tags": tags or [], 
+        "source_type": source_type,
+        "auto_generated": True
+    }
 
     return title, metadata
 
@@ -260,6 +266,7 @@ def update_source_info(
         tags: List of tags
         update_frequency: Update frequency in days
     """
+    search_logger.info(f"Updating source {source_id} with knowledge_type={knowledge_type}")
     try:
         # First, check if source already exists to preserve title
         existing_source = (
@@ -272,12 +279,15 @@ def update_source_info(
             search_logger.info(f"Preserving existing title for {source_id}: {existing_title}")
 
             # Update metadata while preserving title
+            source_type = "file" if source_id.startswith("file_") else "url"
             metadata = {
                 "knowledge_type": knowledge_type,
                 "tags": tags or [],
+                "source_type": source_type,
                 "auto_generated": False,  # Mark as not auto-generated since we're preserving
                 "update_frequency": update_frequency,
             }
+            search_logger.info(f"Updating existing source {source_id} metadata: knowledge_type={knowledge_type}")
             if original_url:
                 metadata["original_url"] = original_url
 
@@ -308,6 +318,7 @@ def update_source_info(
             if original_url:
                 metadata["original_url"] = original_url
 
+            search_logger.info(f"Creating new source {source_id} with knowledge_type={knowledge_type}")
             # Insert new source
             client.table("archon_sources").insert({
                 "source_id": source_id,
