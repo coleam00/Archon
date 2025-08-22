@@ -45,6 +45,7 @@ class URLHandler:
         """
         try:
             parsed = urlparse(url)
+            # Normalize to lowercase and ignore query/fragment
             path = parsed.path.lower()
             return path.endswith(('.md', '.mdx', '.markdown'))
         except Exception as e:
@@ -63,9 +64,11 @@ class URLHandler:
             True if URL is a text file, False otherwise
         """
         try:
-            return url.endswith('.txt')
+            parsed = urlparse(url)
+            # Normalize to lowercase and ignore query/fragment
+            return parsed.path.lower().endswith('.txt')
         except Exception as e:
-            logger.warning(f"Error checking if URL is text file: {e}")
+            logger.warning(f"Error checking if URL is text file: {e}", exc_info=True)
             return False
     
     @staticmethod
@@ -180,7 +183,12 @@ class URLHandler:
 
             def _clean_url(u: str) -> str:
                 # Trim whitespace and comprehensive trailing punctuation
-                return u.strip().rstrip('.,;:)]>')
+                # Also remove invisible Unicode characters that can break URLs
+                import unicodedata
+                cleaned = u.strip().rstrip('.,;:)]>')
+                # Remove invisible/control characters but keep valid URL characters
+                cleaned = ''.join(c for c in cleaned if unicodedata.category(c) not in ('Cf', 'Cc'))
+                return cleaned
 
             urls = []
             for match in re.finditer(combined_pattern, content):

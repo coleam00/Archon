@@ -487,6 +487,36 @@ class CrawlingService:
                     f"Unregistered orchestration service on error | progress_id={self.progress_id}"
                 )
 
+    def _is_self_link(self, link: str, base_url: str) -> bool:
+        """
+        Check if a link is a self-referential link to the base URL.
+        Handles query parameters, fragments, and trailing slashes.
+        
+        Args:
+            link: The link to check
+            base_url: The base URL to compare against
+            
+        Returns:
+            True if the link is self-referential, False otherwise
+        """
+        try:
+            from urllib.parse import urlparse
+            
+            # Parse both URLs to compare their core components
+            link_parsed = urlparse(link)
+            base_parsed = urlparse(base_url)
+            
+            # Compare scheme, netloc, and path (ignoring query and fragment)
+            link_core = f"{link_parsed.scheme}://{link_parsed.netloc}{link_parsed.path.rstrip('/')}"
+            base_core = f"{base_parsed.scheme}://{base_parsed.netloc}{base_parsed.path.rstrip('/')}"
+            
+            return link_core == base_core
+            
+        except Exception as e:
+            logger.warning(f"Error checking if link is self-referential: {e}")
+            # Fallback to simple string comparison
+            return link.rstrip('/') == base_url.rstrip('/')
+
     async def _crawl_by_url_type(self, url: str, request: Dict[str, Any]) -> tuple:
         """
         Detect URL type and perform appropriate crawling.
@@ -507,6 +537,8 @@ class CrawlingService:
                     "percentage": 10,
                     "log": "Detected text/markdown file, fetching content...",
                 })
+                # Keep heartbeat stage/progress in sync with direct emissions
+                self.progress_mapper.map_progress("crawling", 10)
                 await update_crawl_progress(self.progress_id, self.progress_state)
             crawl_results = await self.crawl_markdown_file(
                 url,
@@ -530,6 +562,17 @@ class CrawlingService:
                     
                     # Extract links from the content
                     extracted_links = self.url_handler.extract_markdown_links(content, url)
+                    
+                    # Filter out self-referential links to avoid redundant crawling
+                    if extracted_links:
+                        original_count = len(extracted_links)
+                        extracted_links = [
+                            link for link in extracted_links
+                            if not self._is_self_link(link, url)
+                        ]
+                        self_filtered_count = original_count - len(extracted_links)
+                        if self_filtered_count > 0:
+                            logger.info(f"Filtered out {self_filtered_count} self-referential links from {original_count} extracted links")
                     
                     # Filter out binary files (PDFs, images, archives, etc.) to avoid wasteful crawling
                     if extracted_links:
