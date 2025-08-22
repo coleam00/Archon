@@ -53,8 +53,10 @@ Archon uses true microservices architecture with clear separation of concerns:
 ### Prerequisites
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- [Node.js 18+](https://nodejs.org/) (for hybrid development mode)
 - [Supabase](https://supabase.com/) account (free tier works)
 - [OpenAI API key](https://platform.openai.com/api-keys) or alternative LLM provider
+- (Optional) [Make](https://www.gnu.org/software/make/) for simplified workflows
 - Basic knowledge of Python (FastAPI) and TypeScript (React)
 
 ### Initial Setup
@@ -74,7 +76,11 @@ After forking the repository, you'll need to:
 3. **Start Development Environment**
 
    ```bash
-   docker-compose up --build -d
+   # Using Docker Compose directly
+   docker compose --profile full up --build -d
+   
+   # Or using Make (if installed)
+   make dev-docker
    ```
 
 4. **Configure API Keys**
@@ -211,14 +217,17 @@ Test these things using both the UI and the MCP server. This process will be sim
    **Test commands:**
 
    ```bash
-   # Backend tests
-   cd python && python -m pytest
-
-   # Frontend tests
-   cd archon-ui-main && npm run test
+   # Using Make (if installed)
+   make test       # Run all tests
+   make test-fe    # Frontend tests only
+   make test-be    # Backend tests only
+   
+   # Or manually
+   cd python && python -m pytest       # Backend tests
+   cd archon-ui-main && npm run test   # Frontend tests
 
    # Full integration test
-   docker-compose up --build -d
+   docker compose --profile full up --build -d
    # Test via UI at http://localhost:3737
    ```
 
@@ -324,7 +333,10 @@ Test these things using both the UI and the MCP server. This process will be sim
 2. **Testing Your Changes**
 
    ```bash
-   # Run Python tests
+   # Using Make (if installed)
+   make test-be
+   
+   # Or manually
    cd python && python -m pytest tests/
 
    # Run specific test categories
@@ -334,8 +346,8 @@ Test these things using both the UI and the MCP server. This process will be sim
 
 3. **Code Quality**
    ```bash
-   # We encourage you to use linters for all code
    # Follow service patterns from existing code
+   # Maintain consistency with the codebase
    ```
 
 ### Frontend Development (React)
@@ -353,7 +365,10 @@ Test these things using both the UI and the MCP server. This process will be sim
 2. **Testing Your Changes**
 
    ```bash
-   # Run frontend tests
+   # Using Make (if installed)
+   make test-fe
+   
+   # Or manually
    cd archon-ui-main && npm run test
 
    # Run with coverage
@@ -365,7 +380,10 @@ Test these things using both the UI and the MCP server. This process will be sim
 
 3. **Development Server**
    ```bash
-   # For faster iteration, run frontend locally
+   # Using Make for hybrid mode (if installed)
+   make dev  # Backend in Docker, frontend local
+   
+   # Or manually for faster iteration
    cd archon-ui-main && npm run dev
    # Still connects to Docker backend services
    ```
