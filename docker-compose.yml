@@ -143,7 +143,7 @@ services:
       start_period: 40s
 
   # Frontend
-  frontend:
+  archon-frontend:
     profiles: ["frontend", "full"]
     build: ./archon-ui-main
     container_name: archon-ui
