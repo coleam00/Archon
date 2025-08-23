@@ -360,16 +360,16 @@ class CrawlingService:
             ):
                 if self.progress_id:
                     _ensure_socketio_imports()
-                    # Map percentage to document storage range (20-85%)
-                    mapped_percentage = 20 + int((percentage / 100) * (85 - 20))
+                    # Use ProgressMapper to consistently map document storage progress
+                    overall_progress = self.progress_mapper.map_progress("document_storage", percentage)
                     safe_logfire_info(
-                        f"Document storage progress mapping: {percentage}% -> {mapped_percentage}%"
+                        f"Document storage progress mapping: {percentage}% -> {overall_progress}%"
                     )
 
                     # Update progress state while preserving existing fields
                     self.progress_state.update({
                         "status": "document_storage",
-                        "percentage": mapped_percentage,
+                        "percentage": overall_progress,
                         "log": message,
                     })
 
@@ -553,9 +553,11 @@ class CrawlingService:
                 content = crawl_results[0].get('markdown', '')
                 if self.url_handler.is_link_collection_file(url, content):
                     if self.progress_id:
+                        # Use ProgressMapper to stay within crawling range (5-30%)
+                        overall_progress = self.progress_mapper.map_progress("crawling", 80)  # 80% within crawling = ~25%
                         self.progress_state.update({
-                            "status": "extracting_links",
-                            "percentage": 25,
+                            "status": "crawling",
+                            "percentage": overall_progress,
                             "log": "Link collection file detected, extracting embedded links...",
                         })
                         await update_crawl_progress(self.progress_id, self.progress_state)
@@ -584,9 +586,11 @@ class CrawlingService:
                     
                     if extracted_links:
                         if self.progress_id:
+                            # Use ProgressMapper to stay within crawling range (5-30%)
+                            overall_progress = self.progress_mapper.map_progress("crawling", 90)  # 90% within crawling = ~27%
                             self.progress_state.update({
-                                "status": "crawling_links",
-                                "percentage": 30,
+                                "status": "crawling",
+                                "percentage": overall_progress,
                                 "log": f"Found {len(extracted_links)} links to crawl from {url}",
                             })
                             await update_crawl_progress(self.progress_id, self.progress_state)
@@ -597,8 +601,8 @@ class CrawlingService:
                             extracted_links,
                             max_concurrent=request.get('max_concurrent'),  # None -> use DB settings
                             progress_callback=await self._create_crawl_progress_callback("crawling"),
-                            start_progress=30,
-                            end_progress=70,
+                            start_progress=20,
+                            end_progress=30,
                         )
                         
                         # Combine original text file results with batch results
