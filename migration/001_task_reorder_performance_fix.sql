@@ -13,37 +13,42 @@
 
 -- Drop any existing conflicting function versions
 DROP FUNCTION IF EXISTS increment_task_order(UUID, TEXT, INTEGER, TEXT);
+DROP FUNCTION IF EXISTS increment_task_order(UUID, task_status, INTEGER, TEXT);
+DROP FUNCTION IF EXISTS increment_task_order(UUID, task_status, INTEGER);
 
 -- Create function for efficient task reordering
 -- This replaces the expensive N+1 UPDATE pattern with a single bulk operation
 CREATE OR REPLACE FUNCTION increment_task_order(
     p_project_id UUID,
     p_status task_status,  -- Use the correct enum type, not TEXT
-    p_min_order INTEGER,
-    p_updated_at TEXT
+    p_min_order INTEGER
 )
 RETURNS VOID AS $$
 DECLARE
     project_uuid UUID := p_project_id;
     status_val task_status := p_status;
     min_order_int INTEGER := p_min_order;
-    updated_timestamp TIMESTAMPTZ := p_updated_at::TIMESTAMPTZ;
 BEGIN
     -- Single UPDATE that increments all tasks at position p_min_order and higher
     -- This is much more efficient than individual UPDATE queries in a loop
+    -- Only updates non-archived tasks and uses database time for updated_at
     UPDATE archon_tasks 
     SET 
         task_order = task_order + 1,
-        updated_at = updated_timestamp
+        updated_at = NOW()
     WHERE 
         project_id = project_uuid 
         AND status = status_val 
-        AND task_order >= min_order_int;
+        AND task_order >= min_order_int
+        AND archived = FALSE;
 END;
 $$ LANGUAGE plpgsql;
 
 -- Add function documentation
-COMMENT ON FUNCTION increment_task_order IS 'Efficiently increments task_order for task reordering during creation. Fixes N+1 query performance issue.';
+COMMENT ON FUNCTION increment_task_order(UUID, task_status, INTEGER) IS 'Efficiently increments task_order for task reordering during creation. Fixes N+1 query performance issue.';
+
+-- Add partial composite index for optimal task reordering performance
+CREATE INDEX IF NOT EXISTS idx_archon_tasks_reorder_active ON archon_tasks(project_id, status, task_order) WHERE archived = FALSE;
 
 -- =====================================================
 -- Migration Complete

@@ -6,6 +6,7 @@ shared between MCP tools and FastAPI endpoints.
 """
 
 # Removed direct logging import - using unified config
+import time
 from datetime import datetime
 from typing import Any
 
@@ -116,12 +117,34 @@ class TaskService:
 
                 # Single UPDATE query: increment all tasks at this position and higher
                 # This replaces the expensive N+1 query pattern with one efficient operation
-                self.supabase_client.rpc('increment_task_order', {
-                    'p_project_id': project_id,
-                    'p_status': task_status,
-                    'p_min_order': task_order,
-                    'p_updated_at': datetime.now().isoformat()
-                }).execute()
+                max_attempts = 3
+                base_delay = 1.0  # Start with 1 second
+                
+                for attempt in range(1, max_attempts + 1):
+                    try:
+                        resp = self.supabase_client.rpc('increment_task_order', {
+                            'p_project_id': project_id,
+                            'p_status': task_status,
+                            'p_min_order': task_order
+                        }).execute()
+                        
+                        if resp.error:
+                            raise Exception(f"RPC error: {resp.error}")
+                        
+                        # Success - break out of retry loop
+                        logger.info(f"Task reordering completed successfully on attempt {attempt}")
+                        break
+                        
+                    except Exception as e:
+                        if attempt == max_attempts:
+                            # Final attempt failed - raise exception
+                            logger.error(f"Task reordering failed after {max_attempts} attempts: {e}")
+                            raise Exception(f"Failed to increment task order after {max_attempts} attempts: {e}")
+                        else:
+                            # Log warning and retry with exponential backoff
+                            delay = base_delay * (2 ** (attempt - 1))  # 1s, 2s, 4s, etc.
+                            logger.warning(f"Task reordering attempt {attempt} failed: {e}. Retrying in {delay}s...")
+                            time.sleep(delay)
 
             task_data = {
                 "project_id": project_id,

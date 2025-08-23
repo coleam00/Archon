@@ -430,6 +430,9 @@ CREATE INDEX IF NOT EXISTS idx_archon_tasks_assignee ON archon_tasks(assignee);
 CREATE INDEX IF NOT EXISTS idx_archon_tasks_order ON archon_tasks(task_order);
 CREATE INDEX IF NOT EXISTS idx_archon_tasks_archived ON archon_tasks(archived);
 CREATE INDEX IF NOT EXISTS idx_archon_tasks_archived_at ON archon_tasks(archived_at);
+
+-- Partial composite index for task reordering performance (only non-archived tasks)
+CREATE INDEX IF NOT EXISTS idx_archon_tasks_reorder_active ON archon_tasks(project_id, status, task_order) WHERE archived = FALSE;
 CREATE INDEX IF NOT EXISTS idx_archon_project_sources_project_id ON archon_project_sources(project_id);
 CREATE INDEX IF NOT EXISTS idx_archon_project_sources_source_id ON archon_project_sources(source_id);
 CREATE INDEX IF NOT EXISTS idx_archon_document_versions_project_id ON archon_document_versions(project_id);
@@ -784,7 +787,7 @@ You are the Data-Builder Agent. Your purpose is to transform descriptions of dat
 Remember: Create production-ready data models.', 'System prompt for creating data models in the data array');
 
 -- =====================================================
--- SECTION 9: TASK REORDERING OPTIMIZATION FUNCTIONS
+-- SECTION 11: TASK REORDERING OPTIMIZATION FUNCTIONS
 -- =====================================================
 
 -- Task reordering performance optimization function
@@ -793,30 +796,29 @@ Remember: Create production-ready data models.', 'System prompt for creating dat
 CREATE OR REPLACE FUNCTION increment_task_order(
     p_project_id UUID,
     p_status task_status,  -- Use the correct enum type, not TEXT
-    p_min_order INTEGER,
-    p_updated_at TEXT
+    p_min_order INTEGER
 )
 RETURNS VOID AS $$
 DECLARE
     project_uuid UUID := p_project_id;
     status_val task_status := p_status;
     min_order_int INTEGER := p_min_order;
-    updated_timestamp TIMESTAMPTZ := p_updated_at::TIMESTAMPTZ;
 BEGIN
     -- Single UPDATE that increments all tasks at position p_min_order and higher
     -- This is much more efficient than individual UPDATE queries in a loop
+    -- Only updates non-archived tasks; updated_at is handled by BEFORE UPDATE trigger
     UPDATE archon_tasks 
     SET 
-        task_order = task_order + 1,
-        updated_at = updated_timestamp
+        task_order = task_order + 1
     WHERE 
         project_id = project_uuid 
         AND status = status_val 
-        AND task_order >= min_order_int;
+        AND task_order >= min_order_int
+        AND archived = FALSE;
 END;
 $$ LANGUAGE plpgsql;
 
-COMMENT ON FUNCTION increment_task_order IS 'Efficiently increments task_order for task reordering during creation. Fixes N+1 query performance issue.';
+COMMENT ON FUNCTION increment_task_order(UUID, task_status, INTEGER) IS 'Efficiently increments task_order for task reordering during creation. Fixes N+1 query performance issue.';
 
 -- =====================================================
 -- SETUP COMPLETE
