@@ -49,7 +49,7 @@ class MCPServerManager:
     """Manages the MCP Docker container lifecycle."""
 
     def __init__(self):
-        self.container_name = "Archon-MCP"  # Container name from docker-compose.yml
+        self.container_name = None  # Will be resolved dynamically
         self.docker_client = None
         self.container = None
         self.status: str = "stopped"
@@ -62,16 +62,29 @@ class MCPServerManager:
         self._min_operation_interval = 2.0  # Minimum 2 seconds between operations
         self._initialize_docker_client()
 
+    def _resolve_container(self):
+        """Simple container resolution - just use fixed name."""
+        if not self.docker_client:
+            return None
+        
+        try:
+            # Simple: Just look for the fixed container name
+            container = self.docker_client.containers.get("archon-mcp")
+            self.container_name = "archon-mcp"
+            mcp_logger.info("Found MCP container")
+            return container
+        except NotFound:
+            mcp_logger.warning("MCP container not found - is it running?")
+            self.container_name = "archon-mcp"
+            return None
+
     def _initialize_docker_client(self):
         """Initialize Docker client and get container reference."""
         try:
             self.docker_client = docker.from_env()
-            try:
-                self.container = self.docker_client.containers.get(self.container_name)
-                mcp_logger.info(f"Found Docker container: {self.container_name}")
-            except NotFound:
-                mcp_logger.warning(f"Docker container {self.container_name} not found")
-                self.container = None
+            self.container = self._resolve_container()
+            if not self.container:
+                mcp_logger.warning("MCP container not found during initialization")
         except Exception as e:
             mcp_logger.error(f"Failed to initialize Docker client: {str(e)}")
             self.docker_client = None
@@ -85,10 +98,17 @@ class MCPServerManager:
             if self.container:
                 self.container.reload()  # Refresh container info
             else:
-                self.container = self.docker_client.containers.get(self.container_name)
+                # Try to resolve container again if we don't have it
+                self.container = self._resolve_container()
+                if not self.container:
+                    return "not_found"
 
             return self.container.status
         except NotFound:
+            # Try to resolve again in case container was recreated
+            self.container = self._resolve_container()
+            if self.container:
+                return self.container.status
             return "not_found"
         except Exception as e:
             mcp_logger.error(f"Error getting container status: {str(e)}")
