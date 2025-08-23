@@ -112,26 +112,16 @@ class TaskService:
 
             # REORDERING LOGIC: If inserting at a specific position, increment existing tasks
             if task_order > 0:
-                # Get all tasks in the same project and status with task_order >= new task's order
-                existing_tasks_response = (
-                    self.supabase_client.table("archon_tasks")
-                    .select("id, task_order")
-                    .eq("project_id", project_id)
-                    .eq("status", task_status)
-                    .gte("task_order", task_order)
-                    .execute()
-                )
+                logger.info(f"Inserting task at position {task_order}, incrementing existing tasks")
 
-                if existing_tasks_response.data:
-                    logger.info(f"Reordering {len(existing_tasks_response.data)} existing tasks")
-
-                    # Increment task_order for all affected tasks
-                    for existing_task in existing_tasks_response.data:
-                        new_order = existing_task["task_order"] + 1
-                        self.supabase_client.table("archon_tasks").update({
-                            "task_order": new_order,
-                            "updated_at": datetime.now().isoformat(),
-                        }).eq("id", existing_task["id"]).execute()
+                # Single UPDATE query: increment all tasks at this position and higher
+                # This replaces the expensive N+1 query pattern with one efficient operation
+                self.supabase_client.rpc('increment_task_order', {
+                    'p_project_id': project_id,
+                    'p_status': task_status,
+                    'p_min_order': task_order,
+                    'p_updated_at': datetime.now().isoformat()
+                }).execute()
 
             task_data = {
                 "project_id": project_id,

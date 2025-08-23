@@ -784,6 +784,41 @@ You are the Data-Builder Agent. Your purpose is to transform descriptions of dat
 Remember: Create production-ready data models.', 'System prompt for creating data models in the data array');
 
 -- =====================================================
+-- SECTION 9: TASK REORDERING OPTIMIZATION FUNCTIONS
+-- =====================================================
+
+-- Task reordering performance optimization function
+-- Replaces N+1 UPDATE queries with single bulk operation
+-- This function significantly improves performance for task creation
+CREATE OR REPLACE FUNCTION increment_task_order(
+    p_project_id UUID,
+    p_status task_status,  -- Use the correct enum type, not TEXT
+    p_min_order INTEGER,
+    p_updated_at TEXT
+)
+RETURNS VOID AS $$
+DECLARE
+    project_uuid UUID := p_project_id;
+    status_val task_status := p_status;
+    min_order_int INTEGER := p_min_order;
+    updated_timestamp TIMESTAMPTZ := p_updated_at::TIMESTAMPTZ;
+BEGIN
+    -- Single UPDATE that increments all tasks at position p_min_order and higher
+    -- This is much more efficient than individual UPDATE queries in a loop
+    UPDATE archon_tasks 
+    SET 
+        task_order = task_order + 1,
+        updated_at = updated_timestamp
+    WHERE 
+        project_id = project_uuid 
+        AND status = status_val 
+        AND task_order >= min_order_int;
+END;
+$$ LANGUAGE plpgsql;
+
+COMMENT ON FUNCTION increment_task_order IS 'Efficiently increments task_order for task reordering during creation. Fixes N+1 query performance issue.';
+
+-- =====================================================
 -- SETUP COMPLETE
 -- =====================================================
 -- Your Archon database is now fully configured!
