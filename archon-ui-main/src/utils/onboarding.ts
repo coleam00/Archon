@@ -12,13 +12,14 @@ export interface ProviderInfo {
 
 /**
  * Determines if LM (Language Model) is configured based on credentials
- * 
+ *
  * Logic:
  * - provider := value of 'LLM_PROVIDER' from ragCreds (if present)
  * - if provider === 'openai': check for valid OPENAI_API_KEY
  * - if provider === 'google' or 'gemini': check for valid GOOGLE_API_KEY
+ * - if provider === 'openrouter': check for valid OPENROUTER_API_KEY
  * - if provider === 'ollama': return true (local, no API key needed)
- * - if no provider: check for any valid API key (OpenAI or Google)
+ * - if no provider: check for any valid API key (OpenAI, Google, or OpenRouter)
  */
 export function isLmConfigured(
   ragCreds: NormalizedCredential[],
@@ -50,12 +51,15 @@ export function isLmConfigured(
   // Find API keys
   const openAIKeyCred = apiKeyCreds.find(c => c.key.toUpperCase() === 'OPENAI_API_KEY');
   const googleKeyCred = apiKeyCreds.find(c => c.key.toUpperCase() === 'GOOGLE_API_KEY');
-  
+  const openRouterKeyCred = apiKeyCreds.find(c => c.key.toUpperCase() === 'OPENROUTER_API_KEY');
+
   const hasOpenAIKey = hasValidCredential(openAIKeyCred);
   const hasGoogleKey = hasValidCredential(googleKeyCred);
+  const hasOpenRouterKey = hasValidCredential(openRouterKeyCred);
 
   console.log('🔎 isLmConfigured - OpenAI key valid:', hasOpenAIKey);
   console.log('🔎 isLmConfigured - Google key valid:', hasGoogleKey);
+  console.log('🔎 isLmConfigured - OpenRouter key valid:', hasOpenRouterKey);
 
   // Check based on provider
   if (provider === 'openai') {
@@ -64,6 +68,9 @@ export function isLmConfigured(
   } else if (provider === 'google' || provider === 'gemini') {
     // Google/Gemini provider requires Google API key
     return hasGoogleKey;
+  } else if (provider === 'openrouter') {
+    // OpenRouter provider requires OpenRouter API key
+    return hasOpenRouterKey;
   } else if (provider === 'ollama') {
     // Ollama is local, doesn't need API key
     return true;
@@ -73,7 +80,7 @@ export function isLmConfigured(
     return true;
   } else {
     // No provider specified, check if ANY API key is configured
-    // This allows users to configure either OpenAI or Google without specifying provider
-    return hasOpenAIKey || hasGoogleKey;
+    // This allows users to configure any supported provider without specifying provider
+    return hasOpenAIKey || hasGoogleKey || hasOpenRouterKey;
   }
 }

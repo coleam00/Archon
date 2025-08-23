@@ -19,8 +19,18 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-"paths": { "@/*": ["./src/*"] }
+
+    /* Path mapping */
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+
+    /* Type resolution */
+    "typeRoots": ["./node_modules/@types"],
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true
   },
   "include": ["src", "test"],
+  "exclude": ["node_modules", "dist"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
