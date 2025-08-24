@@ -407,7 +407,8 @@ def register_modules():
         # Code errors that should not be ignored
         logger.error(f"✗ Code error in project tools - MUST FIX: {e}")
         logger.error(traceback.format_exc())
-        # raise  # Do not re-raise, allow other modules to register
+        if os.getenv("ARCHON_MCP_FAIL_ON_CODE_ERROR") == "1":
+            raise
     except Exception as e:
         # Unexpected errors during registration
         logger.error(f"✗ Failed to register project tools: {e}")
@@ -426,7 +427,8 @@ def register_modules():
     except (SyntaxError, NameError, AttributeError) as e:
         logger.error(f"✗ Code error in task tools - MUST FIX: {e}")
         logger.error(traceback.format_exc())
-        # raise # Do not re-raise
+        if os.getenv("ARCHON_MCP_FAIL_ON_CODE_ERROR") == "1":
+            raise
     except Exception as e:
         logger.error(f"✗ Failed to register task tools: {e}")
         logger.error(traceback.format_exc())
@@ -443,7 +445,8 @@ def register_modules():
     except (SyntaxError, NameError, AttributeError) as e:
         logger.error(f"✗ Code error in document tools - MUST FIX: {e}")
         logger.error(traceback.format_exc())
-        # raise # Do not re-raise
+        if os.getenv("ARCHON_MCP_FAIL_ON_CODE_ERROR") == "1":
+            raise
     except Exception as e:
         logger.error(f"✗ Failed to register document tools: {e}")
         logger.error(traceback.format_exc())
@@ -460,7 +463,8 @@ def register_modules():
     except (SyntaxError, NameError, AttributeError) as e:
         logger.error(f"✗ Code error in version tools - MUST FIX: {e}")
         logger.error(traceback.format_exc())
-        # raise # Do not re-raise
+        if os.getenv("ARCHON_MCP_FAIL_ON_CODE_ERROR") == "1":
+            raise
     except Exception as e:
         logger.error(f"✗ Failed to register version tools: {e}")
         logger.error(traceback.format_exc())
@@ -477,7 +481,8 @@ def register_modules():
     except (SyntaxError, NameError, AttributeError) as e:
         logger.error(f"✗ Code error in feature tools - MUST FIX: {e}")
         logger.error(traceback.format_exc())
-        # raise # Do not re-raise
+        if os.getenv("ARCHON_MCP_FAIL_ON_CODE_ERROR") == "1":
+            raise
     except Exception as e:
         logger.error(f"✗ Failed to register feature tools: {e}")
         logger.error(traceback.format_exc())
