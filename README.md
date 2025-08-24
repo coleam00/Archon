@@ -43,8 +43,10 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
 ### Prerequisites
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- [Node.js 18+](https://nodejs.org/) (for hybrid development mode)
 - [Supabase](https://supabase.com/) account (free tier or local Supabase both work)
 - [OpenAI API key](https://platform.openai.com/api-keys) (Gemini and Ollama are supported too!)
+- (OPTIONAL) [Make](https://www.gnu.org/software/make/) (see [Installing Make](#installing-make) below)
 
 ### Setup Instructions
 
@@ -70,13 +72,17 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
 
 3. **Database Setup**: In your [Supabase project](https://supabase.com/dashboard) SQL Editor, copy, paste, and execute the contents of `migration/complete_setup.sql`
 
-4. **Start Services**:
+4. **Start Services** (choose one):
+
+   **Full Docker Mode (Recommended for Normal Archon Usage)**
 
    ```bash
-   docker-compose up --build -d
+   docker compose --profile full up --build -d
+   # or
+   make dev-docker # (Alternative: Requires make installed )
    ```
 
-   This starts the core microservices:
+   This starts all core microservices in Docker:
    - **Server**: Core API and business logic (Port: 8181)
    - **MCP Server**: Protocol interface for AI clients (Port: 8051)
    - **Agents (coming soon!)**: AI operations and streaming (Port: 8052)
@@ -88,6 +94,19 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
    - Open http://localhost:3737
    - Go to **Settings** → Select your LLM/embedding provider and set the API key (OpenAI is default)
    - Test by uploading a document or crawling a website
+
+### 🚀 Quick Command Reference
+
+| Command           | Description                                             |
+| ----------------- | ------------------------------------------------------- |
+| `make dev`        | Start hybrid dev (backend in Docker, frontend local) ⭐ |
+| `make dev-docker` | Everything in Docker                                    |
+| `make stop`       | Stop all services                                       |
+| `make test`       | Run all tests                                           |
+| `make lint`       | Run linters                                             |
+| `make install`    | Install dependencies                                    |
+| `make check`      | Check environment setup                                 |
+| `make clean`      | Remove containers and volumes (with confirmation)       |
 
 ## 🔄 Database Reset (Start Fresh if Needed)
 
@@ -105,7 +124,7 @@ If you need to completely reset your database and start fresh:
 3. **Restart Services**:
 
    ```bash
-   docker-compose up -d
+   docker compose --profile full up -d
    ```
 
 4. **Reconfigure**:
@@ -115,6 +134,41 @@ If you need to completely reset your database and start fresh:
 The reset script safely removes all tables, functions, triggers, and policies with proper dependency handling.
 
 </details>
+
+## 🛠️ Installing Make (OPTIONAL)
+
+Make is required for the local development workflow. Installation varies by platform:
+
+### Windows
+
+```bash
+# Option 1: Using Chocolatey
+choco install make
+
+# Option 2: Using Scoop
+scoop install make
+
+# Option 3: Using WSL2
+wsl --install
+# Then in WSL: sudo apt-get install make
+```
+
+### macOS
+
+```bash
+# Make comes pre-installed on macOS
+# If needed: brew install make
+```
+
+### Linux
+
+```bash
+# Debian/Ubuntu
+sudo apt-get install make
+
+# RHEL/CentOS/Fedora
+sudo yum install make
+```
 
 ## ⚡ Quick Test
 
@@ -221,11 +275,11 @@ Archon uses true microservices architecture with clear separation of concerns:
 
 By default, Archon services run on the following ports:
 
-- **Archon-UI**: 3737
-- **Archon-Server**: 8181
-- **Archon-MCP**: 8051
-- **Archon-Agents**: 8052
-- **Archon-Docs**: 3838 (optional)
+- **archon-ui**: 3737
+- **archon-server**: 8181
+- **archon-mcp**: 8051
+- **archon-agents**: 8052
+- **archon-docs**: 3838 (optional)
 
 ### Changing Ports
 
@@ -269,26 +323,139 @@ This is useful when:
 
 After changing hostname or ports:
 
-1. Restart Docker containers: `docker-compose down && docker-compose up -d`
+1. Restart Docker containers: `docker compose down && docker compose --profile full up -d`
 2. Access the UI at: `http://${HOST}:${ARCHON_UI_PORT}`
 3. Update your AI client configuration with the new hostname and MCP port
 
 ## 🔧 Development
 
-For development with hot reload:
+### Quick Start
 
 ```bash
-# Backend services (with auto-reload)
-docker-compose up archon-server archon-mcp archon-agents --build
+# Install dependencies
+make install
 
-# Frontend (with hot reload)
-cd archon-ui-main && npm run dev
+# Start development (recommended)
+make dev        # Backend in Docker, frontend local with hot reload
 
-# Documentation (with hot reload)
-cd docs && npm start
+# Alternative: Everything in Docker
+make dev-docker # All services in Docker
+
+# Stop everything (local FE needs to be stopped manually)
+make stop
+```
+
+### Development Modes
+
+#### Hybrid Mode (Recommended) - `make dev`
+
+Best for active development with instant frontend updates:
+
+- Backend services run in Docker (isolated, consistent)
+- Frontend runs locally with hot module replacement
+- Instant UI updates without Docker rebuilds
+
+#### Full Docker Mode - `make dev-docker`
+
+For all services in Docker environment:
+
+- All services run in Docker containers
+- Better for integration testing
+- Slower frontend updates
+
+### Testing & Code Quality
+
+```bash
+# Run tests
+make test       # Run all tests
+make test-fe    # Run frontend tests
+make test-be    # Run backend tests
+
+# Run linters
+make lint       # Lint all code
+make lint-fe    # Lint frontend code
+make lint-be    # Lint backend code
+
+# Check environment
+make check      # Verify environment setup
+
+# Clean up
+make clean      # Remove containers and volumes (asks for confirmation)
+```
+
+### Viewing Logs
+
+```bash
+# View logs using Docker Compose directly
+docker compose logs -f              # All services
+docker compose logs -f archon-server # API server
+docker compose logs -f archon-mcp    # MCP server
+docker compose logs -f archon-ui     # Frontend
 ```
 
 **Note**: The backend services are configured with `--reload` flag in their uvicorn commands and have source code mounted as volumes for automatic hot reloading when you make changes.
+
+## 🔍 Troubleshooting
+
+### Common Issues and Solutions
+
+#### Port Conflicts
+
+If you see "Port already in use" errors:
+
+```bash
+# Check what's using a port (e.g., 3737)
+lsof -i :3737
+
+# Stop all containers and local services
+make stop
+
+# Change the port in .env
+```
+
+#### Docker Permission Issues (Linux)
+
+If you encounter permission errors with Docker:
+
+```bash
+# Add your user to the docker group
+sudo usermod -aG docker $USER
+
+# Log out and back in, or run
+newgrp docker
+```
+
+#### Windows-Specific Issues
+
+- **Make not found**: Install Make via Chocolatey, Scoop, or WSL2 (see [Installing Make](#installing-make))
+- **Line ending issues**: Configure Git to use LF endings:
+  ```bash
+  git config --global core.autocrlf false
+  ```
+
+#### Frontend Can't Connect to Backend
+
+- Check backend is running: `curl http://localhost:8181/health`
+- Verify port configuration in `.env`
+- For custom ports, ensure both `ARCHON_SERVER_PORT` and `VITE_ARCHON_SERVER_PORT` are set
+
+#### Docker Compose Hangs
+
+If `docker compose` commands hang:
+
+```bash
+# Reset Docker Compose
+docker compose down --remove-orphans
+docker system prune -f
+
+# Restart Docker Desktop (if applicable)
+```
+
+#### Hot Reload Not Working
+
+- **Frontend**: Ensure you're running in hybrid mode (`make dev`) for best HMR experience
+- **Backend**: Check that volumes are mounted correctly in `docker-compose.yml`
+- **File permissions**: On some systems, mounted volumes may have permission issues
 
 ## 📈 Progress
 

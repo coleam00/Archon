@@ -41,23 +41,33 @@ describe('API Configuration', () => {
       expect(getApiUrl()).toBe('');
     });
 
-    it('should throw error when ARCHON_SERVER_PORT is not set in development', async () => {
-      // Development mode without port
+    it('should use default port 8181 when no port environment variables are set in development', async () => {
+      // Development mode without any port variables
       delete (import.meta.env as any).PROD;
       delete (import.meta.env as any).VITE_API_URL;
+      delete (import.meta.env as any).VITE_ARCHON_SERVER_PORT;
+      delete (import.meta.env as any).VITE_PORT;
       delete (import.meta.env as any).ARCHON_SERVER_PORT;
+      
+      // Mock window.location
+      Object.defineProperty(window, 'location', {
+        value: {
+          protocol: 'http:',
+          hostname: 'localhost'
+        },
+        writable: true
+      });
       
       const { getApiUrl } = await import('../../src/config/api');
       
-      expect(() => getApiUrl()).toThrow('ARCHON_SERVER_PORT environment variable is required');
-      expect(() => getApiUrl()).toThrow('Default value: 8181');
+      expect(getApiUrl()).toBe('http://localhost:8181');
     });
 
-    it('should use ARCHON_SERVER_PORT when set in development', async () => {
-      // Development mode with custom port
+    it('should use VITE_ARCHON_SERVER_PORT when set in development', async () => {
+      // Development mode with custom port via VITE_ prefix
       delete (import.meta.env as any).PROD;
       delete (import.meta.env as any).VITE_API_URL;
-      (import.meta.env as any).ARCHON_SERVER_PORT = '9191';
+      (import.meta.env as any).VITE_ARCHON_SERVER_PORT = '9191';
       
       // Mock window.location
       Object.defineProperty(window, 'location', {
@@ -73,10 +83,10 @@ describe('API Configuration', () => {
     });
 
     it('should use custom port with https protocol', async () => {
-      // Development mode with custom port and https
+      // Development mode with custom port and https via VITE_ prefix
       delete (import.meta.env as any).PROD;
       delete (import.meta.env as any).VITE_API_URL;
-      (import.meta.env as any).ARCHON_SERVER_PORT = '8443';
+      (import.meta.env as any).VITE_ARCHON_SERVER_PORT = '8443';
       
       // Mock window.location with https
       Object.defineProperty(window, 'location', {
@@ -139,7 +149,7 @@ describe('API Configuration', () => {
         vi.resetModules();
         delete (import.meta.env as any).PROD;
         delete (import.meta.env as any).VITE_API_URL;
-        (import.meta.env as any).ARCHON_SERVER_PORT = port;
+        (import.meta.env as any).VITE_ARCHON_SERVER_PORT = port;
         
         Object.defineProperty(window, 'location', {
           value: {
@@ -174,11 +184,10 @@ describe('MCP Client Service Configuration', () => {
   it('should throw error when ARCHON_MCP_PORT is not set', async () => {
     delete (import.meta.env as any).ARCHON_MCP_PORT;
     
-    const { MCPClientService } = await import('../../src/services/mcpClientService');
-    const service = new MCPClientService();
+    const { mcpClientService } = await import('../../src/services/mcpClientService');
     
-    await expect(service.createArchonClient()).rejects.toThrow('ARCHON_MCP_PORT environment variable is required');
-    await expect(service.createArchonClient()).rejects.toThrow('Default value: 8051');
+    await expect(mcpClientService.createArchonClient()).rejects.toThrow('ARCHON_MCP_PORT environment variable is required');
+    await expect(mcpClientService.createArchonClient()).rejects.toThrow('Default value: 8051');
   });
 
   it('should use ARCHON_MCP_PORT when set', async () => {
@@ -205,11 +214,10 @@ describe('MCP Client Service Configuration', () => {
       })
     });
     
-    const { MCPClientService } = await import('../../src/services/mcpClientService');
-    const service = new MCPClientService();
+    const { mcpClientService } = await import('../../src/services/mcpClientService');
     
     try {
-      await service.createArchonClient();
+      await mcpClientService.createArchonClient();
       
       // Verify the fetch was called with the correct URL
       expect(global.fetch).toHaveBeenCalledWith(

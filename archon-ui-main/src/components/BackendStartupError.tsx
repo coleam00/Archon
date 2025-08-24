@@ -28,12 +28,12 @@ export const BackendStartupError: React.FC = () => {
                   <span className="font-semibold">Check Docker Logs</span>
                 </div>
                 <p className="text-red-100 font-mono text-sm mb-3">
-                  Check the <span className="text-red-400 font-bold">Archon-Server</span> logs in Docker Desktop for detailed error information.
+                  Check the <span className="text-red-400 font-bold">Archon API server</span> container logs in Docker Desktop for detailed error information.
                 </p>
                 <div className="space-y-2 text-xs text-red-300">
                   <p>1. Open Docker Desktop</p>
                   <p>2. Go to Containers tab</p>
-                  <p>3. Click on <span className="text-red-400 font-semibold">Archon-Server</span></p>
+                  <p>3. Look for the Archon server container (typically named <span className="text-red-400 font-semibold">archon-server</span> or similar)</p>
                   <p>4. View the logs for the specific error message</p>
                 </div>
               </div>

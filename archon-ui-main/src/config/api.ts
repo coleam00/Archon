@@ -20,14 +20,11 @@ export function getApiUrl(): string {
   // For development, construct from window location
   const protocol = window.location.protocol;
   const host = window.location.hostname;
-  const port = import.meta.env.ARCHON_SERVER_PORT;
+  // Use configured port or default to 8181
+  const port = import.meta.env.VITE_ARCHON_SERVER_PORT || '8181';
   
-  if (!port) {
-    throw new Error(
-      'ARCHON_SERVER_PORT environment variable is required. ' +
-      'Please set it in your environment variables. ' +
-      'Default value: 8181'
-    );
+  if (!import.meta.env.VITE_ARCHON_SERVER_PORT) {
+    console.info('[Archon] Using default ARCHON_SERVER_PORT: 8181');
   }
   
   return `${protocol}//${host}:${port}`;
