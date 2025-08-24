@@ -14,85 +14,6 @@ from ..llm_provider_service import get_llm_client
 from ..threading_service import get_threading_service
 
 
-async def _create_chat_completion_with_fallback(client, model: str, messages: list, temperature: float, max_tokens: int):
-    """
-    Create a chat completion with automatic fallback for parameter restrictions.
-    
-    Handles multiple parameter compatibility issues:
-    - max_tokens vs max_completion_tokens (newer models)
-    - temperature restrictions (GPT-5 reasoning models only support default temperature=1)
-    """
-    # First attempt - try with provided parameters
-    try:
-        return await client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-    except Exception as e:
-        # Log the exact error for debugging
-        search_logger.info(f"OpenAI API call failed for model {model}. Error: {e}")
-        search_logger.info(f"Error type: {type(e).__name__}")
-        
-        error_str = str(e).lower()
-        
-        # More robust max_tokens parameter error detection
-        max_tokens_error = (
-            "max_tokens" in error_str and 
-            ("not supported" in error_str or "unsupported parameter" in error_str)
-        )
-        
-        if max_tokens_error:
-            search_logger.info(f"Model {model} requires max_completion_tokens, retrying with fallback")
-            try:
-                return await client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_completion_tokens=max_tokens,
-                )
-            except Exception as e2:
-                search_logger.info(f"max_completion_tokens attempt failed: {e2}")
-                # If this also fails, continue to check for temperature issues
-                e = e2
-                error_str = str(e).lower()
-        
-        # Handle temperature parameter restrictions (GPT-5 models)
-        temperature_error = (
-            "temperature" in error_str and 
-            ("only the default" in error_str or "not supported" in error_str or "unsupported value" in error_str)
-        )
-        
-        if temperature_error:
-            search_logger.info(f"Model {model} doesn't support custom temperature, retrying without temperature parameter")
-            # Determine which token parameter to use based on the error context
-            use_completion_tokens = (
-                max_tokens_error or 
-                "max_completion_tokens" in error_str or
-                any(model_name in model.lower() for model_name in ["gpt-5", "o1"])
-            )
-            
-            if use_completion_tokens:
-                return await client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    max_completion_tokens=max_tokens,
-                    # No temperature parameter - use model default
-                )
-            else:
-                return await client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    max_tokens=max_tokens,
-                    # No temperature parameter - use model default
-                )
-        
-        # If it's a different error, re-raise
-        search_logger.info(f"Unhandled error for model {model}: {e}")
-        raise
-
-
 async def generate_contextual_embedding(
     full_document: str, chunk: str, provider: str = None
 ) -> tuple[str, bool]:
@@ -144,16 +65,17 @@ Please give a short succinct context to situate this chunk within the overall do
                 # Get model from provider configuration
                 model = await _get_model_choice(provider)
 
-                messages = [
-                    {
-                        "role": "system",
-                        "content": "You are a helpful assistant that provides concise contextual information.",
-                    },
-                    {"role": "user", "content": prompt},
-                ]
-                
-                response = await _create_chat_completion_with_fallback(
-                    client, model, messages, temperature=0.3, max_tokens=500
+                response = await client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are a helpful assistant that provides concise contextual information.",
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.3,
+                    max_tokens=200,
                 )
 
                 context = response.choices[0].message.content.strip()
@@ -239,20 +161,18 @@ async def generate_contextual_embeddings_batch(
 
             batch_prompt += "For each chunk, provide a short succinct context to situate it within the overall document for improving search retrieval. Format your response as:\\nCHUNK 1: [context]\\nCHUNK 2: [context]\\netc."
 
-            messages = [
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant that generates contextual information for document chunks.",
-                },
-                {"role": "user", "content": batch_prompt},
-            ]
-            
-            # Calculate token limit (increased base from 100 to 250 per chunk)
-            token_limit = 250 * len(chunks)
-                
-            # Make single API call for ALL chunks with fallback
-            response = await _create_chat_completion_with_fallback(
-                client, model_choice, messages, temperature=0, max_tokens=token_limit
+            # Make single API call for ALL chunks
+            response = await client.chat.completions.create(
+                model=model_choice,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a helpful assistant that generates contextual information for document chunks.",
+                    },
+                    {"role": "user", "content": batch_prompt},
+                ],
+                temperature=0,
+                max_tokens=100 * len(chunks),  # Limit response size
             )
 
             # Parse response
