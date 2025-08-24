@@ -558,7 +558,7 @@ async def start_server():
             safe_set_attribute(span, "success", result.get("success", False))
             return result
         except Exception as e:
-            api_logger.error("MCP server start API failed - error=%s", str(e))
+            api_logger.error("MCP server start API failed", exc_info=True)
             safe_set_attribute(span, "success", False)
             safe_set_attribute(span, "error", str(e))
             raise HTTPException(status_code=500, detail=str(e))
@@ -577,7 +577,7 @@ async def stop_server():
             safe_set_attribute(span, "success", result.get("success", False))
             return result
         except Exception as e:
-            api_logger.error(f"MCP server stop API failed - error={str(e)}")
+            api_logger.error("MCP server stop API failed", exc_info=True)
             safe_set_attribute(span, "success", False)
             safe_set_attribute(span, "error", str(e))
             raise HTTPException(status_code=500, detail=str(e))
@@ -597,7 +597,7 @@ async def get_status():
             safe_set_attribute(span, "uptime", status.get("uptime"))
             return status
         except Exception as e:
-            api_logger.error(f"MCP server status API failed - error={str(e)}")
+            api_logger.error("MCP server status API failed", exc_info=True)
             safe_set_attribute(span, "error", str(e))
             raise HTTPException(status_code=500, detail=str(e))
 
@@ -616,7 +616,7 @@ async def get_logs(limit: int = 100):
             safe_set_attribute(span, "log_count", len(logs))
             return {"logs": logs}
         except Exception as e:
-            api_logger.error("MCP server logs API failed", error=str(e))
+            api_logger.error("MCP server logs API failed", exc_info=True)
             safe_set_attribute(span, "error", str(e))
             raise HTTPException(status_code=500, detail=str(e))
 
@@ -634,7 +634,7 @@ async def clear_logs():
             safe_set_attribute(span, "success", True)
             return {"success": True, "message": "Logs cleared successfully"}
         except Exception as e:
-            api_logger.error("MCP server clear logs API failed", error=str(e))
+            api_logger.error("MCP server clear logs API failed", exc_info=True)
             safe_set_attribute(span, "success", False)
             safe_set_attribute(span, "error", str(e))
             raise HTTPException(status_code=500, detail=str(e))
@@ -698,7 +698,7 @@ async def get_mcp_config():
 
             return config
         except Exception as e:
-            api_logger.error("Failed to get MCP configuration", error=str(e))
+            api_logger.error("Failed to get MCP configuration", exc_info=True)
             safe_set_attribute(span, "error", str(e))
             raise HTTPException(status_code=500, detail={"error": str(e)})
 
@@ -741,7 +741,7 @@ async def save_configuration(config: ServerConfig):
             return {"success": True, "message": "Configuration saved"}
 
         except Exception as e:
-            api_logger.error(f"Failed to save MCP configuration | error={str(e)}")
+            api_logger.error("Failed to save MCP configuration", exc_info=True)
             safe_set_attribute(span, "error", str(e))
             raise HTTPException(status_code=500, detail={"error": str(e)})
 
@@ -823,7 +823,7 @@ async def get_mcp_tools():
                     }
 
             except Exception as e:
-                api_logger.error("Failed to debug MCP server tools", error=str(e))
+                api_logger.error("Failed to debug MCP server tools", exc_info=True)
 
                 return {
                     "tools": [],
@@ -834,7 +834,7 @@ async def get_mcp_tools():
                 }
 
         except Exception as e:
-            api_logger.error("Failed to get MCP tools", error=str(e))
+            api_logger.error("Failed to get MCP tools", exc_info=True)
             safe_set_attribute(span, "error", str(e))
             safe_set_attribute(span, "source", "general_error")
 
