@@ -360,16 +360,16 @@ class CrawlingService:
             ):
                 if self.progress_id:
                     _ensure_socketio_imports()
-                    # Map percentage to document storage range (20-85%)
-                    mapped_percentage = 20 + int((percentage / 100) * (85 - 20))
+                    # Use ProgressMapper to consistently map document storage progress
+                    overall_progress = self.progress_mapper.map_progress("document_storage", percentage)
                     safe_logfire_info(
-                        f"Document storage progress mapping: {percentage}% -> {mapped_percentage}%"
+                        f"Document storage progress mapping: {percentage}% -> {overall_progress}%"
                     )
 
                     # Update progress state while preserving existing fields
                     self.progress_state.update({
                         "status": "document_storage",
-                        "percentage": mapped_percentage,
+                        "percentage": overall_progress,
                         "log": message,
                     })
 
@@ -487,6 +487,36 @@ class CrawlingService:
                     f"Unregistered orchestration service on error | progress_id={self.progress_id}"
                 )
 
+    def _is_self_link(self, link: str, base_url: str) -> bool:
+        """
+        Check if a link is a self-referential link to the base URL.
+        Handles query parameters, fragments, and trailing slashes.
+        
+        Args:
+            link: The link to check
+            base_url: The base URL to compare against
+            
+        Returns:
+            True if the link is self-referential, False otherwise
+        """
+        try:
+            from urllib.parse import urlparse
+            
+            # Parse both URLs to compare their core components
+            link_parsed = urlparse(link)
+            base_parsed = urlparse(base_url)
+            
+            # Compare scheme, netloc, and path (ignoring query and fragment)
+            link_core = f"{link_parsed.scheme}://{link_parsed.netloc}{link_parsed.path.rstrip('/')}"
+            base_core = f"{base_parsed.scheme}://{base_parsed.netloc}{base_parsed.path.rstrip('/')}"
+            
+            return link_core == base_core
+            
+        except Exception as e:
+            logger.warning(f"Error checking if link is self-referential: {e}")
+            # Fallback to simple string comparison
+            return link.rstrip('/') == base_url.rstrip('/')
+
     async def _crawl_by_url_type(self, url: str, request: Dict[str, Any]) -> tuple:
         """
         Detect URL type and perform appropriate crawling.
@@ -499,14 +529,16 @@ class CrawlingService:
         crawl_results = []
         crawl_type = None
 
-        if self.url_handler.is_txt(url):
+        if self.url_handler.is_txt(url) or self.url_handler.is_markdown(url):
             # Handle text files
             if self.progress_id:
                 self.progress_state.update({
                     "status": "crawling",
                     "percentage": 10,
-                    "log": "Detected text file, fetching content...",
+                    "log": "Detected text/markdown file, fetching content...",
                 })
+                # Keep heartbeat stage/progress in sync with direct emissions
+                self.progress_mapper.map_progress("crawling", 10)
                 await update_crawl_progress(self.progress_id, self.progress_state)
             crawl_results = await self.crawl_markdown_file(
                 url,
@@ -515,6 +547,72 @@ class CrawlingService:
                 end_progress=20,
             )
             crawl_type = "text_file"
+            
+            # Check if this is a link collection file and extract links
+            if crawl_results and len(crawl_results) > 0:
+                content = crawl_results[0].get('markdown', '')
+                if self.url_handler.is_link_collection_file(url, content):
+                    if self.progress_id:
+                        # Use ProgressMapper to stay within crawling range (5-30%)
+                        overall_progress = self.progress_mapper.map_progress("crawling", 80)  # 80% within crawling = ~25%
+                        self.progress_state.update({
+                            "status": "crawling",
+                            "percentage": overall_progress,
+                            "log": "Link collection file detected, extracting embedded links...",
+                        })
+                        await update_crawl_progress(self.progress_id, self.progress_state)
+                    
+                    # Extract links from the content
+                    extracted_links = self.url_handler.extract_markdown_links(content, url)
+                    
+                    # Filter out self-referential links to avoid redundant crawling
+                    if extracted_links:
+                        original_count = len(extracted_links)
+                        extracted_links = [
+                            link for link in extracted_links
+                            if not self._is_self_link(link, url)
+                        ]
+                        self_filtered_count = original_count - len(extracted_links)
+                        if self_filtered_count > 0:
+                            logger.info(f"Filtered out {self_filtered_count} self-referential links from {original_count} extracted links")
+                    
+                    # Filter out binary files (PDFs, images, archives, etc.) to avoid wasteful crawling
+                    if extracted_links:
+                        original_count = len(extracted_links)
+                        extracted_links = [link for link in extracted_links if not self.url_handler.is_binary_file(link)]
+                        filtered_count = original_count - len(extracted_links)
+                        if filtered_count > 0:
+                            logger.info(f"Filtered out {filtered_count} binary files from {original_count} extracted links")
+                    
+                    if extracted_links:
+                        if self.progress_id:
+                            # Use ProgressMapper to stay within crawling range (5-30%)
+                            overall_progress = self.progress_mapper.map_progress("crawling", 90)  # 90% within crawling = ~27%
+                            self.progress_state.update({
+                                "status": "crawling",
+                                "percentage": overall_progress,
+                                "log": f"Found {len(extracted_links)} links to crawl from {url}",
+                            })
+                            await update_crawl_progress(self.progress_id, self.progress_state)
+                        
+                        # Crawl the extracted links using batch crawling
+                        logger.info(f"Crawling {len(extracted_links)} extracted links from {url}")
+                        batch_results = await self.crawl_batch_with_progress(
+                            extracted_links,
+                            max_concurrent=request.get('max_concurrent'),  # None -> use DB settings
+                            progress_callback=await self._create_crawl_progress_callback("crawling"),
+                            start_progress=20,
+                            end_progress=30,
+                        )
+                        
+                        # Combine original text file results with batch results
+                        crawl_results.extend(batch_results)
+                        crawl_type = "link_collection_with_crawled_links"
+                        
+                        logger.info(f"Link collection crawling completed: {len(crawl_results)} total results (1 text file + {len(batch_results)} extracted links)")
+                    else:
+                        logger.info(f"No valid links found in link collection file: {url}")
+                        logger.info(f"Text file crawling completed: {len(crawl_results)} results")
 
         elif self.url_handler.is_sitemap(url):
             # Handle sitemaps
