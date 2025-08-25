@@ -7,7 +7,6 @@ Handles extraction, processing, and storage of code examples from documents.
 import re
 from collections.abc import Callable
 from typing import Any
-from urllib.parse import urlparse
 
 from ...config.logfire_config import safe_logfire_error, safe_logfire_info
 from ...services.credential_service import credential_service
@@ -136,6 +135,7 @@ class CodeExtractionService:
         self,
         crawl_results: list[dict[str, Any]],
         url_to_full_document: dict[str, str],
+        source_id: str,
         progress_callback: Callable | None = None,
         start_progress: int = 0,
         end_progress: int = 100,
@@ -146,6 +146,7 @@ class CodeExtractionService:
         Args:
             crawl_results: List of crawled documents with url and markdown content
             url_to_full_document: Mapping of URLs to full document content
+            source_id: The unique source_id for all documents
             progress_callback: Optional async callback for progress updates
             start_progress: Starting progress percentage (default: 0)
             end_progress: Ending progress percentage (default: 100)
@@ -163,7 +164,7 @@ class CodeExtractionService:
 
         # Extract code blocks from all documents
         all_code_blocks = await self._extract_code_blocks_from_documents(
-            crawl_results, progress_callback, start_progress, extract_end
+            crawl_results, source_id, progress_callback, start_progress, extract_end
         )
 
         if not all_code_blocks:
@@ -201,12 +202,17 @@ class CodeExtractionService:
     async def _extract_code_blocks_from_documents(
         self,
         crawl_results: list[dict[str, Any]],
+        source_id: str,
         progress_callback: Callable | None = None,
         start_progress: int = 0,
         end_progress: int = 100,
     ) -> list[dict[str, Any]]:
         """
         Extract code blocks from all documents.
+
+        Args:
+            crawl_results: List of crawled documents
+            source_id: The unique source_id for all documents
 
         Returns:
             List of code blocks with metadata
@@ -306,10 +312,7 @@ class CodeExtractionService:
                     )
 
                 if code_blocks:
-                    # Always extract source_id from URL
-                    parsed_url = urlparse(source_url)
-                    source_id = parsed_url.netloc or parsed_url.path
-
+                    # Use the provided source_id for all code blocks
                     for block in code_blocks:
                         all_code_blocks.append({
                             "block": block,
