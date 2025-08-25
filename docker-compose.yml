@@ -147,38 +147,23 @@ services:
     ports:
       - "${ARCHON_UI_PORT:-3737}:3737"
     environment:
+      - VITE_API_URL=${VITE_API_URL:-http://localhost:8181}
       - VITE_ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
       - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
-      - ARCHON_UI_PORT=${ARCHON_UI_PORT:-3737}
-      - HOST=${HOST:-0.0.0.0}
+      - HOST=${HOST:-localhost}
       - DOMAIN=${DOMAIN:-localhost}
       - PROD=${PROD:-false}
-      - DOCKER_ENV=true
-      - NODE_ENV=development
     networks:
       - app-network
     healthcheck:
-      test: ["CMD", "sh", "-c", "wget --no-verbose --tries=1 --spider http://localhost:3737/ || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 60s
+      test: ["CMD", "curl", "-f", "http://localhost:3737"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
     depends_on:
-      archon-server:
-        condition: service_healthy
-      archon-mcp:
-        condition: service_healthy
-      archon-agents:
-        condition: service_healthy
+      - archon-server
     labels:
       - "coolify.managed=true"
-      - "coolify.fqdn=archon.cogitia.com.es"
-      - "coolify.port=3737"
-      - "traefik.enable=true"
-      - "traefik.http.routers.archon-frontend.rule=Host(`archon.cogitia.com.es`)"
-      - "traefik.http.routers.archon-frontend.tls=true"
-      - "traefik.http.routers.archon-frontend.tls.certresolver=letsencrypt"
-      - "traefik.http.services.archon-frontend.loadbalancer.server.port=3737"
 
 networks:
   app-network:
