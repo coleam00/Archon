@@ -1,8 +1,5 @@
-# Production Dockerfile for Archon Frontend
-# Builds the app and serves it with nginx
-
-# Build stage
-FROM node:18-alpine AS builder
+# Simple production Dockerfile - just runs Vite in production mode
+FROM node:18-alpine
 
 WORKDIR /app
 
@@ -12,87 +9,21 @@ RUN apk add --no-cache python3 make g++ git curl
 # Copy package files
 COPY package*.json ./
 
-# Install all dependencies (including dev deps needed for build)
+# Install dependencies
 RUN npm ci
 
 # Copy source code
 COPY . .
 
-# Set NODE_ENV and build with explicit mode
+# Set production environment
 ENV NODE_ENV=production
-RUN npm run build -- --mode production
+ENV PROD=true
 
-# Clean up dev dependencies and node_modules to reduce image size
-RUN rm -rf node_modules package*.json
+# Build the application
+RUN npm run build
 
-# Production stage with nginx
-FROM nginx:alpine
-
-# Copy built app from builder stage
-COPY --from=builder /app/dist /usr/share/nginx/html
-
-# Create nginx configuration for SPA
-RUN cat > /etc/nginx/conf.d/default.conf << 'EOF'
-server {
-    listen 3737;
-    server_name localhost;
-    root /usr/share/nginx/html;
-    index index.html;
-
-    # Handle client-side routing
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    # API proxy to backend
-    location /api/ {
-        proxy_pass http://archon-server:8181/api/;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_cache_bypass $http_upgrade;
-    }
-
-    # Socket.IO proxy
-    location /socket.io/ {
-        proxy_pass http://archon-server:8181/socket.io/;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    # Gzip compression
-    gzip on;
-    gzip_vary on;
-    gzip_min_length 1024;
-    gzip_proxied expired no-cache no-store private must-revalidate auth;
-    gzip_types
-        text/plain
-        text/css
-        text/xml
-        text/javascript
-        application/javascript
-        application/xml+rss
-        application/json;
-
-    # Security headers
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-XSS-Protection "1; mode=block" always;
-    add_header Referrer-Policy "no-referrer-when-downgrade" always;
-}
-EOF
-
-# Expose port
+# Expose the port
 EXPOSE 3737
 
-# Start nginx
-CMD ["nginx", "-g", "daemon off;"]
+# Run Vite in production preview mode
+CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "3737"]

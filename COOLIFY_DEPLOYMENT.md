@@ -27,9 +27,6 @@ DOMAIN=tudominio.com
 # Modo producción (habilita CORS específico y SSL)
 PROD=true
 
-# Dockerfile para producción (nginx optimizado)
-DOCKERFILE=Dockerfile.production
-
 # URL de la API para el frontend
 VITE_API_URL=https://tudominio.com
 
@@ -50,7 +47,6 @@ LOG_LEVEL=INFO
 ```bash
 DOMAIN=localhost
 PROD=false
-DOCKERFILE=Dockerfile
 VITE_API_URL=http://localhost:8181
 ```
 
@@ -108,7 +104,7 @@ docker-compose logs -f archon-frontend
 |---------|------------|------------|
 | CORS | Permite `*` | Solo el dominio específico |
 | SSL | HTTP | HTTPS automático |
-| Frontend | Vite dev server | Nginx optimizado |
+| Frontend | Vite dev server | Vite prod preview |
 | API URL | `localhost:8181` | `https://tudominio.com` |
 | Volumes | Montados (hot reload) | Sin volumes |
 
