@@ -15,9 +15,10 @@ export function getApiUrl(): string {
     MODE: import.meta.env.MODE
   });
 
-  // For Docker environment, always use relative URL (goes through Vite proxy)
+  // CRITICAL: For Docker environment, ALWAYS use relative URL regardless of other settings
+  // This ensures internal proxy works even if Coolify sets VITE_API_URL
   if (import.meta.env.DOCKER_ENV === 'true') {
-    console.log('[API Config] Using Docker environment - relative URLs');
+    console.log('[API Config] DOCKER_ENV=true - forcing relative URLs for internal proxy');
     return '';
   }
 
@@ -27,7 +28,7 @@ export function getApiUrl(): string {
     return '';
   }
 
-  // Check if VITE_API_URL is provided (set by docker-compose)
+  // Check if VITE_API_URL is provided (only for local development)
   if (import.meta.env.VITE_API_URL) {
     console.log('[API Config] Using VITE_API_URL:', import.meta.env.VITE_API_URL);
     return import.meta.env.VITE_API_URL;
