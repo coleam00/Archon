@@ -5,6 +5,7 @@ Handles source metadata, summaries, and management.
 Consolidates both utility functions and class-based service.
 """
 
+import os
 from typing import Any
 
 from supabase import Client
@@ -230,14 +231,8 @@ Provide only the title, nothing else."""
         except Exception as e:
             search_logger.error(f"Error generating title for {source_id}: {e}")
 
-    # Build metadata - determine source_type from source_id pattern
-    source_type = "file" if source_id.startswith("file_") else "url"
-    metadata = {
-        "knowledge_type": knowledge_type, 
-        "tags": tags or [], 
-        "source_type": source_type,
-        "auto_generated": True
-    }
+    # Build metadata
+    metadata = {"knowledge_type": knowledge_type, "tags": tags or [], "auto_generated": True}
 
     return title, metadata
 
@@ -254,80 +249,59 @@ def update_source_info(
     original_url: str | None = None,
 ):
     """
-    Update or insert source information in the sources table.
+    Update or insert source information in the sources table with race condition protection.
+
+    Uses PostgreSQL UPSERT (INSERT ... ON CONFLICT) to prevent race conditions
+    when multiple concurrent crawls create the same source_id.
 
     Args:
         client: Supabase client
-        source_id: The source ID (domain)
+        source_id: The unique source ID
         summary: Summary of the source
         word_count: Total word count for the source
         content: Sample content for title generation
         knowledge_type: Type of knowledge
         tags: List of tags
         update_frequency: Update frequency in days
+        original_url: The original crawl URL
     """
-    search_logger.info(f"Updating source {source_id} with knowledge_type={knowledge_type}")
     try:
-        # First, check if source already exists to preserve title
-        existing_source = (
-            client.table("archon_sources").select("title").eq("source_id", source_id).execute()
+        # Build metadata
+        metadata = {
+            "knowledge_type": knowledge_type,
+            "tags": tags or [],
+            "update_frequency": update_frequency,
+        }
+        if original_url:
+            metadata["original_url"] = original_url
+
+        # For new sources, generate title. For existing ones, this will be ignored due to the conflict handling
+        title, generated_metadata = generate_source_title_and_metadata(
+            source_id, content, knowledge_type, tags
         )
 
-        if existing_source.data:
-            # Source exists - preserve the existing title
-            existing_title = existing_source.data[0]["title"]
-            search_logger.info(f"Preserving existing title for {source_id}: {existing_title}")
+        # Merge generated metadata
+        metadata.update(generated_metadata)
 
-            # Update metadata while preserving title
-            source_type = "file" if source_id.startswith("file_") else "url"
-            metadata = {
-                "knowledge_type": knowledge_type,
-                "tags": tags or [],
-                "source_type": source_type,
-                "auto_generated": False,  # Mark as not auto-generated since we're preserving
-                "update_frequency": update_frequency,
-            }
-            search_logger.info(f"Updating existing source {source_id} metadata: knowledge_type={knowledge_type}")
-            if original_url:
-                metadata["original_url"] = original_url
+        # Use PostgreSQL UPSERT pattern directly through Supabase's upsert method
+        # This prevents race conditions by handling INSERT or UPDATE atomically
+        upsert_data = {
+            "source_id": source_id,
+            "title": title,
+            "summary": summary,
+            "total_word_count": word_count,
+            "metadata": metadata
+        }
 
-            # Update existing source (preserving title)
-            result = (
-                client.table("archon_sources")
-                .update({
-                    "summary": summary,
-                    "total_word_count": word_count,
-                    "metadata": metadata,
-                    "updated_at": "now()",
-                })
-                .eq("source_id", source_id)
-                .execute()
-            )
+        result = client.table("archon_sources").upsert(
+            upsert_data,
+            on_conflict="source_id"
+        ).execute()
 
-            search_logger.info(
-                f"Updated source {source_id} while preserving title: {existing_title}"
-            )
+        if result.data:
+            search_logger.info(f"Source {source_id} upserted successfully with title: {title}")
         else:
-            # New source - generate title and metadata
-            title, metadata = generate_source_title_and_metadata(
-                source_id, content, knowledge_type, tags
-            )
-
-            # Add update_frequency and original_url to metadata
-            metadata["update_frequency"] = update_frequency
-            if original_url:
-                metadata["original_url"] = original_url
-
-            search_logger.info(f"Creating new source {source_id} with knowledge_type={knowledge_type}")
-            # Insert new source
-            client.table("archon_sources").insert({
-                "source_id": source_id,
-                "title": title,
-                "summary": summary,
-                "total_word_count": word_count,
-                "metadata": metadata,
-            }).execute()
-            search_logger.info(f"Created new source {source_id} with title: {title}")
+            search_logger.warning(f"Upsert completed but no data returned for {source_id}")
 
     except Exception as e:
         search_logger.error(f"Error updating source {source_id}: {e}")

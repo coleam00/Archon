@@ -306,9 +306,9 @@ class CodeExtractionService:
                     )
 
                 if code_blocks:
-                    # Always extract source_id from URL
-                    parsed_url = urlparse(source_url)
-                    source_id = parsed_url.netloc or parsed_url.path
+                    # Import URLHandler to generate unique source_id
+                    from .helpers.url_handler import URLHandler
+                    source_id = URLHandler.generate_unique_source_id(source_url)
 
                     for block in code_blocks:
                         all_code_blocks.append({
