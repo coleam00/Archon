@@ -190,6 +190,10 @@ class URLHandler:
         This creates a 16-character hash that is guaranteed to be unique
         for each URL, solving race condition issues when multiple crawls
         target the same domain.
+        
+        Uses 16-char SHA256 prefix (64 bits) which provides
+        ~18 quintillion unique values. Collision probability
+        is negligible for realistic usage (<1M sources).
 
         Args:
             url: The URL to generate an ID for

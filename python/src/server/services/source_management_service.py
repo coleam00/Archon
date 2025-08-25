@@ -325,8 +325,8 @@ def update_source_info(
         else:
             # New source - use display name as title if available, otherwise generate
             if source_display_name:
-                # Use the display name directly as the title
-                title = source_display_name
+                # Use the display name directly as the title (truncated to prevent DB issues)
+                title = source_display_name[:100].strip()
                 metadata = {
                     "knowledge_type": knowledge_type,
                     "tags": tags or [],
