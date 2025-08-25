@@ -309,7 +309,7 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
     define: {
       'import.meta.env.VITE_HOST': JSON.stringify(host),
       'import.meta.env.VITE_PORT': JSON.stringify(port),
-      'import.meta.env.PROD': JSON.stringify(env.PROD || false),
+      'import.meta.env.PROD': env.PROD === 'true',
     },
     resolve: {
       alias: {

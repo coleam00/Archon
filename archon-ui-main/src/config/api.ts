@@ -8,7 +8,7 @@
 // Get the API URL from environment or construct it
 export function getApiUrl(): string {
   // For relative URLs in production (goes through proxy)
-  if (import.meta.env.PROD === 'true') {
+  if (import.meta.env.PROD) {
     return '';
   }
 
