@@ -21,5 +21,5 @@ COPY . .
 # Expose the port configured in package.json (3737)
 EXPOSE 3737
 
-# Start Vite dev server (already configured with --port 3737 --host in package.json)
-CMD ["npm", "run", "dev"]
+# Start Vite dev server with conditional config
+CMD ["sh", "-c", "if [ \"$PROD\" = \"true\" ]; then npm run build && npm run preview -- --host 0.0.0.0; else npm run dev; fi"]

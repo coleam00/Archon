@@ -21,17 +21,11 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
   const host = isDocker ? internalHost : externalHost;
   const port = process.env.ARCHON_SERVER_PORT || env.ARCHON_SERVER_PORT || '8181';
   
-  // Build allowed hosts list
-  const allowedHosts = ['localhost', '127.0.0.1'];
-  if (env.HOST) allowedHosts.push(env.HOST);
-  if (env.DOMAIN) allowedHosts.push(env.DOMAIN, `www.${env.DOMAIN}`);
-  if (process.env.DOMAIN) allowedHosts.push(process.env.DOMAIN, `www.${process.env.DOMAIN}`);
-  
   return {
     plugins: [
       react(),
-      // Custom plugin to add test endpoint (development only)
-      ...(mode === 'development' ? [{
+      // Custom plugin to add test endpoint
+      {
         name: 'test-runner',
         configureServer(server) {
           // Serve coverage directory statically
@@ -280,13 +274,13 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
             });
           });
         }
-      }] : [])
+      }
     ],
     server: {
       host: '0.0.0.0', // Listen on all network interfaces with explicit IP
       port: parseInt(process.env.ARCHON_UI_PORT || env.ARCHON_UI_PORT || '3737'), // Use configurable port
       strictPort: true, // Exit if port is in use
-      allowedHosts: allowedHosts,
+      allowedHosts: [env.HOST, 'localhost', '127.0.0.1'],
       proxy: {
         '/api': {
           target: `http://${host}:${port}`,
