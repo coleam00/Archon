@@ -42,6 +42,7 @@ from .strategies.sitemap import SitemapCrawlStrategy
 # Import helpers
 from .helpers.url_handler import URLHandler
 from .helpers.site_config import SiteConfig
+from .helpers.file_discovery import FileDiscoveryService
 
 # Import operations
 from .document_storage_operations import DocumentStorageOperations
@@ -91,6 +92,7 @@ class CrawlingService:
         # Initialize helpers
         self.url_handler = URLHandler()
         self.site_config = SiteConfig()
+        self.file_discovery = FileDiscoveryService()
         self.markdown_generator = self.site_config.get_markdown_generator()
 
         # Initialize strategies
@@ -128,6 +130,45 @@ class CrawlingService:
         """Check if cancelled and raise an exception if so."""
         if self._cancelled:
             raise asyncio.CancelledError("Crawl operation was cancelled by user")
+
+    async def auto_discover_files(self, base_url: str) -> Dict[str, List[str]]:
+        """
+        Automatically discover files using FileDiscoveryService.
+        
+        Args:
+            base_url: Base URL of the website
+            
+        Returns:
+            Dictionary with discovered files categorized by type
+        """
+        safe_logfire_info(f"🔥 DEBUG: auto_discover_files called with base_url: {base_url}")
+        try:
+            discovery_results = await self.file_discovery.discover_all_files(base_url)
+            
+            # Log discovery results
+            total_discovered = sum(len(files) for files in discovery_results.values())
+            if total_discovered > 0:
+                safe_logfire_info(
+                    f"File discovery completed for {base_url} | "
+                    f"total_files={total_discovered} | "
+                    f"llm_files={len(discovery_results.get('llm_files', []))} | "
+                    f"sitemaps={len(discovery_results.get('sitemap_files', []))} | "
+                    f"robots_sitemaps={len(discovery_results.get('robots_sitemaps', []))}"
+                )
+            else:
+                safe_logfire_info(f"No discoverable files found for {base_url}")
+                
+            return discovery_results
+            
+        except Exception as e:
+            safe_logfire_error(f"File discovery failed for {base_url} | error={str(e)}")
+            # Return empty results on discovery failure to not block main crawl
+            return {
+                "robots_sitemaps": [],
+                "llm_files": [],
+                "sitemap_files": [],
+                "metadata_files": []
+            }
 
     async def _create_crawl_progress_callback(
         self, base_status: str
@@ -490,29 +531,141 @@ class CrawlingService:
     async def _crawl_by_url_type(self, url: str, request: Dict[str, Any]) -> tuple:
         """
         Detect URL type and perform appropriate crawling.
+        Includes automatic file discovery before main crawling logic.
 
         Returns:
             Tuple of (crawl_results, crawl_type)
         """
         _ensure_socketio_imports()
+        
+        # DEBUG: Check if this method is being called
+        safe_logfire_info(f"🚨 DEBUG: _crawl_by_url_type called with URL: {url}")
 
         crawl_results = []
         crawl_type = None
+        
+        # Perform automatic file discovery before main crawling
+        try:
+            if self.progress_id:
+                self.progress_state.update({
+                    "status": "discovering",
+                    "percentage": 5,
+                    "log": "Discovering LLM files and sitemaps...",
+                })
+                await update_crawl_progress(self.progress_id, self.progress_state)
+            
+            base_url = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
+            discovery_results = await self.auto_discover_files(base_url)
+            
+            # Debug log the discovery results structure
+            safe_logfire_info(f"🔍 DEBUG: Discovery results = {discovery_results}")
+            
+            # If we discovered LLM files, prioritize them and STOP regular crawling
+            if discovery_results.get('llm_files'):
+                llm_files = discovery_results['llm_files']
+                safe_logfire_info(f"🎯 DISCOVERED LLM FILES: {llm_files} - Will crawl these instead of regular website")
+                safe_logfire_info(f"📋 CRAWLING DECISION: Using LLM files for content - {llm_files}")
+                
+                if self.progress_id:
+                    self.progress_state.update({
+                        "status": "crawling",
+                        "percentage": 8,
+                        "log": f"Crawling discovered LLM files ({len(llm_files)} files) - skipping regular crawl...",
+                    })
+                    await update_crawl_progress(self.progress_id, self.progress_state)
+                
+                # Log exactly what we're about to crawl
+                safe_logfire_info(f"🚀 STARTING CRAWL: LLM files only - {llm_files}")
+                
+                # Crawl LLM files as batch
+                llm_crawl_results = await self.crawl_batch_with_progress(
+                    llm_files,
+                    progress_callback=await self._create_crawl_progress_callback("crawling"),
+                    start_progress=8,
+                    end_progress=95,  # Complete the progress since we're done
+                )
+                if llm_crawl_results:
+                    crawl_results.extend(llm_crawl_results)
+                    safe_logfire_info(f"🎉 SUCCESS: LLM files crawled successfully! Found {len(llm_crawl_results)} results. STOPPING regular crawl.")
+                    return crawl_results, "llm_files_discovered"
+                else:
+                    safe_logfire_info(f"⚠️ LLM files discovered but crawling failed, falling back to regular crawl")
+                    # Continue with normal crawling logic below
+                    
+            # If we discovered additional sitemaps from robots.txt, add them to processing
+            # (only if no LLM files were found - LLM files take priority)
+            if discovery_results.get('robots_sitemaps') and not discovery_results.get('llm_files'):
+                robots_sitemaps = discovery_results['robots_sitemaps']
+                safe_logfire_info(f"Found sitemaps in robots.txt: {robots_sitemaps}")
+                
+                if self.progress_id:
+                    self.progress_state.update({
+                        "status": "crawling", 
+                        "percentage": 12,
+                        "log": f"Processing sitemaps from robots.txt ({len(robots_sitemaps)} sitemaps)...",
+                    })
+                    await update_crawl_progress(self.progress_id, self.progress_state)
+                
+                # Process discovered sitemaps
+                sitemap_crawl_results = []
+                for sitemap_url in robots_sitemaps:
+                    sitemap_urls = self.parse_sitemap(sitemap_url)
+                    if sitemap_urls:
+                        batch_results = await self.crawl_batch_with_progress(
+                            sitemap_urls,
+                            progress_callback=await self._create_crawl_progress_callback("crawling"),
+                            start_progress=12,
+                            end_progress=90,
+                        )
+                        if batch_results:
+                            sitemap_crawl_results.extend(batch_results)
+                
+                if sitemap_crawl_results:
+                    crawl_results.extend(sitemap_crawl_results)
+                    safe_logfire_info(f"📋 CRAWLING DECISION: Using robots.txt sitemaps for content")
+                    safe_logfire_info(f"🎉 SUCCESS: Sitemaps from robots.txt crawled successfully, skipping regular crawl. Found {len(sitemap_crawl_results)} results.")
+                    return crawl_results, "robots_sitemaps_discovered"
+                            
+        except Exception as e:
+            safe_logfire_error(f"File discovery integration failed: {e}")
+            # Continue with normal crawling if discovery fails
 
-        if self.url_handler.is_txt(url):
-            # Handle text files
+        # If no discovery results, log that we're falling back to regular crawling
+        if not crawl_results:
+            safe_logfire_info(f"📋 CRAWLING DECISION: No LLM files or sitemaps discovered, using regular website crawling for {url}")
+
+        # Check if this is specifically an LLM file
+        if self.url_handler.is_llm_file(url):
+            # Handle LLM files specifically
             if self.progress_id:
                 self.progress_state.update({
                     "status": "crawling",
-                    "percentage": 10,
+                    "percentage": 15,
+                    "log": "Detected LLM file, fetching content...",
+                })
+                await update_crawl_progress(self.progress_id, self.progress_state)
+            crawl_results.extend(await self.crawl_markdown_file(
+                url,
+                progress_callback=await self._create_crawl_progress_callback("crawling"),
+                start_progress=15,
+                end_progress=25,
+            ))
+            crawl_type = "llm_file"
+            
+        elif self.url_handler.is_txt(url):
+            # Handle other text files
+            if self.progress_id:
+                self.progress_state.update({
+                    "status": "crawling",
+                    "percentage": 15,
                     "log": "Detected text file, fetching content...",
                 })
                 await update_crawl_progress(self.progress_id, self.progress_state)
             crawl_results = await self.crawl_markdown_file(
                 url,
                 progress_callback=await self._create_crawl_progress_callback("crawling"),
-                start_progress=10,
-                end_progress=20,
+                start_progress=15,
+                end_progress=25,
             )
             crawl_type = "text_file"
 
@@ -521,7 +674,7 @@ class CrawlingService:
             if self.progress_id:
                 self.progress_state.update({
                     "status": "crawling",
-                    "percentage": 10,
+                    "percentage": 15,
                     "log": "Detected sitemap, parsing URLs...",
                 })
                 await update_crawl_progress(self.progress_id, self.progress_state)
@@ -532,7 +685,7 @@ class CrawlingService:
                 if self.progress_id:
                     self.progress_state.update({
                         "status": "crawling",
-                        "percentage": 15,
+                        "percentage": 20,
                         "log": f"Starting batch crawl of {len(sitemap_urls)} URLs...",
                     })
                     await update_crawl_progress(self.progress_id, self.progress_state)
@@ -540,8 +693,8 @@ class CrawlingService:
                 crawl_results = await self.crawl_batch_with_progress(
                     sitemap_urls,
                     progress_callback=await self._create_crawl_progress_callback("crawling"),
-                    start_progress=15,
-                    end_progress=20,
+                    start_progress=20,
+                    end_progress=25,
                 )
                 crawl_type = "sitemap"
 
@@ -550,7 +703,7 @@ class CrawlingService:
             if self.progress_id:
                 self.progress_state.update({
                     "status": "crawling",
-                    "percentage": 10,
+                    "percentage": 15,
                     "log": f"Starting recursive crawl with max depth {request.get('max_depth', 1)}...",
                 })
                 await update_crawl_progress(self.progress_id, self.progress_state)
@@ -564,8 +717,8 @@ class CrawlingService:
                 max_depth=max_depth,
                 max_concurrent=None,  # Let strategy use settings
                 progress_callback=await self._create_crawl_progress_callback("crawling"),
-                start_progress=10,
-                end_progress=20,
+                start_progress=15,
+                end_progress=25,
             )
             crawl_type = "webpage"
 
