@@ -18,23 +18,19 @@ from supabase import Client
 from ...config.logfire_config import search_logger
 from ..embeddings.contextual_embedding_service import generate_contextual_embeddings_batch
 from ..embeddings.embedding_service import create_embeddings_batch
+from ..llm_provider_service import get_llm_client, get_llm_model
 
 
-def _get_model_choice() -> str:
-    """Get MODEL_CHOICE with direct fallback."""
+async def _get_model_choice(provider: str | None = None) -> str:
+    """Get model choice from provider integration."""
     try:
-        # Direct cache/env fallback
-        from ..credential_service import credential_service
-
-        if credential_service._cache_initialized and "MODEL_CHOICE" in credential_service._cache:
-            model = credential_service._cache["MODEL_CHOICE"]
-        else:
-            model = os.getenv("MODEL_CHOICE", "gpt-4.1-nano")
-        search_logger.debug(f"Using model choice: {model}")
-        return model
+        return await get_llm_model(provider, service="code_analysis")
     except Exception as e:
         search_logger.warning(f"Error getting model choice: {e}, using default")
-        return "gpt-4.1-nano"
+        # Fall back to environment or default
+        model = os.getenv("MODEL_CHOICE", "gpt-4o-mini")
+        search_logger.debug(f"Using model choice: {model}")
+        return model
 
 
 def _get_max_workers() -> int:
@@ -489,8 +485,8 @@ def extract_code_blocks(markdown_content: str, min_length: int = None) -> list[d
     return grouped_blocks
 
 
-def generate_code_example_summary(
-    code: str, context_before: str, context_after: str, language: str = "", provider: str = None
+async def generate_code_example_summary(
+    code: str, context_before: str, context_after: str, language: str = "", provider: str | None = None
 ) -> dict[str, str]:
     """
     Generate a summary and name for a code example using its surrounding context.
@@ -505,8 +501,8 @@ def generate_code_example_summary(
     Returns:
         A dictionary with 'summary' and 'example_name'
     """
-    # Get model choice from credential service (RAG setting)
-    model_choice = _get_model_choice()
+    # Get model choice from provider integration
+    model_choice = await _get_model_choice(provider)
 
     # Create the prompt
     prompt = f"""<context_before>
@@ -535,57 +531,23 @@ Format your response as JSON:
 """
 
     try:
-        # Get LLM client using fallback
-        try:
-            import os
-
-            import openai
-
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                # Try to get from credential service with direct fallback
-                from ..credential_service import credential_service
-
-                if (
-                    credential_service._cache_initialized
-                    and "OPENAI_API_KEY" in credential_service._cache
-                ):
-                    cached_key = credential_service._cache["OPENAI_API_KEY"]
-                    if isinstance(cached_key, dict) and cached_key.get("is_encrypted"):
-                        api_key = credential_service._decrypt_value(cached_key["encrypted_value"])
-                    else:
-                        api_key = cached_key
-                else:
-                    api_key = os.getenv("OPENAI_API_KEY", "")
-
-            if not api_key:
-                raise ValueError("No OpenAI API key available")
-
-            client = openai.OpenAI(api_key=api_key)
-        except Exception as e:
-            search_logger.error(
-                f"Failed to create LLM client fallback: {e} - returning default values"
+        # Use provider integration for LLM client
+        async with get_llm_client(provider=provider) as client:
+            search_logger.debug(
+                f"Calling API with model: {model_choice}, language: {language}, code length: {len(code)}"
             )
-            return {
-                "example_name": f"Code Example{f' ({language})' if language else ''}",
-                "summary": "Code example for demonstration purposes.",
-            }
 
-        search_logger.debug(
-            f"Calling OpenAI API with model: {model_choice}, language: {language}, code length: {len(code)}"
-        )
-
-        response = client.chat.completions.create(
-            model=model_choice,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant that analyzes code examples and provides JSON responses with example names and summaries.",
-                },
-                {"role": "user", "content": prompt},
-            ],
-            response_format={"type": "json_object"},
-        )
+            response = await client.chat.completions.create(
+                model=model_choice,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a helpful assistant that analyzes code examples and provides JSON responses with example names and summaries.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={"type": "json_object"},
+            )
 
         response_content = response.choices[0].message.content.strip()
         search_logger.debug(f"OpenAI API response: {repr(response_content[:200])}...")

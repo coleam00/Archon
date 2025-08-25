@@ -145,8 +145,9 @@ class TestAsyncBackgroundTaskManager:
         await asyncio.sleep(0.01)
         assert len(running_tasks) <= 2
 
-        # Wait for all to complete
-        await asyncio.sleep(0.1)
+        # Wait for all to complete (need more time for sequential execution)
+        # With concurrency of 2 and 0.05s per task, we need at least 0.1s plus overhead
+        await asyncio.sleep(0.15)
         assert len(completed_tasks) == 4
 
         # Clean up

@@ -214,7 +214,7 @@ class DocumentStorageOperations:
             
             # Generate summary with fallback
             try:
-                summary = extract_source_summary(source_id, combined_content)
+                summary = await extract_source_summary(source_id, combined_content)
             except Exception as e:
                 safe_logfire_error(f"Failed to generate AI summary for '{source_id}': {str(e)}, using fallback")
                 # Fallback to simple summary
@@ -223,7 +223,7 @@ class DocumentStorageOperations:
             # Update source info in database BEFORE storing documents
             safe_logfire_info(f"About to create/update source record for '{source_id}' (word count: {source_id_word_counts[source_id]})")
             try:
-                update_source_info(
+                await update_source_info(
                     client=self.supabase_client,
                     source_id=source_id,
                     summary=summary,

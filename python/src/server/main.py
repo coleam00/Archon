@@ -27,6 +27,12 @@ from .api_routes.knowledge_api import router as knowledge_router
 from .api_routes.mcp_api import router as mcp_router
 from .api_routes.projects_api import router as projects_router
 
+# Import clean provider routes
+try:
+    from ..providers_clean.api.provider_routes import router as providers_router
+except ImportError:
+    providers_router = None
+
 # Import Socket.IO handlers to ensure they're registered
 from .api_routes import socketio_handlers  # This registers all Socket.IO event handlers
 
@@ -93,6 +99,24 @@ async def lifespan(app: FastAPI):
         # Now we can safely use the logger
         logger.info("✅ Credentials initialized")
         api_logger.info("🔥 Logfire initialized for backend")
+        
+        # Initialize provider integration if available
+        try:
+            from ..providers_clean.integration.main_server_integration import init_provider_integration
+            from .services.credential_service import credential_service
+            
+            # Get the Supabase client from credential service
+            supabase_client = credential_service.supabase
+            if supabase_client:
+                integration = init_provider_integration(supabase_client)
+                await integration.initialize()
+                logger.info("✅ Provider integration initialized")
+            else:
+                logger.warning("⚠️ Supabase client not available for provider integration")
+        except ImportError:
+            logger.info("ℹ️ Provider integration not available - using legacy system")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to initialize provider integration: {e}")
 
         # Initialize crawling context
         try:
@@ -205,6 +229,9 @@ async def skip_health_check_logs(request, call_next):
 
 
 # Include API routers
+# Include provider routes if available
+if providers_router:
+    app.include_router(providers_router)
 app.include_router(settings_router)
 app.include_router(mcp_router)
 # app.include_router(mcp_client_router)  # Removed - not part of new architecture

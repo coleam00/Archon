@@ -10,7 +10,7 @@ import os
 import openai
 
 from ...config.logfire_config import search_logger
-from ..llm_provider_service import get_llm_client
+from ..llm_provider_service import get_llm_client, get_llm_model
 from ..threading_service import get_threading_service
 
 
@@ -30,19 +30,6 @@ async def generate_contextual_embedding(
         - The contextual text that situates the chunk within the document
         - Boolean indicating if contextual embedding was performed
     """
-    # Model choice is a RAG setting, get from credential service
-    try:
-        from ...services.credential_service import credential_service
-
-        model_choice = await credential_service.get_credential("MODEL_CHOICE", "gpt-4.1-nano")
-    except Exception as e:
-        # Fallback to environment variable or default
-        search_logger.warning(
-            f"Failed to get MODEL_CHOICE from credential service: {e}, using fallback"
-        )
-        model_choice = os.getenv("MODEL_CHOICE", "gpt-4.1-nano")
-
-    search_logger.debug(f"Using MODEL_CHOICE: {model_choice}")
 
     threading_service = get_threading_service()
 
@@ -63,7 +50,7 @@ Here is the chunk we want to situate within the whole document
 Please give a short succinct context to situate this chunk within the overall document for the purposes of improving search retrieval of the chunk. Answer only with the succinct context and nothing else."""
 
                 # Get model from provider configuration
-                model = await _get_model_choice(provider)
+                model = await get_llm_model(provider, service="contextual_embedding")
 
                 response = await client.chat.completions.create(
                     model=model,
@@ -110,17 +97,6 @@ async def process_chunk_with_context(
     return await generate_contextual_embedding(full_document, content)
 
 
-async def _get_model_choice(provider: str | None = None) -> str:
-    """Get model choice from credential service."""
-    from ..credential_service import credential_service
-
-    # Get the active provider configuration
-    provider_config = await credential_service.get_active_provider("llm")
-    model = provider_config.get("chat_model", "gpt-4.1-nano")
-
-    search_logger.debug(f"Using model from credential service: {model}")
-
-    return model
 
 
 async def generate_contextual_embeddings_batch(
@@ -144,8 +120,8 @@ async def generate_contextual_embeddings_batch(
     """
     try:
         async with get_llm_client(provider=provider) as client:
-            # Get model choice from credential service (RAG setting)
-            model_choice = await _get_model_choice(provider)
+            # Get model choice from provider configuration
+            model_choice = await get_llm_model(provider, service="contextual_embedding")
 
             # Build batch prompt for ALL chunks at once
             batch_prompt = (
