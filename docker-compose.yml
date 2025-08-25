@@ -153,6 +153,8 @@ services:
       - HOST=${HOST:-localhost}
       - DOMAIN=${DOMAIN:-localhost}
       - PROD=${PROD:-false}
+      - DOCKER_ENV=true
+      - NODE_ENV=${PROD:-false}
     networks:
       - app-network
     healthcheck:
