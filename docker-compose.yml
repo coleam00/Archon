@@ -36,22 +36,13 @@ services:
       - app-network
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock # Docker socket for MCP container control
-      - ./python/src:/app/src # Mount source code for hot reload
-      - ./python/tests:/app/tests # Mount tests for UI test execution
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    command:
-      [
-        "python",
-        "-m",
-        "uvicorn",
-        "src.server.main:socket_app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "${ARCHON_SERVER_PORT:-8181}",
-        "--reload",
-      ]
+    command: >
+      sh -c "cd /app && PYTHONPATH=/app python -m uvicorn src.server.main:socket_app 
+      --host 0.0.0.0 
+      --port ${ARCHON_SERVER_PORT:-8181} 
+      --workers 1"
     labels:
       - "coolify.managed=true"
     healthcheck:
@@ -158,7 +149,7 @@ services:
     ports:
       - "${ARCHON_UI_PORT:-3737}:3737"
     environment:
-      - VITE_API_URL=https://${DOMAIN:-http://localhost:${ARCHON_SERVER_PORT:-8181}}
+      - VITE_API_URL=${VITE_API_URL:-http://localhost:8181}
       - VITE_ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
       - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
       - HOST=${HOST:-localhost}
@@ -171,9 +162,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-    volumes:
-      - ./archon-ui-main/src:/app/src
-      - ./archon-ui-main/public:/app/public
     depends_on:
       - archon-server
     labels:
