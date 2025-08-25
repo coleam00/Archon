@@ -5,7 +5,7 @@ Tests the JWT-based validation of anon vs service keys.
 
 import pytest
 from jose import jwt
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from src.server.config.config import (
     validate_supabase_key,

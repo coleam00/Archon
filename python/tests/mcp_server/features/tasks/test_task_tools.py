@@ -174,7 +174,7 @@ async def test_update_task_status(mock_mcp, mock_context):
         result_data = json.loads(result)
         assert result_data["success"] is True
         assert "Task updated successfully" in result_data["message"]
-        
+
         # Verify the PUT request was made with correct data
         call_args = mock_async_client.put.call_args
         sent_data = call_args[1]["json"]

@@ -46,7 +46,7 @@ class DocumentStorageService(BaseStorageService):
             Tuple of (success, result_dict)
         """
         logger.info(f"Document upload starting: {filename} as {knowledge_type} knowledge")
-        
+
         with safe_span(
             "upload_document",
             filename=filename,

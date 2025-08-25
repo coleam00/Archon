@@ -28,7 +28,6 @@ from .api_routes.mcp_api import router as mcp_router
 from .api_routes.projects_api import router as projects_router
 
 # Import Socket.IO handlers to ensure they're registered
-from .api_routes import socketio_handlers  # This registers all Socket.IO event handlers
 
 # Import modular API routers
 from .api_routes.settings_api import router as settings_router

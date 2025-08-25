@@ -517,7 +517,7 @@ async def upload_document(
         safe_logfire_info(
             f"📋 UPLOAD: Starting document upload | filename={file.filename} | content_type={file.content_type} | knowledge_type={knowledge_type}"
         )
-        
+
         safe_logfire_info(
             f"Starting document upload | filename={file.filename} | content_type={file.content_type} | knowledge_type={knowledge_type}"
         )
@@ -907,7 +907,7 @@ async def stop_crawl_task(progress_id: str):
     """Stop a running crawl task."""
     try:
         from ..services.crawling import get_active_orchestration, unregister_orchestration
-        
+
         # Emit stopping status immediately
         await sio.emit(
             "crawl:stopping",

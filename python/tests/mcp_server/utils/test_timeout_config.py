@@ -4,7 +4,6 @@ import os
 from unittest.mock import patch
 
 import httpx
-import pytest
 
 from src.mcp_server.utils.timeout_config import (
     get_default_timeout,

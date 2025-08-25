@@ -5,7 +5,8 @@ Provides consistent HTTP client configuration.
 """
 
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Optional
+from typing import Optional
+from collections.abc import AsyncIterator
 
 import httpx
 

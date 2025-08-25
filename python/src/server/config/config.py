@@ -101,16 +101,16 @@ def validate_supabase_url(url: str) -> bool:
     # Allow HTTP for local development (host.docker.internal or localhost)
     if parsed.scheme not in ("http", "https"):
         raise ConfigurationError("Supabase URL must use HTTP or HTTPS")
-    
+
     # Require HTTPS for production (non-local) URLs
     if parsed.scheme == "http":
         hostname = parsed.hostname or ""
-        
+
         # Check for exact localhost and Docker internal hosts (security: prevent subdomain bypass)
         local_hosts = ["localhost", "127.0.0.1", "host.docker.internal"]
         if hostname in local_hosts or hostname.endswith(".localhost"):
             return True
-            
+
         # Check if hostname is a private IP address
         try:
             ip = ipaddress.ip_address(hostname)
@@ -125,7 +125,7 @@ def validate_supabase_url(url: str) -> bool:
         except ValueError:
             # hostname is not a valid IP address, could be a domain name
             pass
-            
+
         # If not a local host or private IP, require HTTPS
         raise ConfigurationError(f"Supabase URL must use HTTPS for non-local environments (hostname: {hostname})")
 

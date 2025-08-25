@@ -66,7 +66,7 @@ class MCPServerManager:
         """Simple container resolution - just use fixed name."""
         if not self.docker_client:
             return None
-        
+
         try:
             # Simple: Just look for the fixed container name
             container = self.docker_client.containers.get("archon-mcp")
