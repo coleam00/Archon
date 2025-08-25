@@ -15,9 +15,27 @@ from .config.logfire_config import safe_logfire_info
 logger = logging.getLogger(__name__)
 
 # Create Socket.IO server with FastAPI integration
+def get_cors_origins():
+    """Get CORS origins for Socket.IO based on environment"""
+    import os
+    domain = os.getenv("DOMAIN", "localhost")
+    prod_mode = os.getenv("PROD", "false").lower() == "true"
+    
+    if prod_mode and domain != "localhost":
+        # Production mode with custom domain
+        return [
+            f"https://{domain}",
+            f"http://{domain}",
+            f"https://www.{domain}",
+            f"http://www.{domain}",
+        ]
+    else:
+        # Development mode - allow all origins
+        return "*"
+
 sio = socketio.AsyncServer(
     async_mode="asgi",
-    cors_allowed_origins="*",  # TODO: Configure for production with specific origins
+    cors_allowed_origins=get_cors_origins(),
     logger=False,  # Disable verbose Socket.IO logging
     engineio_logger=False,  # Disable verbose Engine.IO logging
     # Performance settings for long-running operations
