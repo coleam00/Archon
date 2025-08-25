@@ -40,6 +40,7 @@ export interface TestStatus {
 }
 
 import { getApiUrl, getWebSocketUrl } from '../config/api';
+import { v4 as uuidv4 } from 'uuid';
 
 // Use unified API configuration
 const API_BASE_URL = getApiUrl();
@@ -159,7 +160,7 @@ class TestService {
     onError?: (error: Error) => void,
     onComplete?: () => void
   ): Promise<string> {
-    const execution_id = crypto.randomUUID();
+    const execution_id = uuidv4();
     
     try {
       // Send initial status
@@ -247,44 +248,47 @@ class TestService {
    * Get coverage data for Test Results Modal from new API endpoints with fallback
    */
   async getCoverageData(): Promise<any> {
-    try {
-      // Try new API endpoint first
-      const response = await callAPI<any>('/api/coverage/combined-summary');
-      return response;
-    } catch (apiError) {
-      // Fallback to static files for backward compatibility
-      try {
-        const response = await fetch('/test-results/coverage/coverage-summary.json');
-        if (!response.ok) {
-          throw new Error('Coverage data not available');
-        }
-        return await response.json();
-      } catch (staticError) {
-        throw new Error(`Failed to load coverage data: ${apiError instanceof Error ? apiError.message : 'API and static files unavailable'}`);
-      }
+    const response = await fetch('/test-results/coverage/coverage-summary.json');
+    if (!response.ok) {
+      throw new Error('Coverage data not available');
     }
+    return await response.json();
   }
 
   /**
    * Get test results for Test Results Modal from new API endpoints with fallback
    */
   async getTestResults(): Promise<any> {
-    try {
-      // Try new API endpoint first
-      const response = await callAPI<any>('/api/tests/latest-results');
-      return response;
-    } catch (apiError) {
-      // Fallback to static files for backward compatibility
-      try {
-        const response = await fetch('/test-results/test-results.json');
-        if (!response.ok) {
-          throw new Error('Test results not available');
-        }
-        return await response.json();
-      } catch (staticError) {
-        throw new Error(`Failed to load test results: ${apiError instanceof Error ? apiError.message : 'API and static files unavailable'}`);
-      }
+    const response = await fetch('/test-results/test-results.json');
+    if (!response.ok) {
+      throw new Error('Test results not available');
     }
+    const data = await response.json();
+
+    // Transform the data to match the expected TestResults interface
+    const transformedData = {
+      summary: {
+        total: data.numTotalTests || 0,
+        passed: data.numPassedTests || 0,
+        failed: data.numFailedTests || 0,
+        skipped: data.numPendingTests || 0,
+        duration: data.testResults.reduce((acc: number, suite: any) => acc + (suite.endTime - suite.startTime), 0),
+      },
+      suites: data.testResults.map((suite: any) => ({
+        name: suite.name,
+        tests: suite.assertionResults.length,
+        passed: suite.assertionResults.filter((r: any) => r.status === 'passed').length,
+        failed: suite.assertionResults.filter((r: any) => r.status === 'failed').length,
+        skipped: suite.assertionResults.filter((r: any) => r.status === 'pending' || r.status === 'todo').length,
+        duration: suite.endTime - suite.startTime,
+        failedTests: suite.assertionResults
+          .filter((r: any) => r.status === 'failed')
+          .map((r: any) => ({ name: r.title, error: r.failureMessages.join('\\n') }))
+      })),
+      timestamp: new Date(data.startTime).toISOString()
+    };
+
+    return transformedData;
   }
 
   /**

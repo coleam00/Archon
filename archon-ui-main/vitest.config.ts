@@ -23,6 +23,7 @@ export default defineConfig({
     outputFile: { 
       json: './public/test-results/test-results.json' 
     },
+    bail: 0,
     testTimeout: 10000, // 10 seconds timeout
     hookTimeout: 10000, // 10 seconds for setup/teardown
     coverage: {

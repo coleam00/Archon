@@ -57,9 +57,8 @@ describe('API Configuration', () => {
         },
         writable: true
       });
-      
+
       const { getApiUrl } = await import('../../src/config/api');
-      
       expect(getApiUrl()).toBe('http://localhost:8181');
     });
 

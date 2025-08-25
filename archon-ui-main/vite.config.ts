@@ -145,43 +145,34 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
               mkdirSync(testResultsDir, { recursive: true });
             }
             
-            const testProcess = exec('npm run test:coverage:stream', {
+            const testProcess = exec('npx vitest run --coverage --reporter=dot --reporter=json', {
               cwd: process.cwd(),
-              env: { 
-                ...process.env, 
-                FORCE_COLOR: '1', 
+              env: {
+                ...process.env,
+                FORCE_COLOR: '1',
                 CI: 'true',
-                NODE_ENV: 'test' 
-              } // Enable color output and CI mode for cleaner output
-            });
-
-            testProcess.stdout?.on('data', (data) => {
-              const text = data.toString();
-              // Split by newlines but preserve empty lines for better formatting
-              const lines = text.split('\n');
-              
-              lines.forEach((line: string) => {
-                // Strip ANSI escape codes to get clean text
-                const cleanLine = line.replace(/\\x1b\[[0-9;]*m/g, '');
-                
-                // Send all lines for verbose reporter output
-                res.write(`data: ${JSON.stringify({ type: 'output', message: cleanLine, timestamp: new Date().toISOString() })}\n\n`);
-              });
-              
-              // Flush the response to ensure immediate delivery
-              if (res.flushHeaders) {
-                res.flushHeaders();
+                NODE_ENV: 'test',
               }
             });
 
-            testProcess.stderr?.on('data', (data) => {
-              const lines = data.toString().split('\n').filter((line: string) => line.trim());
-              lines.forEach((line: string) => {
-                // Strip ANSI escape codes
-                const cleanLine = line.replace(/\\x1b\[[0-9;]*m/g, '');
-                res.write(`data: ${JSON.stringify({ type: 'output', message: cleanLine, timestamp: new Date().toISOString() })}\n\n`);
+            const handleStream = (stream: any, res: any) => {
+              stream.on('data', (data: any) => {
+                const text = data.toString();
+                const lines = text.split('\n');
+                
+                lines.forEach((line: string) => {
+                  const cleanLine = line.replace(/\x1b\[[0-9;]*m/g, '');
+                  res.write(`data: ${JSON.stringify({ type: 'output', message: cleanLine, timestamp: new Date().toISOString() })}\n\n`);
+                });
+
+                if (res.flushHeaders) {
+                  res.flushHeaders();
+                }
               });
-            });
+            };
+
+            handleStream(testProcess.stdout, res);
+            handleStream(testProcess.stderr, res);
 
             testProcess.on('close', (code) => {
               res.write(`data: ${JSON.stringify({ 

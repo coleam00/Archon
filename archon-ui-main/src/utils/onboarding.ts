@@ -41,10 +41,11 @@ export function isLmConfigured(
   // Helper function to check if a credential has a valid value
   const hasValidCredential = (cred: NormalizedCredential | undefined): boolean => {
     if (!cred) return false;
-    return !!(
-      (cred.value && cred.value !== 'null' && cred.value !== null && cred.value.trim() !== '') || 
-      (cred.is_encrypted && cred.encrypted_value && cred.encrypted_value !== 'null' && cred.encrypted_value !== null)
-    );
+    // If is_encrypted is true, we consider it valid even without a value,
+    // as the value is stored on the server.
+    if (cred.is_encrypted) return true;
+
+    return !!(cred.value && cred.value !== 'null' && cred.value !== null && cred.value.trim() !== '');
   };
 
   // Find API keys

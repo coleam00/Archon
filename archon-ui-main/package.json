@@ -8,7 +8,7 @@
     "build": "npx vite build",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
     "preview": "npx vite preview",
-    "test": "vitest",
+    "test": "vitest run --coverage",
     "test:ui": "vitest --ui",
     "test:coverage": "npm run test:coverage:run && npm run test:coverage:summary",
     "test:coverage:run": "vitest run --coverage --reporter=dot --reporter=json",
@@ -36,6 +36,7 @@
     "react-router-dom": "^6.26.2",
     "socket.io-client": "^4.8.1",
     "tailwind-merge": "latest",
+    "uuid": "^11.1.0",
     "zod": "^3.25.46"
   },
   "devDependencies": {
@@ -45,6 +46,7 @@
     "@types/node": "^20.19.0",
     "@types/react": "^18.3.1",
     "@types/react-dom": "^18.3.1",
+    "@types/uuid": "^10.0.0",
     "@typescript-eslint/eslint-plugin": "^5.54.0",
     "@typescript-eslint/parser": "^5.54.0",
     "@vitejs/plugin-react": "^4.2.1",

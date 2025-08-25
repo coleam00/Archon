@@ -1,5 +1,5 @@
-import { render, screen, fireEvent } from '@testing-library/react'
-import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, fireEvent, act } from '@testing-library/react'
+import { describe, test, expect, vi } from 'vitest'
 import React from 'react'
 import { credentialsService } from '../src/services/credentialsService'
 
@@ -36,7 +36,7 @@ describe('Error Handling Tests', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Failed to load data')
   })
 
-  test('timeout error simulation', () => {
+  test('timeout error simulation', async () => {
     const MockTimeoutComponent = () => {
       const [status, setStatus] = React.useState('idle')
       
@@ -61,10 +61,8 @@ describe('Error Handling Tests', () => {
     fireEvent.click(screen.getByText('Start Request'))
     expect(screen.getByText('Loading...')).toBeInTheDocument()
     
-    // Wait for timeout
-    setTimeout(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent('Request timed out')
-    }, 150)
+    const alert = await screen.findByRole('alert', {}, { timeout: 500 })
+    expect(alert).toHaveTextContent('Request timed out')
   })
 
   test('form validation errors', () => {
