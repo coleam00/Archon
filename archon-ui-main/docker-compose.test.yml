@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  # Main test runner service
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: archon-ui-tests
+    volumes:
+      # Mount source code for live updates (optional for development)
+      - ./src:/app/src:ro
+      - ./test:/app/test:ro
+      # Mount for test results output
+      - ./test-results:/app/public/test-results
+    environment:
+      - NODE_ENV=test
+      - CI=true
+    command: npm run test:coverage:stream
+
+  # Interactive test UI service (for development)
+  test-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: archon-ui-test-ui
+    ports:
+      - "51204:51204"  # Vitest UI port
+    volumes:
+      - ./src:/app/src:ro
+      - ./test:/app/test:ro
+    environment:
+      - NODE_ENV=test
+    command: npm run test:ui -- --host 0.0.0.0 --port 51204
+    profiles:
+      - ui
+
+  # Linting service
+  lint:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: archon-ui-lint
+    volumes:
+      - ./src:/app/src:ro
+    command: npm run lint
+    profiles:
+      - lint
+
+# Named volumes for persisting test results between runs
+volumes:
+  test-results:
+  node_modules:

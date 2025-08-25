@@ -1,0 +1,53 @@
+# Dockerfile.test.multistage - Multi-stage build for testing with result extraction
+# This version allows extracting test results and coverage reports
+
+# Stage 1: Base dependencies
+FROM node:20-alpine AS dependencies
+
+WORKDIR /app
+
+# Install build tools
+RUN apk add --no-cache python3 make g++ git
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci --include=dev
+
+# Stage 2: Test runner
+FROM node:20-alpine AS test-runner
+
+WORKDIR /app
+
+# Install runtime dependencies
+RUN apk add --no-cache git
+
+# Copy dependencies from previous stage
+COPY --from=dependencies /app/node_modules ./node_modules
+
+# Copy application code
+COPY . .
+
+# Create output directories
+RUN mkdir -p /test-results /coverage
+
+# Run tests and save results
+RUN npm run test:coverage:run || true && \
+    cp -r public/test-results/* /test-results/ 2>/dev/null || true && \
+    cp -r coverage/* /coverage/ 2>/dev/null || true
+
+# Stage 3: Results extractor (minimal image with just results)
+FROM alpine:latest AS results
+
+WORKDIR /results
+
+# Copy test results and coverage reports
+COPY --from=test-runner /test-results ./test-results
+COPY --from=test-runner /coverage ./coverage
+
+# Create a summary file
+RUN echo "Test results and coverage reports are available in this container" > README.txt
+
+# Default command to list results
+CMD ["ls", "-la"]

@@ -95,7 +95,7 @@ import { getApiUrl } from '../config/api';
  * MCP Client Service - Universal MCP client that connects to any MCP servers
  * This service communicates with the standalone Python MCP client service
  */
-class MCPClientService {
+export class MCPClientService {
   private baseUrl = getApiUrl();
 
   // ========================================

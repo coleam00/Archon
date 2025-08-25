@@ -1,0 +1,53 @@
+# Dockerfile.test - Run Archon UI tests in a containerized environment
+# This Dockerfile creates a test environment with all dependencies installed
+
+# Use Node.js 20 LTS Alpine for smaller image size
+FROM node:20-alpine AS test-runner
+
+# Install necessary build tools for native dependencies
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    git
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files first for better layer caching
+COPY package*.json ./
+
+# Install all dependencies (including devDependencies needed for testing)
+RUN npm ci --include=dev
+
+# Copy the entire application
+COPY . .
+
+# Create directories for test results
+RUN mkdir -p public/test-results/coverage
+
+# Set environment to test
+ENV NODE_ENV=test
+
+# Set required environment variables for tests to pass
+ENV ARCHON_SERVER_PORT=8181
+ENV ARCHON_MCP_PORT=8051
+ENV VITE_API_URL=http://localhost:8181
+
+# Default command runs tests with coverage
+CMD ["npm", "run", "test:coverage:stream"]
+
+# Alternative commands can be specified at runtime:
+# docker run <image> npm run test                    # Run tests in watch mode
+# docker run <image> npm run test:coverage          # Run with coverage report
+# docker run <image> npm run test:ui                # Run with UI (requires port mapping)
+# docker run <image> npm run lint                   # Run linting
+
+# Health check to ensure container is ready
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD node -e "console.log('Container ready')" || exit 1
+
+# Labels for documentation
+LABEL maintainer="Archon Team" \
+      description="Test runner container for Archon UI" \
+      version="1.0.0"

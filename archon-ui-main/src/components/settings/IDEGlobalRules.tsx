@@ -473,17 +473,92 @@ archon:manage_task(
 
   const handleCopyToClipboard = async () => {
     try {
-      await navigator.clipboard.writeText(currentRules);
-      setCopied(true);
-      showToast(`${selectedRuleType === 'claude' ? 'Claude Code' : 'Universal'} rules copied to clipboard!`, 'success');
-      
-      // Reset copy icon after 2 seconds
-      setTimeout(() => {
-        setCopied(false);
-      }, 2000);
+      // Check if we're in a secure context (HTTPS or localhost)
+      if (!window.isSecureContext) {
+        // Fallback method using a temporary textarea
+        const textArea = document.createElement('textarea');
+        textArea.value = currentRules;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        textArea.style.top = '-999999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        
+        try {
+          const successful = document.execCommand('copy');
+          if (successful) {
+            setCopied(true);
+            showToast(`${selectedRuleType === 'claude' ? 'Claude Code' : 'Universal'} rules copied to clipboard!`, 'success');
+            setTimeout(() => setCopied(false), 2000);
+          } else {
+            throw new Error('Copy command failed');
+          }
+        } finally {
+          document.body.removeChild(textArea);
+        }
+      } else if (navigator.clipboard && navigator.clipboard.writeText) {
+        // Modern clipboard API
+        await navigator.clipboard.writeText(currentRules);
+        setCopied(true);
+        showToast(`${selectedRuleType === 'claude' ? 'Claude Code' : 'Universal'} rules copied to clipboard!`, 'success');
+        
+        // Reset copy icon after 2 seconds
+        setTimeout(() => {
+          setCopied(false);
+        }, 2000);
+      } else {
+        // Fallback for older browsers
+        const textArea = document.createElement('textarea');
+        textArea.value = currentRules;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        textArea.style.top = '-999999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        
+        try {
+          const successful = document.execCommand('copy');
+          if (successful) {
+            setCopied(true);
+            showToast(`${selectedRuleType === 'claude' ? 'Claude Code' : 'Universal'} rules copied to clipboard!`, 'success');
+            setTimeout(() => setCopied(false), 2000);
+          } else {
+            throw new Error('Copy command failed');
+          }
+        } finally {
+          document.body.removeChild(textArea);
+        }
+      }
     } catch (err) {
       console.error('Failed to copy text: ', err);
-      showToast('Failed to copy to clipboard', 'error');
+      
+      // Try one more fallback method
+      try {
+        const textArea = document.createElement('textarea');
+        textArea.value = currentRules;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        textArea.style.top = '-999999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        
+        const successful = document.execCommand('copy');
+        document.body.removeChild(textArea);
+        
+        if (successful) {
+          setCopied(true);
+          showToast(`${selectedRuleType === 'claude' ? 'Claude Code' : 'Universal'} rules copied to clipboard!`, 'success');
+          setTimeout(() => setCopied(false), 2000);
+        } else {
+          showToast('Failed to copy to clipboard. Please try selecting and copying manually.', 'error');
+        }
+      } catch (fallbackErr) {
+        console.error('Fallback copy also failed:', fallbackErr);
+        showToast('Failed to copy to clipboard. Please try selecting and copying manually.', 'error');
+      }
     }
   };
 
