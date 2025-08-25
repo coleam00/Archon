@@ -77,7 +77,9 @@ async def fetch_credentials_from_server():
                         "Please set it in your .env file or environment."
                     )
                 response = await client.get(
-                    f"http://archon-server:{server_port}/internal/credentials/agents", timeout=10.0
+                    f"http://archon-server:{server_port}/internal/credentials/agents", 
+                    timeout=10.0,
+                    headers={"X-Internal-Service": "archon-agents"}
                 )
                 response.raise_for_status()
                 credentials = response.json()

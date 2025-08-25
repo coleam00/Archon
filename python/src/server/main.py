@@ -178,9 +178,27 @@ app = FastAPI(
 )
 
 # Configure CORS
+def get_allowed_origins():
+    """Get allowed origins for CORS based on environment"""
+    import os
+    domain = os.getenv("DOMAIN", "localhost")
+    prod_mode = os.getenv("PROD", "false").lower() == "true"
+    
+    if prod_mode and domain != "localhost":
+        # Production mode with custom domain
+        return [
+            f"https://{domain}",
+            f"http://{domain}",
+            f"https://www.{domain}",
+            f"http://www.{domain}",
+        ]
+    else:
+        # Development mode - allow all origins
+        return ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for testing WebSocket issue
+    allow_origins=get_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -34,4 +34,4 @@ ENV ARCHON_MCP_PORT=${ARCHON_MCP_PORT}
 EXPOSE ${ARCHON_MCP_PORT}
 
 # Run the MCP server
-CMD ["python", "-m", "src.mcp_server.mcp_server"]
+CMD sh -c "cd /app && PYTHONPATH=/app python -m src.mcp_server.mcp_server"

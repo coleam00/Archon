@@ -21,5 +21,5 @@ COPY . .
 # Expose the port configured in package.json (3737)
 EXPOSE 3737
 
-# Start Vite dev server (already configured with --port 3737 --host in package.json)
+# Always use dev server in Docker (with proxy support)
 CMD ["npm", "run", "dev"]
