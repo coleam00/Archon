@@ -139,6 +139,7 @@ class CodeExtractionService:
         progress_callback: Callable | None = None,
         start_progress: int = 0,
         end_progress: int = 100,
+        provided_source_id: str | None = None,
     ) -> int:
         """
         Extract code examples from crawled documents and store them.
@@ -149,6 +150,7 @@ class CodeExtractionService:
             progress_callback: Optional async callback for progress updates
             start_progress: Starting progress percentage (default: 0)
             end_progress: Ending progress percentage (default: 100)
+            provided_source_id: Optional override for source_id to use for all code examples
 
         Returns:
             Number of code examples stored
@@ -163,7 +165,11 @@ class CodeExtractionService:
 
         # Extract code blocks from all documents
         all_code_blocks = await self._extract_code_blocks_from_documents(
-            crawl_results, progress_callback, start_progress, extract_end
+            crawl_results,
+            progress_callback,
+            start_progress,
+            extract_end,
+            provided_source_id=provided_source_id,
         )
 
         if not all_code_blocks:
@@ -204,6 +210,7 @@ class CodeExtractionService:
         progress_callback: Callable | None = None,
         start_progress: int = 0,
         end_progress: int = 100,
+        provided_source_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Extract code blocks from all documents.
@@ -306,9 +313,11 @@ class CodeExtractionService:
                     )
 
                 if code_blocks:
-                    # Always extract source_id from URL
-                    parsed_url = urlparse(source_url)
-                    source_id = parsed_url.netloc or parsed_url.path
+                    # Prefer provided scoped source_id if available; otherwise derive from URL
+                    source_id = provided_source_id
+                    if not source_id:
+                        parsed_url = urlparse(source_url)
+                        source_id = parsed_url.netloc or parsed_url.path
 
                     for block in code_blocks:
                         all_code_blocks.append({

@@ -6,6 +6,7 @@ Consolidates both utility functions and class-based service.
 """
 
 from typing import Any
+import os
 
 from supabase import Client
 
@@ -30,6 +31,90 @@ def _get_model_choice() -> str:
     except Exception as e:
         logger.warning(f"Error getting model choice: {e}, using default")
         return "gpt-4.1-nano"
+
+
+def _resolve_sync_provider_config() -> tuple[str, str | None, str | None]:
+    """Resolve provider, api_key, and base_url synchronously from cached credentials/env.
+
+    Returns:
+        Tuple of (provider_name, api_key, base_url)
+    """
+    from .credential_service import credential_service
+
+    provider = "openai"
+    api_key: str | None = None
+    base_url: str | None = None
+
+    try:
+        # Provider selection
+        if credential_service._cache_initialized and "LLM_PROVIDER" in credential_service._cache:
+            provider = credential_service._cache.get("LLM_PROVIDER", "openai") or "openai"
+        else:
+            provider = os.getenv("LLM_PROVIDER", "openai")
+
+        # API key resolution by provider
+        if provider == "openai":
+            # Prefer cached credential (may be encrypted)
+            if credential_service._cache_initialized and "OPENAI_API_KEY" in credential_service._cache:
+                cached_key = credential_service._cache["OPENAI_API_KEY"]
+                if isinstance(cached_key, dict) and cached_key.get("is_encrypted"):
+                    api_key = credential_service._decrypt_value(cached_key.get("encrypted_value", ""))
+                else:
+                    api_key = cached_key
+            else:
+                api_key = os.getenv("OPENAI_API_KEY")
+
+            # Base URL for OpenAI (optional)
+            # Prefer DB-stored overrides, fallback to env
+            if credential_service._cache_initialized and "OPENAI_BASE_URL" in credential_service._cache:
+                base_url = credential_service._cache.get("OPENAI_BASE_URL") or None
+            elif credential_service._cache_initialized and "OPENAI_API_BASE" in credential_service._cache:
+                base_url = credential_service._cache.get("OPENAI_API_BASE") or None
+            else:
+                base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
+
+        elif provider == "google":
+            # Google requires API key, base URL is fixed OpenAI-compatible shim
+            if credential_service._cache_initialized and "GOOGLE_API_KEY" in credential_service._cache:
+                api_key = credential_service._cache.get("GOOGLE_API_KEY") or None
+            else:
+                api_key = os.getenv("GOOGLE_API_KEY")
+            base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+        elif provider == "ollama":
+            # Ollama base URL may be configured via OPENAI_BASE_URL; API key is not used
+            api_key = "ollama"
+            if credential_service._cache_initialized and "OPENAI_BASE_URL" in credential_service._cache:
+                base_url = credential_service._cache.get("OPENAI_BASE_URL") or "http://localhost:11434/v1"
+            else:
+                base_url = os.getenv("OPENAI_BASE_URL") or "http://localhost:11434/v1"
+
+        else:
+            # Unknown provider, default to OpenAI without base_url
+            if credential_service._cache_initialized and "OPENAI_API_KEY" in credential_service._cache:
+                cached_key = credential_service._cache["OPENAI_API_KEY"]
+                if isinstance(cached_key, dict) and cached_key.get("is_encrypted"):
+                    api_key = credential_service._decrypt_value(cached_key.get("encrypted_value", ""))
+                else:
+                    api_key = cached_key
+            else:
+                api_key = os.getenv("OPENAI_API_KEY")
+
+    except Exception as e:
+        # Fall back entirely to env in case of any cache access/decrypt error
+        logger.warning(f"Falling back to env provider config due to error: {e}")
+        provider = os.getenv("LLM_PROVIDER", provider)
+        if provider == "openai":
+            api_key = os.getenv("OPENAI_API_KEY")
+            base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
+        elif provider == "google":
+            api_key = os.getenv("GOOGLE_API_KEY")
+            base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+        elif provider == "ollama":
+            api_key = "ollama"
+            base_url = os.getenv("OPENAI_BASE_URL") or "http://localhost:11434/v1"
+
+    return provider, api_key, base_url
 
 
 def extract_source_summary(
@@ -72,34 +157,25 @@ The above content is from the documentation for '{source_id}'. Please provide a 
 
     try:
         try:
-            import os
-
             import openai
 
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                # Try to get from credential service with direct fallback
-                from .credential_service import credential_service
+            provider_name, api_key, base_url = _resolve_sync_provider_config()
 
-                if (
-                    credential_service._cache_initialized
-                    and "OPENAI_API_KEY" in credential_service._cache
-                ):
-                    cached_key = credential_service._cache["OPENAI_API_KEY"]
-                    if isinstance(cached_key, dict) and cached_key.get("is_encrypted"):
-                        api_key = credential_service._decrypt_value(cached_key["encrypted_value"])
-                    else:
-                        api_key = cached_key
-                else:
-                    api_key = os.getenv("OPENAI_API_KEY", "")
+            if provider_name in (None, "openai") and not api_key:
+                raise ValueError("OpenAI API key not available")
+            if provider_name == "google" and not api_key:
+                raise ValueError("Google API key not available")
 
-            if not api_key:
-                raise ValueError("No OpenAI API key available")
-
-            client = openai.OpenAI(api_key=api_key)
-            search_logger.info("Successfully created LLM client fallback for summary generation")
+            # Create OpenAI-compatible client with optional base_url
+            if base_url:
+                client = openai.OpenAI(api_key=api_key, base_url=base_url)
+            else:
+                client = openai.OpenAI(api_key=api_key)
+            search_logger.info(
+                f"Created sync LLM client for provider={provider_name} base_url={base_url or 'default'}"
+            )
         except Exception as e:
-            search_logger.error(f"Failed to create LLM client fallback: {e}")
+            search_logger.error(f"Failed to create LLM client for summary generation: {e}")
             return default_summary
 
         # Call the OpenAI API to generate the summary
@@ -165,36 +241,23 @@ def generate_source_title_and_metadata(
     if content and len(content.strip()) > 100:
         try:
             try:
-                import os
-
                 import openai
 
-                api_key = os.getenv("OPENAI_API_KEY")
-                if not api_key:
-                    # Try to get from credential service with direct fallback
-                    from .credential_service import credential_service
+                provider_name, api_key, base_url = _resolve_sync_provider_config()
 
-                    if (
-                        credential_service._cache_initialized
-                        and "OPENAI_API_KEY" in credential_service._cache
-                    ):
-                        cached_key = credential_service._cache["OPENAI_API_KEY"]
-                        if isinstance(cached_key, dict) and cached_key.get("is_encrypted"):
-                            api_key = credential_service._decrypt_value(
-                                cached_key["encrypted_value"]
-                            )
-                        else:
-                            api_key = cached_key
-                    else:
-                        api_key = os.getenv("OPENAI_API_KEY", "")
+                if provider_name in (None, "openai") and not api_key:
+                    raise ValueError("OpenAI API key not available")
+                if provider_name == "google" and not api_key:
+                    raise ValueError("Google API key not available")
 
-                if not api_key:
-                    raise ValueError("No OpenAI API key available")
-
-                client = openai.OpenAI(api_key=api_key)
+                # Create OpenAI-compatible client with optional base_url
+                if base_url:
+                    client = openai.OpenAI(api_key=api_key, base_url=base_url)
+                else:
+                    client = openai.OpenAI(api_key=api_key)
             except Exception as e:
                 search_logger.error(
-                    f"Failed to create LLM client fallback for title generation: {e}"
+                    f"Failed to create LLM client for title generation: {e}"
                 )
                 # Don't proceed if client creation fails
                 raise

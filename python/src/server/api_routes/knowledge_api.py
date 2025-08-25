@@ -151,7 +151,7 @@ async def get_knowledge_items(
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
-@router.put("/knowledge-items/{source_id}")
+@router.put("/knowledge-items/{source_id:path}")
 async def update_knowledge_item(source_id: str, updates: dict):
     """Update a knowledge item's metadata."""
     try:
@@ -176,7 +176,7 @@ async def update_knowledge_item(source_id: str, updates: dict):
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
-@router.delete("/knowledge-items/{source_id}")
+@router.delete("/knowledge-items/{source_id:path}")
 async def delete_knowledge_item(source_id: str):
     """Delete a knowledge item from the database."""
     try:
@@ -225,7 +225,7 @@ async def delete_knowledge_item(source_id: str):
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
-@router.get("/knowledge-items/{source_id}/code-examples")
+@router.get("/knowledge-items/{source_id:path}/code-examples")
 async def get_knowledge_item_code_examples(source_id: str):
     """Get all code examples for a specific knowledge item."""
     try:
@@ -258,7 +258,7 @@ async def get_knowledge_item_code_examples(source_id: str):
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
-@router.post("/knowledge-items/{source_id}/refresh")
+@router.post("/knowledge-items/{source_id:path}/refresh")
 async def refresh_knowledge_item(source_id: str):
     """Refresh a knowledge item by re-crawling its URL with the same metadata."""
     try:

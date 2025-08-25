@@ -16,7 +16,7 @@ interface RAGSettingsProps {
     USE_AGENTIC_RAG: boolean;
     USE_RERANKING: boolean;
     LLM_PROVIDER?: string;
-    LLM_BASE_URL?: string;
+    OPENAI_BASE_URL?: string;
     EMBEDDING_MODEL?: string;
     // Crawling Performance Settings
     CRAWL_BATCH_SIZE?: number;
@@ -52,7 +52,7 @@ export const RAGSettings = ({
           Configure Retrieval-Augmented Generation (RAG) strategies for optimal
           knowledge retrieval.
         </p>
-        
+
         {/* Provider Selection Row */}
         <div className="grid grid-cols-3 gap-4 mb-4">
           <div>
@@ -75,10 +75,10 @@ export const RAGSettings = ({
             <div>
               <Input
                 label="Ollama Base URL"
-                value={ragSettings.LLM_BASE_URL || 'http://localhost:11434/v1'}
+                value={ragSettings.OPENAI_BASE_URL || 'http://localhost:11434/v1'}
                 onChange={e => setRagSettings({
                   ...ragSettings,
-                  LLM_BASE_URL: e.target.value
+                  OPENAI_BASE_URL: e.target.value
                 })}
                 placeholder="http://localhost:11434/v1"
                 accentColor="green"
@@ -86,9 +86,9 @@ export const RAGSettings = ({
             </div>
           )}
           <div className="flex items-end">
-            <Button 
-              variant="outline" 
-              accentColor="green" 
+            <Button
+              variant="outline"
+              accentColor="green"
               icon={saving ? <Loader className="w-4 h-4 mr-1 animate-spin" /> : <Save className="w-4 h-4 mr-1" />}
               className="w-full whitespace-nowrap"
               size="md"
@@ -114,15 +114,15 @@ export const RAGSettings = ({
         {/* Model Settings Row */}
         <div className="grid grid-cols-2 gap-4 mb-6">
           <div>
-            <Input 
-              label="Chat Model" 
-              value={ragSettings.MODEL_CHOICE} 
+            <Input
+              label="Chat Model"
+              value={ragSettings.MODEL_CHOICE}
               onChange={e => setRagSettings({
                 ...ragSettings,
                 MODEL_CHOICE: e.target.value
-              })} 
+              })}
               placeholder={getModelPlaceholder(ragSettings.LLM_PROVIDER || 'openai')}
-              accentColor="green" 
+              accentColor="green"
             />
           </div>
           <div>
@@ -138,19 +138,19 @@ export const RAGSettings = ({
             />
           </div>
         </div>
-        
+
         {/* Second row: Contextual Embeddings, Max Workers, and description */}
         <div className="grid grid-cols-8 gap-4 mb-4 p-4 rounded-lg border border-green-500/20 shadow-[0_2px_8px_rgba(34,197,94,0.1)]">
           <div className="col-span-4">
-            <CustomCheckbox 
-              id="contextualEmbeddings" 
-              checked={ragSettings.USE_CONTEXTUAL_EMBEDDINGS} 
+            <CustomCheckbox
+              id="contextualEmbeddings"
+              checked={ragSettings.USE_CONTEXTUAL_EMBEDDINGS}
               onChange={e => setRagSettings({
                 ...ragSettings,
                 USE_CONTEXTUAL_EMBEDDINGS: e.target.checked
-              })} 
-              label="Use Contextual Embeddings" 
-              description="Enhances embeddings with contextual information for better retrieval" 
+              })}
+              label="Use Contextual Embeddings"
+              description="Enhances embeddings with contextual information for better retrieval"
             />
           </div>
                       <div className="col-span-1">
@@ -166,14 +166,14 @@ export const RAGSettings = ({
                         ...ragSettings,
                         CONTEXTUAL_EMBEDDINGS_MAX_WORKERS: parseInt(e.target.value, 10) || 3
                       })}
-                      className="w-14 h-10 pl-1 pr-7 text-center font-medium rounded-md 
-                        bg-gradient-to-b from-gray-100 to-gray-200 dark:from-gray-900 dark:to-black 
-                        border border-green-500/30 
+                      className="w-14 h-10 pl-1 pr-7 text-center font-medium rounded-md
+                        bg-gradient-to-b from-gray-100 to-gray-200 dark:from-gray-900 dark:to-black
+                        border border-green-500/30
                         text-gray-900 dark:text-white
                         focus:border-green-500 focus:shadow-[0_0_15px_rgba(34,197,94,0.4)]
                         transition-all duration-200
-                        [appearance:textfield] 
-                        [&::-webkit-outer-spin-button]:appearance-none 
+                        [appearance:textfield]
+                        [&::-webkit-outer-spin-button]:appearance-none
                         [&::-webkit-inner-spin-button]:appearance-none"
                     />
                     <div className="absolute right-1 top-1 bottom-1 flex flex-col">
@@ -183,13 +183,13 @@ export const RAGSettings = ({
                           ...ragSettings,
                           CONTEXTUAL_EMBEDDINGS_MAX_WORKERS: Math.min(ragSettings.CONTEXTUAL_EMBEDDINGS_MAX_WORKERS + 1, 10)
                         })}
-                        className="flex-1 px-1 rounded-t-sm 
+                        className="flex-1 px-1 rounded-t-sm
                           bg-gradient-to-b from-green-500/20 to-green-600/10
                           hover:from-green-500/30 hover:to-green-600/20
                           border border-green-500/30 border-b-0
                           transition-all duration-200 group"
                       >
-                        <svg className="w-2.5 h-2.5 text-green-500 group-hover:filter group-hover:drop-shadow-[0_0_4px_rgba(34,197,94,0.8)]" 
+                        <svg className="w-2.5 h-2.5 text-green-500 group-hover:filter group-hover:drop-shadow-[0_0_4px_rgba(34,197,94,0.8)]"
                           viewBox="0 0 10 6" fill="none" stroke="currentColor" strokeWidth="2">
                           <path d="M1 5L5 1L9 5" />
                         </svg>
@@ -200,13 +200,13 @@ export const RAGSettings = ({
                           ...ragSettings,
                           CONTEXTUAL_EMBEDDINGS_MAX_WORKERS: Math.max(ragSettings.CONTEXTUAL_EMBEDDINGS_MAX_WORKERS - 1, 1)
                         })}
-                        className="flex-1 px-1 rounded-b-sm 
+                        className="flex-1 px-1 rounded-b-sm
                           bg-gradient-to-b from-green-500/20 to-green-600/10
                           hover:from-green-500/30 hover:to-green-600/20
                           border border-green-500/30 border-t-0
                           transition-all duration-200 group"
                       >
-                        <svg className="w-2.5 h-2.5 text-green-500 group-hover:filter group-hover:drop-shadow-[0_0_4px_rgba(34,197,94,0.8)]" 
+                        <svg className="w-2.5 h-2.5 text-green-500 group-hover:filter group-hover:drop-shadow-[0_0_4px_rgba(34,197,94,0.8)]"
                           viewBox="0 0 10 6" fill="none" stroke="currentColor" strokeWidth="2">
                           <path d="M1 1L5 5L9 1" />
                         </svg>
@@ -227,47 +227,47 @@ export const RAGSettings = ({
             )}
           </div>
         </div>
-        
+
         {/* Third row: Hybrid Search and Agentic RAG */}
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div>
-            <CustomCheckbox 
-              id="hybridSearch" 
-              checked={ragSettings.USE_HYBRID_SEARCH} 
+            <CustomCheckbox
+              id="hybridSearch"
+              checked={ragSettings.USE_HYBRID_SEARCH}
               onChange={e => setRagSettings({
                 ...ragSettings,
                 USE_HYBRID_SEARCH: e.target.checked
-              })} 
-              label="Use Hybrid Search" 
-              description="Combines vector similarity search with keyword search for better results" 
+              })}
+              label="Use Hybrid Search"
+              description="Combines vector similarity search with keyword search for better results"
             />
           </div>
           <div>
-            <CustomCheckbox 
-              id="agenticRag" 
-              checked={ragSettings.USE_AGENTIC_RAG} 
+            <CustomCheckbox
+              id="agenticRag"
+              checked={ragSettings.USE_AGENTIC_RAG}
               onChange={e => setRagSettings({
                 ...ragSettings,
                 USE_AGENTIC_RAG: e.target.checked
-              })} 
-              label="Use Agentic RAG" 
-              description="Enables code extraction and specialized search for technical content" 
+              })}
+              label="Use Agentic RAG"
+              description="Enables code extraction and specialized search for technical content"
             />
           </div>
         </div>
-        
+
         {/* Fourth row: Use Reranking */}
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <CustomCheckbox 
-              id="reranking" 
-              checked={ragSettings.USE_RERANKING} 
+            <CustomCheckbox
+              id="reranking"
+              checked={ragSettings.USE_RERANKING}
               onChange={e => setRagSettings({
                 ...ragSettings,
                 USE_RERANKING: e.target.checked
-              })} 
-              label="Use Reranking" 
-              description="Applies cross-encoder reranking to improve search result relevance" 
+              })}
+              label="Use Reranking"
+              description="Applies cross-encoder reranking to improve search result relevance"
             />
           </div>
           <div>{/* Empty column */}</div>
@@ -289,7 +289,7 @@ export const RAGSettings = ({
               <ChevronDown className="text-gray-500 dark:text-gray-400" size={20} />
             )}
           </div>
-          
+
           {showCrawlingSettings && (
             <div className="mt-4 p-4 border border-green-500/10 rounded-lg bg-green-500/5">
               <div className="grid grid-cols-2 gap-4">
@@ -328,7 +328,7 @@ export const RAGSettings = ({
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Browser sessions (1-20)</p>
                 </div>
               </div>
-              
+
               <div className="grid grid-cols-3 gap-4 mt-4">
                 <div>
                   <Select
@@ -400,7 +400,7 @@ export const RAGSettings = ({
               <ChevronDown className="text-gray-500 dark:text-gray-400" size={20} />
             )}
           </div>
-          
+
           {showStorageSettings && (
             <div className="mt-4 p-4 border border-green-500/10 rounded-lg bg-green-500/5">
               <div className="grid grid-cols-3 gap-4">
@@ -456,7 +456,7 @@ export const RAGSettings = ({
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Parallel workers (1-10)</p>
                 </div>
               </div>
-              
+
               <div className="mt-4 flex items-center">
                 <CustomCheckbox
                   id="parallelBatches"
@@ -520,14 +520,14 @@ const CustomCheckbox = ({
   return (
     <div className="flex items-start group">
       <div className="relative flex items-center h-5 mt-1">
-        <input 
-          type="checkbox" 
-          id={id} 
-          checked={checked} 
-          onChange={onChange} 
-          className="sr-only peer" 
+        <input
+          type="checkbox"
+          id={id}
+          checked={checked}
+          onChange={onChange}
+          className="sr-only peer"
         />
-        <label 
+        <label
           htmlFor={id}
           className="relative w-5 h-5 rounded-md transition-all duration-200 cursor-pointer
             bg-gradient-to-b from-white/80 to-white/60 dark:from-white/5 dark:to-black/40

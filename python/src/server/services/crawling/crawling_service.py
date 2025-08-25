@@ -304,10 +304,17 @@ class CrawlingService:
             url = str(request.get("url", ""))
             safe_logfire_info(f"Starting async crawl orchestration | url={url} | task_id={task_id}")
 
-            # Extract source_id from the original URL
+            # Derive a scoped source_id from the original URL (domain + start path)
             parsed_original_url = urlparse(url)
-            original_source_id = parsed_original_url.netloc or parsed_original_url.path
-            safe_logfire_info(f"Using source_id '{original_source_id}' from original URL '{url}'")
+            start_path = (parsed_original_url.path or "/").rstrip("/")
+            if start_path and start_path != "/":
+                scoped_source_id = f"{parsed_original_url.netloc}{start_path}"
+            else:
+                # Fall back to domain-only when path is root or empty
+                scoped_source_id = parsed_original_url.netloc or parsed_original_url.path
+            safe_logfire_info(
+                f"Using scoped source_id '{scoped_source_id}' from original URL '{url}'"
+            )
 
             # Helper to update progress with mapper
             async def update_mapped_progress(
@@ -383,7 +390,7 @@ class CrawlingService:
                 crawl_results,
                 request,
                 crawl_type,
-                original_source_id,
+                scoped_source_id,
                 doc_storage_callback,
                 self._check_cancellation,
             )
@@ -413,6 +420,7 @@ class CrawlingService:
                     code_progress_callback,
                     85,
                     95,
+                    provided_source_id=scoped_source_id,
                 )
 
                 # Send heartbeat after code extraction

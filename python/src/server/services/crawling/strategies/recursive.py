@@ -5,7 +5,7 @@ Handles recursive crawling of websites by following internal links.
 """
 import asyncio
 from typing import List, Dict, Any, Optional, Callable
-from urllib.parse import urldefrag
+from urllib.parse import urldefrag, urlparse
 
 from crawl4ai import CrawlerRunConfig, CacheMode, MemoryAdaptiveDispatcher
 from ....config.logfire_config import get_logger
@@ -39,7 +39,8 @@ class RecursiveCrawlStrategy:
         max_concurrent: int = None,
         progress_callback: Optional[Callable] = None,
         start_progress: int = 10,
-        end_progress: int = 60
+        end_progress: int = 60,
+        restrict_to_start_path: bool = True,
     ) -> List[Dict[str, Any]]:
         """
         Recursively crawl internal links from start URLs up to a maximum depth with progress reporting.
@@ -134,10 +135,45 @@ class RecursiveCrawlStrategy:
                 await progress_callback('crawling', percentage, message, **step_info)
         
         visited = set()
-        
+
         def normalize_url(url):
             return urldefrag(url)[0]
-        
+
+        # Build scope constraints from the provided start URLs so we only crawl within
+        # the same domain AND within the starting path (not the whole domain).
+        # Example: start https://github.com/owner/repo -> only follow links under /owner/repo
+        scopes_by_netloc = {}
+        if restrict_to_start_path:
+            try:
+                for su in start_urls:
+                    ps = urlparse(su)
+                    netloc = ps.netloc
+                    path = ps.path or "/"
+                    if netloc:
+                        scopes_by_netloc.setdefault(netloc, set()).add(path)
+            except Exception as e:
+                logger.warning(f"Failed building crawl scopes from start URLs: {e}")
+                scopes_by_netloc = {}
+
+        def within_scope(candidate_url: str) -> bool:
+            if not restrict_to_start_path:
+                return True
+            try:
+                p = urlparse(candidate_url)
+                allowed_paths = scopes_by_netloc.get(p.netloc)
+                if not allowed_paths:
+                    return False
+                for base_path in allowed_paths:
+                    # Allow exact match or any path under the base_path directory
+                    if base_path in ("", "/"):
+                        return True
+                    # Normalize for boundary: '/foo' matches '/foo' and '/foo/...', but not '/foobar'
+                    if p.path == base_path or p.path.startswith(base_path.rstrip('/') + '/'):
+                        return True
+                return False
+            except Exception:
+                return True  # Be permissive on parsing errors
+
         current_urls = set([normalize_url(u) for u in start_urls])
         results_all = []
         total_processed = 0
@@ -197,11 +233,15 @@ class RecursiveCrawlStrategy:
                         # Find internal links for next depth
                         for link in result.links.get("internal", []):
                             next_url = normalize_url(link["href"])
-                            # Skip binary files and already visited URLs
-                            if next_url not in visited and not self.url_handler.is_binary_file(next_url):
-                                next_level_urls.add(next_url)
-                            elif self.url_handler.is_binary_file(next_url):
-                                logger.debug(f"Skipping binary file from crawl queue: {next_url}")
+                            # Enforce scope: only follow links within starting path scope
+                            if within_scope(next_url):
+                                # Skip binary files and already visited URLs
+                                if next_url not in visited and not self.url_handler.is_binary_file(next_url):
+                                    next_level_urls.add(next_url)
+                                elif self.url_handler.is_binary_file(next_url):
+                                    logger.debug(f"Skipping binary file from crawl queue: {next_url}")
+                            else:
+                                logger.debug(f"Skipping out-of-scope link: {next_url}")
                     else:
                         logger.warning(f"Failed to crawl {original_url}: {getattr(result, 'error_message', 'Unknown error')}")
                     

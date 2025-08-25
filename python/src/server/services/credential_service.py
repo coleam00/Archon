@@ -239,6 +239,28 @@ class CredentialService:
                 self._rag_cache_timestamp = None
                 logger.debug(f"Invalidated RAG settings cache due to update of {key}")
 
+            # Invalidate provider cache for LLM client so changes take effect immediately
+            try:
+                # Local import to avoid circular dependency at module import time
+                from .llm_provider_service import invalidate_provider_cache
+
+                # Only invalidate for relevant keys or when rag_strategy category changes
+                provider_related_keys = {
+                    "LLM_PROVIDER",
+                    "MODEL_CHOICE",
+                    "EMBEDDING_MODEL",
+                    "OPENAI_API_KEY",
+                    "OPENAI_BASE_URL",
+                    "OPENAI_API_BASE",
+                    "GOOGLE_API_KEY",
+                    "OLLAMA_BASE_URL",
+                }
+                if category == "rag_strategy" or key in provider_related_keys:
+                    invalidate_provider_cache(keys_changed=[key])
+            except Exception as e:
+                # Non-fatal: logging only
+                logger.debug(f"Provider cache invalidation skipped: {e}")
+
             logger.info(
                 f"Successfully {'encrypted and ' if is_encrypted else ''}stored credential: {key}"
             )
@@ -266,6 +288,25 @@ class CredentialService:
                 self._rag_settings_cache = None
                 self._rag_cache_timestamp = None
                 logger.debug(f"Invalidated RAG settings cache due to deletion of {key}")
+
+            # Invalidate provider cache for LLM client when relevant keys are removed
+            try:
+                from .llm_provider_service import invalidate_provider_cache
+
+                provider_related_keys = {
+                    "LLM_PROVIDER",
+                    "MODEL_CHOICE",
+                    "EMBEDDING_MODEL",
+                    "OPENAI_API_KEY",
+                    "OPENAI_BASE_URL",
+                    "OPENAI_API_BASE",
+                    "GOOGLE_API_KEY",
+                    "OLLAMA_BASE_URL",
+                }
+                if key in provider_related_keys:
+                    invalidate_provider_cache(keys_changed=[key])
+            except Exception as e:
+                logger.debug(f"Provider cache invalidation skipped: {e}")
 
             logger.info(f"Successfully deleted credential: {key}")
             return True
@@ -415,6 +456,21 @@ class CredentialService:
             # Get base URL if needed
             base_url = self._get_provider_base_url(provider, rag_settings)
 
+            # Enhance OpenAI with optional custom base URL from credentials/env
+            if provider == "openai" and not base_url:
+                try:
+                    # Prefer explicitly provided credentials stored in the DB (API Keys section)
+                    base_url = await self.get_credential("OPENAI_BASE_URL", decrypt=True)
+                    if not base_url:
+                        base_url = await self.get_credential("OPENAI_API_BASE", decrypt=True)
+                except Exception as e:
+                    # Non-fatal: fall back to environment variables
+                    logger.debug(f"Unable to fetch OPENAI_BASE_URL from credentials: {e}")
+
+                # Fallback to environment variables if still not set
+                if not base_url:
+                    base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
+
             # Get models
             chat_model = rag_settings.get("MODEL_CHOICE", "")
             embedding_model = rag_settings.get("EMBEDDING_MODEL", "")
@@ -455,7 +511,7 @@ class CredentialService:
     def _get_provider_base_url(self, provider: str, rag_settings: dict) -> str | None:
         """Get base URL for provider."""
         if provider == "ollama":
-            return rag_settings.get("LLM_BASE_URL", "http://localhost:11434/v1")
+            return rag_settings.get("OPENAI_BASE_URL", "http://localhost:11434/v1")
         elif provider == "google":
             return "https://generativelanguage.googleapis.com/v1beta/openai/"
         return None  # Use default for OpenAI
@@ -465,7 +521,7 @@ class CredentialService:
         try:
             # For now, we'll update the RAG strategy settings
             return await self.set_credential(
-                "llm_provider",
+                "LLM_PROVIDER",
                 provider,
                 category="rag_strategy",
                 description=f"Active {service_type} provider",
@@ -510,7 +566,7 @@ async def initialize_credentials() -> None:
     provider_credentials = [
         "GOOGLE_API_KEY",  # Google Gemini API key
         "LLM_PROVIDER",  # Selected provider
-        "LLM_BASE_URL",  # Ollama base URL
+        "OPENAI_BASE_URL",  # Ollama base URL
         "EMBEDDING_MODEL",  # Custom embedding model
         "MODEL_CHOICE",  # Chat model for sync contexts
     ]

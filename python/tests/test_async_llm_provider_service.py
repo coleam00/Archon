@@ -50,6 +50,8 @@ class TestAsyncLLMProviderService:
         mock_service.get_credentials_by_category = AsyncMock()
         mock_service._get_provider_api_key = AsyncMock()
         mock_service._get_provider_base_url = MagicMock()
+        # Needed for provider override path which awaits credential_service.get_credential
+        mock_service.get_credential = AsyncMock()
         return mock_service
 
     @pytest.fixture
@@ -109,6 +111,32 @@ class TestAsyncLLMProviderService:
                 mock_credential_service.get_active_provider.assert_called_once_with("llm")
 
     @pytest.mark.asyncio
+    async def test_get_llm_client_openai_with_custom_base_url(
+        self, mock_credential_service, openai_provider_config
+    ):
+        """OpenAI client passes base_url when provided in provider config"""
+        config_with_base = dict(openai_provider_config)
+        config_with_base["base_url"] = "https://proxy.example.com/v1"
+        mock_credential_service.get_active_provider.return_value = config_with_base
+
+        with patch(
+            "src.server.services.llm_provider_service.credential_service", mock_credential_service
+        ):
+            with patch(
+                "src.server.services.llm_provider_service.openai.AsyncOpenAI"
+            ) as mock_openai:
+                mock_client = MagicMock()
+                mock_openai.return_value = mock_client
+
+                async with get_llm_client() as client:
+                    assert client == mock_client
+                    mock_openai.assert_called_once_with(
+                        api_key="test-openai-key", base_url="https://proxy.example.com/v1"
+                    )
+
+                mock_credential_service.get_active_provider.assert_called_once_with("llm")
+
+    @pytest.mark.asyncio
     async def test_get_llm_client_ollama_success(
         self, mock_credential_service, ollama_provider_config
     ):
@@ -157,8 +185,9 @@ class TestAsyncLLMProviderService:
     async def test_get_llm_client_with_provider_override(self, mock_credential_service):
         """Test client creation with explicit provider override (OpenAI)"""
         mock_credential_service._get_provider_api_key.return_value = "override-key"
-        mock_credential_service.get_credentials_by_category.return_value = {"LLM_BASE_URL": ""}
+        mock_credential_service.get_credentials_by_category.return_value = {"OPENAI_BASE_URL": ""}
         mock_credential_service._get_provider_base_url.return_value = None
+        mock_credential_service.get_credential.return_value = None
 
         with patch(
             "src.server.services.llm_provider_service.credential_service", mock_credential_service

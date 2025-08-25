@@ -44,10 +44,15 @@ export const APIKeysSection = () => {
       // Load all credentials
       const allCredentials = await credentialsService.getAllCredentials();
       
-      // Filter to only show API keys (credentials that end with _KEY or _API)
+      // Filter to show API credentials: keys containing _KEY, _API, API_, or BASE_URL
       const apiKeys = allCredentials.filter(cred => {
         const key = cred.key.toUpperCase();
-        return key.includes('_KEY') || key.includes('_API') || key.includes('API_');
+        return (
+          key.includes('_KEY') ||
+          key.includes('_API') ||
+          key.includes('API_') ||
+          key.includes('BASE_URL')
+        );
       });
       
       // Convert to UI format

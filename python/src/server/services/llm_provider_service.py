@@ -38,6 +38,25 @@ def _set_cached_settings(key: str, value: Any) -> None:
     _settings_cache[key] = (value, time.time())
 
 
+def invalidate_provider_cache(keys_changed: list[str] | None = None) -> None:
+    """Invalidate the provider settings cache immediately.
+
+    Args:
+        keys_changed: Optional list of credential keys that triggered invalidation (for logging)
+    """
+    try:
+        _settings_cache.clear()
+        if keys_changed:
+            logger.debug(
+                f"Invalidated provider settings cache due to credential update: {keys_changed}"
+            )
+        else:
+            logger.debug("Invalidated provider settings cache")
+    except Exception as e:
+        # Never raise from cache invalidation
+        logger.debug(f"Failed to invalidate provider cache (non-fatal): {e}")
+
+
 @asynccontextmanager
 async def get_llm_client(provider: str | None = None, use_embedding_provider: bool = False):
     """
@@ -73,6 +92,14 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
                 logger.debug("Using cached rag_strategy settings")
 
             base_url = credential_service._get_provider_base_url(provider, rag_settings)
+            # If OpenAI override and no base_url from rag settings, attempt to fetch from credentials
+            if provider == "openai" and not base_url:
+                try:
+                    base_url = await credential_service.get_credential("OPENAI_BASE_URL", decrypt=True)
+                    if not base_url:
+                        base_url = await credential_service.get_credential("OPENAI_API_BASE", decrypt=True)
+                except Exception:
+                    base_url = None
         else:
             # Get configured provider from database
             service_type = "embedding" if use_embedding_provider else "llm"
@@ -97,7 +124,11 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
             if not api_key:
                 raise ValueError("OpenAI API key not found")
 
-            client = openai.AsyncOpenAI(api_key=api_key)
+            # Only pass base_url if configured to avoid breaking tests expecting no kwarg
+            if base_url:
+                client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
+            else:
+                client = openai.AsyncOpenAI(api_key=api_key)
             logger.info("OpenAI client created successfully")
 
         elif provider_name == "ollama":

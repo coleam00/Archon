@@ -51,7 +51,7 @@ class DocumentStorageOperations:
             crawl_results: List of crawled documents
             request: The original crawl request
             crawl_type: Type of crawl performed
-            original_source_id: The source ID for all documents
+            original_source_id: The provided source_id for all documents (may be a scoped ID like 'domain/path')
             progress_callback: Optional callback for progress updates
             cancellation_check: Optional function to check for cancellation
             
@@ -87,9 +87,9 @@ class DocumentStorageOperations:
             # CHUNK THE CONTENT
             chunks = storage_service.smart_chunk_text(markdown_content, chunk_size=5000)
             
-            # Use the original source_id for all documents
+            # Use the provided source_id for all documents (scoped ID if supplied)
             source_id = original_source_id
-            safe_logfire_info(f"Using original source_id '{source_id}' for URL '{source_url}'")
+            safe_logfire_info(f"Using provided source_id '{source_id}' for URL '{source_url}'")
             
             # Process each chunk
             for i, chunk in enumerate(chunks):
@@ -278,7 +278,8 @@ class DocumentStorageOperations:
         url_to_full_document: Dict[str, str],
         progress_callback: Optional[Callable] = None,
         start_progress: int = 85,
-        end_progress: int = 95
+        end_progress: int = 95,
+        provided_source_id: Optional[str] = None,
     ) -> int:
         """
         Extract code examples from crawled documents and store them.
@@ -289,7 +290,8 @@ class DocumentStorageOperations:
             progress_callback: Optional callback for progress updates
             start_progress: Starting progress percentage
             end_progress: Ending progress percentage
-            
+            provided_source_id: Optional scoped source_id to use for all code examples
+        
         Returns:
             Number of code examples stored
         """
@@ -298,7 +300,8 @@ class DocumentStorageOperations:
             url_to_full_document,
             progress_callback,
             start_progress,
-            end_progress
+            end_progress,
+            provided_source_id=provided_source_id,
         )
         
         return result
