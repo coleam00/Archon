@@ -24,8 +24,8 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
   return {
     plugins: [
       react(),
-      // Custom plugin to add test endpoint
-      {
+      // Custom plugin to add test endpoint (only in dev mode)
+      ...(mode !== 'production' ? [{
         name: 'test-runner',
         configureServer(server) {
           // Serve coverage directory statically
@@ -274,13 +274,14 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
             });
           });
         }
-      }
+      }] : [])
     ],
-    server: {
-      host: '0.0.0.0', // Listen on all network interfaces with explicit IP
-      port: parseInt(process.env.ARCHON_UI_PORT || env.ARCHON_UI_PORT || '3737'), // Use configurable port
-      strictPort: true, // Exit if port is in use
-      allowedHosts: [env.HOST, 'localhost', '127.0.0.1'],
+    ...(mode !== 'production' && {
+      server: {
+        host: '0.0.0.0', // Listen on all network interfaces with explicit IP
+        port: parseInt(process.env.ARCHON_UI_PORT || env.ARCHON_UI_PORT || '3737'), // Use configurable port
+        strictPort: true, // Exit if port is in use
+        allowedHosts: [env.HOST, 'localhost', '127.0.0.1'],
       proxy: {
         '/api': {
           target: `http://${host}:${port}`,
@@ -305,7 +306,7 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
           ws: true
         }
       },
-    },
+    }),
     define: {
       'import.meta.env.VITE_HOST': JSON.stringify(host),
       'import.meta.env.VITE_PORT': JSON.stringify(port),
