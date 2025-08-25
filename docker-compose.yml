@@ -30,26 +30,21 @@ services:
       - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
       - ARCHON_MCP_PORT=${ARCHON_MCP_PORT:-8051}
       - ARCHON_AGENTS_PORT=${ARCHON_AGENTS_PORT:-8052}
+      - DOMAIN=${DOMAIN:-localhost}
+      - PROD=${PROD:-false}
     networks:
       - app-network
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock # Docker socket for MCP container control
-      - ./python/src:/app/src # Mount source code for hot reload
-      - ./python/tests:/app/tests # Mount tests for UI test execution
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    command:
-      [
-        "python",
-        "-m",
-        "uvicorn",
-        "src.server.main:socket_app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "${ARCHON_SERVER_PORT:-8181}",
-        "--reload",
-      ]
+    command: >
+      sh -c "cd /app && PYTHONPATH=/app python -m uvicorn src.server.main:socket_app 
+      --host 0.0.0.0 
+      --port ${ARCHON_SERVER_PORT:-8181} 
+      --workers 1"
+    labels:
+      - "coolify.managed=true"
     healthcheck:
       test:
         [
@@ -106,6 +101,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s # Give dependencies time to start
+    labels:
+      - "coolify.managed=true"
 
   # AI Agents Service (ML/Reranking)
   archon-agents:
@@ -140,6 +137,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    labels:
+      - "coolify.managed=true"
 
   # Frontend
   archon-frontend:
@@ -148,23 +147,38 @@ services:
     ports:
       - "${ARCHON_UI_PORT:-3737}:3737"
     environment:
-      - VITE_API_URL=http://${HOST:-localhost}:${ARCHON_SERVER_PORT:-8181}
       - VITE_ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
       - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
-      - HOST=${HOST:-localhost}
+      - ARCHON_UI_PORT=${ARCHON_UI_PORT:-3737}
+      - HOST=${HOST:-0.0.0.0}
+      - DOMAIN=${DOMAIN:-localhost}
       - PROD=${PROD:-false}
+      - DOCKER_ENV=true
+      - NODE_ENV=development
     networks:
       - app-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3737"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    volumes:
-      - ./archon-ui-main/src:/app/src
-      - ./archon-ui-main/public:/app/public
+      test: ["CMD", "sh", "-c", "wget --no-verbose --tries=1 --spider http://localhost:3737/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
     depends_on:
-      - archon-server
+      archon-server:
+        condition: service_healthy
+      archon-mcp:
+        condition: service_healthy
+      archon-agents:
+        condition: service_healthy
+    labels:
+      - "coolify.managed=true"
+      - "coolify.fqdn=archon.cogitia.com.es"
+      - "coolify.port=3737"
+      - "traefik.enable=true"
+      - "traefik.http.routers.archon-frontend.rule=Host(`archon.cogitia.com.es`)"
+      - "traefik.http.routers.archon-frontend.tls=true"
+      - "traefik.http.routers.archon-frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.archon-frontend.loadbalancer.server.port=3737"
 
 networks:
   app-network:

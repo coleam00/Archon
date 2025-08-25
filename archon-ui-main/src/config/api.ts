@@ -7,25 +7,40 @@
 
 // Get the API URL from environment or construct it
 export function getApiUrl(): string {
-  // For relative URLs in production (goes through proxy)
-  if (import.meta.env.PROD) {
+  // Debug logging
+  console.log('[API Config] Environment check:', {
+    DOCKER_ENV: import.meta.env.DOCKER_ENV,
+    PROD: import.meta.env.PROD,
+    VITE_API_URL: import.meta.env.VITE_API_URL,
+    MODE: import.meta.env.MODE
+  });
+
+  // CRITICAL: For Docker environment, ALWAYS use relative URL regardless of other settings
+  // This ensures internal proxy works even if Coolify sets VITE_API_URL
+  if (import.meta.env.DOCKER_ENV === 'true') {
+    console.log('[API Config] DOCKER_ENV=true - forcing relative URLs for internal proxy');
     return '';
   }
 
-  // Check if VITE_API_URL is provided (set by docker-compose)
+  // For relative URLs in production (goes through proxy)
+  if (import.meta.env.PROD) {
+    console.log('[API Config] Using production environment - relative URLs');
+    return '';
+  }
+
+  // Check if VITE_API_URL is provided (only for local development)
   if (import.meta.env.VITE_API_URL) {
+    console.log('[API Config] Using VITE_API_URL:', import.meta.env.VITE_API_URL);
     return import.meta.env.VITE_API_URL;
   }
 
-  // For development, construct from window location
+  // For local development only, construct from window location
   const protocol = window.location.protocol;
   const host = window.location.hostname;
   // Use configured port or default to 8181
   const port = import.meta.env.VITE_ARCHON_SERVER_PORT || '8181';
   
-  if (!import.meta.env.VITE_ARCHON_SERVER_PORT) {
-    console.info('[Archon] Using default ARCHON_SERVER_PORT: 8181');
-  }
+  console.log('[API Config] Using local development URL:', `${protocol}//${host}:${port}`);
   
   return `${protocol}//${host}:${port}`;
 }
@@ -36,10 +51,12 @@ export function getApiBasePath(): string {
   
   // If using relative URLs (empty string), just return /api
   if (!apiUrl) {
+    console.log('[API Config] Using relative API path: /api');
     return '/api';
   }
   
   // Otherwise, append /api to the base URL
+  console.log('[API Config] Using full API path:', `${apiUrl}/api`);
   return `${apiUrl}/api`;
 }
 

@@ -9,71 +9,37 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
   // Load environment variables
   const env = loadEnv(mode, process.cwd(), '');
   
-  // Always use Docker service name for proxy in Docker environment
-  const isDocker = process.env.DOCKER_ENV === 'true';
-  const host = isDocker ? 'archon-server' : 'localhost';
+  // Get host and port from environment variables or use defaults
+  const host = process.env.HOST || 'localhost';
   const port = process.env.ARCHON_SERVER_PORT || env.ARCHON_SERVER_PORT || '8181';
-  
-  // Build allowed hosts list including your domain
-  const allowedHosts = ['localhost', '127.0.0.1'];
-  if (env.HOST) allowedHosts.push(env.HOST);
-  if (env.DOMAIN) allowedHosts.push(env.DOMAIN, `www.${env.DOMAIN}`);
-  if (process.env.DOMAIN) allowedHosts.push(process.env.DOMAIN, `www.${process.env.DOMAIN}`);
-  // Add your specific domain
-  allowedHosts.push('archon.cogitia.com.es', 'www.archon.cogitia.com.es');
   
   return {
     plugins: [react()],
     
-    // Always configure server (needed for Docker proxy)
-    server: {
+    // Only configure server for development
+    server: mode === 'development' ? {
       host: '0.0.0.0',
       port: parseInt(process.env.ARCHON_UI_PORT || env.ARCHON_UI_PORT || '3737'),
       strictPort: true,
-      allowedHosts: allowedHosts,
+      allowedHosts: [env.HOST, 'localhost', '127.0.0.1'],
       proxy: {
         '/api': {
           target: `http://${host}:${port}`,
           changeOrigin: true,
           secure: false,
           ws: true,
-          configure: (proxy, _options) => {
-            proxy.on('error', (err, _req, _res) => {
-              console.log('[Vite Proxy] API proxy error:', err);
-            });
-            proxy.on('proxyReq', (proxyReq, req, _res) => {
-              console.log('[Vite Proxy] API request:', req.method, req.url, 'to', `http://${host}:${port}`);
-            });
-          },
         },
         '/socket.io': {
           target: `http://${host}:${port}`,
           changeOrigin: true,
-          ws: true,
-          configure: (proxy, _options) => {
-            proxy.on('error', (err, _req, _res) => {
-              console.log('[Vite Proxy] Socket.IO proxy error:', err);
-            });
-          },
-        },
-        '/mcp': {
-          target: `http://archon-mcp:8051`,
-          changeOrigin: true,
-          secure: false,
-          configure: (proxy, _options) => {
-            proxy.on('error', (err, _req, _res) => {
-              console.log('[Vite Proxy] MCP proxy error:', err);
-            });
-          },
+          ws: true
         }
       },
-    },
+    } : undefined,
     
     define: {
       'import.meta.env.VITE_HOST': JSON.stringify(host),
       'import.meta.env.VITE_PORT': JSON.stringify(port),
-      'import.meta.env.ARCHON_MCP_PORT': JSON.stringify(process.env.ARCHON_MCP_PORT || env.ARCHON_MCP_PORT || '8051'),
-      'import.meta.env.DOCKER_ENV': JSON.stringify(process.env.DOCKER_ENV || 'false'),
       'import.meta.env.PROD': env.PROD === 'true',
     },
     

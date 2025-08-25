@@ -1,0 +1,29 @@
+# Simple production Dockerfile - just runs Vite in production mode
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Install system dependencies needed for some npm packages
+RUN apk add --no-cache python3 make g++ git curl
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy source code
+COPY . .
+
+# Set production environment
+ENV NODE_ENV=production
+ENV PROD=true
+
+# Build the application
+RUN npm run build
+
+# Expose the port
+EXPOSE 3737
+
+# Run Vite in production preview mode
+CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "3737"]
