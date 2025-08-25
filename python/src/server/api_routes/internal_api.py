@@ -31,9 +31,18 @@ ALLOWED_INTERNAL_IPS = [
 def is_internal_request(request: Request) -> bool:
     """Check if request is from an internal source."""
     client_host = request.client.host if request.client else None
+    
+    # Check for internal service header first
+    internal_service = request.headers.get("X-Internal-Service")
+    if internal_service in ["archon-agents", "archon-mcp"]:
+        logger.info(f"Allowing internal service request from {internal_service}")
+        return True
 
     if not client_host:
+        logger.debug("No client host found in request")
         return False
+    
+    logger.info(f"Checking internal access for IP: {client_host}")
 
     # Check if it's a Docker network IP
     parts = client_host.split(".")
@@ -52,6 +61,11 @@ def is_internal_request(request: Request) -> bool:
             elif first_octet == 10:
                 logger.info(f"Allowing Docker/Coolify network request from {client_host}")
                 return True
+            
+            # Private network ranges (192.168.0.0/16)
+            elif first_octet == 192 and int(parts[1]) == 168:
+                logger.info(f"Allowing private network request from {client_host}")
+                return True
                 
         except ValueError:
             pass
@@ -59,7 +73,13 @@ def is_internal_request(request: Request) -> bool:
     # Check if it's localhost
     if client_host in ["127.0.0.1", "::1", "localhost"]:
         return True
+    
+    # Check if it's from known Docker services
+    if client_host in ["archon-agents", "archon-mcp"]:
+        logger.info(f"Allowing known Docker service request from {client_host}")
+        return True
 
+    logger.warning(f"Denying access from unrecognized host: {client_host}")
     return False
 
 
