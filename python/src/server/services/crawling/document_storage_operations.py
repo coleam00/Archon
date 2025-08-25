@@ -224,9 +224,12 @@ class DocumentStorageOperations:
                 else:
                     break
 
-            # Generate summary with fallback
+            # Generate summary with fallback (run in thread to avoid blocking async loop)
             try:
-                summary = extract_source_summary(source_id, combined_content)
+                # Run synchronous extract_source_summary in a thread pool
+                summary = await asyncio.to_thread(
+                    extract_source_summary, source_id, combined_content
+                )
             except Exception as e:
                 safe_logfire_error(
                     f"Failed to generate AI summary for '{source_id}': {str(e)}, using fallback"
