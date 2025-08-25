@@ -75,21 +75,21 @@ class DocumentStorageOperations:
             if cancellation_check:
                 cancellation_check()
 
-            source_url = doc.get("url", "")
+            doc_url = doc.get("url", "")
             markdown_content = doc.get("markdown", "")
 
             if not markdown_content:
                 continue
 
             # Store full document for code extraction context
-            url_to_full_document[source_url] = markdown_content
+            url_to_full_document[doc_url] = markdown_content
 
             # CHUNK THE CONTENT
             chunks = storage_service.smart_chunk_text(markdown_content, chunk_size=5000)
 
             # Use the original source_id for all documents
             source_id = original_source_id
-            safe_logfire_info(f"Using original source_id '{source_id}' for URL '{source_url}'")
+            safe_logfire_info(f"Using original source_id '{source_id}' for URL '{doc_url}'")
 
             # Process each chunk
             for i, chunk in enumerate(chunks):
@@ -97,14 +97,14 @@ class DocumentStorageOperations:
                 if cancellation_check and i % 10 == 0:  # Check every 10 chunks
                     cancellation_check()
 
-                all_urls.append(source_url)
+                all_urls.append(doc_url)
                 all_chunk_numbers.append(i)
                 all_contents.append(chunk)
 
                 # Create metadata for each chunk
                 word_count = len(chunk.split())
                 metadata = {
-                    "url": source_url,
+                    "url": doc_url,
                     "title": doc.get("title", ""),
                     "description": doc.get("description", ""),
                     "source_id": source_id,

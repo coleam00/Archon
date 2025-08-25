@@ -235,12 +235,12 @@ Provide only the title, nothing else."""
         except Exception as e:
             search_logger.error(f"Error generating title for {source_id}: {e}")
 
-    # Build metadata - determine source_type from source_id pattern
-    source_type = "file" if source_id.startswith("file_") else "url"
+    # Build metadata - source_type will be determined by caller based on actual URL
+    # Default to "url" but this should be overridden by the caller
     metadata = {
         "knowledge_type": knowledge_type, 
         "tags": tags or [], 
-        "source_type": source_type,
+        "source_type": "url",  # Default, should be overridden by caller based on actual URL
         "auto_generated": True
     }
 
@@ -286,7 +286,14 @@ def update_source_info(
             search_logger.info(f"Preserving existing title for {source_id}: {existing_title}")
 
             # Update metadata while preserving title
-            source_type = "file" if source_id.startswith("file_") else "url"
+            # Determine source_type based on source_url or original_url
+            if source_url and source_url.startswith("file://"):
+                source_type = "file"
+            elif original_url and original_url.startswith("file://"):
+                source_type = "file"
+            else:
+                source_type = "url"
+            
             metadata = {
                 "knowledge_type": knowledge_type,
                 "tags": tags or [],
@@ -327,9 +334,19 @@ def update_source_info(
             if source_display_name:
                 # Use the display name directly as the title (truncated to prevent DB issues)
                 title = source_display_name[:100].strip()
+                
+                # Determine source_type based on source_url or original_url
+                if source_url and source_url.startswith("file://"):
+                    source_type = "file"
+                elif original_url and original_url.startswith("file://"):
+                    source_type = "file"
+                else:
+                    source_type = "url"
+                
                 metadata = {
                     "knowledge_type": knowledge_type,
                     "tags": tags or [],
+                    "source_type": source_type,
                     "auto_generated": False,
                 }
             else:
@@ -337,6 +354,14 @@ def update_source_info(
                 title, metadata = generate_source_title_and_metadata(
                     source_id, content, knowledge_type, tags, None, source_display_name
                 )
+                
+                # Override the source_type from AI with actual URL-based determination
+                if source_url and source_url.startswith("file://"):
+                    metadata["source_type"] = "file"
+                elif original_url and original_url.startswith("file://"):
+                    metadata["source_type"] = "file"
+                else:
+                    metadata["source_type"] = "url"
 
             # Add update_frequency and original_url to metadata
             metadata["update_frequency"] = update_frequency
