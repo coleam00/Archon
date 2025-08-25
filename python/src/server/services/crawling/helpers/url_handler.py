@@ -187,8 +187,8 @@ class URLHandler:
         """
         Generate a unique source ID from URL using hash.
 
-        This creates a 16-character hash that is guaranteed to be unique
-        for each URL, solving race condition issues when multiple crawls
+        This creates a 16-character hash that is extremely unlikely to collide
+        for distinct canonical URLs, solving race condition issues when multiple crawls
         target the same domain.
         
         Uses 16-char SHA256 prefix (64 bits) which provides
@@ -202,15 +202,54 @@ class URLHandler:
             A 16-character hexadecimal hash string
         """
         try:
-            # Normalize URL for consistent hashing
-            normalized_url = url.strip().lower()
+            from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+            
+            # Canonicalize URL for consistent hashing
+            parsed = urlparse(url.strip())
+            
+            # Normalize scheme and netloc to lowercase
+            scheme = (parsed.scheme or "").lower()
+            netloc = (parsed.netloc or "").lower()
+            
+            # Remove default ports
+            if netloc.endswith(":80") and scheme == "http":
+                netloc = netloc[:-3]
+            if netloc.endswith(":443") and scheme == "https":
+                netloc = netloc[:-4]
+            
+            # Normalize path (remove trailing slash except for root)
+            path = parsed.path or "/"
+            if path.endswith("/") and len(path) > 1:
+                path = path.rstrip("/")
+            
+            # Remove common tracking parameters and sort remaining
+            tracking_params = {
+                "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+                "gclid", "fbclid", "ref", "source"
+            }
+            query_items = [
+                (k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) 
+                if k not in tracking_params
+            ]
+            query = urlencode(sorted(query_items))
+            
+            # Reconstruct canonical URL (fragment is dropped)
+            canonical = urlunparse((scheme, netloc, path, "", query, ""))
+            
             # Generate SHA256 hash and take first 16 characters
-            # 16 hex chars = 64 bits = ~18 quintillion unique values
-            return hashlib.sha256(normalized_url.encode("utf-8")).hexdigest()[:16]
+            return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+            
         except Exception as e:
-            logger.error(f"Error generating unique source ID for {url}: {e}")
+            # Redact sensitive query params from error logs
+            try:
+                redacted = url.split("?", 1)[0] if "?" in url else url
+            except Exception:
+                redacted = "<unparseable-url>"
+            
+            logger.error(f"Error generating unique source ID for {redacted}: {e}", exc_info=True)
+            
             # Fallback: use a hash of the error message + url to still get something unique
-            fallback = f"error_{url}_{str(e)}"
+            fallback = f"error_{redacted}_{str(e)}"
             return hashlib.sha256(fallback.encode("utf-8")).hexdigest()[:16]
 
     @staticmethod

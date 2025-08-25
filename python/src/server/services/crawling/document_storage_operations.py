@@ -68,6 +68,7 @@ class DocumentStorageOperations:
         all_metadatas = []
         source_word_counts = {}
         url_to_full_document = {}
+        processed_docs = 0
 
         # Process and chunk each document
         for doc_index, doc in enumerate(crawl_results):
@@ -80,6 +81,9 @@ class DocumentStorageOperations:
 
             if not markdown_content:
                 continue
+
+            # Increment processed document count
+            processed_docs += 1
 
             # Store full document for code extraction context
             url_to_full_document[doc_url] = markdown_content
@@ -138,8 +142,9 @@ class DocumentStorageOperations:
         safe_logfire_info(f"url_to_full_document keys: {list(url_to_full_document.keys())[:5]}")
 
         # Log chunking results
+        avg_chunks = (len(all_contents) / processed_docs) if processed_docs > 0 else 0.0
         safe_logfire_info(
-            f"Document storage | documents={len(crawl_results)} | chunks={len(all_contents)} | avg_chunks_per_doc={len(all_contents) / len(crawl_results):.1f}"
+            f"Document storage | processed={processed_docs}/{len(crawl_results)} | chunks={len(all_contents)} | avg_chunks_per_doc={avg_chunks:.1f}"
         )
 
         # Call add_documents_to_supabase with the correct parameters
