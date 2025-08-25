@@ -242,7 +242,9 @@ class DocumentStorageOperations:
                 f"About to create/update source record for '{source_id}' (word count: {source_id_word_counts[source_id]})"
             )
             try:
-                update_source_info(
+                # Run synchronous update_source_info in a thread pool
+                await asyncio.to_thread(
+                    update_source_info,
                     client=self.supabase_client,
                     source_id=source_id,
                     summary=summary,

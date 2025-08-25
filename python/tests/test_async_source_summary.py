@@ -1,8 +1,9 @@
 """
-Test async execution of extract_source_summary.
+Test async execution of extract_source_summary and update_source_info.
 
-This test ensures that the synchronous extract_source_summary function
-is properly executed in a thread pool to avoid blocking the async event loop.
+This test ensures that synchronous functions extract_source_summary and
+update_source_info are properly executed in thread pools to avoid blocking
+the async event loop.
 """
 
 import asyncio
@@ -14,7 +15,7 @@ from src.server.services.crawling.document_storage_operations import DocumentSto
 
 
 class TestAsyncSourceSummary:
-    """Test that extract_source_summary doesn't block the async event loop."""
+    """Test that extract_source_summary and update_source_info don't block the async event loop."""
 
     @pytest.mark.asyncio
     async def test_extract_summary_runs_in_thread(self):
@@ -246,3 +247,167 @@ class TestAsyncSourceSummary:
                     assert call["content_len"] > 0
                     # Combined content should start with space + first chunk
                     assert "This is chunk one" in call["content_preview"]
+
+    @pytest.mark.asyncio
+    async def test_update_source_info_runs_in_thread(self):
+        """Test that update_source_info is executed in a thread pool."""
+        mock_supabase = Mock()
+        mock_supabase.table.return_value.upsert.return_value.execute.return_value = Mock()
+        
+        doc_storage = DocumentStorageOperations(mock_supabase)
+        
+        # Track when update_source_info is called
+        update_call_times = []
+        
+        def slow_update_source_info(**kwargs):
+            """Simulate a slow synchronous database operation."""
+            update_call_times.append(time.time())
+            # Simulate a blocking database operation
+            time.sleep(0.1)  # This would block the event loop if not run in thread
+            return None  # update_source_info doesn't return anything
+        
+        doc_storage.doc_storage_service.smart_chunk_text = Mock(
+            return_value=["chunk1"]
+        )
+        
+        with patch('src.server.services.crawling.document_storage_operations.extract_source_summary',
+                   return_value="Test summary"):
+            with patch('src.server.services.crawling.document_storage_operations.update_source_info',
+                       side_effect=slow_update_source_info):
+                with patch('src.server.services.crawling.document_storage_operations.safe_logfire_info'):
+                    with patch('src.server.services.crawling.document_storage_operations.safe_logfire_error'):
+                        all_metadatas = [{"source_id": "test_update", "word_count": 100}]
+                        all_contents = ["chunk1"]
+                        source_word_counts = {"test_update": 100}
+                        request = {"knowledge_type": "documentation", "tags": ["test"]}
+                        
+                        start_time = time.time()
+                        
+                        # This should not block despite the sleep in update_source_info
+                        await doc_storage._create_source_records(
+                            all_metadatas,
+                            all_contents,
+                            source_word_counts,
+                            request,
+                            "https://example.com",
+                            "Example Site"
+                        )
+                        
+                        end_time = time.time()
+                        
+                        # Verify that update_source_info was called
+                        assert len(update_call_times) == 1, "update_source_info should be called once"
+                        
+                        # The async function should complete without blocking
+                        total_time = end_time - start_time
+                        assert total_time < 1.0, "Should complete in reasonable time"
+
+    @pytest.mark.asyncio
+    async def test_update_source_info_error_handling(self):
+        """Test that errors in update_source_info trigger fallback correctly."""
+        mock_supabase = Mock()
+        mock_supabase.table.return_value.upsert.return_value.execute.return_value = Mock()
+        
+        doc_storage = DocumentStorageOperations(mock_supabase)
+        
+        # Mock to raise an exception
+        def failing_update_source_info(**kwargs):
+            raise RuntimeError("Database connection failed")
+        
+        doc_storage.doc_storage_service.smart_chunk_text = Mock(
+            return_value=["chunk1"]
+        )
+        
+        error_messages = []
+        fallback_called = False
+        
+        def track_fallback_upsert(data):
+            nonlocal fallback_called
+            fallback_called = True
+            return Mock(execute=Mock())
+        
+        mock_supabase.table.return_value.upsert.side_effect = track_fallback_upsert
+        
+        with patch('src.server.services.crawling.document_storage_operations.extract_source_summary',
+                   return_value="Test summary"):
+            with patch('src.server.services.crawling.document_storage_operations.update_source_info',
+                       side_effect=failing_update_source_info):
+                with patch('src.server.services.crawling.document_storage_operations.safe_logfire_info'):
+                    with patch('src.server.services.crawling.document_storage_operations.safe_logfire_error') as mock_error:
+                        mock_error.side_effect = lambda msg: error_messages.append(msg)
+                        
+                        all_metadatas = [{"source_id": "test_fail", "word_count": 100}]
+                        all_contents = ["chunk1"]
+                        source_word_counts = {"test_fail": 100}
+                        request = {"knowledge_type": "technical", "tags": ["test"]}
+                        
+                        await doc_storage._create_source_records(
+                            all_metadatas,
+                            all_contents,
+                            source_word_counts,
+                            request,
+                            "https://example.com",
+                            "Example Site"
+                        )
+                        
+                        # Verify error was logged
+                        assert any("Failed to create/update source record" in msg for msg in error_messages)
+                        assert any("Database connection failed" in msg for msg in error_messages)
+                        
+                        # Verify fallback was attempted
+                        assert fallback_called, "Fallback upsert should be called"
+
+    @pytest.mark.asyncio
+    async def test_update_source_info_preserves_kwargs(self):
+        """Test that all kwargs are properly passed to update_source_info in thread."""
+        mock_supabase = Mock()
+        mock_supabase.table.return_value.upsert.return_value.execute.return_value = Mock()
+        
+        doc_storage = DocumentStorageOperations(mock_supabase)
+        
+        # Track what gets passed to update_source_info
+        captured_kwargs = {}
+        
+        def capture_update_source_info(**kwargs):
+            captured_kwargs.update(kwargs)
+            return None
+        
+        doc_storage.doc_storage_service.smart_chunk_text = Mock(
+            return_value=["chunk content"]
+        )
+        
+        with patch('src.server.services.crawling.document_storage_operations.extract_source_summary',
+                   return_value="Generated summary"):
+            with patch('src.server.services.crawling.document_storage_operations.update_source_info',
+                       side_effect=capture_update_source_info):
+                with patch('src.server.services.crawling.document_storage_operations.safe_logfire_info'):
+                    all_metadatas = [{"source_id": "test_kwargs", "word_count": 250}]
+                    all_contents = ["chunk content"]
+                    source_word_counts = {"test_kwargs": 250}
+                    request = {
+                        "knowledge_type": "api_reference",
+                        "tags": ["api", "docs"],
+                        "url": "https://original.url/crawl"
+                    }
+                    
+                    await doc_storage._create_source_records(
+                        all_metadatas,
+                        all_contents,
+                        source_word_counts,
+                        request,
+                        "https://source.url",
+                        "Source Display Name"
+                    )
+                    
+                    # Verify all kwargs were passed correctly
+                    assert captured_kwargs["client"] == mock_supabase
+                    assert captured_kwargs["source_id"] == "test_kwargs"
+                    assert captured_kwargs["summary"] == "Generated summary"
+                    assert captured_kwargs["word_count"] == 250
+                    assert "chunk content" in captured_kwargs["content"]
+                    assert captured_kwargs["knowledge_type"] == "api_reference"
+                    assert captured_kwargs["tags"] == ["api", "docs"]
+                    assert captured_kwargs["update_frequency"] == 0
+                    assert captured_kwargs["original_url"] == "https://original.url/crawl"
+                    assert captured_kwargs["source_url"] == "https://source.url"
+                    assert captured_kwargs["source_display_name"] == "Source Display Name"
