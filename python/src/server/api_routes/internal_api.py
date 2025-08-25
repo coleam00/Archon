@@ -22,6 +22,7 @@ router = APIRouter(prefix="/internal", tags=["internal"])
 ALLOWED_INTERNAL_IPS = [
     "127.0.0.1",  # Localhost
     "172.18.0.0/16",  # Docker network range
+    "10.0.0.0/8",  # Docker network range (Coolify)
     "archon-agents",  # Docker service name
     "archon-mcp",  # Docker service name
 ]
@@ -34,15 +35,26 @@ def is_internal_request(request: Request) -> bool:
     if not client_host:
         return False
 
-    # Check if it's a Docker network IP (172.16.0.0/12 range)
-    if client_host.startswith("172."):
-        parts = client_host.split(".")
-        if len(parts) == 4:
-            second_octet = int(parts[1])
+    # Check if it's a Docker network IP
+    parts = client_host.split(".")
+    if len(parts) == 4:
+        try:
+            first_octet = int(parts[0])
+            
             # Docker uses 172.16.0.0 - 172.31.255.255
-            if 16 <= second_octet <= 31:
-                logger.info(f"Allowing Docker network request from {client_host}")
+            if first_octet == 172:
+                second_octet = int(parts[1])
+                if 16 <= second_octet <= 31:
+                    logger.info(f"Allowing Docker network request from {client_host}")
+                    return True
+            
+            # Docker/Coolify also uses 10.0.0.0/8 range
+            elif first_octet == 10:
+                logger.info(f"Allowing Docker/Coolify network request from {client_host}")
                 return True
+                
+        except ValueError:
+            pass
 
     # Check if it's localhost
     if client_host in ["127.0.0.1", "::1", "localhost"]:

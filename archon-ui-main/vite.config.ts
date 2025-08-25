@@ -44,6 +44,11 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
           target: `http://${host}:${port}`,
           changeOrigin: true,
           ws: true
+        },
+        '/mcp': {
+          target: `http://archon-mcp:8051`,
+          changeOrigin: true,
+          secure: false,
         }
       },
     },
@@ -51,6 +56,7 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
     define: {
       'import.meta.env.VITE_HOST': JSON.stringify(host),
       'import.meta.env.VITE_PORT': JSON.stringify(port),
+      'import.meta.env.ARCHON_MCP_PORT': JSON.stringify(process.env.ARCHON_MCP_PORT || env.ARCHON_MCP_PORT || '8051'),
       'import.meta.env.PROD': env.PROD === 'true',
     },
     
