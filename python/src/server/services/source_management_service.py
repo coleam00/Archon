@@ -145,6 +145,7 @@ def generate_source_title_and_metadata(
     knowledge_type: str = "technical",
     tags: list[str] | None = None,
     provider: str = None,
+    source_display_name: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """
     Generate a user-friendly title and metadata for a source based on its content.
@@ -203,8 +204,11 @@ def generate_source_title_and_metadata(
 
             # Limit content for prompt
             sample_content = content[:3000] if len(content) > 3000 else content
+            
+            # Use display name if available for better context
+            source_context = source_display_name if source_display_name else source_id
 
-            prompt = f"""Based on this content from {source_id}, generate a concise, descriptive title (3-6 words) that captures what this source is about:
+            prompt = f"""Based on this content from {source_context}, generate a concise, descriptive title (3-6 words) that captures what this source is about:
 
 {sample_content}
 
@@ -320,7 +324,7 @@ def update_source_info(
         else:
             # New source - generate title and metadata
             title, metadata = generate_source_title_and_metadata(
-                source_id, content, knowledge_type, tags
+                source_id, content, knowledge_type, tags, None, source_display_name
             )
 
             # Add update_frequency and original_url to metadata
