@@ -1,10 +1,10 @@
 /**
  * Bug Report Service for Archon V2 Alpha
- * 
+ *
  * Handles automatic context collection and GitHub issue creation for bug reports.
  */
 
-import { getApiUrl } from '../config/api';
+import { getApiUrl } from "../config/api";
 
 export interface BugContext {
   error: {
@@ -36,7 +36,7 @@ export interface BugReportData {
   stepsToReproduce: string;
   expectedBehavior: string;
   actualBehavior: string;
-  severity: 'low' | 'medium' | 'high' | 'critical';
+  severity: "low" | "medium" | "high" | "critical";
   component: string;
   context: BugContext;
 }
@@ -48,26 +48,26 @@ class BugReportService {
   async collectBugContext(error?: Error): Promise<BugContext> {
     const context: BugContext = {
       error: {
-        message: error?.message || 'Manual bug report',
+        message: error?.message || "Manual bug report",
         stack: error?.stack,
-        name: error?.name || 'UserReportedError'
+        name: error?.name || "Bug Report",
       },
-      
+
       app: {
         version: await this.getVersion(),
         url: window.location.href,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       },
-      
+
       system: {
         platform: navigator.platform,
         userAgent: navigator.userAgent,
-        memory: this.getMemoryInfo()
+        memory: this.getMemoryInfo(),
       },
-      
+
       services: await this.quickHealthCheck(),
-      
-      logs: await this.getRecentLogs(20)
+
+      logs: await this.getRecentLogs(20),
     };
 
     return context;
@@ -79,15 +79,15 @@ class BugReportService {
   private async getVersion(): Promise<string> {
     try {
       // Try to get version from main health endpoint
-      const response = await fetch('/api/system/version');
+      const response = await fetch("/api/system/version");
       if (response.ok) {
         const data = await response.json();
-        return data.version || 'v0.1.0';
+        return data.version || "v0.1.0";
       }
     } catch {
       // Fallback to default version
     }
-    return 'v0.1.0';
+    return "v0.1.0";
   }
 
   /**
@@ -102,30 +102,37 @@ class BugReportService {
     } catch {
       // Memory API not available
     }
-    return 'unknown';
+    return "unknown";
   }
 
   /**
    * Quick health check of Archon services
    */
-  private async quickHealthCheck(): Promise<{ server: boolean; mcp: boolean; agents: boolean; }> {
+  private async quickHealthCheck(): Promise<{
+    server: boolean;
+    mcp: boolean;
+    agents: boolean;
+  }> {
     const services = { server: false, mcp: false, agents: false };
-    
+
     try {
       // Check services with a short timeout
       const checks = await Promise.allSettled([
-        fetch('/api/health', { signal: AbortSignal.timeout(2000) }),
-        fetch('/api/mcp/health', { signal: AbortSignal.timeout(2000) }),
-        fetch('/api/agents/health', { signal: AbortSignal.timeout(2000) })
+        fetch("/api/health", { signal: AbortSignal.timeout(2000) }),
+        fetch("/api/mcp/health", { signal: AbortSignal.timeout(2000) }),
+        fetch("/api/agents/health", { signal: AbortSignal.timeout(2000) }),
       ]);
 
-      services.server = checks[0].status === 'fulfilled' && (checks[0].value as Response).ok;
-      services.mcp = checks[1].status === 'fulfilled' && (checks[1].value as Response).ok;
-      services.agents = checks[2].status === 'fulfilled' && (checks[2].value as Response).ok;
+      services.server =
+        checks[0].status === "fulfilled" && (checks[0].value as Response).ok;
+      services.mcp =
+        checks[1].status === "fulfilled" && (checks[1].value as Response).ok;
+      services.agents =
+        checks[2].status === "fulfilled" && (checks[2].value as Response).ok;
     } catch {
       // Health checks failed - services will remain false
     }
-    
+
     return services;
   }
 
@@ -139,7 +146,7 @@ class BugReportService {
       `[${new Date().toISOString()}] Browser logs not captured - consider implementing console log capture`,
       `[${new Date().toISOString()}] To get server logs, check Docker container logs`,
       `[${new Date().toISOString()}] Current URL: ${window.location.href}`,
-      `[${new Date().toISOString()}] User Agent: ${navigator.userAgent}`
+      `[${new Date().toISOString()}] User Agent: ${navigator.userAgent}`,
     ];
   }
 
@@ -147,7 +154,15 @@ class BugReportService {
    * Submit bug report to GitHub via backend API
    * Handles both direct API creation (maintainers) and manual submission URLs (open source users)
    */
-  async submitBugReport(bugReport: BugReportData): Promise<{ success: boolean; issueUrl?: string; issueNumber?: number; message?: string; error?: string }> {
+  async submitBugReport(
+    bugReport: BugReportData,
+  ): Promise<{
+    success: boolean;
+    issueUrl?: string;
+    issueNumber?: number;
+    message?: string;
+    error?: string;
+  }> {
     try {
       // Format the request to match backend API expectations
       const requestData = {
@@ -158,13 +173,13 @@ class BugReportService {
         actualBehavior: bugReport.actualBehavior,
         severity: bugReport.severity,
         component: bugReport.component,
-        context: bugReport.context
+        context: bugReport.context,
       };
 
       const response = await fetch(`${getApiUrl()}/api/bug-report/github`, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
         body: JSON.stringify(requestData),
       });
@@ -175,19 +190,19 @@ class BugReportService {
           success: result.success,
           issueUrl: result.issue_url,
           issueNumber: result.issue_number,
-          message: result.message
+          message: result.message,
         };
       } else {
         const errorText = await response.text();
         return {
           success: false,
-          error: `Failed to create issue: ${errorText}`
+          error: `Failed to create issue: ${errorText}`,
         };
       }
     } catch (error) {
       return {
         success: false,
-        error: `Network error: ${error instanceof Error ? error.message : 'Unknown error'}`
+        error: `Network error: ${error instanceof Error ? error.message : "Unknown error"}`,
       };
     }
   }
@@ -221,7 +236,7 @@ ${bugReport.actualBehavior}
 Error: ${bugReport.context.error.name}
 Message: ${bugReport.context.error.message}
 
-${bugReport.context.error.stack || 'No stack trace available'}
+${bugReport.context.error.stack || "No stack trace available"}
 \`\`\`
 
 ## System Info
@@ -231,9 +246,9 @@ ${bugReport.context.error.stack || 'No stack trace available'}
 - **Memory:** ${bugReport.context.system.memory}
 
 ## Service Status
-- **Server:** ${bugReport.context.services.server ? '✅' : '❌'}
-- **MCP:** ${bugReport.context.services.mcp ? '✅' : '❌'}
-- **Agents:** ${bugReport.context.services.agents ? '✅' : '❌'}
+- **Server:** ${bugReport.context.services.server ? "✅" : "❌"}
+- **MCP:** ${bugReport.context.services.mcp ? "✅" : "❌"}
+- **Agents:** ${bugReport.context.services.agents ? "✅" : "❌"}
 
 ---
 *Generated by Archon Bug Reporter*
