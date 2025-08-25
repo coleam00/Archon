@@ -142,9 +142,7 @@ services:
 
   # Frontend
   archon-frontend:
-    build:
-      context: ./archon-ui-main
-      dockerfile: ${DOCKERFILE:-Dockerfile}
+    build: ./archon-ui-main
     container_name: archon-ui
     ports:
       - "${ARCHON_UI_PORT:-3737}:3737"
