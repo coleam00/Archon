@@ -398,7 +398,7 @@ class MCPClientService {
    * Create Archon MCP client using Streamable HTTP transport
    */
   async createArchonClient(): Promise<MCPClient> {
-    // Require ARCHON_MCP_PORT to be set
+    // Require ARCHON_MCP_PORT to be set (for validation)
     const mcpPort = import.meta.env.ARCHON_MCP_PORT;
     if (!mcpPort) {
       throw new Error(
@@ -408,10 +408,19 @@ class MCPClientService {
       );
     }
     
-    // Get the host from the API URL
+    // In production with proxy, use relative path
+    // In development, construct full URL
     const apiUrl = getApiUrl();
-    const url = new URL(apiUrl || `http://${window.location.hostname}:${mcpPort}`);
-    const mcpUrl = `${url.protocol}//${url.hostname}:${mcpPort}/mcp`;
+    let mcpUrl: string;
+    
+    if (import.meta.env.PROD || !apiUrl) {
+      // Production mode - use proxy path
+      mcpUrl = '/mcp';
+    } else {
+      // Development mode - construct full URL
+      const url = new URL(apiUrl);
+      mcpUrl = `${url.protocol}//${url.hostname}:${mcpPort}/mcp`;
+    }
     
     const archonConfig: MCPClientConfig = {
       name: 'Archon',
