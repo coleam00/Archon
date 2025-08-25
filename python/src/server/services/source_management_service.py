@@ -252,6 +252,8 @@ def update_source_info(
     tags: list[str] | None = None,
     update_frequency: int = 7,
     original_url: str | None = None,
+    source_url: str | None = None,
+    source_display_name: str | None = None,
 ):
     """
     Update or insert source information in the sources table.
@@ -292,14 +294,22 @@ def update_source_info(
                 metadata["original_url"] = original_url
 
             # Update existing source (preserving title)
+            update_data = {
+                "summary": summary,
+                "total_word_count": word_count,
+                "metadata": metadata,
+                "updated_at": "now()",
+            }
+            
+            # Add new fields if provided
+            if source_url:
+                update_data["source_url"] = source_url
+            if source_display_name:
+                update_data["source_display_name"] = source_display_name
+            
             result = (
                 client.table("archon_sources")
-                .update({
-                    "summary": summary,
-                    "total_word_count": word_count,
-                    "metadata": metadata,
-                    "updated_at": "now()",
-                })
+                .update(update_data)
                 .eq("source_id", source_id)
                 .execute()
             )
@@ -320,13 +330,21 @@ def update_source_info(
 
             search_logger.info(f"Creating new source {source_id} with knowledge_type={knowledge_type}")
             # Insert new source
-            client.table("archon_sources").insert({
+            insert_data = {
                 "source_id": source_id,
                 "title": title,
                 "summary": summary,
                 "total_word_count": word_count,
                 "metadata": metadata,
-            }).execute()
+            }
+            
+            # Add new fields if provided
+            if source_url:
+                insert_data["source_url"] = source_url
+            if source_display_name:
+                insert_data["source_display_name"] = source_display_name
+            
+            client.table("archon_sources").insert(insert_data).execute()
             search_logger.info(f"Created new source {source_id} with title: {title}")
 
     except Exception as e:
