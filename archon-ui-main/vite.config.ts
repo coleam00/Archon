@@ -57,6 +57,7 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
       'import.meta.env.VITE_HOST': JSON.stringify(host),
       'import.meta.env.VITE_PORT': JSON.stringify(port),
       'import.meta.env.ARCHON_MCP_PORT': JSON.stringify(process.env.ARCHON_MCP_PORT || env.ARCHON_MCP_PORT || '8051'),
+      'import.meta.env.DOCKER_ENV': JSON.stringify(process.env.DOCKER_ENV || 'false'),
       'import.meta.env.PROD': env.PROD === 'true',
     },
     

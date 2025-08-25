@@ -7,6 +7,11 @@
 
 // Get the API URL from environment or construct it
 export function getApiUrl(): string {
+  // For Docker environment, always use relative URL (goes through Vite proxy)
+  if (import.meta.env.DOCKER_ENV === 'true') {
+    return '';
+  }
+
   // For relative URLs in production (goes through proxy)
   if (import.meta.env.PROD) {
     return '';
@@ -17,7 +22,7 @@ export function getApiUrl(): string {
     return import.meta.env.VITE_API_URL;
   }
 
-  // For development, construct from window location
+  // For local development only, construct from window location
   const protocol = window.location.protocol;
   const host = window.location.hostname;
   // Use configured port or default to 8181
