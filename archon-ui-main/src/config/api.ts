@@ -50,10 +50,12 @@ export function getApiBasePath(): string {
   
   // If using relative URLs (empty string), just return /api
   if (!apiUrl) {
+    console.log('[API Config] Using relative API path: /api');
     return '/api';
   }
   
   // Otherwise, append /api to the base URL
+  console.log('[API Config] Using full API path:', `${apiUrl}/api`);
   return `${apiUrl}/api`;
 }
 
