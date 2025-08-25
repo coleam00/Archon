@@ -322,10 +322,20 @@ def update_source_info(
                 f"Updated source {source_id} while preserving title: {existing_title}"
             )
         else:
-            # New source - generate title and metadata
-            title, metadata = generate_source_title_and_metadata(
-                source_id, content, knowledge_type, tags, None, source_display_name
-            )
+            # New source - use display name as title if available, otherwise generate
+            if source_display_name:
+                # Use the display name directly as the title
+                title = source_display_name
+                metadata = {
+                    "knowledge_type": knowledge_type,
+                    "tags": tags or [],
+                    "auto_generated": False,
+                }
+            else:
+                # Fallback to AI generation only if no display name
+                title, metadata = generate_source_title_and_metadata(
+                    source_id, content, knowledge_type, tags, None, source_display_name
+                )
 
             # Add update_frequency and original_url to metadata
             metadata["update_frequency"] = update_frequency
