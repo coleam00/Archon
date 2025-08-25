@@ -5,11 +5,8 @@ Tests the new unique source ID generation and display name extraction
 to ensure the race condition fix works correctly.
 """
 
-import pytest
-from unittest.mock import Mock, patch
-import hashlib
-from concurrent.futures import ThreadPoolExecutor
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 # Import the URLHandler class
 from src.server.services.crawling.helpers.url_handler import URLHandler
@@ -177,7 +174,7 @@ class TestDisplayNameExtraction:
         handler = URLHandler()
         
         test_cases = [
-            ("https://api.github.com/", "Github API"),
+            ("https://api.github.com/", "GitHub API"),
             ("https://api.openai.com/v1/", "Openai API"),
             ("https://example.com/api/v2/", "Example"),
         ]

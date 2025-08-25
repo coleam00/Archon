@@ -7,15 +7,10 @@ Extracted from crawl_orchestration_service.py for better modularity.
 
 import asyncio
 from typing import Dict, Any, List, Optional, Callable
-from urllib.parse import urlparse
 
 from ...config.logfire_config import safe_logfire_info, safe_logfire_error
 from ..storage.storage_services import DocumentStorageService
 from ..storage.document_storage_service import add_documents_to_supabase
-from ..storage.code_storage_service import (
-    generate_code_summaries_batch,
-    add_code_examples_to_supabase,
-)
 from ..source_management_service import update_source_info, extract_source_summary
 from .code_extraction_service import CodeExtractionService
 
@@ -63,8 +58,8 @@ class DocumentStorageOperations:
         Returns:
             Dict containing storage statistics and document mappings
         """
-        # Initialize storage service for chunking
-        storage_service = DocumentStorageService(self.supabase_client)
+        # Reuse initialized storage service for chunking
+        storage_service = self.doc_storage_service
 
         # Prepare data for chunked storage
         all_urls = []

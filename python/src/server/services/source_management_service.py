@@ -5,6 +5,7 @@ Handles source metadata, summaries, and management.
 Consolidates both utility functions and class-based service.
 """
 
+import os
 from typing import Any
 
 from supabase import Client

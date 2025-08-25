@@ -243,7 +243,7 @@ class URLHandler:
             if "github.com" in domain:
                 # Check if it's an API endpoint
                 if domain.startswith("api."):
-                    return "Github API"
+                    return "GitHub API"
                 
                 parts = path.split("/")
                 if len(parts) >= 2:
