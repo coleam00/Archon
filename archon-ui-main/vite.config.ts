@@ -9,11 +9,9 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
   // Load environment variables
   const env = loadEnv(mode, process.cwd(), '');
   
-  // Get host and port from environment variables or use defaults
-  const isDocker = process.env.DOCKER_ENV === 'true' || process.env.NODE_ENV !== 'development';
-  const internalHost = 'archon-server';  // Docker service name
-  const externalHost = process.env.HOST || 'localhost';
-  const host = isDocker ? internalHost : externalHost;
+  // Always use Docker service name for proxy in Docker environment
+  const isDocker = process.env.DOCKER_ENV === 'true';
+  const host = isDocker ? 'archon-server' : 'localhost';
   const port = process.env.ARCHON_SERVER_PORT || env.ARCHON_SERVER_PORT || '8181';
   
   // Build allowed hosts list including your domain
@@ -39,16 +37,34 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
           changeOrigin: true,
           secure: false,
           ws: true,
+          configure: (proxy, _options) => {
+            proxy.on('error', (err, _req, _res) => {
+              console.log('[Vite Proxy] API proxy error:', err);
+            });
+            proxy.on('proxyReq', (proxyReq, req, _res) => {
+              console.log('[Vite Proxy] API request:', req.method, req.url, 'to', `http://${host}:${port}`);
+            });
+          },
         },
         '/socket.io': {
           target: `http://${host}:${port}`,
           changeOrigin: true,
-          ws: true
+          ws: true,
+          configure: (proxy, _options) => {
+            proxy.on('error', (err, _req, _res) => {
+              console.log('[Vite Proxy] Socket.IO proxy error:', err);
+            });
+          },
         },
         '/mcp': {
           target: `http://archon-mcp:8051`,
           changeOrigin: true,
           secure: false,
+          configure: (proxy, _options) => {
+            proxy.on('error', (err, _req, _res) => {
+              console.log('[Vite Proxy] MCP proxy error:', err);
+            });
+          },
         }
       },
     },
