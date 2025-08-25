@@ -414,6 +414,7 @@ class CrawlingService:
                 code_examples_count = await self.doc_storage_ops.extract_and_store_code_examples(
                     crawl_results,
                     storage_results["url_to_full_document"],
+                    storage_results["source_id"],
                     code_progress_callback,
                     85,
                     95,

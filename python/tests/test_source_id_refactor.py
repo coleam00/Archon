@@ -215,6 +215,33 @@ class TestDisplayNameExtraction:
             assert expected_contains in display_name or display_name == expected_contains, \
                 f"Edge case {url} handling failed: {display_name}"
     
+    def test_special_file_display_names(self):
+        """Test that special files like llms.txt and sitemap.xml are properly displayed."""
+        handler = URLHandler()
+        
+        test_cases = [
+            # llms.txt files
+            ("https://docs.mem0.ai/llms-full.txt", "Mem0 - Llms.Txt"),
+            ("https://example.com/llms.txt", "Example - Llms.Txt"),
+            ("https://api.example.com/llms.txt", "Example API"),  # API takes precedence
+            
+            # sitemap.xml files
+            ("https://mem0.ai/sitemap.xml", "Mem0 - Sitemap.Xml"),
+            ("https://docs.example.com/sitemap.xml", "Example - Sitemap.Xml"),
+            ("https://example.org/sitemap.xml", "Example - Sitemap.Xml"),
+            
+            # Regular .txt files on docs sites
+            ("https://docs.example.com/readme.txt", "Example - Readme.Txt"),
+            
+            # Non-special files should not get special treatment
+            ("https://docs.example.com/guide", "Example Documentation"),
+            ("https://example.com/page.html", "Example - Page.Html"),  # Path gets added for single file
+        ]
+        
+        for url, expected in test_cases:
+            display_name = handler.extract_display_name(url)
+            assert display_name == expected, f"URL {url} should display as '{expected}', got '{display_name}'"
+    
     def test_git_extension_removal(self):
         """Test that .git extension is removed from GitHub repos."""
         handler = URLHandler()

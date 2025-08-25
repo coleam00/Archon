@@ -312,6 +312,7 @@ class DocumentStorageOperations:
         self,
         crawl_results: List[Dict],
         url_to_full_document: Dict[str, str],
+        source_id: str,
         progress_callback: Optional[Callable] = None,
         start_progress: int = 85,
         end_progress: int = 95,
@@ -322,6 +323,7 @@ class DocumentStorageOperations:
         Args:
             crawl_results: List of crawled documents
             url_to_full_document: Mapping of URLs to full document content
+            source_id: The unique source_id for all documents
             progress_callback: Optional callback for progress updates
             start_progress: Starting progress percentage
             end_progress: Ending progress percentage
@@ -330,7 +332,7 @@ class DocumentStorageOperations:
             Number of code examples stored
         """
         result = await self.code_extraction_service.extract_and_store_code_examples(
-            crawl_results, url_to_full_document, progress_callback, start_progress, end_progress
+            crawl_results, url_to_full_document, source_id, progress_callback, start_progress, end_progress
         )
 
         return result

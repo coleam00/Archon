@@ -262,9 +262,22 @@ class URLHandler:
             if domain.startswith("docs."):
                 # Extract the service name from docs.X.com/org
                 service_name = domain.replace("docs.", "").split(".")[0]
-                if service_name:
-                    return f"{service_name.title()} Documentation"
-                return "Documentation"
+                base_name = f"{service_name.title()}" if service_name else "Documentation"
+                
+                # Special handling for special files - preserve the filename
+                if path:
+                    # Check for llms.txt files
+                    if "llms" in path.lower() and path.endswith(".txt"):
+                        return f"{base_name} - Llms.Txt"
+                    # Check for sitemap files
+                    elif "sitemap" in path.lower() and path.endswith(".xml"):
+                        return f"{base_name} - Sitemap.Xml"
+                    # Check for any other special .txt files
+                    elif path.endswith(".txt"):
+                        filename = path.split("/")[-1] if "/" in path else path
+                        return f"{base_name} - {filename.title()}"
+                
+                return f"{base_name} Documentation" if service_name else "Documentation"
 
             # Handle readthedocs.io subdomains
             if domain.endswith(".readthedocs.io"):
@@ -302,6 +315,29 @@ class URLHandler:
             if "api." in domain or "/api" in path:
                 service = domain.replace("api.", "").split(".")[0]
                 return f"{service.title()} API"
+
+            # Special handling for sitemap.xml and llms.txt on any site
+            if path:
+                if "sitemap" in path.lower() and path.endswith(".xml"):
+                    # Get base domain name
+                    display = domain
+                    for tld in [".com", ".org", ".io", ".dev", ".net", ".ai", ".app"]:
+                        if display.endswith(tld):
+                            display = display[:-len(tld)]
+                            break
+                    display_parts = display.replace("-", " ").replace("_", " ").split(".")
+                    formatted = " ".join(part.title() for part in display_parts)
+                    return f"{formatted} - Sitemap.Xml"
+                elif "llms" in path.lower() and path.endswith(".txt"):
+                    # Get base domain name
+                    display = domain
+                    for tld in [".com", ".org", ".io", ".dev", ".net", ".ai", ".app"]:
+                        if display.endswith(tld):
+                            display = display[:-len(tld)]
+                            break
+                    display_parts = display.replace("-", " ").replace("_", " ").split(".")
+                    formatted = " ".join(part.title() for part in display_parts)
+                    return f"{formatted} - Llms.Txt"
 
             # Default: Use domain with nice formatting
             # Remove common TLDs for cleaner display
