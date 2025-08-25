@@ -12,14 +12,18 @@ RUN apk add --no-cache python3 make g++ git curl
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install all dependencies (including dev deps needed for build)
+RUN npm ci
 
 # Copy source code
 COPY . .
 
-# Build the application for production
-RUN npm run build
+# Set NODE_ENV and build with explicit mode
+ENV NODE_ENV=production
+RUN npm run build -- --mode production
+
+# Clean up dev dependencies and node_modules to reduce image size
+RUN rm -rf node_modules package*.json
 
 # Production stage with nginx
 FROM nginx:alpine
@@ -27,8 +31,8 @@ FROM nginx:alpine
 # Copy built app from builder stage
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Copy nginx configuration for SPA
-COPY <<EOF /etc/nginx/conf.d/default.conf
+# Create nginx configuration for SPA
+RUN cat > /etc/nginx/conf.d/default.conf << 'EOF'
 server {
     listen 3737;
     server_name localhost;
@@ -37,32 +41,32 @@ server {
 
     # Handle client-side routing
     location / {
-        try_files \$uri \$uri/ /index.html;
+        try_files $uri $uri/ /index.html;
     }
 
     # API proxy to backend
     location /api/ {
         proxy_pass http://archon-server:8181/api/;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_cache_bypass \$http_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
     }
 
     # Socket.IO proxy
     location /socket.io/ {
         proxy_pass http://archon-server:8181/socket.io/;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 
     # Gzip compression
