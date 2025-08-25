@@ -21,6 +21,9 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
   const host = isDocker ? internalHost : externalHost;
   const port = process.env.ARCHON_SERVER_PORT || env.ARCHON_SERVER_PORT || '8181';
   
+  // Always use proxy in Docker for internal communication
+  const needsProxy = true;
+  
   // Build allowed hosts list
   const allowedHosts = ['localhost', '127.0.0.1'];
   if (env.HOST) allowedHosts.push(env.HOST);
@@ -282,12 +285,13 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
         }
       }] : [])
     ],
-    server: {
-      host: '0.0.0.0', // Listen on all network interfaces with explicit IP
-      port: parseInt(process.env.ARCHON_UI_PORT || env.ARCHON_UI_PORT || '3737'), // Use configurable port
-      strictPort: true, // Exit if port is in use
-      allowedHosts: allowedHosts,
-      proxy: {
+    ...(needsProxy && {
+      server: {
+        host: '0.0.0.0', // Listen on all network interfaces with explicit IP
+        port: parseInt(process.env.ARCHON_UI_PORT || env.ARCHON_UI_PORT || '3737'), // Use configurable port
+        strictPort: true, // Exit if port is in use
+        allowedHosts: allowedHosts,
+        proxy: {
         '/api': {
           target: `http://${host}:${port}`,
           changeOrigin: true,
@@ -311,7 +315,7 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
           ws: true
         }
       },
-    },
+    }),
     define: {
       'import.meta.env.VITE_HOST': JSON.stringify(host),
       'import.meta.env.VITE_PORT': JSON.stringify(port),
