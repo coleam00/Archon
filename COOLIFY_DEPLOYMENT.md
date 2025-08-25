@@ -2,6 +2,10 @@
 
 Esta guía explica cómo desplegar Archon V2 en un VPS usando Coolify con SSL automático y configuración de dominio.
 
+## ⚠️ SOLUCIÓN FINAL - Error de sintaxis resuelto
+
+Después de múltiples iteraciones, hemos implementado una **configuración simplificada que funciona** tanto localmente como en Coolify.
+
 ## Problemas Resueltos
 
 ✅ **CORS y dominios**: Configuración automática según `DOMAIN` y `PROD`  
