@@ -369,8 +369,8 @@ def update_source_info(
                 metadata["original_url"] = original_url
 
             search_logger.info(f"Creating new source {source_id} with knowledge_type={knowledge_type}")
-            # Insert new source
-            insert_data = {
+            # Use upsert to avoid race conditions with concurrent crawls
+            upsert_data = {
                 "source_id": source_id,
                 "title": title,
                 "summary": summary,
@@ -380,12 +380,12 @@ def update_source_info(
             
             # Add new fields if provided
             if source_url:
-                insert_data["source_url"] = source_url
+                upsert_data["source_url"] = source_url
             if source_display_name:
-                insert_data["source_display_name"] = source_display_name
+                upsert_data["source_display_name"] = source_display_name
             
-            client.table("archon_sources").insert(insert_data).execute()
-            search_logger.info(f"Created new source {source_id} with title: {title}")
+            client.table("archon_sources").upsert(upsert_data).execute()
+            search_logger.info(f"Created/updated source {source_id} with title: {title}")
 
     except Exception as e:
         search_logger.error(f"Error updating source {source_id}: {e}")
