@@ -45,6 +45,7 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [discoveryComplete, setDiscoveryComplete] = useState(false);
+  const [discoveryProgress, setDiscoveryProgress] = useState<string>('');
   
   const [selectionState, setSelectionState] = useState<ModelSelectionState>({
     selectedChatModel: initialChatModel || null,
@@ -85,12 +86,24 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
     setLoading(true);
     setError(null);
     setDiscoveryComplete(false);
+    setDiscoveryProgress(`Discovering models from ${enabledInstanceUrls.length} instance(s)...`);
 
     try {
-      const discoveryResult = await ollamaService.discoverModels({
+      // Add timeout for discovery
+      const discoveryPromise = ollamaService.discoverModels({
         instanceUrls: enabledInstanceUrls,
         includeCapabilities: true
       });
+
+      // Set a 30 second timeout
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Model discovery timed out after 30 seconds')), 30000)
+      );
+
+      const discoveryResult = await Promise.race([
+        discoveryPromise,
+        timeoutPromise
+      ]) as ModelDiscoveryResponse;
 
       // Enrich models with instance information and status
       const enrichedModels: EnrichedModel[] = [];
@@ -412,7 +425,17 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
               <div className="p-6 text-center">
                 <Loader className="w-12 h-12 text-green-500 mx-auto mb-4 animate-spin" />
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Discovering Models</h3>
-                <p className="text-gray-600 dark:text-gray-400">Scanning {enabledInstanceUrls.length} Ollama instances...</p>
+                <p className="text-gray-600 dark:text-gray-400 mb-2">
+                  {discoveryProgress || `Scanning ${enabledInstanceUrls.length} Ollama instances...`}
+                </p>
+                <p className="text-sm text-gray-500 dark:text-gray-500">
+                  This may take up to 30 seconds depending on the number of models...
+                </p>
+                <div className="mt-4">
+                  <div className="bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
+                    <div className="bg-green-500 h-full animate-pulse" style={{width: '100%'}}></div>
+                  </div>
+                </div>
               </div>
             ) : (
               <div className="h-96 overflow-y-auto p-6">

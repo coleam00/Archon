@@ -1074,6 +1074,8 @@ export const RAGSettings = ({
                     setRagSettings({...ragSettings, LLM_BASE_URL: llmInstanceConfig.url});
                     setShowEditLLMModal(false);
                     showToast('LLM instance updated successfully', 'success');
+                    // Automatically test connection after save
+                    setTimeout(() => testLLMConnection(), 500);
                   }}
                   className="flex-1"
                   accentColor="green"
@@ -1120,6 +1122,8 @@ export const RAGSettings = ({
                     setRagSettings({...ragSettings, OLLAMA_EMBEDDING_URL: embeddingInstanceConfig.url});
                     setShowEditEmbeddingModal(false);
                     showToast('Embedding instance updated successfully', 'success');
+                    // Automatically test connection after save
+                    setTimeout(() => testEmbeddingConnection(), 500);
                   }}
                   className="flex-1"
                   accentColor="green"
