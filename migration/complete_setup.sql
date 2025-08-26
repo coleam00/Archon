@@ -24,11 +24,11 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 -- This table stores both encrypted sensitive data and plain configuration settings
 CREATE TABLE IF NOT EXISTS archon_settings (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    key TEXT UNIQUE NOT NULL,
+    key VARCHAR(255) UNIQUE NOT NULL,
     value TEXT,                    -- For plain text config values
     encrypted_value TEXT,          -- For encrypted sensitive data (bcrypt hashed)
     is_encrypted BOOLEAN DEFAULT FALSE,
-    category TEXT,                 -- Group related settings (e.g., 'rag_strategy', 'api_keys', 'server_config')
+    category VARCHAR(100),         -- Group related settings (e.g., 'rag_strategy', 'api_keys', 'server_config')
     description TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
