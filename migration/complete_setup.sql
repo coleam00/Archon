@@ -208,6 +208,10 @@ CREATE TABLE IF NOT EXISTS archon_crawled_pages (
     embedding_1024 VECTOR(1024), -- Ollama large models
     embedding_1536 VECTOR(1536), -- OpenAI standard models
     embedding_3072 VECTOR(3072), -- OpenAI large models
+    -- Model tracking columns
+    llm_chat_model VARCHAR(255),        -- LLM model used for processing (e.g., 'gpt-4', 'llama3:8b')
+    embedding_model VARCHAR(255),       -- Embedding model used (e.g., 'text-embedding-3-large', 'all-MiniLM-L6-v2')
+    embedding_dimension INTEGER,        -- Dimension of the embedding used (384, 768, 1024, 1536, 3072)
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
 
     -- Add a unique constraint to prevent duplicate chunks for the same URL
@@ -225,9 +229,12 @@ CREATE INDEX IF NOT EXISTS idx_archon_crawled_pages_embedding_1536 ON archon_cra
 -- Note: 3072 dimensions exceed HNSW limit of 2000, using brute force for now
 -- CREATE INDEX IF NOT EXISTS idx_archon_crawled_pages_embedding_3072 ON archon_crawled_pages USING hnsw (embedding_3072 vector_cosine_ops);
 
--- Other indexes
+-- Other indexes for archon_crawled_pages
 CREATE INDEX idx_archon_crawled_pages_metadata ON archon_crawled_pages USING GIN (metadata);
 CREATE INDEX idx_archon_crawled_pages_source_id ON archon_crawled_pages (source_id);
+CREATE INDEX idx_archon_crawled_pages_embedding_model ON archon_crawled_pages (embedding_model);
+CREATE INDEX idx_archon_crawled_pages_embedding_dimension ON archon_crawled_pages (embedding_dimension);
+CREATE INDEX idx_archon_crawled_pages_llm_chat_model ON archon_crawled_pages (llm_chat_model);
 
 -- Create the code_examples table
 CREATE TABLE IF NOT EXISTS archon_code_examples (
@@ -244,6 +251,10 @@ CREATE TABLE IF NOT EXISTS archon_code_examples (
     embedding_1024 VECTOR(1024), -- Ollama large models
     embedding_1536 VECTOR(1536), -- OpenAI standard models
     embedding_3072 VECTOR(3072), -- OpenAI large models
+    -- Model tracking columns
+    llm_chat_model VARCHAR(255),        -- LLM model used for processing (e.g., 'gpt-4', 'llama3:8b')
+    embedding_model VARCHAR(255),       -- Embedding model used (e.g., 'text-embedding-3-large', 'all-MiniLM-L6-v2')
+    embedding_dimension INTEGER,        -- Dimension of the embedding used (384, 768, 1024, 1536, 3072)
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
 
     -- Add a unique constraint to prevent duplicate chunks for the same URL
@@ -261,9 +272,12 @@ CREATE INDEX IF NOT EXISTS idx_archon_code_examples_embedding_1536 ON archon_cod
 -- Note: 3072 dimensions exceed HNSW limit of 2000, using brute force for now
 -- CREATE INDEX IF NOT EXISTS idx_archon_code_examples_embedding_3072 ON archon_code_examples USING hnsw (embedding_3072 vector_cosine_ops);
 
--- Other indexes
+-- Other indexes for archon_code_examples
 CREATE INDEX idx_archon_code_examples_metadata ON archon_code_examples USING GIN (metadata);
 CREATE INDEX idx_archon_code_examples_source_id ON archon_code_examples (source_id);
+CREATE INDEX idx_archon_code_examples_embedding_model ON archon_code_examples (embedding_model);
+CREATE INDEX idx_archon_code_examples_embedding_dimension ON archon_code_examples (embedding_dimension);
+CREATE INDEX idx_archon_code_examples_llm_chat_model ON archon_code_examples (llm_chat_model);
 
 -- =====================================================
 -- SECTION 4.5: MULTI-DIMENSIONAL EMBEDDING HELPER FUNCTIONS
