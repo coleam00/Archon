@@ -77,6 +77,8 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
    **Full Docker Mode (Recommended for Normal Archon Usage)**
 
    ```bash
+   docker compose up --build -d
+   # or, to match a previously used explicit profile:
    docker compose --profile full up --build -d
    # or
    make dev-docker # (Alternative: Requires make installed )
