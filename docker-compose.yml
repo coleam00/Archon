@@ -90,8 +90,10 @@ services:
     networks:
       - app-network
     depends_on:
-      - archon-server
-      - archon-agents
+      archon-server:
+        condition: service_healthy
+      archon-agents:
+        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -126,6 +128,7 @@ services:
       - SERVICE_DISCOVERY_MODE=docker_compose
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - ARCHON_AGENTS_PORT=${ARCHON_AGENTS_PORT:-8052}
+      - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
     networks:
       - app-network
     healthcheck:
@@ -164,7 +167,8 @@ services:
       - ./archon-ui-main/src:/app/src
       - ./archon-ui-main/public:/app/public
     depends_on:
-      - archon-server
+      archon-server:
+        condition: service_healthy
 
 networks:
   app-network:
