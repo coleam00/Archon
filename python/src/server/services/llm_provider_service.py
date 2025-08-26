@@ -39,16 +39,20 @@ def _set_cached_settings(key: str, value: Any) -> None:
 
 
 @asynccontextmanager
-async def get_llm_client(provider: str | None = None, use_embedding_provider: bool = False):
+async def get_llm_client(provider: str | None = None, use_embedding_provider: bool = False,
+                        instance_type: str | None = None, base_url: str | None = None):
     """
     Create an async OpenAI-compatible client based on the configured provider.
 
     This context manager handles client creation for different LLM providers
-    that support the OpenAI API format.
+    that support the OpenAI API format, with enhanced support for multi-instance
+    Ollama configurations and intelligent instance routing.
 
     Args:
         provider: Override provider selection
         use_embedding_provider: Use the embedding-specific provider if different
+        instance_type: For Ollama multi-instance: 'chat', 'embedding', or None for auto-select
+        base_url: Override base URL for specific instance routing
 
     Yields:
         openai.AsyncOpenAI: An OpenAI-compatible client configured for the selected provider
@@ -72,7 +76,8 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
             else:
                 logger.debug("Using cached rag_strategy settings")
 
-            base_url = credential_service._get_provider_base_url(provider, rag_settings)
+            # For Ollama, don't use the base_url from config - let _get_optimal_ollama_instance decide
+            base_url = credential_service._get_provider_base_url(provider, rag_settings) if provider != "ollama" else None
         else:
             # Get configured provider from database
             service_type = "embedding" if use_embedding_provider else "llm"
@@ -89,7 +94,8 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
 
             provider_name = provider_config["provider"]
             api_key = provider_config["api_key"]
-            base_url = provider_config["base_url"]
+            # For Ollama, don't use the base_url from config - let _get_optimal_ollama_instance decide
+            base_url = provider_config["base_url"] if provider_name != "ollama" else None
 
         logger.info(f"Creating LLM client for provider: {provider_name}")
 
@@ -101,12 +107,19 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
             logger.info("OpenAI client created successfully")
 
         elif provider_name == "ollama":
+            # Enhanced Ollama client creation with multi-instance support
+            ollama_base_url = await _get_optimal_ollama_instance(
+                instance_type=instance_type,
+                use_embedding_provider=use_embedding_provider,
+                base_url_override=base_url
+            )
+
             # Ollama requires an API key in the client but doesn't actually use it
             client = openai.AsyncOpenAI(
                 api_key="ollama",  # Required but unused by Ollama
-                base_url=base_url or "http://localhost:11434/v1",
+                base_url=ollama_base_url,
             )
-            logger.info(f"Ollama client created successfully with base URL: {base_url}")
+            logger.info(f"Ollama client created successfully with base URL: {ollama_base_url}")
 
         elif provider_name == "google":
             if not api_key:
@@ -131,6 +144,111 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
     finally:
         # Cleanup if needed
         pass
+
+
+async def _get_optimal_ollama_instance(instance_type: str | None = None,
+                                       use_embedding_provider: bool = False,
+                                       base_url_override: str | None = None) -> str:
+    """
+    Get the optimal Ollama instance URL based on configuration and health status.
+    
+    Args:
+        instance_type: Preferred instance type ('chat', 'embedding', 'both', or None)
+        use_embedding_provider: Whether this is for embedding operations
+        base_url_override: Override URL if specified
+        
+    Returns:
+        Best available Ollama instance URL
+    """
+    # If override URL provided, use it directly
+    if base_url_override:
+        return base_url_override if base_url_override.endswith('/v1') else f"{base_url_override}/v1"
+
+    try:
+        # Get Ollama instances from credential service
+        ollama_instances = await credential_service.get_ollama_instances()
+
+        if not ollama_instances:
+            # Fallback to single instance configuration from RAG settings
+            logger.info("No multi-instance Ollama configuration found, using single instance")
+            rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+
+            # Check if we need embedding provider and have separate embedding URL
+            if use_embedding_provider or instance_type == "embedding":
+                embedding_url = rag_settings.get("OLLAMA_EMBEDDING_URL")
+                if embedding_url:
+                    return embedding_url if embedding_url.endswith('/v1') else f"{embedding_url}/v1"
+
+            # Default to LLM base URL for chat operations
+            fallback_url = rag_settings.get("LLM_BASE_URL", "http://localhost:11434")
+            return fallback_url if fallback_url.endswith('/v1') else f"{fallback_url}/v1"
+
+        # Determine preferred instance type
+        preferred_type = instance_type
+        if not preferred_type:
+            preferred_type = "embedding" if use_embedding_provider else "chat"
+
+        logger.debug(f"Looking for Ollama instance with type: {preferred_type}")
+
+        # Filter instances by type and health
+        suitable_instances = []
+        for instance in ollama_instances:
+            if not instance.get("isEnabled", True):
+                continue
+
+            inst_type = instance.get("instanceType", "both")
+            if inst_type == "both" or inst_type == preferred_type:
+                suitable_instances.append(instance)
+
+        if not suitable_instances:
+            logger.warning(f"No suitable Ollama instances found for type {preferred_type}")
+            # Fallback to any enabled instance
+            suitable_instances = [inst for inst in ollama_instances if inst.get("isEnabled", True)]
+
+        if not suitable_instances:
+            logger.error("No enabled Ollama instances found")
+            # Final fallback to localhost
+            return "http://localhost:11434/v1"
+
+        # Sort by preference: primary first, then by health status, then by response time
+        def instance_priority(inst):
+            priority_score = 0
+
+            # Primary instances get highest priority
+            if inst.get("isPrimary", False):
+                priority_score += 1000
+
+            # Healthy instances get bonus
+            if inst.get("isHealthy", False):
+                priority_score += 100
+                # Faster response times get additional bonus
+                response_time = inst.get("responseTimeMs", 1000)
+                priority_score += max(0, 100 - (response_time / 10))  # Faster = higher score
+
+            # Load balancing weight if available
+            weight = inst.get("loadBalancingWeight", 100)
+            priority_score += weight / 10
+
+            return priority_score
+
+        suitable_instances.sort(key=instance_priority, reverse=True)
+
+        # Select the best instance
+        selected_instance = suitable_instances[0]
+        base_url = selected_instance.get("baseUrl", "http://localhost:11434")
+
+        # Ensure URL ends with /v1 for OpenAI compatibility
+        if not base_url.endswith("/v1"):
+            base_url = f"{base_url}/v1"
+
+        logger.info(f"Selected Ollama instance: {selected_instance.get('name', 'unnamed')} ({base_url})")
+
+        return base_url
+
+    except Exception as e:
+        logger.error(f"Error selecting optimal Ollama instance: {e}")
+        # Fallback to default
+        return "http://localhost:11434/v1"
 
 
 async def get_embedding_model(provider: str | None = None) -> str:
@@ -186,3 +304,115 @@ async def get_embedding_model(provider: str | None = None) -> str:
         logger.error(f"Error getting embedding model: {e}")
         # Fallback to OpenAI default
         return "text-embedding-3-small"
+
+
+async def get_embedding_model_with_routing(provider: str | None = None, instance_url: str | None = None) -> tuple[str, str]:
+    """
+    Get the embedding model with intelligent routing for multi-instance setups.
+    
+    Args:
+        provider: Override provider selection
+        instance_url: Specific instance URL to use
+        
+    Returns:
+        Tuple of (model_name, instance_url) for embedding operations
+    """
+    try:
+        # Get base embedding model
+        model_name = await get_embedding_model(provider)
+
+        # If specific instance URL provided, use it
+        if instance_url:
+            final_url = instance_url if instance_url.endswith('/v1') else f"{instance_url}/v1"
+            return model_name, final_url
+
+        # For Ollama provider, use intelligent instance routing
+        if provider == "ollama" or (not provider and (await credential_service.get_credentials_by_category("rag_strategy")).get("LLM_PROVIDER") == "ollama"):
+            optimal_url = await _get_optimal_ollama_instance(
+                instance_type="embedding",
+                use_embedding_provider=True
+            )
+            return model_name, optimal_url
+
+        # For other providers, return model with None URL (use default)
+        return model_name, None
+
+    except Exception as e:
+        logger.error(f"Error getting embedding model with routing: {e}")
+        return "text-embedding-3-small", None
+
+
+async def validate_provider_instance(provider: str, instance_url: str | None = None) -> dict[str, any]:
+    """
+    Validate a provider instance and return health information.
+    
+    Args:
+        provider: Provider name (openai, ollama, google, etc.)
+        instance_url: Instance URL for providers that support multiple instances
+        
+    Returns:
+        Dictionary with validation results and health status
+    """
+    try:
+        if provider == "ollama":
+            # Use the Ollama model discovery service for health checking
+            from .ollama.model_discovery_service import model_discovery_service
+
+            # Use provided URL or get optimal instance
+            if not instance_url:
+                instance_url = await _get_optimal_ollama_instance()
+                # Remove /v1 suffix for health checking
+                if instance_url.endswith('/v1'):
+                    instance_url = instance_url[:-3]
+
+            health_status = await model_discovery_service.check_instance_health(instance_url)
+
+            return {
+                "provider": provider,
+                "instance_url": instance_url,
+                "is_available": health_status.is_healthy,
+                "response_time_ms": health_status.response_time_ms,
+                "models_available": health_status.models_available,
+                "error_message": health_status.error_message,
+                "validation_timestamp": time.time()
+            }
+
+        else:
+            # For other providers, do basic validation
+            async with get_llm_client(provider=provider) as client:
+                # Try a simple operation to validate the provider
+                start_time = time.time()
+
+                if provider == "openai":
+                    # List models to validate API key
+                    models = await client.models.list()
+                    model_count = len(models.data) if hasattr(models, 'data') else 0
+                elif provider == "google":
+                    # For Google, we can't easily list models, just validate client creation
+                    model_count = 1  # Assume available if client creation succeeded
+                else:
+                    model_count = 1
+
+                response_time = (time.time() - start_time) * 1000
+
+                return {
+                    "provider": provider,
+                    "instance_url": instance_url,
+                    "is_available": True,
+                    "response_time_ms": response_time,
+                    "models_available": model_count,
+                    "error_message": None,
+                    "validation_timestamp": time.time()
+                }
+
+    except Exception as e:
+        logger.error(f"Error validating provider {provider}: {e}")
+        return {
+            "provider": provider,
+            "instance_url": instance_url,
+            "is_available": False,
+            "response_time_ms": None,
+            "models_available": 0,
+            "error_message": str(e),
+            "validation_timestamp": time.time()
+        }

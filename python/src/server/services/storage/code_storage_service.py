@@ -893,6 +893,23 @@ async def add_code_examples_to_supabase(
                 parsed_url = urlparse(urls[idx])
                 source_id = parsed_url.netloc or parsed_url.path
 
+            # Determine the correct embedding column based on dimension
+            embedding_dim = len(embedding) if isinstance(embedding, list) else len(embedding.tolist())
+            embedding_column = None
+            
+            if embedding_dim == 768:
+                embedding_column = "embedding_768"
+            elif embedding_dim == 1024:
+                embedding_column = "embedding_1024"
+            elif embedding_dim == 1536:
+                embedding_column = "embedding_1536"
+            elif embedding_dim == 3072:
+                embedding_column = "embedding_3072"
+            else:
+                # Default to closest supported dimension
+                search_logger.warning(f"Unsupported embedding dimension {embedding_dim}, using embedding_1536")
+                embedding_column = "embedding_1536"
+            
             batch_data.append({
                 "url": urls[idx],
                 "chunk_number": chunk_numbers[idx],
@@ -900,7 +917,7 @@ async def add_code_examples_to_supabase(
                 "summary": summaries[idx],
                 "metadata": metadatas[idx],  # Store as JSON object, not string
                 "source_id": source_id,
-                "embedding": embedding,
+                embedding_column: embedding,
             })
 
         # Insert batch into Supabase with retry logic

@@ -1,11 +1,13 @@
-import React, { useState } from 'react';
-import { Settings, Check, Save, Loader, ChevronDown, ChevronUp, Zap, Database } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Settings, Check, Save, Loader, ChevronDown, ChevronUp, Zap, Database, Trash2 } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Input } from '../ui/Input';
 import { Select } from '../ui/Select';
 import { Button } from '../ui/Button';
 import { useToast } from '../../contexts/ToastContext';
 import { credentialsService } from '../../services/credentialsService';
+import OllamaModelDiscoveryModal from './OllamaModelDiscoveryModal';
+import OllamaModelSelectionModal from './OllamaModelSelectionModal';
 
 interface RAGSettingsProps {
   ragSettings: {
@@ -18,6 +20,7 @@ interface RAGSettingsProps {
     LLM_PROVIDER?: string;
     LLM_BASE_URL?: string;
     EMBEDDING_MODEL?: string;
+    OLLAMA_EMBEDDING_URL?: string;
     // Crawling Performance Settings
     CRAWL_BATCH_SIZE?: number;
     CRAWL_MAX_CONCURRENT?: number;
@@ -45,7 +48,240 @@ export const RAGSettings = ({
   const [saving, setSaving] = useState(false);
   const [showCrawlingSettings, setShowCrawlingSettings] = useState(false);
   const [showStorageSettings, setShowStorageSettings] = useState(false);
+  const [showModelDiscoveryModal, setShowModelDiscoveryModal] = useState(false);
+  
+  // Edit modals state
+  const [showEditLLMModal, setShowEditLLMModal] = useState(false);
+  const [showEditEmbeddingModal, setShowEditEmbeddingModal] = useState(false);
+  
+  // Model selection modals state
+  const [showLLMModelSelectionModal, setShowLLMModelSelectionModal] = useState(false);
+  const [showEmbeddingModelSelectionModal, setShowEmbeddingModelSelectionModal] = useState(false);
+  
+  // Instance configurations
+  const [llmInstanceConfig, setLLMInstanceConfig] = useState({
+    name: 'Ollama1',
+    url: ragSettings.LLM_BASE_URL || 'http://192.168.2.31:11434/v1'
+  });
+  const [embeddingInstanceConfig, setEmbeddingInstanceConfig] = useState({
+    name: 'Ollama2', 
+    url: ragSettings.OLLAMA_EMBEDDING_URL || 'http://192.168.2.32:11434/v1'
+  });
+  
+  // Status tracking
+  const [llmStatus, setLLMStatus] = useState({ online: false, responseTime: null, checking: false });
+  const [embeddingStatus, setEmbeddingStatus] = useState({ online: false, responseTime: null, checking: false });
+  
+  // Ollama metrics state
+  const [ollamaMetrics, setOllamaMetrics] = useState({
+    totalModels: 0,
+    chatModels: 0,
+    embeddingModels: 0,
+    activeHosts: 0,
+    loading: true
+  });
   const { showToast } = useToast();
+
+  // Function to test connection status using backend proxy
+  const testConnection = async (url: string, setStatus: React.Dispatch<React.SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean }>>) => {
+    setStatus(prev => ({ ...prev, checking: true }));
+    const startTime = Date.now();
+    
+    try {
+      // Strip /v1 suffix for backend health check (backend expects base Ollama URL)
+      const baseUrl = url.replace('/v1', '').replace(/\/$/, '');
+      
+      // Use the backend health check endpoint to avoid CORS issues
+      const backendHealthUrl = `/api/ollama/instances/health?instance_urls=${encodeURIComponent(baseUrl)}&include_models=true`;
+      
+      const response = await fetch(backendHealthUrl, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        signal: AbortSignal.timeout(15000)
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        const instanceStatus = data.instance_status?.[baseUrl];
+        
+        if (instanceStatus?.is_healthy) {
+          const responseTime = Math.round(instanceStatus.response_time_ms || (Date.now() - startTime));
+          setStatus({ online: true, responseTime, checking: false });
+          console.log(`✅ ${url} online: ${responseTime}ms (${instanceStatus.models_available || 0} models)`);
+        } else {
+          setStatus({ online: false, responseTime: null, checking: false });
+          console.log(`❌ ${url} unhealthy: ${instanceStatus?.error_message || 'No status available'}`);
+        }
+      } else {
+        throw new Error(`Backend health check failed: HTTP ${response.status}`);
+      }
+      
+    } catch (error: any) {
+      const responseTime = Date.now() - startTime;
+      setStatus({ online: false, responseTime, checking: false });
+      
+      let errorMessage = 'Connection failed';
+      if (error.name === 'AbortError') {
+        errorMessage = 'Request timeout (>15s)';
+      } else if (error.message.includes('Backend health check failed')) {
+        errorMessage = 'Backend proxy error';
+      } else {
+        errorMessage = error.message || 'Unknown error';
+      }
+      
+      console.log(`❌ ${url} failed: ${errorMessage} (${responseTime}ms)`);
+    }
+  };
+
+  // Manual test function with user feedback using backend proxy
+  const manualTestConnection = async (url: string, setStatus: React.Dispatch<React.SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean }>>, instanceName: string) => {
+    setStatus(prev => ({ ...prev, checking: true }));
+    const startTime = Date.now();
+    
+    try {
+      // Strip /v1 suffix for backend health check (backend expects base Ollama URL)
+      const baseUrl = url.replace('/v1', '').replace(/\/$/, '');
+      
+      // Use the backend health check endpoint to avoid CORS issues
+      const backendHealthUrl = `/api/ollama/instances/health?instance_urls=${encodeURIComponent(baseUrl)}&include_models=true`;
+      
+      const response = await fetch(backendHealthUrl, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        signal: AbortSignal.timeout(15000)
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        const instanceStatus = data.instance_status?.[baseUrl];
+        
+        if (instanceStatus?.is_healthy) {
+          const responseTime = Math.round(instanceStatus.response_time_ms || (Date.now() - startTime));
+          setStatus({ online: true, responseTime, checking: false });
+          showToast(`${instanceName} connection successful: ${instanceStatus.models_available || 0} models available (${responseTime}ms)`, 'success');
+        } else {
+          setStatus({ online: false, responseTime: null, checking: false });
+          showToast(`${instanceName} connection failed: ${instanceStatus?.error_message || 'Instance is not healthy'}`, 'error');
+        }
+      } else {
+        setStatus({ online: false, responseTime: null, checking: false });
+        showToast(`${instanceName} connection failed: Backend proxy error (HTTP ${response.status})`, 'error');
+      }
+    } catch (error: any) {
+      setStatus({ online: false, responseTime: null, checking: false });
+      
+      if (error.name === 'AbortError') {
+        showToast(`${instanceName} connection failed: Request timeout (>15s)`, 'error');
+      } else {
+        showToast(`${instanceName} connection failed: ${error.message || 'Unknown error'}`, 'error');
+      }
+    }
+  };
+
+  // Function to handle LLM instance deletion
+  const handleDeleteLLMInstance = () => {
+    if (window.confirm('Are you sure you want to delete the current LLM instance configuration?')) {
+      // Reset LLM instance configuration
+      setLLMInstanceConfig({
+        name: '',
+        url: ''
+      });
+      
+      // Clear related RAG settings
+      const updatedSettings = { ...ragSettings };
+      delete updatedSettings.LLM_BASE_URL;
+      delete updatedSettings.MODEL_CHOICE;
+      setRagSettings(updatedSettings);
+      
+      // Reset status
+      setLLMStatus({ online: false, responseTime: null, checking: false });
+      
+      showToast('LLM instance configuration deleted', 'success');
+    }
+  };
+
+  // Function to handle Embedding instance deletion
+  const handleDeleteEmbeddingInstance = () => {
+    if (window.confirm('Are you sure you want to delete the current Embedding instance configuration?')) {
+      // Reset Embedding instance configuration
+      setEmbeddingInstanceConfig({
+        name: '',
+        url: ''
+      });
+      
+      // Clear related RAG settings
+      const updatedSettings = { ...ragSettings };
+      delete updatedSettings.OLLAMA_EMBEDDING_URL;
+      delete updatedSettings.EMBEDDING_MODEL;
+      setRagSettings(updatedSettings);
+      
+      // Reset status
+      setEmbeddingStatus({ online: false, responseTime: null, checking: false });
+      
+      showToast('Embedding instance configuration deleted', 'success');
+    }
+  };
+
+  // Function to fetch Ollama metrics
+  const fetchOllamaMetrics = async () => {
+    try {
+      setOllamaMetrics(prev => ({ ...prev, loading: true }));
+
+      // Fetch stored models data
+      const modelsResponse = await fetch('/api/ollama/models/stored');
+      const modelsData = await modelsResponse.json();
+
+      if (modelsResponse.ok) {
+        // Count unique models to avoid duplicates
+        const models = modelsData.models || [];
+        const uniqueModels = models.filter((model: any, index: number, arr: any[]) => 
+          arr.findIndex(m => m.name === model.name) === index
+        );
+        
+        const chatModels = uniqueModels.filter((model: any) => model.model_type === 'chat');
+        const embeddingModels = uniqueModels.filter((model: any) => model.model_type === 'embedding');
+        
+        // Count active hosts based on online configurations
+        const activeHosts = (llmStatus.online ? 1 : 0) + (embeddingStatus.online ? 1 : 0);
+
+        setOllamaMetrics({
+          totalModels: uniqueModels.length,
+          chatModels: chatModels.length,
+          embeddingModels: embeddingModels.length,
+          activeHosts,
+          loading: false
+        });
+      } else {
+        console.error('Failed to fetch models:', modelsData);
+        setOllamaMetrics(prev => ({ ...prev, loading: false }));
+      }
+    } catch (error) {
+      console.error('Error fetching Ollama metrics:', error);
+      setOllamaMetrics(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  // Auto-check status on component mount and when URLs change
+  React.useEffect(() => {
+    testConnection(llmInstanceConfig.url, setLLMStatus);
+  }, [llmInstanceConfig.url]);
+
+  React.useEffect(() => {
+    testConnection(embeddingInstanceConfig.url, setEmbeddingStatus);
+  }, [embeddingInstanceConfig.url]);
+
+  // Fetch Ollama metrics when component mounts or when Ollama provider is selected or status changes
+  React.useEffect(() => {
+    if (ragSettings.LLM_PROVIDER === 'ollama') {
+      fetchOllamaMetrics();
+    }
+  }, [ragSettings.LLM_PROVIDER, llmInstanceConfig.url, embeddingInstanceConfig.url, llmStatus.online, embeddingStatus.online]);
   return <Card accentColor="green" className="overflow-hidden p-8">
         {/* Description */}
         <p className="text-sm text-gray-600 dark:text-zinc-400 mb-6">
@@ -53,44 +289,374 @@ export const RAGSettings = ({
           knowledge retrieval.
         </p>
         
-        {/* Provider Selection Row */}
-        <div className="grid grid-cols-3 gap-4 mb-4">
-          <div>
-            <Select
-              label="LLM Provider"
-              value={ragSettings.LLM_PROVIDER || 'openai'}
-              onChange={e => setRagSettings({
-                ...ragSettings,
-                LLM_PROVIDER: e.target.value
-              })}
-              accentColor="green"
-              options={[
-                { value: 'openai', label: 'OpenAI' },
-                { value: 'google', label: 'Google Gemini' },
-                { value: 'ollama', label: 'Ollama (Coming Soon)' },
-              ]}
-            />
-          </div>
-          {ragSettings.LLM_PROVIDER === 'ollama' && (
-            <div>
-              <Input
-                label="Ollama Base URL"
-                value={ragSettings.LLM_BASE_URL || 'http://localhost:11434/v1'}
-                onChange={e => setRagSettings({
+        {/* Provider Selection - 6 Button Layout */}
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+            LLM Provider
+          </label>
+          <div className="grid grid-cols-6 gap-3 mb-4">
+            {[
+              { key: 'openai', name: 'OpenAI', logo: '/img/OpenAI.png', color: 'green' },
+              { key: 'google', name: 'Google', logo: '/img/google-logo.svg', color: 'blue' },
+              { key: 'ollama', name: 'Ollama', logo: '/img/Ollama.png', color: 'purple' },
+              { key: 'anthropic', name: 'Anthropic', logo: '/img/claude-logo.svg', color: 'orange' },
+              { key: 'grok', name: 'Grok', logo: '/img/Grok.png', color: 'yellow' },
+              { key: 'openrouter', name: 'OpenRouter', logo: '/img/OpenRouter.png', color: 'cyan' }
+            ].map(provider => (
+              <button
+                key={provider.key}
+                type="button"
+                onClick={() => setRagSettings({
                   ...ragSettings,
-                  LLM_BASE_URL: e.target.value
+                  LLM_PROVIDER: provider.key
                 })}
-                placeholder="http://localhost:11434/v1"
-                accentColor="green"
-              />
+                className={`
+                  relative p-3 rounded-lg border-2 transition-all duration-200 text-center
+                  ${ragSettings.LLM_PROVIDER === provider.key
+                    ? `border-${provider.color}-500 bg-${provider.color}-500/10 shadow-[0_0_15px_rgba(34,197,94,0.3)]`
+                    : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
+                  }
+                  hover:scale-105 active:scale-95
+                `}
+              >
+                <img 
+                  src={provider.logo} 
+                  alt={`${provider.name} logo`}
+                  className={`w-8 h-8 mb-1 mx-auto ${
+                    provider.key === 'openai' || provider.key === 'grok' 
+                      ? 'bg-white rounded p-1' 
+                      : ''
+                  }`}
+                />
+                <div className={`text-sm font-medium text-gray-700 dark:text-gray-300 ${
+                  provider.key === 'openrouter' ? 'text-center' : ''
+                }`}>
+                  {provider.name}
+                </div>
+                {ragSettings.LLM_PROVIDER === provider.key && (
+                  <div className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center">
+                    <Check className="w-2.5 h-2.5 text-white" />
+                  </div>
+                )}
+                {(provider.key === 'anthropic' || provider.key === 'grok' || provider.key === 'openrouter') && (
+                  <div className="absolute inset-0 bg-black/20 rounded-lg flex items-center justify-center">
+                    <div className="bg-yellow-500/80 text-black text-xs font-bold px-2 py-1 rounded transform -rotate-12">
+                      Coming Soon
+                    </div>
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+          
+          {/* Provider-specific configuration */}
+          {ragSettings.LLM_PROVIDER === 'ollama' && (
+            <div className="bg-gray-800 rounded-lg p-6 mb-6">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-white text-lg font-semibold">Ollama Configuration</h3>
+                  <p className="text-gray-400 text-sm">Configure separate Ollama instances for LLM and embedding models</p>
+                </div>
+                <div className={`text-sm font-medium ${
+                  (llmStatus.online && embeddingStatus.online) ? "text-teal-400" : 
+                  (llmStatus.online || embeddingStatus.online) ? "text-yellow-400" : "text-red-400"
+                }`}>
+                  {(llmStatus.online && embeddingStatus.online) ? "2 / 2 Online" :
+                   (llmStatus.online || embeddingStatus.online) ? "1 / 2 Online" : "0 / 2 Online"}
+                </div>
+              </div>
+
+              {/* LLM Instance Card */}
+              <div className="bg-gray-700 rounded-lg p-4 mb-4">
+                <div className="flex justify-between items-start mb-3">
+                  <div>
+                    <h4 className="text-white font-medium">LLM Instance</h4>
+                    <p className="text-gray-400 text-sm">For chat completions and text generation</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {llmStatus.checking ? (
+                      <span className="text-yellow-400 text-sm">Checking...</span>
+                    ) : llmStatus.online ? (
+                      <span className="text-teal-400 text-sm">Online ({llmStatus.responseTime}ms)</span>
+                    ) : (
+                      <span className="text-red-400 text-sm">Offline</span>
+                    )}
+                    {llmInstanceConfig.name && llmInstanceConfig.url && (
+                      <button 
+                        className="text-red-400 hover:text-red-300 transition-colors"
+                        onClick={handleDeleteLLMInstance}
+                        title="Delete LLM instance configuration"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+                
+                <div className="flex justify-between items-start">
+                  <div className="flex-1">
+                    {llmInstanceConfig.name && llmInstanceConfig.url ? (
+                      <>
+                        <div className="mb-3">
+                          <div className="text-white font-medium mb-1">{llmInstanceConfig.name}</div>
+                          <div className="text-gray-400 text-sm font-mono">{llmInstanceConfig.url}</div>
+                        </div>
+
+                        <div className="mb-4">
+                          <div className="text-gray-300 text-sm mb-1">Model:</div>
+                          <div className="text-white">{getDisplayedChatModel(ragSettings)}</div>
+                        </div>
+                        
+                        <div className="text-gray-400 text-sm">
+                          {llmStatus.checking ? (
+                            <Loader className="w-4 h-4 animate-spin inline mr-1" />
+                          ) : null}
+                          {ollamaMetrics.loading ? 'Loading...' : `${ollamaMetrics.totalModels} models available`}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-center py-8">
+                        <div className="text-gray-400 text-sm mb-2">No LLM instance configured</div>
+                        <div className="text-gray-500 text-xs mb-4">Configure an instance to use LLM features</div>
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          className="text-purple-400 border-purple-400"
+                          onClick={() => setShowEditLLMModal(true)}
+                        >
+                          Add LLM Instance
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+
+                  {llmInstanceConfig.name && llmInstanceConfig.url && (
+                    <div className="flex flex-col gap-2 ml-4">
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="text-purple-400 border-purple-400"
+                        onClick={() => setShowEditLLMModal(true)}
+                      >
+                        Edit Settings
+                      </Button>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="text-purple-400 border-purple-400"
+                        onClick={() => manualTestConnection(llmInstanceConfig.url, setLLMStatus, llmInstanceConfig.name)}
+                        disabled={llmStatus.checking}
+                    >
+                      {llmStatus.checking ? 'Testing...' : 'Test Connection'}
+                    </Button>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="text-purple-400 border-purple-400"
+                        onClick={() => setShowLLMModelSelectionModal(true)}
+                      >
+                        Select Model
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Embedding Instance Card */}
+              <div className="bg-gray-700 rounded-lg p-4 mb-4">
+                <div className="flex justify-between items-start mb-3">
+                  <div>
+                    <h4 className="text-white font-medium">Embedding Instance</h4>
+                    <p className="text-gray-400 text-sm">For generating text embeddings and vector search</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {embeddingStatus.checking ? (
+                      <span className="text-yellow-400 text-sm">Checking...</span>
+                    ) : embeddingStatus.online ? (
+                      <span className="text-teal-400 text-sm">Online ({embeddingStatus.responseTime}ms)</span>
+                    ) : (
+                      <span className="text-red-400 text-sm">Offline</span>
+                    )}
+                    {embeddingInstanceConfig.name && embeddingInstanceConfig.url && (
+                      <button 
+                        className="text-red-400 hover:text-red-300 transition-colors"
+                        onClick={handleDeleteEmbeddingInstance}
+                        title="Delete Embedding instance configuration"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+                
+                <div className="flex justify-between items-start">
+                  <div className="flex-1">
+                    {embeddingInstanceConfig.name && embeddingInstanceConfig.url ? (
+                      <>
+                        <div className="mb-3">
+                          <div className="text-white font-medium mb-1">{embeddingInstanceConfig.name}</div>
+                          <div className="text-gray-400 text-sm font-mono">{embeddingInstanceConfig.url}</div>
+                        </div>
+
+                        <div className="mb-4">
+                          <div className="text-gray-300 text-sm mb-1">Model:</div>
+                          <div className="text-white">{getDisplayedEmbeddingModel(ragSettings)}</div>
+                        </div>
+                        
+                        <div className="text-gray-400 text-sm">
+                          {embeddingStatus.checking ? (
+                            <Loader className="w-4 h-4 animate-spin inline mr-1" />
+                          ) : null}
+                          {ollamaMetrics.loading ? 'Loading...' : `${ollamaMetrics.totalModels} models available`}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-center py-8">
+                        <div className="text-gray-400 text-sm mb-2">No Embedding instance configured</div>
+                        <div className="text-gray-500 text-xs mb-4">Configure an instance to use embedding features</div>
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          className="text-purple-400 border-purple-400"
+                          onClick={() => setShowEditEmbeddingModal(true)}
+                        >
+                          Add Embedding Instance
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+
+                  {embeddingInstanceConfig.name && embeddingInstanceConfig.url && (
+                    <div className="flex flex-col gap-2 ml-4">
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="text-purple-400 border-purple-400"
+                        onClick={() => setShowEditEmbeddingModal(true)}
+                      >
+                        Edit Settings
+                      </Button>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="text-purple-400 border-purple-400"
+                        onClick={() => manualTestConnection(embeddingInstanceConfig.url, setEmbeddingStatus, embeddingInstanceConfig.name)}
+                        disabled={embeddingStatus.checking}
+                      >
+                        {embeddingStatus.checking ? 'Testing...' : 'Test Connection'}
+                      </Button>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="text-purple-400 border-purple-400"
+                        onClick={() => setShowEmbeddingModelSelectionModal(true)}
+                      >
+                        Select Model
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Configuration Summary */}
+              <div className="bg-gray-700 rounded-lg p-4">
+                <h4 className="text-white font-medium mb-3">Configuration Summary</h4>
+                
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-gray-300">LLM Instance:</span>
+                    <span className={llmStatus.online ? "text-teal-400" : "text-red-400"}>
+                      {llmStatus.online ? "Online" : "Offline"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-300">Embedding Instance:</span>
+                    <span className={embeddingStatus.online ? "text-teal-400" : "text-red-400"}>
+                      {embeddingStatus.online ? "Online" : "Offline"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-300">Configuration Status:</span>
+                    <span className={(llmStatus.online && embeddingStatus.online) ? "text-teal-400" : "text-yellow-400"}>
+                      {(llmStatus.online && embeddingStatus.online) ? "Complete" : "Partial"}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="mt-4 space-y-2 text-sm">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
+                      <path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z" />
+                    </svg>
+                    <span className="text-gray-300">Stored Models:</span>
+                    <span className="text-white">
+                      {ollamaMetrics.loading ? (
+                        <Loader className="w-4 h-4 animate-spin inline" />
+                      ) : (
+                        `${ollamaMetrics.totalModels} total`
+                      )}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 ml-6">
+                    <span className="text-gray-400">Chat Models:</span>
+                    <span className="text-white">
+                      {ollamaMetrics.loading ? (
+                        <Loader className="w-4 h-4 animate-spin inline" />
+                      ) : (
+                        ollamaMetrics.chatModels
+                      )}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 ml-6">
+                    <span className="text-gray-400">Embedding Models:</span>
+                    <span className="text-white">
+                      {ollamaMetrics.loading ? (
+                        <Loader className="w-4 h-4 animate-spin inline" />
+                      ) : (
+                        ollamaMetrics.embeddingModels
+                      )}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M3 3a1 1 0 000 2v8a2 2 0 002 2h2a2 2 0 002-2V5a1 1 0 100-2H3zm11.707 4.707a1 1 0 00-1.414-1.414L10 9.586 8.707 8.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                    </svg>
+                    <span className="text-gray-300">Active Hosts:</span>
+                    <span className="text-white">
+                      {ollamaMetrics.loading ? (
+                        <Loader className="w-4 h-4 animate-spin inline" />
+                      ) : (
+                        ollamaMetrics.activeHosts
+                      )}
+                    </span>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
-          <div className="flex items-end">
+
+          {ragSettings.LLM_PROVIDER === 'anthropic' && (
+            <div className="p-4 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-lg mb-4">
+              <p className="text-sm text-orange-800 dark:text-orange-300">
+                Configure your Anthropic API key in the credentials section to use Claude models.
+              </p>
+            </div>
+          )}
+
+          {ragSettings.LLM_PROVIDER === 'groq' && (
+            <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg mb-4">
+              <p className="text-sm text-yellow-800 dark:text-yellow-300">
+                Groq provides fast inference with Llama, Mixtral, and Gemma models.
+              </p>
+            </div>
+          )}
+          
+          <div className="flex justify-end">
             <Button 
               variant="outline" 
               accentColor="green" 
               icon={saving ? <Loader className="w-4 h-4 mr-1 animate-spin" /> : <Save className="w-4 h-4 mr-1" />}
-              className="w-full whitespace-nowrap"
+              className="whitespace-nowrap"
               size="md"
               onClick={async () => {
                 try {
@@ -116,7 +682,7 @@ export const RAGSettings = ({
           <div>
             <Input 
               label="Chat Model" 
-              value={ragSettings.MODEL_CHOICE} 
+              value={getDisplayedChatModel(ragSettings)} 
               onChange={e => setRagSettings({
                 ...ragSettings,
                 MODEL_CHOICE: e.target.value
@@ -128,7 +694,7 @@ export const RAGSettings = ({
           <div>
             <Input
               label="Embedding Model"
-              value={ragSettings.EMBEDDING_MODEL || ''}
+              value={getDisplayedEmbeddingModel(ragSettings)}
               onChange={e => setRagSettings({
                 ...ragSettings,
                 EMBEDDING_MODEL: e.target.value
@@ -472,18 +1038,272 @@ export const RAGSettings = ({
             </div>
           )}
         </div>
+
+        {/* Edit LLM Instance Modal */}
+        {showEditLLMModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-96 max-w-md">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Edit LLM Instance</h3>
+              
+              <div className="space-y-4">
+                <Input
+                  label="Instance Name"
+                  value={llmInstanceConfig.name}
+                  onChange={(e) => setLLMInstanceConfig({...llmInstanceConfig, name: e.target.value})}
+                  placeholder="Enter instance name"
+                />
+                
+                <Input
+                  label="Instance URL"
+                  value={llmInstanceConfig.url}
+                  onChange={(e) => setLLMInstanceConfig({...llmInstanceConfig, url: e.target.value})}
+                  placeholder="http://192.168.2.31:11434/v1"
+                />
+              </div>
+              
+              <div className="flex gap-2 mt-6">
+                <Button
+                  variant="outline"
+                  onClick={() => setShowEditLLMModal(false)}
+                  className="flex-1"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => {
+                    setRagSettings({...ragSettings, LLM_BASE_URL: llmInstanceConfig.url});
+                    setShowEditLLMModal(false);
+                    showToast('LLM instance updated successfully', 'success');
+                  }}
+                  className="flex-1"
+                  accentColor="green"
+                >
+                  Save Changes
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Edit Embedding Instance Modal */}
+        {showEditEmbeddingModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-96 max-w-md">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Edit Embedding Instance</h3>
+              
+              <div className="space-y-4">
+                <Input
+                  label="Instance Name"
+                  value={embeddingInstanceConfig.name}
+                  onChange={(e) => setEmbeddingInstanceConfig({...embeddingInstanceConfig, name: e.target.value})}
+                  placeholder="Enter instance name"
+                />
+                
+                <Input
+                  label="Instance URL"
+                  value={embeddingInstanceConfig.url}
+                  onChange={(e) => setEmbeddingInstanceConfig({...embeddingInstanceConfig, url: e.target.value})}
+                  placeholder="http://192.168.2.32:11434/v1"
+                />
+              </div>
+              
+              <div className="flex gap-2 mt-6">
+                <Button
+                  variant="outline"
+                  onClick={() => setShowEditEmbeddingModal(false)}
+                  className="flex-1"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => {
+                    setRagSettings({...ragSettings, OLLAMA_EMBEDDING_URL: embeddingInstanceConfig.url});
+                    setShowEditEmbeddingModal(false);
+                    showToast('Embedding instance updated successfully', 'success');
+                  }}
+                  className="flex-1"
+                  accentColor="green"
+                >
+                  Save Changes
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* LLM Model Selection Modal */}
+        {showLLMModelSelectionModal && (
+          <OllamaModelSelectionModal
+            isOpen={showLLMModelSelectionModal}
+            onClose={() => setShowLLMModelSelectionModal(false)}
+            instances={[
+              { name: llmInstanceConfig.name, url: llmInstanceConfig.url },
+              { name: embeddingInstanceConfig.name, url: embeddingInstanceConfig.url }
+            ]}
+            currentModel={ragSettings.MODEL_CHOICE}
+            modelType="chat"
+            selectedInstanceUrl={llmInstanceConfig.url.replace('/v1', '')}
+            onSelectModel={(modelName: string) => {
+              setRagSettings({ ...ragSettings, MODEL_CHOICE: modelName });
+              showToast(`Selected LLM model: ${modelName}`, 'success');
+            }}
+          />
+        )}
+
+        {/* Embedding Model Selection Modal */}
+        {showEmbeddingModelSelectionModal && (
+          <OllamaModelSelectionModal
+            isOpen={showEmbeddingModelSelectionModal}
+            onClose={() => setShowEmbeddingModelSelectionModal(false)}
+            instances={[
+              { name: llmInstanceConfig.name, url: llmInstanceConfig.url },
+              { name: embeddingInstanceConfig.name, url: embeddingInstanceConfig.url }
+            ]}
+            currentModel={ragSettings.EMBEDDING_MODEL}
+            modelType="embedding"
+            selectedInstanceUrl={embeddingInstanceConfig.url.replace('/v1', '')}
+            onSelectModel={(modelName: string) => {
+              setRagSettings({ ...ragSettings, EMBEDDING_MODEL: modelName });
+              showToast(`Selected embedding model: ${modelName}`, 'success');
+            }}
+          />
+        )}
+
+        {/* Ollama Model Discovery Modal */}
+        {showModelDiscoveryModal && (
+          <OllamaModelDiscoveryModal
+            isOpen={showModelDiscoveryModal}
+            onClose={() => setShowModelDiscoveryModal(false)}
+            instances={[]}
+            onSelectModels={(selection: { chatModel?: string; embeddingModel?: string }) => {
+              const updatedSettings = { ...ragSettings };
+              if (selection.chatModel) {
+                updatedSettings.MODEL_CHOICE = selection.chatModel;
+              }
+              if (selection.embeddingModel) {
+                updatedSettings.EMBEDDING_MODEL = selection.embeddingModel;
+              }
+              setRagSettings(updatedSettings);
+              setShowModelDiscoveryModal(false);
+              // Refresh metrics after model discovery
+              fetchOllamaMetrics();
+              showToast(`Selected models: ${selection.chatModel || 'none'} (chat), ${selection.embeddingModel || 'none'} (embedding)`, 'success');
+            }}
+          />
+        )}
     </Card>;
 };
+
+// Helper functions to get provider-specific model display
+function getDisplayedChatModel(ragSettings: any): string {
+  const provider = ragSettings.LLM_PROVIDER || 'openai';
+  const modelChoice = ragSettings.MODEL_CHOICE;
+  
+  // Check if the stored model is appropriate for the current provider
+  const isModelAppropriate = (model: string, provider: string): boolean => {
+    if (!model) return false;
+    
+    switch (provider) {
+      case 'openai':
+        return model.startsWith('gpt-') || model.startsWith('o1-') || model.includes('text-davinci') || model.includes('text-embedding');
+      case 'anthropic':
+        return model.startsWith('claude-');
+      case 'google':
+        return model.startsWith('gemini-') || model.startsWith('text-embedding-');
+      case 'grok':
+        return model.startsWith('grok-');
+      case 'ollama':
+        return !model.startsWith('gpt-') && !model.startsWith('claude-') && !model.startsWith('gemini-') && !model.startsWith('grok-');
+      case 'openrouter':
+        return model.includes('/') || model.startsWith('anthropic/') || model.startsWith('openai/');
+      default:
+        return false;
+    }
+  };
+  
+  // Use stored model if it's appropriate for the provider, otherwise use default
+  const useStoredModel = modelChoice && isModelAppropriate(modelChoice, provider);
+  
+  switch (provider) {
+    case 'openai':
+      return useStoredModel ? modelChoice : 'gpt-4o-mini';
+    case 'anthropic':
+      return useStoredModel ? modelChoice : 'claude-3-5-sonnet-20241022';
+    case 'google':
+      return useStoredModel ? modelChoice : 'gemini-1.5-flash';
+    case 'grok':
+      return useStoredModel ? modelChoice : 'grok-2-latest';
+    case 'ollama':
+      return useStoredModel ? modelChoice : 'qwen2.5:7b-instruct-q4_K_M';
+    case 'openrouter':
+      return useStoredModel ? modelChoice : 'anthropic/claude-3.5-sonnet';
+    default:
+      return useStoredModel ? modelChoice : 'gpt-4o-mini';
+  }
+}
+
+function getDisplayedEmbeddingModel(ragSettings: any): string {
+  const provider = ragSettings.LLM_PROVIDER || 'openai';
+  const embeddingModel = ragSettings.EMBEDDING_MODEL;
+  
+  // Check if the stored embedding model is appropriate for the current provider
+  const isEmbeddingModelAppropriate = (model: string, provider: string): boolean => {
+    if (!model) return false;
+    
+    switch (provider) {
+      case 'openai':
+        return model.startsWith('text-embedding-') || model.includes('ada-');
+      case 'anthropic':
+        return false; // Claude doesn't provide embedding models
+      case 'google':
+        return model.startsWith('text-embedding-') || model.startsWith('textembedding-') || model.includes('embedding');
+      case 'grok':
+        return false; // Grok doesn't provide embedding models
+      case 'ollama':
+        return !model.startsWith('text-embedding-') || model.includes('embed') || model.includes('arctic');
+      case 'openrouter':
+        return model.startsWith('text-embedding-') || model.includes('/');
+      default:
+        return false;
+    }
+  };
+  
+  // Use stored model if it's appropriate for the provider, otherwise use default
+  const useStoredModel = embeddingModel && isEmbeddingModelAppropriate(embeddingModel, provider);
+  
+  switch (provider) {
+    case 'openai':
+      return useStoredModel ? embeddingModel : 'text-embedding-3-small';
+    case 'anthropic':
+      return 'Not available - Claude does not provide embedding models';
+    case 'google':
+      return useStoredModel ? embeddingModel : 'text-embedding-004';
+    case 'grok':
+      return 'Not available - Grok does not provide embedding models';
+    case 'ollama':
+      return useStoredModel ? embeddingModel : 'snowflake-arctic-embed2:latest';
+    case 'openrouter':
+      return useStoredModel ? embeddingModel : 'text-embedding-3-small';
+    default:
+      return useStoredModel ? embeddingModel : 'text-embedding-3-small';
+  }
+}
 
 // Helper functions for model placeholders
 function getModelPlaceholder(provider: string): string {
   switch (provider) {
     case 'openai':
       return 'e.g., gpt-4o-mini';
-    case 'ollama':
-      return 'e.g., llama2, mistral';
+    case 'anthropic':
+      return 'e.g., claude-3-5-sonnet-20241022';
     case 'google':
       return 'e.g., gemini-1.5-flash';
+    case 'grok':
+      return 'e.g., grok-2-latest';
+    case 'ollama':
+      return 'e.g., llama2, mistral';
+    case 'openrouter':
+      return 'e.g., anthropic/claude-3.5-sonnet';
     default:
       return 'e.g., gpt-4o-mini';
   }
@@ -493,10 +1313,16 @@ function getEmbeddingPlaceholder(provider: string): string {
   switch (provider) {
     case 'openai':
       return 'Default: text-embedding-3-small';
-    case 'ollama':
-      return 'e.g., nomic-embed-text';
+    case 'anthropic':
+      return 'Claude does not provide embedding models';
     case 'google':
       return 'e.g., text-embedding-004';
+    case 'grok':
+      return 'Grok does not provide embedding models';
+    case 'ollama':
+      return 'e.g., nomic-embed-text';
+    case 'openrouter':
+      return 'e.g., text-embedding-3-small';
     default:
       return 'Default: text-embedding-3-small';
   }

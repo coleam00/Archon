@@ -295,13 +295,30 @@ async def add_documents_to_supabase(
                     parsed_url = urlparse(batch_urls[j])
                     source_id = parsed_url.netloc or parsed_url.path
 
+                # Determine the correct embedding column based on dimension
+                embedding_dim = len(embedding) if isinstance(embedding, list) else len(embedding.tolist())
+                embedding_column = None
+                
+                if embedding_dim == 768:
+                    embedding_column = "embedding_768"
+                elif embedding_dim == 1024:
+                    embedding_column = "embedding_1024"
+                elif embedding_dim == 1536:
+                    embedding_column = "embedding_1536"
+                elif embedding_dim == 3072:
+                    embedding_column = "embedding_3072"
+                else:
+                    # Default to closest supported dimension
+                    search_logger.warning(f"Unsupported embedding dimension {embedding_dim}, using embedding_1536")
+                    embedding_column = "embedding_1536"
+                
                 data = {
                     "url": batch_urls[j],
                     "chunk_number": batch_chunk_numbers[j],
                     "content": text,  # Use the successful text
                     "metadata": {"chunk_size": len(text), **batch_metadatas[j]},
                     "source_id": source_id,
-                    "embedding": embedding,  # Use the successful embedding
+                    embedding_column: embedding,  # Use the successful embedding with correct column
                 }
                 batch_data.append(data)
 

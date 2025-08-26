@@ -307,6 +307,12 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
             });
           }
         },
+        // Health check endpoint proxy
+        '/health': {
+          target: `http://${host}:${port}`,
+          changeOrigin: true,
+          secure: false
+        },
         // Socket.IO specific proxy configuration
         '/socket.io': {
           target: `http://${host}:${port}`,
