@@ -3,7 +3,6 @@ import { useState, useEffect } from 'react';
 interface MigrationStatus {
   migrationRequired: boolean;
   message?: string;
-  instructions?: string;
   loading: boolean;
 }
 
@@ -23,7 +22,6 @@ export const useMigrationStatus = (): MigrationStatus => {
           setStatus({
             migrationRequired: true,
             message: healthData.message,
-            instructions: healthData.migration_instructions,
             loading: false,
           });
         } else {

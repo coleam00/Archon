@@ -4,13 +4,11 @@ import { Card } from './Card';
 
 interface MigrationBannerProps {
   message: string;
-  instructions: string;
   onDismiss?: () => void;
 }
 
 export const MigrationBanner: React.FC<MigrationBannerProps> = ({
   message,
-  instructions,
   onDismiss
 }) => {
   return (

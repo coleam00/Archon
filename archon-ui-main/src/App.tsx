@@ -85,7 +85,6 @@ const AppContent = () => {
             {migrationStatus.migrationRequired && !migrationBannerDismissed && (
               <MigrationBanner
                 message={migrationStatus.message || "Database migration required"}
-                instructions={migrationStatus.instructions || "Check migration folder"}
                 onDismiss={() => setMigrationBannerDismissed(true)}
               />
             )}
