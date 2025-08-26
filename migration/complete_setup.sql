@@ -24,11 +24,11 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 -- This table stores both encrypted sensitive data and plain configuration settings
 CREATE TABLE IF NOT EXISTS archon_settings (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    key VARCHAR(255) UNIQUE NOT NULL,
+    key TEXT UNIQUE NOT NULL,
     value TEXT,                    -- For plain text config values
     encrypted_value TEXT,          -- For encrypted sensitive data (bcrypt hashed)
     is_encrypted BOOLEAN DEFAULT FALSE,
-    category VARCHAR(100),         -- Group related settings (e.g., 'rag_strategy', 'api_keys', 'server_config')
+    category TEXT,                 -- Group related settings (e.g., 'rag_strategy', 'api_keys', 'server_config')
     description TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -209,9 +209,9 @@ CREATE TABLE IF NOT EXISTS archon_crawled_pages (
     embedding_1536 VECTOR(1536), -- OpenAI standard models
     embedding_3072 VECTOR(3072), -- OpenAI large models
     -- Model tracking columns
-    llm_chat_model VARCHAR(255),        -- LLM model used for processing (e.g., 'gpt-4', 'llama3:8b')
-    embedding_model VARCHAR(255),       -- Embedding model used (e.g., 'text-embedding-3-large', 'all-MiniLM-L6-v2')
-    embedding_dimension INTEGER,        -- Dimension of the embedding used (384, 768, 1024, 1536, 3072)
+    llm_chat_model TEXT,                -- LLM model used for processing (e.g., 'gpt-4', 'llama3:8b')
+    embedding_model TEXT,                -- Embedding model used (e.g., 'text-embedding-3-large', 'all-MiniLM-L6-v2')
+    embedding_dimension INTEGER,         -- Dimension of the embedding used (384, 768, 1024, 1536, 3072)
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
 
     -- Add a unique constraint to prevent duplicate chunks for the same URL
@@ -252,9 +252,9 @@ CREATE TABLE IF NOT EXISTS archon_code_examples (
     embedding_1536 VECTOR(1536), -- OpenAI standard models
     embedding_3072 VECTOR(3072), -- OpenAI large models
     -- Model tracking columns
-    llm_chat_model VARCHAR(255),        -- LLM model used for processing (e.g., 'gpt-4', 'llama3:8b')
-    embedding_model VARCHAR(255),       -- Embedding model used (e.g., 'text-embedding-3-large', 'all-MiniLM-L6-v2')
-    embedding_dimension INTEGER,        -- Dimension of the embedding used (384, 768, 1024, 1536, 3072)
+    llm_chat_model TEXT,                -- LLM model used for processing (e.g., 'gpt-4', 'llama3:8b')
+    embedding_model TEXT,                -- Embedding model used (e.g., 'text-embedding-3-large', 'all-MiniLM-L6-v2')
+    embedding_dimension INTEGER,         -- Dimension of the embedding used (384, 768, 1024, 1536, 3072)
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
 
     -- Add a unique constraint to prevent duplicate chunks for the same URL
