@@ -267,14 +267,20 @@ export const RAGSettings = ({
     }
   };
 
-  // Auto-check status on component mount and when URLs change
+  // Auto-check status on component mount only if configured
   React.useEffect(() => {
-    testConnection(llmInstanceConfig.url, setLLMStatus);
-  }, [llmInstanceConfig.url]);
+    // Only test if we have a real URL (not the default localhost)
+    if (llmInstanceConfig.url && llmInstanceConfig.name && llmInstanceConfig.url !== 'http://localhost:11434/v1') {
+      testConnection(llmInstanceConfig.url, setLLMStatus);
+    }
+  }, []); // Only run on mount
 
   React.useEffect(() => {
-    testConnection(embeddingInstanceConfig.url, setEmbeddingStatus);
-  }, [embeddingInstanceConfig.url]);
+    // Only test if we have a real URL (not the default localhost)
+    if (embeddingInstanceConfig.url && embeddingInstanceConfig.name && embeddingInstanceConfig.url !== 'http://localhost:11434/v1') {
+      testConnection(embeddingInstanceConfig.url, setEmbeddingStatus);
+    }
+  }, []); // Only run on mount
 
   // Fetch Ollama metrics when component mounts or when Ollama provider is selected or status changes
   React.useEffect(() => {
@@ -1070,12 +1076,12 @@ export const RAGSettings = ({
                   Cancel
                 </Button>
                 <Button
-                  onClick={() => {
+                  onClick={async () => {
                     setRagSettings({...ragSettings, LLM_BASE_URL: llmInstanceConfig.url});
                     setShowEditLLMModal(false);
                     showToast('LLM instance updated successfully', 'success');
-                    // Automatically test connection after save
-                    setTimeout(() => testLLMConnection(), 500);
+                    // Test connection immediately (not in timeout to avoid race conditions)
+                    testLLMConnection();
                   }}
                   className="flex-1"
                   accentColor="green"
@@ -1118,12 +1124,12 @@ export const RAGSettings = ({
                   Cancel
                 </Button>
                 <Button
-                  onClick={() => {
+                  onClick={async () => {
                     setRagSettings({...ragSettings, OLLAMA_EMBEDDING_URL: embeddingInstanceConfig.url});
                     setShowEditEmbeddingModal(false);
                     showToast('Embedding instance updated successfully', 'success');
-                    // Automatically test connection after save
-                    setTimeout(() => testEmbeddingConnection(), 500);
+                    // Test connection immediately (not in timeout to avoid race conditions)
+                    testEmbeddingConnection();
                   }}
                   className="flex-1"
                   accentColor="green"
