@@ -60,12 +60,12 @@ export const RAGSettings = ({
   
   // Instance configurations
   const [llmInstanceConfig, setLLMInstanceConfig] = useState({
-    name: 'Ollama1',
-    url: ragSettings.LLM_BASE_URL || 'http://192.168.2.31:11434/v1'
+    name: '',
+    url: ragSettings.LLM_BASE_URL || 'http://localhost:11434/v1'
   });
   const [embeddingInstanceConfig, setEmbeddingInstanceConfig] = useState({
-    name: 'Ollama2', 
-    url: ragSettings.OLLAMA_EMBEDDING_URL || 'http://192.168.2.32:11434/v1'
+    name: '', 
+    url: ragSettings.OLLAMA_EMBEDDING_URL || 'http://localhost:11434/v1'
   });
   
   // Status tracking
@@ -1057,7 +1057,7 @@ export const RAGSettings = ({
                   label="Instance URL"
                   value={llmInstanceConfig.url}
                   onChange={(e) => setLLMInstanceConfig({...llmInstanceConfig, url: e.target.value})}
-                  placeholder="http://192.168.2.31:11434/v1"
+                  placeholder="http://localhost:11434/v1"
                 />
               </div>
               
@@ -1103,7 +1103,7 @@ export const RAGSettings = ({
                   label="Instance URL"
                   value={embeddingInstanceConfig.url}
                   onChange={(e) => setEmbeddingInstanceConfig({...embeddingInstanceConfig, url: e.target.value})}
-                  placeholder="http://192.168.2.32:11434/v1"
+                  placeholder="http://localhost:11434/v1"
                 />
               </div>
               
@@ -1234,7 +1234,7 @@ function getDisplayedChatModel(ragSettings: any): string {
     case 'grok':
       return useStoredModel ? modelChoice : 'grok-2-latest';
     case 'ollama':
-      return useStoredModel ? modelChoice : 'qwen2.5:7b-instruct-q4_K_M';
+      return useStoredModel ? modelChoice : '';
     case 'openrouter':
       return useStoredModel ? modelChoice : 'anthropic/claude-3.5-sonnet';
     default:
@@ -1281,7 +1281,7 @@ function getDisplayedEmbeddingModel(ragSettings: any): string {
     case 'grok':
       return 'Not available - Grok does not provide embedding models';
     case 'ollama':
-      return useStoredModel ? embeddingModel : 'snowflake-arctic-embed2:latest';
+      return useStoredModel ? embeddingModel : '';
     case 'openrouter':
       return useStoredModel ? embeddingModel : 'text-embedding-3-small';
     default:
