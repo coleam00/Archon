@@ -256,7 +256,8 @@ async def health_check():
             "ready": False,
             "migration_required": True,
             "message": schema_status["message"],
-            "migration_instructions": "Open Supabase Dashboard → SQL Editor → Run: migration/add_source_url_display_name.sql"
+            "migration_instructions": "Open Supabase Dashboard → SQL Editor → Run: migration/add_source_url_display_name.sql",
+            "schema_valid": False
         }
 
     return {
