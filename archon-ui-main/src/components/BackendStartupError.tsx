@@ -40,8 +40,12 @@ export const BackendStartupError: React.FC = () => {
 
               <div className="bg-yellow-950/30 border border-yellow-700/30 rounded-lg p-3">
                 <p className="text-yellow-200 text-sm">
-                  <strong>Common issue:</strong> Using an ANON key instead of SERVICE key in your .env file
+                  <strong>Common issues:</strong>
                 </p>
+                <ul className="text-yellow-200 text-sm mt-1 space-y-1 list-disc list-inside">
+                  <li>Using an ANON key instead of SERVICE key in your .env file</li>
+                  <li>Database not set up - run <code className="bg-yellow-800/50 px-1 rounded">migration/complete_setup.sql</code> in Supabase SQL Editor</li>
+                </ul>
               </div>
 
               <div className="pt-4 border-t border-red-900/30">
