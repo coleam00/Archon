@@ -18,9 +18,9 @@ When we understand the story/task, we can proceed with the codebase analysis. We
 
 The contents of the created PRP should encapsulate all the information the agent needs to complete the story/task in one pass.
 
-Remember that subagents will only receive their details from you, the user has no way of interacting with the subagents. so you need to share all the relevant context to the subagent in the subagent prompt and in the TODO that is shared with the particular agent.
+Remember that subagents will only receive details from you; the user cannot interact with them directly. Therefore, include all relevant context in the subagent prompt and TODO.
 
-Create detailed todos and spawn parallel subagents to analyze (Use specialized subagents when apropriate):
+Create detailed TODOs and spawn parallel subagents to analyze (use specialized subagents when appropriate).
 
 ## Analysis Process
 
