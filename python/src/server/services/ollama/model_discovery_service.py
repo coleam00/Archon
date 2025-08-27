@@ -178,6 +178,10 @@ class ModelDiscoveryService:
         Returns:
             Models enriched with capability information
         """
+        import time
+        start_time = time.time()
+        logger.info(f"Starting capability enrichment for {len(models)} models from {instance_url}")
+        
         enriched_models = []
         unknown_models = []
 
@@ -236,6 +240,19 @@ class ModelDiscoveryService:
                     # Unknown model - needs testing
                     unknown_models.append(model)
 
+        # Log pattern matching results for debugging
+        pattern_matched_count = len(enriched_models)
+        unknown_count = len(unknown_models)
+        logger.info(f"Pattern matching results: {pattern_matched_count} models matched patterns, {unknown_count} models require API testing")
+        
+        if pattern_matched_count > 0:
+            matched_names = [m.name for m in enriched_models]
+            logger.info(f"Pattern-matched models: {', '.join(matched_names[:10])}{'...' if len(matched_names) > 10 else ''}")
+        
+        if unknown_models:
+            unknown_names = [m.name for m in unknown_models]
+            logger.info(f"Unknown models requiring API testing: {', '.join(unknown_names[:10])}{'...' if len(unknown_names) > 10 else ''}")
+        
         # Second pass: Only test unknown models (significantly fewer API calls)
         if unknown_models:
             logger.info(f"Testing capabilities for {len(unknown_models)} unknown models (pattern matching saved {len(models) - len(unknown_models)} API tests)")
@@ -285,8 +302,17 @@ class ModelDiscoveryService:
                         model.capabilities = ["chat"]
                         enriched_models.append(model)
 
+        # Log final timing and results
+        end_time = time.time()
+        total_duration = end_time - start_time
+        pattern_matched_count = len(models) - len(unknown_models)
+        
         logger.info(f"Model capability enrichment complete: {len(enriched_models)} total models, "
-                   f"pattern-matched {len(models) - len(unknown_models)}, tested {len(unknown_models)}")
+                   f"pattern-matched {pattern_matched_count}, tested {len(unknown_models)}")
+        logger.info(f"Total enrichment time: {total_duration:.2f}s for {instance_url}")
+        
+        if pattern_matched_count > 0:
+            logger.info(f"Pattern matching saved ~{pattern_matched_count * 10:.1f}s (estimated 10s per model API test)")
 
         return enriched_models
 
