@@ -46,6 +46,8 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [discoveryComplete, setDiscoveryComplete] = useState(false);
   const [discoveryProgress, setDiscoveryProgress] = useState<string>('');
+  const [lastDiscoveryTime, setLastDiscoveryTime] = useState<number | null>(null);
+  const [hasCache, setHasCache] = useState(false);
   
   const [selectionState, setSelectionState] = useState<ModelSelectionState>({
     selectedChatModel: initialChatModel || null,
@@ -76,11 +78,73 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
     return lookup;
   }, [instances]);
 
+  // Generate cache key based on enabled instances
+  const cacheKey = useMemo(() => {
+    const sortedUrls = [...enabledInstanceUrls].sort();
+    return `ollama-models-${sortedUrls.join('|')}`;
+  }, [enabledInstanceUrls]);
+
+  // Save models to localStorage
+  const saveModelsToCache = useCallback((modelsToCache: EnrichedModel[]) => {
+    try {
+      const cacheData = {
+        models: modelsToCache,
+        timestamp: Date.now(),
+        instanceUrls: enabledInstanceUrls
+      };
+      localStorage.setItem(cacheKey, JSON.stringify(cacheData));
+      setLastDiscoveryTime(Date.now());
+      setHasCache(true);
+    } catch (error) {
+      console.warn('Failed to cache models:', error);
+    }
+  }, [cacheKey, enabledInstanceUrls]);
+
+  // Load models from localStorage
+  const loadModelsFromCache = useCallback(() => {
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        const cacheData = JSON.parse(cached);
+        const cacheAge = Date.now() - cacheData.timestamp;
+        
+        // Use cache if less than 10 minutes old and same instances
+        if (cacheAge < 10 * 60 * 1000 && 
+            JSON.stringify(cacheData.instanceUrls?.sort()) === JSON.stringify([...enabledInstanceUrls].sort())) {
+          setModels(cacheData.models);
+          setDiscoveryComplete(true);
+          setLastDiscoveryTime(cacheData.timestamp);
+          setHasCache(true);
+          setDiscoveryProgress(`Loaded ${cacheData.models.length} cached models`);
+          return true;
+        }
+      }
+    } catch (error) {
+      console.warn('Failed to load cached models:', error);
+    }
+    return false;
+  }, [cacheKey, enabledInstanceUrls]);
+
+  // Check cache when modal opens or instances change
+  useEffect(() => {
+    if (isOpen && enabledInstanceUrls.length > 0) {
+      loadModelsFromCache(); // Progress message is set inside this function
+    }
+  }, [isOpen, enabledInstanceUrls, loadModelsFromCache]);
+
   // Discover models when modal opens
-  const discoverModels = useCallback(async () => {
+  const discoverModels = useCallback(async (forceRefresh: boolean = false) => {
     if (enabledInstanceUrls.length === 0) {
       setError('No enabled Ollama instances configured');
       return;
+    }
+
+    // Check cache first if not forcing refresh
+    if (!forceRefresh) {
+      const loaded = loadModelsFromCache();
+      if (loaded) {
+        return; // Progress message already set by loadModelsFromCache
+      }
     }
 
     setLoading(true);
@@ -148,6 +212,9 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
       setModels(enrichedModels);
       setDiscoveryComplete(true);
       
+      // Cache the discovered models
+      saveModelsToCache(enrichedModels);
+      
       showToast(
         `Discovery complete: Found ${discoveryResult.total_models} models across ${Object.keys(discoveryResult.host_status).length} instances`,
         'success'
@@ -164,7 +231,7 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [enabledInstanceUrls, instanceLookup, showToast]);
+  }, [enabledInstanceUrls, instanceLookup, showToast, loadModelsFromCache, saveModelsToCache]);
 
   // Test model capabilities
   const testModelCapabilities = useCallback(async (model: EnrichedModel) => {
@@ -289,12 +356,12 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
     onClose();
   };
 
-  // Auto-discover when modal opens
+  // Auto-discover when modal opens (only if no cache available)
   useEffect(() => {
-    if (isOpen && !discoveryComplete && !loading) {
+    if (isOpen && !discoveryComplete && !loading && !hasCache) {
       discoverModels();
     }
-  }, [isOpen, discoveryComplete, loading, discoverModels]);
+  }, [isOpen, discoveryComplete, loading, hasCache, discoverModels]);
 
   if (!isOpen) return null;
 
@@ -326,6 +393,11 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
                 </h2>
                 <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
                   Discover and select models from your Ollama instances
+                  {hasCache && lastDiscoveryTime && (
+                    <span className="ml-2 text-green-600 dark:text-green-400">
+                      (Cached {new Date(lastDiscoveryTime).toLocaleTimeString()})
+                    </span>
+                  )}
                 </p>
               </div>
               <Button
@@ -388,7 +460,7 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={discoverModels}
+                onClick={() => discoverModels(true)}  // Force refresh
                 disabled={loading}
                 className="flex items-center gap-1"
               >
@@ -409,7 +481,7 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
                 <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Discovery Failed</h3>
                 <p className="text-gray-600 dark:text-gray-400 mb-4">{error}</p>
-                <Button onClick={discoverModels}>Try Again</Button>
+                <Button onClick={() => discoverModels(true)}>Try Again</Button>
               </div>
             ) : loading ? (
               <div className="p-6 text-center">

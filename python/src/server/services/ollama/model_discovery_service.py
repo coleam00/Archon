@@ -168,7 +168,8 @@ class ModelDiscoveryService:
 
     async def _enrich_model_capabilities(self, models: list[OllamaModel], instance_url: str) -> list[OllamaModel]:
         """
-        Enrich models with capability information by testing each model.
+        Enrich models with capability information using optimized pattern-based detection.
+        Only performs API testing for unknown models or when specifically requested.
 
         Args:
             models: List of basic model information
@@ -178,58 +179,175 @@ class ModelDiscoveryService:
             Models enriched with capability information
         """
         enriched_models = []
+        unknown_models = []
 
-        # Process models in batches to avoid overwhelming the instance
-        batch_size = 3
-        for i in range(0, len(models), batch_size):
-            batch = models[i:i + batch_size]
-
-            # Process batch concurrently with limited concurrency
-            tasks = [
-                self._detect_model_capabilities(model.name, instance_url)
-                for model in batch
+        # First pass: Use pattern-based detection for known models
+        for model in models:
+            model_name_lower = model.name.lower()
+            
+            # Known embedding model patterns - these are fast to identify
+            embedding_patterns = [
+                'embed', 'embedding', 'bge-', 'e5-', 'sentence-', 'arctic-embed',
+                'nomic-embed', 'mxbai-embed', 'snowflake-arctic-embed', 'gte-', 'stella-'
             ]
-
-            try:
-                capabilities_batch = await asyncio.gather(*tasks, return_exceptions=True)
-
-                for _j, (model, capabilities) in enumerate(zip(batch, capabilities_batch, strict=False)):
-                    if isinstance(capabilities, Exception):
-                        logger.warning(f"Failed to detect capabilities for {model.name}: {capabilities}")
-                        # Set basic capabilities as fallback
-                        model.capabilities = ["chat"]  # Default assumption
-                    else:
-                        # Use cast to tell type checker this is ModelCapabilities
-                        caps = cast(ModelCapabilities, capabilities)
-                        # Apply detected capabilities
-                        model.capabilities = []
-                        if caps.supports_chat:
-                            model.capabilities.append("chat")
-                            # Add advanced capabilities for chat models
-                            if caps.supports_function_calling:
-                                model.capabilities.append("function_calling")
-                            if caps.supports_structured_output:
-                                model.capabilities.append("structured_output")
-                        if caps.supports_embedding:
-                            model.capabilities.append("embedding")
-                            model.embedding_dimensions = caps.embedding_dimensions
-
-                        # Update parameters if available
-                        if caps.parameter_count:
-                            if not model.parameters:
-                                model.parameters = {}
-                            model.parameters["parameter_count"] = caps.parameter_count
-
-                    enriched_models.append(model)
-
-            except Exception as e:
-                logger.error(f"Error enriching model batch: {e}")
-                # Add models with basic capabilities as fallback
-                for model in batch:
+            
+            is_embedding_model = any(pattern in model_name_lower for pattern in embedding_patterns)
+            
+            if is_embedding_model:
+                # Set embedding capabilities immediately
+                model.capabilities = ["embedding"]
+                # Set reasonable default dimensions based on model patterns
+                if 'nomic' in model_name_lower:
+                    model.embedding_dimensions = 768
+                elif 'bge' in model_name_lower:
+                    model.embedding_dimensions = 1024 if 'large' in model_name_lower else 768
+                elif 'e5' in model_name_lower:
+                    model.embedding_dimensions = 1024 if 'large' in model_name_lower else 768
+                elif 'arctic' in model_name_lower:
+                    model.embedding_dimensions = 1024
+                else:
+                    model.embedding_dimensions = 768  # Conservative default
+                    
+                logger.debug(f"Pattern-matched embedding model {model.name} with {model.embedding_dimensions}D")
+                enriched_models.append(model)
+            else:
+                # Known chat model patterns
+                chat_patterns = [
+                    'phi', 'qwen', 'llama', 'mistral', 'gemma', 'deepseek', 'codellama',
+                    'orca', 'vicuna', 'wizardlm', 'solar', 'mixtral', 'chatglm', 'baichuan',
+                    'yi', 'zephyr', 'openchat', 'starling', 'nous-hermes'
+                ]
+                
+                is_known_chat_model = any(pattern in model_name_lower for pattern in chat_patterns)
+                
+                if is_known_chat_model:
+                    # Set chat capabilities based on model patterns
                     model.capabilities = ["chat"]
+                    
+                    # Advanced capability detection based on model families
+                    if any(pattern in model_name_lower for pattern in ['qwen', 'llama3', 'phi3', 'mistral']):
+                        model.capabilities.extend(["function_calling", "structured_output"])
+                    elif any(pattern in model_name_lower for pattern in ['llama', 'phi', 'gemma']):
+                        model.capabilities.append("structured_output")
+                    
+                    logger.debug(f"Pattern-matched chat model {model.name} with capabilities: {model.capabilities}")
                     enriched_models.append(model)
+                else:
+                    # Unknown model - needs testing
+                    unknown_models.append(model)
+
+        # Second pass: Only test unknown models (significantly fewer API calls)
+        if unknown_models:
+            logger.info(f"Testing capabilities for {len(unknown_models)} unknown models (pattern matching saved {len(models) - len(unknown_models)} API tests)")
+            
+            # Process unknown models in larger batches since there are fewer
+            batch_size = min(5, len(unknown_models))
+            for i in range(0, len(unknown_models), batch_size):
+                batch = unknown_models[i:i + batch_size]
+
+                tasks = [
+                    self._detect_model_capabilities_optimized(model.name, instance_url)
+                    for model in batch
+                ]
+
+                try:
+                    capabilities_batch = await asyncio.gather(*tasks, return_exceptions=True)
+
+                    for model, capabilities in zip(batch, capabilities_batch, strict=False):
+                        if isinstance(capabilities, Exception):
+                            logger.warning(f"Failed to detect capabilities for unknown model {model.name}: {capabilities}")
+                            # Default to chat for unknown models
+                            model.capabilities = ["chat"]
+                        else:
+                            caps = cast(ModelCapabilities, capabilities)
+                            model.capabilities = []
+                            if caps.supports_chat:
+                                model.capabilities.append("chat")
+                                if caps.supports_function_calling:
+                                    model.capabilities.append("function_calling")
+                                if caps.supports_structured_output:
+                                    model.capabilities.append("structured_output")
+                            if caps.supports_embedding:
+                                model.capabilities.append("embedding")
+                                model.embedding_dimensions = caps.embedding_dimensions
+
+                            if caps.parameter_count:
+                                if not model.parameters:
+                                    model.parameters = {}
+                                model.parameters["parameter_count"] = caps.parameter_count
+
+                        enriched_models.append(model)
+
+                except Exception as e:
+                    logger.error(f"Error testing unknown model batch: {e}")
+                    # Add unknown models with basic chat capabilities
+                    for model in batch:
+                        model.capabilities = ["chat"]
+                        enriched_models.append(model)
+
+        logger.info(f"Model capability enrichment complete: {len(enriched_models)} total models, "
+                   f"pattern-matched {len(models) - len(unknown_models)}, tested {len(unknown_models)}")
 
         return enriched_models
+
+    async def _detect_model_capabilities_optimized(self, model_name: str, instance_url: str) -> ModelCapabilities:
+        """
+        Optimized capability detection that prioritizes speed over comprehensive testing.
+        Only tests the most likely capability first, then stops.
+
+        Args:
+            model_name: Name of the model to test
+            instance_url: Ollama instance URL
+
+        Returns:
+            ModelCapabilities object with detected capabilities
+        """
+        # Check cache first
+        cache_key = f"{model_name}@{instance_url}"
+        if cache_key in self.capability_cache:
+            cached_caps = self.capability_cache[cache_key]
+            logger.debug(f"Using cached capabilities for {model_name}")
+            return cached_caps
+
+        capabilities = ModelCapabilities()
+
+        try:
+            # Quick heuristic: if model name suggests embedding, test that first
+            model_name_lower = model_name.lower()
+            likely_embedding = any(pattern in model_name_lower for pattern in ['embed', 'embedding', 'bge', 'e5'])
+            
+            if likely_embedding:
+                # Test embedding capability first for likely embedding models
+                embedding_dims = await self._test_embedding_capability_fast(model_name, instance_url)
+                if embedding_dims:
+                    capabilities.supports_embedding = True
+                    capabilities.embedding_dimensions = embedding_dims
+                    logger.debug(f"Fast embedding test: {model_name} supports embeddings with {embedding_dims}D")
+                    # Cache immediately and return - don't test other capabilities
+                    self.capability_cache[cache_key] = capabilities
+                    return capabilities
+
+            # If not embedding or embedding test failed, test chat capability
+            chat_supported = await self._test_chat_capability_fast(model_name, instance_url)
+            if chat_supported:
+                capabilities.supports_chat = True
+                logger.debug(f"Fast chat test: {model_name} supports chat")
+                
+                # For chat models, do a quick structured output test (skip function calling for speed)
+                structured_output_supported = await self._test_structured_output_capability_fast(model_name, instance_url)
+                if structured_output_supported:
+                    capabilities.supports_structured_output = True
+                    logger.debug(f"Fast structured test: {model_name} supports structured output")
+
+            # Cache the results
+            self.capability_cache[cache_key] = capabilities
+
+        except Exception as e:
+            logger.warning(f"Fast capability detection failed for {model_name}: {e}")
+            # Default to chat capability if detection fails
+            capabilities.supports_chat = True
+
+        return capabilities
 
     async def _detect_model_capabilities(self, model_name: str, instance_url: str) -> ModelCapabilities:
         """
@@ -292,6 +410,79 @@ class ModelDiscoveryService:
             capabilities.supports_chat = True
 
         return capabilities
+
+    async def _test_embedding_capability_fast(self, model_name: str, instance_url: str) -> int | None:
+        """
+        Fast embedding capability test with reduced timeout and no retry.
+
+        Returns:
+            Embedding dimensions if supported, None otherwise
+        """
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(5)) as client:  # Reduced timeout
+                embed_url = f"{instance_url.rstrip('/')}/api/embeddings"
+                payload = {
+                    "model": model_name,
+                    "prompt": "test"  # Shorter test prompt
+                }
+                response = await client.post(embed_url, json=payload)
+                if response.status_code == 200:
+                    data = response.json()
+                    embedding = data.get("embedding", [])
+                    if isinstance(embedding, list) and len(embedding) > 0:
+                        return len(embedding)
+        except Exception:
+            pass  # Fail silently for speed
+        return None
+
+    async def _test_chat_capability_fast(self, model_name: str, instance_url: str) -> bool:
+        """
+        Fast chat capability test with minimal request.
+
+        Returns:
+            True if chat is supported, False otherwise
+        """
+        try:
+            async with get_llm_client(provider="ollama") as client:
+                client.base_url = f"{instance_url.rstrip('/')}/v1"
+                response = await client.chat.completions.create(
+                    model=model_name,
+                    messages=[{"role": "user", "content": "Hi"}],
+                    max_tokens=1,
+                    timeout=5  # Reduced timeout
+                )
+                return response.choices and len(response.choices) > 0
+        except Exception:
+            pass  # Fail silently for speed
+        return False
+
+    async def _test_structured_output_capability_fast(self, model_name: str, instance_url: str) -> bool:
+        """
+        Fast structured output test with minimal JSON request.
+
+        Returns:
+            True if structured output is supported, False otherwise
+        """
+        try:
+            async with get_llm_client(provider="ollama") as client:
+                client.base_url = f"{instance_url.rstrip('/')}/v1"
+                response = await client.chat.completions.create(
+                    model=model_name,
+                    messages=[{
+                        "role": "user", 
+                        "content": "Return: {\"ok\":true}"  # Minimal JSON test
+                    }],
+                    max_tokens=10,
+                    timeout=5,  # Reduced timeout
+                    temperature=0.1
+                )
+                if response.choices and len(response.choices) > 0:
+                    content = response.choices[0].message.content
+                    # Simple check for JSON-like structure
+                    return content and ('{' in content and '}' in content)
+        except Exception:
+            pass  # Fail silently for speed
+        return False
 
     async def _test_embedding_capability(self, model_name: str, instance_url: str) -> int | None:
         """
