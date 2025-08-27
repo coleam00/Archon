@@ -99,17 +99,20 @@ export const DocumentCard: React.FC<DocumentCardProps> = ({
           {document.id.slice(0, 8)}...
         </span>
         <button 
+          type="button"
           onClick={handleCopyId}
           className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
           title="Copy Document ID to clipboard"
+          aria-label="Copy Document ID to clipboard"
         >
-          <Clipboard className="w-3 h-3" />
+          <Clipboard className="w-3 h-3" aria-hidden="true" />
         </button>
       </div>
       
       {/* Delete Button */}
       {showDelete && !isActive && (
         <button
+          type="button"
           onClick={(e) => {
             e.stopPropagation();
             if (confirm(`Delete "${document.title}"?`)) {
@@ -118,8 +121,9 @@ export const DocumentCard: React.FC<DocumentCardProps> = ({
           }}
           className="absolute top-2 right-2 p-1 rounded-md bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 transition-colors"
           aria-label={`Delete ${document.title}`}
+          title="Delete document"
         >
-          <X className="w-4 h-4" />
+          <X className="w-4 h-4" aria-hidden="true" />
         </button>
       )}
     </div>

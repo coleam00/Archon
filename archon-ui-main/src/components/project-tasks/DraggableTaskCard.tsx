@@ -145,28 +145,37 @@ export const DraggableTaskCard = ({
               {/* Action buttons group */}
               <div className="ml-auto flex items-center gap-1.5">
                 <button 
+                  type="button"
                   onClick={(e) => {
                     e.stopPropagation();
                     onDelete(task);
                   }} 
                   className="w-5 h-5 rounded-full flex items-center justify-center bg-red-100/80 dark:bg-red-500/20 text-red-600 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-500/30 hover:shadow-[0_0_10px_rgba(239,68,68,0.3)] transition-all duration-300"
+                  title="Delete task"
+                  aria-label="Delete task"
                 >
-                  <Trash2 className="w-3 h-3" />
+                  <Trash2 className="w-3 h-3" aria-hidden="true" />
                 </button>
                 <button 
+                  type="button"
                   onClick={(e) => {
                     e.stopPropagation();
                     onView();
                   }} 
                   className="w-5 h-5 rounded-full flex items-center justify-center bg-cyan-100/80 dark:bg-cyan-500/20 text-cyan-600 dark:text-cyan-400 hover:bg-cyan-200 dark:hover:bg-cyan-500/30 hover:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all duration-300"
+                  title="Edit task"
+                  aria-label="Edit task"
                 >
-                  <Edit className="w-3 h-3" />
+                  <Edit className="w-3 h-3" aria-hidden="true" />
                 </button>
                 <button 
+                  type="button"
                   onClick={toggleFlip} 
                   className="w-5 h-5 rounded-full flex items-center justify-center bg-cyan-100/80 dark:bg-cyan-500/20 text-cyan-600 dark:text-cyan-400 hover:bg-cyan-200 dark:hover:bg-cyan-500/30 hover:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all duration-300"
+                  title="View task details"
+                  aria-label="View task details"
                 >
-                  <RefreshCw className="w-3 h-3" />
+                  <RefreshCw className="w-3 h-3" aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -188,6 +197,7 @@ export const DraggableTaskCard = ({
                 <span className="text-gray-600 dark:text-gray-400 text-xs">{task.assignee?.name || 'User'}</span>
               </div>
               <button 
+                type="button"
                 onClick={(e) => {
                   e.stopPropagation();
                   navigator.clipboard.writeText(task.id);
@@ -201,8 +211,9 @@ export const DraggableTaskCard = ({
                 }}
                 className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors"
                 title="Copy Task ID to clipboard"
+                aria-label="Copy Task ID to clipboard"
               >
-                <Clipboard className="w-3 h-3" />
+                <Clipboard className="w-3 h-3" aria-hidden="true" />
                 <span>Task ID</span>
               </button>
             </div>
@@ -222,10 +233,13 @@ export const DraggableTaskCard = ({
                 {task.title}
               </h4>
               <button 
+                type="button"
                 onClick={toggleFlip} 
                 className="ml-auto w-5 h-5 rounded-full flex items-center justify-center bg-cyan-100/80 dark:bg-cyan-500/20 text-cyan-600 dark:text-cyan-400 hover:bg-cyan-200 dark:hover:bg-cyan-500/30 hover:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all duration-300"
+                title="Flip back to front"
+                aria-label="Flip back to front"
               >
-                <RefreshCw className="w-3 h-3" />
+                <RefreshCw className="w-3 h-3" aria-hidden="true" />
               </button>
             </div>
             

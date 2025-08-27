@@ -366,25 +366,35 @@ const DraggableTaskRow = ({
       <td className="p-3">
         <div className="flex justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
           <button 
+            type="button"
             onClick={() => onTaskDelete(task)}
             className="p-1.5 rounded-full bg-red-500/20 text-red-500 hover:bg-red-500/30 hover:shadow-[0_0_10px_rgba(239,68,68,0.3)] transition-all duration-300"
+            title="Delete task"
+            aria-label="Delete task"
           >
-            <Trash2 className="w-3.5 h-3.5" />
+            <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
           </button>
           <button 
+            type="button"
             onClick={() => onTaskComplete(task.id)} 
             className="p-1.5 rounded-full bg-green-500/20 text-green-500 hover:bg-green-500/30 hover:shadow-[0_0_10px_rgba(34,197,94,0.3)] transition-all duration-300"
+            title="Mark task as complete"
+            aria-label="Mark task as complete"
           >
-            <Check className="w-3.5 h-3.5" />
+            <Check className="w-3.5 h-3.5" aria-hidden="true" />
           </button>
           <button 
+            type="button"
             onClick={() => onTaskView(task)} 
             className="p-1.5 rounded-full bg-cyan-500/20 text-cyan-500 hover:bg-cyan-500/30 hover:shadow-[0_0_10px_rgba(34,211,238,0.3)] transition-all duration-300"
+            title="Edit task"
+            aria-label="Edit task"
           >
-            <Edit className="w-3.5 h-3.5" />
+            <Edit className="w-3.5 h-3.5" aria-hidden="true" />
           </button>
           {/* Copy Task ID Button - Matching Board View */}
           <button 
+            type="button"
             onClick={(e) => {
               e.stopPropagation();
               navigator.clipboard.writeText(task.id);
@@ -398,8 +408,9 @@ const DraggableTaskRow = ({
             }}
             className="p-1.5 rounded-full bg-gray-500/20 text-gray-500 hover:bg-gray-500/30 hover:shadow-[0_0_10px_rgba(107,114,128,0.3)] transition-all duration-300"
             title="Copy Task ID to clipboard"
+            aria-label="Copy Task ID to clipboard"
           >
-            <Clipboard className="w-3.5 h-3.5" />
+            <Clipboard className="w-3.5 h-3.5" aria-hidden="true" />
           </button>
         </div>
       </td>

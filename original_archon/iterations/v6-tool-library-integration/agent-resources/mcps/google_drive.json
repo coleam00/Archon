@@ -1,8 +1,0 @@
-{
-    "mcpServers": {
-      "gdrive": {
-        "command": "docker",
-        "args": ["run", "-i", "--rm", "-v", "mcp-gdrive:/gdrive-server", "-e", "GDRIVE_CREDENTIALS_PATH=/gdrive-server/credentials.json", "mcp/gdrive"]
-      }
-    }
-  }
