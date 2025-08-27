@@ -135,6 +135,9 @@ OPTIONAL_SETTINGS_WITH_DEFAULTS = {
     "DISCONNECT_SCREEN_ENABLED": "true",  # Show disconnect screen when server is unavailable
     "PROJECTS_ENABLED": "false",  # Enable project management features
     "LOGFIRE_ENABLED": "false",  # Enable Pydantic Logfire integration
+    "CRAWL_DISCOVERY_LLM_FILES": '["llms-full.txt", "llms-ctx.txt", "llms.md", "llms.txt"]',  # LLM files to auto-discover (priority order)
+    "CRAWL_DISCOVERY_SITEMAP_FILES": '["sitemap.xml", "sitemap_index.xml", "sitemap-*.xml"]',  # Sitemap files to auto-discover
+    "CRAWL_DISCOVERY_METADATA_FILES": '["robots.txt", ".well-known/security.txt", ".well-known/humans.txt", "humans.txt", "security.txt"]',  # Metadata files to auto-discover
 }
 
 
