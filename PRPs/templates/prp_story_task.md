@@ -175,6 +175,4 @@ database-mcp --validate-schema --test-queries --check-performance
 
 [Any additional context, decisions made, or follow-up items]
 
-```
-
-```
+<!-- EOF -->
