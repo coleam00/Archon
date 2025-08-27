@@ -138,5 +138,5 @@ Save as: `PRPs/story_{kebab-case-summary}.md`
 ## Success Metrics
 
 **Implementation Ready**: Another developer could execute these tasks without additional context
-**Validation Complete**: Every task has atleast one working validation command
+**Validation Complete**: Every task has at least one working validation command
 **Pattern Consistent**: Tasks follow existing codebase conventions
