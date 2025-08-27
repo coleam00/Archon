@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+
+// FORCE DEBUG - This should ALWAYS appear in console when this file loads
+console.log('🚨 DEBUG: OllamaModelDiscoveryModal.tsx file loaded at', new Date().toISOString());
 import { 
   X, Search, Activity, Database, Zap, Clock, Server, 
   Loader, CheckCircle, AlertCircle, Filter, Download,
@@ -41,6 +44,7 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
   initialChatModel,
   initialEmbeddingModel
 }) => {
+  console.log('🔴 COMPONENT DEBUG: OllamaModelDiscoveryModal component loaded/rendered', { isOpen });
   const [models, setModels] = useState<EnrichedModel[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
