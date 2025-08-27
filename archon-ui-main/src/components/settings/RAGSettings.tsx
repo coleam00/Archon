@@ -1080,9 +1080,10 @@ export const RAGSettings = ({
                     setRagSettings({...ragSettings, LLM_BASE_URL: llmInstanceConfig.url});
                     setShowEditLLMModal(false);
                     showToast('LLM instance updated successfully', 'success');
-                    // Wait 1 second then automatically test connection
+                    // Wait 1 second then automatically test connection and refresh models
                     setTimeout(() => {
                       manualTestConnection(llmInstanceConfig.url, setLLMStatus, llmInstanceConfig.name);
+                      fetchOllamaMetrics(); // Refresh model metrics after saving
                     }, 1000);
                   }}
                   className="flex-1"
@@ -1130,9 +1131,10 @@ export const RAGSettings = ({
                     setRagSettings({...ragSettings, OLLAMA_EMBEDDING_URL: embeddingInstanceConfig.url});
                     setShowEditEmbeddingModal(false);
                     showToast('Embedding instance updated successfully', 'success');
-                    // Wait 1 second then automatically test connection
+                    // Wait 1 second then automatically test connection and refresh models
                     setTimeout(() => {
                       manualTestConnection(embeddingInstanceConfig.url, setEmbeddingStatus, embeddingInstanceConfig.name);
+                      fetchOllamaMetrics(); // Refresh model metrics after saving
                     }, 1000);
                   }}
                   className="flex-1"

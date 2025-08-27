@@ -89,21 +89,11 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
     setDiscoveryProgress(`Discovering models from ${enabledInstanceUrls.length} instance(s)...`);
 
     try {
-      // Add timeout for discovery
-      const discoveryPromise = ollamaService.discoverModels({
+      // Discover models (no timeout - let it complete naturally)
+      const discoveryResult = await ollamaService.discoverModels({
         instanceUrls: enabledInstanceUrls,
         includeCapabilities: true
       });
-
-      // Set a 30 second timeout
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Model discovery timed out after 30 seconds')), 30000)
-      );
-
-      const discoveryResult = await Promise.race([
-        discoveryPromise,
-        timeoutPromise
-      ]) as ModelDiscoveryResponse;
 
       // Enrich models with instance information and status
       const enrichedModels: EnrichedModel[] = [];
@@ -427,9 +417,6 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Discovering Models</h3>
                 <p className="text-gray-600 dark:text-gray-400 mb-2">
                   {discoveryProgress || `Scanning ${enabledInstanceUrls.length} Ollama instances...`}
-                </p>
-                <p className="text-sm text-gray-500 dark:text-gray-500">
-                  This may take up to 30 seconds depending on the number of models...
                 </p>
                 <div className="mt-4">
                   <div className="bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
