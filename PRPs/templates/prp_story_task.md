@@ -33,12 +33,11 @@ Paste in the original story shared by the user below:
 
 [Task blocks in dependency order - each block is atomic and testable]
 
-### Concept For tasks
+### Guidelines for Tasks
 
 - We are using Information dense keywords to be specific and concise about implementation steps and details.
 - The tasks have to be detailed and specific to ensure clarity and accuracy.
-- The developer that will execute the tasks should be able to complete the task using only the context of this file, with references to relevant codebase paths and integration points.
-
+- The developer who will execute the tasks should be able to complete the task using only the context of this file, with references to relevant codebase paths and integration points.
 ### {ACTION} {target_file}:
 
 - {VERB/KEYWORD}: {Specific implementation detail}
