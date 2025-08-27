@@ -1,6 +1,6 @@
 ---
 name: "library-researcher"
-description: "Use proactivley to research external libraries and fetch relevant documentation for implementation"
+description: "Use proactively to research external libraries and fetch implementation-critical documentation"
 model: "sonnet"
 ---
 
