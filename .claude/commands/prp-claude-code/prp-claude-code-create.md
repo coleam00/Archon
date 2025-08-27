@@ -8,7 +8,6 @@ Create a comprehensive PRP that enables **one-pass implementation success** thro
 
 **Critical Understanding**: The executing AI agent only receives:
 
-- Start by reading and understanding the prp concepts PRPs/README.md
 - The PRP content you create
 - Its training data knowledge
 - Access to codebase files (but needs guidance on which ones)

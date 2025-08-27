@@ -96,9 +96,14 @@ class DocumentService:
             logger.error(f"Error adding document: {e}")
             return False, {"error": f"Error adding document: {str(e)}"}
 
-    def list_documents(self, project_id: str) -> tuple[bool, dict[str, Any]]:
+    def list_documents(self, project_id: str, include_content: bool = False) -> tuple[bool, dict[str, Any]]:
         """
         List all documents in a project's docs JSONB field.
+
+        Args:
+            project_id: The project ID
+            include_content: If True, includes full document content.
+                           If False (default), returns metadata only.
 
         Returns:
             Tuple of (success, result_dict)
@@ -116,20 +121,28 @@ class DocumentService:
 
             docs = response.data[0].get("docs", [])
 
-            # Format documents for response (exclude full content for listing)
+            # Format documents for response
             documents = []
             for doc in docs:
-                documents.append({
-                    "id": doc.get("id"),
-                    "document_type": doc.get("document_type"),
-                    "title": doc.get("title"),
-                    "status": doc.get("status"),
-                    "version": doc.get("version"),
-                    "tags": doc.get("tags", []),
-                    "author": doc.get("author"),
-                    "created_at": doc.get("created_at"),
-                    "updated_at": doc.get("updated_at"),
-                })
+                if include_content:
+                    # Return full document
+                    documents.append(doc)
+                else:
+                    # Return metadata only
+                    documents.append({
+                        "id": doc.get("id"),
+                        "document_type": doc.get("document_type"),
+                        "title": doc.get("title"),
+                        "status": doc.get("status"),
+                        "version": doc.get("version"),
+                        "tags": doc.get("tags", []),
+                        "author": doc.get("author"),
+                        "created_at": doc.get("created_at"),
+                        "updated_at": doc.get("updated_at"),
+                        "stats": {
+                            "content_size": len(str(doc.get("content", {})))
+                        }
+                    })
 
             return True, {
                 "project_id": project_id,

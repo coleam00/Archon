@@ -73,35 +73,73 @@ class ProjectService:
             logger.error(f"Error creating project: {e}")
             return False, {"error": f"Database error: {str(e)}"}
 
-    def list_projects(self) -> tuple[bool, dict[str, Any]]:
+    def list_projects(self, include_content: bool = True) -> tuple[bool, dict[str, Any]]:
         """
         List all projects.
+
+        Args:
+            include_content: If True (default), includes docs, features, data fields.
+                           If False, returns lightweight metadata only with counts.
 
         Returns:
             Tuple of (success, result_dict)
         """
         try:
-            response = (
-                self.supabase_client.table("archon_projects")
-                .select("*")
-                .order("created_at", desc=True)
-                .execute()
-            )
+            if include_content:
+                # Current behavior - maintain backward compatibility
+                response = (
+                    self.supabase_client.table("archon_projects")
+                    .select("*")
+                    .order("created_at", desc=True)
+                    .execute()
+                )
 
-            projects = []
-            for project in response.data:
-                projects.append({
-                    "id": project["id"],
-                    "title": project["title"],
-                    "github_repo": project.get("github_repo"),
-                    "created_at": project["created_at"],
-                    "updated_at": project["updated_at"],
-                    "pinned": project.get("pinned", False),
-                    "description": project.get("description", ""),
-                    "docs": project.get("docs", []),
-                    "features": project.get("features", []),
-                    "data": project.get("data", []),
-                })
+                projects = []
+                for project in response.data:
+                    projects.append({
+                        "id": project["id"],
+                        "title": project["title"],
+                        "github_repo": project.get("github_repo"),
+                        "created_at": project["created_at"],
+                        "updated_at": project["updated_at"],
+                        "pinned": project.get("pinned", False),
+                        "description": project.get("description", ""),
+                        "docs": project.get("docs", []),
+                        "features": project.get("features", []),
+                        "data": project.get("data", []),
+                    })
+            else:
+                # Lightweight response for MCP - fetch all data but only return metadata + stats
+                # FIXED: N+1 query problem - now using single query
+                response = (
+                    self.supabase_client.table("archon_projects")
+                    .select("*")  # Fetch all fields in single query
+                    .order("created_at", desc=True)
+                    .execute()
+                )
+
+                projects = []
+                for project in response.data:
+                    # Calculate counts from fetched data (no additional queries)
+                    docs_count = len(project.get("docs", []))
+                    features_count = len(project.get("features", []))
+                    has_data = bool(project.get("data", []))
+                    
+                    # Return only metadata + stats, excluding large JSONB fields
+                    projects.append({
+                        "id": project["id"],
+                        "title": project["title"],
+                        "github_repo": project.get("github_repo"),
+                        "created_at": project["created_at"],
+                        "updated_at": project["updated_at"],
+                        "pinned": project.get("pinned", False),
+                        "description": project.get("description", ""),
+                        "stats": {
+                            "docs_count": docs_count,
+                            "features_count": features_count,
+                            "has_data": has_data
+                        }
+                    })
 
             return True, {"projects": projects, "total_count": len(projects)}
 
