@@ -1,6 +1,5 @@
 """Unit tests for project management tools."""
 
-import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 

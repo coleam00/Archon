@@ -4,7 +4,8 @@ Batch Crawling Strategy
 Handles batch crawling of multiple URLs in parallel.
 """
 
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional
+from collections.abc import Callable
 
 from crawl4ai import CrawlerRunConfig, CacheMode, MemoryAdaptiveDispatcher
 from ....config.logfire_config import get_logger

@@ -4,7 +4,8 @@ Recursive Crawling Strategy
 Handles recursive crawling of websites by following internal links.
 """
 
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional
+from collections.abc import Callable
 from urllib.parse import urldefrag
 
 from crawl4ai import CrawlerRunConfig, CacheMode, MemoryAdaptiveDispatcher

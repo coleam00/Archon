@@ -8,7 +8,7 @@ No complex PRP examples - just straightforward project management.
 import asyncio
 import json
 import logging
-from typing import Any, Optional
+from typing import Optional
 from urllib.parse import urljoin
 
 import httpx

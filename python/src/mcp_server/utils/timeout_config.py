@@ -5,7 +5,6 @@ Provides consistent timeout values across all tools.
 """
 
 import os
-from typing import Optional
 
 import httpx
 

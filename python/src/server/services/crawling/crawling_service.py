@@ -8,7 +8,8 @@ batch crawling, recursive crawling, and overall orchestration with progress trac
 
 import asyncio
 import uuid
-from typing import Dict, Any, List, Optional, Callable, Awaitable
+from typing import Dict, Any, List, Optional
+from collections.abc import Callable, Awaitable
 from urllib.parse import urlparse
 
 from ...config.logfire_config import safe_logfire_info, safe_logfire_error, get_logger
@@ -558,7 +559,7 @@ class CrawlingService:
             max_depth = request.get("max_depth", 1)
             # Let the strategy handle concurrency from settings
             # This will use CRAWL_MAX_CONCURRENT from database (default: 10)
-            
+
             crawl_results = await self.crawl_recursive_with_progress(
                 [url],
                 max_depth=max_depth,
