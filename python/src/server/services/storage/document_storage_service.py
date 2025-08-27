@@ -96,7 +96,7 @@ async def add_documents_to_supabase(
                 if cancellation_check:
                     cancellation_check()
 
-                batch_urls = unique_urls[i : i + 10]
+                batch_urls = unique_urls[i : i + fallback_batch_size]
                 try:
                     client.table("archon_crawled_pages").delete().in_("url", batch_urls).execute()
                     await asyncio.sleep(0.05)  # Rate limit to prevent overwhelming
@@ -110,9 +110,7 @@ async def add_documents_to_supabase(
                 search_logger.error(f"Failed to delete {len(failed_urls)} URLs")
 
         # Check if contextual embeddings are enabled
-        # Fix: Get from credential service instead of environment
-        from ..credential_service import credential_service
-
+        # Use global credential_service import from top of file
         try:
             use_contextual_embeddings = await credential_service.get_credential(
                 "USE_CONTEXTUAL_EMBEDDINGS", "false", decrypt=True
@@ -147,11 +145,15 @@ async def add_documents_to_supabase(
             # Get max workers setting FIRST before using it
             if use_contextual_embeddings:
                 try:
-                    max_workers = await credential_service.get_credential(
+                    max_workers_raw = await credential_service.get_credential(
                         "CONTEXTUAL_EMBEDDINGS_MAX_WORKERS", "4", decrypt=True
                     )
-                    max_workers = int(max_workers)
-                except:
+                    max_workers = int(max_workers_raw)
+                except (ValueError, TypeError) as e:
+                    search_logger.warning(
+                        f"Invalid CONTEXTUAL_EMBEDDINGS_MAX_WORKERS value; using default 4: {e}",
+                        exc_info=True,
+                    )
                     max_workers = 4
             else:
                 max_workers = 1
@@ -257,21 +259,18 @@ async def add_documents_to_supabase(
 
             # Prepare batch data - only for successful embeddings
             batch_data = []
-            # Map successful texts back to their original indices
-            for j, (embedding, text) in enumerate(
-                zip(batch_embeddings, successful_texts, strict=False)
-            ):
-                # Find the original index of this text
-                orig_idx = None
-                for idx, orig_text in enumerate(contextual_contents):
-                    if orig_text == text:
-                        orig_idx = idx
-                        break
+            # Build an index map so duplicate texts are handled correctly
+            from collections import defaultdict, deque
+            index_map = defaultdict(deque)
+            for idx, orig_text in enumerate(contextual_contents):
+                index_map[orig_text].append(idx)
 
+            # Map successful texts back to their original indices using the map
+            for _, (embedding, text) in enumerate(zip(batch_embeddings, successful_texts, strict=False)):
+                orig_idx = index_map[text].popleft() if index_map[text] else None
                 if orig_idx is None:
                     search_logger.warning("Could not map embedding back to original text")
                     continue
-
                 j = orig_idx  # Use original index for metadata lookup
                 # Use source_id from metadata if available, otherwise extract from URL
                 if batch_metadatas[j].get("source_id"):

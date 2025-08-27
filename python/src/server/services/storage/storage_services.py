@@ -5,6 +5,10 @@ This module contains all storage service classes that handle document and data s
 These services extend the base storage functionality with specific implementations.
 """
 
+import os
+import ntpath
+import inspect
+from urllib.parse import quote
 from typing import Any
 
 from fastapi import WebSocket
@@ -45,29 +49,64 @@ class DocumentStorageService(BaseStorageService):
         Returns:
             Tuple of (success, result_dict)
         """
-        logger.info(f"Document upload starting: {filename} as {knowledge_type} knowledge")
+        # Strip any path traversal (handle both POSIX and Windows separators)
+        # Strip any path traversal (handle both POSIX and Windows separators)
+        candidate = os.path.basename(filename)
+        safe_filename = ntpath.basename(candidate) or candidate
+
+        # Comprehensive validation
+        if (not safe_filename or
+            safe_filename.startswith('.') or
+            '..' in safe_filename or
+            safe_filename.strip() == '' or
+            len(safe_filename) > 255 or
+            any(c in safe_filename for c in ['/', '\\', '\0', ':', '*', '?', '"', '<', '>', '|'])):
+            return False, {"error": "Invalid filename", "filename": safe_filename, "source_id": source_id}
+        
+        logger.info(f"Document upload starting: {safe_filename} as {knowledge_type} knowledge")
         
         with safe_span(
             "upload_document",
-            filename=filename,
+            filename=safe_filename,
             source_id=source_id,
             content_length=len(file_content),
         ) as span:
             try:
                 # Progress reporting helper
-                async def report_progress(message: str, percentage: int, batch_info: dict = None):
+                async def report_progress(message: str, percentage: float, batch_info: dict | None = None):
+                    # Normalize, clamp, and convert to int for UI
+                    try:
+                        progress_value = int(round(min(max(percentage, 0.0), 100.0)))
+                    except Exception:
+                        progress_value = 0
+
                     if websocket:
-                        data = {
-                            "type": "upload_progress",
-                            "filename": filename,
-                            "progress": percentage,
-                            "message": message,
-                        }
-                        if batch_info:
-                            data.update(batch_info)
-                        await websocket.send_json(data)
+                        try:
+                            data = {
+                                "type": "upload_progress",
+                                "filename": safe_filename,
+                                "progress": progress_value,
+                                "message": message,
+                            }
+                            if batch_info:
+                                data.update(batch_info)
+                            await websocket.send_json(data)
+                        except Exception as ws_err:
+                            logger.warning(
+                                f"WebSocket progress send failed: {ws_err} | filename={safe_filename} | source_id={source_id}",
+                                exc_info=True,
+                            )
                     if progress_callback:
-                        await progress_callback(message, percentage, batch_info)
+                        try:
+                            res = progress_callback(message, progress_value, batch_info)
+                            # Support both sync and async callbacks
+                            if inspect.isawaitable(res):
+                                await res
+                        except Exception as cb_err:
+                            logger.warning(
+                                f"Progress callback failed: {cb_err} | filename={safe_filename} | source_id={source_id}",
+                                exc_info=True,
+                            )
 
                 await report_progress("Starting document processing...", 10)
 
@@ -86,7 +125,7 @@ class DocumentStorageService(BaseStorageService):
                 await report_progress("Preparing document chunks...", 30)
 
                 # Prepare data for storage
-                doc_url = f"file://{filename}"
+                doc_url = f"file://{quote(safe_filename)}"
                 urls = []
                 chunk_numbers = []
                 contents = []
@@ -105,7 +144,7 @@ class DocumentStorageService(BaseStorageService):
                             "source_id": source_id,
                             "knowledge_type": knowledge_type,
                             "source_type": "file",  # FIX: Mark as file upload
-                            "filename": filename,
+                            "filename": safe_filename,
                         },
                     )
 
@@ -124,22 +163,81 @@ class DocumentStorageService(BaseStorageService):
                 url_to_full_document = {doc_url: file_content}
 
                 # Update source information
-                from ...utils import extract_source_summary, update_source_info
+                from ..source_management_service import extract_source_summary, update_source_info
+                from ..credential_service import credential_service
 
-                source_summary = await self.threading_service.run_cpu_intensive(
-                    extract_source_summary, source_id, file_content[:5000]
+                # Get the active LLM provider for summary generation
+                try:
+                    provider_config = await credential_service.get_active_provider("llm")
+                    active_provider = provider_config.get("provider", "openai")
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to get active provider for file upload, falling back to OpenAI: {e} | "
+                        f"filename={safe_filename} | source_id={source_id}"
+                    )
+                    active_provider = "openai"
+
+                # Trace: record which LLM provider was used
+                try:
+                    span.set_attribute("active_provider", active_provider)
+                except Exception:
+                    pass
+
+                # Get the active embedding provider for document embeddings
+                try:
+                    embedding_provider_config = await credential_service.get_active_provider("embedding")
+                    active_embedding_provider = embedding_provider_config.get("provider", "openai")
+                    # OpenRouter does not support embeddings—force OpenAI here
+                    if active_embedding_provider.lower() == "openrouter":
+                        logger.warning(
+                            "Embedding provider 'openrouter' not supported for embeddings, falling back to OpenAI | "
+                            f"filename={safe_filename} | source_id={source_id}"
+                        )
+                        active_embedding_provider = "openai"
+                    logger.info(
+                        f"Using embedding provider '{active_embedding_provider}' for file upload embeddings | "
+                        f"filename={safe_filename} | source_id={source_id}"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to get active embedding provider for file upload, falling back to OpenAI: {e} | "
+                        f"filename={safe_filename} | source_id={source_id}"
+                    )
+                    active_embedding_provider = "openai"
+
+                # Trace: record which embedding provider was used
+                try:
+                    span.set_attribute("active_embedding_provider", active_embedding_provider)
+                except Exception:
+                    pass
+
+                # Build a representative sample across the document to avoid intro bias (5k total)
+                summary_sample = (
+                    file_content[:1700]
+                    + "\n...\n"
+                    + file_content[max(len(file_content) // 2 - 850, 0) : (len(file_content) // 2 + 850)]
+                    + "\n...\n"
+                    + file_content[-1600:]
+                ) if len(file_content) > 5000 else file_content[:5000]
+
+                source_summary = await extract_source_summary(
+                    source_id,
+                    summary_sample,
+                    500,
+                    active_provider,
                 )
 
                 logger.info(f"Updating source info for {source_id} with knowledge_type={knowledge_type}")
-                await self.threading_service.run_io_bound(
-                    update_source_info,
-                    self.supabase_client,
-                    source_id,
-                    source_summary,
-                    total_word_count,
-                    file_content[:1000],  # content for title generation
-                    knowledge_type,      # FIX: Pass knowledge_type parameter!
-                    tags,               # FIX: Pass tags parameter!
+                await update_source_info(
+                    client=self.supabase_client,
+                    source_id=source_id,
+                    summary=source_summary,
+                    word_count=total_word_count,
+                    content=file_content[:1000],
+                    knowledge_type=knowledge_type,
+                    tags=tags,
+                    original_url=doc_url,
+                    provider=active_provider,
                 )
 
                 await report_progress("Storing document chunks...", 70)
@@ -155,7 +253,7 @@ class DocumentStorageService(BaseStorageService):
                     batch_size=15,
                     progress_callback=progress_callback,
                     enable_parallel_batches=True,
-                    provider=None,  # Use configured provider
+                    provider=active_embedding_provider,  # Use configured embedding provider
                     cancellation_check=cancellation_check,
                 )
 
@@ -165,7 +263,7 @@ class DocumentStorageService(BaseStorageService):
                     "chunks_stored": len(chunks),
                     "total_word_count": total_word_count,
                     "source_id": source_id,
-                    "filename": filename,
+                    "filename": safe_filename,
                 }
 
                 span.set_attribute("success", True)
@@ -173,7 +271,7 @@ class DocumentStorageService(BaseStorageService):
                 span.set_attribute("total_word_count", total_word_count)
 
                 logger.info(
-                    f"Document upload completed successfully: filename={filename}, chunks_stored={len(chunks)}, total_word_count={total_word_count}"
+                    f"Document upload completed successfully: filename={safe_filename}, chunks_stored={len(chunks)}, total_word_count={total_word_count}"
                 )
 
                 return True, result
@@ -181,16 +279,30 @@ class DocumentStorageService(BaseStorageService):
             except Exception as e:
                 span.set_attribute("success", False)
                 span.set_attribute("error", str(e))
-                logger.error(f"Error uploading document: {e}")
+                logger.error(
+                    f"Error uploading document: {e} | filename={safe_filename} | source_id={source_id}",
+                    exc_info=True,
+                )
 
                 if websocket:
-                    await websocket.send_json({
-                        "type": "upload_error",
-                        "error": str(e),
-                        "filename": filename,
-                    })
+                    try:
+                        await websocket.send_json({
+                            "type": "upload_error",
+                            "error": str(e),
+                            "filename": safe_filename,
+                            "source_id": source_id,
+                        })
+                    except Exception as ws_err:
+                        logger.warning(
+                            f"WebSocket error-notify failed: {ws_err} | filename={safe_filename} | source_id={source_id}",
+                            exc_info=True,
+                        )
 
-                return False, {"error": f"Error uploading document: {str(e)}"}
+                return False, {
+                    "error": f"Error uploading document: {str(e)}",
+                    "filename": safe_filename,
+                    "source_id": source_id,
+                }
 
     async def store_documents(self, documents: list[dict[str, Any]], **kwargs) -> dict[str, Any]:
         """

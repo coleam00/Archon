@@ -45,8 +45,13 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/)
 - [Node.js 18+](https://nodejs.org/) (for hybrid development mode)
 - [Supabase](https://supabase.com/) account (free tier or local Supabase both work)
+
+- LLM/Embeddings API keys: Choose an LLM provider ([OpenAI](https://platform.openai.com/api-keys), [OpenRouter](https://openrouter.ai/), Google, or Ollama).
+- Note: OpenRouter does not offer embeddings—if you select OpenRouter for chat, also add an embeddings provider/key (e.g., OpenAI or Google Gemini).
+
 - [OpenAI API key](https://platform.openai.com/api-keys) (Gemini and Ollama are supported too!)
 - (OPTIONAL) [Make](https://www.gnu.org/software/make/) (see [Installing Make](#installing-make) below)
+
 
 ### Setup Instructions
 
@@ -206,7 +211,7 @@ Once everything is running:
 
 - **Model Context Protocol (MCP)**: Connect any MCP-compatible client (Claude Code, Cursor, even non-AI coding assistants like Claude Desktop)
 - **10 MCP Tools**: Comprehensive yet simple set of tools for RAG queries, task management, and project operations
-- **Multi-LLM Support**: Works with OpenAI, Ollama, and Google Gemini models
+- **Multi-LLM Support**: Works with OpenAI, OpenRouter (200+ models), Google Gemini, and Ollama
 - **RAG Strategies**: Hybrid search, contextual embeddings, and result reranking for optimal AI responses
 - **Real-time Streaming**: Live responses from AI agents with progress tracking
 
