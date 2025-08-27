@@ -417,8 +417,7 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
     },
     define: {
       'import.meta.env.VITE_HOST': JSON.stringify(host),
-      'import.meta.env.VITE_PORT': JSON.stringify(serverPort),
-      'import.meta.env.VITE_PORT': JSON.stringify(port),
+      'import.meta.env.VITE_PORT': JSON.stringify(String(serverPort)),
       'import.meta.env.PROD': env.PROD === 'true',
     },
     resolve: {
