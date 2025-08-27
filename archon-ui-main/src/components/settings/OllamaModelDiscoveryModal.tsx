@@ -87,40 +87,98 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
   // Save models to localStorage
   const saveModelsToCache = useCallback((modelsToCache: EnrichedModel[]) => {
     try {
+      console.log('🟡 CACHE DEBUG: Attempting to save models to cache', {
+        cacheKey,
+        modelCount: modelsToCache.length,
+        instanceUrls: enabledInstanceUrls,
+        timestamp: Date.now()
+      });
+      
       const cacheData = {
         models: modelsToCache,
         timestamp: Date.now(),
         instanceUrls: enabledInstanceUrls
       };
+      
       localStorage.setItem(cacheKey, JSON.stringify(cacheData));
       setLastDiscoveryTime(Date.now());
       setHasCache(true);
+      
+      console.log('🟢 CACHE DEBUG: Successfully saved models to cache', {
+        cacheKey,
+        modelCount: modelsToCache.length,
+        cacheSize: JSON.stringify(cacheData).length,
+        storedInLocalStorage: !!localStorage.getItem(cacheKey)
+      });
     } catch (error) {
-      console.warn('Failed to cache models:', error);
+      console.error('🔴 CACHE DEBUG: Failed to save models to cache:', error);
     }
   }, [cacheKey, enabledInstanceUrls]);
 
   // Load models from localStorage
   const loadModelsFromCache = useCallback(() => {
+    console.log('🟡 CACHE DEBUG: Attempting to load models from cache', {
+      cacheKey,
+      enabledInstanceUrls,
+      hasLocalStorageItem: !!localStorage.getItem(cacheKey)
+    });
+    
     try {
       const cached = localStorage.getItem(cacheKey);
       if (cached) {
+        console.log('🟡 CACHE DEBUG: Found cached data', {
+          cacheKey,
+          cacheSize: cached.length
+        });
+        
         const cacheData = JSON.parse(cached);
         const cacheAge = Date.now() - cacheData.timestamp;
+        const cacheAgeMinutes = Math.floor(cacheAge / (60 * 1000));
+        
+        console.log('🟡 CACHE DEBUG: Cache data parsed', {
+          modelCount: cacheData.models?.length,
+          timestamp: cacheData.timestamp,
+          cacheAge,
+          cacheAgeMinutes,
+          cachedInstanceUrls: cacheData.instanceUrls,
+          currentInstanceUrls: enabledInstanceUrls
+        });
         
         // Use cache if less than 10 minutes old and same instances
-        if (cacheAge < 10 * 60 * 1000 && 
-            JSON.stringify(cacheData.instanceUrls?.sort()) === JSON.stringify([...enabledInstanceUrls].sort())) {
+        const instanceUrlsMatch = JSON.stringify(cacheData.instanceUrls?.sort()) === JSON.stringify([...enabledInstanceUrls].sort());
+        const isCacheValid = cacheAge < 10 * 60 * 1000 && instanceUrlsMatch;
+        
+        console.log('🟡 CACHE DEBUG: Cache validation', {
+          isCacheValid,
+          cacheAge: cacheAge,
+          maxAge: 10 * 60 * 1000,
+          instanceUrlsMatch,
+          cachedUrls: JSON.stringify(cacheData.instanceUrls?.sort()),
+          currentUrls: JSON.stringify([...enabledInstanceUrls].sort())
+        });
+        
+        if (isCacheValid) {
+          console.log('🟢 CACHE DEBUG: Using cached models', {
+            modelCount: cacheData.models.length,
+            timestamp: cacheData.timestamp
+          });
+          
           setModels(cacheData.models);
           setDiscoveryComplete(true);
           setLastDiscoveryTime(cacheData.timestamp);
           setHasCache(true);
           setDiscoveryProgress(`Loaded ${cacheData.models.length} cached models`);
           return true;
+        } else {
+          console.log('🟠 CACHE DEBUG: Cache invalid - will refresh', {
+            reason: cacheAge >= 10 * 60 * 1000 ? 'expired' : 'different instances'
+          });
         }
+      } else {
+        console.log('🟠 CACHE DEBUG: No cached data found for key:', cacheKey);
       }
     } catch (error) {
-      console.warn('Failed to load cached models:', error);
+      console.error('🔴 CACHE DEBUG: Failed to load cached models:', error);
     }
     return false;
   }, [cacheKey, enabledInstanceUrls]);
@@ -128,24 +186,50 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
   // Check cache when modal opens or instances change
   useEffect(() => {
     if (isOpen && enabledInstanceUrls.length > 0) {
+      console.log('🟡 MODAL DEBUG: Modal opened, checking cache', {
+        isOpen,
+        enabledInstanceUrls,
+        instanceUrlsCount: enabledInstanceUrls.length
+      });
       loadModelsFromCache(); // Progress message is set inside this function
+    } else {
+      console.log('🟡 MODAL DEBUG: Modal state change', {
+        isOpen,
+        enabledInstanceUrlsCount: enabledInstanceUrls.length
+      });
     }
   }, [isOpen, enabledInstanceUrls, loadModelsFromCache]);
 
   // Discover models when modal opens
   const discoverModels = useCallback(async (forceRefresh: boolean = false) => {
+    console.log('🟡 DISCOVERY DEBUG: Starting model discovery', {
+      forceRefresh,
+      enabledInstanceUrls,
+      instanceUrlsCount: enabledInstanceUrls.length,
+      timestamp: new Date().toISOString()
+    });
+    
     if (enabledInstanceUrls.length === 0) {
+      console.log('🔴 DISCOVERY DEBUG: No enabled instances');
       setError('No enabled Ollama instances configured');
       return;
     }
 
     // Check cache first if not forcing refresh
     if (!forceRefresh) {
+      console.log('🟡 DISCOVERY DEBUG: Checking cache before discovery');
       const loaded = loadModelsFromCache();
       if (loaded) {
+        console.log('🟢 DISCOVERY DEBUG: Used cached models, skipping API call');
         return; // Progress message already set by loadModelsFromCache
       }
+      console.log('🟡 DISCOVERY DEBUG: No valid cache, proceeding with API discovery');
+    } else {
+      console.log('🟡 DISCOVERY DEBUG: Force refresh requested, skipping cache');
     }
+
+    const discoveryStartTime = Date.now();
+    console.log('🟡 DISCOVERY DEBUG: Starting API discovery at', new Date(discoveryStartTime).toISOString());
 
     setLoading(true);
     setError(null);
@@ -157,6 +241,18 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
       const discoveryResult = await ollamaService.discoverModels({
         instanceUrls: enabledInstanceUrls,
         includeCapabilities: true
+      });
+      
+      const discoveryEndTime = Date.now();
+      const discoveryDuration = discoveryEndTime - discoveryStartTime;
+      console.log('🟢 DISCOVERY DEBUG: API discovery completed', {
+        duration: discoveryDuration,
+        durationSeconds: (discoveryDuration / 1000).toFixed(1),
+        totalModels: discoveryResult.total_models,
+        chatModels: discoveryResult.chat_models.length,
+        embeddingModels: discoveryResult.embedding_models.length,
+        hostStatus: Object.keys(discoveryResult.host_status).length,
+        errors: discoveryResult.discovery_errors.length
       });
 
       // Enrich models with instance information and status
@@ -358,8 +454,24 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
 
   // Auto-discover when modal opens (only if no cache available)
   useEffect(() => {
+    console.log('🟡 AUTO-DISCOVERY DEBUG: useEffect triggered', {
+      isOpen,
+      discoveryComplete,
+      loading,
+      hasCache,
+      willAutoDiscover: isOpen && !discoveryComplete && !loading && !hasCache
+    });
+    
     if (isOpen && !discoveryComplete && !loading && !hasCache) {
+      console.log('🟢 AUTO-DISCOVERY DEBUG: Starting auto-discovery');
       discoverModels();
+    } else {
+      console.log('🟠 AUTO-DISCOVERY DEBUG: Skipping auto-discovery', {
+        reason: !isOpen ? 'modal closed' : 
+                discoveryComplete ? 'already complete' :
+                loading ? 'already loading' :
+                hasCache ? 'has cache' : 'unknown'
+      });
     }
   }, [isOpen, discoveryComplete, loading, hasCache, discoverModels]);
 
