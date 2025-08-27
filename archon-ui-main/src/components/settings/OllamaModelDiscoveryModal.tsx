@@ -81,7 +81,13 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
   // Generate cache key based on enabled instances
   const cacheKey = useMemo(() => {
     const sortedUrls = [...enabledInstanceUrls].sort();
-    return `ollama-models-${sortedUrls.join('|')}`;
+    const key = `ollama-models-${sortedUrls.join('|')}`;
+    console.log('🟡 CACHE KEY DEBUG: Generated cache key', {
+      key,
+      enabledInstanceUrls,
+      sortedUrls
+    });
+    return key;
   }, [enabledInstanceUrls]);
 
   // Save models to localStorage
@@ -182,6 +188,35 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
     }
     return false;
   }, [cacheKey, enabledInstanceUrls]);
+
+  // Test localStorage functionality (run once when component mounts)
+  useEffect(() => {
+    const testLocalStorage = () => {
+      try {
+        const testKey = 'ollama-test-key';
+        const testData = { test: 'localStorage working', timestamp: Date.now() };
+        
+        console.log('🔧 LOCALSTORAGE DEBUG: Testing localStorage functionality');
+        localStorage.setItem(testKey, JSON.stringify(testData));
+        
+        const retrieved = localStorage.getItem(testKey);
+        const parsed = retrieved ? JSON.parse(retrieved) : null;
+        
+        console.log('🟢 LOCALSTORAGE DEBUG: localStorage test successful', {
+          saved: testData,
+          retrieved: parsed,
+          working: !!parsed && parsed.test === testData.test
+        });
+        
+        localStorage.removeItem(testKey);
+        
+      } catch (error) {
+        console.error('🔴 LOCALSTORAGE DEBUG: localStorage test failed', error);
+      }
+    };
+    
+    testLocalStorage();
+  }, []); // Run once on mount
 
   // Check cache when modal opens or instances change
   useEffect(() => {
