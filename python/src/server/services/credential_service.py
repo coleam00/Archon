@@ -47,6 +47,14 @@ class CredentialService:
         self._rag_cache_timestamp: float | None = None
         self._rag_cache_ttl = 300  # 5 minutes TTL for RAG settings cache
 
+    @property
+    def supabase(self) -> Client | None:
+        """Get the Supabase client instance."""
+        try:
+            return self._get_supabase_client()
+        except Exception:
+            return None
+    
     def _get_supabase_client(self) -> Client:
         """
         Get or create a properly configured Supabase client using environment variables.

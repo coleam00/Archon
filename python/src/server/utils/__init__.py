@@ -25,7 +25,6 @@ from ..services.embeddings import (
     create_embeddings_batch,
     generate_contextual_embedding,
     generate_contextual_embeddings_batch,
-    get_openai_client,
     process_chunk_with_context,
 )
 
@@ -87,15 +86,10 @@ __all__ = [
     # Embedding functions
     "create_embedding",
     "create_embeddings_batch",
-    "create_embedding_async",
-    "create_embeddings_batch_async",
-    "get_openai_client",
     # Contextual embedding functions
     "generate_contextual_embedding",
-    "generate_contextual_embedding_async",
     "generate_contextual_embeddings_batch",
     "process_chunk_with_context",
-    "process_chunk_with_context_async",
     # Note: Document storage and search functions not exported from utils
     # to avoid circular dependencies. Import directly from services modules.
     # Source management functions

@@ -68,10 +68,7 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
             if rag_settings is None:
                 rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
                 _set_cached_settings(cache_key, rag_settings)
-                logger.debug("Fetched and cached rag_strategy settings")
-            else:
-                logger.debug("Using cached rag_strategy settings")
-
+            
             base_url = credential_service._get_provider_base_url(provider, rag_settings)
         else:
             # Get configured provider from database
@@ -83,54 +80,42 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
             if provider_config is None:
                 provider_config = await credential_service.get_active_provider(service_type)
                 _set_cached_settings(cache_key, provider_config)
-                logger.debug(f"Fetched and cached {service_type} provider config")
-            else:
-                logger.debug(f"Using cached {service_type} provider config")
 
             provider_name = provider_config["provider"]
             api_key = provider_config["api_key"]
             base_url = provider_config["base_url"]
 
-        logger.info(f"Creating LLM client for provider: {provider_name}")
-
         if provider_name == "openai":
             if not api_key:
                 raise ValueError("OpenAI API key not found")
-
             client = openai.AsyncOpenAI(api_key=api_key)
-            logger.info("OpenAI client created successfully")
 
         elif provider_name == "ollama":
-            # Ollama requires an API key in the client but doesn't actually use it
-            client = openai.AsyncOpenAI(
-                api_key="ollama",  # Required but unused by Ollama
-                base_url=base_url or "http://localhost:11434/v1",
-            )
-            logger.info(f"Ollama client created successfully with base URL: {base_url}")
+            # Ollama uses OpenAI-compatible API but doesn't require API key
+            if not base_url:
+                base_url = "http://host.docker.internal:11434/v1"
+            client = openai.AsyncOpenAI(base_url=base_url, api_key="not-needed")
 
-        elif provider_name == "google":
+        elif provider_name == "google" or provider_name == "gemini":
             if not api_key:
                 raise ValueError("Google API key not found")
-
-            client = openai.AsyncOpenAI(
-                api_key=api_key,
-                base_url=base_url or "https://generativelanguage.googleapis.com/v1beta/openai/",
-            )
-            logger.info("Google Gemini client created successfully")
+            # Google requires a specific base URL for their OpenAI-compatible endpoint
+            base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+            client = openai.AsyncOpenAI(base_url=base_url, api_key=api_key)
 
         else:
-            raise ValueError(f"Unsupported LLM provider: {provider_name}")
+            raise ValueError(f"Unsupported provider: {provider_name}")
 
         yield client
 
     except Exception as e:
-        logger.error(
-            f"Error creating LLM client for provider {provider_name if 'provider_name' in locals() else 'unknown'}: {e}"
-        )
+        logger.error(f"Error creating LLM client: {e}")
         raise
+
     finally:
         # Cleanup if needed
-        pass
+        if client:
+            await client.close()
 
 
 async def get_embedding_model(provider: str | None = None) -> str:
@@ -154,7 +139,8 @@ async def get_embedding_model(provider: str | None = None) -> str:
             if rag_settings is None:
                 rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
                 _set_cached_settings(cache_key, rag_settings)
-            custom_model = rag_settings.get("EMBEDDING_MODEL", "")
+
+            custom_model = rag_settings.get("embedding_model") if rag_settings else None
         else:
             # Get configured provider from database
             cache_key = "provider_config_embedding"
@@ -162,27 +148,62 @@ async def get_embedding_model(provider: str | None = None) -> str:
             if provider_config is None:
                 provider_config = await credential_service.get_active_provider("embedding")
                 _set_cached_settings(cache_key, provider_config)
+
             provider_name = provider_config["provider"]
-            custom_model = provider_config["embedding_model"]
+            custom_model = provider_config.get("custom_model")
 
-        # Use custom model if specified
-        if custom_model:
-            return custom_model
-
-        # Return provider-specific defaults
-        if provider_name == "openai":
-            return "text-embedding-3-small"
-        elif provider_name == "ollama":
-            # Ollama default embedding model
-            return "nomic-embed-text"
-        elif provider_name == "google":
-            # Google's embedding model
-            return "text-embedding-004"
-        else:
-            # Fallback to OpenAI's model
-            return "text-embedding-3-small"
+        # Return model based on provider - no defaults
+        if not custom_model:
+            raise ValueError(f"No embedding model configured for provider '{provider_name}'. Please configure in Settings.")
+        
+        return custom_model
 
     except Exception as e:
         logger.error(f"Error getting embedding model: {e}")
-        # Fallback to OpenAI default
-        return "text-embedding-3-small"
+        raise
+
+
+async def get_llm_model(provider: str | None = None, service: str = "rag_agent") -> str:
+    """
+    Get the configured LLM model based on the provider.
+
+    Args:
+        provider: Override provider selection
+        service: Service requesting the model (for future use)
+
+    Returns:
+        str: The LLM model to use
+    """
+    try:
+        # Get provider configuration
+        if provider:
+            # Explicit provider requested
+            provider_name = provider
+            # Get custom model from settings if any
+            cache_key = "rag_strategy_settings"
+            rag_settings = _get_cached_settings(cache_key)
+            if rag_settings is None:
+                rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+                _set_cached_settings(cache_key, rag_settings)
+
+            custom_model = rag_settings.get("llm_model") if rag_settings else None
+        else:
+            # Get configured provider from database
+            cache_key = "provider_config_llm"
+            provider_config = _get_cached_settings(cache_key)
+            if provider_config is None:
+                provider_config = await credential_service.get_active_provider("llm")
+                _set_cached_settings(cache_key, provider_config)
+
+            provider_name = provider_config["provider"]
+            custom_model = provider_config.get("custom_model")
+
+        # Return model - no defaults
+        if not custom_model:
+            raise ValueError(f"No LLM model configured for provider '{provider_name}' and service '{service}'. Please configure in Settings.")
+        
+        return custom_model
+
+    except Exception as e:
+        logger.error(f"Error getting LLM model: {e}")
+        raise

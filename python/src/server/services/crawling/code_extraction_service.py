@@ -56,14 +56,16 @@ class CodeExtractionService:
         },
     }
 
-    def __init__(self, supabase_client):
+    def __init__(self, supabase_client, provider_manager=None):
         """
         Initialize the code extraction service.
 
         Args:
             supabase_client: The Supabase client for database operations
+            provider_manager: Optional provider manager for embeddings
         """
         self.supabase_client = supabase_client
+        self.provider_manager = provider_manager
         self._settings_cache = {}
 
     async def _get_setting(self, key: str, default: Any) -> Any:
@@ -1507,6 +1509,7 @@ class CodeExtractionService:
                 url_to_full_document=url_to_full_document,
                 progress_callback=storage_progress_callback,
                 provider=None,  # Use configured provider
+                provider_manager=self.provider_manager,
             )
 
             # Report final progress for code storage phase (not overall completion)

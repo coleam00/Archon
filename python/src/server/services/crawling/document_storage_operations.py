@@ -24,16 +24,18 @@ class DocumentStorageOperations:
     Handles document storage operations for crawled content.
     """
     
-    def __init__(self, supabase_client):
+    def __init__(self, supabase_client, provider_manager=None):
         """
         Initialize document storage operations.
         
         Args:
             supabase_client: The Supabase client for database operations
+            provider_manager: Optional ProviderManager instance for new system
         """
         self.supabase_client = supabase_client
+        self.provider_manager = provider_manager
         self.doc_storage_service = DocumentStorageService(supabase_client)
-        self.code_extraction_service = CodeExtractionService(supabase_client)
+        self.code_extraction_service = CodeExtractionService(supabase_client, provider_manager)
     
     async def process_and_store_documents(
         self,
@@ -151,7 +153,8 @@ class DocumentStorageOperations:
             progress_callback=progress_callback,  # Pass the callback for progress updates
             enable_parallel_batches=True,  # Enable parallel processing
             provider=None,  # Use configured provider
-            cancellation_check=cancellation_check  # Pass cancellation check
+            cancellation_check=cancellation_check,  # Pass cancellation check
+            provider_manager=self.provider_manager  # Pass the new ProviderManager
         )
         
         # Calculate actual chunk count
@@ -214,7 +217,7 @@ class DocumentStorageOperations:
             
             # Generate summary with fallback
             try:
-                summary = extract_source_summary(source_id, combined_content)
+                summary = await extract_source_summary(source_id, combined_content)
             except Exception as e:
                 safe_logfire_error(f"Failed to generate AI summary for '{source_id}': {str(e)}, using fallback")
                 # Fallback to simple summary
@@ -223,7 +226,7 @@ class DocumentStorageOperations:
             # Update source info in database BEFORE storing documents
             safe_logfire_info(f"About to create/update source record for '{source_id}' (word count: {source_id_word_counts[source_id]})")
             try:
-                update_source_info(
+                await update_source_info(
                     client=self.supabase_client,
                     source_id=source_id,
                     summary=summary,

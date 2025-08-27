@@ -15,7 +15,7 @@ import time
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Request
 from pydantic import BaseModel
 
 from ..utils import get_supabase_client
@@ -259,7 +259,7 @@ async def get_knowledge_item_code_examples(source_id: str):
 
 
 @router.post("/knowledge-items/{source_id}/refresh")
-async def refresh_knowledge_item(source_id: str):
+async def refresh_knowledge_item(source_id: str, request: Request):
     """Refresh a knowledge item by re-crawling its URL with the same metadata."""
     try:
         safe_logfire_info(f"Starting knowledge item refresh | source_id={source_id}")
@@ -316,9 +316,14 @@ async def refresh_knowledge_item(source_id: str):
                 status_code=500, detail={"error": f"Failed to initialize crawler: {str(e)}"}
             )
 
+        # Get provider_manager from app state if available
+        provider_manager = getattr(request.app.state, 'provider_manager', None)
+        
         # Use the same crawl orchestration as regular crawl
         crawl_service = CrawlOrchestrationService(
-            crawler=crawler, supabase_client=get_supabase_client()
+            crawler=crawler, 
+            supabase_client=get_supabase_client(),
+            provider_manager=provider_manager
         )
         crawl_service.set_progress_id(progress_id)
 
@@ -368,7 +373,7 @@ async def refresh_knowledge_item(source_id: str):
 
 
 @router.post("/knowledge-items/crawl")
-async def crawl_knowledge_item(request: KnowledgeItemRequest):
+async def crawl_knowledge_item(request: KnowledgeItemRequest, fastapi_request: Request):
     """Crawl a URL and add it to the knowledge base with progress tracking."""
     # Validate URL
     if not request.url:
@@ -398,8 +403,11 @@ async def crawl_knowledge_item(request: KnowledgeItemRequest):
                 "eta": "Calculating...",
             },
         )
+        # Get provider_manager from app state if available
+        provider_manager = getattr(fastapi_request.app.state, 'provider_manager', None)
+        
         # Start background task IMMEDIATELY (like the old API)
-        task = asyncio.create_task(_perform_crawl_with_progress(progress_id, request))
+        task = asyncio.create_task(_perform_crawl_with_progress(progress_id, request, provider_manager))
         # Track the task for cancellation support
         active_crawl_tasks[progress_id] = task
         safe_logfire_info(
@@ -417,7 +425,7 @@ async def crawl_knowledge_item(request: KnowledgeItemRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def _perform_crawl_with_progress(progress_id: str, request: KnowledgeItemRequest):
+async def _perform_crawl_with_progress(progress_id: str, request: KnowledgeItemRequest, provider_manager=None):
     """Perform the actual crawl operation with progress tracking using service layer."""
     # Add a small delay to allow frontend WebSocket subscription to be established
     # This prevents the "Room has 0 subscribers" issue
@@ -444,7 +452,9 @@ async def _perform_crawl_with_progress(progress_id: str, request: KnowledgeItemR
                 return
 
             supabase_client = get_supabase_client()
-            orchestration_service = CrawlOrchestrationService(crawler, supabase_client)
+            orchestration_service = CrawlOrchestrationService(
+                crawler, supabase_client, provider_manager=provider_manager
+            )
             orchestration_service.set_progress_id(progress_id)
 
             # Store the current task in active_crawl_tasks for cancellation support

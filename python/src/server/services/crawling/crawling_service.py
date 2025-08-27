@@ -75,7 +75,7 @@ class CrawlingService:
     Combines functionality from both CrawlingService and CrawlOrchestrationService.
     """
 
-    def __init__(self, crawler=None, supabase_client=None, progress_id=None):
+    def __init__(self, crawler=None, supabase_client=None, progress_id=None, provider_manager=None):
         """
         Initialize the crawling service.
 
@@ -83,10 +83,12 @@ class CrawlingService:
             crawler: The Crawl4AI crawler instance
             supabase_client: The Supabase client for database operations
             progress_id: Optional progress ID for Socket.IO updates
+            provider_manager: Optional ProviderManager instance for new embedding system
         """
         self.crawler = crawler
         self.supabase_client = supabase_client or get_supabase_client()
         self.progress_id = progress_id
+        self.provider_manager = provider_manager
 
         # Initialize helpers
         self.url_handler = URLHandler()
@@ -100,7 +102,7 @@ class CrawlingService:
         self.sitemap_strategy = SitemapCrawlStrategy()
 
         # Initialize operations
-        self.doc_storage_ops = DocumentStorageOperations(self.supabase_client)
+        self.doc_storage_ops = DocumentStorageOperations(self.supabase_client, self.provider_manager)
 
         # Track progress state across all stages to prevent UI resets
         self.progress_state = {"progressId": self.progress_id} if self.progress_id else {}

@@ -27,6 +27,15 @@ from pydantic import BaseModel
 from .document_agent import DocumentAgent
 from .rag_agent import RagAgent
 
+# Import provider integration
+try:
+    from ..providers_clean.integration.agent_server_integration import ProviderIntegration
+    PROVIDER_INTEGRATION_AVAILABLE = True
+except ImportError:
+    PROVIDER_INTEGRATION_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("Provider integration not available - using legacy credential system")
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -57,12 +66,12 @@ AVAILABLE_AGENTS = {
     "rag": RagAgent,
 }
 
-# Global credentials storage
+# Global credentials storage (for legacy mode)
 AGENT_CREDENTIALS = {}
 
 
 async def fetch_credentials_from_server():
-    """Fetch credentials from the server's internal API."""
+    """Fetch credentials from the server's internal API (legacy mode)."""
     max_retries = 30  # Try for up to 5 minutes (30 * 10 seconds)
     retry_delay = 10  # seconds
 
@@ -113,6 +122,56 @@ async def lifespan(app: FastAPI):
     """Initialize and cleanup resources"""
     logger.info("Starting Agents service...")
 
+    # Try to use provider integration if available
+    if PROVIDER_INTEGRATION_AVAILABLE:
+        logger.info("Using clean provider integration system")
+        
+        # Initialize provider integration
+        provider_integration = ProviderIntegration()
+        app.state.provider_integration = provider_integration
+        
+        try:
+            # Initialize the provider system
+            init_status = await provider_integration.initialize()
+            
+            if not init_status.get('api_keys'):
+                logger.warning("No API keys configured - agents will use defaults")
+            
+            if not init_status.get('model_configs'):
+                logger.warning("No model configurations found - using defaults")
+            
+            # Initialize agents with configured models
+            app.state.agents = {}
+            
+            for name, agent_class in AVAILABLE_AGENTS.items():
+                try:
+                    # Get model from provider system
+                    model = await provider_integration.get_agent_model(name)
+                    app.state.agents[name] = agent_class(model=model)
+                    logger.info(f"Initialized {name} agent with model: {model}")
+                except Exception as e:
+                    logger.error(f"Failed to initialize {name} agent: {e}")
+                    # Try with default
+                    app.state.agents[name] = agent_class()
+                    logger.info(f"Initialized {name} agent with default model")
+                    
+        except Exception as e:
+            logger.error(f"Provider integration failed, falling back to legacy: {e}")
+            # Fall back to legacy credential system
+            await setup_legacy_agents(app)
+    else:
+        # Use legacy credential system
+        logger.info("Using legacy credential system")
+        await setup_legacy_agents(app)
+
+    yield
+
+    # Cleanup
+    logger.info("Shutting down Agents service...")
+
+
+async def setup_legacy_agents(app: FastAPI):
+    """Setup agents using legacy credential system"""
     # Fetch credentials from server first
     try:
         await fetch_credentials_from_server()
@@ -133,11 +192,6 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"Failed to initialize {name} agent: {e}")
 
-    yield
-
-    # Cleanup
-    logger.info("Shutting down Agents service...")
-
 
 # Create FastAPI app
 app = FastAPI(
@@ -151,10 +205,13 @@ app = FastAPI(
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
+    provider_status = "provider_integration" if PROVIDER_INTEGRATION_AVAILABLE else "legacy"
+    
     return {
         "status": "healthy",
         "service": "agents",
         "agents_available": list(AVAILABLE_AGENTS.keys()),
+        "provider_system": provider_status,
         "note": "This service only hosts PydanticAI agents",
     }
 
@@ -182,6 +239,19 @@ async def run_agent(request: AgentRequest):
 
         # Run the agent
         result = await agent.run(request.prompt, deps)
+        
+        # Track usage if provider integration is available
+        if PROVIDER_INTEGRATION_AVAILABLE and hasattr(app.state, 'provider_integration'):
+            # Extract token counts if available (this depends on agent implementation)
+            if hasattr(result, 'usage'):
+                try:
+                    await app.state.provider_integration.track_agent_usage(
+                        agent_name=request.agent_type,
+                        input_tokens=result.usage.get('prompt_tokens', 0),
+                        output_tokens=result.usage.get('completion_tokens', 0)
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to track usage: {e}")
 
         return AgentResponse(
             success=True,
@@ -197,107 +267,77 @@ async def run_agent(request: AgentRequest):
 @app.get("/agents/list")
 async def list_agents():
     """List all available agents and their capabilities"""
-    agents_info = {}
-
-    for name, agent in app.state.agents.items():
-        agents_info[name] = {
-            "name": agent.name,
-            "model": agent.model,
-            "description": agent.__class__.__doc__ or "No description available",
-            "available": True,
+    return {
+        "agents": {
+            "document": {
+                "description": "Manage project documents through conversation",
+                "capabilities": [
+                    "Create new documents",
+                    "Update existing documents",
+                    "Query document information",
+                    "Track version history",
+                ],
+                "model": getattr(app.state.agents.get("document"), "model", "not initialized"),
+            },
+            "rag": {
+                "description": "Search and chat with your knowledge base",
+                "capabilities": [
+                    "Semantic search across documents",
+                    "Answer questions based on content",
+                    "Find code examples",
+                    "Explain concepts from documentation",
+                ],
+                "model": getattr(app.state.agents.get("rag"), "model", "not initialized"),
+            },
         }
+    }
 
-    return {"agents": agents_info, "total": len(agents_info)}
 
-
-@app.post("/agents/{agent_type}/stream")
-async def stream_agent(agent_type: str, request: AgentRequest):
+@app.get("/agents/stream/{agent_type}")
+async def stream_agent(agent_type: str, prompt: str):
     """
-    Stream responses from an agent using Server-Sent Events (SSE).
-
-    This endpoint streams the agent's response in real-time, allowing
-    for a more interactive experience.
+    Stream agent responses (if the agent supports streaming).
+    
+    Note: Current PydanticAI agents don't support streaming natively,
+    but this endpoint is here for future enhancement.
     """
-    # Get the requested agent
     if agent_type not in app.state.agents:
         raise HTTPException(status_code=400, detail=f"Unknown agent type: {agent_type}")
 
-    agent = app.state.agents[agent_type]
-
     async def generate() -> AsyncGenerator[str, None]:
+        # For now, just run the agent normally and yield the result
+        # In the future, we can implement true streaming
+        agent = app.state.agents[agent_type]
+        result = await agent.run(prompt, {})
+        yield json.dumps({"result": result})
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
+
+
+@app.get("/agents/model-config")
+async def get_model_configuration():
+    """Get current model configuration for all agents"""
+    config = {}
+    
+    if PROVIDER_INTEGRATION_AVAILABLE and hasattr(app.state, 'provider_integration'):
+        # Get from provider integration
         try:
-            # Prepare dependencies based on agent type
-            # Import dependency classes
-            if agent_type == "rag":
-                from .rag_agent import RagDependencies
-
-                deps = RagDependencies(
-                    source_filter=request.context.get("source_filter") if request.context else None,
-                    match_count=request.context.get("match_count", 5) if request.context else 5,
-                    project_id=request.context.get("project_id") if request.context else None,
-                )
-            elif agent_type == "document":
-                from .document_agent import DocumentDependencies
-
-                deps = DocumentDependencies(
-                    project_id=request.context.get("project_id") if request.context else None,
-                    user_id=request.context.get("user_id") if request.context else None,
-                )
-            else:
-                # Default dependencies
-                from .base_agent import ArchonDependencies
-
-                deps = ArchonDependencies()
-
-            # Use PydanticAI's run_stream method
-            # run_stream returns an async context manager directly
-            async with agent.run_stream(request.prompt, deps) as stream:
-                # Stream text chunks as they arrive
-                async for chunk in stream.stream_text():
-                    event_data = json.dumps({"type": "stream_chunk", "content": chunk})
-                    yield f"data: {event_data}\n\n"
-
-                # Get the final structured result
-                try:
-                    final_result = await stream.get_data()
-                    event_data = json.dumps({"type": "stream_complete", "content": final_result})
-                    yield f"data: {event_data}\n\n"
-                except Exception:
-                    # If we can't get structured data, just send completion
-                    event_data = json.dumps({"type": "stream_complete", "content": ""})
-                    yield f"data: {event_data}\n\n"
-
+            for agent_name in AVAILABLE_AGENTS.keys():
+                config[agent_name] = await app.state.provider_integration.get_agent_model(agent_name)
         except Exception as e:
-            logger.error(f"Error streaming {agent_type} agent: {e}")
-            event_data = json.dumps({"type": "error", "error": str(e)})
-            yield f"data: {event_data}\n\n"
-
-    # Return SSE response
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",  # Disable Nginx buffering
-        },
-    )
+            logger.error(f"Failed to get model config from provider: {e}")
+    else:
+        # Get from agents directly
+        for name, agent in app.state.agents.items():
+            config[name] = getattr(agent, "model", "unknown")
+    
+    return {
+        "provider_system": "provider_integration" if PROVIDER_INTEGRATION_AVAILABLE else "legacy",
+        "models": config
+    }
 
 
-# Main entry point
 if __name__ == "__main__":
-    agents_port = os.getenv("ARCHON_AGENTS_PORT")
-    if not agents_port:
-        raise ValueError(
-            "ARCHON_AGENTS_PORT environment variable is required. "
-            "Please set it in your .env file or environment. "
-            "Default value: 8052"
-        )
-    port = int(agents_port)
-
-    uvicorn.run(
-        "server:app",
-        host="0.0.0.0",
-        port=port,
-        log_level="info",
-        reload=False,  # Disable reload in production
-    )
+    # For local development only
+    port = int(os.getenv("AGENTS_PORT", 8052))
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")

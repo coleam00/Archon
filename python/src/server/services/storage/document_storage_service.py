@@ -27,6 +27,7 @@ async def add_documents_to_supabase(
     enable_parallel_batches: bool = True,
     provider: str | None = None,
     cancellation_check: Any | None = None,
+    provider_manager: Any | None = None,  # New: pass ProviderManager instance
 ) -> None:
     """
     Add documents to Supabase with threading optimizations.
@@ -110,9 +111,6 @@ async def add_documents_to_supabase(
                 search_logger.error(f"Failed to delete {len(failed_urls)} URLs")
 
         # Check if contextual embeddings are enabled
-        # Fix: Get from credential service instead of environment
-        from ..credential_service import credential_service
-
         try:
             use_contextual_embeddings = await credential_service.get_credential(
                 "USE_CONTEXTUAL_EMBEDDINGS", "false", decrypt=True
@@ -235,7 +233,13 @@ async def add_documents_to_supabase(
 
             # Create embeddings for the batch - no progress reporting
             # Don't pass websocket to avoid Socket.IO issues
-            result = await create_embeddings_batch(contextual_contents, provider=provider)
+            # Pass provider_manager if available for new system
+            result = await create_embeddings_batch(
+                contextual_contents, 
+                provider=provider,
+                provider_manager=provider_manager,
+                use_new_provider_manager=provider_manager is not None
+            )
 
             # Log any failures
             if result.has_failures:
