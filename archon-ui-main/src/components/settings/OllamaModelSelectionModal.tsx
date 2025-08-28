@@ -435,30 +435,136 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
         const data = await response.json();
         console.log('🚨 MODAL DEBUG: POST discover-with-details response:', data);
         
+        // Functions to determine real compatibility and performance based on model characteristics
+        const getArchonCompatibility = (model: any, modelType: string): 'full' | 'partial' | 'limited' => {
+          if (modelType === 'chat') {
+            // Chat model compatibility based on name patterns and capabilities
+            const modelName = model.name.toLowerCase();
+            
+            // Well-tested models with full Archon support
+            if (modelName.includes('llama') || 
+                modelName.includes('mistral') || 
+                modelName.includes('phi') ||
+                modelName.includes('qwen') ||
+                modelName.includes('gemma')) {
+              return 'full';
+            }
+            
+            // Experimental or newer models with partial support
+            if (modelName.includes('codestral') ||
+                modelName.includes('deepseek') ||
+                modelName.includes('aya') ||
+                model.size > 50 * 1024 * 1024 * 1024) { // Models > 50GB might have issues
+              return 'partial';
+            }
+            
+            // Very small models or unknown architectures
+            if (model.size < 1 * 1024 * 1024 * 1024) { // Models < 1GB
+              return 'limited';
+            }
+            
+            return 'partial'; // Default for unknown models
+          } else {
+            // Embedding model compatibility based on dimensions
+            const dimensions = model.dimensions;
+            
+            // Standard dimensions with excellent Archon support
+            if (dimensions === 768 || dimensions === 1536 || dimensions === 384) {
+              return 'full';
+            }
+            
+            // Less common but supported dimensions
+            if (dimensions >= 256 && dimensions <= 4096) {
+              return 'partial';
+            }
+            
+            // Very unusual dimensions
+            return 'limited';
+          }
+        };
+
+        const getPerformanceRating = (model: any, modelType: string): 'high' | 'medium' | 'low' => {
+          if (modelType === 'chat') {
+            const sizeInGB = model.size / (1024 ** 3);
+            
+            // Performance based on model size (smaller = faster)
+            if (sizeInGB <= 4) {
+              return 'high';    // Small, fast models
+            } else if (sizeInGB <= 15) {
+              return 'medium';  // Medium-sized models
+            } else {
+              return 'low';     // Large models, slower but more capable
+            }
+          } else {
+            // Embedding performance based on dimensions (lower = faster)
+            const dimensions = model.dimensions;
+            
+            if (dimensions <= 384) {
+              return 'high';    // Fast, lightweight embeddings
+            } else if (dimensions <= 768) {
+              return 'medium';  // Balanced speed/quality
+            } else {
+              return 'low';     // High-quality but slower
+            }
+          }
+        };
+
+        const getCompatibilityFeatures = (model: any, modelType: string, compatibility: string): string[] => {
+          if (modelType === 'chat') {
+            const baseFeatures = ['Chat Support'];
+            if (compatibility === 'full') {
+              return [...baseFeatures, 'Streaming', 'Function Calling', 'Context Preservation'];
+            } else if (compatibility === 'partial') {
+              return [...baseFeatures, 'Streaming', 'Basic Function Calling'];
+            } else {
+              return [...baseFeatures, 'Basic Responses'];
+            }
+          } else {
+            const baseFeatures = ['Vector Embeddings'];
+            if (compatibility === 'full') {
+              return [...baseFeatures, 'Semantic Search', 'Document Analysis', 'Similarity Matching'];
+            } else if (compatibility === 'partial') {
+              return [...baseFeatures, 'Semantic Search', 'Document Analysis'];
+            } else {
+              return [...baseFeatures, 'Basic Embeddings'];
+            }
+          }
+        };
+
         // Handle ModelDiscoveryResponse format
         const allModels = [
-          ...(data.chat_models || []).map(model => ({ 
-            ...model, 
-            capabilities: ['chat'],
-            host: model.instance_url.replace('/v1', ''), // Remove /v1 suffix to match selectedInstanceUrl
-            model_type: 'chat',
-            archon_compatibility: 'full',
-            description: `Chat model: ${model.name}`,
-            size_gb: (model.size / (1024 ** 3)).toFixed(1),
-            compatibility_features: ['Chat Support', 'Streaming', 'Function Calling'],
-            performance_rating: 'excellent'
-          })),
-          ...(data.embedding_models || []).map(model => ({ 
-            ...model, 
-            capabilities: ['embedding'],
-            host: model.instance_url.replace('/v1', ''), // Remove /v1 suffix to match selectedInstanceUrl
-            model_type: 'embedding',
-            archon_compatibility: 'full',
-            description: `Embedding model: ${model.name} (${model.dimensions}D)`,
-            size_gb: (model.size / (1024 ** 3)).toFixed(1),
-            compatibility_features: ['Vector Embeddings', 'Semantic Search', 'Document Analysis'],
-            performance_rating: 'excellent'
-          }))
+          ...(data.chat_models || []).map(model => {
+            const compatibility = getArchonCompatibility(model, 'chat');
+            const performance = getPerformanceRating(model, 'chat');
+            
+            return {
+              ...model, 
+              capabilities: ['chat'],
+              host: model.instance_url.replace('/v1', ''), // Remove /v1 suffix to match selectedInstanceUrl
+              model_type: 'chat',
+              archon_compatibility: compatibility,
+              description: `Chat model: ${model.name}`,
+              size_gb: (model.size / (1024 ** 3)).toFixed(1),
+              compatibility_features: getCompatibilityFeatures(model, 'chat', compatibility),
+              performance_rating: performance
+            };
+          }),
+          ...(data.embedding_models || []).map(model => {
+            const compatibility = getArchonCompatibility(model, 'embedding');
+            const performance = getPerformanceRating(model, 'embedding');
+            
+            return {
+              ...model, 
+              capabilities: ['embedding'],
+              host: model.instance_url.replace('/v1', ''), // Remove /v1 suffix to match selectedInstanceUrl
+              model_type: 'embedding',
+              archon_compatibility: compatibility,
+              description: `Embedding model: ${model.name} (${model.dimensions}D)`,
+              size_gb: (model.size / (1024 ** 3)).toFixed(1),
+              compatibility_features: getCompatibilityFeatures(model, 'embedding', compatibility),
+              performance_rating: performance
+            };
+          })
         ];
         
         console.log('🚨 MODAL DEBUG: Setting models:', allModels);
