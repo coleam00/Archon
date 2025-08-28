@@ -715,73 +715,106 @@ export const RAGSettings = ({
               <div className="bg-gray-700 rounded-lg p-4">
                 <h4 className="text-white font-medium mb-3">Configuration Summary</h4>
                 
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-gray-300">LLM Instance:</span>
-                    <span className={llmStatus.online ? "text-teal-400" : "text-red-400"}>
-                      {llmStatus.online ? "Online" : "Offline"}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-300">Embedding Instance:</span>
-                    <span className={embeddingStatus.online ? "text-teal-400" : "text-red-400"}>
-                      {embeddingStatus.online ? "Online" : "Offline"}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-300">Configuration Status:</span>
-                    <span className={(llmStatus.online && embeddingStatus.online) ? "text-teal-400" : "text-yellow-400"}>
-                      {(llmStatus.online && embeddingStatus.online) ? "Complete" : "Partial"}
-                    </span>
-                  </div>
+                {/* Instance Comparison Table */}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-600">
+                        <th className="text-left py-2 text-gray-300 font-medium">Configuration</th>
+                        <th className="text-left py-2 text-gray-300 font-medium">LLM Instance</th>
+                        <th className="text-left py-2 text-gray-300 font-medium">Embedding Instance</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-600">
+                      <tr>
+                        <td className="py-2 text-gray-400">Instance Name</td>
+                        <td className="py-2 text-white">
+                          {llmInstanceConfig.name || <span className="text-gray-500 italic">Not configured</span>}
+                        </td>
+                        <td className="py-2 text-white">
+                          {embeddingInstanceConfig.name || <span className="text-gray-500 italic">Not configured</span>}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="py-2 text-gray-400">URL</td>
+                        <td className="py-2 text-white font-mono text-xs">
+                          {llmInstanceConfig.url || <span className="text-gray-500 italic">Not configured</span>}
+                        </td>
+                        <td className="py-2 text-white font-mono text-xs">
+                          {embeddingInstanceConfig.url || <span className="text-gray-500 italic">Not configured</span>}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="py-2 text-gray-400">Status</td>
+                        <td className="py-2">
+                          <span className={llmStatus.checking ? "text-yellow-400" : llmStatus.online ? "text-teal-400" : "text-red-400"}>
+                            {llmStatus.checking ? "Checking..." : llmStatus.online ? `Online (${llmStatus.responseTime}ms)` : "Offline"}
+                          </span>
+                        </td>
+                        <td className="py-2">
+                          <span className={embeddingStatus.checking ? "text-yellow-400" : embeddingStatus.online ? "text-teal-400" : "text-red-400"}>
+                            {embeddingStatus.checking ? "Checking..." : embeddingStatus.online ? `Online (${embeddingStatus.responseTime}ms)` : "Offline"}
+                          </span>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="py-2 text-gray-400">Selected Model</td>
+                        <td className="py-2 text-white">
+                          {getDisplayedChatModel(ragSettings) || <span className="text-gray-500 italic">No model selected</span>}
+                        </td>
+                        <td className="py-2 text-white">
+                          {getDisplayedEmbeddingModel(ragSettings) || <span className="text-gray-500 italic">No model selected</span>}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
                 </div>
 
-                <div className="mt-4 space-y-2 text-sm">
-                  <div className="flex items-center gap-2">
-                    <svg className="w-4 h-4 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
-                      <path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z" />
-                    </svg>
-                    <span className="text-gray-300">Stored Models:</span>
-                    <span className="text-white">
-                      {ollamaMetrics.loading ? (
-                        <Loader className="w-4 h-4 animate-spin inline" />
-                      ) : (
-                        `${ollamaMetrics.totalModels} total`
-                      )}
+                {/* Overall Summary */}
+                <div className="mt-4 pt-3 border-t border-gray-600">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-gray-300">Overall Configuration Status:</span>
+                    <span className={(llmStatus.online && embeddingStatus.online) ? "text-teal-400" : (llmStatus.online || embeddingStatus.online) ? "text-yellow-400" : "text-red-400"}>
+                      {(llmStatus.online && embeddingStatus.online) ? "Complete (2/2 Online)" : 
+                       (llmStatus.online || embeddingStatus.online) ? "Partial (1/2 Online)" : "Incomplete (0/2 Online)"}
                     </span>
                   </div>
-                  <div className="flex items-center gap-2 ml-6">
-                    <span className="text-gray-400">Chat Models:</span>
-                    <span className="text-white">
-                      {ollamaMetrics.loading ? (
-                        <Loader className="w-4 h-4 animate-spin inline" />
-                      ) : (
-                        ollamaMetrics.chatModels
-                      )}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 ml-6">
-                    <span className="text-gray-400">Embedding Models:</span>
-                    <span className="text-white">
-                      {ollamaMetrics.loading ? (
-                        <Loader className="w-4 h-4 animate-spin inline" />
-                      ) : (
-                        ollamaMetrics.embeddingModels
-                      )}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <svg className="w-4 h-4 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M3 3a1 1 0 000 2v8a2 2 0 002 2h2a2 2 0 002-2V5a1 1 0 100-2H3zm11.707 4.707a1 1 0 00-1.414-1.414L10 9.586 8.707 8.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                    </svg>
-                    <span className="text-gray-300">Active Hosts:</span>
-                    <span className="text-white">
-                      {ollamaMetrics.loading ? (
-                        <Loader className="w-4 h-4 animate-spin inline" />
-                      ) : (
-                        ollamaMetrics.activeHosts
-                      )}
-                    </span>
+                  
+                  {/* Model Metrics */}
+                  <div className="mt-3 flex items-center gap-4 text-xs">
+                    <div className="flex items-center gap-1">
+                      <svg className="w-3 h-3 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z" />
+                      </svg>
+                      <span className="text-gray-400">Total Models:</span>
+                      <span className="text-white">
+                        {ollamaMetrics.loading ? (
+                          <Loader className="w-3 h-3 animate-spin inline" />
+                        ) : (
+                          ollamaMetrics.totalModels
+                        )}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <span className="text-gray-400">Chat:</span>
+                      <span className="text-white">
+                        {ollamaMetrics.loading ? (
+                          <Loader className="w-3 h-3 animate-spin inline" />
+                        ) : (
+                          ollamaMetrics.chatModels
+                        )}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <span className="text-gray-400">Embedding:</span>
+                      <span className="text-white">
+                        {ollamaMetrics.loading ? (
+                          <Loader className="w-3 h-3 animate-spin inline" />
+                        ) : (
+                          ollamaMetrics.embeddingModels
+                        )}
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>

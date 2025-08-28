@@ -176,50 +176,6 @@ const ModelCard: React.FC<ModelCardProps> = ({ model, isSelected, onSelect }) =>
         </p>
       )}
 
-      {/* Host Information */}
-      <div className="flex items-center mb-3">
-        <Server className="w-4 h-4 text-orange-400 mr-2" />
-        <span className="text-sm text-gray-400">Host: </span>
-        <span className="text-sm text-orange-400 ml-1">{model.host.replace('http://', '')}</span>
-      </div>
-
-      {/* Capabilities - only show if available for chat models */}
-      {model.model_type === 'chat' && model.capabilities.length > 0 && (
-        <div className="mb-3">
-          <div className="text-xs text-gray-300 mb-1">Capabilities:</div>
-          <div className="flex flex-wrap gap-1">
-            {model.capabilities.map((capability, index) => (
-              <span key={index} className="px-2 py-1 bg-gray-600 text-green-400 text-xs rounded">
-                {capability}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-      
-      {/* Embedding Dimensions moved to top-right badge area */}
-
-      {/* Archon Integration - only show for chat models */}
-      {model.model_type === 'chat' && (
-        <div className="mb-4">
-          <div className="text-white font-medium mb-2">
-            Archon Integration: <span className="capitalize">{model.archon_compatibility} Support</span>
-          </div>
-          
-          {/* Only show compatibility features if they exist and are not just defaults */}
-          {model.compatibility_features && model.compatibility_features.length > 1 && (
-            <div className="text-sm text-gray-300 mb-2">
-              {model.compatibility_features.map((feature, index) => (
-                <div key={index} className="flex items-center mb-1">
-                  <span className="text-green-400 mr-2">●</span>
-                  {feature}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
       {/* Performance Metrics - flexible layout */}
       <div className="border-t border-gray-600 pt-3">
         <div className="flex flex-wrap gap-4 text-xs">
@@ -261,16 +217,6 @@ const ModelCard: React.FC<ModelCardProps> = ({ model, isSelected, onSelect }) =>
         </div>
       </div>
 
-      {/* Model Capabilities Tags */}
-      {model.capabilities.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-1">
-          {model.capabilities.map((capability, index) => (
-            <span key={index} className="px-2 py-1 bg-gray-600 text-gray-300 text-xs rounded">
-              {capability}
-            </span>
-          ))}
-        </div>
-      )}
     </div>
   );
 };
@@ -358,10 +304,8 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
           if (contextDiff !== 0) return contextDiff;
           break;
         case 'performance':
-          const perfOrder = { high: 3, medium: 2, low: 1 };
-          const perfDiff = (perfOrder[b.performance_rating as keyof typeof perfOrder] || 2) - 
-                          (perfOrder[a.performance_rating as keyof typeof perfOrder] || 2);
-          if (perfDiff !== 0) return perfDiff;
+          // Performance sorting removed - will be implemented via external data sources
+          // For now, fall through to name sorting
           break;
         default:
           // For 'name' and fallback, use alphabetical
@@ -483,86 +427,34 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
           }
         };
 
-        const getPerformanceRating = (model: any, modelType: string): 'high' | 'medium' | 'low' => {
-          if (modelType === 'chat') {
-            const sizeInGB = model.size / (1024 ** 3);
-            
-            // Performance based on model size (smaller = faster)
-            if (sizeInGB <= 4) {
-              return 'high';    // Small, fast models
-            } else if (sizeInGB <= 15) {
-              return 'medium';  // Medium-sized models
-            } else {
-              return 'low';     // Large models, slower but more capable
-            }
-          } else {
-            // Embedding performance based on dimensions (lower = faster)
-            const dimensions = model.dimensions;
-            
-            if (dimensions <= 384) {
-              return 'high';    // Fast, lightweight embeddings
-            } else if (dimensions <= 768) {
-              return 'medium';  // Balanced speed/quality
-            } else {
-              return 'low';     // High-quality but slower
-            }
-          }
-        };
+        // Performance rating removed - will be implemented via external data sources in future
 
-        const getCompatibilityFeatures = (model: any, modelType: string, compatibility: string): string[] => {
-          if (modelType === 'chat') {
-            const baseFeatures = ['Chat Support'];
-            if (compatibility === 'full') {
-              return [...baseFeatures, 'Streaming', 'Function Calling', 'Context Preservation'];
-            } else if (compatibility === 'partial') {
-              return [...baseFeatures, 'Streaming', 'Basic Function Calling'];
-            } else {
-              return [...baseFeatures, 'Basic Responses'];
-            }
-          } else {
-            const baseFeatures = ['Vector Embeddings'];
-            if (compatibility === 'full') {
-              return [...baseFeatures, 'Semantic Search', 'Document Analysis', 'Similarity Matching'];
-            } else if (compatibility === 'partial') {
-              return [...baseFeatures, 'Semantic Search', 'Document Analysis'];
-            } else {
-              return [...baseFeatures, 'Basic Embeddings'];
-            }
-          }
-        };
+        // Compatibility features function removed - no longer needed
 
         // Handle ModelDiscoveryResponse format
         const allModels = [
           ...(data.chat_models || []).map(model => {
             const compatibility = getArchonCompatibility(model, 'chat');
-            const performance = getPerformanceRating(model, 'chat');
             
             return {
               ...model, 
-              capabilities: ['chat'],
               host: model.instance_url.replace('/v1', ''), // Remove /v1 suffix to match selectedInstanceUrl
               model_type: 'chat',
               archon_compatibility: compatibility,
-              description: `Chat model: ${model.name}`,
-              size_gb: (model.size / (1024 ** 3)).toFixed(1),
-              compatibility_features: getCompatibilityFeatures(model, 'chat', compatibility),
-              performance_rating: performance
+              size_gb: (model.size / (1024 ** 3)).toFixed(1)
+              // Removed: capabilities, description, compatibility_features, performance_rating
             };
           }),
           ...(data.embedding_models || []).map(model => {
             const compatibility = getArchonCompatibility(model, 'embedding');
-            const performance = getPerformanceRating(model, 'embedding');
             
             return {
               ...model, 
-              capabilities: ['embedding'],
               host: model.instance_url.replace('/v1', ''), // Remove /v1 suffix to match selectedInstanceUrl
               model_type: 'embedding',
               archon_compatibility: compatibility,
-              description: `Embedding model: ${model.name} (${model.dimensions}D)`,
-              size_gb: (model.size / (1024 ** 3)).toFixed(1),
-              compatibility_features: getCompatibilityFeatures(model, 'embedding', compatibility),
-              performance_rating: performance
+              size_gb: (model.size / (1024 ** 3)).toFixed(1)
+              // Removed: capabilities, description, compatibility_features, performance_rating
             };
           })
         ];
