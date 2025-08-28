@@ -520,6 +520,7 @@ async def get_stored_models_endpoint() -> ModelListResponse:
             )
 
         models_data = json.loads(models_setting) if isinstance(models_setting, str) else models_setting
+        from datetime import datetime
         
         # Handle both old format (direct list) and new format (object with models key)
         if isinstance(models_data, list):
@@ -544,7 +545,18 @@ async def get_stored_models_endpoint() -> ModelListResponse:
                     stored_model = StoredModelInfo(
                         name=model.get('name', 'Unknown'),
                         host=model.get('instance_url', model.get('host', 'Unknown')),
-                        model_type=model.get('model_type', 'chat')
+                        model_type=model.get('model_type', 'chat'),
+                        size_mb=model.get('size_mb'),
+                        context_length=model.get('context_length'),
+                        parameters=model.get('parameters'),
+                        capabilities=model.get('capabilities', []),
+                        archon_compatibility=model.get('archon_compatibility', 'unknown'),
+                        compatibility_features=model.get('compatibility_features', []),
+                        limitations=model.get('limitations', []),
+                        performance_rating=model.get('performance_rating'),
+                        description=model.get('description'),
+                        last_updated=model.get('last_updated', datetime.utcnow().isoformat()),
+                        embedding_dimensions=model.get('embedding_dimensions')
                     )
                     stored_models.append(stored_model)
             except Exception as model_error:
@@ -958,27 +970,51 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
             mock_models.extend([
                 {
                     'name': 'llama3.2:latest',
-                    'instance_url': instance_url,
+                    'host': instance_url,
                     'model_type': 'chat',
                     'size_mb': 5000,
+                    'context_length': 131072,
+                    'parameters': '3.2B parameters',
                     'capabilities': ['chat', 'structured_output'],
-                    'context_info': {'current': 4096, 'max': 131072, 'min': 1}
+                    'archon_compatibility': 'full',
+                    'compatibility_features': ['MCP Integration', 'Structured Output', 'Function Calling', 'Streaming'],
+                    'limitations': ['Local processing only'],
+                    'performance_rating': 'high',
+                    'description': 'Latest Llama 3.2 model with enhanced capabilities',
+                    'last_updated': datetime.utcnow().isoformat(),
+                    'embedding_dimensions': None
                 },
                 {
                     'name': 'mistral:latest',
-                    'instance_url': instance_url,
+                    'host': instance_url,
                     'model_type': 'chat',
                     'size_mb': 4000,
+                    'context_length': 32768,
+                    'parameters': '7B parameters',
                     'capabilities': ['chat'],
-                    'context_info': {'current': 4096, 'max': 32768, 'min': 1}
+                    'archon_compatibility': 'partial',
+                    'compatibility_features': ['MCP Integration', 'Streaming', 'Text Generation'],
+                    'limitations': ['Limited structured output support', 'Local processing only'],
+                    'performance_rating': 'medium',
+                    'description': 'Mistral AI language model optimized for chat',
+                    'last_updated': datetime.utcnow().isoformat(),
+                    'embedding_dimensions': None
                 },
                 {
                     'name': 'nomic-embed-text:latest',
-                    'instance_url': instance_url,
+                    'host': instance_url,
                     'model_type': 'embedding',
                     'size_mb': 300,
-                    'embedding_dimensions': 768,
+                    'context_length': 2048,
+                    'parameters': '137M parameters',
                     'capabilities': ['embedding'],
+                    'archon_compatibility': 'full',
+                    'compatibility_features': ['Vector Embeddings', 'Local Processing', 'Fast Inference'],
+                    'limitations': ['Text only, no multimodal support'],
+                    'performance_rating': 'high',
+                    'description': 'Nomic text embedding model for semantic search',
+                    'last_updated': datetime.utcnow().isoformat(),
+                    'embedding_dimensions': 768
                 }
             ])
         
