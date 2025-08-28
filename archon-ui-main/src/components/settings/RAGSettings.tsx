@@ -45,6 +45,13 @@ export const RAGSettings = ({
   ragSettings,
   setRagSettings
 }: RAGSettingsProps) => {
+  console.log('🏗️ RAGSettings component render:', {
+    'ragSettings.LLM_BASE_URL': ragSettings.LLM_BASE_URL,
+    'ragSettings.OLLAMA_EMBEDDING_URL': ragSettings.OLLAMA_EMBEDDING_URL,
+    'ragSettings keys': Object.keys(ragSettings),
+    timestamp: new Date().toISOString()
+  });
+  
   const [saving, setSaving] = useState(false);
   const [showCrawlingSettings, setShowCrawlingSettings] = useState(false);
   const [showStorageSettings, setShowStorageSettings] = useState(false);
@@ -68,9 +75,25 @@ export const RAGSettings = ({
     url: ragSettings.OLLAMA_EMBEDDING_URL || 'http://localhost:11434/v1'
   });
 
+  // Debug: Monitor ragSettings changes
+  useEffect(() => {
+    console.log('📊 ragSettings changed:', {
+      'LLM_BASE_URL': ragSettings.LLM_BASE_URL,
+      'OLLAMA_EMBEDDING_URL': ragSettings.OLLAMA_EMBEDDING_URL,
+      'LLM_PROVIDER': ragSettings.LLM_PROVIDER,
+      'all keys': Object.keys(ragSettings),
+      timestamp: new Date().toISOString()
+    });
+  }, [ragSettings]);
+
   // Update instance configs when ragSettings change (after loading from database)
   useEffect(() => {
+    console.log('🔄 LLM useEffect triggered:', { 
+      'ragSettings.LLM_BASE_URL': ragSettings.LLM_BASE_URL,
+      'current llmInstanceConfig.url': llmInstanceConfig.url
+    });
     if (ragSettings.LLM_BASE_URL) {
+      console.log('✅ Updating LLM instance config with URL:', ragSettings.LLM_BASE_URL);
       setLLMInstanceConfig(prev => ({
         ...prev,
         url: ragSettings.LLM_BASE_URL
@@ -79,7 +102,12 @@ export const RAGSettings = ({
   }, [ragSettings.LLM_BASE_URL]);
 
   useEffect(() => {
+    console.log('🔄 Embedding useEffect triggered:', { 
+      'ragSettings.OLLAMA_EMBEDDING_URL': ragSettings.OLLAMA_EMBEDDING_URL,
+      'current embeddingInstanceConfig.url': embeddingInstanceConfig.url
+    });
     if (ragSettings.OLLAMA_EMBEDDING_URL) {
+      console.log('✅ Updating embedding instance config with URL:', ragSettings.OLLAMA_EMBEDDING_URL);
       setEmbeddingInstanceConfig(prev => ({
         ...prev,
         url: ragSettings.OLLAMA_EMBEDDING_URL
@@ -307,6 +335,31 @@ export const RAGSettings = ({
       fetchOllamaMetrics();
     }
   }, [ragSettings.LLM_PROVIDER, llmInstanceConfig.url, embeddingInstanceConfig.url, llmStatus.online, embeddingStatus.online]);
+
+  // Function to check if a provider is properly configured
+  const getProviderStatus = (providerKey: string): 'configured' | 'missing' | 'partial' => {
+    switch (providerKey) {
+      case 'openai':
+        // Check if OpenAI API key is configured
+        const hasOpenAIKey = ragSettings.OPENAI_API_KEY && ragSettings.OPENAI_API_KEY.trim().length > 0;
+        return hasOpenAIKey ? 'configured' : 'missing';
+      case 'google':
+        // Check if Google API key is configured
+        const hasGoogleKey = ragSettings.GOOGLE_API_KEY && ragSettings.GOOGLE_API_KEY.trim().length > 0;
+        return hasGoogleKey ? 'configured' : 'missing';
+      case 'ollama':
+        // Check if both LLM and embedding instances are configured and online
+        if (llmStatus.online && embeddingStatus.online) return 'configured';
+        if (llmStatus.online || embeddingStatus.online) return 'partial';
+        return 'missing';
+      case 'anthropic':
+      case 'grok':  
+      case 'openrouter':
+        return 'missing'; // Coming soon providers
+      default:
+        return 'missing';
+    }
+  };
   return <Card accentColor="green" className="overflow-hidden p-8">
         {/* Description */}
         <p className="text-sm text-gray-600 dark:text-zinc-400 mb-6">
@@ -358,11 +411,33 @@ export const RAGSettings = ({
                 }`}>
                   {provider.name}
                 </div>
-                {ragSettings.LLM_PROVIDER === provider.key && (
-                  <div className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center">
-                    <Check className="w-2.5 h-2.5 text-white" />
-                  </div>
-                )}
+{(() => {
+                  const status = getProviderStatus(provider.key);
+                  const isSelected = ragSettings.LLM_PROVIDER === provider.key;
+                  
+                  // Only show status indicator if provider is selected
+                  if (!isSelected) return null;
+                  
+                  if (status === 'configured') {
+                    return (
+                      <div className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center">
+                        <Check className="w-2.5 h-2.5 text-white" />
+                      </div>
+                    );
+                  } else if (status === 'partial') {
+                    return (
+                      <div className="absolute -top-1 -right-1 w-4 h-4 bg-yellow-500 rounded-full flex items-center justify-center">
+                        <div className="w-2 h-2 bg-white rounded-full" />
+                      </div>
+                    );
+                  } else {
+                    return (
+                      <div className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center">
+                        <div className="w-1.5 h-1.5 bg-white rounded-full" />
+                      </div>
+                    );
+                  }
+                })()}
                 {(provider.key === 'anthropic' || provider.key === 'grok' || provider.key === 'openrouter') && (
                   <div className="absolute inset-0 bg-black/20 rounded-lg flex items-center justify-center">
                     <div className="bg-yellow-500/80 text-black text-xs font-bold px-2 py-1 rounded transform -rotate-12">
@@ -686,7 +761,19 @@ export const RAGSettings = ({
               onClick={async () => {
                 try {
                   setSaving(true);
-                  await credentialsService.updateRagSettings(ragSettings);
+                  
+                  // Ensure instance configurations are synced with ragSettings before saving
+                  const updatedSettings = {
+                    ...ragSettings,
+                    LLM_BASE_URL: llmInstanceConfig.url,
+                    OLLAMA_EMBEDDING_URL: embeddingInstanceConfig.url
+                  };
+                  
+                  await credentialsService.updateRagSettings(updatedSettings);
+                  
+                  // Update local ragSettings state to match what was saved
+                  setRagSettings(updatedSettings);
+                  
                   showToast('RAG settings saved successfully!', 'success');
                 } catch (err) {
                   console.error('Failed to save RAG settings:', err);
