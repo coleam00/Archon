@@ -372,6 +372,11 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
 
   // Refresh models from instances
   const refreshModels = async () => {
+    console.log('🚨 MODAL DEBUG: refreshModels called - OllamaModelSelectionModal', {
+      timestamp: new Date().toISOString(),
+      instancesCount: instances.length
+    });
+    
     try {
       setRefreshing(true);
       const instanceUrls = instances.map(instance => instance.url);
@@ -389,8 +394,19 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
 
       if (response.ok) {
         const data = await response.json();
-        setModels(data.models || []);
-        showToast(`Refreshed ${data.total_count} models from ${data.instances_checked} instances`, 'success');
+        console.log('🚨 MODAL DEBUG: POST discover-with-details response:', data);
+        
+        // Handle ModelDiscoveryResponse format
+        const allModels = [
+          ...(data.chat_models || []).map(model => ({ ...model, capabilities: ['chat'] })),
+          ...(data.embedding_models || []).map(model => ({ ...model, capabilities: ['embedding'] }))
+        ];
+        
+        console.log('🚨 MODAL DEBUG: Setting models:', allModels);
+        setModels(allModels);
+        
+        const instanceCount = Object.keys(data.host_status || {}).length;
+        showToast(`Refreshed ${data.total_models || 0} models from ${instanceCount} instances`, 'success');
       } else {
         throw new Error('Failed to refresh models');
       }
