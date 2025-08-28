@@ -295,6 +295,16 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
 
   // Filter and sort models
   const filteredModels = useMemo(() => {
+    console.log('🚨 FILTERING DEBUG: Starting model filtering', {
+      modelsCount: models.length,
+      models: models.map(m => ({ name: m.name, host: m.host, model_type: m.model_type, archon_compatibility: m.archon_compatibility })),
+      selectedInstanceUrl,
+      modelType,
+      searchTerm,
+      compatibilityFilter,
+      timestamp: new Date().toISOString()
+    });
+    
     let filtered = models.filter(model => {
       // Filter by selected host
       if (selectedInstanceUrl && model.host !== selectedInstanceUrl) {
@@ -350,6 +360,13 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
       return a.name.localeCompare(b.name);
     });
 
+    console.log('🚨 FILTERING DEBUG: Filtering complete', {
+      originalCount: models.length,
+      filteredCount: filtered.length,
+      filtered: filtered.map(m => ({ name: m.name, host: m.host, model_type: m.model_type })),
+      timestamp: new Date().toISOString()
+    });
+    
     return filtered;
   }, [models, searchTerm, compatibilityFilter, sortBy, modelType, selectedInstanceUrl]);
 
@@ -398,8 +415,24 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
         
         // Handle ModelDiscoveryResponse format
         const allModels = [
-          ...(data.chat_models || []).map(model => ({ ...model, capabilities: ['chat'] })),
-          ...(data.embedding_models || []).map(model => ({ ...model, capabilities: ['embedding'] }))
+          ...(data.chat_models || []).map(model => ({ 
+            ...model, 
+            capabilities: ['chat'],
+            host: model.instance_url,
+            model_type: 'chat',
+            archon_compatibility: 'full',
+            description: `Chat model: ${model.name}`,
+            size_gb: (model.size / (1024 ** 3)).toFixed(1)
+          })),
+          ...(data.embedding_models || []).map(model => ({ 
+            ...model, 
+            capabilities: ['embedding'],
+            host: model.instance_url,
+            model_type: 'embedding',
+            archon_compatibility: 'full',
+            description: `Embedding model: ${model.name} (${model.dimensions}D)`,
+            size_gb: (model.size / (1024 ** 3)).toFixed(1)
+          }))
         ];
         
         console.log('🚨 MODAL DEBUG: Setting models:', allModels);
