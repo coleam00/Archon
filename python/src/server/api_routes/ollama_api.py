@@ -1045,10 +1045,18 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
         except Exception as storage_error:
             logger.warning(f"Failed to store models: {storage_error}, but continuing with response")
         
+        # Convert dict models to StoredModelInfo objects for response
+        stored_mock_models = []
+        for model_dict in mock_models:
+            stored_model = StoredModelInfo(**model_dict)
+            stored_mock_models.append(stored_model)
+        
         return ModelListResponse(
-            models=mock_models,
+            models=stored_mock_models,
+            total_count=len(mock_models),
             instances_checked=len(request.instance_urls),
-            models_found=len(mock_models)
+            last_discovery=datetime.utcnow().isoformat(),
+            cache_status="emergency_mode"
         )
         
         # ORIGINAL CODE BELOW (temporarily disabled)
