@@ -297,12 +297,24 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
   const filteredModels = useMemo(() => {
     console.log('🚨 FILTERING DEBUG: Starting model filtering', {
       modelsCount: models.length,
-      models: models.map(m => ({ name: m.name, host: m.host, model_type: m.model_type, archon_compatibility: m.archon_compatibility })),
+      models: models.map(m => ({ 
+        name: m.name, 
+        host: m.host, 
+        model_type: m.model_type, 
+        archon_compatibility: m.archon_compatibility,
+        instance_url: m.instance_url
+      })),
       selectedInstanceUrl,
       modelType,
       searchTerm,
       compatibilityFilter,
       timestamp: new Date().toISOString()
+    });
+    
+    console.log('🚨 HOST COMPARISON DEBUG:', {
+      selectedInstanceUrl,
+      modelHosts: models.map(m => m.host),
+      exactMatches: models.filter(m => m.host === selectedInstanceUrl).length
     });
     
     let filtered = models.filter(model => {
@@ -418,7 +430,7 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
           ...(data.chat_models || []).map(model => ({ 
             ...model, 
             capabilities: ['chat'],
-            host: model.instance_url,
+            host: model.instance_url.replace('/v1', ''), // Remove /v1 suffix to match selectedInstanceUrl
             model_type: 'chat',
             archon_compatibility: 'full',
             description: `Chat model: ${model.name}`,
@@ -427,7 +439,7 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
           ...(data.embedding_models || []).map(model => ({ 
             ...model, 
             capabilities: ['embedding'],
-            host: model.instance_url,
+            host: model.instance_url.replace('/v1', ''), // Remove /v1 suffix to match selectedInstanceUrl
             model_type: 'embedding',
             archon_compatibility: 'full',
             description: `Embedding model: ${model.name} (${model.dimensions}D)`,
