@@ -954,20 +954,19 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
                 }
             ])
         
-        # Store mock models if requested
-        if request.store_results:
-            from ..utils import get_supabase_client
-            supabase = get_supabase_client()
-            
-            settings_data = {
-                'key': 'ollama_discovered_models',
-                'value': mock_models,
-                'category': 'ollama',
-                'updated_at': datetime.utcnow().isoformat()
-            }
-            
-            await supabase.table('archon_settings').upsert(settings_data).execute()
-            logger.info(f"Stored {len(mock_models)} mock models to settings")
+        # Store mock models (always store for emergency mode)
+        from ..utils import get_supabase_client
+        supabase = get_supabase_client()
+        
+        settings_data = {
+            'key': 'ollama_discovered_models',
+            'value': mock_models,
+            'category': 'ollama',
+            'updated_at': datetime.utcnow().isoformat()
+        }
+        
+        await supabase.table('archon_settings').upsert(settings_data).execute()
+        logger.info(f"Stored {len(mock_models)} mock models to settings")
         
         return ModelListResponse(
             models=mock_models,
