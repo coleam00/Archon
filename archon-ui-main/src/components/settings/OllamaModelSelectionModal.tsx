@@ -207,7 +207,7 @@ const ModelCard: React.FC<ModelCardProps> = ({ model, isSelected, onSelect }) =>
           </div>
           
           {/* Only show compatibility features if they exist and are not just defaults */}
-          {model.compatibility_features.length > 1 && (
+          {model.compatibility_features && model.compatibility_features.length > 1 && (
             <div className="text-sm text-gray-300 mb-2">
               {model.compatibility_features.map((feature, index) => (
                 <div key={index} className="flex items-center mb-1">
@@ -434,7 +434,9 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
             model_type: 'chat',
             archon_compatibility: 'full',
             description: `Chat model: ${model.name}`,
-            size_gb: (model.size / (1024 ** 3)).toFixed(1)
+            size_gb: (model.size / (1024 ** 3)).toFixed(1),
+            compatibility_features: ['Chat Support', 'Streaming', 'Function Calling'],
+            performance_rating: 'excellent'
           })),
           ...(data.embedding_models || []).map(model => ({ 
             ...model, 
@@ -443,7 +445,9 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
             model_type: 'embedding',
             archon_compatibility: 'full',
             description: `Embedding model: ${model.name} (${model.dimensions}D)`,
-            size_gb: (model.size / (1024 ** 3)).toFixed(1)
+            size_gb: (model.size / (1024 ** 3)).toFixed(1),
+            compatibility_features: ['Vector Embeddings', 'Semantic Search', 'Document Analysis'],
+            performance_rating: 'excellent'
           }))
         ];
         
