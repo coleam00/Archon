@@ -67,6 +67,25 @@ export const RAGSettings = ({
     name: '', 
     url: ragSettings.OLLAMA_EMBEDDING_URL || 'http://localhost:11434/v1'
   });
+
+  // Update instance configs when ragSettings change (after loading from database)
+  useEffect(() => {
+    if (ragSettings.LLM_BASE_URL) {
+      setLLMInstanceConfig(prev => ({
+        ...prev,
+        url: ragSettings.LLM_BASE_URL
+      }));
+    }
+  }, [ragSettings.LLM_BASE_URL]);
+
+  useEffect(() => {
+    if (ragSettings.OLLAMA_EMBEDDING_URL) {
+      setEmbeddingInstanceConfig(prev => ({
+        ...prev,
+        url: ragSettings.OLLAMA_EMBEDDING_URL
+      }));
+    }
+  }, [ragSettings.OLLAMA_EMBEDDING_URL]);
   
   // Status tracking
   const [llmStatus, setLLMStatus] = useState({ online: false, responseTime: null, checking: false });
