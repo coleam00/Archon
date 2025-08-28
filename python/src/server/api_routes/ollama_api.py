@@ -1009,18 +1009,7 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
                             elif "llama.context_length" in model_info:
                                 max_context = model_info["llama.context_length"]
 
-                            # Get current context from parameters
-                            if "parameters" in show_data:
-                                params_str = show_data["parameters"]
-                                if "num_ctx" in params_str:
-                                    try:
-                                        # Extract num_ctx value
-                                        for line in params_str.split('\n'):
-                                            if line.strip().startswith('num_ctx'):
-                                                current_context = int(line.split()[-1])
-                                                break
-                                    except (ValueError, IndexError):
-                                        pass
+                            # Skip parameter extraction since we don't have show_data
 
                             # Create context info object
                             context_info = {
@@ -1059,24 +1048,12 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
                             param_string = " ".join(param_parts) if param_parts else None
 
                             # Create model with only real data
-                            # Assess compatibility using actual capability testing
+                            # Skip capability testing for fast discovery - assume basic capabilities
                             if model_type == 'chat':
-                                # Test actual capabilities instead of hardcoding based on name patterns
-                                function_calling_supported = await _test_function_calling_capability(model_name, base_url)
-                                structured_output_supported = await _test_structured_output_capability(model_name, base_url)
-                                
-                                features = ['Local Processing', 'Text Generation']
+                                # Skip testing, assume basic chat capabilities for fast discovery
+                                features = ['Local Processing', 'Text Generation', 'Chat Support']
                                 limitations = []
-                                
-                                if function_calling_supported:
-                                    features.append('Function Calling')
-                                    compatibility_level = 'full'
-                                elif structured_output_supported:
-                                    compatibility_level = 'partial'
-                                    limitations.append('Limited function calling support')
-                                else:
-                                    compatibility_level = 'limited'
-                                    limitations.append('Basic text generation only')
+                                compatibility_level = 'full'  # Assume full for now
                                 
                                 compatibility = {
                                     'level': compatibility_level,
