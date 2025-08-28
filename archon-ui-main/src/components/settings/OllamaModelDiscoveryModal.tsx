@@ -241,6 +241,13 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
 
   // Discover models when modal opens
   const discoverModels = useCallback(async (forceRefresh: boolean = false) => {
+    console.log('🚨 DISCOVERY DEBUG: discoverModels FUNCTION CALLED', {
+      forceRefresh,
+      enabledInstanceUrls,
+      instanceUrlsCount: enabledInstanceUrls.length,
+      timestamp: new Date().toISOString(),
+      callStack: new Error().stack?.split('\n').slice(0, 3)
+    });
     console.log('🟡 DISCOVERY DEBUG: Starting model discovery', {
       forceRefresh,
       enabledInstanceUrls,
@@ -277,9 +284,23 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
 
     try {
       // Discover models (no timeout - let it complete naturally)
+      console.log('🚨 DISCOVERY DEBUG: About to call ollamaService.discoverModels', {
+        instanceUrls: enabledInstanceUrls,
+        includeCapabilities: true,
+        timestamp: new Date().toISOString()
+      });
+      
       const discoveryResult = await ollamaService.discoverModels({
         instanceUrls: enabledInstanceUrls,
         includeCapabilities: true
+      });
+      
+      console.log('🚨 DISCOVERY DEBUG: ollamaService.discoverModels returned', {
+        totalModels: discoveryResult.total_models,
+        chatModelsCount: discoveryResult.chat_models?.length,
+        embeddingModelsCount: discoveryResult.embedding_models?.length,
+        hostStatusCount: Object.keys(discoveryResult.host_status || {}).length,
+        timestamp: new Date().toISOString()
       });
       
       const discoveryEndTime = Date.now();
@@ -326,7 +347,7 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
         if (existingModel) {
           // Add embedding capability
           existingModel.capabilities.push('embedding');
-          existingModel.embeddingDimensions = embeddingModel.dimensions;
+          existingModel.embedding_dimensions = embeddingModel.dimensions;
         } else {
           // Create new model entry
           const enriched: EnrichedModel = {
@@ -335,7 +356,7 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
             size: embeddingModel.size,
             digest: '',
             capabilities: ['embedding'],
-            embeddingDimensions: embeddingModel.dimensions,
+            embedding_dimensions: embeddingModel.dimensions,
             instance_url: embeddingModel.instance_url,
             instanceName: instance?.name || 'Unknown',
             status: 'available'
@@ -344,8 +365,19 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
         }
       });
 
+      console.log('🚨 DISCOVERY DEBUG: About to call setModels', {
+        enrichedModelsCount: enrichedModels.length,
+        enrichedModels: enrichedModels.map(m => ({ name: m.name, capabilities: m.capabilities })),
+        timestamp: new Date().toISOString()
+      });
+      
       setModels(enrichedModels);
       setDiscoveryComplete(true);
+      
+      console.log('🚨 DISCOVERY DEBUG: Called setModels and setDiscoveryComplete', {
+        enrichedModelsCount: enrichedModels.length,
+        timestamp: new Date().toISOString()
+      });
       
       // Cache the discovered models
       saveModelsToCache(enrichedModels);
@@ -416,6 +448,13 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
 
   // Filter and sort models
   const filteredAndSortedModels = useMemo(() => {
+    console.log('🚨 FILTERING DEBUG: filteredAndSortedModels useMemo running', {
+      modelsLength: models.length,
+      models: models.map(m => ({ name: m.name, capabilities: m.capabilities })),
+      selectionState,
+      timestamp: new Date().toISOString()
+    });
+    
     let filtered = models.filter(model => {
       // Text filter
       if (selectionState.filterText && !model.name.toLowerCase().includes(selectionState.filterText.toLowerCase())) {
@@ -445,6 +484,13 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
         default:
           return 0;
       }
+    });
+
+    console.log('🚨 FILTERING DEBUG: filteredAndSortedModels result', {
+      originalCount: models.length,
+      filteredCount: filtered.length,
+      filtered: filtered.map(m => ({ name: m.name, capabilities: m.capabilities })),
+      timestamp: new Date().toISOString()
     });
 
     return filtered;
@@ -611,7 +657,15 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => discoverModels(true)}  // Force refresh
+                onClick={() => {
+                  console.log('🚨 REFRESH BUTTON CLICKED - About to call discoverModels(true)', {
+                    timestamp: new Date().toISOString(),
+                    loading,
+                    enabledInstanceUrls,
+                    instanceUrlsCount: enabledInstanceUrls.length
+                  });
+                  discoverModels(true);  // Force refresh
+                }}
                 disabled={loading}
                 className="flex items-center gap-1"
               >
@@ -649,6 +703,17 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
               </div>
             ) : (
               <div className="h-96 overflow-y-auto p-6">
+                {(() => {
+                  console.log('🚨 RENDERING DEBUG: About to render models list', {
+                    filteredAndSortedModelsLength: filteredAndSortedModels.length,
+                    modelsLength: models.length,
+                    loading,
+                    error,
+                    discoveryComplete,
+                    timestamp: new Date().toISOString()
+                  });
+                  return null;
+                })()}
                 {filteredAndSortedModels.length === 0 ? (
                   <div className="text-center text-gray-500 dark:text-gray-400">
                     <Database className="w-16 h-16 mx-auto mb-4 opacity-50" />
@@ -693,7 +758,7 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
                                   {model.capabilities.includes('embedding') && (
                                     <Badge variant="solid" className="bg-purple-100 text-purple-800 text-xs">
                                       <Layers className="w-3 h-3 mr-1" />
-                                      {model.embeddingDimensions}D
+                                      {model.embedding_dimensions}D
                                     </Badge>
                                   )}
                                 </div>
