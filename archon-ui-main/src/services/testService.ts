@@ -40,6 +40,8 @@ export interface TestStatus {
 }
 
 import { getApiUrl, getWebSocketUrl } from '../config/api';
+import { TestResults } from '../components/ui/TestResultDashboard';
+import { CoverageData } from '../components/ui/CoverageVisualization';
 
 // Use unified API configuration
 const API_BASE_URL = getApiUrl();
@@ -246,7 +248,7 @@ class TestService {
   /**
    * Get coverage data for Test Results Modal from new API endpoints with fallback
    */
-  async getCoverageData(): Promise<any> {
+  async getCoverageData(): Promise<CoverageData> {
     try {
       // Try new API endpoint first
       const response = await callAPI<any>('/api/coverage/combined-summary');
@@ -268,7 +270,7 @@ class TestService {
   /**
    * Get test results for Test Results Modal from new API endpoints with fallback
    */
-  async getTestResults(): Promise<any> {
+  async getTestResults(): Promise<TestResults> {
     try {
       // Try new API endpoint first
       const response = await callAPI<any>('/api/tests/latest-results');

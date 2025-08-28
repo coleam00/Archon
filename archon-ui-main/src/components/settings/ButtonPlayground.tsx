@@ -3,6 +3,7 @@ import { Copy, Check, Link, Unlink } from 'lucide-react';
 import { NeonButton, type CornerRadius, type GlowIntensity, type ColorOption } from '../ui/NeonButton';
 import { motion } from 'framer-motion';
 import { cn } from '../../lib/utils';
+import { useClipboardWithFeedback } from '../../utils/clipboard';
 
 export const ButtonPlayground: React.FC = () => {
   const [showLayer2, setShowLayer2] = useState(true);
@@ -47,7 +48,11 @@ export const ButtonPlayground: React.FC = () => {
     bottomLeft: true
   });
   
-  const [copied, setCopied] = useState(false);
+  // Clipboard functionality with visual feedback
+  const { copy: copyClipboard, copied } = useClipboardWithFeedback({
+    successMessage: 'CSS styles copied to clipboard',
+    errorMessage: 'Failed to copy CSS styles'
+  });
 
   const colors: ColorOption[] = ['none', 'purple', 'pink', 'blue', 'green', 'red'];
   const glowOptions: GlowIntensity[] = ['none', 'sm', 'md', 'lg', 'xl', 'xxl'];
@@ -280,9 +285,7 @@ export const ButtonPlayground: React.FC = () => {
   };
 
   const copyToClipboard = () => {
-    navigator.clipboard.writeText(generateCSS());
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    copyClipboard(generateCSS());
   };
 
   // Corner input component

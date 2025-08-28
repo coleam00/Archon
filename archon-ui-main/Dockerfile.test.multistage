@@ -1,0 +1,128 @@
+# Dockerfile.test.multistage - Secure multi-stage build for testing with result extraction
+# This version allows extracting test results and coverage reports with enhanced security
+
+# Stage 1: Secure base dependencies
+FROM node:20-alpine AS dependencies
+
+# Install build tools and security updates
+RUN apk add --no-cache python3 make g++ git dumb-init && \
+    apk upgrade --no-cache
+
+# Create non-root user for build stage
+RUN addgroup -g 1001 -S builduser && \
+    adduser -S -D -H -u 1001 -s /sbin/nologin -G builduser builduser
+
+WORKDIR /app
+RUN chown -R builduser:builduser /app
+
+# Switch to non-root user
+USER builduser
+
+# Copy package files with proper ownership
+COPY --chown=builduser:builduser package*.json ./
+
+# Install dependencies
+RUN npm ci --include=dev && npm cache clean --force
+
+# Stage 2: Secure test runner
+FROM node:20-alpine AS test-runner
+
+# Add build argument for test failure handling
+# Default: false (builds will fail if tests fail)
+# Set to true to allow builds to continue even with test failures
+ARG ALLOW_TEST_FAILURE=false
+
+# Install runtime dependencies and security updates
+RUN apk add --no-cache git dumb-init bash && \
+    apk upgrade --no-cache
+
+# Create non-root user for test execution
+RUN addgroup -g 1001 -S testuser && \
+    adduser -S -D -H -u 1001 -s /sbin/nologin -G testuser testuser
+
+WORKDIR /app
+RUN chown -R testuser:testuser /app
+
+# Switch to non-root user
+USER testuser
+
+# Copy dependencies from previous stage with proper ownership
+COPY --from=dependencies --chown=testuser:testuser /app/node_modules ./node_modules
+
+# Copy application code with proper ownership
+COPY --chown=testuser:testuser . .
+
+# Remove potential security risks
+RUN rm -rf .git .env* || true
+
+# Create output directories with proper permissions
+RUN mkdir -p /test-results /coverage
+
+# Set test environment
+ENV NODE_ENV=test
+
+# Run tests with proper failure handling and artifact preservation
+# 1. Run tests and capture exit code
+# 2. Always preserve test artifacts regardless of test outcome
+# 3. Conditionally fail the build based on ALLOW_TEST_FAILURE
+RUN bash -c 'set -euo pipefail; \
+    TEST_EXIT_CODE=0; \
+    npm run test:coverage:run || TEST_EXIT_CODE=$?; \
+    echo "Test execution completed with exit code: $TEST_EXIT_CODE"; \
+    \
+    # Always preserve test artifacts \
+    if [ -d "public/test-results" ]; then \
+        cp -r public/test-results/* /test-results/ 2>/dev/null || echo "Warning: Could not copy some test results"; \
+    else \
+        echo "Warning: No test results directory found"; \
+    fi; \
+    \
+    if [ -d "coverage" ]; then \
+        cp -r coverage/* /coverage/ 2>/dev/null || echo "Warning: Could not copy some coverage reports"; \
+    else \
+        echo "Warning: No coverage directory found"; \
+    fi; \
+    \
+    # Conditionally fail the build \
+    if [ "'$ALLOW_TEST_FAILURE'" = "false" ] && [ $TEST_EXIT_CODE -ne 0 ]; then \
+        echo "Tests failed and ALLOW_TEST_FAILURE=false, failing build"; \
+        exit $TEST_EXIT_CODE; \
+    elif [ $TEST_EXIT_CODE -ne 0 ]; then \
+        echo "Tests failed but ALLOW_TEST_FAILURE=true, continuing build"; \
+    else \
+        echo "All tests passed successfully"; \
+    fi'
+
+# Stage 3: Secure results extractor (minimal image with just results)
+FROM alpine:latest AS results
+
+# Install security updates
+RUN apk upgrade --no-cache
+
+# Create non-root user for results
+RUN addgroup -g 1001 -S resultuser && \
+    adduser -S -D -H -u 1001 -s /sbin/nologin -G resultuser resultuser
+
+WORKDIR /results
+RUN chown -R resultuser:resultuser /results
+
+# Switch to non-root user
+USER resultuser
+
+# Copy test results and coverage reports with proper ownership
+COPY --from=test-runner --chown=resultuser:resultuser /test-results ./test-results
+COPY --from=test-runner --chown=resultuser:resultuser /coverage ./coverage
+
+# Create a summary file
+RUN echo "Test results and coverage reports are available in this container" > README.txt && \
+    echo "Generated on: $(date)" >> README.txt
+
+# Security labels
+LABEL maintainer="Archon Team" \
+      description="Secure multi-stage test results container" \
+      version="2.0.0" \
+      security.scan="enabled" \
+      security.non-root="true"
+
+# Default command to list results
+CMD ["ls", "-la"]

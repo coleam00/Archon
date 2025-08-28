@@ -1,37 +1,68 @@
-# MCP Service - Lightweight HTTP-based microservice  
+# Secure MCP Service - Lightweight HTTP-based microservice with non-root user
 FROM python:3.11-slim
+
+# Install security updates and required tools
+RUN apt-get update && apt-get install -y \
+    dumb-init \
+    gosu \
+    && apt-get upgrade -y \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Create non-root user for security
+RUN groupadd -r -g 1001 mcpuser && \
+    useradd -r -u 1001 -g mcpuser -s /sbin/nologin -d /app mcpuser
 
 WORKDIR /app
 
-# Install dependencies
+# Install dependencies as root
 COPY requirements.mcp.txt .
-RUN pip install --no-cache-dir -r requirements.mcp.txt
+RUN pip install --no-cache-dir -r requirements.mcp.txt && \
+    pip cache purge
 
-# Create minimal directory structure
-RUN mkdir -p src/mcp_server/features/projects src/mcp_server/features/tasks src/mcp_server/features/documents src/server/services src/server/config
+# Create minimal directory structure with proper ownership
+RUN mkdir -p src/mcp_server/features/projects src/mcp_server/features/tasks src/mcp_server/features/documents src/server/services src/server/config && \
+    chown -R mcpuser:mcpuser /app
 
-# Copy only MCP-specific files (lightweight protocol wrapper)
-COPY src/mcp_server/ src/mcp_server/
-COPY src/__init__.py src/
+# Copy only MCP-specific files with proper ownership
+COPY --chown=mcpuser:mcpuser src/mcp_server/ src/mcp_server/
+COPY --chown=mcpuser:mcpuser src/__init__.py src/
 
 # Copy only the minimal server files MCP needs for HTTP communication
-COPY src/server/__init__.py src/server/
-COPY src/server/services/__init__.py src/server/services/
-COPY src/server/services/mcp_service_client.py src/server/services/
-COPY src/server/services/client_manager.py src/server/services/
-COPY src/server/services/mcp_session_manager.py src/server/services/
-COPY src/server/config/__init__.py src/server/config/
-COPY src/server/config/service_discovery.py src/server/config/
-COPY src/server/config/logfire_config.py src/server/config/
+COPY --chown=mcpuser:mcpuser src/server/__init__.py src/server/
+COPY --chown=mcpuser:mcpuser src/server/services/__init__.py src/server/services/
+COPY --chown=mcpuser:mcpuser src/server/services/mcp_service_client.py src/server/services/
+COPY --chown=mcpuser:mcpuser src/server/services/client_manager.py src/server/services/
+COPY --chown=mcpuser:mcpuser src/server/services/mcp_session_manager.py src/server/services/
+COPY --chown=mcpuser:mcpuser src/server/config/__init__.py src/server/config/
+COPY --chown=mcpuser:mcpuser src/server/config/service_discovery.py src/server/config/
+COPY --chown=mcpuser:mcpuser src/server/config/logfire_config.py src/server/config/
+
+# Remove potential security risks
+RUN find /app -name "*.pyc" -delete && \
+    find /app -name "__pycache__" -type d -exec rm -rf {} + || true
 
 # Set environment variables
 ENV PYTHONPATH="/app:$PYTHONPATH"
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 
 # Expose MCP port
 ARG ARCHON_MCP_PORT=8051
 ENV ARCHON_MCP_PORT=${ARCHON_MCP_PORT}
 EXPOSE ${ARCHON_MCP_PORT}
 
-# Run the MCP server
-CMD ["python", "-m", "src.mcp_server.mcp_server"]
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD gosu mcpuser python -c "import socket; s=socket.socket(); s.connect(('localhost', ${ARCHON_MCP_PORT})); s.close()"
+
+# Security labels
+LABEL maintainer="Archon Team" \
+      description="Secure MCP Service - Lightweight HTTP-based microservice" \
+      version="2.0.0" \
+      security.scan="enabled" \
+      security.non-root="true"
+
+# Use dumb-init and run as non-root user
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["gosu", "mcpuser", "python", "-m", "src.mcp_server.mcp_server"]

@@ -1,0 +1,66 @@
+# Dockerfile.test - Secure test runner container with non-root user
+# This Dockerfile creates a hardened test environment with all dependencies installed
+
+# Use Node.js 20 LTS Alpine for smaller image size
+FROM node:20-alpine AS test-runner
+
+# Install necessary build tools and security updates
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    git \
+    dumb-init \
+    && apk upgrade --no-cache
+
+# Create non-root user for security
+RUN addgroup -g 1001 -S testuser && \
+    adduser -S -D -H -u 1001 -s /sbin/nologin -G testuser testuser
+
+# Set working directory
+WORKDIR /app
+
+# Change ownership of working directory
+RUN chown -R testuser:testuser /app
+
+# Switch to non-root user
+USER testuser
+
+# Copy package files first for better layer caching
+COPY --chown=testuser:testuser package*.json ./
+
+# Install all dependencies (including devDependencies needed for testing)
+RUN npm ci --include=dev && npm cache clean --force
+
+# Copy the entire application with proper ownership
+COPY --chown=testuser:testuser . .
+
+# Remove potential security risks
+RUN rm -rf .git .env* || true
+
+# Create directories for test results with proper permissions
+RUN mkdir -p public/test-results/coverage
+
+# Set environment to test
+ENV NODE_ENV=test
+
+# Set required environment variables for tests to pass
+ENV ARCHON_SERVER_PORT=8181
+ENV ARCHON_MCP_PORT=8051
+ENV VITE_API_URL=http://localhost:8181
+
+# Health check to ensure container is ready
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+  CMD node -e "console.log('Container ready')" || exit 1
+
+# Use dumb-init to handle signals properly
+ENTRYPOINT ["dumb-init", "--"]
+# Default command runs tests with coverage
+CMD ["npm", "run", "test:coverage:stream"]
+
+# Security labels and documentation
+LABEL maintainer="Archon Team" \
+      description="Secure test runner container for Archon UI" \
+      version="2.0.0" \
+      security.scan="enabled" \
+      security.non-root="true"

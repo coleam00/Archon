@@ -1,25 +1,28 @@
-# Server Service - Web crawling and document processing microservice
+# Secure Server Service - Web crawling and document processing microservice
 
-# Build stage
+# Build stage - Security hardened
 FROM python:3.11 AS builder
 
 WORKDIR /build
 
-# Install build dependencies
+# Install build dependencies and security updates
 RUN apt-get update && apt-get install -y \
     build-essential \
+    && apt-get upgrade -y \
     && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user for build stage
+RUN groupadd -r -g 1001 builduser && \
+    useradd -r -u 1001 -g builduser -s /sbin/nologin builduser
 
 # Copy and install Python dependencies
 COPY requirements.server.txt .
 RUN pip install --user --no-cache-dir -r requirements.server.txt
 
-# Runtime stage
+# Runtime stage - Security hardened
 FROM python:3.11-slim
 
-WORKDIR /app
-
-# Install runtime dependencies for Playwright (minimal set)
+# Install security updates and runtime dependencies for Playwright (minimal set)
 RUN apt-get update && apt-get install -y \
     wget \
     ca-certificates \
@@ -42,24 +45,45 @@ RUN apt-get update && apt-get install -y \
     libxkbcommon0 \
     libxrandr2 \
     xdg-utils \
+    dumb-init \
+    gosu \
+    && apt-get upgrade -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Copy Python packages from builder
-COPY --from=builder /root/.local /root/.local
+# Create non-root user for application
+RUN groupadd -r -g 1001 appuser && \
+    useradd -r -u 1001 -g appuser -s /sbin/nologin -d /app appuser
 
-# Install Playwright browsers
-ENV PATH=/root/.local/bin:$PATH
-RUN playwright install chromium
+WORKDIR /app
 
-# Copy server code and tests
-COPY src/server/ src/server/
-COPY src/__init__.py src/
-COPY tests/ tests/
+# Copy Python packages from builder with proper ownership
+COPY --from=builder --chown=appuser:appuser /root/.local /home/appuser/.local
+
+# Update PATH for non-root user
+ENV PATH=/home/appuser/.local/bin:$PATH
+
+# Install Playwright browsers as root, then change ownership
+RUN export PATH=/home/appuser/.local/bin:$PATH && \
+    playwright install chromium && \
+    chown -R appuser:appuser /home/appuser/.local
+
+# Copy server code and tests with proper ownership
+COPY --chown=appuser:appuser src/server/ src/server/
+COPY --chown=appuser:appuser src/__init__.py src/
+COPY --chown=appuser:appuser tests/ tests/
+
+# Remove potential security risks
+RUN find /app -name "*.pyc" -delete && \
+    find /app -name "__pycache__" -type d -exec rm -rf {} + || true
+
+# Set ownership of app directory
+RUN chown -R appuser:appuser /app
 
 # Set environment variables
-ENV PYTHONPATH="/app:/root/.local/lib/python3.11/site-packages:$PYTHONPATH"
+ENV PYTHONPATH="/app:/home/appuser/.local/lib/python3.11/site-packages:$PYTHONPATH"
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 
 # Expose Server port
 ARG ARCHON_SERVER_PORT=8181
@@ -68,7 +92,15 @@ EXPOSE ${ARCHON_SERVER_PORT}
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD sh -c "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:${ARCHON_SERVER_PORT}/health')\""
+    CMD gosu appuser python -c "import urllib.request; urllib.request.urlopen('http://localhost:${ARCHON_SERVER_PORT}/health')"
 
-# Run the Server service
-CMD sh -c "python -m uvicorn src.server.main:socket_app --host 0.0.0.0 --port ${ARCHON_SERVER_PORT} --workers 1"
+# Security labels
+LABEL maintainer="Archon Team" \
+      description="Secure Server Service - Web crawling and document processing" \
+      version="2.0.0" \
+      security.scan="enabled" \
+      security.non-root="true"
+
+# Use dumb-init and run as non-root user
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["gosu", "appuser", "python", "-m", "uvicorn", "src.server.main:socket_app", "--host", "0.0.0.0", "--port", "${ARCHON_SERVER_PORT}", "--workers", "1"]

@@ -1,4 +1,4 @@
-"""Simple test configuration for Archon - Essential tests only."""
+"""Optimized test configuration for Archon with lazy loading and performance enhancements."""
 
 import os
 from unittest.mock import MagicMock, patch
@@ -6,16 +6,21 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-# Set test environment
-os.environ["TEST_MODE"] = "true"
-os.environ["TESTING"] = "true"
-# Set fake database credentials to prevent connection attempts
-os.environ["SUPABASE_URL"] = "https://test.supabase.co"
-os.environ["SUPABASE_SERVICE_KEY"] = "test-key"
-# Set required port environment variables for ServiceDiscovery
-os.environ.setdefault("ARCHON_SERVER_PORT", "8181")
-os.environ.setdefault("ARCHON_MCP_PORT", "8051")
-os.environ.setdefault("ARCHON_AGENTS_PORT", "8052")
+# Import lazy fixtures for enhanced performance
+from tests.fixtures.simple_lazy_fixtures import *  # noqa: F403, F401
+
+# Set test environment with performance optimizations
+os.environ.update({
+    "TEST_MODE": "true",
+    "TESTING": "true",
+    "SUPABASE_URL": "https://test.supabase.co",
+    "SUPABASE_SERVICE_KEY": "test-key",
+    "ARCHON_SERVER_PORT": "8181",
+    "ARCHON_MCP_PORT": "8051",
+    "ARCHON_AGENTS_PORT": "8052",
+    "LOG_LEVEL": "WARNING",  # Reduce logging noise
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",  # Speed up pytest startup
+})
 
 
 @pytest.fixture(autouse=True)
@@ -23,7 +28,7 @@ def prevent_real_db_calls():
     """Automatically prevent any real database calls in all tests."""
     with patch("supabase.create_client") as mock_create:
         # Make create_client raise an error if called without our mock
-        mock_create.side_effect = Exception("Real database calls are not allowed in tests!")
+        mock_create.side_effect = Exception("Real database calls are not allowed in tests! Use lazy fixtures.")
         yield
 
 
@@ -74,26 +79,11 @@ def mock_supabase_client():
     return mock_client
 
 
+# Legacy client fixture - use optimized_test_client from lazy_test_fixtures instead
 @pytest.fixture
-def client(mock_supabase_client):
-    """FastAPI test client with mocked database."""
-    # Patch all the ways Supabase client can be created
-    with patch(
-        "src.server.services.client_manager.create_client", return_value=mock_supabase_client
-    ):
-        with patch(
-            "src.server.services.credential_service.create_client",
-            return_value=mock_supabase_client,
-        ):
-            with patch(
-                "src.server.services.client_manager.get_supabase_client",
-                return_value=mock_supabase_client,
-            ):
-                with patch("supabase.create_client", return_value=mock_supabase_client):
-                    # Import app after patching to ensure mocks are used
-                    from src.server.main import app
-
-                    return TestClient(app)
+def client(optimized_test_client):
+    """Legacy FastAPI test client - redirects to optimized version."""
+    return optimized_test_client
 
 
 @pytest.fixture

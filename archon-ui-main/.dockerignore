@@ -8,12 +8,13 @@ yarn-error.log*
 dist
 build
 
-# Environment variables
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+# Environment variables and secrets
+.env*
+*.key
+*.pem
+*.p12
+*.pfx
+secrets/
 
 # IDE and editor files
 .vscode
@@ -21,6 +22,7 @@ build
 *.swp
 *.swo
 *~
+.editorconfig
 
 # OS generated files
 .DS_Store
@@ -30,20 +32,88 @@ build
 .Trashes
 ehthumbs.db
 Thumbs.db
+desktop.ini
 
-# Git
+# Git and version control
 .git
 .gitignore
+.gitattributes
+.github/
 
-# Docker
-Dockerfile
-docker-compose.yml
-.dockerignore
+# Docker and container files
+# Note: Docker files are NOT ignored to support standard build workflows
 
-# Tests
+# Tests and coverage
 coverage
 test-results
+.nyc_output
+*.lcov
 
 # Documentation
 README.md
-*.md 
+*.md
+DOCS.md
+CHANGELOG.md
+LICENSE*
+CONTRIBUTING.md
+
+# Security and logs
+*.log
+*.log.*
+logs/
+*.pid
+*.seed
+*.pid.lock
+
+# Cache directories
+.npm
+.eslintcache
+.cache
+.parcel-cache
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Optional npm cache directory
+.npm
+
+# Optional REPL history
+.node_repl_history
+
+# Temporary folders
+tmp/
+temp/
+
+# macOS specific
+.AppleDouble
+.LSOverride
+Icon
+
+# Windows specific
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux specific
+*~
+
+# Security exclusions
+security/
+*.security
+*.audit
+
+# Backup files
+*.bak
+*.backup
+*.old
+*.orig
+
+# Development tools
+.eslintrc*
+.prettierrc*
+tsconfig*.json
+vite.config.*
+vitest.config.* 

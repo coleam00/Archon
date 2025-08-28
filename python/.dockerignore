@@ -4,46 +4,48 @@ __pycache__/
 *$py.class
 *.so
 .Python
-.venv/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
 env/
 venv/
 ENV/
-.pytest_cache/
-.coverage
-.coverage.*
-htmlcov/
-.tox/
-.nox/
-*.egg-info/
-*.egg
-dist/
-build/
-pip-log.txt
-pip-delete-this-directory.txt
+env.bak/
+venv.bak/
+.venv/
 
-# Development
-.git/
-.gitignore
-.github/
-docs/
-# tests/  # Keep tests for now as Dockerfile needs them
-*.md
-.env
-.env.*
-.editorconfig
-.pre-commit-config.yaml
-pytest.ini
+# Environment variables and secrets
+.env*
+*.key
+*.pem
+*.p12
+*.pfx
+secrets/
+credentials/
 
-# IDE
+# IDE and editor files
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-.project
-.pydevproject
+.editorconfig
 
-# OS
+# OS generated files
 .DS_Store
 .DS_Store?
 ._*
@@ -51,50 +53,77 @@ pytest.ini
 .Trashes
 ehthumbs.db
 Thumbs.db
+desktop.ini
 
-# Docker
+# Git and version control
+.git
+.gitignore
+.gitattributes
+.github/
+
+# Docker and container files
 Dockerfile*
 docker-compose*.yml
 .dockerignore
+*.dockerfile
 
-# Logs and databases
+# Testing and coverage
+.tox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+htmlcov/
+.nyc_output
+*.lcov
+coverage.xml
+*.cover
+.hypothesis/
+
+# Documentation
+README.md
+*.md
+DOCS.md
+CHANGELOG.md
+LICENSE*
+CONTRIBUTING.md
+
+# Security and logs
 *.log
+*.log.*
 logs/
-*.db
-*.sqlite
-*.sqlite3
+*.pid
+*.seed
+*.pid.lock
+*.audit
+*.security
 
-# Temporary files
-*.tmp
-*.temp
-*.bak
-*.swp
-*.swo
-*~
+# Jupyter Notebook
+.ipynb_checkpoints
 
-# Archives
-*.zip
-*.tar.gz
-*.tgz
-*.rar
+# IPython
+profile_default/
+ipython_config.py
 
-# Old or backup files
-old_rag/
-backup/
-*.old
-*.backup
+# pyenv
+.python-version
 
-# Local development
-.local/
-.cache/
-uploads/
-downloads/
+# celery beat schedule file
+celerybeat-schedule
 
-# Documentation build artifacts
-_build/
-site/
+# SageMath parsed files
+*.sage.py
 
-# MyPy
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# mypy
 .mypy_cache/
 .dmypy.json
 dmypy.json
@@ -105,5 +134,64 @@ dmypy.json
 # pytype static type analyzer
 .pytype/
 
-# UV/pip
-uv.lock.bak
+# Cython debug symbols
+cython_debug/
+
+# Temporary folders
+tmp/
+temp/
+__tmp__/
+
+# Backup files
+*.bak
+*.backup
+*.old
+*.orig
+
+# Development tools
+.pylintrc
+.flake8
+setup.cfg
+tox.ini
+.bandit
+.safety
+
+# Package management
+requirements.txt.backup
+pip-selfcheck.json
+
+# Security exclusions
+security/
+audit/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Cache directories
+.cache/
+.parcel-cache/
+
+# Runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# macOS specific
+.AppleDouble
+.LSOverride
+Icon
+
+# Windows specific
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux specific
+*~
+
+# Lock files (keep requirements but not lock files)
+poetry.lock
+Pipfile.lock

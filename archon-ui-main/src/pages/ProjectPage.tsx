@@ -9,6 +9,7 @@ import { DocsTab } from '../components/project-tasks/DocsTab';
 import { TasksTab } from '../components/project-tasks/TasksTab';
 import { Button } from '../components/ui/Button';
 import { ChevronRight, ShoppingCart, Code, Briefcase, Layers, Plus, X, AlertCircle, Loader2, Heart, BarChart3, Trash2, Pin, ListTodo, Activity, CheckCircle2, Clipboard } from 'lucide-react';
+import { useClipboardWithFeedback } from '../utils/clipboard';
 
 // Import our service layer and types
 import { projectService } from '../services/projectService';
@@ -77,6 +78,23 @@ export function ProjectPage({
   const [projectToDelete, setProjectToDelete] = useState<{ id: string; title: string } | null>(null);
 
   const { showToast } = useToast();
+  
+  // Clipboard functionality with visual feedback
+  const { copy: copyToClipboard, copied: projectIdCopied, reset: resetCopiedState } = useClipboardWithFeedback({
+    successMessage: 'Project ID copied to clipboard',
+    errorMessage: 'Failed to copy project ID',
+    showToast
+  });
+  
+  // Track which specific project ID was copied
+  const [copiedProjectId, setCopiedProjectId] = useState<string | null>(null);
+
+  // Reset copied project ID when the global copied state resets
+  useEffect(() => {
+    if (!projectIdCopied) {
+      setCopiedProjectId(null);
+    }
+  }, [projectIdCopied]);
 
   // Load projects on mount - simplified approach
   useEffect(() => {
@@ -846,21 +864,25 @@ export function ProjectPage({
                       <button 
                         onClick={(e) => {
                           e.stopPropagation();
-                          navigator.clipboard.writeText(project.id);
-                          showToast('Project ID copied to clipboard', 'success');
-                          // Visual feedback
-                          const button = e.currentTarget;
-                          const originalHTML = button.innerHTML;
-                          button.innerHTML = '<svg class="w-3 h-3 mr-1 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>Copied!';
-                          setTimeout(() => {
-                            button.innerHTML = originalHTML;
-                          }, 2000);
+                          setCopiedProjectId(project.id);
+                          copyToClipboard(project.id);
                         }}
                         className="flex-1 flex items-center justify-center gap-1 text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors py-1"
                         title="Copy Project ID to clipboard"
                       >
-                        <Clipboard className="w-3 h-3" />
-                        <span>Copy ID</span>
+                        {copiedProjectId === project.id && projectIdCopied ? (
+                          <>
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
+                            </svg>
+                            <span>Copied!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Clipboard className="w-3 h-3" />
+                            <span>Copy ID</span>
+                          </>
+                        )}
                       </button>
                       
                       {/* Delete button */}

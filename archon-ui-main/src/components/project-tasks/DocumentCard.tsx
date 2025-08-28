@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Rocket, Code, Briefcase, Users, FileText, X, Plus, Clipboard } from 'lucide-react';
 import { useToast } from '../../contexts/ToastContext';
+import { useClipboardWithFeedback } from '../../utils/clipboard';
 
 export interface ProjectDoc {
   id: string;
@@ -29,6 +30,13 @@ export const DocumentCard: React.FC<DocumentCardProps> = ({
   const [showDelete, setShowDelete] = useState(false);
   const { showToast } = useToast();
   
+  // Clipboard functionality with visual feedback
+  const { copy: copyToClipboard, copied: documentIdCopied } = useClipboardWithFeedback({
+    successMessage: 'Document ID copied to clipboard',
+    errorMessage: 'Failed to copy document ID',
+    showToast
+  });
+  
   const getDocumentIcon = (type?: string) => {
     switch (type) {
       case 'prp': return <Rocket className="w-4 h-4" />;
@@ -51,16 +59,7 @@ export const DocumentCard: React.FC<DocumentCardProps> = ({
 
   const handleCopyId = (e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(document.id);
-    showToast('Document ID copied to clipboard', 'success');
-    
-    // Visual feedback
-    const button = e.currentTarget;
-    const originalHTML = button.innerHTML;
-    button.innerHTML = '<div class="flex items-center gap-1"><span class="w-3 h-3 text-green-500">✓</span><span class="text-green-500 text-xs">Copied</span></div>';
-    setTimeout(() => {
-      button.innerHTML = originalHTML;
-    }, 2000);
+    copyToClipboard(document.id);
   };
   
   return (
@@ -105,7 +104,13 @@ export const DocumentCard: React.FC<DocumentCardProps> = ({
           title="Copy Document ID to clipboard"
           aria-label="Copy Document ID to clipboard"
         >
-          <Clipboard className="w-3 h-3" aria-hidden="true" />
+          {documentIdCopied ? (
+            <div className="flex items-center gap-1">
+              <span className="w-3 h-3 text-green-500">✓</span>
+            </div>
+          ) : (
+            <Clipboard className="w-3 h-3" aria-hidden="true" />
+          )}
         </button>
       </div>
       

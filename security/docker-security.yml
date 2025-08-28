@@ -1,0 +1,132 @@
+# Docker Security Configuration and Scanning Rules
+# This file defines security policies and scanning configurations for all containers
+
+security_policies:
+  # Base security requirements for all containers
+  base_requirements:
+    - non_root_user: true
+    - read_only_filesystem: preferred  # Where possible
+    - no_new_privileges: true
+    - capability_dropping: all
+    - minimal_capabilities: only_required
+    - tmpfs_mounts: true
+    - resource_limits: true
+
+  # Container-specific requirements
+  containers:
+    archon-server:
+      user_id: 1001
+      group_id: 1001
+      capabilities_required:
+        - SETGID
+        - SETUID
+        - NET_BIND_SERVICE
+      read_only: false  # Needs write access for temp files
+      volumes_security:
+        - "/var/run/docker.sock:/var/run/docker.sock:ro"  # Read-only Docker socket
+        - "./python/src:/app/src:ro"  # Read-only source mount
+        - "./python/tests:/app/tests:ro"  # Read-only test mount
+
+    archon-mcp:
+      user_id: 1001
+      group_id: 1001
+      capabilities_required:
+        - SETGID
+        - SETUID
+        - NET_BIND_SERVICE
+      read_only: true
+      volumes_security: []
+
+    archon-agents:
+      user_id: 1001
+      group_id: 1001
+      capabilities_required:
+        - SETGID
+        - SETUID
+        - NET_BIND_SERVICE
+      read_only: true
+      volumes_security: []
+
+    archon-frontend:
+      user_id: 1001
+      group_id: 1001
+      capabilities_required:
+        - SETGID
+        - SETUID
+        - NET_BIND_SERVICE
+      read_only: false  # Vite needs write access
+      volumes_security:
+        - "./archon-ui-main/src:/app/src:ro"  # Read-only source mount
+        - "./archon-ui-main/public:/app/public:ro"  # Read-only public mount
+
+    test-containers:
+      user_id: 1001
+      group_id: 1001
+      capabilities_required:
+        - SETGID
+        - SETUID
+      read_only: false  # Tests need write access for results
+      volumes_security:
+        - "./src:/app/src:ro"  # Read-only source mount
+        - "./test:/app/test:ro"  # Read-only test mount
+
+# Vulnerability scanning configuration
+vulnerability_scanning:
+  tools:
+    - name: "trivy"
+      enabled: true
+      severity_levels: ["HIGH", "CRITICAL"]
+      ignore_unfixed: false
+      
+    - name: "docker-bench-security"
+      enabled: true
+      
+    - name: "hadolint"
+      enabled: true
+      dockerfile_rules: "all"
+
+  scan_schedule:
+    base_images: "daily"
+    application_images: "on_build"
+    running_containers: "weekly"
+
+  reporting:
+    format: ["json", "table"]
+    output_dir: "./security/reports"
+    slack_webhook: "${SECURITY_SLACK_WEBHOOK:-}"
+    email_notifications: "${SECURITY_EMAIL:-}"
+
+# Runtime security monitoring
+runtime_security:
+  file_integrity_monitoring: true
+  process_monitoring: true
+  network_monitoring: true
+  
+  alerts:
+    - event: "privilege_escalation"
+      severity: "critical"
+      action: "stop_container"
+      
+    - event: "suspicious_file_access"
+      severity: "high"
+      action: "log_and_alert"
+      
+    - event: "unexpected_network_connection"
+      severity: "medium" 
+      action: "log"
+
+# Compliance and audit requirements
+compliance:
+  standards:
+    - "CIS Docker Benchmark"
+    - "NIST Cybersecurity Framework"
+    - "Docker Security Best Practices"
+    
+  audit_logging:
+    enabled: true
+    retention_period: "90d"
+    log_level: "info"
+    
+  reporting:
+    compliance_reports: "monthly"
+    security_metrics: "weekly"

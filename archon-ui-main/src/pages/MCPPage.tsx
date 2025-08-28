@@ -6,6 +6,7 @@ import { Button } from '../components/ui/Button';
 import { useStaggeredEntrance } from '../hooks/useStaggeredEntrance';
 import { useToast } from '../contexts/ToastContext';
 import { mcpServerService, ServerStatus, LogEntry, ServerConfig } from '../services/mcpServerService';
+import { copyToClipboard } from '../utils/clipboard';
 import { IDEGlobalRules } from '../components/settings/IDEGlobalRules';
 // import { MCPClients } from '../components/mcp/MCPClients'; // Commented out - feature not implemented
 
@@ -189,12 +190,15 @@ export const MCPPage = () => {
     }
   };
 
-  const handleCopyConfig = () => {
+  const handleCopyConfig = async () => {
     if (!config) return;
     
     const configText = getConfigForIDE(selectedIDE);
-    navigator.clipboard.writeText(configText);
-    showToast('Configuration copied to clipboard', 'success');
+    await copyToClipboard(configText, {
+      successMessage: 'Configuration copied to clipboard',
+      errorMessage: 'Failed to copy configuration',
+      showToast
+    });
   };
 
   const generateCursorDeeplink = () => {

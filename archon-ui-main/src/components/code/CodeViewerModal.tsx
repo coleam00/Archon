@@ -13,6 +13,7 @@ import {
   ChevronRight,
   FileCode,
 } from 'lucide-react'
+import { useClipboardWithFeedback } from '../../utils/clipboard'
 import Prism from 'prismjs'
 import 'prismjs/components/prism-javascript'
 import 'prismjs/components/prism-jsx'
@@ -53,9 +54,14 @@ export const CodeViewerModal: React.FC<CodeViewerModalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'code' | 'metadata'>('code')
   const [activeExampleIndex, setActiveExampleIndex] = useState(0)
-  const [copied, setCopied] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+
+  // Clipboard functionality with visual feedback
+  const { copy: copyToClipboard, copied } = useClipboardWithFeedback({
+    successMessage: 'Code copied to clipboard',
+    errorMessage: 'Failed to copy code'
+  })
 
   // Filter examples based on search query
   const filteredExamples = useMemo(() => {
@@ -104,9 +110,7 @@ export const CodeViewerModal: React.FC<CodeViewerModalProps> = ({
 
   const handleCopyCode = () => {
     if (activeExample) {
-      navigator.clipboard.writeText(activeExample.code)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      copyToClipboard(activeExample.code)
     }
   }
 

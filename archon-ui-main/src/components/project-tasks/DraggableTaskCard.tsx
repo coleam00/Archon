@@ -3,6 +3,7 @@ import { useDrag, useDrop } from 'react-dnd';
 import { Edit, Trash2, RefreshCw, Tag, User, Bot, Clipboard } from 'lucide-react';
 import { Task } from './TaskTableView';
 import { ItemTypes, getAssigneeIcon, getAssigneeGlow, getOrderColor, getOrderGlow } from '../../lib/task-utils';
+import { useClipboardWithFeedback } from '../../utils/clipboard';
 
 export interface DraggableTaskCardProps {
   task: Task;
@@ -59,6 +60,13 @@ export const DraggableTaskCard = ({
   });
 
   const [isFlipped, setIsFlipped] = useState(false);
+  
+  // Clipboard functionality with visual feedback  
+  const { copy: copyToClipboard, copied: taskIdCopied } = useClipboardWithFeedback({
+    successMessage: 'Task ID copied to clipboard',
+    errorMessage: 'Failed to copy task ID',
+    resetDelay: 2000
+  });
   
   const toggleFlip = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -200,21 +208,23 @@ export const DraggableTaskCard = ({
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  navigator.clipboard.writeText(task.id);
-                  // Optional: Add a small toast or visual feedback here
-                  const button = e.currentTarget;
-                  const originalHTML = button.innerHTML;
-                  button.innerHTML = '<span class="text-green-500">Copied!</span>';
-                  setTimeout(() => {
-                    button.innerHTML = originalHTML;
-                  }, 2000);
+                  copyToClipboard(task.id);
                 }}
                 className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors"
                 title="Copy Task ID to clipboard"
                 aria-label="Copy Task ID to clipboard"
               >
-                <Clipboard className="w-3 h-3" aria-hidden="true" />
-                <span>Task ID</span>
+                {taskIdCopied ? (
+                  <>
+                    <span className="text-green-500">✓</span>
+                    <span className="text-green-500">Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Clipboard className="w-3 h-3" aria-hidden="true" />
+                    <span>Task ID</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

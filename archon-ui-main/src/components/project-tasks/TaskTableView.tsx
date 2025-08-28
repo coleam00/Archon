@@ -6,6 +6,7 @@ import { DeleteConfirmModal } from '../../pages/ProjectPage';
 import { projectService } from '../../services/projectService';
 import { ItemTypes, getAssigneeIcon, getAssigneeGlow, getOrderColor, getOrderGlow } from '../../lib/task-utils';
 import { DraggableTaskCard } from './DraggableTaskCard';
+import { useClipboardWithFeedback } from '../../utils/clipboard';
 
 export interface Task {
   id: string;
@@ -209,6 +210,14 @@ const DraggableTaskRow = ({
   const [editingField, setEditingField] = useState<string | null>(null);
   const [isHovering, setIsHovering] = useState(false);
   
+  // Clipboard functionality with visual feedback
+  const { showToast } = useToast();
+  const { copy: copyToClipboard, copied: taskIdCopied } = useClipboardWithFeedback({
+    successMessage: 'Task ID copied to clipboard',
+    errorMessage: 'Failed to copy task ID',
+    showToast
+  });
+  
   const [{ isDragging }, drag] = useDrag({
     type: ItemTypes.TASK,
     item: { id: task.id, index, status: task.status },
@@ -397,20 +406,19 @@ const DraggableTaskRow = ({
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              navigator.clipboard.writeText(task.id);
-              // Visual feedback like in board view
-              const button = e.currentTarget;
-              const originalHTML = button.innerHTML;
-              button.innerHTML = '<div class="flex items-center gap-1"><span class="w-3 h-3 text-green-500">✓</span><span class="text-green-500 text-xs">Copied</span></div>';
-              setTimeout(() => {
-                button.innerHTML = originalHTML;
-              }, 2000);
+              copyToClipboard(task.id);
             }}
             className="p-1.5 rounded-full bg-gray-500/20 text-gray-500 hover:bg-gray-500/30 hover:shadow-[0_0_10px_rgba(107,114,128,0.3)] transition-all duration-300"
             title="Copy Task ID to clipboard"
             aria-label="Copy Task ID to clipboard"
           >
-            <Clipboard className="w-3.5 h-3.5" aria-hidden="true" />
+            {taskIdCopied ? (
+              <div className="flex items-center gap-1">
+                <span className="w-3 h-3 text-green-500">✓</span>
+              </div>
+            ) : (
+              <Clipboard className="w-3.5 h-3.5" aria-hidden="true" />
+            )}
           </button>
         </div>
       </td>

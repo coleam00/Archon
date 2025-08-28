@@ -3,6 +3,7 @@ import { X, Play, ChevronDown, TerminalSquare, Copy, Check, MinusCircle, Maximiz
 import { Client, Tool } from './MCPClients';
 import { Button } from '../ui/Button';
 import { mcpClientService } from '../../services/mcpClientService';
+import { useClipboardWithFeedback } from '../../utils/clipboard';
 
 interface ToolTestingPanelProps {
   client: Client | null;
@@ -32,8 +33,13 @@ export const ToolTestingPanel = ({
     isCommand: true
   }]);
   const [paramValues, setParamValues] = useState<Record<string, string>>({});
-  const [isCopied, setIsCopied] = useState(false);
   const [panelHeight, setPanelHeight] = useState(400);
+  
+  // Clipboard functionality with visual feedback
+  const { copy: copyToClipboard, copied: isCopied } = useClipboardWithFeedback({
+    successMessage: 'Terminal output copied to clipboard',
+    errorMessage: 'Failed to copy terminal output'
+  });
   const [isResizing, setIsResizing] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
@@ -313,9 +319,7 @@ export const ToolTestingPanel = ({
   // Handle copy terminal output
   const copyTerminalOutput = () => {
     const textContent = terminalOutput.map(line => line.content).join('\n');
-    navigator.clipboard.writeText(textContent);
-    setIsCopied(true);
-    setTimeout(() => setIsCopied(false), 2000);
+    copyToClipboard(textContent);
   };
 
   // Handle resize start

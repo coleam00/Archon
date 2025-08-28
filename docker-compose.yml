@@ -6,7 +6,7 @@
 #   docker compose --profile agents up -d    # Also starts archon-agents
 
 services:
-  # Server Service (FastAPI + Socket.IO + Crawling)
+  # Server Service (FastAPI + Socket.IO + Crawling) - Security Hardened
   archon-server:
     build:
       context: ./python
@@ -31,13 +31,30 @@ services:
     networks:
       - app-network
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock # Docker socket for MCP container control
-      - ./python/src:/app/src # Mount source code for hot reload
-      - ./python/tests:/app/tests # Mount tests for UI test execution
+      - /var/run/docker.sock:/var/run/docker.sock:ro # Docker socket for MCP container control (read-only)
+      - ./python/src:/app/src:ro # Mount source code for hot reload (read-only)
+      - ./python/tests:/app/tests:ro # Mount tests for UI test execution (read-only)
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Security: Remove privileged access and add security options
+    security_opt:
+      - no-new-privileges:true
+    read_only: false # Needs write access for temp files
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=100m
+      - /var/tmp:rw,noexec,nosuid,size=50m
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
+      - NET_BIND_SERVICE
     command:
       [
+        "dumb-init",
+        "--",
+        "gosu",
+        "appuser",
         "python",
         "-m",
         "uvicorn",
@@ -52,16 +69,18 @@ services:
       test:
         [
           "CMD",
-          "sh",
+          "gosu",
+          "appuser",
+          "python",
           "-c",
-          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:${ARCHON_SERVER_PORT:-8181}/health'')"',
+          "import urllib.request; urllib.request.urlopen('http://localhost:${ARCHON_SERVER_PORT:-8181}/health')",
         ]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
 
-  # Lightweight MCP Server Service (HTTP-based)
+  # Lightweight MCP Server Service (HTTP-based) - Security Hardened
   archon-mcp:
     build:
       context: ./python
@@ -92,20 +111,34 @@ services:
       - archon-server
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Security: Add security options
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=50m
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
+      - NET_BIND_SERVICE
     healthcheck:
       test:
         [
           "CMD",
-          "sh",
+          "gosu",
+          "mcpuser",
+          "python",
           "-c",
-          'python -c "import socket; s=socket.socket(); s.connect((''localhost'', ${ARCHON_MCP_PORT:-8051})); s.close()"',
+          "import socket; s=socket.socket(); s.connect(('localhost', ${ARCHON_MCP_PORT:-8051})); s.close()",
         ]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s # Give dependencies time to start
 
-  # AI Agents Service (ML/Reranking)
+  # AI Agents Service (ML/Reranking) - Security Hardened
   archon-agents:
     profiles:
       - agents  # Only starts when explicitly using --profile agents
@@ -128,20 +161,34 @@ services:
       - ARCHON_AGENTS_PORT=${ARCHON_AGENTS_PORT:-8052}
     networks:
       - app-network
+    # Security: Add security options
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=50m
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
+      - NET_BIND_SERVICE
     healthcheck:
       test:
         [
           "CMD",
-          "sh",
+          "gosu",
+          "agentuser",
+          "python",
           "-c",
-          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:${ARCHON_AGENTS_PORT:-8052}/health'')"',
+          "import urllib.request; urllib.request.urlopen('http://localhost:${ARCHON_AGENTS_PORT:-8052}/health')",
         ]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
 
-  # Frontend
+  # Frontend - Security Hardened
   archon-frontend:
     build: ./archon-ui-main
     container_name: archon-ui
@@ -152,17 +199,29 @@ services:
       - VITE_ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
       - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
       - HOST=${HOST:-localhost}
-      - PROD=${PROD:-false}
+      - NODE_ENV=production
     networks:
       - app-network
+    # Security: Add security options
+    security_opt:
+      - no-new-privileges:true
+    read_only: false # Vite needs write access for dev server
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=100m
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
+      - NET_BIND_SERVICE
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3737"]
       interval: 30s
       timeout: 10s
       retries: 3
     volumes:
-      - ./archon-ui-main/src:/app/src
-      - ./archon-ui-main/public:/app/public
+      - ./archon-ui-main/src:/app/src:ro # Read-only mount for security
+      - ./archon-ui-main/public:/app/public:ro # Read-only mount for security
     depends_on:
       - archon-server
 

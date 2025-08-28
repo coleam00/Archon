@@ -321,6 +321,8 @@ export class DocumentSyncService {
 
   /**
    * Flush all pending batches
+   * Uses Promise.allSettled to ensure we attempt all flushes even if some fail,
+   * as individual batches have their own error handling and retry logic.
    */
   private async flushAllBatches(): Promise<void> {
     const promises: Promise<void>[] = [];

@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  # Main test runner service - Security Hardened
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: archon-ui-tests
+    volumes:
+      # Mount source code for live updates (read-only for security)
+      - ./src:/app/src:ro
+      - ./test:/app/test:ro
+      # Mount for test results output
+      - ./test-results:/app/public/test-results
+    environment:
+      - NODE_ENV=test
+      - CI=true
+    # Security: Add security options
+    security_opt:
+      - no-new-privileges:true
+    read_only: false # Tests need write access for results
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=100m
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
+    command: ["dumb-init", "--", "npm", "run", "test:coverage:stream"]
+
+  # Interactive test UI service (for development) - Security Hardened
+  test-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: archon-ui-test-ui
+    ports:
+      - "51204:51204"  # Vitest UI port
+    volumes:
+      - ./src:/app/src:ro
+      - ./test:/app/test:ro
+    environment:
+      - NODE_ENV=test
+    # Security: Add security options
+    security_opt:
+      - no-new-privileges:true
+    read_only: false # UI needs write access
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=100m
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
+      - NET_BIND_SERVICE
+    command: ["dumb-init", "--", "npm", "run", "test:ui", "--", "--host", "0.0.0.0", "--port", "51204"]
+    profiles:
+      - ui
+
+  # Linting service - Security Hardened
+  lint:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: archon-ui-lint
+    volumes:
+      - ./src:/app/src:ro
+    # Security: Add security options
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=50m
+    cap_drop:
+      - ALL
+    command: ["dumb-init", "--", "npm", "run", "lint"]
+    profiles:
+      - lint
+
+# Named volumes for persisting test results between runs
+volumes:
+  test-results:
+  node_modules:

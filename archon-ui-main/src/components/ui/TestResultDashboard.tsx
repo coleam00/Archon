@@ -298,22 +298,17 @@ export const TestResultDashboard: React.FC<TestResultDashboardProps> = ({
     setError(null);
 
     try {
-      // Load test results and coverage data
-      const [testResults, coverageData] = await Promise.allSettled([
+      // Load test results and coverage data with fail-fast approach
+      const [testResults, coverageData]: [TestResults, CoverageData | null] = await Promise.all([
         testService.getTestResults(),
         showCoverage ? testService.getCoverageData() : Promise.resolve(null)
       ]);
 
-      if (testResults.status === 'fulfilled') {
-        setResults(testResults.value);
-      } else {
-        console.warn('Failed to load test results:', testResults.reason);
-      }
-
-      if (coverageData.status === 'fulfilled' && coverageData.value) {
-        setCoverage(coverageData.value);
-      } else if (showCoverage) {
-        console.warn('Failed to load coverage data:', coverageData.status === 'rejected' ? coverageData.reason : 'No data');
+      // Type-safe result handling
+      setResults(testResults);
+      
+      if (showCoverage && coverageData !== null) {
+        setCoverage(coverageData);
       }
 
       setLastRefresh(new Date());

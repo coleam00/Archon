@@ -113,6 +113,7 @@ class BugReportService {
     
     try {
       // Check services with a short timeout
+      // Uses Promise.allSettled to check all services regardless of individual failures
       const checks = await Promise.allSettled([
         fetch('/api/health', { signal: AbortSignal.timeout(2000) }),
         fetch('/api/mcp/health', { signal: AbortSignal.timeout(2000) }),
