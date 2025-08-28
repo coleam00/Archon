@@ -1158,7 +1158,7 @@ export const RAGSettings = ({
             ]}
             currentModel={ragSettings.MODEL_CHOICE}
             modelType="chat"
-            selectedInstanceUrl={""} // Show models from all instances
+            selectedInstanceUrl={llmInstanceConfig.url.replace('/v1', '')}
             onSelectModel={(modelName: string) => {
               setRagSettings({ ...ragSettings, MODEL_CHOICE: modelName });
               showToast(`Selected LLM model: ${modelName}`, 'success');
@@ -1177,7 +1177,7 @@ export const RAGSettings = ({
             ]}
             currentModel={ragSettings.EMBEDDING_MODEL}
             modelType="embedding"
-            selectedInstanceUrl={""} // Show models from all instances
+            selectedInstanceUrl={embeddingInstanceConfig.url.replace('/v1', '')}
             onSelectModel={(modelName: string) => {
               setRagSettings({ ...ragSettings, EMBEDDING_MODEL: modelName });
               showToast(`Selected embedding model: ${modelName}`, 'success');

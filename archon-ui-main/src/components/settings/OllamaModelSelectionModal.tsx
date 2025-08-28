@@ -408,7 +408,17 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
     
     try {
       setRefreshing(true);
-      const instanceUrls = instances.map(instance => instance.url);
+      // Only discover models from the selected instance, not all instances
+      const instanceUrls = selectedInstanceUrl 
+        ? [instances.find(i => i.url.replace('/v1', '') === selectedInstanceUrl)?.url || selectedInstanceUrl + '/v1'] 
+        : instances.map(instance => instance.url);
+      
+      console.log('🚨 API CALL DEBUG:', {
+        selectedInstanceUrl,
+        allInstances: instances,
+        instanceUrlsToQuery: instanceUrls,
+        timestamp: new Date().toISOString()
+      });
       
       const response = await fetch('/api/ollama/models/discover-with-details', {
         method: 'POST',

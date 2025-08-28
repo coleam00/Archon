@@ -95,45 +95,6 @@ async def discover_models_endpoint(
     try:
         logger.info(f"Starting model discovery for {len(instance_urls)} instances")
         
-        # EMERGENCY FAST MODE - Return mock data immediately for GET /models endpoint
-        logger.warning("🚀 EMERGENCY FAST MODE (GET /models) - Returning mock discovery response to avoid slow discovery")
-        
-        mock_chat_models = []
-        mock_embedding_models = []
-        host_status = {}
-        
-        for instance_url in instance_urls:
-            base_url = instance_url.rstrip('/')
-            host_status[base_url] = {
-                "status": "online",
-                "models_count": 3,
-                "instance_url": instance_url
-            }
-            
-            # Add chat models
-            mock_chat_models.extend([
-                {"name": "llama3.2:latest", "instance_url": instance_url, "size": 5000000000},
-                {"name": "mistral:latest", "instance_url": instance_url, "size": 4000000000}
-            ])
-            
-            # Add embedding models  
-            mock_embedding_models.append({
-                "name": "nomic-embed-text:latest",
-                "instance_url": instance_url,
-                "dimensions": 768,
-                "size": 300000000
-            })
-        
-        return ModelDiscoveryResponse(
-            total_models=len(mock_chat_models) + len(mock_embedding_models),
-            chat_models=mock_chat_models,
-            embedding_models=mock_embedding_models,
-            host_status=host_status,
-            discovery_errors=[],
-            unique_model_names=["llama3.2:latest", "mistral:latest", "nomic-embed-text:latest"]
-        )
-
-        # ORIGINAL CODE BELOW (temporarily disabled)
         # Validate instance URLs
         valid_urls = []
         for url in instance_urls:
@@ -997,132 +958,6 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
     """
     try:
         logger.info(f"Starting detailed model discovery for {len(request.instance_urls)} instances")
-        
-        # EMERGENCY FIX: Return mock data immediately to bypass slow discovery
-        logger.warning("🚀 EMERGENCY FAST MODE - Returning mock models to avoid 60+ second discovery")
-        
-        from datetime import datetime
-        
-        mock_models = []
-        for instance_url in request.instance_urls:
-            base_url = instance_url.replace('/v1', '').rstrip('/')
-            mock_models.extend([
-                {
-                    'name': 'llama3.2:latest',
-                    'host': instance_url,
-                    'model_type': 'chat',
-                    'size_mb': 5000,
-                    'context_length': 131072,
-                    'parameters': '3.2B parameters',
-                    'capabilities': ['chat', 'structured_output'],
-                    'archon_compatibility': 'full',
-                    'compatibility_features': ['MCP Integration', 'Structured Output', 'Function Calling', 'Streaming'],
-                    'limitations': ['Local processing only'],
-                    'performance_rating': 'high',
-                    'description': 'Latest Llama 3.2 model with enhanced capabilities',
-                    'last_updated': datetime.utcnow().isoformat(),
-                    'embedding_dimensions': None
-                },
-                {
-                    'name': 'mistral:latest',
-                    'host': instance_url,
-                    'model_type': 'chat',
-                    'size_mb': 4000,
-                    'context_length': 32768,
-                    'parameters': '7B parameters',
-                    'capabilities': ['chat'],
-                    'archon_compatibility': 'partial',
-                    'compatibility_features': ['MCP Integration', 'Streaming', 'Text Generation'],
-                    'limitations': ['Limited structured output support', 'Local processing only'],
-                    'performance_rating': 'medium',
-                    'description': 'Mistral AI language model optimized for chat',
-                    'last_updated': datetime.utcnow().isoformat(),
-                    'embedding_dimensions': None
-                },
-                {
-                    'name': 'nomic-embed-text:latest',
-                    'host': instance_url,
-                    'model_type': 'embedding',
-                    'size_mb': 300,
-                    'context_length': 2048,
-                    'parameters': '137M parameters',
-                    'capabilities': ['embedding'],
-                    'archon_compatibility': 'full',
-                    'compatibility_features': ['Vector Embeddings', 'Local Processing', 'Fast Inference'],
-                    'limitations': ['Text only, no multimodal support'],
-                    'performance_rating': 'high',
-                    'description': 'Nomic text embedding model for semantic search',
-                    'last_updated': datetime.utcnow().isoformat(),
-                    'embedding_dimensions': 768
-                }
-            ])
-        
-        # Store mock models (always store for emergency mode)
-        from ..utils import get_supabase_client
-        import json
-        supabase = get_supabase_client()
-        
-        # Format the data to match expected structure
-        models_data = {
-            'models': mock_models,
-            'total_count': len(mock_models),
-            'instances_checked': len(request.instance_urls),
-            'last_discovery': datetime.utcnow().isoformat()
-        }
-        
-        settings_data = {
-            'key': 'ollama_discovered_models',
-            'value': json.dumps(models_data),
-            'category': 'ollama',
-            'updated_at': datetime.utcnow().isoformat()
-        }
-        
-        # Use upsert to handle existing keys
-        try:
-            supabase.table('archon_settings').upsert(settings_data, on_conflict='key').execute()
-            logger.info(f"Stored {len(mock_models)} mock models to settings")
-        except Exception as storage_error:
-            logger.warning(f"Failed to store models: {storage_error}, but continuing with response")
-        
-        # Convert to ModelDiscoveryResponse format that frontend expects
-        mock_chat_models = []
-        mock_embedding_models = []
-        host_status = {}
-        
-        for instance_url in request.instance_urls:
-            base_url = instance_url.replace('/v1', '').rstrip('/')
-            host_status[base_url] = {
-                "status": "online",
-                "models_count": 3,
-                "instance_url": instance_url
-            }
-            
-            # Add chat models
-            mock_chat_models.extend([
-                {"name": "llama3.2:latest", "instance_url": instance_url, "size": 5000000000},
-                {"name": "mistral:latest", "instance_url": instance_url, "size": 4000000000}
-            ])
-            
-            # Add embedding models  
-            mock_embedding_models.append({
-                "name": "nomic-embed-text:latest",
-                "instance_url": instance_url,
-                "dimensions": 768,
-                "size": 300000000
-            })
-        
-        # Return ModelDiscoveryResponse format instead
-        return ModelDiscoveryResponse(
-            total_models=len(mock_chat_models) + len(mock_embedding_models),
-            chat_models=mock_chat_models,
-            embedding_models=mock_embedding_models,
-            host_status=host_status,
-            discovery_errors=[],
-            unique_model_names=["llama3.2:latest", "mistral:latest", "nomic-embed-text:latest"]
-        )
-        
-        # ORIGINAL CODE BELOW (temporarily disabled)
-        logger.info(f"Starting detailed model discovery for {len(request.instance_urls)} instances ORIGINAL")
 
         from datetime import datetime
 
@@ -1139,8 +974,8 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
                 base_url = instance_url.replace('/v1', '').rstrip('/')
                 logger.debug(f"Fetching real model data from {base_url}")
 
-                async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
-                    # Step 1: Get list of all models from /api/tags
+                async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+                    # Only use /api/tags for fast discovery - skip /api/show to avoid timeouts
                     tags_response = await client.get(f"{base_url}/api/tags")
                     tags_response.raise_for_status()
                     tags_data = tags_response.json()
@@ -1149,26 +984,17 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
                         logger.warning(f"No models found at {base_url}")
                         continue
 
-                    # Step 2: For each model, get detailed info from /api/show
+                    # Process models using only tags data for speed
                     for model_data in tags_data["models"]:
                         model_name = model_data.get("name")
                         if not model_name:
                             continue
 
                         try:
-                            # Get detailed model information
-                            show_response = await client.post(
-                                f"{base_url}/api/show",
-                                json={"name": model_name},
-                                headers={"Content-Type": "application/json"}
-                            )
-                            show_response.raise_for_status()
-                            show_data = show_response.json()
-
-                            # Extract real data from both endpoints
+                            # Extract real data from tags endpoint only
                             details = model_data.get("details", {})
-                            model_info = show_data.get("model_info", {})
-                            capabilities = show_data.get("capabilities", [])
+                            model_info = {}  # No model_info without /api/show
+                            capabilities = []  # No capabilities without /api/show
 
                             # Determine model type based on name patterns (more reliable than capabilities)
                             model_type = _determine_model_type_from_name_only(model_name)
@@ -1207,28 +1033,18 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
                             size_bytes = model_data.get("size", 0)
                             size_mb = round(size_bytes / (1024 * 1024)) if size_bytes > 0 else None
 
-                            # Extract embedding dimensions for embedding models
+                            # Set default embedding dimensions based on common model patterns
                             embedding_dimensions = None
                             if model_type == 'embedding':
-                                logger.debug(f"Processing embedding model {model_name}, model_info keys: {list(model_info.keys())}")
-                                # Check for various embedding length fields
-                                if "nomic-bert.embedding_length" in model_info:
-                                    embedding_dimensions = model_info["nomic-bert.embedding_length"]
-                                    logger.debug(f"Found nomic-bert.embedding_length: {embedding_dimensions} for {model_name}")
-                                elif "bert.embedding_length" in model_info:
-                                    embedding_dimensions = model_info["bert.embedding_length"]
-                                    logger.info(f"Found bert.embedding_length: {embedding_dimensions} for {model_name}")
-                                elif "llama.embedding_length" in model_info:
-                                    embedding_dimensions = model_info["llama.embedding_length"]
-                                    logger.debug(f"Found llama.embedding_length: {embedding_dimensions}")
-                                elif "mistral.embedding_length" in model_info:
-                                    embedding_dimensions = model_info["mistral.embedding_length"]
-                                    logger.debug(f"Found mistral.embedding_length: {embedding_dimensions}")
-                                elif "general.embedding_length" in model_info:
-                                    embedding_dimensions = model_info["general.embedding_length"]
-                                    logger.debug(f"Found general.embedding_length: {embedding_dimensions}")
+                                # Use common defaults based on model name
+                                if "nomic-embed" in model_name.lower():
+                                    embedding_dimensions = 768
+                                elif "bge" in model_name.lower():
+                                    embedding_dimensions = 768
+                                elif "e5" in model_name.lower():
+                                    embedding_dimensions = 1024
                                 else:
-                                    logger.debug(f"No embedding_length field found for {model_name}")
+                                    embedding_dimensions = 768  # Common default
 
                             # Extract real parameter info
                             parameters = details.get("parameter_size")
@@ -1336,12 +1152,47 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
             model_obj = StoredModelInfo(**model_data)
             model_objects.append(model_obj)
 
-        return ModelListResponse(
-            models=model_objects,
-            total_count=len(stored_models),
-            instances_checked=instances_checked,
-            last_discovery=models_data["last_discovery"],
-            cache_status="updated"
+        # Convert to ModelDiscoveryResponse format for frontend
+        chat_models = []
+        embedding_models = []
+        host_status = {}
+        unique_model_names = set()
+        
+        for model in stored_models:
+            unique_model_names.add(model['name'])
+            
+            # Build host status
+            host = model['host'].replace('/v1', '').rstrip('/')
+            if host not in host_status:
+                host_status[host] = {
+                    "status": "online",
+                    "models_count": 0,
+                    "instance_url": model['host']
+                }
+            host_status[host]["models_count"] += 1
+            
+            # Categorize models
+            if model['model_type'] == 'embedding':
+                embedding_models.append({
+                    "name": model['name'],
+                    "instance_url": model['host'],
+                    "dimensions": model.get('embedding_dimensions'),
+                    "size": model.get('size_mb', 0) * 1024 * 1024 if model.get('size_mb') else 0
+                })
+            else:
+                chat_models.append({
+                    "name": model['name'],
+                    "instance_url": model['host'],
+                    "size": model.get('size_mb', 0) * 1024 * 1024 if model.get('size_mb') else 0
+                })
+        
+        return ModelDiscoveryResponse(
+            total_models=len(stored_models),
+            chat_models=chat_models,
+            embedding_models=embedding_models,
+            host_status=host_status,
+            discovery_errors=[],
+            unique_model_names=list(unique_model_names)
         )
 
     except Exception as e:
