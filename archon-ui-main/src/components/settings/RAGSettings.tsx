@@ -798,60 +798,6 @@ export const RAGSettings = ({
                           {getDisplayedEmbeddingModel(ragSettings) || <span className="text-gray-500 italic">No model selected</span>}
                         </td>
                       </tr>
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Overall Configuration Status - Extended Table */}
-                <div className="mt-4 pt-3 border-t border-gray-600">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr>
-                        <th className="text-left py-2 text-gray-300 font-medium">Overall Status</th>
-                        <th className="text-left py-2 text-gray-300 font-medium">LLM Instance</th>
-                        <th className="text-left py-2 text-gray-300 font-medium">Embedding Instance</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr>
-                        <td className="py-2 text-gray-400">Configuration</td>
-                        <td className="py-2">
-                          <span className={llmInstanceConfig.name && llmInstanceConfig.url ? "text-teal-400" : "text-red-400"}>
-                            {llmInstanceConfig.name && llmInstanceConfig.url ? "Configured" : "Not Configured"}
-                          </span>
-                        </td>
-                        <td className="py-2">
-                          <span className={embeddingInstanceConfig.name && embeddingInstanceConfig.url ? "text-teal-400" : "text-red-400"}>
-                            {embeddingInstanceConfig.name && embeddingInstanceConfig.url ? "Configured" : "Not Configured"}
-                          </span>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td className="py-2 text-gray-400">Connection</td>
-                        <td className="py-2">
-                          <span className={llmStatus.online ? "text-teal-400" : "text-red-400"}>
-                            {llmStatus.online ? "Connected" : "Disconnected"}
-                          </span>
-                        </td>
-                        <td className="py-2">
-                          <span className={embeddingStatus.online ? "text-teal-400" : "text-red-400"}>
-                            {embeddingStatus.online ? "Connected" : "Disconnected"}
-                          </span>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td className="py-2 text-gray-400">Model Selected</td>
-                        <td className="py-2">
-                          <span className={getDisplayedChatModel(ragSettings) ? "text-teal-400" : "text-yellow-400"}>
-                            {getDisplayedChatModel(ragSettings) ? "Yes" : "No"}
-                          </span>
-                        </td>
-                        <td className="py-2">
-                          <span className={getDisplayedEmbeddingModel(ragSettings) ? "text-teal-400" : "text-yellow-400"}>
-                            {getDisplayedEmbeddingModel(ragSettings) ? "Yes" : "No"}
-                          </span>
-                        </td>
-                      </tr>
                       <tr>
                         <td className="py-2 text-gray-400">Available Models</td>
                         <td className="py-2">
@@ -890,29 +836,31 @@ export const RAGSettings = ({
                     </tbody>
                   </table>
                   
-                  {/* Summary Line */}
-                  <div className="mt-3 pt-2 border-t border-gray-600 flex items-center justify-between text-sm">
-                    <span className="text-gray-300">System Readiness:</span>
-                    <span className={(llmStatus.online && embeddingStatus.online) ? "text-teal-400 font-medium" : (llmStatus.online || embeddingStatus.online) ? "text-yellow-400" : "text-red-400"}>
-                      {(llmStatus.online && embeddingStatus.online) ? "✓ Ready (Both Instances Online)" : 
-                       (llmStatus.online || embeddingStatus.online) ? "⚠ Partial (1 of 2 Online)" : "✗ Not Ready (No Instances Online)"}
-                    </span>
-                  </div>
-                  
-                  {/* Model Metrics */}
-                  <div className="mt-3 flex items-center gap-4 text-xs text-gray-400">
-                    <div className="flex items-center gap-1">
-                      <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                        <path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z" />
-                      </svg>
-                      <span>Available Models:</span>
-                      <span className="text-white">
-                        {ollamaMetrics.loading ? (
-                          <Loader className="w-3 h-3 animate-spin inline" />
-                        ) : (
-                          `${ollamaMetrics.totalModels} total (${ollamaMetrics.chatModels} chat, ${ollamaMetrics.embeddingModels} embedding)`
-                        )}
+                  {/* System Readiness Summary */}
+                  <div className="mt-4 pt-3 border-t border-gray-600">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-gray-300">System Readiness:</span>
+                      <span className={(llmStatus.online && embeddingStatus.online) ? "text-teal-400 font-medium" : (llmStatus.online || embeddingStatus.online) ? "text-yellow-400" : "text-red-400"}>
+                        {(llmStatus.online && embeddingStatus.online) ? "✓ Ready (Both Instances Online)" : 
+                         (llmStatus.online || embeddingStatus.online) ? "⚠ Partial (1 of 2 Online)" : "✗ Not Ready (No Instances Online)"}
                       </span>
+                    </div>
+                    
+                    {/* Overall Model Metrics */}
+                    <div className="mt-3 flex items-center gap-4 text-xs text-gray-400">
+                      <div className="flex items-center gap-1">
+                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                          <path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z" />
+                        </svg>
+                        <span>Overall Available:</span>
+                        <span className="text-white">
+                          {ollamaMetrics.loading ? (
+                            <Loader className="w-3 h-3 animate-spin inline" />
+                          ) : (
+                            `${ollamaMetrics.totalModels} total (${ollamaMetrics.chatModels} chat, ${ollamaMetrics.embeddingModels} embedding)`
+                          )}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 </div>
