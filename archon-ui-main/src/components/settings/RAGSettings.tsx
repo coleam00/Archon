@@ -173,7 +173,10 @@ export const RAGSettings = ({
     chatModels: 0,
     embeddingModels: 0,
     activeHosts: 0,
-    loading: true
+    loading: true,
+    // Per-instance model counts
+    llmInstanceModels: { chat: 0, embedding: 0, total: 0 },
+    embeddingInstanceModels: { chat: 0, embedding: 0, total: 0 }
   });
   const { showToast } = useToast();
 
@@ -342,6 +345,24 @@ export const RAGSettings = ({
         const chatModels = uniqueModels.filter((model: any) => model.model_type === 'chat');
         const embeddingModels = uniqueModels.filter((model: any) => model.model_type === 'embedding');
         
+        // Count models per instance
+        const llmInstanceUrl = llmInstanceConfig.url.replace('/v1', '');
+        const embeddingInstanceUrl = embeddingInstanceConfig.url.replace('/v1', '');
+        
+        // Models for LLM instance
+        const llmInstanceModelsList = models.filter((model: any) => 
+          model.host === llmInstanceUrl || model.instance_url === llmInstanceConfig.url
+        );
+        const llmChatModels = llmInstanceModelsList.filter((model: any) => model.model_type === 'chat');
+        const llmEmbeddingModels = llmInstanceModelsList.filter((model: any) => model.model_type === 'embedding');
+        
+        // Models for Embedding instance
+        const embeddingInstanceModelsList = models.filter((model: any) => 
+          model.host === embeddingInstanceUrl || model.instance_url === embeddingInstanceConfig.url
+        );
+        const embChatModels = embeddingInstanceModelsList.filter((model: any) => model.model_type === 'chat');
+        const embEmbeddingModels = embeddingInstanceModelsList.filter((model: any) => model.model_type === 'embedding');
+        
         // Count active hosts based on online configurations
         const activeHosts = (llmStatus.online ? 1 : 0) + (embeddingStatus.online ? 1 : 0);
 
@@ -350,7 +371,18 @@ export const RAGSettings = ({
           chatModels: chatModels.length,
           embeddingModels: embeddingModels.length,
           activeHosts,
-          loading: false
+          loading: false,
+          // Per-instance model counts
+          llmInstanceModels: {
+            chat: llmChatModels.length,
+            embedding: llmEmbeddingModels.length,
+            total: llmInstanceModelsList.length
+          },
+          embeddingInstanceModels: {
+            chat: embChatModels.length,
+            embedding: embEmbeddingModels.length,
+            total: embeddingInstanceModelsList.length
+          }
         });
       } else {
         console.error('Failed to fetch models:', modelsData);
@@ -817,6 +849,41 @@ export const RAGSettings = ({
                         <td className="py-2">
                           <span className={getDisplayedEmbeddingModel(ragSettings) ? "text-teal-400" : "text-yellow-400"}>
                             {getDisplayedEmbeddingModel(ragSettings) ? "Yes" : "No"}
+                          </span>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="py-2 text-gray-400">Available Models</td>
+                        <td className="py-2">
+                          <span className="text-white">
+                            {ollamaMetrics.loading ? (
+                              <Loader className="w-3 h-3 animate-spin inline" />
+                            ) : (
+                              <>
+                                {ollamaMetrics.llmInstanceModels.total} total
+                                {ollamaMetrics.llmInstanceModels.total > 0 && (
+                                  <span className="text-gray-400 text-xs ml-1">
+                                    ({ollamaMetrics.llmInstanceModels.chat} chat, {ollamaMetrics.llmInstanceModels.embedding} embed)
+                                  </span>
+                                )}
+                              </>
+                            )}
+                          </span>
+                        </td>
+                        <td className="py-2">
+                          <span className="text-white">
+                            {ollamaMetrics.loading ? (
+                              <Loader className="w-3 h-3 animate-spin inline" />
+                            ) : (
+                              <>
+                                {ollamaMetrics.embeddingInstanceModels.total} total
+                                {ollamaMetrics.embeddingInstanceModels.total > 0 && (
+                                  <span className="text-gray-400 text-xs ml-1">
+                                    ({ollamaMetrics.embeddingInstanceModels.chat} chat, {ollamaMetrics.embeddingInstanceModels.embedding} embed)
+                                  </span>
+                                )}
+                              </>
+                            )}
                           </span>
                         </td>
                       </tr>
