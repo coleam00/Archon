@@ -965,7 +965,7 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
             'updated_at': datetime.utcnow().isoformat()
         }
         
-        await supabase.table('archon_settings').upsert(settings_data).execute()
+        supabase.table('archon_settings').upsert(settings_data).execute()
         logger.info(f"Stored {len(mock_models)} mock models to settings")
         
         return ModelListResponse(
