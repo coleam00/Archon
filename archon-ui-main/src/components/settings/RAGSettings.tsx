@@ -120,10 +120,52 @@ export const RAGSettings = ({
       }));
     }
   }, [ragSettings.OLLAMA_EMBEDDING_URL, ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME]);
+
+  // Load API credentials for status checking
+  useEffect(() => {
+    const loadApiCredentials = async () => {
+      try {
+        const apiKeysCredentials = await credentialsService.getCredentialsByCategory('api_keys');
+        const credentials: {[key: string]: string} = {};
+        apiKeysCredentials.forEach((cred) => {
+          credentials[cred.key] = cred.value;
+        });
+        setApiCredentials(credentials);
+      } catch (error) {
+        console.error('Failed to load API credentials for status checking:', error);
+      }
+    };
+
+    loadApiCredentials();
+  }, []);
+
+  // Reload API credentials when ragSettings change (e.g., after saving)
+  useEffect(() => {
+    const reloadApiCredentials = async () => {
+      try {
+        const apiKeysCredentials = await credentialsService.getCredentialsByCategory('api_keys');
+        const credentials: {[key: string]: string} = {};
+        apiKeysCredentials.forEach((cred) => {
+          credentials[cred.key] = cred.value;
+        });
+        setApiCredentials(credentials);
+      } catch (error) {
+        console.error('Failed to reload API credentials:', error);
+      }
+    };
+
+    // Only reload if we have ragSettings (avoid initial empty load)
+    if (Object.keys(ragSettings).length > 0) {
+      reloadApiCredentials();
+    }
+  }, [ragSettings]);
   
   // Status tracking
   const [llmStatus, setLLMStatus] = useState({ online: false, responseTime: null, checking: false });
   const [embeddingStatus, setEmbeddingStatus] = useState({ online: false, responseTime: null, checking: false });
+  
+  // API key credentials for status checking
+  const [apiCredentials, setApiCredentials] = useState<{[key: string]: string}>({});
   
   // Ollama metrics state
   const [ollamaMetrics, setOllamaMetrics] = useState({
@@ -347,11 +389,11 @@ export const RAGSettings = ({
     switch (providerKey) {
       case 'openai':
         // Check if OpenAI API key is configured
-        const hasOpenAIKey = ragSettings.OPENAI_API_KEY && ragSettings.OPENAI_API_KEY.trim().length > 0;
+        const hasOpenAIKey = apiCredentials.OPENAI_API_KEY && apiCredentials.OPENAI_API_KEY.trim().length > 0;
         return hasOpenAIKey ? 'configured' : 'missing';
       case 'google':
-        // Check if Google API key is configured
-        const hasGoogleKey = ragSettings.GOOGLE_API_KEY && ragSettings.GOOGLE_API_KEY.trim().length > 0;
+        // Check if Google API key is configured  
+        const hasGoogleKey = apiCredentials.GOOGLE_API_KEY && apiCredentials.GOOGLE_API_KEY.trim().length > 0;
         return hasGoogleKey ? 'configured' : 'missing';
       case 'ollama':
         // Check if both LLM and embedding instances are configured and online
@@ -359,9 +401,17 @@ export const RAGSettings = ({
         if (llmStatus.online || embeddingStatus.online) return 'partial';
         return 'missing';
       case 'anthropic':
-      case 'grok':  
+        // Check if Anthropic API key is configured
+        const hasAnthropicKey = apiCredentials.ANTHROPIC_API_KEY && apiCredentials.ANTHROPIC_API_KEY.trim().length > 0;
+        return hasAnthropicKey ? 'configured' : 'missing';
+      case 'grok':
+        // Check if Grok API key is configured
+        const hasGrokKey = apiCredentials.GROK_API_KEY && apiCredentials.GROK_API_KEY.trim().length > 0;
+        return hasGrokKey ? 'configured' : 'missing';
       case 'openrouter':
-        return 'missing'; // Coming soon providers
+        // Check if OpenRouter API key is configured
+        const hasOpenRouterKey = apiCredentials.OPENROUTER_API_KEY && apiCredentials.OPENROUTER_API_KEY.trim().length > 0;
+        return hasOpenRouterKey ? 'configured' : 'missing';
       default:
         return 'missing';
     }
@@ -420,9 +470,6 @@ export const RAGSettings = ({
 {(() => {
                   const status = getProviderStatus(provider.key);
                   const isSelected = ragSettings.LLM_PROVIDER === provider.key;
-                  
-                  // Only show status indicator if provider is selected
-                  if (!isSelected) return null;
                   
                   if (status === 'configured') {
                     return (
