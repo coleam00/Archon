@@ -519,14 +519,42 @@ async def get_stored_models_endpoint() -> ModelListResponse:
                 cache_status="empty"
             )
 
-        models_data = json.loads(models_setting)
-        stored_models = [StoredModelInfo(**model) for model in models_data.get("models", [])]
+        models_data = json.loads(models_setting) if isinstance(models_setting, str) else models_setting
+        
+        # Handle both old format (direct list) and new format (object with models key)
+        if isinstance(models_data, list):
+            # Old format - direct list of models
+            models_list = models_data
+            total_count = len(models_list)
+            instances_checked = 0
+            last_discovery = None
+        else:
+            # New format - object with models key
+            models_list = models_data.get("models", [])
+            total_count = models_data.get("total_count", len(models_list))
+            instances_checked = models_data.get("instances_checked", 0)
+            last_discovery = models_data.get("last_discovery")
+        
+        # Convert to StoredModelInfo objects, handling missing fields
+        stored_models = []
+        for model in models_list:
+            try:
+                # Ensure required fields exist
+                if isinstance(model, dict):
+                    stored_model = StoredModelInfo(
+                        name=model.get('name', 'Unknown'),
+                        host=model.get('instance_url', model.get('host', 'Unknown')),
+                        model_type=model.get('model_type', 'chat')
+                    )
+                    stored_models.append(stored_model)
+            except Exception as model_error:
+                logger.warning(f"Failed to parse stored model {model}: {model_error}")
 
         return ModelListResponse(
             models=stored_models,
-            total_count=models_data.get("total_count", len(stored_models)),
-            instances_checked=models_data.get("instances_checked", 0),
-            last_discovery=models_data.get("last_discovery"),
+            total_count=total_count,
+            instances_checked=instances_checked,
+            last_discovery=last_discovery,
             cache_status="loaded"
         )
 
@@ -956,17 +984,30 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
         
         # Store mock models (always store for emergency mode)
         from ..utils import get_supabase_client
+        import json
         supabase = get_supabase_client()
+        
+        # Format the data to match expected structure
+        models_data = {
+            'models': mock_models,
+            'total_count': len(mock_models),
+            'instances_checked': len(request.instance_urls),
+            'last_discovery': datetime.utcnow().isoformat()
+        }
         
         settings_data = {
             'key': 'ollama_discovered_models',
-            'value': mock_models,
+            'value': json.dumps(models_data),
             'category': 'ollama',
             'updated_at': datetime.utcnow().isoformat()
         }
         
-        supabase.table('archon_settings').upsert(settings_data).execute()
-        logger.info(f"Stored {len(mock_models)} mock models to settings")
+        # Use upsert to handle existing keys
+        try:
+            supabase.table('archon_settings').upsert(settings_data, on_conflict='key').execute()
+            logger.info(f"Stored {len(mock_models)} mock models to settings")
+        except Exception as storage_error:
+            logger.warning(f"Failed to store models: {storage_error}, but continuing with response")
         
         return ModelListResponse(
             models=mock_models,
