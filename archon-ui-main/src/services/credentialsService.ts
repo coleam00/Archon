@@ -19,7 +19,9 @@ export interface RagSettings {
   MODEL_CHOICE: string;
   LLM_PROVIDER?: string;
   LLM_BASE_URL?: string;
+  LLM_INSTANCE_NAME?: string;
   OLLAMA_EMBEDDING_URL?: string;
+  OLLAMA_EMBEDDING_INSTANCE_NAME?: string;
   EMBEDDING_MODEL?: string;
   // Crawling Performance Settings
   CRAWL_BATCH_SIZE?: number;
@@ -167,7 +169,9 @@ class CredentialsService {
       MODEL_CHOICE: "gpt-4.1-nano",
       LLM_PROVIDER: "openai",
       LLM_BASE_URL: "",
+      LLM_INSTANCE_NAME: "",
       OLLAMA_EMBEDDING_URL: "",
+      OLLAMA_EMBEDDING_INSTANCE_NAME: "",
       EMBEDDING_MODEL: "",
       // Crawling Performance Settings defaults
       CRAWL_BATCH_SIZE: 50,
@@ -196,7 +200,9 @@ class CredentialsService {
             "MODEL_CHOICE",
             "LLM_PROVIDER",
             "LLM_BASE_URL",
+            "LLM_INSTANCE_NAME",
             "OLLAMA_EMBEDDING_URL",
+            "OLLAMA_EMBEDDING_INSTANCE_NAME",
             "EMBEDDING_MODEL",
             "CRAWL_WAIT_STRATEGY",
           ].includes(cred.key)

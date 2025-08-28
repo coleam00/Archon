@@ -90,30 +90,36 @@ export const RAGSettings = ({
   useEffect(() => {
     console.log('🔄 LLM useEffect triggered:', { 
       'ragSettings.LLM_BASE_URL': ragSettings.LLM_BASE_URL,
-      'current llmInstanceConfig.url': llmInstanceConfig.url
+      'ragSettings.LLM_INSTANCE_NAME': ragSettings.LLM_INSTANCE_NAME,
+      'current llmInstanceConfig.url': llmInstanceConfig.url,
+      'current llmInstanceConfig.name': llmInstanceConfig.name
     });
-    if (ragSettings.LLM_BASE_URL) {
-      console.log('✅ Updating LLM instance config with URL:', ragSettings.LLM_BASE_URL);
+    if (ragSettings.LLM_BASE_URL || ragSettings.LLM_INSTANCE_NAME) {
+      console.log('✅ Updating LLM instance config with URL:', ragSettings.LLM_BASE_URL, 'and name:', ragSettings.LLM_INSTANCE_NAME);
       setLLMInstanceConfig(prev => ({
         ...prev,
-        url: ragSettings.LLM_BASE_URL
+        url: ragSettings.LLM_BASE_URL || prev.url,
+        name: ragSettings.LLM_INSTANCE_NAME || prev.name
       }));
     }
-  }, [ragSettings.LLM_BASE_URL]);
+  }, [ragSettings.LLM_BASE_URL, ragSettings.LLM_INSTANCE_NAME]);
 
   useEffect(() => {
     console.log('🔄 Embedding useEffect triggered:', { 
       'ragSettings.OLLAMA_EMBEDDING_URL': ragSettings.OLLAMA_EMBEDDING_URL,
-      'current embeddingInstanceConfig.url': embeddingInstanceConfig.url
+      'ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME': ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME,
+      'current embeddingInstanceConfig.url': embeddingInstanceConfig.url,
+      'current embeddingInstanceConfig.name': embeddingInstanceConfig.name
     });
-    if (ragSettings.OLLAMA_EMBEDDING_URL) {
-      console.log('✅ Updating embedding instance config with URL:', ragSettings.OLLAMA_EMBEDDING_URL);
+    if (ragSettings.OLLAMA_EMBEDDING_URL || ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME) {
+      console.log('✅ Updating embedding instance config with URL:', ragSettings.OLLAMA_EMBEDDING_URL, 'and name:', ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME);
       setEmbeddingInstanceConfig(prev => ({
         ...prev,
-        url: ragSettings.OLLAMA_EMBEDDING_URL
+        url: ragSettings.OLLAMA_EMBEDDING_URL || prev.url,
+        name: ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME || prev.name
       }));
     }
-  }, [ragSettings.OLLAMA_EMBEDDING_URL]);
+  }, [ragSettings.OLLAMA_EMBEDDING_URL, ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME]);
   
   // Status tracking
   const [llmStatus, setLLMStatus] = useState({ online: false, responseTime: null, checking: false });
@@ -766,7 +772,9 @@ export const RAGSettings = ({
                   const updatedSettings = {
                     ...ragSettings,
                     LLM_BASE_URL: llmInstanceConfig.url,
-                    OLLAMA_EMBEDDING_URL: embeddingInstanceConfig.url
+                    LLM_INSTANCE_NAME: llmInstanceConfig.name,
+                    OLLAMA_EMBEDDING_URL: embeddingInstanceConfig.url,
+                    OLLAMA_EMBEDDING_INSTANCE_NAME: embeddingInstanceConfig.name
                   };
                   
                   await credentialsService.updateRagSettings(updatedSettings);
