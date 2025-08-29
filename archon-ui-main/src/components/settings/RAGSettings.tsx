@@ -345,21 +345,23 @@ export const RAGSettings = ({
         const chatModels = uniqueModels.filter((model: any) => model.model_type === 'chat');
         const embeddingModels = uniqueModels.filter((model: any) => model.model_type === 'embedding');
         
-        // Count models per instance
-        const llmInstanceUrl = llmInstanceConfig.url.replace('/v1', '');
-        const embeddingInstanceUrl = embeddingInstanceConfig.url.replace('/v1', '');
+        // Count models per instance - normalize URLs for comparison
+        const normalizeLLMUrl = llmInstanceConfig.url.replace('/v1', '').replace(/\/$/, '');
+        const normalizeEmbeddingUrl = embeddingInstanceConfig.url.replace('/v1', '').replace(/\/$/, '');
         
-        // Models for LLM instance
-        const llmInstanceModelsList = models.filter((model: any) => 
-          model.host === llmInstanceUrl || model.instance_url === llmInstanceConfig.url
-        );
+        // Models for LLM instance - match by normalized URL
+        const llmInstanceModelsList = models.filter((model: any) => {
+          const normalizedHost = model.host?.replace(/\/$/, '') || '';
+          return normalizedHost === normalizeLLMUrl;
+        });
         const llmChatModels = llmInstanceModelsList.filter((model: any) => model.model_type === 'chat');
         const llmEmbeddingModels = llmInstanceModelsList.filter((model: any) => model.model_type === 'embedding');
         
-        // Models for Embedding instance
-        const embeddingInstanceModelsList = models.filter((model: any) => 
-          model.host === embeddingInstanceUrl || model.instance_url === embeddingInstanceConfig.url
-        );
+        // Models for Embedding instance - match by normalized URL
+        const embeddingInstanceModelsList = models.filter((model: any) => {
+          const normalizedHost = model.host?.replace(/\/$/, '') || '';
+          return normalizedHost === normalizeEmbeddingUrl;
+        });
         const embChatModels = embeddingInstanceModelsList.filter((model: any) => model.model_type === 'chat');
         const embEmbeddingModels = embeddingInstanceModelsList.filter((model: any) => model.model_type === 'embedding');
         
@@ -801,36 +803,42 @@ export const RAGSettings = ({
                       <tr>
                         <td className="py-2 text-gray-400">Available Models</td>
                         <td className="py-2">
-                          <span className="text-white">
-                            {ollamaMetrics.loading ? (
-                              <Loader className="w-3 h-3 animate-spin inline" />
-                            ) : (
-                              <>
-                                {ollamaMetrics.llmInstanceModels.total} total
-                                {ollamaMetrics.llmInstanceModels.total > 0 && (
-                                  <span className="text-gray-400 text-xs ml-1">
-                                    ({ollamaMetrics.llmInstanceModels.chat} chat, {ollamaMetrics.llmInstanceModels.embedding} embed)
+                          {ollamaMetrics.loading ? (
+                            <Loader className="w-3 h-3 animate-spin inline" />
+                          ) : (
+                            <div className="text-white">
+                              <div className="font-medium">{ollamaMetrics.llmInstanceModels.total} Total Models</div>
+                              {ollamaMetrics.llmInstanceModels.total > 0 && (
+                                <div className="text-xs text-gray-400 mt-1">
+                                  <span className="inline-block mr-3">
+                                    <span className="text-blue-400">{ollamaMetrics.llmInstanceModels.chat}</span> Chat
                                   </span>
-                                )}
-                              </>
-                            )}
-                          </span>
+                                  <span className="inline-block">
+                                    <span className="text-green-400">{ollamaMetrics.llmInstanceModels.embedding}</span> Embedding
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </td>
                         <td className="py-2">
-                          <span className="text-white">
-                            {ollamaMetrics.loading ? (
-                              <Loader className="w-3 h-3 animate-spin inline" />
-                            ) : (
-                              <>
-                                {ollamaMetrics.embeddingInstanceModels.total} total
-                                {ollamaMetrics.embeddingInstanceModels.total > 0 && (
-                                  <span className="text-gray-400 text-xs ml-1">
-                                    ({ollamaMetrics.embeddingInstanceModels.chat} chat, {ollamaMetrics.embeddingInstanceModels.embedding} embed)
+                          {ollamaMetrics.loading ? (
+                            <Loader className="w-3 h-3 animate-spin inline" />
+                          ) : (
+                            <div className="text-white">
+                              <div className="font-medium">{ollamaMetrics.embeddingInstanceModels.total} Total Models</div>
+                              {ollamaMetrics.embeddingInstanceModels.total > 0 && (
+                                <div className="text-xs text-gray-400 mt-1">
+                                  <span className="inline-block mr-3">
+                                    <span className="text-blue-400">{ollamaMetrics.embeddingInstanceModels.chat}</span> Chat
                                   </span>
-                                )}
-                              </>
-                            )}
-                          </span>
+                                  <span className="inline-block">
+                                    <span className="text-green-400">{ollamaMetrics.embeddingInstanceModels.embedding}</span> Embedding
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </td>
                       </tr>
                     </tbody>
