@@ -130,7 +130,6 @@ async def create_embedding(text: str, provider: str | None = None) -> list[float
 
 async def create_embeddings_batch(
     texts: list[str],
-    websocket: Any | None = None,
     progress_callback: Any | None = None,
     provider: str | None = None,
 ) -> EmbeddingBatchResult:
@@ -144,7 +143,6 @@ async def create_embeddings_batch(
 
     Args:
         texts: List of texts to create embeddings for
-        websocket: Optional WebSocket for progress updates
         progress_callback: Optional callback for progress reporting
         provider: Optional provider override
 
@@ -294,19 +292,6 @@ async def create_embeddings_batch(
                             message += f" ({result.failure_count} failed)"
 
                         await progress_callback(message, progress)
-
-                    # WebSocket update
-                    if websocket:
-                        processed = result.success_count + result.failure_count
-                        ws_progress = (processed / len(texts)) * 100
-                        await websocket.send_json({
-                            "type": "embedding_progress",
-                            "processed": processed,
-                            "successful": result.success_count,
-                            "failed": result.failure_count,
-                            "total": len(texts),
-                            "percentage": ws_progress,
-                        })
 
                     # Yield control
                     await asyncio.sleep(0.01)

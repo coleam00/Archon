@@ -107,7 +107,7 @@ def process_batch(items):
 Archon V2 Alpha is a microservices-based knowledge management system with MCP (Model Context Protocol) integration:
 
 - **Frontend (port 3737)**: React + TypeScript + Vite + TailwindCSS
-- **Main Server (port 8181)**: FastAPI + Socket.IO for real-time updates
+- **Main Server (port 8181)**: FastAPI with HTTP polling for updates
 - **MCP Server (port 8051)**: Lightweight HTTP-based MCP protocol server
 - **Agents Service (port 8052)**: PydanticAI agents for AI/ML operations
 - **Database**: Supabase (PostgreSQL + pgvector for embeddings)
@@ -167,19 +167,28 @@ uv run pytest tests/test_service_integration.py -v
 
 ### Projects & Tasks (when enabled)
 
-- `GET /api/projects` - List projects
+- `GET /api/projects` - List all projects
 - `POST /api/projects` - Create project
-- `GET /api/projects/{id}/tasks` - Get project tasks
-- `POST /api/projects/{id}/tasks` - Create task
+- `GET /api/projects/{id}` - Get single project
+- `PUT /api/projects/{id}` - Update project
+- `DELETE /api/projects/{id}` - Delete project
+- `GET /api/projects/{id}/tasks` - Get tasks for project (use this, not getTasks)
+- `POST /api/tasks` - Create task
+- `PUT /api/tasks/{id}` - Update task
+- `DELETE /api/tasks/{id}` - Delete task
 
-## Socket.IO Events
+## Polling Architecture
 
-Real-time updates via Socket.IO on port 8181:
+### HTTP Polling (replaced Socket.IO)
+- **Polling intervals**: 1-2s for active operations, 5-10s for background data
+- **ETag caching**: Reduces bandwidth by ~70% via 304 Not Modified responses
+- **Smart pausing**: Stops polling when browser tab is inactive
+- **Progress endpoints**: `/api/progress/crawl`, `/api/progress/project-creation`
 
-- `crawl_progress` - Website crawling progress
-- `project_creation_progress` - Project setup progress
-- `task_update` - Task status changes
-- `knowledge_update` - Knowledge base changes
+### Key Polling Hooks
+- `usePolling` - Generic polling with ETag support
+- `useDatabaseMutation` - Optimistic updates with rollback
+- `useProjectMutation` - Project-specific operations
 
 ## Environment Variables
 
@@ -225,6 +234,24 @@ Key tables in Supabase:
 - `projects` - Project management (optional feature)
 - `tasks` - Task tracking linked to projects
 - `code_examples` - Extracted code snippets
+
+## API Naming Conventions
+
+### Task Status Values
+Use database values directly (no UI mapping):
+- `todo`, `doing`, `review`, `done`
+
+### Service Method Patterns
+- `get[Resource]sByProject(projectId)` - Scoped queries
+- `get[Resource](id)` - Single resource
+- `create[Resource](data)` - Create operations
+- `update[Resource](id, updates)` - Updates
+- `delete[Resource](id)` - Soft deletes
+
+### State Naming
+- `is[Action]ing` - Loading states (e.g., `isSwitchingProject`)
+- `[resource]Error` - Error messages
+- `selected[Resource]` - Current selection
 
 ## Common Development Tasks
 
@@ -273,7 +300,7 @@ When connected to Cursor/Windsurf:
 
 - Projects feature is optional - toggle in Settings UI
 - All services communicate via HTTP, not gRPC
-- Socket.IO handles all real-time updates
+- HTTP polling handles all updates (Socket.IO removed)
 - Frontend uses Vite proxy for API calls in development
 - Python backend uses `uv` for dependency management
 - Docker Compose handles service orchestration

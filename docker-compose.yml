@@ -41,7 +41,7 @@ services:
         "python",
         "-m",
         "uvicorn",
-        "src.server.main:socket_app",
+        "src.server.main:app",
         "--host",
         "0.0.0.0",
         "--port",

@@ -4,9 +4,11 @@ Batch Crawling Strategy
 Handles batch crawling of multiple URLs in parallel.
 """
 
-from typing import List, Dict, Any, Optional, Callable
+from collections.abc import Callable
+from typing import Any, Optional, Awaitable
 
-from crawl4ai import CrawlerRunConfig, CacheMode, MemoryAdaptiveDispatcher
+from crawl4ai import CacheMode, CrawlerRunConfig, MemoryAdaptiveDispatcher
+
 from ....config.logfire_config import get_logger
 from ...credential_service import credential_service
 
@@ -29,14 +31,15 @@ class BatchCrawlStrategy:
 
     async def crawl_batch_with_progress(
         self,
-        urls: List[str],
+        urls: list[str],
         transform_url_func: Callable[[str], str],
         is_documentation_site_func: Callable[[str], bool],
-        max_concurrent: int = None,
-        progress_callback: Optional[Callable] = None,
+        max_concurrent: int | None = None,
+        progress_callback: Callable[..., Awaitable[None]] | None = None,
         start_progress: int = 15,
         end_progress: int = 60,
-    ) -> List[Dict[str, Any]]:
+        cancellation_check: Callable[[], None] | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Batch crawl multiple URLs in parallel with progress reporting.
 
@@ -63,6 +66,8 @@ class BatchCrawlStrategy:
             settings = await credential_service.get_credentials_by_category("rag_strategy")
             batch_size = int(settings.get("CRAWL_BATCH_SIZE", "50"))
             if max_concurrent is None:
+                # CRAWL_MAX_CONCURRENT: Pages to crawl in parallel within this single crawl operation
+                # (Different from server-level CONCURRENT_CRAWL_LIMIT which limits total crawl operations)
                 max_concurrent = int(settings.get("CRAWL_MAX_CONCURRENT", "10"))
             memory_threshold = float(settings.get("MEMORY_THRESHOLD_PERCENT", "80"))
             check_interval = float(settings.get("DISPATCHER_CHECK_INTERVAL", "0.5"))
@@ -122,8 +127,15 @@ class BatchCrawlStrategy:
         async def report_progress(percentage: int, message: str, **kwargs):
             """Helper to report progress if callback is available"""
             if progress_callback:
-                step_info = {"currentStep": message, "stepMessage": message, **kwargs}
-                await progress_callback("crawling", percentage, message, step_info=step_info)
+                # Pass step information as flattened kwargs for consistency
+                await progress_callback(
+                    "crawling", 
+                    percentage, 
+                    message, 
+                    currentStep=message,
+                    stepMessage=message,
+                    **kwargs
+                )
 
         total_urls = len(urls)
         await report_progress(start_progress, f"Starting to crawl {total_urls} URLs...")
@@ -141,6 +153,10 @@ class BatchCrawlStrategy:
             url_mapping[transformed] = url
 
         for i in range(0, total_urls, batch_size):
+            # Check for cancellation before processing each batch
+            if cancellation_check:
+                cancellation_check()
+            
             batch_urls = transformed_urls[i : i + batch_size]
             batch_start = i
             batch_end = min(i + batch_size, total_urls)
@@ -164,6 +180,15 @@ class BatchCrawlStrategy:
 
             # Handle streaming results
             async for result in batch_results:
+                # Check for cancellation during streaming
+                if cancellation_check:
+                    try:
+                        cancellation_check()
+                    except Exception:
+                        # If cancelled, break out of the loop
+                        logger.info("Batch crawl cancelled during processing")
+                        break
+                
                 processed += 1
                 if result.success and result.markdown:
                     # Map back to original URL

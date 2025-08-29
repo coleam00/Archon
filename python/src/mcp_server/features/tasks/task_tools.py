@@ -7,12 +7,12 @@ Mirrors the functionality of the original manage_task tool but with individual t
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 from urllib.parse import urljoin
 
 import httpx
-from mcp.server.fastmcp import Context, FastMCP
 
+from mcp.server.fastmcp import Context, FastMCP
 from src.mcp_server.utils.error_handling import MCPErrorFormatter
 from src.mcp_server.utils.timeout_config import get_default_timeout
 from src.server.config.service_discovery import get_api_url
@@ -31,9 +31,9 @@ def register_task_tools(mcp: FastMCP):
         description: str = "",
         assignee: str = "User",
         task_order: int = 0,
-        feature: Optional[str] = None,
-        sources: Optional[List[Dict[str, str]]] = None,
-        code_examples: Optional[List[Dict[str, str]]] = None,
+        feature: str | None = None,
+        sources: list[dict[str, str]] | None = None,
+        code_examples: list[dict[str, str]] | None = None,
     ) -> str:
         """
         Create a new task in a project.
@@ -151,9 +151,9 @@ def register_task_tools(mcp: FastMCP):
     @mcp.tool()
     async def list_tasks(
         ctx: Context,
-        filter_by: Optional[str] = None,
-        filter_value: Optional[str] = None,
-        project_id: Optional[str] = None,
+        filter_by: str | None = None,
+        filter_value: str | None = None,
+        project_id: str | None = None,
         include_closed: bool = False,
         page: int = 1,
         per_page: int = 50,
@@ -182,7 +182,7 @@ def register_task_tools(mcp: FastMCP):
             timeout = get_default_timeout()
 
             # Build URL and parameters based on filter type
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "page": page,
                 "per_page": per_page,
                 "exclude_large_fields": True,  # Always exclude large fields in MCP responses
@@ -302,14 +302,14 @@ def register_task_tools(mcp: FastMCP):
     async def update_task(
         ctx: Context,
         task_id: str,
-        title: Optional[str] = None,
-        description: Optional[str] = None,
-        status: Optional[str] = None,
-        assignee: Optional[str] = None,
-        task_order: Optional[int] = None,
-        feature: Optional[str] = None,
-        sources: Optional[List[Dict[str, str]]] = None,
-        code_examples: Optional[List[Dict[str, str]]] = None,
+        title: str | None = None,
+        description: str | None = None,
+        status: str | None = None,
+        assignee: str | None = None,
+        task_order: int | None = None,
+        feature: str | None = None,
+        sources: list[dict[str, str]] | None = None,
+        code_examples: list[dict[str, str]] | None = None,
     ) -> str:
         """
         Update a task's properties.

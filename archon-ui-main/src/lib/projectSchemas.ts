@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 // Base validation schemas
 export const DatabaseTaskStatusSchema = z.enum(['todo', 'doing', 'review', 'done']);
-export const UITaskStatusSchema = z.enum(['backlog', 'in-progress', 'review', 'complete']);
+// Using database status values directly - no UI mapping needed
 export const TaskPrioritySchema = z.enum(['low', 'medium', 'high', 'critical']);
 export const ProjectColorSchema = z.enum(['cyan', 'purple', 'pink', 'blue', 'orange', 'green']);
 
@@ -99,7 +99,7 @@ export const TaskSchema = z.object({
   feature: z.string().optional(),
   featureColor: z.string().optional(),
   priority: TaskPrioritySchema.optional(),
-  uiStatus: UITaskStatusSchema.optional()
+  // No UI-specific status mapping needed
 });
 
 // Update task status schema (for drag & drop operations)
@@ -125,29 +125,6 @@ export const PaginatedResponseSchema = <T extends z.ZodTypeAny>(itemSchema: T) =
     limit: z.number().min(1),
     hasMore: z.boolean()
   });
-
-// WebSocket event schemas
-export const ProjectUpdateEventSchema = z.object({
-  type: z.enum(['PROJECT_UPDATED', 'PROJECT_CREATED', 'PROJECT_DELETED']),
-  projectId: z.string().uuid(),
-  userId: z.string(),
-  timestamp: z.string().datetime(),
-  data: z.record(z.any())
-});
-
-export const TaskUpdateEventSchema = z.object({
-  type: z.enum(['TASK_MOVED', 'TASK_CREATED', 'TASK_UPDATED', 'TASK_DELETED']),
-  taskId: z.string().uuid(),
-  projectId: z.string().uuid(),
-  userId: z.string(),
-  timestamp: z.string().datetime(),
-  data: z.record(z.any())
-});
-
-export const ProjectManagementEventSchema = z.union([
-  ProjectUpdateEventSchema,
-  TaskUpdateEventSchema
-]);
 
 // Validation helper functions
 export function validateProject(data: unknown) {

@@ -72,7 +72,7 @@ class TestSourceIDGeneration:
         """Test that URL normalization works correctly."""
         handler = URLHandler()
         
-        # These should all generate the same ID (after normalization)
+        # These should generate different IDs (path case is preserved)
         url_variations = [
             "https://github.com/Microsoft/TypeScript",
             "HTTPS://GITHUB.COM/MICROSOFT/TYPESCRIPT",
@@ -81,8 +81,9 @@ class TestSourceIDGeneration:
         
         ids = [handler.generate_unique_source_id(url) for url in url_variations]
         
-        # All normalized versions should generate the same ID
-        assert len(set(ids)) == 1, f"Normalized URLs should generate same ID, got: {set(ids)}"
+        # Path case matters, so these will be different
+        assert ids[0] == ids[2], "Same path case should generate same ID"
+        assert ids[0] != ids[1], "Different path case should generate different ID"
     
     def test_concurrent_crawl_simulation(self):
         """Simulate concurrent crawls to verify no race conditions."""

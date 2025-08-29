@@ -15,6 +15,7 @@ interface TaskBoardViewProps {
   onTaskDelete: (task: Task) => void;
   onTaskMove: (taskId: string, newStatus: Task['status']) => void;
   onTaskReorder: (taskId: string, targetIndex: number, status: Task['status']) => void;
+  movingTaskIds?: Set<string>;
 }
 
 interface ColumnDropZoneProps {
@@ -68,13 +69,13 @@ const ColumnDropZone = ({
   // Get column header color based on status
   const getColumnColor = () => {
     switch (status) {
-      case 'backlog':
+      case 'todo':
         return 'text-gray-600 dark:text-gray-400';
-      case 'in-progress':
+      case 'doing':
         return 'text-blue-600 dark:text-blue-400';
       case 'review':
         return 'text-purple-600 dark:text-purple-400';
-      case 'complete':
+      case 'done':
         return 'text-green-600 dark:text-green-400';
     }
   };
@@ -82,13 +83,13 @@ const ColumnDropZone = ({
   // Get column header glow based on status
   const getColumnGlow = () => {
     switch (status) {
-      case 'backlog':
+      case 'todo':
         return 'bg-gray-500/30';
-      case 'in-progress':
+      case 'doing':
         return 'bg-blue-500/30 shadow-[0_0_10px_2px_rgba(59,130,246,0.2)]';
       case 'review':
         return 'bg-purple-500/30 shadow-[0_0_10px_2px_rgba(168,85,247,0.2)]';
-      case 'complete':
+      case 'done':
         return 'bg-green-500/30 shadow-[0_0_10px_2px_rgba(16,185,129,0.2)]';
     }
   };
@@ -134,7 +135,8 @@ export const TaskBoardView = ({
   onTaskComplete,
   onTaskDelete,
   onTaskMove,
-  onTaskReorder
+  onTaskReorder,
+  movingTaskIds = new Set()
 }: TaskBoardViewProps) => {
   const [hoveredTaskId, setHoveredTaskId] = useState<string | null>(null);
   const [selectedTasks, setSelectedTasks] = useState<Set<string>>(new Set());
@@ -199,7 +201,7 @@ export const TaskBoardView = ({
       await Promise.all(
         tasksToUpdate.map(task => 
           projectService.updateTask(task.id, { 
-            status: mapUIStatusToDBStatus(newStatus) 
+            status: newStatus 
           })
         )
       );
@@ -214,16 +216,7 @@ export const TaskBoardView = ({
     }
   }, [selectedTasks, tasks, clearSelection, showToast]);
 
-  // Helper function to map UI status to DB status (reuse from TasksTab)
-  const mapUIStatusToDBStatus = (uiStatus: Task['status']) => {
-    switch (uiStatus) {
-      case 'backlog': return 'todo';
-      case 'in-progress': return 'doing';
-      case 'review': return 'review';
-      case 'complete': return 'done';
-      default: return 'todo';
-    }
-  };
+  // No status mapping needed - using database values directly
 
   // Handle task deletion (opens confirmation modal)
   const handleDeleteTask = useCallback((task: Task) => {
@@ -262,8 +255,24 @@ export const TaskBoardView = ({
       .sort((a, b) => a.task_order - b.task_order);
   };
 
+  const isAnyTaskMoving = movingTaskIds.size > 0;
+
   return (
-    <div className="flex flex-col h-full min-h-[70vh]">
+    <div className="flex flex-col h-full min-h-[70vh] relative">
+      {/* Loading overlay when tasks are being moved */}
+      {isAnyTaskMoving && (
+        <div className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-xl">
+            <div className="flex items-center gap-3">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cyan-500"></div>
+              <span className="text-gray-700 dark:text-gray-300 font-medium">
+                Moving task...
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Multi-select toolbar */}
       {selectedTasks.size > 0 && (
         <div className="flex items-center justify-between p-3 bg-blue-50 dark:bg-blue-900/20 border-b border-blue-200 dark:border-blue-800">
@@ -286,10 +295,10 @@ export const TaskBoardView = ({
               defaultValue=""
             >
               <option value="" disabled>Move to...</option>
-              <option value="backlog">Backlog</option>
-              <option value="in-progress">In Progress</option>
+              <option value="todo">Todo</option>
+              <option value="doing">Doing</option>
               <option value="review">Review</option>
-              <option value="complete">Complete</option>
+              <option value="done">Done</option>
             </select>
             
             {/* Mass delete button */}
@@ -314,11 +323,11 @@ export const TaskBoardView = ({
 
       {/* Board Columns */}
       <div className="grid grid-cols-4 gap-0 flex-1">
-        {/* Backlog Column */}
+        {/* Todo Column */}
         <ColumnDropZone
-          status="backlog"
-          title="Backlog"
-          tasks={getTasksByStatus('backlog')}
+          status="todo"
+          title="Todo"
+          tasks={getTasksByStatus('todo')}
           onTaskMove={onTaskMove}
           onTaskView={onTaskView}
           onTaskComplete={onTaskComplete}
@@ -331,11 +340,11 @@ export const TaskBoardView = ({
           onTaskSelect={toggleTaskSelection}
         />
         
-        {/* In Progress Column */}
+        {/* Doing Column */}
         <ColumnDropZone
-          status="in-progress"
-          title="In Process"
-          tasks={getTasksByStatus('in-progress')}
+          status="doing"
+          title="Doing"
+          tasks={getTasksByStatus('doing')}
           onTaskMove={onTaskMove}
           onTaskView={onTaskView}
           onTaskComplete={onTaskComplete}
@@ -365,11 +374,11 @@ export const TaskBoardView = ({
           onTaskSelect={toggleTaskSelection}
         />
         
-        {/* Complete Column */}
+        {/* Done Column */}
         <ColumnDropZone
-          status="complete"
-          title="Complete"
-          tasks={getTasksByStatus('complete')}
+          status="done"
+          title="Done"
+          tasks={getTasksByStatus('done')}
           onTaskMove={onTaskMove}
           onTaskView={onTaskView}
           onTaskComplete={onTaskComplete}

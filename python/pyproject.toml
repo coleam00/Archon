@@ -27,7 +27,6 @@ dependencies = [
     "httpx>=0.24.0",
     "pydantic-ai>=0.0.13",
     "logfire>=0.30.0",
-    "python-socketio[asyncio]>=5.11.0",
     "pytest-asyncio>=1.0.0",
     "docker>=7.1.0",
 ]

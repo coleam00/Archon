@@ -69,9 +69,9 @@ class CredentialService:
                 match = re.match(r"https://([^.]+)\.supabase\.co", url)
                 if match:
                     project_id = match.group(1)
-                    logger.info(f"Supabase client initialized for project: {project_id}")
+                    logger.debug(f"Supabase client initialized for project: {project_id}")
                 else:
-                    logger.info("Supabase client initialized successfully")
+                    logger.debug("Supabase client initialized successfully")
 
             except Exception as e:
                 logger.error(f"Error initializing Supabase client: {e}")

@@ -52,8 +52,8 @@ export const EditTaskModal = memo(({
   }, [editingTask]);
   
   const priorityOptions = useMemo(() => {
-    console.log(`[EditTaskModal] Recalculating priorityOptions for status: ${localTask?.status || 'backlog'}`);
-    return getTasksForPrioritySelection(localTask?.status || 'backlog');
+    console.log(`[EditTaskModal] Recalculating priorityOptions for status: ${localTask?.status || 'todo'}`);
+    return getTasksForPrioritySelection(localTask?.status || 'todo');
   }, [localTask?.status, getTasksForPrioritySelection]);
 
   // Memoized handlers for input changes
@@ -139,14 +139,14 @@ export const EditTaskModal = memo(({
               <div>
                 <label className="block text-gray-700 dark:text-gray-300 mb-1">Status</label>
                 <select 
-                  value={localTask?.status || 'backlog'} 
+                  value={localTask?.status || 'todo'} 
                   onChange={handleStatusChange}
                   className="w-full bg-white/50 dark:bg-black/70 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-white rounded-md py-2 px-3 focus:outline-none focus:border-cyan-400 focus:shadow-[0_0_10px_rgba(34,211,238,0.2)] transition-all duration-300"
                 >
-                  <option value="backlog">Backlog</option>
-                  <option value="in-progress">In Process</option>
+                  <option value="todo">Todo</option>
+                  <option value="doing">Doing</option>
                   <option value="review">Review</option>
-                  <option value="complete">Complete</option>
+                  <option value="done">Done</option>
                 </select>
               </div>
 

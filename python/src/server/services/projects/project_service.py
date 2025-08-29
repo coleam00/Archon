@@ -124,7 +124,7 @@ class ProjectService:
                     docs_count = len(project.get("docs", []))
                     features_count = len(project.get("features", []))
                     has_data = bool(project.get("data", []))
-                    
+
                     # Return only metadata + stats, excluding large JSONB fields
                     projects.append({
                         "id": project["id"],
@@ -306,6 +306,11 @@ class ProjectService:
             return True, {"features": feature_options, "count": len(feature_options)}
 
         except Exception as e:
+            # Check if it's a "no rows found" error from PostgREST
+            error_message = str(e)
+            if "The result contains 0 rows" in error_message or "PGRST116" in error_message:
+                return False, {"error": "Project not found"}
+            
             logger.error(f"Error getting project features: {e}")
             return False, {"error": f"Error getting project features: {str(e)}"}
 

@@ -1,7 +1,7 @@
 """
 Progress Tracker Utility
 
-Consolidates all Socket.IO progress tracking operations for cleaner service code.
+Tracks operation progress in memory for HTTP polling access.
 """
 
 from datetime import datetime
@@ -12,20 +12,21 @@ from ...config.logfire_config import safe_logfire_error, safe_logfire_info
 
 class ProgressTracker:
     """
-    Utility class for tracking and broadcasting progress updates via Socket.IO.
-    Consolidates all progress-related Socket.IO operations.
+    Utility class for tracking progress updates in memory.
+    State can be accessed via HTTP polling endpoints.
     """
 
-    def __init__(self, sio, progress_id: str, operation_type: str = "crawl"):
+    # Class-level storage for all progress states
+    _progress_states: dict[str, dict[str, Any]] = {}
+
+    def __init__(self, progress_id: str, operation_type: str = "crawl"):
         """
         Initialize the progress tracker.
 
         Args:
-            sio: Socket.IO instance
             progress_id: Unique progress identifier
             operation_type: Type of operation (crawl, upload, etc.)
         """
-        self.sio = sio
         self.progress_id = progress_id
         self.operation_type = operation_type
         self.state = {
@@ -35,6 +36,19 @@ class ProgressTracker:
             "percentage": 0,
             "logs": [],
         }
+        # Store in class-level dictionary
+        ProgressTracker._progress_states[progress_id] = self.state
+
+    @classmethod
+    def get_progress(cls, progress_id: str) -> dict[str, Any] | None:
+        """Get progress state by ID."""
+        return cls._progress_states.get(progress_id)
+
+    @classmethod
+    def clear_progress(cls, progress_id: str) -> None:
+        """Remove progress state from memory."""
+        if progress_id in cls._progress_states:
+            del cls._progress_states[progress_id]
 
     async def start(self, initial_data: dict[str, Any] | None = None):
         """
@@ -49,7 +63,7 @@ class ProgressTracker:
         if initial_data:
             self.state.update(initial_data)
 
-        await self._emit_progress()
+        self._update_state()
         safe_logfire_info(
             f"Progress tracking started | progress_id={self.progress_id} | type={self.operation_type}"
         )
@@ -85,7 +99,7 @@ class ProgressTracker:
         for key, value in kwargs.items():
             self.state[key] = value
 
-        await self._emit_progress()
+        self._update_state()
 
     async def complete(self, completion_data: dict[str, Any] | None = None):
         """
@@ -109,7 +123,7 @@ class ProgressTracker:
             self.state["duration"] = duration
             self.state["durationFormatted"] = self._format_duration(duration)
 
-        await self._emit_progress()
+        self._update_state()
         safe_logfire_info(
             f"Progress completed | progress_id={self.progress_id} | type={self.operation_type} | duration={self.state.get('durationFormatted', 'unknown')}"
         )
@@ -131,7 +145,7 @@ class ProgressTracker:
         if error_details:
             self.state["errorDetails"] = error_details
 
-        await self._emit_progress()
+        self._update_state()
         safe_logfire_error(
             f"Progress error | progress_id={self.progress_id} | type={self.operation_type} | error={error_message}"
         )
@@ -203,18 +217,15 @@ class ProgressTracker:
             totalChunks=total_chunks,
         )
 
-    async def _emit_progress(self):
-        """Emit progress update via Socket.IO."""
-        event_name = f"{self.operation_type}_progress"
+    def _update_state(self):
+        """Update progress state in memory storage."""
+        # Update the class-level dictionary
+        ProgressTracker._progress_states[self.progress_id] = self.state
 
-        # Log detailed progress info for debugging
-        safe_logfire_info(f"📢 [SOCKETIO] Broadcasting {event_name} to room: {self.progress_id}")
         safe_logfire_info(
-            f"📢 [SOCKETIO] Status: {self.state.get('status')} | Percentage: {self.state.get('percentage')}%"
+            f"📊 [PROGRESS] Updated {self.operation_type} | ID: {self.progress_id} | "
+            f"Status: {self.state.get('status')} | Percentage: {self.state.get('percentage')}%"
         )
-
-        # Emit to the progress room
-        await self.sio.emit(event_name, self.state, room=self.progress_id)
 
     def _format_duration(self, seconds: float) -> str:
         """Format duration in seconds to human-readable string."""
@@ -230,13 +241,3 @@ class ProgressTracker:
     def get_state(self) -> dict[str, Any]:
         """Get current progress state."""
         return self.state.copy()
-
-    async def join_room(self, sid: str):
-        """Add a socket ID to the progress room."""
-        await self.sio.enter_room(sid, self.progress_id)
-        safe_logfire_info(f"Socket {sid} joined progress room {self.progress_id}")
-
-    async def leave_room(self, sid: str):
-        """Remove a socket ID from the progress room."""
-        await self.sio.leave_room(sid, self.progress_id)
-        safe_logfire_info(f"Socket {sid} left progress room {self.progress_id}")

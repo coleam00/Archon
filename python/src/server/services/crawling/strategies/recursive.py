@@ -4,10 +4,12 @@ Recursive Crawling Strategy
 Handles recursive crawling of websites by following internal links.
 """
 
-from typing import List, Dict, Any, Optional, Callable
+from collections.abc import Callable
+from typing import Any, Awaitable
 from urllib.parse import urldefrag
 
-from crawl4ai import CrawlerRunConfig, CacheMode, MemoryAdaptiveDispatcher
+from crawl4ai import CacheMode, CrawlerRunConfig, MemoryAdaptiveDispatcher
+
 from ....config.logfire_config import get_logger
 from ...credential_service import credential_service
 from ..helpers.url_handler import URLHandler
@@ -32,15 +34,16 @@ class RecursiveCrawlStrategy:
 
     async def crawl_recursive_with_progress(
         self,
-        start_urls: List[str],
+        start_urls: list[str],
         transform_url_func: Callable[[str], str],
         is_documentation_site_func: Callable[[str], bool],
         max_depth: int = 3,
-        max_concurrent: int = None,
-        progress_callback: Optional[Callable] = None,
+        max_concurrent: int | None = None,
+        progress_callback: Callable[..., Awaitable[None]] | None = None,
         start_progress: int = 10,
         end_progress: int = 60,
-    ) -> List[Dict[str, Any]]:
+        cancellation_check: Callable[[], None] | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Recursively crawl internal links from start URLs up to a maximum depth with progress reporting.
 
@@ -68,6 +71,8 @@ class RecursiveCrawlStrategy:
             settings = await credential_service.get_credentials_by_category("rag_strategy")
             batch_size = int(settings.get("CRAWL_BATCH_SIZE", "50"))
             if max_concurrent is None:
+                # CRAWL_MAX_CONCURRENT: Pages to crawl in parallel within this single crawl operation
+                # (Different from server-level CONCURRENT_CRAWL_LIMIT which limits total crawl operations)
                 max_concurrent = int(settings.get("CRAWL_MAX_CONCURRENT", "10"))
             memory_threshold = float(settings.get("MEMORY_THRESHOLD_PERCENT", "80"))
             check_interval = float(settings.get("DISPATCHER_CHECK_INTERVAL", "0.5"))
@@ -128,9 +133,15 @@ class RecursiveCrawlStrategy:
         async def report_progress(percentage: int, message: str, **kwargs):
             """Helper to report progress if callback is available"""
             if progress_callback:
-                # Add step information for multi-progress tracking
-                step_info = {"currentStep": message, "stepMessage": message, **kwargs}
-                await progress_callback("crawling", percentage, message, **step_info)
+                # Pass step information as flattened kwargs for consistency
+                await progress_callback(
+                    "crawling", 
+                    percentage, 
+                    message, 
+                    currentStep=message,
+                    stepMessage=message,
+                    **kwargs
+                )
 
         visited = set()
 
@@ -142,6 +153,10 @@ class RecursiveCrawlStrategy:
         total_processed = 0
 
         for depth in range(max_depth):
+            # Check for cancellation at the start of each depth level
+            if cancellation_check:
+                cancellation_check()
+            
             urls_to_crawl = [
                 normalize_url(url) for url in current_urls if normalize_url(url) not in visited
             ]
@@ -166,6 +181,10 @@ class RecursiveCrawlStrategy:
             depth_successful = 0
 
             for batch_idx in range(0, len(urls_to_crawl), batch_size):
+                # Check for cancellation before processing each batch
+                if cancellation_check:
+                    cancellation_check()
+                
                 batch_urls = urls_to_crawl[batch_idx : batch_idx + batch_size]
                 batch_end_idx = min(batch_idx + batch_size, len(urls_to_crawl))
 
@@ -197,6 +216,15 @@ class RecursiveCrawlStrategy:
                 # Handle streaming results from arun_many
                 i = 0
                 async for result in batch_results:
+                    # Check for cancellation during streaming results
+                    if cancellation_check:
+                        try:
+                            cancellation_check()
+                        except Exception:
+                            # If cancelled, break out of the loop
+                            logger.info("Crawl cancelled during batch processing")
+                            break
+                    
                     # Map back to original URL using the mapping dict
                     original_url = url_mapping.get(result.url, result.url)
 

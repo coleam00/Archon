@@ -126,6 +126,7 @@ def setup_logfire(
     # These libraries log low-level details that are rarely useful
     logging.getLogger("hpack").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
     _logfire_configured = True
     logging.info(

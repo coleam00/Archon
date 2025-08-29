@@ -4,8 +4,8 @@ Crawling Helpers
 This module contains helper utilities for crawling operations.
 """
 
-from .url_handler import URLHandler
 from .site_config import SiteConfig
+from .url_handler import URLHandler
 
 __all__ = [
     'URLHandler',
