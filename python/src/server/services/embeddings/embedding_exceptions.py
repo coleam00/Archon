@@ -83,6 +83,22 @@ class EmbeddingAsyncContextError(EmbeddingError):
     pass
 
 
+class EmbeddingAuthenticationError(EmbeddingError):
+    """
+    Raised when API authentication fails (invalid API key, expired key, etc).
+
+    This is a CRITICAL error that should stop the entire process
+    as continuing would be pointless without valid authentication.
+    """
+
+    def __init__(self, message: str, api_key_prefix: str | None = None, **kwargs):
+        super().__init__(message, **kwargs)
+        masked = f"{api_key_prefix[:4]}…" if api_key_prefix else None
+        self.api_key_prefix = masked
+        if masked:
+            self.metadata["api_key_prefix"] = masked
+
+
 class EmbeddingAPIError(EmbeddingError):
     """
     Raised for general API failures (network, invalid response, etc).

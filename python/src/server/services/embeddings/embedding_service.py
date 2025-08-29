@@ -17,6 +17,7 @@ from ..llm_provider_service import get_embedding_model, get_llm_client
 from ..threading_service import get_threading_service
 from .embedding_exceptions import (
     EmbeddingAPIError,
+    EmbeddingAuthenticationError,
     EmbeddingError,
     EmbeddingQuotaExhaustedError,
     EmbeddingRateLimitError,
@@ -107,6 +108,9 @@ async def create_embedding(text: str, provider: str | None = None) -> list[float
                     "No embeddings returned from batch creation", text_preview=text
                 )
         return result.embeddings[0]
+    except EmbeddingAuthenticationError:
+        # Let auth errors bubble so the HTTP layer can return 401
+        raise
     except EmbeddingError:
         # Re-raise our custom exceptions
         raise
@@ -226,6 +230,11 @@ async def create_embeddings_batch(
 
                                     break  # Success, exit retry loop
 
+                                except openai.AuthenticationError as e:
+                                    # Invalid API key - critical error, stop everything
+                                    search_logger.error("Authentication failed: Invalid API key", exc_info=True)
+                                    raise EmbeddingAuthenticationError("Invalid API key") from e
+
                                 except openai.RateLimitError as e:
                                     error_message = str(e)
                                     if "insufficient_quota" in error_message:
@@ -268,6 +277,9 @@ async def create_embeddings_batch(
                                         else:
                                             raise  # Will be caught by outer try
 
+                    except EmbeddingAuthenticationError:
+                        # Auth errors must bubble up immediately for HTTP 401
+                        raise
                     except Exception as e:
                         # This batch failed - track failures but continue with next batch
                         search_logger.error(f"Batch {batch_index} failed: {e}", exc_info=True)
@@ -318,6 +330,9 @@ async def create_embeddings_batch(
 
                 return result
 
+        except EmbeddingAuthenticationError:
+            # Auth errors must bubble up immediately for HTTP 401
+            raise
         except Exception as e:
             # Catastrophic failure - return what we have
             span.set_attribute("catastrophic_failure", True)

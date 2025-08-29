@@ -31,6 +31,9 @@ from ..services.crawler_manager import get_crawler
 from ..services.search.rag_service import RAGService
 from ..services.storage import DocumentStorageService
 from ..utils import get_supabase_client
+from ..services.embeddings.embedding_exceptions import (
+    EmbeddingAuthenticationError,
+)
 from ..utils.document_processing import extract_text_from_document
 
 # Get logger for this module
@@ -750,6 +753,9 @@ async def perform_rag_query(request: RagQueryRequest):
             )
     except HTTPException:
         raise
+    except EmbeddingAuthenticationError as e:
+        safe_logfire_error(f"Authentication error in RAG query: {str(e)}")
+        raise HTTPException(status_code=401, detail={"error": "Invalid API key"})
     except Exception as e:
         safe_logfire_error(
             f"RAG query failed | error={str(e)} | query={request.query[:50]} | source={request.source}"
@@ -784,6 +790,9 @@ async def search_code_examples(request: RagQueryRequest):
             )
     except HTTPException:
         raise
+    except EmbeddingAuthenticationError as e:
+        safe_logfire_error(f"Authentication error in code examples search: {str(e)}")
+        raise HTTPException(status_code=401, detail={"error": "Invalid API key"})
     except Exception as e:
         safe_logfire_error(
             f"Code examples search failed | error={str(e)} | query={request.query[:50]} | source={request.source}"

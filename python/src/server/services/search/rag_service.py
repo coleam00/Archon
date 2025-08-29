@@ -15,6 +15,7 @@ Multiple strategies can be enabled simultaneously and work together.
 import os
 from typing import Any
 
+from ..embeddings.embedding_exceptions import EmbeddingAuthenticationError
 from ...config.logfire_config import get_logger, safe_span
 from ...utils import get_supabase_client
 from ..embeddings.embedding_service import create_embedding
@@ -112,8 +113,8 @@ class RAGService:
             hybrid_enabled=use_hybrid_search,
         ) as span:
             try:
-                # Create embedding for the query
-                query_embedding = await create_embedding(query)
+                # Create embedding for the query using single-vector API
+                query_embedding = await create_embedding(text=query)
 
                 if not query_embedding:
                     logger.error("Failed to create embedding for query")
@@ -140,6 +141,9 @@ class RAGService:
                 span.set_attribute("results_found", len(results))
                 return results
 
+            except EmbeddingAuthenticationError:
+                # Let auth failures bubble to API layer -> 401
+                raise
             except Exception as e:
                 logger.error(f"Document search failed: {e}")
                 span.set_attribute("error", str(e))
@@ -202,7 +206,6 @@ class RAGService:
 
                 # Check which strategies are enabled
                 use_hybrid_search = self.get_bool_setting("USE_HYBRID_SEARCH", False)
-                use_reranking = self.get_bool_setting("USE_RERANKING", False)
 
                 # Step 1 & 2: Get results (with hybrid search if enabled)
                 results = await self.search_documents(
@@ -230,9 +233,9 @@ class RAGService:
                         logger.warning(f"Failed to format result {i}: {format_error}")
                         continue
 
-                # Step 3: Apply reranking if we have a strategy or if enabled
+                # Step 3: Apply reranking if we have a strategy
                 reranking_applied = False
-                if self.reranking_strategy and formatted_results:
+                if self.reranking_strategy is not None and formatted_results:
                     try:
                         formatted_results = await self.reranking_strategy.rerank_results(
                             query, formatted_results, content_key="content"
@@ -262,6 +265,9 @@ class RAGService:
                 logger.info(f"RAG query completed - {len(formatted_results)} results found")
                 return True, response_data
 
+            except EmbeddingAuthenticationError:
+                # Let 401 bubble to the API layer
+                raise
             except Exception as e:
                 logger.error(f"RAG query failed: {e}")
                 span.set_attribute("error", str(e))
@@ -311,7 +317,6 @@ class RAGService:
 
                 # Check which strategies are enabled
                 use_hybrid_search = self.get_bool_setting("USE_HYBRID_SEARCH", False)
-                use_reranking = self.get_bool_setting("USE_RERANKING", False)
 
                 # Prepare filter
                 filter_metadata = {"source": source_id} if source_id and source_id.strip() else None
@@ -334,11 +339,13 @@ class RAGService:
                     )
 
                 # Apply reranking if we have a strategy
-                if self.reranking_strategy and results:
+                reranking_applied = False
+                if self.reranking_strategy is not None and results:
                     try:
                         results = await self.reranking_strategy.rerank_results(
                             query, results, content_key="content"
                         )
+                        reranking_applied = True
                     except Exception as e:
                         logger.warning(f"Code reranking failed: {e}")
 
@@ -362,17 +369,20 @@ class RAGService:
                     "query": query,
                     "source_filter": source_id,
                     "search_mode": "hybrid" if use_hybrid_search else "vector",
-                    "reranking_applied": self.reranking_strategy is not None,
+                    "reranking_applied": reranking_applied,
                     "results": formatted_results,
                     "count": len(formatted_results),
                 }
 
                 span.set_attribute("results_found", len(formatted_results))
                 span.set_attribute("hybrid_used", use_hybrid_search)
-                span.set_attribute("reranking_used", use_reranking)
+                span.set_attribute("reranking_used", reranking_applied)
 
                 return True, response_data
 
+            except EmbeddingAuthenticationError:
+                # Let 401 bubble to the API layer
+                raise
             except Exception as e:
                 logger.error(f"Code example search failed: {e}")
                 span.set_attribute("error", str(e))
