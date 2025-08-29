@@ -331,59 +331,68 @@ export const RAGSettings = ({
     try {
       setOllamaMetrics(prev => ({ ...prev, loading: true }));
 
-      // Fetch stored models data
-      const modelsResponse = await fetch('/api/ollama/models/stored');
+      // Prepare instance URLs for the API call
+      const instanceUrls = [];
+      if (llmInstanceConfig.url) instanceUrls.push(llmInstanceConfig.url);
+      if (embeddingInstanceConfig.url && embeddingInstanceConfig.url !== llmInstanceConfig.url) {
+        instanceUrls.push(embeddingInstanceConfig.url);
+      }
+
+      if (instanceUrls.length === 0) {
+        setOllamaMetrics(prev => ({ ...prev, loading: false }));
+        return;
+      }
+
+      // Build query parameters
+      const params = new URLSearchParams();
+      instanceUrls.forEach(url => params.append('instance_urls', url));
+      params.append('include_capabilities', 'true');
+
+      // Fetch models from configured instances
+      const modelsResponse = await fetch(`/api/ollama/models?${params.toString()}`);
       const modelsData = await modelsResponse.json();
 
       if (modelsResponse.ok) {
-        // Count unique models to avoid duplicates
-        const models = modelsData.models || [];
-        const uniqueModels = models.filter((model: any, index: number, arr: any[]) => 
-          arr.findIndex(m => m.name === model.name) === index
+        // Extract models from the response
+        const allChatModels = modelsData.chat_models || [];
+        const allEmbeddingModels = modelsData.embedding_models || [];
+        
+        // Count models for LLM instance
+        const llmChatModels = allChatModels.filter((model: any) => 
+          model.instance_url === llmInstanceConfig.url
+        );
+        const llmEmbeddingModels = allEmbeddingModels.filter((model: any) => 
+          model.instance_url === llmInstanceConfig.url
         );
         
-        const chatModels = uniqueModels.filter((model: any) => model.model_type === 'chat');
-        const embeddingModels = uniqueModels.filter((model: any) => model.model_type === 'embedding');
+        // Count models for Embedding instance
+        const embChatModels = allChatModels.filter((model: any) => 
+          model.instance_url === embeddingInstanceConfig.url
+        );
+        const embEmbeddingModels = allEmbeddingModels.filter((model: any) => 
+          model.instance_url === embeddingInstanceConfig.url
+        );
         
-        // Count models per instance - normalize URLs for comparison
-        const normalizeLLMUrl = llmInstanceConfig.url.replace('/v1', '').replace(/\/$/, '');
-        const normalizeEmbeddingUrl = embeddingInstanceConfig.url.replace('/v1', '').replace(/\/$/, '');
-        
-        // Models for LLM instance - match by normalized URL
-        const llmInstanceModelsList = models.filter((model: any) => {
-          const normalizedHost = model.host?.replace(/\/$/, '') || '';
-          return normalizedHost === normalizeLLMUrl;
-        });
-        const llmChatModels = llmInstanceModelsList.filter((model: any) => model.model_type === 'chat');
-        const llmEmbeddingModels = llmInstanceModelsList.filter((model: any) => model.model_type === 'embedding');
-        
-        // Models for Embedding instance - match by normalized URL
-        const embeddingInstanceModelsList = models.filter((model: any) => {
-          const normalizedHost = model.host?.replace(/\/$/, '') || '';
-          return normalizedHost === normalizeEmbeddingUrl;
-        });
-        const embChatModels = embeddingInstanceModelsList.filter((model: any) => model.model_type === 'chat');
-        const embEmbeddingModels = embeddingInstanceModelsList.filter((model: any) => model.model_type === 'embedding');
-        
-        // Count active hosts based on online configurations
+        // Calculate totals
+        const totalModels = modelsData.total_models || 0;
         const activeHosts = (llmStatus.online ? 1 : 0) + (embeddingStatus.online ? 1 : 0);
 
         setOllamaMetrics({
-          totalModels: uniqueModels.length,
-          chatModels: chatModels.length,
-          embeddingModels: embeddingModels.length,
+          totalModels: totalModels,
+          chatModels: allChatModels.length,
+          embeddingModels: allEmbeddingModels.length,
           activeHosts,
           loading: false,
           // Per-instance model counts
           llmInstanceModels: {
             chat: llmChatModels.length,
             embedding: llmEmbeddingModels.length,
-            total: llmInstanceModelsList.length
+            total: llmChatModels.length + llmEmbeddingModels.length
           },
           embeddingInstanceModels: {
             chat: embChatModels.length,
             embedding: embEmbeddingModels.length,
-            total: embeddingInstanceModelsList.length
+            total: embChatModels.length + embEmbeddingModels.length
           }
         });
       } else {
