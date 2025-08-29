@@ -105,48 +105,47 @@ class ModelDiscoveryService:
         Returns:
             List of OllamaModel objects with discovered capabilities
         """
-        # ULTRA FAST MODE - Skip everything and return common models instantly
-        # This is temporary while we debug the performance issue
-        logger.warning(f"🚀 ULTRA FAST MODE ACTIVE - Returning mock models instantly for {instance_url}")
+        # ULTRA FAST MODE DISABLED - Now fetching real models
+        # logger.warning(f"🚀 ULTRA FAST MODE ACTIVE - Returning mock models instantly for {instance_url}")
         
-        mock_models = [
-            OllamaModel(
-                name="llama3.2:latest",
-                tag="llama3.2:latest",
-                size=5000000000,
-                digest="mock",
-                capabilities=["chat", "structured_output"],
-                instance_url=instance_url
-            ),
-            OllamaModel(
-                name="mistral:latest",
-                tag="mistral:latest",
-                size=4000000000,
-                digest="mock",
-                capabilities=["chat"],
-                instance_url=instance_url
-            ),
-            OllamaModel(
-                name="nomic-embed-text:latest",
-                tag="nomic-embed-text:latest",
-                size=300000000,
-                digest="mock",
-                capabilities=["embedding"],
-                embedding_dimensions=768,
-                instance_url=instance_url
-            ),
-            OllamaModel(
-                name="mxbai-embed-large:latest",
-                tag="mxbai-embed-large:latest",
-                size=670000000,
-                digest="mock",
-                capabilities=["embedding"],
-                embedding_dimensions=1024,
-                instance_url=instance_url
-            ),
-        ]
+        # mock_models = [
+        #     OllamaModel(
+        #         name="llama3.2:latest",
+        #         tag="llama3.2:latest",
+        #         size=5000000000,
+        #         digest="mock",
+        #         capabilities=["chat", "structured_output"],
+        #         instance_url=instance_url
+        #     ),
+        #     OllamaModel(
+        #         name="mistral:latest",
+        #         tag="mistral:latest",
+        #         size=4000000000,
+        #         digest="mock",
+        #         capabilities=["chat"],
+        #         instance_url=instance_url
+        #     ),
+        #     OllamaModel(
+        #         name="nomic-embed-text:latest",
+        #         tag="nomic-embed-text:latest",
+        #         size=300000000,
+        #         digest="mock",
+        #         capabilities=["embedding"],
+        #         embedding_dimensions=768,
+        #         instance_url=instance_url
+        #     ),
+        #     OllamaModel(
+        #         name="mxbai-embed-large:latest",
+        #         tag="mxbai-embed-large:latest",
+        #         size=670000000,
+        #         digest="mock",
+        #         capabilities=["embedding"],
+        #         embedding_dimensions=1024,
+        #         instance_url=instance_url
+        #     ),
+        # ]
         
-        return mock_models
+        # return mock_models
         
         # Check cache first
         cached_models = self._get_cached_models(instance_url)
@@ -158,8 +157,10 @@ class ModelDiscoveryService:
 
             # Use direct HTTP client for /api/tags endpoint (not OpenAI-compatible)
             async with httpx.AsyncClient(timeout=httpx.Timeout(self.discovery_timeout)) as client:
+                # Remove /v1 suffix if present (OpenAI compatibility layer)
+                base_url = instance_url.rstrip('/').replace('/v1', '')
                 # Ollama API endpoint for listing models
-                tags_url = f"{instance_url.rstrip('/')}/api/tags"
+                tags_url = f"{base_url}/api/tags"
 
                 response = await client.get(tags_url)
                 response.raise_for_status()
