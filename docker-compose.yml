@@ -1,12 +1,9 @@
-# Docker Compose Profiles Strategy:
-# - No profile: All services start by default when running 'docker compose up'
-# - "backend": Starts only backend services (server, mcp, agents) for hybrid development
-# - "frontend": Starts only the frontend UI service  
-# - "full": Starts all services for complete Docker deployment (same as no profile)
-# Use --profile flag to control which services start:
-#   docker compose up                      # All services (default behavior)
-#   docker compose --profile backend up    # Backend only for hybrid dev
-#   docker compose --profile full up       # Everything in Docker (same as default)
+# Docker Compose profiles:
+# - Default (no profile): Starts archon-server, archon-mcp, and archon-frontend
+# - Agents are opt-in: archon-agents starts only with the "agents" profile
+# Usage:
+#   docker compose up                        # Starts server, mcp, frontend (agents disabled)
+#   docker compose --profile agents up -d    # Also starts archon-agents
 
 services:
   # Server Service (FastAPI + Socket.IO + Crawling)
@@ -30,6 +27,7 @@ services:
       - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
       - ARCHON_MCP_PORT=${ARCHON_MCP_PORT:-8051}
       - ARCHON_AGENTS_PORT=${ARCHON_AGENTS_PORT:-8052}
+      - AGENTS_ENABLED=${AGENTS_ENABLED:-false}
     networks:
       - app-network
     volumes:
@@ -83,15 +81,17 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       # MCP needs to know where to find other services
       - API_SERVICE_URL=http://archon-server:${ARCHON_SERVER_PORT:-8181}
-      - AGENTS_SERVICE_URL=http://archon-agents:${ARCHON_AGENTS_PORT:-8052}
+      - AGENTS_ENABLED=${AGENTS_ENABLED:-false}
+      - AGENTS_SERVICE_URL=${AGENTS_SERVICE_URL:-http://archon-agents:${ARCHON_AGENTS_PORT:-8052}}
       - ARCHON_MCP_PORT=${ARCHON_MCP_PORT:-8051}
       - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
       - ARCHON_AGENTS_PORT=${ARCHON_AGENTS_PORT:-8052}
     networks:
       - app-network
     depends_on:
-      - archon-server
-      - archon-agents
+      archon-server:
+        condition: service_healthy
+      
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -109,6 +109,8 @@ services:
 
   # AI Agents Service (ML/Reranking)
   archon-agents:
+    profiles:
+      - agents  # Only starts when explicitly using --profile agents
     build:
       context: ./python
       dockerfile: Dockerfile.agents
@@ -126,6 +128,7 @@ services:
       - SERVICE_DISCOVERY_MODE=docker_compose
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - ARCHON_AGENTS_PORT=${ARCHON_AGENTS_PORT:-8052}
+      - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
     networks:
       - app-network
     healthcheck:
@@ -153,6 +156,7 @@ services:
       - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
       - HOST=${HOST:-localhost}
       - PROD=${PROD:-false}
+      - VITE_ALLOWED_HOSTS=${VITE_ALLOWED_HOSTS:-}
     networks:
       - app-network
     healthcheck:
@@ -164,7 +168,8 @@ services:
       - ./archon-ui-main/src:/app/src
       - ./archon-ui-main/public:/app/public
     depends_on:
-      - archon-server
+      archon-server:
+        condition: service_healthy
 
 networks:
   app-network:
