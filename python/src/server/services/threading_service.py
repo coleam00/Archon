@@ -43,11 +43,12 @@ class ProcessingMode(str, Enum):
 class RateLimitConfig:
     """Configuration for rate limiting"""
 
-    tokens_per_minute: int = 200_000  # OpenAI embedding limit
-    requests_per_minute: int = 3000  # Request rate limit
+    tokens_per_minute: int = 90_000  # Conservative OpenAI embedding limit
+    requests_per_minute: int = 500  # Conservative request rate limit
     max_concurrent: int = 2  # Concurrent request limit
-    backoff_multiplier: float = 1.5  # Exponential backoff multiplier
-    max_backoff: float = 60.0  # Maximum backoff delay in seconds
+    max_wait_time: float = 300.0  # Maximum time to wait for capacity (5 minutes)
+    backoff_multiplier: float = 1.1  # Gentler exponential backoff
+    min_wait_time: float = 0.1  # Minimum wait time between checks
 
 
 @dataclass
@@ -84,33 +85,76 @@ class RateLimiter:
         self.semaphore = asyncio.Semaphore(config.max_concurrent)
         self._lock = asyncio.Lock()
 
-    async def acquire(self, estimated_tokens: int = 8000) -> bool:
-        """Acquire permission to make API call with token awareness"""
-        async with self._lock:
-            now = time.time()
+    async def acquire(self, estimated_tokens: int = 8000, max_wait_time: float | None = None) -> bool:
+        """
+        Acquire permission to make an API request.
+        Waits until capacity is available, up to max_wait_time seconds.
 
-            # Clean old entries
-            self._clean_old_entries(now)
+        Args:
+            estimated_tokens: Estimated tokens for the request
+            max_wait_time: Maximum time to wait (uses config default if None)
 
-            # Check if we can make the request
-            if not self._can_make_request(estimated_tokens):
+        Returns:
+            True if capacity acquired, False if timeout exceeded
+        """
+        if max_wait_time is None:
+            max_wait_time = self.config.max_wait_time
+
+        start_time = time.time()
+        attempt = 0
+
+        while (time.time() - start_time) < max_wait_time:
+            attempt += 1
+
+            # Phase 1: Check capacity (minimal lock time)
+            async with self._lock:
+                now = time.time()
+                self._clean_old_entries(now)
+
+                if self._can_make_request(estimated_tokens):
+                    # Reserve capacity and proceed
+                    self.request_times.append(now)
+                    self.token_usage.append((now, estimated_tokens))
+                    return True
+
+                # Calculate wait time while state is consistent
                 wait_time = self._calculate_wait_time(estimated_tokens)
-                if wait_time > 0:
-                    logfire_logger.info(
-                        f"Rate limiting: waiting {wait_time:.1f}s",
-                        extra={
-                            "tokens": estimated_tokens,
-                            "current_usage": self._get_current_usage(),
-                        }
-                    )
-                    await asyncio.sleep(wait_time)
-                    return await self.acquire(estimated_tokens)
-                return False
 
-            # Record the request
-            self.request_times.append(now)
-            self.token_usage.append((now, estimated_tokens))
-            return True
+            # Phase 2: Wait outside the lock
+            if wait_time <= 0:
+                wait_time = self.config.min_wait_time  # Minimum wait to prevent busy loops
+
+            # Apply gentle exponential backoff (capped at 60s)
+            wait_time = min(wait_time * (self.config.backoff_multiplier ** (attempt - 1)), 60.0)
+
+            # Respect overall timeout
+            remaining_time = max_wait_time - (time.time() - start_time)
+            if remaining_time <= 0:
+                break
+
+            wait_time = min(wait_time, remaining_time)
+
+            logfire_logger.info(
+                f"Rate limiting: waiting {wait_time:.1f}s (attempt {attempt})",
+                extra={
+                    "tokens": estimated_tokens,
+                    "remaining_timeout": remaining_time,
+                    "current_usage": await self._get_current_usage_async()
+                }
+            )
+            await asyncio.sleep(wait_time)
+
+        # Timeout exceeded
+        logfire_logger.warning(
+            f"Rate limiter timeout after {max_wait_time}s",
+            extra={"tokens": estimated_tokens, "attempts": attempt}
+        )
+        return False
+
+    async def _get_current_usage_async(self) -> dict[str, int]:
+        """Get current usage statistics (async-safe version)"""
+        async with self._lock:
+            return self._get_current_usage()
 
     def _can_make_request(self, estimated_tokens: int) -> bool:
         """Check if request can be made within limits"""
@@ -136,17 +180,45 @@ class RateLimiter:
             self.token_usage.popleft()
 
     def _calculate_wait_time(self, estimated_tokens: int) -> float:
-        """Calculate how long to wait before retrying"""
-        if not self.request_times:
-            return 0
+        """
+        Calculate minimum wait time for capacity.
+        Must be called with self._lock held.
+        """
+        now = time.time()
 
-        oldest_request = self.request_times[0]
-        time_since_oldest = time.time() - oldest_request
+        # Calculate wait for request rate limit
+        request_wait = 0.0
+        if len(self.request_times) >= self.config.requests_per_minute:
+            if self.request_times:
+                oldest_request = self.request_times[0]
+                request_wait = max(0, 60.0 - (now - oldest_request))
 
-        if time_since_oldest < 60:
-            return 60 - time_since_oldest + 0.1
+        # Calculate wait for token rate limit
+        token_wait = 0.0
+        current_tokens = sum(tokens for _, tokens in self.token_usage)
 
-        return 0
+        if current_tokens + estimated_tokens > self.config.tokens_per_minute:
+            # Need to wait for some tokens to free up
+            excess_tokens = (current_tokens + estimated_tokens) - self.config.tokens_per_minute
+
+            # Find when enough old usage expires
+            tokens_freed = 0
+            for timestamp, tokens in self.token_usage:
+                age = now - timestamp
+                time_until_expiry = max(0, 60.0 - age)
+
+                tokens_freed += tokens
+                if tokens_freed >= excess_tokens:
+                    token_wait = time_until_expiry
+                    break
+            else:
+                # If we couldn't free enough, wait for oldest to expire
+                if self.token_usage:
+                    oldest_token_time = self.token_usage[0][0]
+                    token_wait = max(0, 60.0 - (now - oldest_token_time))
+
+        # Return maximum wait needed plus small buffer
+        return max(request_wait, token_wait) + 0.1
 
     def _get_current_usage(self) -> dict[str, int]:
         """Get current usage statistics"""
@@ -510,12 +582,19 @@ class ThreadingService:
         logfire_logger.info("Threading service stopped")
 
     @asynccontextmanager
-    async def rate_limited_operation(self, estimated_tokens: int = 8000):
+    async def rate_limited_operation(self, estimated_tokens: int = 8000, timeout: float | None = None):
         """Context manager for rate-limited operations"""
         async with self.rate_limiter.semaphore:
-            can_proceed = await self.rate_limiter.acquire(estimated_tokens)
+            acquisition_start = time.time()
+            can_proceed = await self.rate_limiter.acquire(estimated_tokens, max_wait_time=timeout)
+
             if not can_proceed:
-                raise Exception("Rate limit exceeded")
+                # Import the embedding exception if available
+                from ..embeddings.embedding_exceptions import EmbeddingRateLimitError
+                raise EmbeddingRateLimitError(
+                    f"Rate limiter timeout: couldn't acquire {estimated_tokens} tokens within timeout",
+                    text_preview=f"[{estimated_tokens} tokens requested]"
+                )
 
             start_time = time.time()
             try:
@@ -524,7 +603,11 @@ class ThreadingService:
                 duration = time.time() - start_time
                 logfire_logger.debug(
                     "Rate limited operation completed",
-                    extra={"duration": duration, "tokens": estimated_tokens},
+                    extra={
+                        "duration": duration,
+                        "tokens": estimated_tokens,
+                        "wait_time": start_time - acquisition_start
+                    },
                 )
 
     async def run_cpu_intensive(self, func: Callable, *args, **kwargs) -> Any:
