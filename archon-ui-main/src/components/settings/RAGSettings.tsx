@@ -787,15 +787,6 @@ export const RAGSettings = ({
                         </td>
                       </tr>
                       <tr>
-                        <td className="py-2 text-gray-400">URL</td>
-                        <td className="py-2 text-white font-mono text-xs">
-                          {llmInstanceConfig.url || <span className="text-gray-500 italic">Not configured</span>}
-                        </td>
-                        <td className="py-2 text-white font-mono text-xs">
-                          {embeddingInstanceConfig.url || <span className="text-gray-500 italic">Not configured</span>}
-                        </td>
-                      </tr>
-                      <tr>
                         <td className="py-2 text-gray-400">Status</td>
                         <td className="py-2">
                           <span className={llmStatus.checking ? "text-yellow-400" : llmStatus.online ? "text-teal-400" : "text-red-400"}>
