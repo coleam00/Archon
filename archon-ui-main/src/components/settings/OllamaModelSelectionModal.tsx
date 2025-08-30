@@ -202,7 +202,12 @@ const ModelCard: React.FC<ModelCardProps> = ({ model, isSelected, onSelect }) =>
             <div className="flex items-center">
               <Settings className="w-3 h-3 text-green-400 mr-1" />
               <span className="text-gray-300">Params: </span>
-              <span className="text-green-400 ml-1">{model.parameters}</span>
+              <span className="text-green-400 ml-1">
+                {typeof model.parameters === 'object' 
+                  ? `${model.parameters.parameter_size || 'Unknown size'} ${model.parameters.quantization ? `(${model.parameters.quantization})` : ''}`.trim()
+                  : model.parameters
+                }
+              </span>
             </div>
           )}
 
