@@ -66,9 +66,11 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
    # SUPABASE_SERVICE_KEY=your-service-key-here
    ```
 
-   NOTE: Supabase introduced a new type of service key but use the legacy one (the longer one).
+   IMPORTANT NOTES:
+   - For cloud Supabase: they recently introduced a new type of service role key but use the legacy one (the longer one).
+   - For local Supabase: set SUPABASE_URL to http://host.docker.internal:8000 (unless you have an IP address set up).
 
-   OPTIONAL: If you want to enable the reranking RAG strategy, uncomment lines 20-22 in `python\requirements.server.txt`. This will significantly increase the size of the Archon Server container which is why it's off by default.
+   OPTIONAL: If you want to enable the reranking RAG strategy, add " --group server-reranking" to the end of the uv install on line 18 of `python/server/Dockerfile.server`. This will significantly increase the size of the Archon Server container which is why it's off by default.
 
 3. **Database Setup**: In your [Supabase project](https://supabase.com/dashboard) SQL Editor, copy, paste, and execute the contents of `migration/complete_setup.sql`
 
@@ -205,7 +207,7 @@ Once everything is running:
 ### 🤖 AI Integration
 
 - **Model Context Protocol (MCP)**: Connect any MCP-compatible client (Claude Code, Cursor, even non-AI coding assistants like Claude Desktop)
-- **10 MCP Tools**: Comprehensive yet simple set of tools for RAG queries, task management, and project operations
+- **MCP Tools**: Comprehensive yet simple set of tools for RAG queries, task management, and project operations
 - **Multi-LLM Support**: Works with OpenAI, Ollama, and Google Gemini models
 - **RAG Strategies**: Hybrid search, contextual embeddings, and result reranking for optimal AI responses
 - **Real-time Streaming**: Live responses from AI agents with progress tracking
@@ -256,7 +258,7 @@ Archon uses true microservices architecture with clear separation of concerns:
 | -------------- | -------------------- | ---------------------------- | ------------------------------------------------------------------ |
 | **Frontend**   | `archon-ui-main/`    | Web interface and dashboard  | React, TypeScript, TailwindCSS, Socket.IO client                   |
 | **Server**     | `python/src/server/` | Core business logic and APIs | FastAPI, service layer, Socket.IO broadcasts, all ML/AI operations |
-| **MCP Server** | `python/src/mcp/`    | MCP protocol interface       | Lightweight HTTP wrapper, 10 MCP tools, session management         |
+| **MCP Server** | `python/src/mcp/`    | MCP protocol interface       | Lightweight HTTP wrapper, MCP tools, session management         |
 | **Agents**     | `python/src/agents/` | PydanticAI agent hosting     | Document and RAG agents, streaming responses                       |
 
 ### Communication Patterns
