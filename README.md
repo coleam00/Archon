@@ -8,8 +8,10 @@
 
 <p align="center">
   <a href="#quick-start">Quick Start</a> •
+  <a href="#upgrading">Upgrading</a> •
   <a href="#whats-included">What's Included</a> •
-  <a href="#architecture">Architecture</a>
+  <a href="#architecture">Architecture</a> •
+  <a href="#troubleshooting">Troubleshooting</a>
 </p>
 
 ---
@@ -78,68 +80,32 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
 
    ```bash
    docker compose up --build -d
-   # or, to match a previously used explicit profile:
-   docker compose --profile full up --build -d
-   # or
-   make dev-docker # (Alternative: Requires make installed )
    ```
 
    This starts all core microservices in Docker:
    - **Server**: Core API and business logic (Port: 8181)
    - **MCP Server**: Protocol interface for AI clients (Port: 8051)
-   - **Agents (coming soon!)**: AI operations and streaming (Port: 8052)
    - **UI**: Web interface (Port: 3737)
 
    Ports are configurable in your .env as well!
 
 5. **Configure API Keys**:
    - Open http://localhost:3737
-   - Go to **Settings** → Select your LLM/embedding provider and set the API key (OpenAI is default)
-   - Test by uploading a document or crawling a website
+   - You'll automatically be brought through an onboarding flow to set your API key (OpenAI is default)
 
-### 🚀 Quick Command Reference
+## ⚡ Quick Test
 
-| Command           | Description                                             |
-| ----------------- | ------------------------------------------------------- |
-| `make dev`        | Start hybrid dev (backend in Docker, frontend local) ⭐ |
-| `make dev-docker` | Everything in Docker                                    |
-| `make stop`       | Stop all services                                       |
-| `make test`       | Run all tests                                           |
-| `make lint`       | Run linters                                             |
-| `make install`    | Install dependencies                                    |
-| `make check`      | Check environment setup                                 |
-| `make clean`      | Remove containers and volumes (with confirmation)       |
+Once everything is running:
 
-## 🔄 Database Reset (Start Fresh if Needed)
+1. **Test Web Crawling**: Go to http://localhost:3737 → Knowledge Base → "Crawl Website" → Enter a doc URL (such as https://ai.pydantic.dev/llms-full.txt)
+2. **Test Document Upload**: Knowledge Base → Upload a PDF
+3. **Test Projects**: Projects → Create a new project and add tasks
+4. **Integrate with your AI coding assistant**: MCP Dashboard → Copy connection config for your AI coding assistant 
 
-If you need to completely reset your database and start fresh:
+## Installing Make
 
 <details>
-<summary>⚠️ <strong>Reset Database - This will delete ALL data for Archon!</strong></summary>
-
-1. **Run Reset Script**: In your Supabase SQL Editor, run the contents of `migration/RESET_DB.sql`
-
-   ⚠️ WARNING: This will delete all Archon specific tables and data! Nothing else will be touched in your DB though.
-
-2. **Rebuild Database**: After reset, run `migration/complete_setup.sql` to create all the tables again.
-
-3. **Restart Services**:
-
-   ```bash
-   docker compose --profile full up -d
-   ```
-
-4. **Reconfigure**:
-   - Select your LLM/embedding provider and set the API key again
-   - Re-upload any documents or re-crawl websites
-
-The reset script safely removes all tables, functions, triggers, and policies with proper dependency handling.
-
-</details>
-
-## 🛠️ Installing Make (OPTIONAL)
-
-Make is required for the local development workflow. Installation varies by platform:
+<summary><strong>🛠️ Make installation (OPTIONAL - For Dev Workflows)</strong></summary>
 
 ### Windows
 
@@ -172,14 +138,52 @@ sudo apt-get install make
 sudo yum install make
 ```
 
-## ⚡ Quick Test
+</details>
 
-Once everything is running:
+<br/>
 
-1. **Test Web Crawling**: Go to http://localhost:3737 → Knowledge Base → "Crawl Website" → Enter a doc URL (such as https://ai.pydantic.dev/llms-full.txt)
-2. **Test Document Upload**: Knowledge Base → Upload a PDF
-3. **Test Projects**: Projects → Create a new project and add tasks
-4. **Integrate with your AI coding assistant**: MCP Dashboard → Copy connection config for your AI coding assistant
+<details>
+<summary><strong>🚀 Quick Command Reference for Make</strong></summary>
+
+| Command           | Description                                             |
+| ----------------- | ------------------------------------------------------- |
+| `make dev`        | Start hybrid dev (backend in Docker, frontend local) ⭐ |
+| `make dev-docker` | Everything in Docker                                    |
+| `make stop`       | Stop all services                                       |
+| `make test`       | Run all tests                                           |
+| `make lint`       | Run linters                                             |
+| `make install`    | Install dependencies                                    |
+| `make check`      | Check environment setup                                 |
+| `make clean`      | Remove containers and volumes (with confirmation)       |
+
+</details>
+
+## 🔄 Database Reset (Start Fresh if Needed)
+
+If you need to completely reset your database and start fresh:
+
+<details>
+<summary>⚠️ <strong>Reset Database - This will delete ALL data for Archon!</strong></summary>
+
+1. **Run Reset Script**: In your Supabase SQL Editor, run the contents of `migration/RESET_DB.sql`
+
+   ⚠️ WARNING: This will delete all Archon specific tables and data! Nothing else will be touched in your DB though.
+
+2. **Rebuild Database**: After reset, run `migration/complete_setup.sql` to create all the tables again.
+
+3. **Restart Services**:
+
+   ```bash
+   docker compose --profile full up -d
+   ```
+
+4. **Reconfigure**:
+   - Select your LLM/embedding provider and set the API key again
+   - Re-upload any documents or re-crawl websites
+
+The reset script safely removes all tables, functions, triggers, and policies with proper dependency handling.
+
+</details>
 
 ## 📚 Documentation
 
@@ -190,7 +194,25 @@ Once everything is running:
 | **Web Interface**  | archon-ui      | http://localhost:3737 | Main dashboard and controls       |
 | **API Service**    | archon-server  | http://localhost:8181 | Web crawling, document processing |
 | **MCP Server**     | archon-mcp     | http://localhost:8051 | Model Context Protocol interface  |
-| **Agents Service** | archon-agents  | http://localhost:8052 | AI/ML operations, reranking       |
+| **Agents Service** | archon-agents  | http://localhost:8052 | AI/ML operations, reranking       |  
+
+## Upgrading
+
+To upgrade Archon to the latest version:
+
+1. **Pull latest changes**:
+   ```bash
+   git pull
+   ```
+
+2. **Check for migrations**: Look in the `migration/` folder for any SQL files newer than your last update. Check the file created dates to determine if you need to run them. You can run these in the SQL editor just like you did when you first set up Archon. We are also working on a way to make handling these migrations automatic!
+
+3. **Rebuild and restart**:
+   ```bash
+   docker compose up -d --build
+   ```
+
+This is the same command used for initial setup - it rebuilds containers with the latest code and restarts services.
 
 ## What's Included
 
@@ -397,7 +419,7 @@ docker compose logs -f archon-ui     # Frontend
 
 **Note**: The backend services are configured with `--reload` flag in their uvicorn commands and have source code mounted as volumes for automatic hot reloading when you make changes.
 
-## 🔍 Troubleshooting
+## Troubleshooting
 
 ### Common Issues and Solutions
 
