@@ -463,12 +463,61 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
       if (response.ok) {
         const data = await response.json();
         
+        // Helper function to determine real compatibility based on model characteristics
+        const getArchonCompatibility = (model: any, modelType: string): 'full' | 'partial' | 'limited' => {
+          if (modelType === 'chat') {
+            // Chat model compatibility based on name patterns and capabilities
+            const modelName = model.name.toLowerCase();
+            
+            // Well-tested models with full Archon support
+            if (modelName.includes('llama') || 
+                modelName.includes('mistral') || 
+                modelName.includes('phi') ||
+                modelName.includes('qwen') ||
+                modelName.includes('gemma')) {
+              return 'full';
+            }
+            
+            // Experimental or newer models with partial support
+            if (modelName.includes('codestral') ||
+                modelName.includes('deepseek') ||
+                modelName.includes('aya') ||
+                model.size > 50 * 1024 * 1024 * 1024) { // Models > 50GB might have issues
+              return 'partial';
+            }
+            
+            // Very small models or unknown architectures
+            if (model.size < 1 * 1024 * 1024 * 1024) { // Models < 1GB
+              return 'limited';
+            }
+            
+            return 'partial'; // Default for unknown models
+          } else {
+            // Embedding model compatibility based on dimensions
+            const dimensions = model.dimensions;
+            
+            // Standard dimensions with excellent Archon support
+            if (dimensions === 768 || dimensions === 1536 || dimensions === 384) {
+              return 'full';
+            }
+            
+            // Less common but supported dimensions
+            if (dimensions >= 256 && dimensions <= 4096) {
+              return 'partial';
+            }
+            
+            // Very unusual dimensions
+            return 'limited';
+          }
+        };
+        
         // Convert API response to ModelInfo format
         const allModels: ModelInfo[] = [];
         
         // Process chat models
         if (data.chat_models) {
           data.chat_models.forEach((model: any) => {
+            const compatibility = getArchonCompatibility(model, 'chat');
             allModels.push({
               name: model.name,
               host: selectedInstanceUrl,
@@ -476,12 +525,13 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
               size_mb: model.size ? Math.round(model.size / 1048576) : undefined,
               parameters: model.parameters,
               capabilities: model.capabilities || ['chat'],
-              archon_compatibility: 'full',
-              compatibility_features: ['Local Processing', 'Text Generation'],
-              limitations: [],
+              archon_compatibility: compatibility,
+              compatibility_features: getCompatibilityFeatures(compatibility),
+              limitations: getCompatibilityLimitations(compatibility),
               last_updated: new Date().toISOString(),
               // Real API data from /api/show endpoint
               context_window: model.context_window,
+              context_length: model.context_window, // Map for UI compatibility
               architecture: model.architecture,
               block_count: model.block_count,
               attention_heads: model.attention_heads,
@@ -494,16 +544,18 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
         // Process embedding models
         if (data.embedding_models) {
           data.embedding_models.forEach((model: any) => {
+            const compatibility = getArchonCompatibility(model, 'embedding');
             allModels.push({
               name: model.name,
               host: selectedInstanceUrl,
               model_type: 'embedding',
               size_mb: model.size ? Math.round(model.size / 1048576) : undefined,
               embedding_dimensions: model.dimensions,
-              capabilities: ['embedding'],
-              archon_compatibility: 'full',
-              compatibility_features: ['High-quality embeddings', 'Local processing'],
-              limitations: [],
+              dimensions: model.dimensions, // Some UI might expect this field name
+              capabilities: model.capabilities || ['embedding'],
+              archon_compatibility: compatibility,
+              compatibility_features: getCompatibilityFeatures(compatibility),
+              limitations: getCompatibilityLimitations(compatibility),
               last_updated: new Date().toISOString(),
               // Real API data from /api/show endpoint
               context_window: model.context_window,
