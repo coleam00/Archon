@@ -371,6 +371,33 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
     return filtered;
   }, [models, searchTerm, compatibilityFilter, sortBy, modelType, selectedInstanceUrl]);
 
+  // Helper functions for compatibility features
+  const getCompatibilityFeatures = (compatibility: 'full' | 'partial' | 'limited'): string[] => {
+    switch (compatibility) {
+      case 'full':
+        return ['Real-time streaming', 'Function calling', 'JSON mode', 'Tool integration', 'Advanced prompting'];
+      case 'partial':
+        return ['Basic streaming', 'Standard prompting', 'Text generation'];
+      case 'limited':
+        return ['Basic functionality only'];
+      default:
+        return [];
+    }
+  };
+
+  const getCompatibilityLimitations = (compatibility: 'full' | 'partial' | 'limited'): string[] => {
+    switch (compatibility) {
+      case 'full':
+        return [];
+      case 'partial':
+        return ['Limited advanced features', 'May require specific prompting'];
+      case 'limited':
+        return ['Basic functionality only', 'Limited feature support', 'May have performance constraints'];
+      default:
+        return [];
+    }
+  };
+
   // Load models - first try cache, then fetch from instance
   const loadModels = async () => {
     try {
@@ -595,8 +622,12 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
               host: model.instance_url.replace('/v1', ''), // Remove /v1 suffix to match selectedInstanceUrl
               model_type: 'chat',
               archon_compatibility: compatibility,
-              size_gb: (model.size / (1024 ** 3)).toFixed(1)
-              // Removed: capabilities, description, compatibility_features, performance_rating
+              size_gb: (model.size / (1024 ** 3)).toFixed(1),
+              // Preserve all model data from API
+              capabilities: model.capabilities || ['chat'],
+              compatibility_features: getCompatibilityFeatures(compatibility),
+              limitations: getCompatibilityLimitations(compatibility),
+              last_updated: new Date().toISOString()
             };
           }),
           ...(data.embedding_models || []).map(model => {
@@ -607,8 +638,12 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
               host: model.instance_url.replace('/v1', ''), // Remove /v1 suffix to match selectedInstanceUrl
               model_type: 'embedding',
               archon_compatibility: compatibility,
-              size_gb: (model.size / (1024 ** 3)).toFixed(1)
-              // Removed: capabilities, description, compatibility_features, performance_rating
+              size_gb: (model.size / (1024 ** 3)).toFixed(1),
+              // Preserve all model data from API
+              capabilities: model.capabilities || ['embedding'],
+              compatibility_features: getCompatibilityFeatures(compatibility),
+              limitations: getCompatibilityLimitations(compatibility),
+              last_updated: new Date().toISOString()
             };
           })
         ];
