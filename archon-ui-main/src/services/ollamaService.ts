@@ -20,9 +20,17 @@ export interface OllamaModel {
     parameter_size?: string;
     quantization?: string;
     parameter_count?: string;
+    format?: string;
   };
   instance_url: string;
   last_updated?: string;
+  // Real API data from /api/show endpoint
+  context_window?: number;
+  architecture?: string;
+  block_count?: number;
+  attention_heads?: number;
+  format?: string;
+  parent_model?: string;
 }
 
 export interface ModelDiscoveryResponse {
@@ -32,12 +40,26 @@ export interface ModelDiscoveryResponse {
     instance_url: string;
     size: number;
     parameters?: any;
+    // Real API data from /api/show
+    context_window?: number;
+    architecture?: string;
+    block_count?: number;
+    attention_heads?: number;
+    format?: string;
+    parent_model?: string;
+    capabilities?: string[];
   }>;
   embedding_models: Array<{
     name: string;
     instance_url: string;
     dimensions?: number;
     size: number;
+    parameters?: any;
+    // Real API data from /api/show
+    architecture?: string;
+    format?: string;
+    parent_model?: string;
+    capabilities?: string[];
   }>;
   host_status: Record<string, {
     status: 'online' | 'error';

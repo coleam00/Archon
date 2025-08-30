@@ -19,7 +19,12 @@ interface ModelInfo {
   context_length?: number;
   context_info?: ContextInfo;
   embedding_dimensions?: number;
-  parameters?: string;
+  parameters?: string | {
+    family?: string;
+    parameter_size?: string;
+    quantization?: string;
+    format?: string;
+  };
   capabilities: string[];
   archon_compatibility: 'full' | 'partial' | 'limited';
   compatibility_features: string[];
@@ -27,6 +32,14 @@ interface ModelInfo {
   performance_rating?: 'high' | 'medium' | 'low';
   description?: string;
   last_updated: string;
+  // Real API data from /api/show endpoint
+  context_window?: number;
+  architecture?: string;
+  block_count?: number;
+  attention_heads?: number;
+  format?: string;
+  parent_model?: string;
+  instance_url?: string;
 }
 
 interface OllamaModelSelectionModalProps {
@@ -211,12 +224,37 @@ const ModelCard: React.FC<ModelCardProps> = ({ model, isSelected, onSelect }) =>
             </div>
           )}
 
-          {/* Performance - only show if available */}
-          {model.performance_rating && (
+          {/* Context Window - show if available from real API data */}
+          {model.context_window && (
             <div className="flex items-center">
-              <Zap className="w-3 h-3 text-yellow-400 mr-1" />
-              <span className="text-gray-300">Speed: </span>
-              <span className="text-yellow-400 ml-1 capitalize">{model.performance_rating}</span>
+              <span className="w-3 h-3 text-blue-400 mr-1">📏</span>
+              <span className="text-gray-300">Context: </span>
+              <span className="text-blue-400 ml-1">
+                {model.context_window >= 1000000 
+                  ? `${(model.context_window / 1000000).toFixed(1)}M tokens`
+                  : model.context_window >= 1000 
+                  ? `${Math.round(model.context_window / 1000)}K tokens`
+                  : `${model.context_window} tokens`
+                }
+              </span>
+            </div>
+          )}
+
+          {/* Architecture - show if available */}
+          {model.architecture && (
+            <div className="flex items-center">
+              <span className="w-3 h-3 text-purple-400 mr-1">🏗️</span>
+              <span className="text-gray-300">Arch: </span>
+              <span className="text-purple-400 ml-1 capitalize">{model.architecture}</span>
+            </div>
+          )}
+
+          {/* Format - show if available */}
+          {(model.format || model.parameters?.format) && (
+            <div className="flex items-center">
+              <span className="w-3 h-3 text-cyan-400 mr-1">📦</span>
+              <span className="text-gray-300">Format: </span>
+              <span className="text-cyan-400 ml-1 uppercase">{model.format || model.parameters?.format}</span>
             </div>
           )}
         </div>
@@ -383,11 +421,18 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
               model_type: 'chat',
               size_mb: model.size ? Math.round(model.size / 1048576) : undefined,
               parameters: model.parameters,
-              capabilities: ['chat'],
+              capabilities: model.capabilities || ['chat'],
               archon_compatibility: 'full',
               compatibility_features: ['Local Processing', 'Text Generation'],
               limitations: [],
-              last_updated: new Date().toISOString()
+              last_updated: new Date().toISOString(),
+              // Real API data from /api/show endpoint
+              context_window: model.context_window,
+              architecture: model.architecture,
+              block_count: model.block_count,
+              attention_heads: model.attention_heads,
+              format: model.format,
+              parent_model: model.parent_model
             });
           });
         }
@@ -405,7 +450,15 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
               archon_compatibility: 'full',
               compatibility_features: ['High-quality embeddings', 'Local processing'],
               limitations: [],
-              last_updated: new Date().toISOString()
+              last_updated: new Date().toISOString(),
+              // Real API data from /api/show endpoint
+              context_window: model.context_window,
+              architecture: model.architecture,
+              block_count: model.block_count,
+              attention_heads: model.attention_heads,
+              format: model.format,
+              parent_model: model.parent_model,
+              instance_url: selectedInstanceUrl
             });
           });
         }

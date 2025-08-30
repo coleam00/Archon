@@ -31,6 +31,13 @@ class OllamaModel:
     parameters: dict[str, Any] | None = None
     instance_url: str = ""
     last_updated: str | None = None
+    # Real API data from /api/show endpoint
+    context_window: int | None = None
+    architecture: str | None = None
+    block_count: int | None = None
+    attention_heads: int | None = None
+    format: str | None = None
+    parent_model: str | None = None
 
 
 @dataclass
@@ -277,6 +284,36 @@ class ModelDiscoveryService:
                         model.capabilities.extend(["function_calling", "structured_output"])
                     elif any(pattern in model_name_lower for pattern in ['llama', 'phi', 'gemma']):
                         model.capabilities.append("structured_output")
+                    
+                    # Get detailed information from /api/show endpoint
+                    try:
+                        detailed_info = await self._get_model_details(model.name, instance_url)
+                        if detailed_info:
+                            # Add real API data to the model
+                            model.context_window = detailed_info.get("context_window")
+                            model.architecture = detailed_info.get("architecture")
+                            model.block_count = detailed_info.get("block_count")
+                            model.attention_heads = detailed_info.get("attention_heads")
+                            model.format = detailed_info.get("format")
+                            model.parent_model = detailed_info.get("parent_model")
+                            
+                            # Update parameters with more detailed info
+                            if model.parameters:
+                                model.parameters.update({
+                                    "family": detailed_info.get("family") or model.parameters.get("family"),
+                                    "parameter_size": detailed_info.get("parameter_size") or model.parameters.get("parameter_size"),
+                                    "quantization": detailed_info.get("quantization") or model.parameters.get("quantization"),
+                                    "format": detailed_info.get("format")
+                                })
+                            else:
+                                model.parameters = {
+                                    "family": detailed_info.get("family"),
+                                    "parameter_size": detailed_info.get("parameter_size"),
+                                    "quantization": detailed_info.get("quantization"),
+                                    "format": detailed_info.get("format")
+                                }
+                    except Exception as e:
+                        logger.debug(f"Could not get detailed info for {model.name}: {e}")
                     
                     logger.debug(f"Pattern-matched chat model {model.name} with capabilities: {model.capabilities}")
                     enriched_models.append(model)
@@ -592,7 +629,7 @@ class ModelDiscoveryService:
         Get detailed information about a model from Ollama /api/show endpoint.
 
         Returns:
-            Model details dictionary or None if failed
+            Model details dictionary with real API data or None if failed
         """
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(10)) as client:
@@ -603,12 +640,45 @@ class ModelDiscoveryService:
 
                 if response.status_code == 200:
                     data = response.json()
-                    # Extract relevant details
+                    
+                    # Extract basic details
+                    details_section = data.get("details", {})
+                    model_info = data.get("model_info", {})
+                    
+                    # Extract real API data
                     details = {
-                        "family": data.get("details", {}).get("family"),
-                        "parameter_count": data.get("details", {}).get("parameter_size"),
-                        "quantization": data.get("details", {}).get("quantization_level")
+                        # Basic model info from details section
+                        "family": details_section.get("family"),
+                        "parameter_size": details_section.get("parameter_size"),
+                        "quantization": details_section.get("quantization_level"),
+                        "format": details_section.get("format"),
+                        "parent_model": details_section.get("parent_model"),
+                        
+                        # Context and architecture from model_info section
+                        "context_window": None,
+                        "architecture": model_info.get("general.architecture"),
+                        "block_count": None,
+                        "attention_heads": None
                     }
+                    
+                    # Extract context window (different patterns for different architectures)
+                    for key, value in model_info.items():
+                        if "context_length" in key:
+                            details["context_window"] = value
+                            break
+                    
+                    # Extract block count (layers)
+                    for key, value in model_info.items():
+                        if "block_count" in key:
+                            details["block_count"] = value
+                            break
+                    
+                    # Extract attention heads
+                    for key, value in model_info.items():
+                        if key.endswith(".attention.head_count") and not key.endswith("_kv"):
+                            details["attention_heads"] = value
+                            break
+                    
                     return details
 
         except Exception as e:
@@ -868,7 +938,15 @@ class ModelDiscoveryService:
                             "name": model.name,
                             "instance_url": model.instance_url,
                             "size": model.size,
-                            "parameters": model.parameters
+                            "parameters": model.parameters,
+                            # Real API data from /api/show
+                            "context_window": model.context_window,
+                            "architecture": model.architecture,
+                            "block_count": model.block_count,
+                            "attention_heads": model.attention_heads,
+                            "format": model.format,
+                            "parent_model": model.parent_model,
+                            "capabilities": model.capabilities
                         })
 
                     if "embedding" in model.capabilities:
@@ -876,7 +954,13 @@ class ModelDiscoveryService:
                             "name": model.name,
                             "instance_url": model.instance_url,
                             "dimensions": model.embedding_dimensions,
-                            "size": model.size
+                            "size": model.size,
+                            "parameters": model.parameters,
+                            # Real API data from /api/show
+                            "architecture": model.architecture,
+                            "format": model.format,
+                            "parent_model": model.parent_model,
+                            "capabilities": model.capabilities
                         })
 
         # Remove duplicates (same model on multiple instances)
