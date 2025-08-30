@@ -405,20 +405,28 @@ export const RAGSettings = ({
     }
   };
 
-  // Auto-check status on component mount only if configured
+  // Auto-check status when instances are configured or when Ollama is selected
   React.useEffect(() => {
-    // Only test if we have a real URL (not the default localhost)
-    if (llmInstanceConfig.url && llmInstanceConfig.name && llmInstanceConfig.url !== 'http://localhost:11434/v1') {
+    // Only test if Ollama is selected and we have a real URL (not the default localhost)
+    if (ragSettings.LLM_PROVIDER === 'ollama' && 
+        llmInstanceConfig.url && 
+        llmInstanceConfig.name && 
+        llmInstanceConfig.url !== 'http://localhost:11434/v1') {
+      console.log('Auto-testing LLM connection:', llmInstanceConfig.url);
       testConnection(llmInstanceConfig.url, setLLMStatus);
     }
-  }, []); // Only run on mount
+  }, [llmInstanceConfig.url, llmInstanceConfig.name, ragSettings.LLM_PROVIDER]); // Run when config changes or provider changes
 
   React.useEffect(() => {
-    // Only test if we have a real URL (not the default localhost)
-    if (embeddingInstanceConfig.url && embeddingInstanceConfig.name && embeddingInstanceConfig.url !== 'http://localhost:11434/v1') {
+    // Only test if Ollama is selected and we have a real URL (not the default localhost)
+    if (ragSettings.LLM_PROVIDER === 'ollama' && 
+        embeddingInstanceConfig.url && 
+        embeddingInstanceConfig.name && 
+        embeddingInstanceConfig.url !== 'http://localhost:11434/v1') {
+      console.log('Auto-testing Embedding connection:', embeddingInstanceConfig.url);
       testConnection(embeddingInstanceConfig.url, setEmbeddingStatus);
     }
-  }, []); // Only run on mount
+  }, [embeddingInstanceConfig.url, embeddingInstanceConfig.name, ragSettings.LLM_PROVIDER]); // Run when config changes or provider changes
 
   // Fetch Ollama metrics when component mounts or when Ollama provider is selected or status changes
   React.useEffect(() => {
