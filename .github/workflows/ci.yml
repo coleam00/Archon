@@ -93,7 +93,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync --dev
+          uv sync --group all --group dev
           uv add pytest-cov
 
       - name: Run linting with ruff (if available)
