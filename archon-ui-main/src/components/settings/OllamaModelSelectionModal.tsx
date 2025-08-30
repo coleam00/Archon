@@ -237,6 +237,8 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadedFromCache, setLoadedFromCache] = useState(false);
+  const [cacheTimestamp, setCacheTimestamp] = useState<string | null>(null);
   const { showToast } = useToast();
 
   // Filter and sort models
@@ -326,14 +328,102 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
     return filtered;
   }, [models, searchTerm, compatibilityFilter, sortBy, modelType, selectedInstanceUrl]);
 
-  // Load stored models
+  // Load models - first try cache, then fetch from instance
   const loadModels = async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/ollama/models/stored');
+      
+      // Check session storage cache first
+      const cacheKey = `ollama_models_${selectedInstanceUrl}_${modelType}`;
+      const cachedData = sessionStorage.getItem(cacheKey);
+      const cacheExpiry = 5 * 60 * 1000; // 5 minutes cache
+      
+      if (cachedData) {
+        const parsed = JSON.parse(cachedData);
+        const age = Date.now() - parsed.timestamp;
+        
+        if (age < cacheExpiry) {
+          // Use cached data
+          setModels(parsed.models);
+          setLoadedFromCache(true);
+          setCacheTimestamp(new Date(parsed.timestamp).toLocaleTimeString());
+          setLoading(false);
+          console.log(`✅ Loaded ${parsed.models.length} ${modelType} models from cache (age: ${Math.round(age/1000)}s)`);
+          return;
+        }
+      }
+      
+      // Cache miss or expired - fetch from instance
+      console.log(`🔄 Fetching fresh ${modelType} models for ${selectedInstanceUrl}`);
+      const instanceUrl = instances.find(i => i.url.replace('/v1', '') === selectedInstanceUrl)?.url || selectedInstanceUrl + '/v1';
+      
+      // Use the dynamic discovery API
+      const params = new URLSearchParams();
+      params.append('instance_urls', instanceUrl);
+      params.append('include_capabilities', 'true');
+      
+      const response = await fetch(`/api/ollama/models?${params.toString()}`);
       if (response.ok) {
         const data = await response.json();
-        setModels(data.models || []);
+        
+        // Convert API response to ModelInfo format
+        const allModels: ModelInfo[] = [];
+        
+        // Process chat models
+        if (data.chat_models) {
+          data.chat_models.forEach((model: any) => {
+            allModels.push({
+              name: model.name,
+              host: selectedInstanceUrl,
+              model_type: 'chat',
+              size_mb: model.size ? Math.round(model.size / 1048576) : undefined,
+              parameters: model.parameters,
+              capabilities: ['chat'],
+              archon_compatibility: 'full',
+              compatibility_features: ['Local Processing', 'Text Generation'],
+              limitations: [],
+              last_updated: new Date().toISOString()
+            });
+          });
+        }
+        
+        // Process embedding models
+        if (data.embedding_models) {
+          data.embedding_models.forEach((model: any) => {
+            allModels.push({
+              name: model.name,
+              host: selectedInstanceUrl,
+              model_type: 'embedding',
+              size_mb: model.size ? Math.round(model.size / 1048576) : undefined,
+              embedding_dimensions: model.dimensions,
+              capabilities: ['embedding'],
+              archon_compatibility: 'full',
+              compatibility_features: ['High-quality embeddings', 'Local processing'],
+              limitations: [],
+              last_updated: new Date().toISOString()
+            });
+          });
+        }
+        
+        setModels(allModels);
+        setLoadedFromCache(false);
+        setCacheTimestamp(null);
+        
+        // Cache the results
+        sessionStorage.setItem(cacheKey, JSON.stringify({
+          models: allModels,
+          timestamp: Date.now()
+        }));
+        
+        console.log(`✅ Fetched and cached ${allModels.length} models`);
+      } else {
+        // Fallback to stored models endpoint
+        const response = await fetch('/api/ollama/models/stored');
+        if (response.ok) {
+          const data = await response.json();
+          setModels(data.models || []);
+          setLoadedFromCache(false);
+        }
       }
     } catch (error) {
       console.error('Failed to load models:', error);
@@ -349,6 +439,12 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
       timestamp: new Date().toISOString(),
       instancesCount: instances.length
     });
+    
+    // Clear cache for this instance and model type
+    const cacheKey = `ollama_models_${selectedInstanceUrl}_${modelType}`;
+    sessionStorage.removeItem(cacheKey);
+    setLoadedFromCache(false);
+    setCacheTimestamp(null);
     
     try {
       setRefreshing(true);
@@ -461,6 +557,15 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
         
         console.log('🚨 MODAL DEBUG: Setting models:', allModels);
         setModels(allModels);
+        setLoadedFromCache(false);
+        setCacheTimestamp(null);
+        
+        // Cache the refreshed results
+        const cacheKey = `ollama_models_${selectedInstanceUrl}_${modelType}`;
+        sessionStorage.setItem(cacheKey, JSON.stringify({
+          models: allModels,
+          timestamp: Date.now()
+        }));
         
         const instanceCount = Object.keys(data.host_status || {}).length;
         showToast(`Refreshed ${data.total_models || 0} models from ${instanceCount} instances`, 'success');
@@ -604,11 +709,25 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
           </div>
         </div>
 
-        {/* Models Count */}
+        {/* Models Count and Cache Status */}
         <div className="px-6 py-3 border-b border-gray-700">
-          <div className="flex items-center text-sm text-orange-400">
-            <span className="mr-2">📋</span>
-            {filteredModels.length} models found
+          <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center text-orange-400">
+              <span className="mr-2">📋</span>
+              {filteredModels.length} models found
+            </div>
+            {loadedFromCache && cacheTimestamp && (
+              <div className="flex items-center text-gray-400">
+                <span className="mr-2">💾</span>
+                Cached at {cacheTimestamp}
+              </div>
+            )}
+            {!loadedFromCache && !loading && (
+              <div className="flex items-center text-green-400">
+                <span className="mr-2">🔄</span>
+                Fresh data
+              </div>
+            )}
           </div>
         </div>
 
