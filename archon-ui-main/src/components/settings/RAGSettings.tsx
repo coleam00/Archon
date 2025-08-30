@@ -18,6 +18,10 @@ interface RAGSettingsProps {
     LLM_PROVIDER?: string;
     LLM_BASE_URL?: string;
     EMBEDDING_MODEL?: string;
+    // Azure OpenAI specific settings
+    AZURE_OPENAI_ENDPOINT?: string;
+    AZURE_OPENAI_DEPLOYMENT?: string;
+    AZURE_OPENAI_API_VERSION?: string;
     // Crawling Performance Settings
     CRAWL_BATCH_SIZE?: number;
     CRAWL_MAX_CONCURRENT?: number;
@@ -53,8 +57,8 @@ export const RAGSettings = ({
           knowledge retrieval.
         </p>
         
-        {/* Provider Selection Row */}
-        <div className="grid grid-cols-3 gap-4 mb-4">
+        {/* Provider Selection Row - Dynamic grid based on provider */}
+        <div className={`grid gap-4 mb-4 ${ragSettings.LLM_PROVIDER === 'azure-openai' ? 'grid-cols-1' : 'grid-cols-3'}`}>
           <div>
             <Select
               label="LLM Provider"
@@ -66,6 +70,7 @@ export const RAGSettings = ({
               accentColor="green"
               options={[
                 { value: 'openai', label: 'OpenAI' },
+                { value: 'azure-openai', label: 'Azure OpenAI' },
                 { value: 'google', label: 'Google Gemini' },
                 { value: 'ollama', label: 'Ollama (Coming Soon)' },
               ]}
@@ -85,6 +90,67 @@ export const RAGSettings = ({
               />
             </div>
           )}
+        </div>
+
+        {/* Azure-specific fields in separate section */}
+        {ragSettings.LLM_PROVIDER === 'azure-openai' && (
+          <div className="mb-4 p-4 border border-blue-500/20 rounded-lg bg-blue-500/5">
+            {/* Azure Configuration Help */}
+            <div className="mb-4 p-3 bg-blue-100 dark:bg-blue-800/30 border border-blue-300 dark:border-blue-600 rounded-md">
+              <div className="text-sm text-blue-800 dark:text-blue-200">
+                <p className="font-medium mb-1">💡 Azure Setup Guide:</p>
+                <p>1. Add your <code className="bg-blue-200 dark:bg-blue-700 px-1 rounded">AZURE_OPENAI_API_KEY</code> in the API Keys section</p>
+                <p>2. Configure the fields below with your Azure OpenAI resource details</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <Input
+                  label="Azure Endpoint"
+                  value={ragSettings.AZURE_OPENAI_ENDPOINT || ''}
+                  onChange={e => setRagSettings({
+                    ...ragSettings,
+                    AZURE_OPENAI_ENDPOINT: e.target.value
+                  })}
+                  placeholder="https://your-resource.openai.azure.com"
+                  accentColor="green"
+                />
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Your Azure OpenAI resource endpoint</p>
+              </div>
+              <div>
+                <Input
+                  label="Azure Deployment Name"
+                  value={ragSettings.AZURE_OPENAI_DEPLOYMENT || ''}
+                  onChange={e => setRagSettings({
+                    ...ragSettings,
+                    AZURE_OPENAI_DEPLOYMENT: e.target.value
+                  })}
+                  placeholder="your-deployment-name"
+                  accentColor="green"
+                />
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Model deployment name from Azure OpenAI Studio</p>
+              </div>
+              <div>
+                <Input
+                  label="Azure API Version"
+                  value={ragSettings.AZURE_OPENAI_API_VERSION || '2024-10-21'}
+                  onChange={e => setRagSettings({
+                    ...ragSettings,
+                    AZURE_OPENAI_API_VERSION: e.target.value
+                  })}
+                  placeholder="2024-10-21"
+                  accentColor="green"
+                />
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">API version (e.g., 2024-10-21)</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Save Button Row */}
+        <div className="grid grid-cols-4 gap-4 mb-6">
+          <div className="col-span-3"></div>
           <div className="flex items-end">
             <Button 
               variant="outline" 
@@ -480,6 +546,8 @@ function getModelPlaceholder(provider: string): string {
   switch (provider) {
     case 'openai':
       return 'e.g., gpt-4o-mini';
+    case 'azure-openai':
+      return 'e.g., gpt-4o-mini';
     case 'ollama':
       return 'e.g., llama2, mistral';
     case 'google':
@@ -492,6 +560,8 @@ function getModelPlaceholder(provider: string): string {
 function getEmbeddingPlaceholder(provider: string): string {
   switch (provider) {
     case 'openai':
+      return 'Default: text-embedding-3-small';
+    case 'azure-openai':
       return 'Default: text-embedding-3-small';
     case 'ollama':
       return 'e.g., nomic-embed-text';

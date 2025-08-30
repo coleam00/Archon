@@ -444,6 +444,7 @@ class CredentialService:
         key_mapping = {
             "openai": "OPENAI_API_KEY",
             "google": "GOOGLE_API_KEY",
+            "azure-openai": "AZURE_OPENAI_API_KEY",
             "ollama": None,  # No API key needed
         }
 
@@ -458,7 +459,13 @@ class CredentialService:
             return rag_settings.get("LLM_BASE_URL", "http://localhost:11434/v1")
         elif provider == "google":
             return "https://generativelanguage.googleapis.com/v1beta/openai/"
+        elif provider == "azure-openai":
+            return rag_settings.get("AZURE_OPENAI_ENDPOINT")
         return None  # Use default for OpenAI
+
+    def _get_azure_api_version(self, rag_settings: dict) -> str:
+        """Get Azure OpenAI API version with fallback to default."""
+        return rag_settings.get("AZURE_OPENAI_API_VERSION", "2024-10-21")
 
     async def set_active_provider(self, provider: str, service_type: str = "llm") -> bool:
         """Set the active provider for a service type."""

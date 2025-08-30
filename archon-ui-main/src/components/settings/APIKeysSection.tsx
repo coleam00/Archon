@@ -295,8 +295,8 @@ export const APIKeysSection = () => {
             ))}
           </div>
 
-          {/* Add credential button */}
-          <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+          {/* Add credential button and quick suggestions */}
+          <div className="pt-4 border-t border-gray-200 dark:border-gray-700 space-y-3">
             <Button
               variant="outline"
               onClick={handleAddNewRow}
@@ -306,6 +306,40 @@ export const APIKeysSection = () => {
               <Plus className="w-3.5 h-3.5 mr-1.5" />
               Add Credential
             </Button>
+
+            {/* Quick add suggestions */}
+            <div className="space-y-2">
+              <p className="text-xs text-gray-500 dark:text-gray-400">Quick add common API keys:</p>
+              <div className="flex flex-wrap gap-2">
+                {['OPENAI_API_KEY', 'AZURE_OPENAI_API_KEY', 'GOOGLE_API_KEY'].map(keyName => (
+                  <button
+                    key={keyName}
+                    onClick={() => {
+                      // Check if key already exists
+                      const exists = customCredentials.some(cred => cred.key === keyName);
+                      if (!exists) {
+                        const newCred: CustomCredential = {
+                          key: keyName,
+                          value: '',
+                          description: '',
+                          originalValue: '',
+                          hasChanges: true,
+                          is_encrypted: true,
+                          showValue: true,
+                          isNew: true
+                        };
+                        setCustomCredentials([...customCredentials, newCred]);
+                      } else {
+                        showToast(`${keyName} already exists`, 'info');
+                      }
+                    }}
+                    className="px-2 py-1 text-xs rounded-md bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 border border-gray-300 dark:border-gray-600 transition-colors"
+                  >
+                    {keyName}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
           {/* Save all changes button */}
