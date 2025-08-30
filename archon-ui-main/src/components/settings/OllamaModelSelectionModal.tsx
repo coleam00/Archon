@@ -622,7 +622,8 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
               host: model.instance_url.replace('/v1', ''), // Remove /v1 suffix to match selectedInstanceUrl
               model_type: 'chat',
               archon_compatibility: compatibility,
-              size_gb: (model.size / (1024 ** 3)).toFixed(1),
+              size_mb: model.size ? Math.round(model.size / 1048576) : undefined, // Convert bytes to MB
+              context_length: model.context_window, // Map context_window to context_length for UI compatibility
               // Preserve all model data from API
               capabilities: model.capabilities || ['chat'],
               compatibility_features: getCompatibilityFeatures(compatibility),
@@ -638,8 +639,8 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
               host: model.instance_url.replace('/v1', ''), // Remove /v1 suffix to match selectedInstanceUrl
               model_type: 'embedding',
               archon_compatibility: compatibility,
-              size_gb: (model.size / (1024 ** 3)).toFixed(1),
-              // Preserve all model data from API
+              size_mb: model.size ? Math.round(model.size / 1048576) : undefined, // Convert bytes to MB
+              // Preserve all model data from API (embedding models don't typically have context_window)
               capabilities: model.capabilities || ['embedding'],
               compatibility_features: getCompatibilityFeatures(compatibility),
               limitations: getCompatibilityLimitations(compatibility),
