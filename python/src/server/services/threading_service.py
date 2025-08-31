@@ -84,31 +84,63 @@ class RateLimiter:
         self.semaphore = asyncio.Semaphore(config.max_concurrent)
         self._lock = asyncio.Lock()
 
-    async def acquire(self, estimated_tokens: int = 8000) -> bool:
-        """Acquire permission to make API call with token awareness"""
-        async with self._lock:
-            now = time.time()
+    async def acquire(self, estimated_tokens: int = 8000, progress_callback: Callable | None = None) -> bool:
+        """Acquire permission to make API call with token awareness
+        
+        Args:
+            estimated_tokens: Estimated number of tokens for the operation
+            progress_callback: Optional async callback for progress updates during wait
+        """
+        while True:  # Loop instead of recursion to avoid stack overflow
+            wait_time_to_sleep = None
+            
+            async with self._lock:
+                now = time.time()
 
-            # Clean old entries
-            self._clean_old_entries(now)
+                # Clean old entries
+                self._clean_old_entries(now)
 
-            # Check if we can make the request
-            if not self._can_make_request(estimated_tokens):
+                # Check if we can make the request
+                if self._can_make_request(estimated_tokens):
+                    # Record the request
+                    self.request_times.append(now)
+                    self.token_usage.append((now, estimated_tokens))
+                    return True
+                
+                # Calculate wait time if we can't make the request
                 wait_time = self._calculate_wait_time(estimated_tokens)
                 if wait_time > 0:
                     logfire_logger.info(
                         f"Rate limiting: waiting {wait_time:.1f}s",
-                        tokens=estimated_tokens,
-                        current_usage=self._get_current_usage(),
+                        extra={
+                            "tokens": estimated_tokens,
+                            "current_usage": self._get_current_usage(),
+                        }
                     )
-                    await asyncio.sleep(wait_time)
-                    return await self.acquire(estimated_tokens)
-                return False
-
-            # Record the request
-            self.request_times.append(now)
-            self.token_usage.append((now, estimated_tokens))
-            return True
+                    wait_time_to_sleep = wait_time
+                else:
+                    return False
+            
+            # Sleep outside the lock to avoid deadlock
+            if wait_time_to_sleep is not None:
+                # For long waits, break into smaller chunks with progress updates
+                if wait_time_to_sleep > 5 and progress_callback:
+                    chunks = int(wait_time_to_sleep / 5)  # 5 second chunks
+                    for i in range(chunks):
+                        await asyncio.sleep(5)
+                        remaining = wait_time_to_sleep - (i + 1) * 5
+                        if progress_callback:
+                            await progress_callback({
+                                "type": "rate_limit_wait",
+                                "remaining_seconds": max(0, remaining),
+                                "message": f"waiting {max(0, remaining):.1f}s more..."
+                            })
+                    # Sleep any remaining time
+                    if wait_time_to_sleep % 5 > 0:
+                        await asyncio.sleep(wait_time_to_sleep % 5)
+                else:
+                    await asyncio.sleep(wait_time_to_sleep)
+                # Continue the loop to try again
 
     def _can_make_request(self, estimated_tokens: int) -> bool:
         """Check if request can be made within limits"""
@@ -199,16 +231,20 @@ class MemoryAdaptiveDispatcher:
             workers = max(1, base // 2)
             logfire_logger.warning(
                 "High memory usage detected, reducing workers",
-                memory_percent=metrics.memory_percent,
-                workers=workers,
+                extra={
+                    "memory_percent": metrics.memory_percent,
+                    "workers": workers,
+                }
             )
         elif metrics.cpu_percent > self.config.cpu_threshold * 100:
             # Reduce workers when CPU is high
             workers = max(1, base // 2)
             logfire_logger.warning(
                 "High CPU usage detected, reducing workers",
-                cpu_percent=metrics.cpu_percent,
-                workers=workers,
+                extra={
+                    "cpu_percent": metrics.cpu_percent,
+                    "workers": workers,
+                }
             )
         elif metrics.memory_percent < 50 and metrics.cpu_percent < 50:
             # Increase workers when resources are available
@@ -239,11 +275,13 @@ class MemoryAdaptiveDispatcher:
 
         logfire_logger.info(
             "Starting adaptive processing",
-            items_count=len(items),
-            workers=optimal_workers,
-            mode=mode,
-            memory_percent=self.last_metrics.memory_percent,
-            cpu_percent=self.last_metrics.cpu_percent,
+            extra={
+                "items_count": len(items),
+                "workers": optimal_workers,
+                "mode": mode,
+                "memory_percent": self.last_metrics.memory_percent,
+                "cpu_percent": self.last_metrics.cpu_percent,
+            }
         )
 
         # Track active workers
@@ -318,7 +356,8 @@ class MemoryAdaptiveDispatcher:
                             del active_workers[worker_id]
 
                     logfire_logger.error(
-                        f"Processing failed for item {index}", error=str(e), item_index=index
+                        f"Processing failed for item {index}",
+                        extra={"error": str(e), "item_index": index}
                     )
                     return None
 
@@ -334,10 +373,12 @@ class MemoryAdaptiveDispatcher:
         success_rate = len(successful_results) / len(items) * 100
         logfire_logger.info(
             "Adaptive processing completed",
-            total_items=len(items),
-            successful=len(successful_results),
-            success_rate=f"{success_rate:.1f}%",
-            workers_used=optimal_workers,
+            extra={
+                "total_items": len(items),
+                "successful": len(successful_results),
+                "success_rate": f"{success_rate:.1f}%",
+                "workers_used": optimal_workers,
+            }
         )
 
         return successful_results
@@ -355,7 +396,8 @@ class WebSocketSafeProcessor:
         await websocket.accept()
         self.active_connections.append(websocket)
         logfire_logger.info(
-            "WebSocket client connected", total_connections=len(self.active_connections)
+            "WebSocket client connected",
+            extra={"total_connections": len(self.active_connections)}
         )
 
     def disconnect(self, websocket: WebSocket):
@@ -363,7 +405,8 @@ class WebSocketSafeProcessor:
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
             logfire_logger.info(
-                "WebSocket client disconnected", remaining_connections=len(self.active_connections)
+                "WebSocket client disconnected",
+                extra={"remaining_connections": len(self.active_connections)}
             )
 
     async def broadcast_progress(self, message: dict[str, Any]):
@@ -474,7 +517,7 @@ class ThreadingService:
 
         self._running = True
         self._health_check_task = asyncio.create_task(self._health_check_loop())
-        logfire_logger.info("Threading service started", config=self.config.__dict__)
+        logfire_logger.info("Threading service started", extra={"config": self.config.__dict__})
 
     async def stop(self):
         """Stop the threading service"""
@@ -497,10 +540,15 @@ class ThreadingService:
         logfire_logger.info("Threading service stopped")
 
     @asynccontextmanager
-    async def rate_limited_operation(self, estimated_tokens: int = 8000):
-        """Context manager for rate-limited operations"""
+    async def rate_limited_operation(self, estimated_tokens: int = 8000, progress_callback: Callable | None = None):
+        """Context manager for rate-limited operations
+        
+        Args:
+            estimated_tokens: Estimated number of tokens for the operation
+            progress_callback: Optional async callback for progress updates during wait
+        """
         async with self.rate_limiter.semaphore:
-            can_proceed = await self.rate_limiter.acquire(estimated_tokens)
+            can_proceed = await self.rate_limiter.acquire(estimated_tokens, progress_callback)
             if not can_proceed:
                 raise Exception("Rate limit exceeded")
 
@@ -510,7 +558,8 @@ class ThreadingService:
             finally:
                 duration = time.time() - start_time
                 logfire_logger.debug(
-                    "Rate limited operation completed", duration=duration, tokens=estimated_tokens
+                    "Rate limited operation completed",
+                    extra={"duration": duration, "tokens": estimated_tokens},
                 )
 
     async def run_cpu_intensive(self, func: Callable, *args, **kwargs) -> Any:
@@ -563,36 +612,43 @@ class ThreadingService:
                 # Log system metrics
                 logfire_logger.info(
                     "System health check",
-                    memory_percent=metrics.memory_percent,
-                    cpu_percent=metrics.cpu_percent,
-                    available_memory_gb=metrics.available_memory_gb,
-                    active_threads=metrics.active_threads,
-                    active_websockets=len(self.websocket_processor.active_connections),
+                    extra={
+                        "memory_percent": metrics.memory_percent,
+                        "cpu_percent": metrics.cpu_percent,
+                        "available_memory_gb": metrics.available_memory_gb,
+                        "active_threads": metrics.active_threads,
+                        "active_websockets": len(self.websocket_processor.active_connections),
+                    }
                 )
 
                 # Alert on critical thresholds
                 if metrics.memory_percent > 90:
                     logfire_logger.warning(
-                        "Critical memory usage", memory_percent=metrics.memory_percent
+                        "Critical memory usage",
+                        extra={"memory_percent": metrics.memory_percent}
                     )
                     # Force garbage collection
                     gc.collect()
 
                 if metrics.cpu_percent > 95:
-                    logfire_logger.warning("Critical CPU usage", cpu_percent=metrics.cpu_percent)
+                    logfire_logger.warning(
+                        "Critical CPU usage", extra={"cpu_percent": metrics.cpu_percent}
+                    )
 
                 # Check for memory leaks (too many threads)
                 if metrics.active_threads > self.config.max_workers * 3:
                     logfire_logger.warning(
                         "High thread count detected",
-                        active_threads=metrics.active_threads,
-                        max_expected=self.config.max_workers * 3,
+                        extra={
+                            "active_threads": metrics.active_threads,
+                            "max_expected": self.config.max_workers * 3,
+                        }
                     )
 
                 await asyncio.sleep(self.config.health_check_interval)
 
             except Exception as e:
-                logfire_logger.error("Health check failed", error=str(e))
+                logfire_logger.error("Health check failed", extra={"error": str(e)})
                 await asyncio.sleep(self.config.health_check_interval)
 
 

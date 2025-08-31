@@ -40,8 +40,12 @@ export const BackendStartupError: React.FC = () => {
 
               <div className="bg-yellow-950/30 border border-yellow-700/30 rounded-lg p-3">
                 <p className="text-yellow-200 text-sm">
-                  <strong>Common issue:</strong> Using an ANON key instead of SERVICE key in your .env file
+                  <strong>Common issues:</strong>
                 </p>
+                <ul className="text-yellow-200 text-sm mt-1 space-y-1 list-disc list-inside">
+                  <li>Using an ANON key instead of SERVICE key in your .env file</li>
+                  <li>Database not set up - run <code className="bg-yellow-800/50 px-1 rounded">migration/complete_setup.sql</code> in Supabase SQL Editor</li>
+                </ul>
               </div>
 
               <div className="pt-4 border-t border-red-900/30">
@@ -49,11 +53,16 @@ export const BackendStartupError: React.FC = () => {
                   After fixing the issue in your .env file, recreate the Docker containers:
                 </p>
                 <code className="block mt-2 p-2 bg-black/70 rounded text-red-100 font-mono text-sm">
-                  docker compose down && docker compose up -d
+                  docker compose down && docker compose up --build -d
                 </code>
-                <p className="text-red-300 text-xs mt-2">
-                  Note: Use 'down' and 'up', not 'restart' - containers need to be recreated to load new environment variables
-                </p>
+                <div className="text-red-300 text-xs mt-2">
+                  <p>Note:</p>
+                  <p>• Use 'down' and 'up' (not 'restart') so new env vars are picked up.</p>
+                  <p>• If you originally started with a specific profile (backend, frontend, or full),</p>
+                  <p>&nbsp;&nbsp;run the same profile again:</p>
+                  <br />
+                  <code className="bg-black/50 px-1 rounded">docker compose --profile full up --build -d</code>
+                </div>
               </div>
 
               <div className="flex justify-center pt-4">

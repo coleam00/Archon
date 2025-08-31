@@ -93,7 +93,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync --dev
+          uv sync --group all --group dev
           uv add pytest-cov
 
       - name: Run linting with ruff (if available)
@@ -122,7 +122,7 @@ jobs:
           uv run pytest tests/ --verbose --tb=short \
             --cov=src --cov-report=xml --cov-report=html \
             --cov-report=term-missing \
-            --junitxml=test-results.xml || true
+            --junitxml=test-results.xml
 
       - name: Upload backend test results
         if: always()

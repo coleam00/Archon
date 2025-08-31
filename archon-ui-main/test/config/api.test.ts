@@ -35,7 +35,9 @@ describe('API Configuration', () => {
     it('should return empty string in production mode', async () => {
       // Set production mode
       (import.meta.env as any).PROD = true;
-      delete (import.meta.env as any).VITE_API_URL;
+
+      // It should not use VITE_API_URL
+      (import.meta.env as any).VITE_API_URL = 'http://custom-api:9999';
       
       const { getApiUrl } = await import('../../src/config/api');
       expect(getApiUrl()).toBe('');

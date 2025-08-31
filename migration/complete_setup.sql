@@ -170,6 +170,8 @@ COMMENT ON TABLE archon_settings IS 'Stores application configuration including 
 -- Create the sources table
 CREATE TABLE IF NOT EXISTS archon_sources (
     source_id TEXT PRIMARY KEY,
+    source_url TEXT,
+    source_display_name TEXT,
     summary TEXT,
     total_word_count INTEGER DEFAULT 0,
     title TEXT,
@@ -180,10 +182,15 @@ CREATE TABLE IF NOT EXISTS archon_sources (
 
 -- Create indexes for better query performance
 CREATE INDEX IF NOT EXISTS idx_archon_sources_title ON archon_sources(title);
+CREATE INDEX IF NOT EXISTS idx_archon_sources_url ON archon_sources(source_url);
+CREATE INDEX IF NOT EXISTS idx_archon_sources_display_name ON archon_sources(source_display_name);
 CREATE INDEX IF NOT EXISTS idx_archon_sources_metadata ON archon_sources USING GIN(metadata);
 CREATE INDEX IF NOT EXISTS idx_archon_sources_knowledge_type ON archon_sources((metadata->>'knowledge_type'));
 
--- Add comments to document the new columns
+-- Add comments to document the columns
+COMMENT ON COLUMN archon_sources.source_id IS 'Unique hash identifier for the source (16-char SHA256 hash of URL)';
+COMMENT ON COLUMN archon_sources.source_url IS 'The original URL that was crawled to create this source';
+COMMENT ON COLUMN archon_sources.source_display_name IS 'Human-readable name for UI display (e.g., "GitHub - microsoft/typescript")';
 COMMENT ON COLUMN archon_sources.title IS 'Descriptive title for the source (e.g., "Pydantic AI API Reference")';
 COMMENT ON COLUMN archon_sources.metadata IS 'JSONB field storing knowledge_type, tags, and other metadata';
 

@@ -146,7 +146,7 @@ class TestAsyncBackgroundTaskManager:
         assert len(running_tasks) <= 2
 
         # Wait for all to complete
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.3)
         assert len(completed_tasks) == 4
 
         # Clean up
