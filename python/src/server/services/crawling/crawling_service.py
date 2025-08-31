@@ -537,19 +537,18 @@ class CrawlingService:
         if self.url_handler.is_txt(url) or self.url_handler.is_markdown(url):
             # Handle text files
             if self.progress_id:
+                overall_progress = self.progress_mapper.map_progress("crawling", 10)
                 self.progress_state.update({
                     "status": "crawling",
-                    "percentage": 10,
+                    "percentage": overall_progress,
                     "log": "Detected text/markdown file, fetching content...",
                 })
-                # Keep heartbeat stage/progress in sync with direct emissions
-                self.progress_mapper.map_progress("crawling", 10)
                 await update_crawl_progress(self.progress_id, self.progress_state)
             crawl_results = await self.crawl_markdown_file(
                 url,
                 progress_callback=await self._create_crawl_progress_callback("crawling"),
-                start_progress=10,
-                end_progress=20,
+                start_progress=5,
+                end_progress=10,
             )
             crawl_type = "text_file"
             

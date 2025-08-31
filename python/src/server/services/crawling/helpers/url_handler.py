@@ -33,7 +33,6 @@ class URLHandler:
         except Exception as e:
             logger.warning(f"Error checking if URL is sitemap: {e}")
             return False
-<<<<<<< HEAD
     
     @staticmethod  
     def is_markdown(url: str) -> bool:
@@ -54,8 +53,6 @@ class URLHandler:
         except Exception as e:
             logger.warning(f"Error checking if URL is markdown file: {e}", exc_info=True)
             return False
-=======
->>>>>>> origin/main
 
     @staticmethod
     def is_txt(url: str) -> bool:
@@ -69,13 +66,9 @@ class URLHandler:
             True if URL is a text file, False otherwise
         """
         try:
-<<<<<<< HEAD
             parsed = urlparse(url)
             # Normalize to lowercase and ignore query/fragment
             return parsed.path.lower().endswith('.txt')
-=======
-            return url.endswith(".txt")
->>>>>>> origin/main
         except Exception as e:
             logger.warning(f"Error checking if URL is text file: {e}", exc_info=True)
             return False
@@ -196,13 +189,7 @@ class URLHandler:
         match = re.match(github_file_pattern, url)
         if match:
             owner, repo, branch, path = match.groups()
-<<<<<<< HEAD
-            # Strip query parameters and fragments that break raw URLs
-            path = path.split('?', 1)[0].split('#', 1)[0]
-            raw_url = f'https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}'
-=======
             raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}"
->>>>>>> origin/main
             logger.info(f"Transformed GitHub file URL to raw: {url} -> {raw_url}")
             return raw_url
 
@@ -227,8 +214,66 @@ class URLHandler:
         for distinct canonical URLs, solving race condition issues when multiple crawls
         target the same domain.
         
-<<<<<<< HEAD
-        return url
+        Uses 16-char SHA256 prefix (64 bits) which provides
+        ~18 quintillion unique values. Collision probability
+        is negligible for realistic usage (<1M sources).
+
+        Args:
+            url: The URL to generate an ID for
+
+        Returns:
+            A 16-character hexadecimal hash string
+        """
+        try:
+            from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+            
+            # Canonicalize URL for consistent hashing
+            parsed = urlparse(url.strip())
+            
+            # Normalize scheme and netloc to lowercase
+            scheme = (parsed.scheme or "").lower()
+            netloc = (parsed.netloc or "").lower()
+            
+            # Remove default ports
+            if netloc.endswith(":80") and scheme == "http":
+                netloc = netloc[:-3]
+            if netloc.endswith(":443") and scheme == "https":
+                netloc = netloc[:-4]
+            
+            # Normalize path (remove trailing slash except for root)
+            path = parsed.path or "/"
+            if path.endswith("/") and len(path) > 1:
+                path = path.rstrip("/")
+            
+            # Remove common tracking parameters and sort remaining
+            tracking_params = {
+                "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+                "gclid", "fbclid", "ref", "source"
+            }
+            query_items = [
+                (k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) 
+                if k not in tracking_params
+            ]
+            query = urlencode(sorted(query_items))
+            
+            # Reconstruct canonical URL (fragment is dropped)
+            canonical = urlunparse((scheme, netloc, path, "", query, ""))
+            
+            # Generate SHA256 hash and take first 16 characters
+            return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+            
+        except Exception as e:
+            # Redacted sensitive query params from error logs
+            try:
+                redacted = url.split("?", 1)[0] if "?" in url else url
+            except Exception:
+                redacted = "<unparseable-url>"
+            
+            logger.error(f"Error generating unique source ID for {redacted}: {e}", exc_info=True)
+            
+            # Fallback: use a hash of the error message + url to still get something unique
+            fallback = f"error_{redacted}_{str(e)}"
+            return hashlib.sha256(fallback.encode("utf-8")).hexdigest()[:16]
     
     @staticmethod
     def extract_markdown_links(content: str, base_url: Optional[str] = None) -> List[str]:
@@ -365,8 +410,12 @@ class URLHandler:
             
             # Content-based detection if content is provided
             if content:
+                # Never treat "full" variants as link collections to preserve single-page behavior
+                if 'full' in filename:
+                    logger.info(f"Skipping content-based link-collection detection for full-content file: {filename}")
+                    return False
                 # Reuse extractor to avoid regex divergence and maintain consistency
-                extracted_links = URLHandler.extract_markdown_links(content)
+                extracted_links = URLHandler.extract_markdown_links(content, url)
                 total_links = len(extracted_links)
                 
                 # Calculate link density (links per 100 characters)
@@ -384,16 +433,20 @@ class URLHandler:
         except Exception as e:
             logger.warning(f"Error checking if file is link collection: {e}", exc_info=True)
             return False
-=======
-        Uses 16-char SHA256 prefix (64 bits) which provides
-        ~18 quintillion unique values. Collision probability
-        is negligible for realistic usage (<1M sources).
+
+    @staticmethod
+    def extract_display_name(url: str) -> str:
+        """
+        Extract a human-readable display name from URL.
+
+        This creates user-friendly names for common source patterns
+        while falling back to the domain for unknown patterns.
 
         Args:
-            url: The URL to generate an ID for
+            url: The URL to extract a display name from
 
         Returns:
-            A 16-character hexadecimal hash string
+            A human-readable string suitable for UI display
         """
         try:
             from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
@@ -594,4 +647,3 @@ class URLHandler:
             logger.warning(f"Error extracting display name for {url}: {e}, using URL")
             # Fallback: return truncated URL
             return url[:50] + "..." if len(url) > 50 else url
->>>>>>> origin/main
