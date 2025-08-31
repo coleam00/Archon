@@ -9,7 +9,6 @@ PRPs enable working code on the first attempt through:
 - **Context Completeness**: Everything needed, nothing guessed
 - **Progressive Validation**: 4-level gates catch errors early
 - **Pattern Consistency**: Follow existing codebase approaches
-- Read PRPs/README.md to understand PRP concepts
 
 **Your Goal**: Transform the PRP into working code that passes all validation gates.
 

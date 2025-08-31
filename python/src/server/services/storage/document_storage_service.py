@@ -233,9 +233,23 @@ async def add_documents_to_supabase(
                 # If not using contextual embeddings, use original contents
                 contextual_contents = batch_contents
 
-            # Create embeddings for the batch - no progress reporting
-            # Don't pass websocket to avoid Socket.IO issues
-            result = await create_embeddings_batch(contextual_contents, provider=provider)
+            # Create embeddings for the batch with rate limit progress support
+            # Create a wrapper for progress callback to handle rate limiting updates
+            async def embedding_progress_wrapper(message: str, percentage: float):
+                # Forward rate limiting messages to the main progress callback
+                if progress_callback and "rate limit" in message.lower():
+                    await progress_callback(
+                        message,
+                        current_percentage,  # Use current batch progress
+                        {"batch": batch_num, "type": "rate_limit_wait"}
+                    )
+            
+            # Pass progress callback for rate limiting updates
+            result = await create_embeddings_batch(
+                contextual_contents,
+                provider=provider,
+                progress_callback=embedding_progress_wrapper if progress_callback else None
+            )
 
             # Log any failures
             if result.has_failures:

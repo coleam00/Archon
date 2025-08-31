@@ -27,7 +27,7 @@ help:
 install:
 	@echo "Installing dependencies..."
 	@cd archon-ui-main && npm install
-	@cd python && uv sync
+	@cd python && uv sync --group all --group dev
 	@echo "✓ Dependencies installed"
 
 # Check environment

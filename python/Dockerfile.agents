@@ -1,13 +1,18 @@
-# Agents Service - Lightweight PydanticAI agents ONLY (no ML models)
-FROM python:3.11-slim
+# Agents Service - Lightweight Pydantic AI agents
+FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install dependencies
-COPY requirements.agents.txt .
-RUN pip install --no-cache-dir -r requirements.agents.txt
+# Install uv
+RUN pip install --no-cache-dir uv
 
-# Copy ONLY agents code - no dependencies on server code
+# Copy pyproject.toml for dependency installation
+COPY pyproject.toml .
+
+# Install only agents dependencies using uv
+RUN uv pip install --system --group agents
+
+# Copy agents code - no dependencies on server code
 # Agents use MCP tools for all operations
 COPY src/agents/ src/agents/
 COPY src/__init__.py src/
@@ -15,9 +20,6 @@ COPY src/__init__.py src/
 # Set environment variables
 ENV PYTHONPATH="/app:$PYTHONPATH"
 ENV PYTHONUNBUFFERED=1
-
-# NO ML models in agents container!
-# Agents use MCP tools for all ML operations
 
 # Expose Agents port
 ARG ARCHON_AGENTS_PORT=8052

@@ -1,20 +1,25 @@
 # MCP Service - Lightweight HTTP-based microservice  
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install dependencies
-COPY requirements.mcp.txt .
-RUN pip install --no-cache-dir -r requirements.mcp.txt
+# Install uv
+RUN pip install --no-cache-dir uv
+
+# Copy pyproject.toml for dependency installation
+COPY pyproject.toml .
+
+# Install only mcp dependencies using uv
+RUN uv pip install --system --group mcp
 
 # Create minimal directory structure
 RUN mkdir -p src/mcp_server/features/projects src/mcp_server/features/tasks src/mcp_server/features/documents src/server/services src/server/config
 
-# Copy only MCP-specific files (lightweight protocol wrapper)
+# Copy only MCP-specific files
 COPY src/mcp_server/ src/mcp_server/
 COPY src/__init__.py src/
 
-# Copy only the minimal server files MCP needs for HTTP communication
+# Copy the server files MCP needs for HTTP communication
 COPY src/server/__init__.py src/server/
 COPY src/server/services/__init__.py src/server/services/
 COPY src/server/services/mcp_service_client.py src/server/services/

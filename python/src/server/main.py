@@ -246,12 +246,27 @@ async def health_check():
             "ready": False,
         }
 
+    # Check for required database schema
+    schema_status = await _check_database_schema()
+    if not schema_status["valid"]:
+        return {
+            "status": "migration_required",
+            "service": "archon-backend", 
+            "timestamp": datetime.now().isoformat(),
+            "ready": False,
+            "migration_required": True,
+            "message": schema_status["message"],
+            "migration_instructions": "Open Supabase Dashboard → SQL Editor → Run: migration/add_source_url_display_name.sql",
+            "schema_valid": False
+        }
+
     return {
         "status": "healthy",
         "service": "archon-backend",
         "timestamp": datetime.now().isoformat(),
         "ready": True,
         "credentials_loaded": True,
+        "schema_valid": True,
     }
 
 
@@ -260,6 +275,78 @@ async def health_check():
 async def api_health_check():
     """API health check endpoint - alias for /health."""
     return await health_check()
+
+
+# Cache schema check result to avoid repeated database queries
+_schema_check_cache = {"valid": None, "checked_at": 0}
+
+async def _check_database_schema():
+    """Check if required database schema exists - only for existing users who need migration."""
+    import time
+    
+    # If we've already confirmed schema is valid, don't check again
+    if _schema_check_cache["valid"] is True:
+        return {"valid": True, "message": "Schema is up to date (cached)"}
+    
+    # If we recently failed, don't spam the database (wait at least 30 seconds)
+    current_time = time.time()
+    if (_schema_check_cache["valid"] is False and 
+        current_time - _schema_check_cache["checked_at"] < 30):
+        return _schema_check_cache["result"]
+    
+    try:
+        from .services.client_manager import get_supabase_client
+        
+        client = get_supabase_client()
+        
+        # Try to query the new columns directly - if they exist, schema is up to date
+        test_query = client.table('archon_sources').select('source_url, source_display_name').limit(1).execute()
+        
+        # Cache successful result permanently
+        _schema_check_cache["valid"] = True
+        _schema_check_cache["checked_at"] = current_time
+        
+        return {"valid": True, "message": "Schema is up to date"}
+        
+    except Exception as e:
+        error_msg = str(e).lower()
+        
+        # Log schema check error for debugging
+        api_logger.debug(f"Schema check error: {type(e).__name__}: {str(e)}")
+        
+        # Check for specific error types based on PostgreSQL error codes and messages
+        
+        # Check for missing columns first (more specific than table check)
+        missing_source_url = 'source_url' in error_msg and ('column' in error_msg or 'does not exist' in error_msg)
+        missing_source_display = 'source_display_name' in error_msg and ('column' in error_msg or 'does not exist' in error_msg)
+        
+        # Also check for PostgreSQL error code 42703 (undefined column)
+        is_column_error = '42703' in error_msg or 'column' in error_msg
+        
+        if (missing_source_url or missing_source_display) and is_column_error:
+            result = {
+                "valid": False, 
+                "message": "Database schema outdated - missing required columns from recent updates"
+            }
+            # Cache failed result with timestamp
+            _schema_check_cache["valid"] = False
+            _schema_check_cache["checked_at"] = current_time
+            _schema_check_cache["result"] = result
+            return result
+        
+        # Check for table doesn't exist (less specific, only if column check didn't match)
+        # Look for relation/table errors specifically
+        if ('relation' in error_msg and 'does not exist' in error_msg) or ('table' in error_msg and 'does not exist' in error_msg):
+            # Table doesn't exist - not a migration issue, it's a setup issue
+            return {"valid": True, "message": "Table doesn't exist - handled by startup error"}
+        
+        # Other errors don't necessarily mean migration needed
+        result = {"valid": True, "message": f"Schema check inconclusive: {str(e)}"}
+        # Don't cache inconclusive results - allow retry
+        return result
+
+
+# Export for Socket.IO
 
 
 # Create Socket.IO app wrapper
