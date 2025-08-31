@@ -624,15 +624,13 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
         timestamp: new Date().toISOString()
       });
       
-      const response = await fetch('/api/ollama/models/discover-with-details', {
-        method: 'POST',
+      // Use the correct API endpoint that provides comprehensive model data
+      const instanceUrlParams = instanceUrls.map(url => `instance_urls=${encodeURIComponent(url)}`).join('&');
+      const response = await fetch(`/api/ollama/models?${instanceUrlParams}`, {
+        method: 'GET',
         headers: {
           'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          instance_urls: instanceUrls,
-          force_refresh: true
-        })
+        }
       });
 
       if (response.ok) {
