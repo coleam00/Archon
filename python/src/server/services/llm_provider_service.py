@@ -118,6 +118,16 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
             )
             logger.info("Google Gemini client created successfully")
 
+        elif provider_name == "xai":
+            if not api_key:
+                raise ValueError("xAI API key not found")
+
+            client = openai.AsyncOpenAI(
+                api_key=api_key,
+                base_url=base_url or "https://api.x.ai/v1",
+            )
+            logger.info("xAI Grok client created successfully")
+
         else:
             raise ValueError(f"Unsupported LLM provider: {provider_name}")
 

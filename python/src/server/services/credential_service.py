@@ -406,8 +406,11 @@ class CredentialService:
             # Get RAG strategy settings (where UI saves provider selection)
             rag_settings = await self.get_credentials_by_category("rag_strategy")
 
-            # Get the selected provider
-            provider = rag_settings.get("LLM_PROVIDER", "openai")
+            # Get the selected provider - check for embedding-specific provider first
+            if service_type == "embedding" and "EMBEDDING_PROVIDER" in rag_settings:
+                provider = rag_settings.get("EMBEDDING_PROVIDER", "openai")
+            else:
+                provider = rag_settings.get("LLM_PROVIDER", "openai")
 
             # Get API key for this provider
             api_key = await self._get_provider_api_key(provider)
@@ -444,6 +447,7 @@ class CredentialService:
         key_mapping = {
             "openai": "OPENAI_API_KEY",
             "google": "GOOGLE_API_KEY",
+            "xai": "XAI_API_KEY",
             "ollama": None,  # No API key needed
         }
 
@@ -458,6 +462,8 @@ class CredentialService:
             return rag_settings.get("LLM_BASE_URL", "http://localhost:11434/v1")
         elif provider == "google":
             return "https://generativelanguage.googleapis.com/v1beta/openai/"
+        elif provider == "xai":
+            return "https://api.x.ai/v1"
         return None  # Use default for OpenAI
 
     async def set_active_provider(self, provider: str, service_type: str = "llm") -> bool:

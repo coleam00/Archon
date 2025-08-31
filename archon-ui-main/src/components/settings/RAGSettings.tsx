@@ -67,6 +67,7 @@ export const RAGSettings = ({
               options={[
                 { value: 'openai', label: 'OpenAI' },
                 { value: 'google', label: 'Google Gemini' },
+                { value: 'xai', label: 'xAI Grok' },
                 { value: 'ollama', label: 'Ollama (Coming Soon)' },
               ]}
             />
@@ -484,6 +485,8 @@ function getModelPlaceholder(provider: string): string {
       return 'e.g., llama2, mistral';
     case 'google':
       return 'e.g., gemini-1.5-flash';
+    case 'xai':
+      return 'e.g., grok-beta, grok-2';
     default:
       return 'e.g., gpt-4o-mini';
   }
@@ -497,6 +500,8 @@ function getEmbeddingPlaceholder(provider: string): string {
       return 'e.g., nomic-embed-text';
     case 'google':
       return 'e.g., text-embedding-004';
+    case 'xai':
+      return 'Use OpenAI embedding model';
     default:
       return 'Default: text-embedding-3-small';
   }

@@ -21,6 +21,7 @@ services:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - XAI_API_KEY=${XAI_API_KEY:-}
       - LOGFIRE_TOKEN=${LOGFIRE_TOKEN:-}
       - SERVICE_DISCOVERY_MODE=docker_compose
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -91,7 +92,7 @@ services:
     depends_on:
       archon-server:
         condition: service_healthy
-      
+
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
