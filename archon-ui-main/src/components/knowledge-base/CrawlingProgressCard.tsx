@@ -297,14 +297,23 @@ export const CrawlingProgressCard: React.FC<CrawlingProgressCardProps> = ({
                 step.message = 'Creating source records...';
                 break;
               case 'document_storage':
-                if (progressData.completedBatches !== undefined && progressData.totalBatches) {
+                // Use stage-specific batch fields for document storage
+                if (progressData.document_completed_batches !== undefined && progressData.document_total_batches) {
+                  step.message = `Batch ${progressData.document_completed_batches}/${progressData.document_total_batches} - Saving to database...`;
+                } else if (progressData.completedBatches !== undefined && progressData.totalBatches) {
+                  // Fallback to generic fields for backward compatibility
                   step.message = `Batch ${progressData.completedBatches}/${progressData.totalBatches} - Saving to database...`;
                 } else {
                   step.message = 'Saving to database...';
                 }
                 break;
               case 'code_storage':
-                step.message = 'Extracting code blocks...';
+                // Use stage-specific batch fields for code examples
+                if (progressData.code_current_batch && progressData.code_total_batches) {
+                  step.message = `Batch ${progressData.code_current_batch}/${progressData.code_total_batches} - Extracting code blocks...`;
+                } else {
+                  step.message = 'Extracting code blocks...';
+                }
                 break;
               case 'finalization':
                 step.message = 'Completing crawl...';
@@ -411,17 +420,25 @@ export const CrawlingProgressCard: React.FC<CrawlingProgressCardProps> = ({
           icon: <FileText className="w-4 h-4" />
         };
       case 'document_storage':
+        // Use stage-specific batch fields for document storage status display
+        const docCompleted = progressData.document_completed_batches ?? progressData.completedBatches;
+        const docTotal = progressData.document_total_batches ?? progressData.totalBatches;
         return {
-          text: progressData.completedBatches !== undefined && progressData.totalBatches 
-            ? `Document Storage: ${progressData.completedBatches}/${progressData.totalBatches} batches`
+          text: docCompleted !== undefined && docTotal
+            ? `Document Storage: ${docCompleted}/${docTotal} batches`
             : 'Storing documents...',
           color: 'blue' as const,
           icon: <Database className="w-4 h-4" />
         };
       case 'code_storage':
       case 'code_extraction':
+        // Use stage-specific batch fields for code examples status display
+        const codeCompleted = progressData.code_current_batch;
+        const codeTotal = progressData.code_total_batches;
         return {
-          text: 'Processing code examples...',
+          text: codeCompleted && codeTotal
+            ? `Code Examples: ${codeCompleted}/${codeTotal} batches`
+            : 'Processing code examples...',
           color: 'blue' as const,
           icon: <Code className="w-4 h-4" />
         };
@@ -718,7 +735,8 @@ export const CrawlingProgressCard: React.FC<CrawlingProgressCardProps> = ({
                               </span>
                             )}
                             <span className="text-xs text-gray-500 dark:text-gray-400">
-                              {progressData.completed_batches || 0}/{progressData.total_batches || 0}
+                              {/* Use stage-specific batch counts to prevent contamination */}
+                              {(progressData.document_completed_batches ?? progressData.completed_batches) || 0}/{(progressData.document_total_batches ?? progressData.total_batches) || 0}
                             </span>
                           </div>
                         </div>
@@ -729,16 +747,16 @@ export const CrawlingProgressCard: React.FC<CrawlingProgressCardProps> = ({
                             className="h-2 rounded-full bg-blue-500 dark:bg-blue-400"
                             initial={{ width: 0 }}
                             animate={{ 
-                              width: `${Math.min(100, Math.max(0, Math.round(((progressData.completed_batches || 0) / (progressData.total_batches || 1)) * 100)))}%`
+                              width: `${Math.min(100, Math.max(0, Math.round((((progressData.document_completed_batches ?? progressData.completed_batches) || 0) / ((progressData.document_total_batches ?? progressData.total_batches) || 1)) * 100)))}%`
                             }}
                             transition={{ duration: 0.5, ease: 'easeOut' }}
                           />
                         </div>
                         
                         {/* Current batch details */}
-                        {progressData.current_batch && progressData.current_batch > 0 && (
+                        {(progressData.document_current_batch ?? progressData.current_batch) && (progressData.document_current_batch ?? progressData.current_batch) > 0 && (
                           <div className="text-xs text-gray-600 dark:text-gray-400">
-                            <span className="font-medium">Processing batch {progressData.current_batch}:</span>
+                            <span className="font-medium">Processing batch {progressData.document_current_batch ?? progressData.current_batch}:</span>
                             {progressData.total_chunks_in_batch && progressData.total_chunks_in_batch > 0 && (
                               <span className="ml-2">
                                 {progressData.chunks_in_batch || 0}/{progressData.total_chunks_in_batch} chunks processed
@@ -749,9 +767,9 @@ export const CrawlingProgressCard: React.FC<CrawlingProgressCardProps> = ({
                         
                         {/* Status text */}
                         <div className="text-xs text-gray-500 dark:text-gray-400">
-                          Completed: {progressData.completed_batches || 0} batches
-                          {progressData.current_batch && progressData.current_batch > 0 && 
-                            progressData.current_batch <= (progressData.total_batches || 0) && (
+                          Completed: {(progressData.document_completed_batches ?? progressData.completed_batches) || 0} batches
+                          {(progressData.document_current_batch ?? progressData.current_batch) && (progressData.document_current_batch ?? progressData.current_batch) > 0 && 
+                            (progressData.document_current_batch ?? progressData.current_batch) <= ((progressData.document_total_batches ?? progressData.total_batches) || 0) && (
                             <span> • In Progress: 1 batch</span>
                           )}
                         </div>

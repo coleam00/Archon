@@ -955,6 +955,10 @@ async def add_code_examples_to_supabase(
                 "status": "code_storage",
                 "percentage": progress_percentage,
                 "log": f"Stored batch {batch_num}/{total_batches} of code examples",
+                # Stage-specific batch fields to prevent contamination with document storage
+                "code_current_batch": batch_num,
+                "code_total_batches": total_batches,
+                # Keep generic fields for backward compatibility
                 "batch_number": batch_num,
                 "total_batches": total_batches,
             })
@@ -966,4 +970,7 @@ async def add_code_examples_to_supabase(
             "percentage": 100,
             "log": f"Code storage completed. Stored {total_items} code examples.",
             "total_items": total_items,
+            # Keep final batch info for code storage completion
+            "code_total_batches": (total_items + batch_size - 1) // batch_size,
+            "code_current_batch": (total_items + batch_size - 1) // batch_size,
         })

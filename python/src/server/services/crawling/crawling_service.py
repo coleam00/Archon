@@ -495,7 +495,8 @@ class CrawlingService:
     def _is_self_link(self, link: str, base_url: str) -> bool:
         """
         Check if a link is a self-referential link to the base URL.
-        Handles query parameters, fragments, and trailing slashes.
+        Handles query parameters, fragments, trailing slashes, and normalizes
+        scheme/host/ports for accurate comparison.
         
         Args:
             link: The link to check
@@ -506,19 +507,22 @@ class CrawlingService:
         """
         try:
             from urllib.parse import urlparse
-            
-            # Parse both URLs to compare their core components
-            link_parsed = urlparse(link)
-            base_parsed = urlparse(base_url)
-            
-            # Compare scheme, netloc, and path (ignoring query and fragment)
-            link_core = f"{link_parsed.scheme}://{link_parsed.netloc}{link_parsed.path.rstrip('/')}"
-            base_core = f"{base_parsed.scheme}://{base_parsed.netloc}{base_parsed.path.rstrip('/')}"
-            
-            return link_core == base_core
-            
+
+            def _core(u: str) -> str:
+                p = urlparse(u)
+                scheme = (p.scheme or "http").lower()
+                host = (p.hostname or "").lower()
+                port = p.port
+                if (scheme == "http" and port in (None, 80)) or (scheme == "https" and port in (None, 443)):
+                    port_part = ""
+                else:
+                    port_part = f":{port}" if port else ""
+                path = p.path.rstrip("/")
+                return f"{scheme}://{host}{port_part}{path}"
+
+            return _core(link) == _core(base_url)
         except Exception as e:
-            logger.warning(f"Error checking if link is self-referential: {e}")
+            logger.warning(f"Error checking if link is self-referential: {e}", exc_info=True)
             # Fallback to simple string comparison
             return link.rstrip('/') == base_url.rstrip('/')
 

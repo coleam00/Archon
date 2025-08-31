@@ -74,6 +74,12 @@ export interface CrawlProgressData {
   active_workers?: number;
   chunks_in_batch?: number;
   total_chunks_in_batch?: number;
+  // Stage-specific batch fields to prevent contamination between phases
+  document_completed_batches?: number;
+  document_total_batches?: number;
+  document_current_batch?: number;
+  code_current_batch?: number;
+  code_total_batches?: number;
   // Legacy fields
   totalJobs?: number;
   parallelWorkers?: number;
