@@ -552,16 +552,6 @@ class CrawlingService:
             if crawl_results and len(crawl_results) > 0:
                 content = crawl_results[0].get('markdown', '')
                 if self.url_handler.is_link_collection_file(url, content):
-                    if self.progress_id:
-                        # Use ProgressMapper to stay within crawling range (5-30%)
-                        overall_progress = self.progress_mapper.map_progress("crawling", 80)  # 80% within crawling = ~25%
-                        self.progress_state.update({
-                            "status": "crawling",
-                            "percentage": overall_progress,
-                            "log": "Link collection file detected, extracting embedded links...",
-                        })
-                        await update_crawl_progress(self.progress_id, self.progress_state)
-                    
                     # Extract links from the content
                     extracted_links = self.url_handler.extract_markdown_links(content, url)
                     
@@ -585,24 +575,14 @@ class CrawlingService:
                             logger.info(f"Filtered out {filtered_count} binary files from {original_count} extracted links")
                     
                     if extracted_links:
-                        if self.progress_id:
-                            # Use ProgressMapper to stay within crawling range (5-30%)
-                            overall_progress = self.progress_mapper.map_progress("crawling", 90)  # 90% within crawling = ~27%
-                            self.progress_state.update({
-                                "status": "crawling",
-                                "percentage": overall_progress,
-                                "log": f"Found {len(extracted_links)} links to crawl from {url}",
-                            })
-                            await update_crawl_progress(self.progress_id, self.progress_state)
-                        
                         # Crawl the extracted links using batch crawling
                         logger.info(f"Crawling {len(extracted_links)} extracted links from {url}")
                         batch_results = await self.crawl_batch_with_progress(
                             extracted_links,
                             max_concurrent=request.get('max_concurrent'),  # None -> use DB settings
                             progress_callback=await self._create_crawl_progress_callback("crawling"),
-                            start_progress=20,
-                            end_progress=30,
+                            start_progress=10,
+                            end_progress=20,
                         )
                         
                         # Combine original text file results with batch results

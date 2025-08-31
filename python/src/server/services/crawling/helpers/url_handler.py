@@ -258,11 +258,12 @@ class URLHandler:
             filename = parsed.path.split('/')[-1].lower()
             
             # Check for specific link collection filenames
+            # Note: "full-*" or "*-full" patterns are NOT link collections - they contain complete content, not just links
             link_collection_patterns = [
-                # .txt variants
-                'llms.txt', 'full-llms.txt', 'links.txt', 'resources.txt', 'references.txt',
+                # .txt variants - files that typically contain lists of links
+                'llms.txt', 'links.txt', 'resources.txt', 'references.txt',
                 # .md/.mdx/.markdown variants
-                'llms.md', 'full-llms.md', 'links.md', 'resources.md', 'references.md',
+                'llms.md', 'links.md', 'resources.md', 'references.md',
                 'llms.mdx', 'links.mdx', 'resources.mdx', 'references.mdx',
                 'llms.markdown', 'links.markdown', 'resources.markdown', 'references.markdown',
             ]
@@ -272,11 +273,16 @@ class URLHandler:
                 logger.info(f"Detected link collection file by filename: {filename}")
                 return True
             
-            # Pattern-based detection for variations (complete coverage)
-            if any(pattern in filename for pattern in ['llms', 'links', 'resources', 'references']):
-                if filename.endswith(('.txt', '.md', '.mdx', '.markdown')):
-                    logger.info(f"Detected potential link collection file: {filename}")
-                    return True
+            # Pattern-based detection for variations, but exclude "full" variants
+            # Only match files that are likely link collections, not complete content files
+            if filename.endswith(('.txt', '.md', '.mdx', '.markdown')):
+                # Exclude files with "full" in the name - these typically contain complete content, not just links
+                if 'full' not in filename:
+                    # Match files that start with common link collection prefixes
+                    base_patterns = ['llms', 'links', 'resources', 'references']
+                    if any(filename.startswith(pattern + '.') or filename.startswith(pattern + '-') for pattern in base_patterns):
+                        logger.info(f"Detected potential link collection file: {filename}")
+                        return True
             
             # Content-based detection if content is provided
             if content:

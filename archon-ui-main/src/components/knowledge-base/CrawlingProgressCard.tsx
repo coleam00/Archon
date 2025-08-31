@@ -724,12 +724,12 @@ export const CrawlingProgressCard: React.FC<CrawlingProgressCardProps> = ({
                         </div>
                         
                         {/* Single batch progress bar */}
-                        <div className="w-full bg-gray-200 dark:bg-zinc-700 rounded-full h-2">
+                        <div className="w-full bg-gray-200 dark:bg-zinc-700 rounded-full h-2 min-w-0">
                           <motion.div
                             className="h-2 rounded-full bg-blue-500 dark:bg-blue-400"
                             initial={{ width: 0 }}
                             animate={{ 
-                              width: `${Math.round(((progressData.completed_batches || 0) / (progressData.total_batches || 1)) * 100)}%` 
+                              width: `${Math.min(100, Math.max(0, Math.round(((progressData.completed_batches || 0) / (progressData.total_batches || 1)) * 100)))}%`
                             }}
                             transition={{ duration: 0.5, ease: 'easeOut' }}
                           />
