@@ -20,7 +20,7 @@ logger = get_logger(__name__)
 
 @dataclass
 class OllamaModel:
-    """Represents a discovered Ollama model with capabilities."""
+    """Represents a discovered Ollama model with comprehensive capabilities and metadata."""
 
     name: str
     tag: str
@@ -31,13 +31,30 @@ class OllamaModel:
     parameters: dict[str, Any] | None = None
     instance_url: str = ""
     last_updated: str | None = None
-    # Real API data from /api/show endpoint
-    context_window: int | None = None
+    
+    # Comprehensive API data from /api/show endpoint
+    context_window: int | None = None  # Current/active context length
+    max_context_length: int | None = None  # Maximum supported context length  
+    base_context_length: int | None = None  # Original/base context length
+    custom_context_length: int | None = None  # Custom num_ctx if set
     architecture: str | None = None
     block_count: int | None = None
     attention_heads: int | None = None
     format: str | None = None
     parent_model: str | None = None
+    
+    # Extended model metadata
+    family: str | None = None
+    parameter_size: str | None = None
+    quantization: str | None = None
+    parameter_count: int | None = None
+    file_type: int | None = None
+    quantization_version: int | None = None
+    basename: str | None = None
+    size_label: str | None = None
+    license: str | None = None
+    finetune: str | None = None
+    embedding_dimension: int | None = None
 
 
 @dataclass
@@ -285,35 +302,66 @@ class ModelDiscoveryService:
                     elif any(pattern in model_name_lower for pattern in ['llama', 'phi', 'gemma']):
                         model.capabilities.append("structured_output")
                     
-                    # Get detailed information from /api/show endpoint
+                    # Get comprehensive information from /api/show endpoint
                     try:
                         detailed_info = await self._get_model_details(model.name, instance_url)
                         if detailed_info:
-                            # Add real API data to the model
+                            # Add comprehensive real API data to the model
+                            # Context information
                             model.context_window = detailed_info.get("context_window")
+                            model.max_context_length = detailed_info.get("max_context_length")
+                            model.base_context_length = detailed_info.get("base_context_length")
+                            model.custom_context_length = detailed_info.get("custom_context_length")
+                            
+                            # Architecture and technical details
                             model.architecture = detailed_info.get("architecture")
                             model.block_count = detailed_info.get("block_count")
                             model.attention_heads = detailed_info.get("attention_heads")
                             model.format = detailed_info.get("format")
                             model.parent_model = detailed_info.get("parent_model")
                             
-                            # Update parameters with more detailed info
+                            # Extended metadata
+                            model.family = detailed_info.get("family")
+                            model.parameter_size = detailed_info.get("parameter_size")
+                            model.quantization = detailed_info.get("quantization")
+                            model.parameter_count = detailed_info.get("parameter_count")
+                            model.file_type = detailed_info.get("file_type")
+                            model.quantization_version = detailed_info.get("quantization_version")
+                            model.basename = detailed_info.get("basename")
+                            model.size_label = detailed_info.get("size_label")
+                            model.license = detailed_info.get("license")
+                            model.finetune = detailed_info.get("finetune")
+                            model.embedding_dimension = detailed_info.get("embedding_dimension")
+                            
+                            # Update capabilities with real API capabilities if available
+                            api_capabilities = detailed_info.get("capabilities", [])
+                            if api_capabilities:
+                                # Merge with existing capabilities, prioritizing API data
+                                combined_capabilities = list(set(model.capabilities + api_capabilities))
+                                model.capabilities = combined_capabilities
+                            
+                            # Update parameters with comprehensive structured info
                             if model.parameters:
                                 model.parameters.update({
                                     "family": detailed_info.get("family") or model.parameters.get("family"),
                                     "parameter_size": detailed_info.get("parameter_size") or model.parameters.get("parameter_size"),
                                     "quantization": detailed_info.get("quantization") or model.parameters.get("quantization"),
-                                    "format": detailed_info.get("format")
+                                    "format": detailed_info.get("format") or model.parameters.get("format")
                                 })
                             else:
-                                model.parameters = {
+                                # Use the structured parameters object from detailed_info if available
+                                model.parameters = detailed_info.get("parameters", {
                                     "family": detailed_info.get("family"),
                                     "parameter_size": detailed_info.get("parameter_size"),
                                     "quantization": detailed_info.get("quantization"),
                                     "format": detailed_info.get("format")
-                                }
+                                })
+                                
+                            logger.debug(f"Enriched {model.name} with comprehensive data: "
+                                       f"context={model.context_window}, arch={model.architecture}, "
+                                       f"params={model.parameter_size}, capabilities={model.capabilities}")
                     except Exception as e:
-                        logger.debug(f"Could not get detailed info for {model.name}: {e}")
+                        logger.debug(f"Could not get comprehensive details for {model.name}: {e}")
                     
                     logger.debug(f"Pattern-matched chat model {model.name} with capabilities: {model.capabilities}")
                     enriched_models.append(model)
@@ -626,10 +674,12 @@ class ModelDiscoveryService:
 
     async def _get_model_details(self, model_name: str, instance_url: str) -> dict[str, Any] | None:
         """
-        Get detailed information about a model from Ollama /api/show endpoint.
+        Get comprehensive information about a model from Ollama /api/show endpoint.
+        Extracts all available data including context lengths, architecture details,
+        capabilities, and parameter information as specified by user requirements.
 
         Returns:
-            Model details dictionary with real API data or None if failed
+            Model details dictionary with comprehensive real API data or None if failed
         """
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(10)) as client:
@@ -641,48 +691,113 @@ class ModelDiscoveryService:
                 if response.status_code == 200:
                     data = response.json()
                     
-                    # Extract basic details
+                    # Extract sections from /api/show response
                     details_section = data.get("details", {})
                     model_info = data.get("model_info", {})
+                    parameters_raw = data.get("parameters", "")
+                    capabilities = data.get("capabilities", [])
                     
-                    # Extract real API data
+                    # Parse parameters string for custom context length (num_ctx)
+                    custom_context_length = None
+                    if parameters_raw:
+                        for line in parameters_raw.split('\n'):
+                            line = line.strip()
+                            if line.startswith('num_ctx'):
+                                try:
+                                    # Extract value: "num_ctx                        65536"
+                                    custom_context_length = int(line.split()[-1])
+                                    break
+                                except (ValueError, IndexError):
+                                    continue
+                    
+                    # Extract architecture-specific context lengths from model_info
+                    max_context_length = None
+                    base_context_length = None
+                    embedding_dimension = None
+                    
+                    # Find architecture-specific values (e.g., phi3.context_length, gptoss.context_length)
+                    for key, value in model_info.items():
+                        if key.endswith(".context_length"):
+                            max_context_length = value
+                        elif key.endswith(".rope.scaling.original_context_length"):
+                            base_context_length = value
+                        elif key.endswith(".embedding_length"):
+                            embedding_dimension = value
+                    
+                    # Determine current context length based on logic:
+                    # If custom num_ctx exists, use it; otherwise use base context length
+                    current_context_length = custom_context_length if custom_context_length else base_context_length
+                    
+                    # Build comprehensive parameters object
+                    parameters_obj = {
+                        "family": details_section.get("family"),
+                        "parameter_size": details_section.get("parameter_size"),
+                        "quantization": details_section.get("quantization_level"),
+                        "format": details_section.get("format")
+                    }
+                    
+                    # Extract real API data with comprehensive coverage
                     details = {
-                        # Basic model info from details section
+                        # From details section
                         "family": details_section.get("family"),
                         "parameter_size": details_section.get("parameter_size"),
                         "quantization": details_section.get("quantization_level"),
                         "format": details_section.get("format"),
                         "parent_model": details_section.get("parent_model"),
                         
-                        # Context and architecture from model_info section
-                        "context_window": None,
+                        # Structured parameters object for display
+                        "parameters": parameters_obj,
+                        
+                        # Context length information with proper logic
+                        "context_window": current_context_length,  # Current/active context length
+                        "max_context_length": max_context_length,  # Maximum supported context length
+                        "base_context_length": base_context_length,  # Original/base context length
+                        "custom_context_length": custom_context_length,  # Custom num_ctx if set
+                        
+                        # Architecture and model info
                         "architecture": model_info.get("general.architecture"),
+                        "embedding_dimension": embedding_dimension,
+                        "parameter_count": model_info.get("general.parameter_count"),
+                        "file_type": model_info.get("general.file_type"),
+                        "quantization_version": model_info.get("general.quantization_version"),
+                        
+                        # Model metadata
+                        "basename": model_info.get("general.basename"),
+                        "size_label": model_info.get("general.size_label"),
+                        "license": model_info.get("general.license"),
+                        "finetune": model_info.get("general.finetune"),
+                        
+                        # Capabilities from API
+                        "capabilities": capabilities,
+                        
+                        # Initialize fields for advanced extraction
                         "block_count": None,
                         "attention_heads": None
                     }
                     
-                    # Extract context window (different patterns for different architectures)
+                    # Extract block count (layers) - try multiple patterns
                     for key, value in model_info.items():
-                        if "context_length" in key:
-                            details["context_window"] = value
-                            break
-                    
-                    # Extract block count (layers)
-                    for key, value in model_info.items():
-                        if "block_count" in key:
+                        if ("block_count" in key or "num_layers" in key or 
+                            key.endswith(".block_count") or key.endswith(".n_layer")):
                             details["block_count"] = value
                             break
                     
-                    # Extract attention heads
+                    # Extract attention heads - try multiple patterns
                     for key, value in model_info.items():
-                        if key.endswith(".attention.head_count") and not key.endswith("_kv"):
+                        if (key.endswith(".attention.head_count") or 
+                            key.endswith(".n_head") or 
+                            "attention_head" in key) and not key.endswith("_kv"):
                             details["attention_heads"] = value
                             break
+                    
+                    logger.debug(f"Extracted comprehensive details for {model_name}: "
+                               f"context={current_context_length}, max={max_context_length}, "
+                               f"base={base_context_length}, arch={details['architecture']}")
                     
                     return details
 
         except Exception as e:
-            logger.debug(f"Could not get details for model {model_name}: {e}")
+            logger.debug(f"Could not get comprehensive details for model {model_name}: {e}")
 
         return None
 
