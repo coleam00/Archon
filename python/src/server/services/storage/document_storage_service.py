@@ -233,9 +233,23 @@ async def add_documents_to_supabase(
                 # If not using contextual embeddings, use original contents
                 contextual_contents = batch_contents
 
-            # Create embeddings for the batch - no progress reporting
-            # Don't pass websocket to avoid Socket.IO issues
-            result = await create_embeddings_batch(contextual_contents, provider=provider)
+            # Create embeddings for the batch with rate limit progress support
+            # Create a wrapper for progress callback to handle rate limiting updates
+            async def embedding_progress_wrapper(message: str, percentage: float):
+                # Forward rate limiting messages to the main progress callback
+                if progress_callback and "rate limit" in message.lower():
+                    await progress_callback(
+                        message,
+                        current_percentage,  # Use current batch progress
+                        {"batch": batch_num, "type": "rate_limit_wait"}
+                    )
+            
+            # Pass progress callback for rate limiting updates
+            result = await create_embeddings_batch(
+                contextual_contents,
+                provider=provider,
+                progress_callback=embedding_progress_wrapper if progress_callback else None
+            )
 
             # Log any failures
             if result.has_failures:
@@ -281,13 +295,30 @@ async def add_documents_to_supabase(
                     parsed_url = urlparse(batch_urls[j])
                     source_id = parsed_url.netloc or parsed_url.path
 
+                # Determine the correct embedding column based on dimension
+                embedding_dim = len(embedding) if isinstance(embedding, list) else len(embedding.tolist())
+                embedding_column = None
+                
+                if embedding_dim == 768:
+                    embedding_column = "embedding_768"
+                elif embedding_dim == 1024:
+                    embedding_column = "embedding_1024"
+                elif embedding_dim == 1536:
+                    embedding_column = "embedding_1536"
+                elif embedding_dim == 3072:
+                    embedding_column = "embedding_3072"
+                else:
+                    # Default to closest supported dimension
+                    search_logger.warning(f"Unsupported embedding dimension {embedding_dim}, using embedding_1536")
+                    embedding_column = "embedding_1536"
+                
                 data = {
                     "url": batch_urls[j],
                     "chunk_number": batch_chunk_numbers[j],
                     "content": text,  # Use the successful text
                     "metadata": {"chunk_size": len(text), **batch_metadatas[j]},
                     "source_id": source_id,
-                    "embedding": embedding,  # Use the successful embedding
+                    embedding_column: embedding,  # Use the successful embedding with correct column
                 }
                 batch_data.append(data)
 

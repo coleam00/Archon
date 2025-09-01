@@ -304,10 +304,12 @@ class CrawlingService:
             url = str(request.get("url", ""))
             safe_logfire_info(f"Starting async crawl orchestration | url={url} | task_id={task_id}")
 
-            # Extract source_id from the original URL
-            parsed_original_url = urlparse(url)
-            original_source_id = parsed_original_url.netloc or parsed_original_url.path
-            safe_logfire_info(f"Using source_id '{original_source_id}' from original URL '{url}'")
+            # Generate unique source_id and display name from the original URL
+            original_source_id = self.url_handler.generate_unique_source_id(url)
+            source_display_name = self.url_handler.extract_display_name(url)
+            safe_logfire_info(
+                f"Generated unique source_id '{original_source_id}' and display name '{source_display_name}' from URL '{url}'"
+            )
 
             # Helper to update progress with mapper
             async def update_mapped_progress(
@@ -386,6 +388,8 @@ class CrawlingService:
                 original_source_id,
                 doc_storage_callback,
                 self._check_cancellation,
+                source_url=url,
+                source_display_name=source_display_name,
             )
 
             # Check for cancellation after document storage
@@ -410,6 +414,7 @@ class CrawlingService:
                 code_examples_count = await self.doc_storage_ops.extract_and_store_code_examples(
                     crawl_results,
                     storage_results["url_to_full_document"],
+                    storage_results["source_id"],
                     code_progress_callback,
                     85,
                     95,
@@ -558,7 +563,7 @@ class CrawlingService:
             max_depth = request.get("max_depth", 1)
             # Let the strategy handle concurrency from settings
             # This will use CRAWL_MAX_CONCURRENT from database (default: 10)
-            
+
             crawl_results = await self.crawl_recursive_with_progress(
                 [url],
                 max_depth=max_depth,

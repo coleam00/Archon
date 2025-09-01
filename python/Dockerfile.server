@@ -1,21 +1,24 @@
 # Server Service - Web crawling and document processing microservice
-
-# Build stage
-FROM python:3.11 AS builder
+FROM python:3.12 AS builder
 
 WORKDIR /build
 
-# Install build dependencies
+# Install build dependencies and uv
 RUN apt-get update && apt-get install -y \
     build-essential \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir uv
 
-# Copy and install Python dependencies
-COPY requirements.server.txt .
-RUN pip install --user --no-cache-dir -r requirements.server.txt
+# Copy pyproject.toml for dependency installation
+COPY pyproject.toml .
+
+# Install server dependencies to a virtual environment using uv
+RUN uv venv /venv && \
+    . /venv/bin/activate && \
+    uv pip install --group server --group server-reranking
 
 # Runtime stage
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
@@ -45,11 +48,11 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Copy Python packages from builder
-COPY --from=builder /root/.local /root/.local
+# Copy the virtual environment from builder
+COPY --from=builder /venv /venv
 
 # Install Playwright browsers
-ENV PATH=/root/.local/bin:$PATH
+ENV PATH=/venv/bin:$PATH
 RUN playwright install chromium
 
 # Copy server code and tests
@@ -58,8 +61,9 @@ COPY src/__init__.py src/
 COPY tests/ tests/
 
 # Set environment variables
-ENV PYTHONPATH="/app:/root/.local/lib/python3.11/site-packages:$PYTHONPATH"
+ENV PYTHONPATH="/app:$PYTHONPATH"
 ENV PYTHONUNBUFFERED=1
+ENV PATH="/venv/bin:$PATH"
 
 # Expose Server port
 ARG ARCHON_SERVER_PORT=8181

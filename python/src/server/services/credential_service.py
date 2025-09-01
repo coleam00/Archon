@@ -415,8 +415,15 @@ class CredentialService:
             # Get base URL if needed
             base_url = self._get_provider_base_url(provider, rag_settings)
 
-            # Get models
+            # Get models with provider-specific fallback logic
             chat_model = rag_settings.get("MODEL_CHOICE", "")
+            
+            # If MODEL_CHOICE is empty, try provider-specific model settings
+            if not chat_model and provider == "ollama":
+                chat_model = rag_settings.get("OLLAMA_CHAT_MODEL", "")
+                if chat_model:
+                    logger.debug(f"Using OLLAMA_CHAT_MODEL: {chat_model}")
+                    
             embedding_model = rag_settings.get("EMBEDDING_MODEL", "")
 
             return {
