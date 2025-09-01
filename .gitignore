@@ -3,4 +3,5 @@ __pycache__
 .serena
 .claude/settings.local.json
 PRPs/local
+PRPs/completed/
 /logs/
