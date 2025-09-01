@@ -34,9 +34,10 @@ interface ModelInfo {
   last_updated: string;
   // Real API data from /api/show endpoint
   context_window?: number;
+  max_context_length?: number;
+  base_context_length?: number;
+  custom_context_length?: number;
   architecture?: string;
-  block_count?: number;
-  attention_heads?: number;
   format?: string;
   parent_model?: string;
   instance_url?: string;
@@ -104,6 +105,18 @@ interface ModelCardProps {
 }
 
 const ModelCard: React.FC<ModelCardProps> = ({ model, isSelected, onSelect }) => {
+  // DEBUG: Log model data when rendering each card
+  console.log(`🎨 DEBUG: Rendering card for ${model.name}:`, {
+    context_info: model.context_info,
+    context_window: model.context_window,
+    max_context_length: model.max_context_length,
+    base_context_length: model.base_context_length,
+    custom_context_length: model.custom_context_length,
+    architecture: model.architecture,
+    parent_model: model.parent_model,
+    capabilities: model.capabilities
+  });
+
   const getCardBorderColor = () => {
     switch (model.archon_compatibility) {
       case 'full': return 'border-green-500/50';
@@ -132,29 +145,41 @@ const ModelCard: React.FC<ModelCardProps> = ({ model, isSelected, onSelect }) =>
   };
 
   const formatContextDetails = (model: ModelInfo) => {
-    const current = model.context_length;
     const contextInfo = model.context_info;
     
-    if (!current) return 'Unknown';
-    
-    // For models with context_info, show detailed format
+    // For models with comprehensive context_info, show all 3 data points
     if (contextInfo) {
-      const max = contextInfo.max;
-      const min = contextInfo.min;
+      const current = contextInfo.current;
+      const max = contextInfo.max;  
+      const base = contextInfo.min; // This is base_context_length from backend
       
-      // If max context is available and different from current, show both
-      if (max && max !== current) {
-        return `${formatContext(current)} / ${formatContext(max)} max`;
+      // Build comprehensive context display
+      const parts = [];
+      
+      if (current) {
+        parts.push(`Current: ${formatContext(current)}`);
       }
       
-      // If only current and min are available
-      if (min && min !== current) {
-        return `${formatContext(current)} (min: ${formatContext(min)})`;
+      if (max && max !== current) {
+        parts.push(`Max: ${formatContext(max)}`);
+      }
+      
+      if (base && base !== current && base !== max) {
+        parts.push(`Base: ${formatContext(base)}`);
+      }
+      
+      if (parts.length > 0) {
+        return parts.join(' | ');
       }
     }
     
-    // Default: just show the context size
-    return formatContext(current);
+    // Fallback to legacy context_length field
+    const current = model.context_length;
+    if (current) {
+      return `Context: ${formatContext(current)}`;
+    }
+    
+    return 'Unknown';
   };
 
   return (
@@ -179,7 +204,23 @@ const ModelCard: React.FC<ModelCardProps> = ({ model, isSelected, onSelect }) =>
       {/* Model Name and Type */}
       <div className="mb-3">
         <h3 className="text-white font-semibold text-lg mb-1">{model.name}</h3>
-        <span className="text-gray-400 text-sm capitalize">{model.model_type}</span>
+        <div className="flex items-center justify-between">
+          <span className="text-gray-400 text-sm capitalize">{model.model_type}</span>
+          
+          {/* Capabilities Tags */}
+          {model.capabilities && model.capabilities.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {model.capabilities.map((capability: string) => (
+                <span
+                  key={capability}
+                  className="px-2 py-1 bg-blue-600/20 border border-blue-500/30 rounded-md text-xs text-blue-300 font-medium"
+                >
+                  {capability}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Model Description - only show if available */}
@@ -224,19 +265,51 @@ const ModelCard: React.FC<ModelCardProps> = ({ model, isSelected, onSelect }) =>
             </div>
           )}
 
-          {/* Context Window - show if available from real API data */}
-          {model.context_window && (
-            <div className="flex items-center">
+          {/* Context Windows - show all 3 data points if available from real API data */}
+          {model.context_info && (model.context_info.current || model.context_info.max || model.context_info.min) && (
+            <div className="flex items-center flex-wrap gap-2">
               <span className="w-3 h-3 text-blue-400 mr-1">📏</span>
-              <span className="text-gray-300">Context: </span>
-              <span className="text-blue-400 ml-1">
-                {model.context_window >= 1000000 
-                  ? `${(model.context_window / 1000000).toFixed(1)}M tokens`
-                  : model.context_window >= 1000 
-                  ? `${Math.round(model.context_window / 1000)}K tokens`
-                  : `${model.context_window} tokens`
-                }
-              </span>
+              <div className="flex gap-2 text-xs">
+                {model.context_info.current && (
+                  <div>
+                    <span className="text-gray-400">Current: </span>
+                    <span className="text-blue-400">
+                      {model.context_info.current >= 1000000 
+                        ? `${(model.context_info.current / 1000000).toFixed(1)}M`
+                        : model.context_info.current >= 1000 
+                        ? `${Math.round(model.context_info.current / 1000)}K`
+                        : `${model.context_info.current}`
+                      }
+                    </span>
+                  </div>
+                )}
+                {model.context_info.max && model.context_info.max !== model.context_info.current && (
+                  <div>
+                    <span className="text-gray-400">Max: </span>
+                    <span className="text-blue-400">
+                      {model.context_info.max >= 1000000 
+                        ? `${(model.context_info.max / 1000000).toFixed(1)}M`
+                        : model.context_info.max >= 1000 
+                        ? `${Math.round(model.context_info.max / 1000)}K`
+                        : `${model.context_info.max}`
+                      }
+                    </span>
+                  </div>
+                )}
+                {model.context_info.min && model.context_info.min !== model.context_info.current && model.context_info.min !== model.context_info.max && (
+                  <div>
+                    <span className="text-gray-400">Base: </span>
+                    <span className="text-blue-400">
+                      {model.context_info.min >= 1000000 
+                        ? `${(model.context_info.min / 1000000).toFixed(1)}M`
+                        : model.context_info.min >= 1000 
+                        ? `${Math.round(model.context_info.min / 1000)}K`
+                        : `${model.context_info.min}`
+                      }
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -267,23 +340,6 @@ const ModelCard: React.FC<ModelCardProps> = ({ model, isSelected, onSelect }) =>
             </div>
           )}
 
-          {/* Block Count - show if available */}
-          {model.block_count && (
-            <div className="flex items-center">
-              <span className="w-3 h-3 text-green-400 mr-1">🧱</span>
-              <span className="text-gray-300">Layers: </span>
-              <span className="text-green-400 ml-1">{model.block_count}</span>
-            </div>
-          )}
-
-          {/* Attention Heads - show if available */}
-          {model.attention_heads && (
-            <div className="flex items-center">
-              <span className="w-3 h-3 text-red-400 mr-1">🎯</span>
-              <span className="text-gray-300">Heads: </span>
-              <span className="text-red-400 ml-1">{model.attention_heads}</span>
-            </div>
-          )}
         </div>
       </div>
 
@@ -426,16 +482,22 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
   };
 
   // Load models - first try cache, then fetch from instance
-  const loadModels = async () => {
+  const loadModels = async (forceRefresh: boolean = false) => {
     try {
       setLoading(true);
       
-      // Check session storage cache first
+      // Check session storage cache first (unless force refresh)
       const cacheKey = `ollama_models_${selectedInstanceUrl}_${modelType}`;
+      
+      if (forceRefresh) {
+        console.log(`🔥 Force refresh: Clearing cache for ${cacheKey}`);
+        sessionStorage.removeItem(cacheKey);
+      }
+      
       const cachedData = sessionStorage.getItem(cacheKey);
       const cacheExpiry = 5 * 60 * 1000; // 5 minutes cache
       
-      if (cachedData) {
+      if (cachedData && !forceRefresh) {
         const parsed = JSON.parse(cachedData);
         const age = Date.now() - parsed.timestamp;
         
@@ -454,10 +516,11 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
       console.log(`🔄 Fetching fresh ${modelType} models for ${selectedInstanceUrl}`);
       const instanceUrl = instances.find(i => i.url.replace('/v1', '') === selectedInstanceUrl)?.url || selectedInstanceUrl + '/v1';
       
-      // Use the dynamic discovery API
+      // Use the dynamic discovery API with fetch_details to get comprehensive data
       const params = new URLSearchParams();
       params.append('instance_urls', instanceUrl);
       params.append('include_capabilities', 'true');
+      params.append('fetch_details', 'true');  // CRITICAL: This triggers /api/show calls for comprehensive data
       
       const response = await fetch(`/api/ollama/models?${params.toString()}`);
       if (response.ok) {
@@ -518,6 +581,27 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
         if (data.chat_models) {
           data.chat_models.forEach((model: any) => {
             const compatibility = getArchonCompatibility(model, 'chat');
+            // DEBUG: Log raw model data from API
+            console.log(`🔍 DEBUG: Raw model data for ${model.name}:`, {
+              context_window: model.context_window,
+              custom_context_length: model.custom_context_length,
+              base_context_length: model.base_context_length,
+              max_context_length: model.max_context_length,
+              architecture: model.architecture,
+              parent_model: model.parent_model,
+              capabilities: model.capabilities
+            });
+
+            // Create context_info object with the 3 comprehensive context data points
+            const context_info: ContextInfo = {
+              current: model.context_window || model.custom_context_length || model.base_context_length,
+              max: model.max_context_length,
+              min: model.base_context_length
+            };
+
+            // DEBUG: Log context_info object creation
+            console.log(`📏 DEBUG: Context info for ${model.name}:`, context_info);
+
             allModels.push({
               name: model.name,
               host: selectedInstanceUrl,
@@ -529,12 +613,15 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
               compatibility_features: getCompatibilityFeatures(compatibility),
               limitations: getCompatibilityLimitations(compatibility),
               last_updated: new Date().toISOString(),
-              // Real API data from /api/show endpoint
+              // Comprehensive context information with all 3 data points
               context_window: model.context_window,
-              context_length: model.context_window, // Map for UI compatibility
+              max_context_length: model.max_context_length,
+              base_context_length: model.base_context_length,
+              custom_context_length: model.custom_context_length,
+              context_length: model.context_window || model.custom_context_length || model.base_context_length,
+              context_info: context_info,
+              // Real API data from /api/show endpoint
               architecture: model.architecture,
-              block_count: model.block_count,
-              attention_heads: model.attention_heads,
               format: model.format,
               parent_model: model.parent_model
             });
@@ -545,6 +632,26 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
         if (data.embedding_models) {
           data.embedding_models.forEach((model: any) => {
             const compatibility = getArchonCompatibility(model, 'embedding');
+            
+            // DEBUG: Log raw embedding model data from API
+            console.log(`🔍 DEBUG: Raw embedding model data for ${model.name}:`, {
+              context_window: model.context_window,
+              custom_context_length: model.custom_context_length,
+              base_context_length: model.base_context_length,
+              max_context_length: model.max_context_length,
+              embedding_dimensions: model.embedding_dimensions
+            });
+
+            // Create context_info object for embedding models if context data available
+            const context_info: ContextInfo = {
+              current: model.context_window || model.custom_context_length || model.base_context_length,
+              max: model.max_context_length,
+              min: model.base_context_length
+            };
+
+            // DEBUG: Log context_info object creation
+            console.log(`📏 DEBUG: Embedding context info for ${model.name}:`, context_info);
+            
             allModels.push({
               name: model.name,
               host: selectedInstanceUrl,
@@ -557,8 +664,11 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
               compatibility_features: getCompatibilityFeatures(compatibility),
               limitations: getCompatibilityLimitations(compatibility),
               last_updated: new Date().toISOString(),
-              // Real API data from /api/show endpoint
+              // Comprehensive context information
               context_window: model.context_window,
+              context_length: model.context_window || model.custom_context_length || model.base_context_length,
+              context_info: context_info,
+              // Real API data from /api/show endpoint
               architecture: model.architecture,
               block_count: model.block_count,
               attention_heads: model.attention_heads,
@@ -568,6 +678,9 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
             });
           });
         }
+        
+        // DEBUG: Log final allModels array to see what gets set
+        console.log(`🚀 DEBUG: Final allModels array (${allModels.length} models):`, allModels);
         
         setModels(allModels);
         setLoadedFromCache(false);
@@ -626,7 +739,8 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
       
       // Use the correct API endpoint that provides comprehensive model data
       const instanceUrlParams = instanceUrls.map(url => `instance_urls=${encodeURIComponent(url)}`).join('&');
-      const response = await fetch(`/api/ollama/models?${instanceUrlParams}`, {
+      const fetchDetailsParam = '&include_capabilities=true&fetch_details=true'; // CRITICAL: fetch_details triggers /api/show
+      const response = await fetch(`/api/ollama/models?${instanceUrlParams}${fetchDetailsParam}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -694,23 +808,72 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
           ...(data.chat_models || []).map(model => {
             const compatibility = getArchonCompatibility(model, 'chat');
             
+            // DEBUG: Log raw model data from API
+            console.log(`🔍 DEBUG [refresh]: Raw model data for ${model.name}:`, {
+              context_window: model.context_window,
+              custom_context_length: model.custom_context_length,
+              base_context_length: model.base_context_length,
+              max_context_length: model.max_context_length,
+              architecture: model.architecture,
+              parent_model: model.parent_model,
+              capabilities: model.capabilities
+            });
+
+            // Create context_info object with the 3 comprehensive context data points
+            const context_info: ContextInfo = {
+              current: model.context_window || model.custom_context_length || model.base_context_length,
+              max: model.max_context_length,
+              min: model.base_context_length
+            };
+
+            // DEBUG: Log context_info object creation
+            console.log(`📏 DEBUG [refresh]: Context info for ${model.name}:`, context_info);
+            
             return {
               ...model, 
               host: model.instance_url.replace('/v1', ''), // Remove /v1 suffix to match selectedInstanceUrl
               model_type: 'chat',
               archon_compatibility: compatibility,
               size_mb: model.size ? Math.round(model.size / 1048576) : undefined, // Convert bytes to MB
-              context_length: model.context_window, // Map context_window to context_length for UI compatibility
+              context_length: model.context_window || model.custom_context_length || model.base_context_length,
+              context_info: context_info, // Add the comprehensive context info
               parameters: model.parameters, // Preserve parameters field for display
-              // Preserve all model data from API
+              // Preserve all comprehensive model data from API
               capabilities: model.capabilities || ['chat'],
               compatibility_features: getCompatibilityFeatures(compatibility),
               limitations: getCompatibilityLimitations(compatibility),
-              last_updated: new Date().toISOString()
+              last_updated: new Date().toISOString(),
+              // Real API data from /api/show endpoint
+              context_window: model.context_window,
+              max_context_length: model.max_context_length,
+              base_context_length: model.base_context_length,
+              custom_context_length: model.custom_context_length,
+              architecture: model.architecture,
+              format: model.format,
+              parent_model: model.parent_model
             };
           }),
           ...(data.embedding_models || []).map(model => {
             const compatibility = getArchonCompatibility(model, 'embedding');
+            
+            // DEBUG: Log raw embedding model data from API
+            console.log(`🔍 DEBUG [refresh]: Raw embedding model data for ${model.name}:`, {
+              context_window: model.context_window,
+              custom_context_length: model.custom_context_length,
+              base_context_length: model.base_context_length,
+              max_context_length: model.max_context_length,
+              embedding_dimensions: model.embedding_dimensions
+            });
+
+            // Create context_info object for embedding models if context data available
+            const context_info: ContextInfo = {
+              current: model.context_window || model.custom_context_length || model.base_context_length,
+              max: model.max_context_length,
+              min: model.base_context_length
+            };
+
+            // DEBUG: Log context_info object creation
+            console.log(`📏 DEBUG [refresh]: Embedding context info for ${model.name}:`, context_info);
             
             return {
               ...model, 
@@ -718,16 +881,29 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
               model_type: 'embedding',
               archon_compatibility: compatibility,
               size_mb: model.size ? Math.round(model.size / 1048576) : undefined, // Convert bytes to MB
+              context_length: model.context_window || model.custom_context_length || model.base_context_length,
+              context_info: context_info, // Add the comprehensive context info
               parameters: model.parameters, // Preserve parameters field for display
-              // Preserve all model data from API (embedding models don't typically have context_window)
+              // Preserve all comprehensive model data from API
               capabilities: model.capabilities || ['embedding'],
               compatibility_features: getCompatibilityFeatures(compatibility),
               limitations: getCompatibilityLimitations(compatibility),
-              last_updated: new Date().toISOString()
+              last_updated: new Date().toISOString(),
+              // Real API data from /api/show endpoint
+              context_window: model.context_window,
+              max_context_length: model.max_context_length,
+              base_context_length: model.base_context_length,
+              custom_context_length: model.custom_context_length,
+              architecture: model.architecture,
+              format: model.format,
+              parent_model: model.parent_model,
+              embedding_dimensions: model.embedding_dimensions
             };
           })
         ];
         
+        // DEBUG: Log final allModels array to see what gets set
+        console.log(`🚀 DEBUG [refresh]: Final allModels array (${allModels.length} models):`, allModels);
         console.log('🚨 MODAL DEBUG: Setting models:', allModels);
         setModels(allModels);
         setLoadedFromCache(false);

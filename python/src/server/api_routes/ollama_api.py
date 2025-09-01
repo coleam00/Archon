@@ -84,6 +84,7 @@ class EmbeddingRouteResponse(BaseModel):
 async def discover_models_endpoint(
     instance_urls: list[str] = Query(..., description="Ollama instance URLs"),
     include_capabilities: bool = Query(True, description="Include capability detection"),
+    fetch_details: bool = Query(False, description="Fetch comprehensive model details via /api/show"),
     background_tasks: BackgroundTasks = None
 ) -> ModelDiscoveryResponse:
     """
@@ -93,7 +94,7 @@ async def discover_models_endpoint(
     deployments with automatic capability classification and health monitoring.
     """
     try:
-        logger.info(f"Starting model discovery for {len(instance_urls)} instances")
+        logger.info(f"Starting model discovery for {len(instance_urls)} instances with fetch_details={fetch_details}")
         
         # Validate instance URLs
         valid_urls = []
@@ -110,8 +111,11 @@ async def discover_models_endpoint(
         if not valid_urls:
             raise HTTPException(status_code=400, detail="No valid instance URLs provided")
 
-        # Perform model discovery
-        discovery_result = await model_discovery_service.discover_models_from_multiple_instances(valid_urls)
+        # Perform model discovery with optional detailed fetching
+        discovery_result = await model_discovery_service.discover_models_from_multiple_instances(
+            valid_urls, 
+            fetch_details=fetch_details
+        )
 
         logger.info(f"Discovery complete: {discovery_result['total_models']} models found")
 
