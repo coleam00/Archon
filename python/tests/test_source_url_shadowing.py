@@ -37,7 +37,12 @@ class TestSourceUrlShadowing:
         
         # Mock add_documents_to_supabase
         with patch('src.server.services.crawling.document_storage_operations.add_documents_to_supabase') as mock_add:
-            mock_add.return_value = None
+            mock_add.return_value = {
+                'chunks_stored': 6,
+                'embedding_failures': 0,
+                'total_chunks': 6,
+                'success': True
+            }
             
             # Test data - simulating a sitemap crawl
             original_source_url = "https://mem0.ai/sitemap.xml"
@@ -104,7 +109,13 @@ class TestSourceUrlShadowing:
         
         doc_storage._create_source_records = mock_create_source_records
         
-        with patch('src.server.services.crawling.document_storage_operations.add_documents_to_supabase'):
+        with patch('src.server.services.crawling.document_storage_operations.add_documents_to_supabase') as mock_add_docs:
+            mock_add_docs.return_value = {
+                'chunks_stored': 4,
+                'embedding_failures': 0,
+                'total_chunks': 4,
+                'success': True
+            }
             crawl_results = [
                 {"url": "https://example.com/doc1", "markdown": "Doc 1"},
                 {"url": "https://example.com/doc2", "markdown": "Doc 2"}

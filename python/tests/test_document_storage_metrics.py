@@ -34,7 +34,13 @@ class TestDocumentStorageMetrics:
         with patch('src.server.services.crawling.document_storage_operations.safe_logfire_info') as mock_log:
             mock_log.side_effect = lambda msg: logged_messages.append(msg)
             
-            with patch('src.server.services.crawling.document_storage_operations.add_documents_to_supabase'):
+            with patch('src.server.services.crawling.document_storage_operations.add_documents_to_supabase') as mock_add_docs:
+                mock_add_docs.return_value = {
+                    'chunks_stored': 6,
+                    'embedding_failures': 0,
+                    'total_chunks': 6,
+                    'success': True
+                }
                 # Test data with mix of empty and non-empty documents
                 crawl_results = [
                     {"url": "https://example.com/page1", "markdown": "Content 1"},
@@ -83,7 +89,13 @@ class TestDocumentStorageMetrics:
         with patch('src.server.services.crawling.document_storage_operations.safe_logfire_info') as mock_log:
             mock_log.side_effect = lambda msg: logged_messages.append(msg)
             
-            with patch('src.server.services.crawling.document_storage_operations.add_documents_to_supabase'):
+            with patch('src.server.services.crawling.document_storage_operations.add_documents_to_supabase') as mock_add_docs:
+                mock_add_docs.return_value = {
+                    'chunks_stored': 0,
+                    'embedding_failures': 0,
+                    'total_chunks': 0,
+                    'success': True
+                }
                 # All documents are empty
                 crawl_results = [
                     {"url": "https://example.com/page1", "markdown": ""},
@@ -131,7 +143,13 @@ class TestDocumentStorageMetrics:
         with patch('src.server.services.crawling.document_storage_operations.safe_logfire_info') as mock_log:
             mock_log.side_effect = lambda msg: logged_messages.append(msg)
             
-            with patch('src.server.services.crawling.document_storage_operations.add_documents_to_supabase'):
+            with patch('src.server.services.crawling.document_storage_operations.add_documents_to_supabase') as mock_add_docs:
+                mock_add_docs.return_value = {
+                    'chunks_stored': 10,
+                    'embedding_failures': 0,
+                    'total_chunks': 10,
+                    'success': True
+                }
                 crawl_results = [
                     {"url": "https://example.com/page", "markdown": "Long content here..."},
                 ]
@@ -175,7 +193,13 @@ class TestDocumentStorageMetrics:
         doc_storage._create_source_records = AsyncMock()
         
         with patch('src.server.services.crawling.document_storage_operations.safe_logfire_info'):
-            with patch('src.server.services.crawling.document_storage_operations.add_documents_to_supabase'):
+            with patch('src.server.services.crawling.document_storage_operations.add_documents_to_supabase') as mock_add_docs:
+                mock_add_docs.return_value = {
+                    'chunks_stored': 3,
+                    'embedding_failures': 0,
+                    'total_chunks': 3,
+                    'success': True
+                }
                 # Mix of documents with various content states
                 crawl_results = [
                     {"url": "https://example.com/1", "markdown": "Content"},

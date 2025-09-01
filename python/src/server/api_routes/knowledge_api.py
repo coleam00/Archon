@@ -11,6 +11,7 @@ This module handles all knowledge base operations including:
 
 import asyncio
 import json
+import re
 import time
 import uuid
 from datetime import datetime
@@ -27,6 +28,9 @@ from ..services.crawler_manager import get_crawler
 
 # Import unified logging
 from ..config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
+from ..services.embeddings.embedding_exceptions import (
+    EmbeddingAuthenticationError,
+)
 from ..utils.document_processing import extract_text_from_document
 
 # Get logger for this module
@@ -52,6 +56,86 @@ crawl_semaphore = asyncio.Semaphore(CONCURRENT_CRAWL_LIMIT)
 
 # Track active async crawl tasks for cancellation support
 active_crawl_tasks: dict[str, asyncio.Task] = {}
+
+
+def _sanitize_openai_error(error_message: str) -> str:
+    """Sanitize OpenAI API error messages to prevent information disclosure."""
+    # Input validation
+    if not isinstance(error_message, str):
+        return "OpenAI API encountered an error. Please verify your API key and quota."
+    if not error_message.strip():
+        return "OpenAI API encountered an error. Please verify your API key and quota."
+    
+    # Common patterns to sanitize
+    sanitized_patterns = {
+        r'https?://[^\s]+': '[REDACTED_URL]',  # Remove URLs
+        r'sk-[a-zA-Z0-9]{48}': '[REDACTED_KEY]',     # Remove API keys (OpenAI format)
+        r'"[^"]*auth[^"]*"': '[REDACTED_AUTH]',     # Remove auth details
+        r'org-[a-zA-Z0-9]{24}': '[REDACTED_ORG]',   # Remove OpenAI organization IDs
+        r'proj_[a-zA-Z0-9]{10,}': '[REDACTED_PROJ]', # Remove OpenAI project IDs (adjusted length)
+        r'req_[a-zA-Z0-9]{6,}': '[REDACTED_REQ]',   # Remove OpenAI request IDs (adjusted length)
+        r'user-[a-zA-Z0-9]{10,}': '[REDACTED_USER]', # Remove OpenAI user IDs
+        r'sess_[a-zA-Z0-9]{10,}': '[REDACTED_SESS]', # Remove session IDs
+        r'Bearer\s+[^\s]{1,200}': 'Bearer [REDACTED_AUTH_TOKEN]', # Remove bearer tokens (bounded to prevent ReDoS)
+    }
+
+    sanitized = error_message
+    for pattern, replacement in sanitized_patterns.items():
+        sanitized = re.sub(pattern, replacement, sanitized, flags=re.IGNORECASE)
+
+    # Check for sensitive words after pattern replacement, but exclude our redacted patterns
+    sensitive_words = ['internal', 'server', 'token']
+    # Only check for 'endpoint' if it's not part of our redacted URL pattern
+    if 'endpoint' in sanitized.lower() and '[REDACTED_URL]' not in sanitized:
+        sensitive_words.append('endpoint')
+
+    # Return generic message if still contains sensitive info
+    if any(word in sanitized.lower() for word in sensitive_words):
+        return "OpenAI API encountered an error. Please verify your API key and quota."
+
+    return sanitized
+
+async def _validate_openai_api_key() -> None:
+    """
+    Validate OpenAI API key is present and working before starting operations.
+    
+    Raises:
+        HTTPException: 401 if API key is invalid/missing, 429 if quota exhausted
+    """
+    try:
+        # Test the API key with a minimal embedding request
+        from ..services.embeddings.embedding_service import create_embedding
+        from ..services.embeddings.embedding_exceptions import (
+            EmbeddingAuthenticationError,
+            EmbeddingQuotaExhaustedError,
+        )
+        
+        # Try to create a test embedding with minimal content
+        await create_embedding(text="test")
+        
+    except EmbeddingAuthenticationError as e:
+        raise HTTPException(
+            status_code=401, 
+            detail={
+                "error": "Invalid OpenAI API key",
+                "message": "Please verify your OpenAI API key in Settings before starting a crawl.",
+                "error_type": "authentication_failed"
+            }
+        )
+    except EmbeddingQuotaExhaustedError as e:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "OpenAI quota exhausted", 
+                "message": "Your OpenAI API key has no remaining credits. Please add credits to your account.",
+                "error_type": "quota_exhausted"
+            }
+        )
+    except Exception as e:
+        # For any other errors, allow the crawl to continue
+        # The error will be caught later during actual processing
+        logger.warning(f"API key validation failed with unexpected error: {e}")
+        pass
 
 
 # Request Models
@@ -257,6 +341,9 @@ async def get_knowledge_item_code_examples(source_id: str):
 @router.post("/knowledge-items/{source_id}/refresh")
 async def refresh_knowledge_item(source_id: str):
     """Refresh a knowledge item by re-crawling its URL with the same metadata."""
+    # CRITICAL: Validate OpenAI API key before starting refresh
+    await _validate_openai_api_key()
+    
     try:
         safe_logfire_info(f"Starting knowledge item refresh | source_id={source_id}")
 
@@ -373,6 +460,9 @@ async def crawl_knowledge_item(request: KnowledgeItemRequest):
     # Basic URL validation
     if not request.url.startswith(("http://", "https://")):
         raise HTTPException(status_code=422, detail="URL must start with http:// or https://")
+
+    # CRITICAL: Validate OpenAI API key before starting crawl
+    await _validate_openai_api_key()
 
     try:
         safe_logfire_info(
@@ -508,7 +598,15 @@ async def upload_document(
     knowledge_type: str = Form("technical"),
 ):
     """Upload and process a document with progress tracking."""
+    # CRITICAL: Validate OpenAI API key before starting upload
+    await _validate_openai_api_key()
+    
     try:
+        # DETAILED LOGGING: Track knowledge_type parameter flow
+        safe_logfire_info(
+            f"📋 UPLOAD: Starting document upload | filename={file.filename} | content_type={file.content_type} | knowledge_type={knowledge_type}"
+        )
+        
         safe_logfire_info(
             f"Starting document upload | filename={file.filename} | content_type={file.content_type} | knowledge_type={knowledge_type}"
         )
@@ -742,10 +840,74 @@ async def perform_rag_query(request: RagQueryRequest):
     except HTTPException:
         raise
     except Exception as e:
-        safe_logfire_error(
-            f"RAG query failed | error={str(e)} | query={request.query[:50]} | source={request.source}"
+        # Import embedding exceptions for specific error handling
+        from ..services.embeddings.embedding_exceptions import (
+            EmbeddingAPIError,
+            EmbeddingAuthenticationError,
+            EmbeddingQuotaExhaustedError,
+            EmbeddingRateLimitError,
         )
-        raise HTTPException(status_code=500, detail={"error": f"RAG query failed: {str(e)}"})
+
+        # Handle specific OpenAI/embedding errors with detailed messages
+        if isinstance(e, EmbeddingAuthenticationError):
+            safe_logfire_error(
+                f"OpenAI authentication failed during RAG query | query={request.query[:50]} | source={request.source}"
+            )
+            sanitized_message = _sanitize_openai_error(str(e))
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "OpenAI API authentication failed",
+                    "message": "Invalid or expired OpenAI API key. Please check your API key in settings.",
+                    "error_type": "authentication_failed",
+                    "api_key_prefix": getattr(e, "api_key_prefix", None),
+                }
+            )
+        elif isinstance(e, EmbeddingQuotaExhaustedError):
+            safe_logfire_error(
+                f"OpenAI quota exhausted during RAG query | query={request.query[:50]} | source={request.source}"
+            )
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "OpenAI API quota exhausted",
+                    "message": "Your OpenAI API key has no remaining credits. Please add credits to your OpenAI account or check your billing settings.",
+                    "error_type": "quota_exhausted",
+                    "tokens_used": getattr(e, "tokens_used", None),
+                }
+            )
+        elif isinstance(e, EmbeddingRateLimitError):
+            safe_logfire_error(
+                f"OpenAI rate limit hit during RAG query | query={request.query[:50]} | source={request.source}"
+            )
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "OpenAI API rate limit exceeded",
+                    "message": "Too many requests to OpenAI API. Please wait a moment and try again.",
+                    "error_type": "rate_limit",
+                    "retry_after": 30,  # Suggest 30 second wait
+                }
+            )
+        elif isinstance(e, EmbeddingAPIError):
+            safe_logfire_error(
+                f"OpenAI API error during RAG query | error={str(e)} | query={request.query[:50]} | source={request.source}"
+            )
+            sanitized_message = _sanitize_openai_error(str(e))
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": "OpenAI API error",
+                    "message": f"OpenAI API error: {sanitized_message}",
+                    "error_type": "api_error",
+                }
+            )
+        else:
+            # Generic error handling for other exceptions
+            safe_logfire_error(
+                f"RAG query failed | error={str(e)} | query={request.query[:50]} | source={request.source}"
+            )
+            raise HTTPException(status_code=500, detail={"error": f"RAG query failed: {str(e)}"})
 
 
 @router.post("/rag/code-examples")
@@ -862,22 +1024,7 @@ async def get_database_metrics():
 
 @router.get("/health")
 async def knowledge_health():
-    """Knowledge API health check with migration detection."""
-    # Check for database migration needs
-    from ..main import _check_database_schema
-    
-    schema_status = await _check_database_schema()
-    if not schema_status["valid"]:
-        return {
-            "status": "migration_required",
-            "service": "knowledge-api", 
-            "timestamp": datetime.now().isoformat(),
-            "ready": False,
-            "migration_required": True,
-            "message": schema_status["message"],
-            "migration_instructions": "Open Supabase Dashboard → SQL Editor → Run: migration/add_source_url_display_name.sql"
-        }
-    
+    """Knowledge API health check."""
     # Removed health check logging to reduce console noise
     result = {
         "status": "healthy",

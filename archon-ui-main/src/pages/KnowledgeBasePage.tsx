@@ -19,6 +19,7 @@ import { KnowledgeItemCard } from '../components/knowledge-base/KnowledgeItemCar
 import { GroupedKnowledgeItemCard } from '../components/knowledge-base/GroupedKnowledgeItemCard';
 import { KnowledgeGridSkeleton, KnowledgeTableSkeleton } from '../components/knowledge-base/KnowledgeItemSkeleton';
 import { GroupCreationModal } from '../components/knowledge-base/GroupCreationModal';
+import { parseKnowledgeBaseError, getDisplayErrorMessage, getErrorAction, EnhancedError } from '../services/knowledgeBaseErrorHandler';
 
 const extractDomain = (url: string): string => {
   try {
@@ -92,7 +93,11 @@ export const KnowledgeBasePage = () => {
       setTotalItems(response.total);
     } catch (error) {
       console.error('Failed to load knowledge items:', error);
-      showToast('Failed to load knowledge items', 'error');
+      
+      // Parse the error using enhanced error handler
+      const enhancedError = parseKnowledgeBaseError(error);
+      const displayMessage = getDisplayErrorMessage(enhancedError);
+      showToast(displayMessage, 'error');
       setKnowledgeItems([]);
     } finally {
       setLoading(false);
@@ -498,7 +503,17 @@ export const KnowledgeBasePage = () => {
       }
     } catch (error) {
       console.error('Failed to refresh knowledge item:', error);
-      showToast('Failed to refresh knowledge item', 'error');
+      
+      // Parse the error using enhanced error handler
+      const enhancedError = parseKnowledgeBaseError(error);
+      const displayMessage = getDisplayErrorMessage(enhancedError);
+      const suggestedAction = getErrorAction(enhancedError);
+      
+      const fullMessage = suggestedAction 
+        ? `${displayMessage} ${suggestedAction}`
+        : displayMessage;
+        
+      showToast(fullMessage, 'error');
     }
   };
 
@@ -737,7 +752,17 @@ export const KnowledgeBasePage = () => {
       }
     } catch (error) {
       console.error('Failed to retry:', error);
-      showToast(`Retry failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+      
+      // Parse the error using enhanced error handler
+      const enhancedError = parseKnowledgeBaseError(error);
+      const displayMessage = getDisplayErrorMessage(enhancedError);
+      const suggestedAction = getErrorAction(enhancedError);
+      
+      const fullMessage = suggestedAction 
+        ? `Retry failed: ${displayMessage} ${suggestedAction}`
+        : `Retry failed: ${displayMessage}`;
+        
+      showToast(fullMessage, 'error');
     }
   };
 
@@ -1384,7 +1409,18 @@ const AddKnowledgeModal = ({
       }
     } catch (error) {
       console.error('Failed to add knowledge:', error);
-      showToast('Failed to add knowledge source', 'error');
+      
+      // Parse the error using the enhanced error handler
+      const enhancedError = parseKnowledgeBaseError(error);
+      const displayMessage = getDisplayErrorMessage(enhancedError);
+      const suggestedAction = getErrorAction(enhancedError);
+      
+      // Show enhanced error message with action if available
+      const fullMessage = suggestedAction 
+        ? `${displayMessage} ${suggestedAction}`
+        : displayMessage;
+        
+      showToast(fullMessage, 'error');
     } finally {
       setLoading(false);
     }

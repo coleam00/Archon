@@ -113,7 +113,7 @@ class TestRAGServiceSearch:
 
             assert isinstance(results, list)
             assert len(results) == 1
-            mock_embed.assert_called_once_with("test query")
+            mock_embed.assert_called_once_with(text="test query")
             mock_search.assert_called_once()
 
     @pytest.mark.asyncio

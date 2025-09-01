@@ -3,6 +3,8 @@ import { X, Play, ChevronDown, TerminalSquare, Copy, Check, MinusCircle, Maximiz
 import { Client, Tool } from './MCPClients';
 import { Button } from '../ui/Button';
 import { mcpClientService } from '../../services/mcpClientService';
+import { ErrorAlert, useErrorHandler } from '../ui/ErrorAlert';
+import { parseKnowledgeBaseError, EnhancedError } from '../../services/knowledgeBaseErrorHandler';
 
 interface ToolTestingPanelProps {
   client: Client | null;
@@ -37,6 +39,7 @@ export const ToolTestingPanel = ({
   const [isResizing, setIsResizing] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
+  const { error, setError, clearError } = useErrorHandler();
   const terminalRef = useRef<HTMLDivElement>(null);
   const resizeHandleRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -91,6 +94,13 @@ export const ToolTestingPanel = ({
       document.removeEventListener('mouseup', handleMouseUp);
     };
   }, [isResizing]);
+
+  // Cleanup error state on component unmount
+  useEffect(() => {
+    return () => {
+      clearError(); // Clear any pending errors when component unmounts
+    };
+  }, [clearError]);
 
   // Handle tool selection
   const handleToolSelect = (tool: Tool) => {
@@ -260,9 +270,23 @@ export const ToolTestingPanel = ({
 
     } catch (error: any) {
       console.error('MCP tool execution failed:', error);
+      
+      // Parse error through enhanced error handler for better user experience
+      const enhancedError = parseKnowledgeBaseError(error);
+      setError(enhancedError);
+      
       setTimeout(() => {
         addTypingLine(`> ERROR: Failed to execute tool on ${client.name}`, false, true);
         addTypingLine(`> ${error.message || 'Unknown error occurred'}`, false, true);
+        
+        // Add special handling for OpenAI/RAG related errors
+        if (enhancedError.isOpenAIError && enhancedError.errorDetails) {
+          addTypingLine(`> Error Type: ${enhancedError.errorDetails.error_type}`, false, true);
+          if (enhancedError.errorDetails.tokens_used) {
+            addTypingLine(`> Tokens Used: ${enhancedError.errorDetails.tokens_used}`, false, true);
+          }
+        }
+        
         addTypingLine('> Execution failed');
         setIsExecuting(false);
       }, 300);
@@ -285,6 +309,9 @@ export const ToolTestingPanel = ({
   // Handle tool execution
   const executeSelectedTool = () => {
     if (!selectedTool || !client || isExecuting) return;
+
+    // Clear any previous errors
+    clearError();
 
     // Validate required parameters
     const validationError = validateParameters();
@@ -415,6 +442,9 @@ export const ToolTestingPanel = ({
 
         {/* Content */}
         <div className="px-6 py-4 h-[calc(100%-73px)] overflow-y-auto">
+          {/* Error Alert for OpenAI/RAG errors */}
+          <ErrorAlert error={error} onDismiss={clearError} />
+          
           {client.tools.length === 0 ? (
             <div className="flex items-center justify-center h-full">
               <div className="text-center">

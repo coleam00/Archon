@@ -38,6 +38,23 @@ def _set_cached_settings(key: str, value: Any) -> None:
     _settings_cache[key] = (value, time.time())
 
 
+def invalidate_provider_cache() -> None:
+    """Invalidate all cached provider configurations."""
+    global _settings_cache
+    _settings_cache.clear()
+    logger.debug("Provider configuration cache cleared")
+
+
+def invalidate_specific_cache(key_pattern: str) -> None:
+    """Invalidate cache entries matching a specific pattern."""
+    global _settings_cache
+    keys_to_remove = [key for key in _settings_cache.keys() if key_pattern in key]
+    for key in keys_to_remove:
+        del _settings_cache[key]
+    if keys_to_remove:
+        logger.debug(f"Invalidated cache entries: {keys_to_remove}")
+
+
 @asynccontextmanager
 async def get_llm_client(provider: str | None = None, use_embedding_provider: bool = False):
     """

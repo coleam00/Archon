@@ -141,14 +141,14 @@ class DocumentStorageOperations:
 
         safe_logfire_info(f"url_to_full_document keys: {list(url_to_full_document.keys())[:5]}")
 
-        # Log chunking results
+        # Log chunking results (keep logging from main)
         avg_chunks = (len(all_contents) / processed_docs) if processed_docs > 0 else 0.0
         safe_logfire_info(
             f"Document storage | processed={processed_docs}/{len(crawl_results)} | chunks={len(all_contents)} | avg_chunks_per_doc={avg_chunks:.1f}"
         )
 
-        # Call add_documents_to_supabase with the correct parameters
-        await add_documents_to_supabase(
+        # Call add_documents_to_supabase with the correct parameters and capture result
+        storage_stats = await add_documents_to_supabase(
             client=self.supabase_client,
             urls=all_urls,  # Now has entry per chunk
             chunk_numbers=all_chunk_numbers,  # Proper chunk numbers (0, 1, 2, etc)
@@ -161,15 +161,21 @@ class DocumentStorageOperations:
             provider=None,  # Use configured provider
             cancellation_check=cancellation_check,  # Pass cancellation check
         )
-
-        # Calculate actual chunk count
-        chunk_count = len(all_contents)
+        
+        # Log if there were embedding failures
+        if storage_stats.get('embedding_failures', 0) > 0:
+            safe_logfire_error(
+                f"Document storage had embedding failures | failures={storage_stats['embedding_failures']} | "
+                f"stored={storage_stats['chunks_stored']} | total={storage_stats['total_chunks']}"
+            )
 
         return {
-            "chunk_count": chunk_count,
-            "total_word_count": sum(source_word_counts.values()),
-            "url_to_full_document": url_to_full_document,
-            "source_id": original_source_id,
+            'chunk_count': storage_stats.get('chunks_stored', 0),
+            'total_word_count': sum(source_word_counts.values()),
+            'url_to_full_document': url_to_full_document,
+            'source_id': original_source_id,
+            'embedding_failures': storage_stats.get('embedding_failures', 0),
+            'success': storage_stats.get('success', False)
         }
 
     async def _create_source_records(

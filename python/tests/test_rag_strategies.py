@@ -11,6 +11,25 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+# Global mock to prevent any real API calls during testing
+@pytest.fixture(autouse=True)
+def mock_embedding_service():
+    """Auto-use fixture to mock embedding service globally"""
+    # Only mock create_embeddings_batch (batch function), not create_embedding
+    # This allows individual tests to mock create_embedding as needed
+    with patch("src.server.services.embeddings.embedding_service.create_embeddings_batch") as mock_batch:
+        # Create a mock result object with the expected attributes
+        mock_result = type('EmbeddingResult', (), {
+            'embeddings': [[0.1] * 1536],
+            'texts_processed': ["test"],
+            'success_count': 1,
+            'failure_count': 0,
+            'has_failures': False,
+            'failed_items': []
+        })()
+        mock_batch.return_value = mock_result
+        yield
+
 # Mock problematic imports at module level
 with patch.dict(
     os.environ,
@@ -31,11 +50,9 @@ with patch.dict(
             mock_client = MagicMock()
             mock_supabase.return_value = mock_client
 
-            # Mock embedding service to prevent API calls
-            with patch(
-                "src.server.services.embeddings.embedding_service.create_embedding"
-            ) as mock_embed:
-                mock_embed.return_value = [0.1] * 1536
+            # Import the modules we need but don't mock create_embedding at module level
+            # This allows individual tests to properly mock create_embedding as needed
+            pass
 
 
 # Test RAGService core functionality
@@ -352,18 +369,18 @@ class TestRAGIntegration:
     @pytest.mark.asyncio
     async def test_error_handling_in_rag_pipeline(self, rag_service):
         """Test error handling when strategies fail"""
-        with patch(
-            "src.server.services.embeddings.embedding_service.create_embedding"
-        ) as mock_embedding:
-            # Simulate embedding failure (returns None)
-            mock_embedding.return_value = None
-
+        # Mock the search_documents method to raise an error directly
+        with patch.object(
+            rag_service, 'search_documents', 
+            side_effect=RuntimeError("Failed to create embedding for query - this indicates a configuration or API issue")
+        ):
+            # Should now fail fast and return error result instead of empty results
             success, result = await rag_service.perform_rag_query(query="test query", match_count=5)
 
-            # Should handle gracefully by returning empty results
-            assert success is True
-            assert "results" in result
-            assert len(result["results"]) == 0  # Empty results due to embedding failure
+            # Should return failure result due to "fail fast" principle
+            assert success is False
+            assert "error" in result
+            assert "Failed to create embedding" in result["error"] or "configuration or API issue" in result["error"]
 
     @pytest.mark.asyncio
     async def test_empty_results_handling(self, rag_service):

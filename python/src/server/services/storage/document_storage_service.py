@@ -27,7 +27,7 @@ async def add_documents_to_supabase(
     enable_parallel_batches: bool = True,
     provider: str | None = None,
     cancellation_check: Any | None = None,
-) -> None:
+) -> dict[str, Any]:
     """
     Add documents to Supabase with threading optimizations.
 
@@ -43,6 +43,9 @@ async def add_documents_to_supabase(
         batch_size: Size of each batch for insertion
         progress_callback: Optional async callback function for progress reporting
         provider: Optional provider override for embeddings
+        
+    Returns:
+        Dict with statistics: chunks_stored, embedding_failures, total_chunks, success
     """
     with safe_span(
         "add_documents_to_supabase", total_documents=len(contents), batch_size=batch_size
@@ -124,6 +127,9 @@ async def add_documents_to_supabase(
             use_contextual_embeddings = os.getenv("USE_CONTEXTUAL_EMBEDDINGS", "false") == "true"
 
         # Initialize batch tracking for simplified progress
+        # Track embedding failures for reporting
+        total_embedding_failures = 0
+        total_chunks_stored = 0
         completed_batches = 0
         total_batches = (len(contents) + batch_size - 1) // batch_size
 
@@ -251,8 +257,9 @@ async def add_documents_to_supabase(
                 progress_callback=embedding_progress_wrapper if progress_callback else None
             )
 
-            # Log any failures
+            # Log any failures and track them
             if result.has_failures:
+                total_embedding_failures += result.failure_count
                 search_logger.error(
                     f"Batch {batch_num}: Failed to create {result.failure_count} embeddings. "
                     f"Successful: {result.success_count}. Errors: {[item['error'] for item in result.failed_items[:3]]}"
@@ -339,6 +346,7 @@ async def add_documents_to_supabase(
                         "max_workers": max_workers if use_contextual_embeddings else 0,
                     }
                     await report_progress(complete_msg, new_percentage, batch_info)
+                    total_chunks_stored += len(batch_data)  # Track successful chunks
                     break
 
                 except Exception as e:
@@ -370,6 +378,7 @@ async def add_documents_to_supabase(
                         search_logger.info(
                             f"Individual inserts: {successful_inserts}/{len(batch_data)} successful"
                         )
+                        total_chunks_stored += successful_inserts  # Track successful individual inserts
 
             # Minimal delay between batches to prevent overwhelming
             if i + batch_size < len(contents):
@@ -390,5 +399,15 @@ async def add_documents_to_supabase(
                 },
             )
 
-        span.set_attribute("success", True)
+        span.set_attribute("success", total_embedding_failures == 0)
         span.set_attribute("total_processed", len(contents))
+        span.set_attribute("embedding_failures", total_embedding_failures)
+        span.set_attribute("chunks_stored", total_chunks_stored)
+        
+        # Return statistics
+        return {
+            "chunks_stored": total_chunks_stored,
+            "embedding_failures": total_embedding_failures,
+            "total_chunks": len(contents),
+            "success": total_embedding_failures == 0
+        }
