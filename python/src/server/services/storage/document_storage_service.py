@@ -261,6 +261,26 @@ async def add_documents_to_supabase(
             # Use only successful embeddings
             batch_embeddings = result.embeddings
             successful_texts = result.texts_processed
+            
+            # Get model information for tracking
+            from ..llm_provider_service import get_embedding_model
+            from ..credential_service import credential_service
+            
+            # Get embedding model name
+            embedding_model_name = await get_embedding_model(provider=provider)
+            
+            # Get LLM chat model (used for contextual embeddings if enabled)
+            llm_chat_model = None
+            if use_contextual_embeddings:
+                try:
+                    provider_config = await credential_service.get_active_provider("llm")
+                    llm_chat_model = provider_config.get("chat_model", "")
+                    if not llm_chat_model:
+                        # Fallback to MODEL_CHOICE or provider defaults
+                        llm_chat_model = await credential_service.get_credential("MODEL_CHOICE", "gpt-4o-mini")
+                except Exception as e:
+                    search_logger.warning(f"Failed to get LLM chat model: {e}")
+                    llm_chat_model = "gpt-4o-mini"  # Default fallback
 
             if not batch_embeddings:
                 search_logger.warning(
@@ -319,6 +339,9 @@ async def add_documents_to_supabase(
                     "metadata": {"chunk_size": len(text), **batch_metadatas[j]},
                     "source_id": source_id,
                     embedding_column: embedding,  # Use the successful embedding with correct column
+                    "llm_chat_model": llm_chat_model,  # Add LLM model tracking
+                    "embedding_model": embedding_model_name,  # Add embedding model tracking
+                    "embedding_dimension": embedding_dim,  # Add dimension tracking
                 }
                 batch_data.append(data)
 
