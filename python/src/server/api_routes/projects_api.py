@@ -9,7 +9,9 @@ Handles:
 """
 
 import asyncio
+import json
 import secrets
+import sys
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -74,23 +76,49 @@ class CreateTaskRequest(BaseModel):
 
 
 @router.get("/projects")
-async def list_projects():
-    """List all projects."""
+async def list_projects(include_content: bool = True):
+    """
+    List all projects.
+    
+    Args:
+        include_content: If True (default), returns full project content.
+                        If False, returns lightweight metadata with statistics.
+    """
     try:
-        logfire.info("Listing all projects")
+        logfire.info(f"Listing all projects | include_content={include_content}")
 
-        # Use ProjectService to get projects
+        # Use ProjectService to get projects with include_content parameter
         project_service = ProjectService()
-        success, result = project_service.list_projects()
+        success, result = project_service.list_projects(include_content=include_content)
 
         if not success:
             raise HTTPException(status_code=500, detail=result)
 
-        # Use SourceLinkingService to format projects with sources
-        source_service = SourceLinkingService()
-        formatted_projects = source_service.format_projects_with_sources(result["projects"])
+        # Only format with sources if we have full content
+        if include_content:
+            # Use SourceLinkingService to format projects with sources
+            source_service = SourceLinkingService()
+            formatted_projects = source_service.format_projects_with_sources(result["projects"])
+        else:
+            # Lightweight response doesn't need source formatting
+            formatted_projects = result["projects"]
 
-        logfire.info(f"Projects listed successfully | count={len(formatted_projects)}")
+        # Monitor response size for optimization validation
+        response_json = json.dumps(formatted_projects)
+        response_size = len(response_json)
+        
+        # Log response metrics
+        logfire.info(
+            f"Projects listed successfully | count={len(formatted_projects)} | "
+            f"size_bytes={response_size} | include_content={include_content}"
+        )
+        
+        # Warning for large responses (>10KB)
+        if response_size > 10000:
+            logfire.warning(
+                f"Large response size detected | size_bytes={response_size} | "
+                f"include_content={include_content} | project_count={len(formatted_projects)}"
+            )
 
         return formatted_projects
 
@@ -473,18 +501,20 @@ async def get_project_features(project_id: str):
 
 
 @router.get("/projects/{project_id}/tasks")
-async def list_project_tasks(project_id: str, include_archived: bool = False):
+async def list_project_tasks(project_id: str, include_archived: bool = False, exclude_large_fields: bool = False):
     """List all tasks for a specific project. By default, filters out archived tasks."""
     try:
         logfire.info(
-            f"Listing project tasks | project_id={project_id} | include_archived={include_archived}"
+            f"Listing project tasks | project_id={project_id} | include_archived={include_archived} | exclude_large_fields={exclude_large_fields}"
         )
 
         # Use TaskService to list tasks
         task_service = TaskService()
         success, result = task_service.list_tasks(
             project_id=project_id,
-            include_closed=True,  # Get all tasks, we'll filter archived separately
+            include_closed=True,  # Get all tasks, including done
+            exclude_large_fields=exclude_large_fields,
+            include_archived=include_archived,  # Pass the flag down to service
         )
 
         if not success:
@@ -492,20 +522,11 @@ async def list_project_tasks(project_id: str, include_archived: bool = False):
 
         tasks = result.get("tasks", [])
 
-        # Apply filters
-        filtered_tasks = []
-        for task in tasks:
-            # Skip archived tasks if not including them (handle None as False)
-            if not include_archived and task.get("archived", False):
-                continue
-
-            filtered_tasks.append(task)
-
         logfire.info(
-            f"Project tasks retrieved | project_id={project_id} | task_count={len(filtered_tasks)}"
+            f"Project tasks retrieved | project_id={project_id} | task_count={len(tasks)}"
         )
 
-        return filtered_tasks
+        return tasks
 
     except HTTPException:
         raise
@@ -571,6 +592,7 @@ async def list_tasks(
             project_id=project_id,
             status=status,
             include_closed=include_closed,
+            exclude_large_fields=exclude_large_fields,
         )
 
         if not success:
@@ -591,8 +613,8 @@ async def list_tasks(
         end_idx = start_idx + per_page
         paginated_tasks = tasks[start_idx:end_idx]
 
-        # Return paginated response
-        return {
+        # Prepare response
+        response = {
             "tasks": paginated_tasks,
             "pagination": {
                 "total": len(tasks),
@@ -601,6 +623,25 @@ async def list_tasks(
                 "pages": (len(tasks) + per_page - 1) // per_page,
             },
         }
+        
+        # Monitor response size for optimization validation
+        response_json = json.dumps(response)
+        response_size = len(response_json)
+        
+        # Log response metrics
+        logfire.info(
+            f"Tasks listed successfully | count={len(paginated_tasks)} | "
+            f"size_bytes={response_size} | exclude_large_fields={exclude_large_fields}"
+        )
+        
+        # Warning for large responses (>10KB)
+        if response_size > 10000:
+            logfire.warning(
+                f"Large task response size | size_bytes={response_size} | "
+                f"exclude_large_fields={exclude_large_fields} | task_count={len(paginated_tasks)}"
+            )
+        
+        return response
 
     except HTTPException:
         raise
@@ -795,14 +836,23 @@ async def mcp_update_task_status_with_socketio(task_id: str, status: str):
 
 
 @router.get("/projects/{project_id}/docs")
-async def list_project_documents(project_id: str):
-    """List all documents for a specific project."""
+async def list_project_documents(project_id: str, include_content: bool = False):
+    """
+    List all documents for a specific project.
+    
+    Args:
+        project_id: Project UUID
+        include_content: If True, includes full document content.
+                        If False (default), returns metadata only.
+    """
     try:
-        logfire.info(f"Listing documents for project | project_id={project_id}")
+        logfire.info(
+            f"Listing documents for project | project_id={project_id} | include_content={include_content}"
+        )
 
         # Use DocumentService to list documents
         document_service = DocumentService()
-        success, result = document_service.list_documents(project_id)
+        success, result = document_service.list_documents(project_id, include_content=include_content)
 
         if not success:
             if "not found" in result.get("error", "").lower():
@@ -811,7 +861,7 @@ async def list_project_documents(project_id: str):
                 raise HTTPException(status_code=500, detail=result)
 
         logfire.info(
-            f"Documents listed successfully | project_id={project_id} | count={result.get('total_count', 0)}"
+            f"Documents listed successfully | project_id={project_id} | count={result.get('total_count', 0)} | lightweight={not include_content}"
         )
 
         return result

@@ -11,7 +11,9 @@ import { SettingsProvider, useSettings } from './contexts/SettingsContext';
 import { ProjectPage } from './pages/ProjectPage';
 import { DisconnectScreenOverlay } from './components/DisconnectScreenOverlay';
 import { ErrorBoundaryWithBugReport } from './components/bug-report/ErrorBoundaryWithBugReport';
+import { MigrationBanner } from './components/ui/MigrationBanner';
 import { serverHealthService } from './services/serverHealthService';
+import { useMigrationStatus } from './hooks/useMigrationStatus';
 
 const AppRoutes = () => {
   const { projectsEnabled } = useSettings();
@@ -38,6 +40,8 @@ const AppContent = () => {
     enabled: true,
     delay: 10000
   });
+  const [migrationBannerDismissed, setMigrationBannerDismissed] = useState(false);
+  const migrationStatus = useMigrationStatus();
 
   useEffect(() => {
     // Load initial settings
@@ -77,6 +81,13 @@ const AppContent = () => {
       <Router>
         <ErrorBoundaryWithBugReport>
           <MainLayout>
+            {/* Migration Banner - shows when backend is up but DB schema needs work */}
+            {migrationStatus.migrationRequired && !migrationBannerDismissed && (
+              <MigrationBanner
+                message={migrationStatus.message || "Database migration required"}
+                onDismiss={() => setMigrationBannerDismissed(true)}
+              />
+            )}
             <AppRoutes />
           </MainLayout>
         </ErrorBoundaryWithBugReport>

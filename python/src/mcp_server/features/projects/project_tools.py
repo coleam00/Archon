@@ -175,7 +175,11 @@ def register_project_tools(mcp: FastMCP):
             timeout = get_default_timeout()
 
             async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.get(urljoin(api_url, "/api/projects"))
+                # CRITICAL: Pass include_content=False for lightweight response
+                response = await client.get(
+                    urljoin(api_url, "/api/projects"),
+                    params={"include_content": False}
+                )
 
                 if response.status_code == 200:
                     projects = response.json()

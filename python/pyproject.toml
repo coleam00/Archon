@@ -1,64 +1,141 @@
 [project]
 name = "archon"
 version = "0.1.0"
-description = "MCP server for integrating web crawling and RAG into AI agents and AI coding assistants"
+description = "Archon - the command center for AI coding assistants."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = [
-    "crawl4ai==0.6.2",
-    "mcp==1.7.1",
-    "supabase==2.15.1",
-    "openai==1.71.0",
-    "dotenv==0.9.9",
-    "python-dotenv>=1.0.0",
-    "sentence-transformers>=4.1.0",
-    "cryptography>=41.0.0",
-    "asyncpg>=0.29.0",
-    "pypdf2>=3.0.1",
-    "python-multipart>=0.0.20",
-    "pdfplumber>=0.11.6",
-    "python-docx>=1.1.2",
-    "markdown>=3.8",
-    "fastapi>=0.104.0",
-    "uvicorn>=0.24.0",
-    "pydantic>=2.0.0",
-    "python-jose[cryptography]>=3.3.0",
-    "slowapi>=0.1.9",
-    "httpx>=0.24.0",
-    "pydantic-ai>=0.0.13",
-    "logfire>=0.30.0",
-    "python-socketio[asyncio]>=5.11.0",
-    "pytest-asyncio>=1.0.0",
-    "docker>=7.1.0",
-]
+# Base dependencies - empty since we're using dependency groups
+dependencies = []
 
-[project.optional-dependencies]
-test = [
+# PyTorch CPU-only index configuration
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+# Sources configuration to use CPU-only PyTorch
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+
+[dependency-groups]
+# Development dependencies for linting and testing
+dev = [
+    "mypy>=1.17.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.21.0",
     "pytest-mock>=3.12.0",
     "pytest-timeout>=2.3.0",
-    "httpx>=0.24.0",
-    "fastapi>=0.104.0",
-    "uvicorn>=0.24.0",
-    "requests>=2.31.0",
-    "docker>=7.0.0",
-    "factory-boy>=3.3.0",
-]
-api = [
-    "fastapi>=0.104.0",
-    "uvicorn>=0.24.0",
-    "pydantic>=2.0.0",
-    "python-jose[cryptography]>=3.3.0",
-    "slowapi>=0.1.9",
-    "httpx>=0.24.0",
-]
-
-[dependency-groups]
-dev = [
-    "mypy>=1.17.0",
     "pytest-cov>=6.2.1",
     "ruff>=0.12.5",
+    "requests>=2.31.0",
+    "factory-boy>=3.3.0",
+]
+
+# Server container dependencies
+server = [
+    # Web framework
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "python-multipart>=0.0.20",
+    "watchfiles>=0.18",
+    # Web crawling
+    "crawl4ai==0.6.2",
+    # Real-time communication
+    "python-socketio[asyncio]>=5.11.0",
+    # Database and storage
+    "supabase==2.15.1",
+    "asyncpg>=0.29.0",
+    # AI/ML libraries
+    "openai==1.71.0",
+    # Document processing
+    "pypdf2>=3.0.1",
+    "pdfplumber>=0.11.6",
+    "python-docx>=1.1.2",
+    "markdown>=3.8",
+    # Security and utilities
+    "python-jose[cryptography]>=3.3.0",
+    "cryptography>=41.0.0",
+    "slowapi>=0.1.9",
+    # Core utilities
+    "httpx>=0.24.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "docker>=6.1.0",
+    # Logging
+    "logfire>=0.30.0",
+    # Testing (needed for UI-triggered tests)
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-mock>=3.12.0",
+]
+
+# Optional reranking dependencies for server
+server-reranking = [
+    "sentence-transformers>=4.1.0",
+    "torch>=2.0.0",
+    "transformers>=4.30.0",
+]
+
+# MCP container dependencies
+mcp = [
+    "mcp==1.12.2",
+    "httpx>=0.24.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "supabase==2.15.1",
+    "logfire>=0.30.0",
+    "fastapi>=0.104.0",
+]
+
+# Agents container dependencies
+agents = [
+    "pydantic-ai>=0.0.13",
+    "pydantic>=2.0.0",
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "httpx>=0.24.0",
+    "python-dotenv>=1.0.0",
+    "structlog>=23.1.0",
+]
+
+# All dependencies for running unit tests locally
+# This combines all container dependencies plus test-specific ones
+all = [
+    # All server dependencies
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "python-multipart>=0.0.20",
+    "watchfiles>=0.18",
+    "crawl4ai==0.6.2",
+    "python-socketio[asyncio]>=5.11.0",
+    "supabase==2.15.1",
+    "asyncpg>=0.29.0",
+    "openai==1.71.0",
+    "pypdf2>=3.0.1",
+    "pdfplumber>=0.11.6",
+    "python-docx>=1.1.2",
+    "markdown>=3.8",
+    "python-jose[cryptography]>=3.3.0",
+    "cryptography>=41.0.0",
+    "slowapi>=0.1.9",
+    "docker>=6.1.0",
+    "logfire>=0.30.0",
+    # MCP specific (mcp version)
+    "mcp==1.12.2",
+    # Agents specific
+    "pydantic-ai>=0.0.13",
+    "structlog>=23.1.0",
+    # Shared utilities
+    "httpx>=0.24.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    # Test dependencies
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-mock>=3.12.0",
+    "pytest-timeout>=2.3.0",
+    "requests>=2.31.0",
+    "factory-boy>=3.3.0",
 ]
 
 [tool.ruff]

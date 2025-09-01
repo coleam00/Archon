@@ -78,7 +78,13 @@ Please give a short succinct context to situate this chunk within the overall do
                     max_tokens=200,
                 )
 
-                context = response.choices[0].message.content.strip()
+                # Handle potential None response from some providers (e.g., Google Gemini)
+                content = response.choices[0].message.content
+                if content is None:
+                    search_logger.warning("LLM provider returned None for message content, skipping contextual embedding")
+                    return chunk, False
+                
+                context = content.strip()
                 contextual_text = f"{context}\n---\n{chunk}"
 
                 return contextual_text, True
@@ -111,14 +117,27 @@ async def process_chunk_with_context(
 
 
 async def _get_model_choice(provider: str | None = None) -> str:
-    """Get model choice from credential service."""
+    """Get model choice from credential service with provider-aware defaults."""
     from ..credential_service import credential_service
+
+    # Provider-specific model defaults
+    PROVIDER_MODEL_DEFAULTS = {
+        "openai": "gpt-4.1-nano",
+        "openrouter": "openai/gpt-4.1-nano", 
+        "google": "gemini-1.5-flash",
+        "ollama": "llama3.1:8b"
+    }
 
     # Get the active provider configuration
     provider_config = await credential_service.get_active_provider("llm")
-    model = provider_config.get("chat_model", "gpt-4.1-nano")
+    active_provider = provider_config.get("provider", "openai")
+    model = provider_config.get("chat_model")
+    
+    # If no custom model is set, use provider-specific default
+    if not model or model.strip() == "":
+        model = PROVIDER_MODEL_DEFAULTS.get(active_provider, "gpt-4.1-nano")
 
-    search_logger.debug(f"Using model from credential service: {model}")
+    search_logger.debug(f"Using model for provider {active_provider}: {model}")
 
     return model
 
@@ -175,8 +194,13 @@ async def generate_contextual_embeddings_batch(
                 max_tokens=100 * len(chunks),  # Limit response size
             )
 
-            # Parse response
-            response_text = response.choices[0].message.content
+            # Parse response with null-safety
+            response_content = response.choices[0].message.content
+            if response_content is None:
+                search_logger.warning("LLM provider returned None for batch message content, skipping contextual embeddings")
+                return [(chunk, False) for chunk in chunks]
+            
+            response_text = response_content
 
             # Extract contexts from response
             lines = response_text.strip().split("\\n")

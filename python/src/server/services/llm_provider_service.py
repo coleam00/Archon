@@ -38,6 +38,13 @@ def _set_cached_settings(key: str, value: Any) -> None:
     _settings_cache[key] = (value, time.time())
 
 
+def clear_provider_cache() -> None:
+    """Clear the provider configuration cache to force refresh on next request."""
+    global _settings_cache
+    _settings_cache.clear()
+    logger.debug("Provider configuration cache cleared")
+
+
 @asynccontextmanager
 async def get_llm_client(provider: str | None = None, use_embedding_provider: bool = False):
     """

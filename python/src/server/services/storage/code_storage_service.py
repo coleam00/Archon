@@ -21,17 +21,72 @@ from ..embeddings.embedding_service import create_embeddings_batch
 from ..llm_provider_service import get_llm_client
 
 
-def _get_model_choice() -> str:
-    """Get MODEL_CHOICE with direct fallback."""
+def _supports_response_format(provider: str, model: str) -> bool:
+    """
+    Determine if a specific provider/model combination supports response_format.
+    
+    Args:
+        provider: The LLM provider name
+        model: The model identifier
+        
+    Returns:
+        True if the model supports structured JSON output via response_format
+    """
+    if not provider:
+        return True  # Default to supporting it
+        
+    provider = provider.lower()
+    
+    if provider == "openai":
+        return True  # OpenAI models generally support response_format
+    elif provider == "openrouter":
+        # OpenRouter: "OpenAI models, Nitro models, and some others" support it
+        model_lower = model.lower()
+        
+        # Known compatible model patterns on OpenRouter
+        compatible_patterns = [
+            "openai/",      # OpenAI models on OpenRouter
+            "gpt-",         # GPT models
+            "nitro/",       # Nitro models  
+            "deepseek/",    # DeepSeek models often support JSON
+            "google/",      # Some Google models support it
+        ]
+        
+        for pattern in compatible_patterns:
+            if pattern in model_lower:
+                search_logger.debug(f"Model {model} supports response_format (pattern: {pattern})")
+                return True
+                
+        search_logger.debug(f"Model {model} may not support response_format, skipping")
+        return False
+    else:
+        # Conservative approach for other providers
+        return False
+
+
+async def _get_model_choice() -> str:
+    """Get MODEL_CHOICE with provider-aware defaults."""
     try:
-        # Direct cache/env fallback
         from ..credential_service import credential_service
 
-        if credential_service._cache_initialized and "MODEL_CHOICE" in credential_service._cache:
-            model = credential_service._cache["MODEL_CHOICE"]
-        else:
-            model = os.getenv("MODEL_CHOICE", "gpt-4.1-nano")
-        search_logger.debug(f"Using model choice: {model}")
+        # Provider-specific model defaults
+        PROVIDER_MODEL_DEFAULTS = {
+            "openai": "gpt-4.1-nano",
+            "openrouter": "openai/gpt-4.1-nano", 
+            "google": "gemini-1.5-flash",
+            "ollama": "llama3.1:8b"
+        }
+
+        # Get the active provider configuration
+        provider_config = await credential_service.get_active_provider("llm")
+        active_provider = provider_config.get("provider", "openai")
+        model = provider_config.get("chat_model")
+        
+        # If no custom model is set, use provider-specific default
+        if not model or model.strip() == "":
+            model = PROVIDER_MODEL_DEFAULTS.get(active_provider, "gpt-4.1-nano")
+
+        search_logger.debug(f"Using model for provider {active_provider}: {model}")
         return model
     except Exception as e:
         search_logger.warning(f"Error getting model choice: {e}, using default")
@@ -41,6 +96,129 @@ def _get_model_choice() -> str:
 def _get_max_workers() -> int:
     """Get max workers from environment, defaulting to 3."""
     return int(os.getenv("CONTEXTUAL_EMBEDDINGS_MAX_WORKERS", "3"))
+
+
+def _extract_json_from_response(response_content: str, language: str = "") -> dict[str, str]:
+    """
+    Extract JSON from LLM response, handling various wrapper formats and edge cases.
+    
+    This function is model-agnostic and handles common response patterns
+    from any LLM provider (OpenAI, OpenRouter, Google, etc.).
+    
+    Args:
+        response_content: Raw response content from LLM
+        language: Programming language for fallback naming
+        
+    Returns:
+        Dictionary with example_name and summary keys
+    """
+    content = response_content.strip()
+    search_logger.debug(f"Processing LLM response ({len(content)} chars): {repr(content[:200])}...")
+    
+    # Handle completely empty responses
+    if not content:
+        search_logger.warning("Received empty response from LLM, using fallback")
+        return {
+            "example_name": f"Code Example{f' ({language})' if language else ''}",
+            "summary": "Code example for demonstration purposes.",
+        }
+    
+    # Handle pure instruction responses (no JSON)
+    instruction_patterns = [
+        "only respond with",
+        "only return",
+        "do not include",
+        "ensure your response",
+        "output only",
+        "begin your response",
+        "first determine",
+    ]
+    
+    if any(pattern in content.lower() for pattern in instruction_patterns) and '{' not in content:
+        search_logger.warning(f"Received instruction-only response: {repr(content[:100])}...")
+        return {
+            "example_name": f"Code Example{f' ({language})' if language else ''}",
+            "summary": "Code example for demonstration purposes.",
+        }
+    
+    # Pattern 1: Remove common wrapper tags
+    wrapper_patterns = [
+        (r'<response>(.*?)</response>', r'\1'),
+        (r'<json_output>(.*?)</json_output>', r'\1'),
+        (r'<json>(.*?)</json>', r'\1'),
+        (r'```json\s*(.*?)\s*```', r'\1'),
+        (r'```\s*(.*?)\s*```', r'\1'),
+        (r'&\{(.*?)\}&', r'\1'),  # Handle &{ }& formatting
+    ]
+    
+    for pattern, replacement in wrapper_patterns:
+        content = re.sub(pattern, replacement, content, flags=re.DOTALL | re.IGNORECASE)
+        content = content.strip()
+    
+    # After wrapper removal, check if we now have direct JSON
+    if content.startswith('{') and content.endswith('}'):
+        try:
+            parsed = json.loads(content)
+            if isinstance(parsed, dict) and "example_name" in parsed and "summary" in parsed:
+                search_logger.info("Successfully parsed JSON after wrapper removal")
+                return parsed
+        except json.JSONDecodeError:
+            search_logger.debug("JSON parsing failed after wrapper removal")
+    
+    # Pattern 2: Extract JSON from text that includes instructions
+    # Look for JSON-like structure in the response
+    json_patterns = [
+        r'\{[^}]*"example_name"[^}]*"summary"[^}]*\}',
+        r'\{.*?"example_name".*?"summary".*?\}',
+        r'\{\s*"example_name":\s*"[^"]+",\s*"summary":\s*"[^"]+"\s*\}',  # Strict format
+        r'\{.*?\}',  # Any JSON-like structure as fallback
+    ]
+    
+    for pattern in json_patterns:
+        match = re.search(pattern, content, re.DOTALL)
+        if match:
+            potential_json = match.group(0)
+            try:
+                # Test if it's valid JSON
+                parsed = json.loads(potential_json)
+                # Validate it has the required structure
+                if isinstance(parsed, dict) and "example_name" in parsed and "summary" in parsed:
+                    return parsed
+            except json.JSONDecodeError:
+                continue
+    
+    # Pattern 3: If content looks like instructions, try to find embedded JSON
+    if 'json' in content.lower() and '{' in content and '}' in content:
+        # Find the largest JSON-like substring
+        start = content.find('{')
+        end = content.rfind('}') + 1
+        if start < end:
+            potential_json = content[start:end]
+            try:
+                parsed = json.loads(potential_json)
+                if isinstance(parsed, dict):
+                    # Use parsed JSON even if it doesn't have the exact structure
+                    return {
+                        "example_name": parsed.get("example_name", f"Code Example{f' ({language})' if language else ''}"),
+                        "summary": parsed.get("summary", "Code example for demonstration purposes."),
+                    }
+            except json.JSONDecodeError:
+                pass
+    
+    # Pattern 4: Handle incomplete JSON like just "{"
+    if content.startswith('{') and not content.endswith('}'):
+        search_logger.warning(f"Received incomplete JSON: {repr(content[:100])}...")
+        return {
+            "example_name": f"Code Example{f' ({language})' if language else ''}",
+            "summary": "Code example for demonstration purposes.",
+        }
+    
+    # No valid JSON found - return fallback structure
+    search_logger.warning(f"No valid JSON found in response, using fallback. Full content: {repr(content)}")
+    return {
+        "example_name": f"Code Example{f' ({language})' if language else ''}",
+        "summary": "Code example for demonstration purposes.",
+    }
 
 
 def _normalize_code_for_comparison(code: str) -> str:
@@ -507,7 +685,7 @@ async def generate_code_example_summary(
         A dictionary with 'summary' and 'example_name'
     """
     # Get model choice from credential service (RAG setting)
-    model_choice = _get_model_choice()
+    model_choice = await _get_model_choice()
 
     # Create the prompt
     prompt = f"""<context_before>
@@ -536,7 +714,7 @@ Format your response as JSON:
 """
 
     try:
-        # Use the provider-aware LLM client
+        # Use the LLM client
         async with get_llm_client(provider=provider) as client:
             search_logger.debug(
                 f"Calling LLM API with model: {model_choice}, language: {language}, code length: {len(code)}"
@@ -555,13 +733,14 @@ Format your response as JSON:
             )
 
         response_content = response.choices[0].message.content.strip()
-        search_logger.debug(f"OpenAI API response: {repr(response_content[:200])}...")
+        search_logger.debug(f"LLM API response: {repr(response_content[:200])}...")
 
-        result = json.loads(response_content)
+        # Use the enhanced JSON parser for better compatibility
+        result = _extract_json_from_response(response_content, language)
 
         # Validate the response has the required fields
         if not result.get("example_name") or not result.get("summary"):
-            search_logger.warning(f"Incomplete response from OpenAI: {result}")
+            search_logger.warning(f"Incomplete response from LLM: {result}")
 
         final_result = {
             "example_name": result.get(
@@ -575,14 +754,6 @@ Format your response as JSON:
         )
         return final_result
 
-    except json.JSONDecodeError as e:
-        search_logger.error(
-            f"Failed to parse JSON response from OpenAI: {e}, Response: {repr(response_content) if 'response_content' in locals() else 'No response'}"
-        )
-        return {
-            "example_name": f"Code Example{f' ({language})' if language else ''}",
-            "summary": "Code example for demonstration purposes.",
-        }
     except Exception as e:
         search_logger.error(f"Error generating code example summary: {e}, Model: {model_choice}")
         return {

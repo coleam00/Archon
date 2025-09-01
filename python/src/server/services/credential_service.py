@@ -238,6 +238,14 @@ class CredentialService:
                 self._rag_settings_cache = None
                 self._rag_cache_timestamp = None
                 logger.debug(f"Invalidated RAG settings cache due to update of {key}")
+                
+                # Also invalidate provider service cache to ensure immediate effect
+                try:
+                    from .llm_provider_service import clear_provider_cache
+                    clear_provider_cache()
+                    logger.debug("Also cleared LLM provider service cache")
+                except Exception as e:
+                    logger.warning(f"Failed to clear provider service cache: {e}")
 
             logger.info(
                 f"Successfully {'encrypted and ' if is_encrypted else ''}stored credential: {key}"
@@ -266,6 +274,14 @@ class CredentialService:
                 self._rag_settings_cache = None
                 self._rag_cache_timestamp = None
                 logger.debug(f"Invalidated RAG settings cache due to deletion of {key}")
+                
+                # Also invalidate provider service cache to ensure immediate effect
+                try:
+                    from .llm_provider_service import clear_provider_cache
+                    clear_provider_cache()
+                    logger.debug("Also cleared LLM provider service cache")
+                except Exception as e:
+                    logger.warning(f"Failed to clear provider service cache: {e}")
 
             logger.info(f"Successfully deleted credential: {key}")
             return True
