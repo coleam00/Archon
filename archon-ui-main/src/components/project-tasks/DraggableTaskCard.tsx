@@ -1,8 +1,9 @@
 import React, { useRef, useState } from 'react';
 import { useDrag, useDrop } from 'react-dnd';
-import { Edit, Trash2, RefreshCw, Tag, User, Bot, Clipboard } from 'lucide-react';
+import { Edit, Trash2, RefreshCw, Tag, Clipboard } from 'lucide-react';
 import { Task } from './TaskTableView';
 import { ItemTypes, getAssigneeIcon, getAssigneeGlow, getOrderColor, getOrderGlow } from '../../lib/task-utils';
+import { useToast } from '../../contexts/ToastContext';
 
 export interface DraggableTaskCardProps {
   task: Task;
@@ -11,22 +12,25 @@ export interface DraggableTaskCardProps {
   onComplete: () => void;
   onDelete: (task: Task) => void;
   onTaskReorder: (taskId: string, targetIndex: number, status: Task['status']) => void;
-  tasksInStatus: Task[];
-  allTasks?: Task[];
   hoveredTaskId?: string | null;
   onTaskHover?: (taskId: string | null) => void;
+  selectedTasks?: Set<string>;
+  onTaskSelect?: (taskId: string) => void;
 }
 
 export const DraggableTaskCard = ({
   task,
   index,
   onView,
+  onComplete,
   onDelete,
   onTaskReorder,
-  allTasks = [],
   hoveredTaskId,
   onTaskHover,
+  selectedTasks,
+  onTaskSelect,
 }: DraggableTaskCardProps) => {
+  const { showToast } = useToast();
   
   const [{ isDragging }, drag] = useDrag({
     type: ItemTypes.TASK,
@@ -48,7 +52,6 @@ export const DraggableTaskCard = ({
       
       if (draggedIndex === hoveredIndex) return;
       
-      console.log('BOARD HOVER: Moving task', draggedItem.id, 'from index', draggedIndex, 'to', hoveredIndex, 'in status', task.status);
       
       // Move the task immediately for visual feedback (same pattern as table view)
       onTaskReorder(draggedItem.id, hoveredIndex, task.status);
@@ -65,15 +68,8 @@ export const DraggableTaskCard = ({
     setIsFlipped(!isFlipped);
   };
 
-  // Calculate hover effects for parent-child relationships
-  const getRelatedTaskIds = () => {
-    const relatedIds = new Set<string>();
-    
-    return relatedIds;
-  };
-
-  const relatedTaskIds = getRelatedTaskIds();
-  const isHighlighted = hoveredTaskId ? relatedTaskIds.has(hoveredTaskId) || hoveredTaskId === task.id : false;
+  const isHighlighted = hoveredTaskId === task.id;
+  const isSelected = selectedTasks?.has(task.id) || false;
 
   const handleMouseEnter = () => {
     onTaskHover?.(task.id);
@@ -81,6 +77,13 @@ export const DraggableTaskCard = ({
 
   const handleMouseLeave = () => {
     onTaskHover?.(null);
+  };
+
+  const handleTaskClick = (e: React.MouseEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      e.stopPropagation();
+      onTaskSelect?.(task.id);
+    }
   };
 
   
@@ -93,6 +96,11 @@ export const DraggableTaskCard = ({
   // Subtle highlight effect for related tasks - applied to the card, not parent
   const highlightGlow = isHighlighted 
     ? 'border-cyan-400/50 shadow-[0_0_8px_rgba(34,211,238,0.2)]' 
+    : '';
+    
+  // Selection styling
+  const selectionGlow = isSelected
+    ? 'border-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.4)] bg-blue-50/30 dark:bg-blue-900/20'
     : '';
     
   // Simplified hover effect - just a glowing border
@@ -114,12 +122,13 @@ export const DraggableTaskCard = ({
       className={`flip-card w-full min-h-[140px] cursor-move relative ${cardScale} ${cardOpacity} ${isDragging ? 'opacity-50 scale-90' : ''} ${transitionStyles} group`}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
+      onClick={handleTaskClick}
     >
       <div 
         className={`relative w-full min-h-[140px] transform-style-preserve-3d ${isFlipped ? 'rotate-y-180' : ''}`}
       >
         {/* Front side with subtle hover effect */}
-        <div className={`absolute w-full h-full backface-hidden ${cardBaseStyles} ${transitionStyles} ${hoverEffectClasses} ${highlightGlow} rounded-lg`}>
+        <div className={`absolute w-full h-full backface-hidden ${cardBaseStyles} ${transitionStyles} ${hoverEffectClasses} ${highlightGlow} ${selectionGlow} rounded-lg`}>
           {/* Priority indicator */}
           <div className={`absolute left-0 top-0 bottom-0 w-[3px] ${getOrderColor(task.task_order)} ${getOrderGlow(task.task_order)} rounded-l-lg opacity-80 group-hover:w-[4px] group-hover:opacity-100 transition-all duration-300`}></div>
           
@@ -198,16 +207,25 @@ export const DraggableTaskCard = ({
               </div>
               <button 
                 type="button"
-                onClick={(e) => {
+                onClick={async (e) => {
                   e.stopPropagation();
-                  navigator.clipboard.writeText(task.id);
-                  // Optional: Add a small toast or visual feedback here
-                  const button = e.currentTarget;
-                  const originalHTML = button.innerHTML;
-                  button.innerHTML = '<span class="text-green-500">Copied!</span>';
-                  setTimeout(() => {
-                    button.innerHTML = originalHTML;
-                  }, 2000);
+                  try {
+                    if (navigator.clipboard?.writeText) {
+                      await navigator.clipboard.writeText(task.id);
+                    } else {
+                      const ta = document.createElement('textarea');
+                      ta.value = task.id;
+                      ta.style.position = 'fixed';
+                      ta.style.opacity = '0';
+                      document.body.appendChild(ta);
+                      ta.select();
+                      document.execCommand('copy');
+                      document.body.removeChild(ta);
+                    }
+                    showToast('Task ID copied to clipboard', 'success');
+                  } catch (error) {
+                    showToast('Failed to copy Task ID', 'error');
+                  }
                 }}
                 className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors"
                 title="Copy Task ID to clipboard"
@@ -222,7 +240,7 @@ export const DraggableTaskCard = ({
         
         {/* Back side */}
         {/* Back side with same hover effect */}
-        <div className={`absolute w-full h-full backface-hidden ${cardBaseStyles} ${transitionStyles} ${hoverEffectClasses} ${highlightGlow} rounded-lg rotate-y-180 ${isDragging ? 'opacity-0' : 'opacity-100'}`}>
+        <div className={`absolute w-full h-full backface-hidden ${cardBaseStyles} ${transitionStyles} ${hoverEffectClasses} ${highlightGlow} ${selectionGlow} rounded-lg rotate-y-180 ${isDragging ? 'opacity-0' : 'opacity-100'}`}>
           {/* Priority indicator */}
           <div className={`absolute left-0 top-0 bottom-0 w-[3px] ${getOrderColor(task.task_order)} ${getOrderGlow(task.task_order)} rounded-l-lg opacity-80 group-hover:w-[4px] group-hover:opacity-100 transition-all duration-300`}></div>
           

@@ -6,7 +6,7 @@ It uses a modular approach with separate API modules for different functionality
 
 Modules:
 - settings_api: Settings and credentials management
-- mcp_api: MCP server management and WebSocket streaming
+- mcp_api: MCP server management and tool execution
 - knowledge_api: Knowledge base, crawling, and RAG operations
 - projects_api: Project and task management with streaming
 """
@@ -21,18 +21,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api_routes.agent_chat_api import router as agent_chat_router
 from .api_routes.bug_report_api import router as bug_report_router
-from .api_routes.coverage_api import router as coverage_router
 from .api_routes.internal_api import router as internal_router
 from .api_routes.knowledge_api import router as knowledge_router
 from .api_routes.mcp_api import router as mcp_router
+from .api_routes.progress_api import router as progress_router
 from .api_routes.projects_api import router as projects_router
-
-# Import Socket.IO handlers to ensure they're registered
-from .api_routes import socketio_handlers  # This registers all Socket.IO event handlers
 
 # Import modular API routers
 from .api_routes.settings_api import router as settings_router
-from .api_routes.tests_api import router as tests_router
 
 # Import Logfire configuration
 from .config.logfire_config import api_logger, setup_logfire
@@ -41,9 +37,6 @@ from .services.crawler_manager import cleanup_crawler, initialize_crawler
 
 # Import utilities and core classes
 from .services.credential_service import initialize_credentials
-
-# Import Socket.IO integration
-from .socketio_app import create_socketio_app
 
 # Import missing dependencies that the modular APIs need
 try:
@@ -103,12 +96,7 @@ async def lifespan(app: FastAPI):
         # Make crawling context available to modules
         # Crawler is now managed by CrawlerManager
 
-        # Initialize Socket.IO services
-        try:
-            # Import API modules to register their Socket.IO handlers
-            api_logger.info("✅ Socket.IO handlers imported from API modules")
-        except Exception as e:
-            api_logger.warning(f"Could not initialize Socket.IO services: {e}")
+        api_logger.info("✅ Using polling for real-time updates")
 
         # Initialize prompt service
         try:
@@ -180,7 +168,7 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for testing WebSocket issue
+    allow_origins=["*"],  # Allow all origins for development
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -210,10 +198,9 @@ app.include_router(mcp_router)
 # app.include_router(mcp_client_router)  # Removed - not part of new architecture
 app.include_router(knowledge_router)
 app.include_router(projects_router)
-app.include_router(tests_router)
+app.include_router(progress_router)
 app.include_router(agent_chat_router)
 app.include_router(internal_router)
-app.include_router(coverage_router)
 app.include_router(bug_report_router)
 
 
@@ -251,7 +238,7 @@ async def health_check():
     if not schema_status["valid"]:
         return {
             "status": "migration_required",
-            "service": "archon-backend", 
+            "service": "archon-backend",
             "timestamp": datetime.now().isoformat(),
             "ready": False,
             "migration_required": True,
@@ -283,49 +270,49 @@ _schema_check_cache = {"valid": None, "checked_at": 0}
 async def _check_database_schema():
     """Check if required database schema exists - only for existing users who need migration."""
     import time
-    
+
     # If we've already confirmed schema is valid, don't check again
     if _schema_check_cache["valid"] is True:
         return {"valid": True, "message": "Schema is up to date (cached)"}
-    
+
     # If we recently failed, don't spam the database (wait at least 30 seconds)
     current_time = time.time()
-    if (_schema_check_cache["valid"] is False and 
+    if (_schema_check_cache["valid"] is False and
         current_time - _schema_check_cache["checked_at"] < 30):
         return _schema_check_cache["result"]
-    
+
     try:
         from .services.client_manager import get_supabase_client
-        
+
         client = get_supabase_client()
-        
+
         # Try to query the new columns directly - if they exist, schema is up to date
         test_query = client.table('archon_sources').select('source_url, source_display_name').limit(1).execute()
-        
+
         # Cache successful result permanently
         _schema_check_cache["valid"] = True
         _schema_check_cache["checked_at"] = current_time
-        
+
         return {"valid": True, "message": "Schema is up to date"}
-        
+
     except Exception as e:
         error_msg = str(e).lower()
-        
+
         # Log schema check error for debugging
         api_logger.debug(f"Schema check error: {type(e).__name__}: {str(e)}")
-        
+
         # Check for specific error types based on PostgreSQL error codes and messages
-        
+
         # Check for missing columns first (more specific than table check)
         missing_source_url = 'source_url' in error_msg and ('column' in error_msg or 'does not exist' in error_msg)
         missing_source_display = 'source_display_name' in error_msg and ('column' in error_msg or 'does not exist' in error_msg)
-        
+
         # Also check for PostgreSQL error code 42703 (undefined column)
         is_column_error = '42703' in error_msg or 'column' in error_msg
-        
+
         if (missing_source_url or missing_source_display) and is_column_error:
             result = {
-                "valid": False, 
+                "valid": False,
                 "message": "Database schema outdated - missing required columns from recent updates"
             }
             # Cache failed result with timestamp
@@ -333,28 +320,20 @@ async def _check_database_schema():
             _schema_check_cache["checked_at"] = current_time
             _schema_check_cache["result"] = result
             return result
-        
+
         # Check for table doesn't exist (less specific, only if column check didn't match)
         # Look for relation/table errors specifically
         if ('relation' in error_msg and 'does not exist' in error_msg) or ('table' in error_msg and 'does not exist' in error_msg):
             # Table doesn't exist - not a migration issue, it's a setup issue
             return {"valid": True, "message": "Table doesn't exist - handled by startup error"}
-        
+
         # Other errors don't necessarily mean migration needed
         result = {"valid": True, "message": f"Schema check inconclusive: {str(e)}"}
         # Don't cache inconclusive results - allow retry
         return result
 
 
-# Export for Socket.IO
-
-
-# Create Socket.IO app wrapper
-# This wraps the FastAPI app with Socket.IO functionality
-socket_app = create_socketio_app(app)
-
-# Export the socket_app for uvicorn to use
-# The socket_app still handles all FastAPI routes, but also adds Socket.IO support
+# Export the app directly for uvicorn to use
 
 
 def main():
@@ -371,7 +350,7 @@ def main():
         )
 
     uvicorn.run(
-        "src.server.main:socket_app",
+        "src.server.main:app",
         host="0.0.0.0",
         port=int(server_port),
         reload=True,

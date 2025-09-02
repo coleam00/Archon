@@ -8,12 +8,11 @@ No complex PRP examples - just straightforward project management.
 import asyncio
 import json
 import logging
-from typing import Any, Optional
 from urllib.parse import urljoin
 
 import httpx
-from mcp.server.fastmcp import Context, FastMCP
 
+from mcp.server.fastmcp import Context, FastMCP
 from src.mcp_server.utils.error_handling import MCPErrorFormatter
 from src.mcp_server.utils.timeout_config import (
     get_default_timeout,
@@ -34,7 +33,7 @@ def register_project_tools(mcp: FastMCP):
         ctx: Context,
         title: str,
         description: str = "",
-        github_repo: Optional[str] = None,
+        github_repo: str | None = None,
     ) -> str:
         """
         Create a new project with automatic AI assistance.
@@ -104,7 +103,9 @@ def register_project_tools(mcp: FastMCP):
                                     )
                                     list_response.raise_for_status()  # Raise on HTTP errors
 
-                                    projects = list_response.json()
+                                    response_data = list_response.json()
+                                    # Extract projects array from response
+                                    projects = response_data.get("projects", [])
                                     # Find project with matching title created recently
                                     for proj in projects:
                                         if proj.get("title") == title:
@@ -182,11 +183,12 @@ def register_project_tools(mcp: FastMCP):
                 )
 
                 if response.status_code == 200:
-                    projects = response.json()
+                    response_data = response.json()
+                    # Response already includes projects array and count
                     return json.dumps({
                         "success": True,
-                        "projects": projects,
-                        "count": len(projects),
+                        "projects": response_data,
+                        "count": response_data.get("count", 0),
                     })
                 else:
                     return MCPErrorFormatter.from_http_error(response, "list projects")
@@ -283,9 +285,9 @@ def register_project_tools(mcp: FastMCP):
     async def update_project(
         ctx: Context,
         project_id: str,
-        title: Optional[str] = None,
-        description: Optional[str] = None,
-        github_repo: Optional[str] = None,
+        title: str | None = None,
+        description: str | None = None,
+        github_repo: str | None = None,
     ) -> str:
         """
         Update a project's basic information.

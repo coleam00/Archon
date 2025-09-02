@@ -1,12 +1,11 @@
 import React, { useRef, useState, useCallback } from 'react';
-import { useDrag, useDrop } from 'react-dnd';
+import { useDrop } from 'react-dnd';
 import { useToast } from '../../contexts/ToastContext';
-import { DeleteConfirmModal } from '../../pages/ProjectPage';
-import { CheckSquare, Square, Trash2, ArrowRight } from 'lucide-react';
-import { projectService } from '../../services/projectService';
+import { DeleteConfirmModal } from '../common/DeleteConfirmModal';
+import { Trash2 } from 'lucide-react';
 import { Task } from './TaskTableView'; // Import Task interface
 import { ItemTypes, getAssigneeIcon, getAssigneeGlow, getOrderColor, getOrderGlow } from '../../lib/task-utils';
-import { DraggableTaskCard, DraggableTaskCardProps } from './DraggableTaskCard'; // Import the new component and its props
+import { DraggableTaskCard } from './DraggableTaskCard';
 
 interface TaskBoardViewProps {
   tasks: Task[];
@@ -23,7 +22,6 @@ interface ColumnDropZoneProps {
   tasks: Task[];
   onTaskMove: (taskId: string, newStatus: Task['status']) => void;
   onTaskView: (task: Task) => void;
-  onTaskComplete: (taskId: string) => void;
   onTaskDelete: (task: Task) => void;
   onTaskReorder: (taskId: string, targetIndex: number, status: Task['status']) => void;
   allTasks: Task[];
@@ -39,7 +37,6 @@ const ColumnDropZone = ({
   tasks,
   onTaskMove,
   onTaskView,
-  onTaskComplete,
   onTaskDelete,
   onTaskReorder,
   allTasks,
@@ -52,7 +49,7 @@ const ColumnDropZone = ({
   
   const [{ isOver }, drop] = useDrop({
     accept: ItemTypes.TASK,
-    drop: (item: { id: string; status: string }) => {
+    drop: (item: { id: string; status: Task['status'] }) => {
       if (item.status !== status) {
         // Moving to different status - use length of current column as new order
         onTaskMove(item.id, status);
@@ -68,13 +65,13 @@ const ColumnDropZone = ({
   // Get column header color based on status
   const getColumnColor = () => {
     switch (status) {
-      case 'backlog':
+      case 'todo':
         return 'text-gray-600 dark:text-gray-400';
-      case 'in-progress':
+      case 'doing':
         return 'text-blue-600 dark:text-blue-400';
       case 'review':
         return 'text-purple-600 dark:text-purple-400';
-      case 'complete':
+      case 'done':
         return 'text-green-600 dark:text-green-400';
     }
   };
@@ -82,13 +79,13 @@ const ColumnDropZone = ({
   // Get column header glow based on status
   const getColumnGlow = () => {
     switch (status) {
-      case 'backlog':
+      case 'todo':
         return 'bg-gray-500/30';
-      case 'in-progress':
+      case 'doing':
         return 'bg-blue-500/30 shadow-[0_0_10px_2px_rgba(59,130,246,0.2)]';
       case 'review':
         return 'bg-purple-500/30 shadow-[0_0_10px_2px_rgba(168,85,247,0.2)]';
-      case 'complete':
+      case 'done':
         return 'bg-green-500/30 shadow-[0_0_10px_2px_rgba(16,185,129,0.2)]';
     }
   };
@@ -117,10 +114,10 @@ const ColumnDropZone = ({
             onComplete={() => onTaskComplete(task.id)}
             onDelete={onTaskDelete}
             onTaskReorder={onTaskReorder}
-            tasksInStatus={organizedTasks}
-            allTasks={allTasks}
             hoveredTaskId={hoveredTaskId}
             onTaskHover={onTaskHover}
+            selectedTasks={selectedTasks}
+            onTaskSelect={onTaskSelect}
           />
         ))}
       </div>
@@ -173,20 +170,18 @@ export const TaskBoardView = ({
     const tasksToDelete = tasks.filter(task => selectedTasks.has(task.id));
     
     try {
-      // Delete all selected tasks
-      await Promise.all(
-        tasksToDelete.map(task => projectService.deleteTask(task.id))
+      const results = await Promise.allSettled(
+        tasksToDelete.map(task => Promise.resolve(onTaskDelete(task)))
       );
-      
-      // Clear selection
+      const rejected = results.filter(r => r.status === 'rejected');
+      if (rejected.length) {
+        console.error('Some deletions failed:', rejected.length);
+      }
       clearSelection();
-      
-      showToast(`${tasksToDelete.length} tasks deleted successfully`, 'success');
     } catch (error) {
       console.error('Failed to delete tasks:', error);
-      showToast('Failed to delete some tasks', 'error');
     }
-  }, [selectedTasks, tasks, clearSelection, showToast]);
+  }, [selectedTasks, tasks, onTaskDelete, clearSelection]);
 
   // Mass status change handler
   const handleMassStatusChange = useCallback(async (newStatus: Task['status']) => {
@@ -195,35 +190,17 @@ export const TaskBoardView = ({
     const tasksToUpdate = tasks.filter(task => selectedTasks.has(task.id));
     
     try {
-      // Update all selected tasks
-      await Promise.all(
-        tasksToUpdate.map(task => 
-          projectService.updateTask(task.id, { 
-            status: mapUIStatusToDBStatus(newStatus) 
-          })
-        )
-      );
-      
-      // Clear selection
+      // Call onTaskMove so optimistic UI and counts refresh immediately; parent persists
+      tasksToUpdate.forEach(task => onTaskMove(task.id, newStatus));
       clearSelection();
-      
-      showToast(`${tasksToUpdate.length} tasks moved to ${newStatus}`, 'success');
+      showToast(`Moved ${tasksToUpdate.length} task${tasksToUpdate.length !== 1 ? 's' : ''} to ${newStatus}`, 'success');
     } catch (error) {
       console.error('Failed to update tasks:', error);
-      showToast('Failed to update some tasks', 'error');
+      showToast('Failed to move some tasks', 'error');
     }
-  }, [selectedTasks, tasks, clearSelection, showToast]);
+  }, [selectedTasks, tasks, onTaskMove, clearSelection, showToast]);
 
-  // Helper function to map UI status to DB status (reuse from TasksTab)
-  const mapUIStatusToDBStatus = (uiStatus: Task['status']) => {
-    switch (uiStatus) {
-      case 'backlog': return 'todo';
-      case 'in-progress': return 'doing';
-      case 'review': return 'review';
-      case 'complete': return 'done';
-      default: return 'todo';
-    }
-  };
+  // No status mapping needed - using database values directly
 
   // Handle task deletion (opens confirmation modal)
   const handleDeleteTask = useCallback((task: Task) => {
@@ -236,18 +213,15 @@ export const TaskBoardView = ({
     if (!taskToDelete) return;
 
     try {
-      await projectService.deleteTask(taskToDelete.id);
-      // Notify parent to update tasks
-      onTaskDelete(taskToDelete);
-      showToast(`Task "${taskToDelete.title}" deleted successfully`, 'success');
+      // Delegate deletion to parent to avoid duplicate API calls
+      await onTaskDelete(taskToDelete);
     } catch (error) {
       console.error('Failed to delete task:', error);
-      showToast(error instanceof Error ? error.message : 'Failed to delete task', 'error');
     } finally {
       setShowDeleteConfirm(false);
       setTaskToDelete(null);
     }
-  }, [taskToDelete, onTaskDelete, showToast, setShowDeleteConfirm, setTaskToDelete, projectService]);
+  }, [taskToDelete, onTaskDelete, setShowDeleteConfirm, setTaskToDelete]);
 
   // Cancel deletion
   const cancelDeleteTask = useCallback(() => {
@@ -262,8 +236,12 @@ export const TaskBoardView = ({
       .sort((a, b) => a.task_order - b.task_order);
   };
 
+  // Note: With optimistic updates, we no longer show loading overlays for successful moves
+  // Tasks update instantly and only rollback on actual failures
+
   return (
-    <div className="flex flex-col h-full min-h-[70vh]">
+    <div className="flex flex-col h-full min-h-[70vh] relative">
+
       {/* Multi-select toolbar */}
       {selectedTasks.size > 0 && (
         <div className="flex items-center justify-between p-3 bg-blue-50 dark:bg-blue-900/20 border-b border-blue-200 dark:border-blue-800">
@@ -286,10 +264,10 @@ export const TaskBoardView = ({
               defaultValue=""
             >
               <option value="" disabled>Move to...</option>
-              <option value="backlog">Backlog</option>
-              <option value="in-progress">In Progress</option>
+              <option value="todo">Todo</option>
+              <option value="doing">Doing</option>
               <option value="review">Review</option>
-              <option value="complete">Complete</option>
+              <option value="done">Done</option>
             </select>
             
             {/* Mass delete button */}
@@ -314,15 +292,14 @@ export const TaskBoardView = ({
 
       {/* Board Columns */}
       <div className="grid grid-cols-4 gap-0 flex-1">
-        {/* Backlog Column */}
+        {/* Todo Column */}
         <ColumnDropZone
-          status="backlog"
-          title="Backlog"
-          tasks={getTasksByStatus('backlog')}
+          status="todo"
+          title="Todo"
+          tasks={getTasksByStatus('todo')}
           onTaskMove={onTaskMove}
           onTaskView={onTaskView}
-          onTaskComplete={onTaskComplete}
-          onTaskDelete={onTaskDelete}
+          onTaskDelete={handleDeleteTask}
           onTaskReorder={onTaskReorder}
           allTasks={tasks}
           hoveredTaskId={hoveredTaskId}
@@ -331,15 +308,14 @@ export const TaskBoardView = ({
           onTaskSelect={toggleTaskSelection}
         />
         
-        {/* In Progress Column */}
+        {/* Doing Column */}
         <ColumnDropZone
-          status="in-progress"
-          title="In Process"
-          tasks={getTasksByStatus('in-progress')}
+          status="doing"
+          title="Doing"
+          tasks={getTasksByStatus('doing')}
           onTaskMove={onTaskMove}
           onTaskView={onTaskView}
-          onTaskComplete={onTaskComplete}
-          onTaskDelete={onTaskDelete}
+          onTaskDelete={handleDeleteTask}
           onTaskReorder={onTaskReorder}
           allTasks={tasks}
           hoveredTaskId={hoveredTaskId}
@@ -355,8 +331,7 @@ export const TaskBoardView = ({
           tasks={getTasksByStatus('review')}
           onTaskMove={onTaskMove}
           onTaskView={onTaskView}
-          onTaskComplete={onTaskComplete}
-          onTaskDelete={onTaskDelete}
+          onTaskDelete={handleDeleteTask}
           onTaskReorder={onTaskReorder}
           allTasks={tasks}
           hoveredTaskId={hoveredTaskId}
@@ -365,15 +340,14 @@ export const TaskBoardView = ({
           onTaskSelect={toggleTaskSelection}
         />
         
-        {/* Complete Column */}
+        {/* Done Column */}
         <ColumnDropZone
-          status="complete"
-          title="Complete"
-          tasks={getTasksByStatus('complete')}
+          status="done"
+          title="Done"
+          tasks={getTasksByStatus('done')}
           onTaskMove={onTaskMove}
           onTaskView={onTaskView}
-          onTaskComplete={onTaskComplete}
-          onTaskDelete={onTaskDelete}
+          onTaskDelete={handleDeleteTask}
           onTaskReorder={onTaskReorder}
           allTasks={tasks}
           hoveredTaskId={hoveredTaskId}

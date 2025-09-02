@@ -5,35 +5,18 @@ Handles source metadata, summaries, and management.
 Consolidates both utility functions and class-based service.
 """
 
-import os
 from typing import Any
 
 from supabase import Client
 
 from ..config.logfire_config import get_logger, search_logger
 from .client_manager import get_supabase_client
+from .llm_provider_service import get_llm_client
 
 logger = get_logger(__name__)
 
 
-def _get_model_choice() -> str:
-    """Get MODEL_CHOICE with direct fallback."""
-    try:
-        # Direct cache/env fallback
-        from .credential_service import credential_service
-
-        if credential_service._cache_initialized and "MODEL_CHOICE" in credential_service._cache:
-            model = credential_service._cache["MODEL_CHOICE"]
-        else:
-            model = os.getenv("MODEL_CHOICE", "gpt-4.1-nano")
-        logger.debug(f"Using model choice: {model}")
-        return model
-    except Exception as e:
-        logger.warning(f"Error getting model choice: {e}, using default")
-        return "gpt-4.1-nano"
-
-
-def extract_source_summary(
+async def extract_source_summary(
     source_id: str, content: str, max_length: int = 500, provider: str = None
 ) -> str:
     """
@@ -56,10 +39,6 @@ def extract_source_summary(
     if not content or len(content.strip()) == 0:
         return default_summary
 
-    # Get the model choice from credential service (RAG setting)
-    model_choice = _get_model_choice()
-    search_logger.info(f"Generating summary for {source_id} using model: {model_choice}")
-
     # Limit content length to avoid token limits
     truncated_content = content[:25000] if len(content) > 25000 else content
 
@@ -72,66 +51,43 @@ The above content is from the documentation for '{source_id}'. Please provide a 
 """
 
     try:
-        try:
-            import os
+        async with get_llm_client(provider=provider) as client:
+            # Get model choice from credential service
+            from .credential_service import credential_service
+            rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+            model_choice = rag_settings.get("MODEL_CHOICE", "gpt-4.1-nano")
 
-            import openai
+            search_logger.info(f"Generating summary for {source_id} using model: {model_choice}")
 
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                # Try to get from credential service with direct fallback
-                from .credential_service import credential_service
+            # Call the LLM API to generate the summary
+            response = await client.chat.completions.create(
+                model=model_choice,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a helpful assistant that provides concise library/tool/framework summaries.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+            )
 
-                if (
-                    credential_service._cache_initialized
-                    and "OPENAI_API_KEY" in credential_service._cache
-                ):
-                    cached_key = credential_service._cache["OPENAI_API_KEY"]
-                    if isinstance(cached_key, dict) and cached_key.get("is_encrypted"):
-                        api_key = credential_service._decrypt_value(cached_key["encrypted_value"])
-                    else:
-                        api_key = cached_key
-                else:
-                    api_key = os.getenv("OPENAI_API_KEY", "")
+            # Extract the generated summary with proper error handling
+            if not response or not response.choices or len(response.choices) == 0:
+                search_logger.error(f"Empty or invalid response from LLM for {source_id}")
+                return default_summary
 
-            if not api_key:
-                raise ValueError("No OpenAI API key available")
+            message_content = response.choices[0].message.content
+            if message_content is None:
+                search_logger.error(f"LLM returned None content for {source_id}")
+                return default_summary
 
-            client = openai.OpenAI(api_key=api_key)
-            search_logger.info("Successfully created LLM client fallback for summary generation")
-        except Exception as e:
-            search_logger.error(f"Failed to create LLM client fallback: {e}")
-            return default_summary
+            summary = message_content.strip()
 
-        # Call the OpenAI API to generate the summary
-        response = client.chat.completions.create(
-            model=model_choice,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant that provides concise library/tool/framework summaries.",
-                },
-                {"role": "user", "content": prompt},
-            ],
-        )
+            # Ensure the summary is not too long
+            if len(summary) > max_length:
+                summary = summary[:max_length] + "..."
 
-        # Extract the generated summary with proper error handling
-        if not response or not response.choices or len(response.choices) == 0:
-            search_logger.error(f"Empty or invalid response from LLM for {source_id}")
-            return default_summary
-
-        message_content = response.choices[0].message.content
-        if message_content is None:
-            search_logger.error(f"LLM returned None content for {source_id}")
-            return default_summary
-
-        summary = message_content.strip()
-
-        # Ensure the summary is not too long
-        if len(summary) > max_length:
-            summary = summary[:max_length] + "..."
-
-        return summary
+            return summary
 
     except Exception as e:
         search_logger.error(
@@ -140,12 +96,13 @@ The above content is from the documentation for '{source_id}'. Please provide a 
         return default_summary
 
 
-def generate_source_title_and_metadata(
+async def generate_source_title_and_metadata(
     source_id: str,
     content: str,
     knowledge_type: str = "technical",
     tags: list[str] | None = None,
     provider: str = None,
+    original_url: str | None = None,
     source_display_name: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """
@@ -156,6 +113,7 @@ def generate_source_title_and_metadata(
         content: Sample content from the source
         knowledge_type: Type of knowledge (default: "technical")
         tags: Optional list of tags
+        provider: Optional provider override
 
     Returns:
         Tuple of (title, metadata)
@@ -166,71 +124,73 @@ def generate_source_title_and_metadata(
     # Try to generate a better title from content
     if content and len(content.strip()) > 100:
         try:
-            try:
-                import os
+            async with get_llm_client(provider=provider) as client:
+                # Get model choice from credential service
+                from .credential_service import credential_service
+                rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+                model_choice = rag_settings.get("MODEL_CHOICE", "gpt-4.1-nano")
 
-                import openai
+                # Limit content for prompt
+                sample_content = content[:3000] if len(content) > 3000 else content
 
-                api_key = os.getenv("OPENAI_API_KEY")
-                if not api_key:
-                    # Try to get from credential service with direct fallback
-                    from .credential_service import credential_service
-
-                    if (
-                        credential_service._cache_initialized
-                        and "OPENAI_API_KEY" in credential_service._cache
-                    ):
-                        cached_key = credential_service._cache["OPENAI_API_KEY"]
-                        if isinstance(cached_key, dict) and cached_key.get("is_encrypted"):
-                            api_key = credential_service._decrypt_value(
-                                cached_key["encrypted_value"]
-                            )
-                        else:
-                            api_key = cached_key
+                # Determine source type from URL patterns
+                source_type_info = ""
+                if original_url:
+                    if "llms.txt" in original_url:
+                        source_type_info = " (detected from llms.txt file)"
+                    elif "sitemap" in original_url:
+                        source_type_info = " (detected from sitemap)"
+                    elif any(doc_indicator in original_url for doc_indicator in ["docs", "documentation", "api"]):
+                        source_type_info = " (detected from documentation site)"
                     else:
-                        api_key = os.getenv("OPENAI_API_KEY", "")
+                        source_type_info = " (detected from website)"
 
-                if not api_key:
-                    raise ValueError("No OpenAI API key available")
+                # Use display name if available for better context
+                source_context = source_display_name if source_display_name else source_id
 
-                client = openai.OpenAI(api_key=api_key)
-            except Exception as e:
-                search_logger.error(
-                    f"Failed to create LLM client fallback for title generation: {e}"
-                )
-                # Don't proceed if client creation fails
-                raise
+                prompt = f"""You are creating a title for crawled content that identifies the SERVICE NAME and SOURCE TYPE.
 
-            model_choice = _get_model_choice()
+Source ID: {source_id}
+Original URL: {original_url or 'Not provided'}
+Display Name: {source_context}
+{source_type_info}
 
-            # Limit content for prompt
-            sample_content = content[:3000] if len(content) > 3000 else content
-            
-            # Use display name if available for better context
-            source_context = source_display_name if source_display_name else source_id
-
-            prompt = f"""Based on this content from {source_context}, generate a concise, descriptive title (3-6 words) that captures what this source is about:
-
+Content sample:
 {sample_content}
 
-Provide only the title, nothing else."""
+Generate a title in this format: "[Service Name] [Source Type]"
 
-            response = client.chat.completions.create(
-                model=model_choice,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a helpful assistant that generates concise titles.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-            )
+Requirements:
+- Identify the service/platform name from the URL (e.g., "Anthropic", "OpenAI", "Supabase", "Mem0")
+- Identify the source type: Documentation, API Reference, llms.txt, Guide, etc.
+- Keep it concise (2-4 words total)
+- Use proper capitalization
 
-            generated_title = response.choices[0].message.content.strip()
-            # Clean up the title
-            generated_title = generated_title.strip("\"'")
-            if len(generated_title) < 50:  # Sanity check
-                title = generated_title
+Examples:
+- "Anthropic Documentation" 
+- "OpenAI API Reference"
+- "Mem0 llms.txt"
+- "Supabase Docs"
+- "GitHub Guide"
+
+Generate only the title, nothing else."""
+
+                response = await client.chat.completions.create(
+                    model=model_choice,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are a helpful assistant that generates concise titles.",
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                )
+
+                generated_title = response.choices[0].message.content.strip()
+                # Clean up the title
+                generated_title = generated_title.strip("\"'")
+                if len(generated_title) < 50:  # Sanity check
+                    title = generated_title
 
         except Exception as e:
             search_logger.error(f"Error generating title for {source_id}: {e}")
@@ -238,8 +198,8 @@ Provide only the title, nothing else."""
     # Build metadata - source_type will be determined by caller based on actual URL
     # Default to "url" but this should be overridden by the caller
     metadata = {
-        "knowledge_type": knowledge_type, 
-        "tags": tags or [], 
+        "knowledge_type": knowledge_type,
+        "tags": tags or [],
         "source_type": "url",  # Default, should be overridden by caller based on actual URL
         "auto_generated": True
     }
@@ -247,7 +207,7 @@ Provide only the title, nothing else."""
     return title, metadata
 
 
-def update_source_info(
+async def update_source_info(
     client: Client,
     source_id: str,
     summary: str,
@@ -293,7 +253,7 @@ def update_source_info(
                 source_type = "file"
             else:
                 source_type = "url"
-            
+
             metadata = {
                 "knowledge_type": knowledge_type,
                 "tags": tags or [],
@@ -312,13 +272,13 @@ def update_source_info(
                 "metadata": metadata,
                 "updated_at": "now()",
             }
-            
+
             # Add new fields if provided
             if source_url:
                 update_data["source_url"] = source_url
             if source_display_name:
                 update_data["source_display_name"] = source_display_name
-            
+
             result = (
                 client.table("archon_sources")
                 .update(update_data)
@@ -334,7 +294,7 @@ def update_source_info(
             if source_display_name:
                 # Use the display name directly as the title (truncated to prevent DB issues)
                 title = source_display_name[:100].strip()
-                
+
                 # Determine source_type based on source_url or original_url
                 if source_url and source_url.startswith("file://"):
                     source_type = "file"
@@ -342,7 +302,7 @@ def update_source_info(
                     source_type = "file"
                 else:
                     source_type = "url"
-                
+
                 metadata = {
                     "knowledge_type": knowledge_type,
                     "tags": tags or [],
@@ -351,10 +311,10 @@ def update_source_info(
                 }
             else:
                 # Fallback to AI generation only if no display name
-                title, metadata = generate_source_title_and_metadata(
-                    source_id, content, knowledge_type, tags, None, source_display_name
+                title, metadata = await generate_source_title_and_metadata(
+                    source_id, content, knowledge_type, tags, original_url, source_display_name
                 )
-                
+
                 # Override the source_type from AI with actual URL-based determination
                 if source_url and source_url.startswith("file://"):
                     metadata["source_type"] = "file"
@@ -377,13 +337,13 @@ def update_source_info(
                 "total_word_count": word_count,
                 "metadata": metadata,
             }
-            
+
             # Add new fields if provided
             if source_url:
                 upsert_data["source_url"] = source_url
             if source_display_name:
                 upsert_data["source_display_name"] = source_display_name
-            
+
             client.table("archon_sources").upsert(upsert_data).execute()
             search_logger.info(f"Created/updated source {source_id} with title: {title}")
 
@@ -568,7 +528,7 @@ class SourceManagementService:
             logger.error(f"Error updating source metadata: {e}")
             return False, {"error": f"Error updating source metadata: {str(e)}"}
 
-    def create_source_info(
+    async def create_source_info(
         self,
         source_id: str,
         content_sample: str,
@@ -596,10 +556,10 @@ class SourceManagementService:
                 tags = []
 
             # Generate source summary using the utility function
-            source_summary = extract_source_summary(source_id, content_sample)
+            source_summary = await extract_source_summary(source_id, content_sample)
 
             # Create the source info using the utility function
-            update_source_info(
+            await update_source_info(
                 self.supabase_client,
                 source_id,
                 source_summary,

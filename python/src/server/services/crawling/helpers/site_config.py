@@ -12,40 +12,40 @@ logger = get_logger(__name__)
 
 class SiteConfig:
     """Helper class for site-specific configurations."""
-    
+
     # Common code block selectors for various editors and documentation frameworks
     CODE_BLOCK_SELECTORS = [
         # Milkdown
         ".milkdown-code-block pre",
-        
+
         # Monaco Editor
         ".monaco-editor .view-lines",
-        
+
         # CodeMirror
         ".cm-editor .cm-content",
         ".cm-line",
-        
+
         # Prism.js (used by Docusaurus, Docsify, Gatsby)
         "pre[class*='language-']",
         "code[class*='language-']",
         ".prism-code",
-        
+
         # highlight.js
         "pre code.hljs",
         ".hljs",
-        
+
         # Shiki (used by VitePress, Nextra)
         ".shiki",
         "div[class*='language-'] pre",
         ".astro-code",
-        
+
         # Generic patterns
         "pre code",
         ".code-block",
         ".codeblock",
         ".highlight pre"
     ]
-    
+
     @staticmethod
     def is_documentation_site(url: str) -> bool:
         """
@@ -69,10 +69,10 @@ class SiteConfig:
             'docsify',
             'mkdocs'
         ]
-        
+
         url_lower = url.lower()
         return any(pattern in url_lower for pattern in doc_patterns)
-    
+
     @staticmethod
     def get_markdown_generator():
         """

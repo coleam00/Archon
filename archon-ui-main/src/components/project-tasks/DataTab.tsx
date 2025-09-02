@@ -3,7 +3,6 @@ import '@xyflow/react/dist/style.css';
 import { ReactFlow, Node, Edge, Background, Controls, MarkerType, NodeChange, applyNodeChanges, EdgeChange, applyEdgeChanges, ConnectionLineType, addEdge, Connection, Handle, Position } from '@xyflow/react';
 import { Database, Info, Calendar, TrendingUp, Edit, Plus, X, Save, Trash2 } from 'lucide-react';
 import { projectService } from '../../services/projectService';
-import { taskUpdateSocketIO } from '../../services/socketIOService';
 import { useToast } from '../../contexts/ToastContext';
 
 // Custom node types - will be defined inside the component to access state
@@ -117,7 +116,6 @@ export const DataTab = ({ project }: DataTabProps) => {
 
   const { showToast } = useToast();
 
-  // Note: Removed aggressive WebSocket cleanup to prevent interference with normal connection lifecycle
 
   // Helper function to normalize nodes to ensure required properties
   const normalizeNode = (node: any): Node => {

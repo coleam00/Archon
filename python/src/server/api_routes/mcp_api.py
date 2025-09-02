@@ -4,7 +4,6 @@ MCP API endpoints for Archon
 Handles:
 - MCP server lifecycle (start/stop/status)
 - MCP server configuration management
-- WebSocket log streaming
 - Tool discovery and testing
 """
 
@@ -16,7 +15,7 @@ from typing import Any
 
 import docker
 from docker.errors import APIError, NotFound
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 # Import unified logging
@@ -54,8 +53,7 @@ class MCPServerManager:
         self.container = None
         self.status: str = "stopped"
         self.start_time: float | None = None
-        self.logs: deque = deque(maxlen=1000)  # Keep last 1000 log entries
-        self.log_websockets: list[WebSocket] = []
+        self.logs: deque = deque(maxlen=1000)  # Keep last 1000 log entries for internal use
         self.log_reader_task: asyncio.Task | None = None
         self._operation_lock = asyncio.Lock()  # Prevent concurrent start/stop operations
         self._last_operation_time = 0
@@ -66,7 +64,7 @@ class MCPServerManager:
         """Simple container resolution - just use fixed name."""
         if not self.docker_client:
             return None
-        
+
         try:
             # Simple: Just look for the fixed container name
             container = self.docker_client.containers.get("archon-mcp")
@@ -411,7 +409,7 @@ class MCPServerManager:
         }
 
     def _add_log(self, level: str, message: str):
-        """Add a log entry and broadcast to connected WebSockets."""
+        """Add a log entry for internal tracking."""
         log_entry = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "level": level,
@@ -419,21 +417,6 @@ class MCPServerManager:
         }
         self.logs.append(log_entry)
 
-        # Broadcast to all connected WebSockets
-        asyncio.create_task(self._broadcast_log(log_entry))
-
-    async def _broadcast_log(self, log_entry: dict[str, Any]):
-        """Broadcast log entry to all connected WebSockets."""
-        disconnected = []
-        for ws in self.log_websockets:
-            try:
-                await ws.send_json(log_entry)
-            except Exception:
-                disconnected.append(ws)
-
-        # Remove disconnected WebSockets
-        for ws in disconnected:
-            self.log_websockets.remove(ws)
 
     async def _read_container_logs(self):
         """Read logs from Docker container."""
@@ -509,34 +492,6 @@ class MCPServerManager:
         else:
             return "INFO", line
 
-    def get_logs(self, limit: int = 100) -> list[dict[str, Any]]:
-        """Get historical logs."""
-        logs = list(self.logs)
-        if limit > 0:
-            logs = logs[-limit:]
-        return logs
-
-    def clear_logs(self):
-        """Clear the log buffer."""
-        self.logs.clear()
-        self._add_log("INFO", "Logs cleared")
-
-    async def add_websocket(self, websocket: WebSocket):
-        """Add a WebSocket connection for log streaming."""
-        await websocket.accept()
-        self.log_websockets.append(websocket)
-
-        # Send connection info but NOT historical logs
-        # The frontend already fetches historical logs via the /logs endpoint
-        await websocket.send_json({
-            "type": "connection",
-            "message": "WebSocket connected for log streaming",
-        })
-
-    def remove_websocket(self, websocket: WebSocket):
-        """Remove a WebSocket connection."""
-        if websocket in self.log_websockets:
-            self.log_websockets.remove(websocket)
 
 
 # Global MCP manager instance
@@ -601,43 +556,6 @@ async def get_status():
             safe_set_attribute(span, "error", str(e))
             raise HTTPException(status_code=500, detail=str(e))
 
-
-@router.get("/logs")
-async def get_logs(limit: int = 100):
-    """Get MCP server logs."""
-    with safe_span("api_mcp_logs") as span:
-        safe_set_attribute(span, "endpoint", "/mcp/logs")
-        safe_set_attribute(span, "method", "GET")
-        safe_set_attribute(span, "limit", limit)
-
-        try:
-            logs = mcp_manager.get_logs(limit)
-            api_logger.debug("MCP server logs retrieved", count=len(logs))
-            safe_set_attribute(span, "log_count", len(logs))
-            return {"logs": logs}
-        except Exception as e:
-            api_logger.error("MCP server logs API failed", error=str(e))
-            safe_set_attribute(span, "error", str(e))
-            raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.delete("/logs")
-async def clear_logs():
-    """Clear MCP server logs."""
-    with safe_span("api_mcp_clear_logs") as span:
-        safe_set_attribute(span, "endpoint", "/mcp/logs")
-        safe_set_attribute(span, "method", "DELETE")
-
-        try:
-            mcp_manager.clear_logs()
-            api_logger.info("MCP server logs cleared")
-            safe_set_attribute(span, "success", True)
-            return {"success": True, "message": "Logs cleared successfully"}
-        except Exception as e:
-            api_logger.error("MCP server clear logs API failed", error=str(e))
-            safe_set_attribute(span, "success", False)
-            safe_set_attribute(span, "error", str(e))
-            raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/config")
@@ -745,25 +663,6 @@ async def save_configuration(config: ServerConfig):
             safe_set_attribute(span, "error", str(e))
             raise HTTPException(status_code=500, detail={"error": str(e)})
 
-
-@router.websocket("/logs/stream")
-async def websocket_log_stream(websocket: WebSocket):
-    """WebSocket endpoint for streaming MCP server logs."""
-    await mcp_manager.add_websocket(websocket)
-    try:
-        while True:
-            # Keep connection alive
-            await asyncio.sleep(1)
-            # Check if WebSocket is still connected
-            await websocket.send_json({"type": "ping"})
-    except WebSocketDisconnect:
-        mcp_manager.remove_websocket(websocket)
-    except Exception:
-        mcp_manager.remove_websocket(websocket)
-        try:
-            await websocket.close()
-        except:
-            pass
 
 
 @router.get("/tools")

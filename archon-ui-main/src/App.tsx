@@ -25,7 +25,10 @@ const AppRoutes = () => {
       <Route path="/settings" element={<SettingsPage />} />
       <Route path="/mcp" element={<MCPPage />} />
       {projectsEnabled ? (
-        <Route path="/projects" element={<ProjectPage />} />
+        <>
+          <Route path="/projects" element={<ProjectPage />} />
+          <Route path="/projects/:projectId" element={<ProjectPage />} />
+        </>
       ) : (
         <Route path="/projects" element={<Navigate to="/" replace />} />
       )}

@@ -124,7 +124,7 @@ class ProjectService:
                     docs_count = len(project.get("docs", []))
                     features_count = len(project.get("features", []))
                     has_data = bool(project.get("data", []))
-                    
+
                     # Return only metadata + stats, excluding large JSONB fields
                     projects.append({
                         "id": project["id"],
@@ -306,6 +306,11 @@ class ProjectService:
             return True, {"features": feature_options, "count": len(feature_options)}
 
         except Exception as e:
+            # Check if it's a "no rows found" error from PostgREST
+            error_message = str(e)
+            if "The result contains 0 rows" in error_message or "PGRST116" in error_message:
+                return False, {"error": "Project not found"}
+
             logger.error(f"Error getting project features: {e}")
             return False, {"error": f"Error getting project features: {str(e)}"}
 
@@ -341,12 +346,17 @@ class ProjectService:
 
             # Handle pinning logic - only one project can be pinned at a time
             if update_fields.get("pinned") is True:
-                # Unpin any other pinned projects
-                self.supabase_client.table("archon_projects").update({"pinned": False}).neq(
-                    "id", project_id
-                ).eq("pinned", True).execute()
+                # Unpin any other pinned projects first
+                unpin_response = (
+                    self.supabase_client.table("archon_projects")
+                    .update({"pinned": False})
+                    .neq("id", project_id)
+                    .eq("pinned", True)
+                    .execute()
+                )
+                logger.debug(f"Unpinned {len(unpin_response.data or [])} other projects before pinning {project_id}")
 
-            # Update the project
+            # Update the target project
             response = (
                 self.supabase_client.table("archon_projects")
                 .update(update_data)
@@ -354,11 +364,22 @@ class ProjectService:
                 .execute()
             )
 
-            if response.data:
+            if response.data and len(response.data) > 0:
                 project = response.data[0]
                 return True, {"project": project, "message": "Project updated successfully"}
             else:
-                return False, {"error": f"Project with ID {project_id} not found"}
+                # If update didn't return data, fetch the project to ensure it exists and get current state
+                get_response = (
+                    self.supabase_client.table("archon_projects")
+                    .select("*")
+                    .eq("id", project_id)
+                    .execute()
+                )
+                if get_response.data and len(get_response.data) > 0:
+                    project = get_response.data[0]
+                    return True, {"project": project, "message": "Project updated successfully"}
+                else:
+                    return False, {"error": f"Project with ID {project_id} not found"}
 
         except Exception as e:
             logger.error(f"Error updating project: {e}")

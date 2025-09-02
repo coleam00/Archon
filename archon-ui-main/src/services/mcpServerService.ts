@@ -12,22 +12,11 @@ export interface ServerResponse {
   message: string;
 }
 
-export interface LogEntry {
-  timestamp: string;
-  level: string;
-  message: string;
-}
-
 export interface ServerConfig {
   transport: string;
   host: string;
   port: number;
   model?: string;
-}
-
-interface StreamLogOptions {
-  autoReconnect?: boolean;
-  reconnectDelay?: number;
 }
 
 // Zod schemas for MCP protocol
@@ -66,17 +55,12 @@ const MCPResponseSchema = z.object({
 export type MCPTool = z.infer<typeof MCPToolSchema>;
 export type MCPParameter = z.infer<typeof MCPParameterSchema>;
 
-import { getWebSocketUrl } from '../config/api';
 
 /**
  * MCP Server Service - Handles the Archon MCP server lifecycle via FastAPI
  */
 class MCPServerService {
   private baseUrl = ''; // Use relative URL to go through Vite proxy
-  private wsUrl = getWebSocketUrl(); // Use WebSocket URL from config
-  private logWebSocket: WebSocket | null = null;
-  private reconnectTimeout: NodeJS.Timeout | null = null;
-  public isReconnecting = false;
 
   // ========================================
   // SERVER MANAGEMENT
@@ -150,102 +134,6 @@ class MCPServerService {
     return response.json();
   }
 
-  async getLogs(options: { limit?: number } = {}): Promise<LogEntry[]> {
-    const params = new URLSearchParams();
-    if (options.limit) {
-      params.append('limit', options.limit.toString());
-    }
-
-    const response = await fetch(`${this.baseUrl}/api/mcp/logs?${params}`);
-
-    if (!response.ok) {
-      throw new Error('Failed to fetch logs');
-    }
-
-    const data = await response.json();
-    return data.logs || [];
-  }
-
-  async clearLogs(): Promise<ServerResponse> {
-    const response = await fetch(`${this.baseUrl}/api/mcp/logs`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' }
-    });
-
-    if (!response.ok) {
-      throw new Error('Failed to clear logs');
-    }
-
-    return response.json();
-  }
-
-  streamLogs(
-    onMessage: (log: LogEntry) => void,
-    options: StreamLogOptions = {}
-  ): WebSocket {
-    const { autoReconnect = false, reconnectDelay = 5000 } = options;
-
-    // Close existing connection if any
-    this.disconnectLogs();
-
-    const ws = new WebSocket(`${getWebSocketUrl()}/api/mcp/logs/stream`);
-    this.logWebSocket = ws;
-
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        
-        // Ignore ping messages
-        if (data.type === 'ping') {
-          return;
-        }
-        
-        // Ignore connection messages
-        if (data.type === 'connection') {
-          return;
-        }
-
-        // Handle log entries
-        if (data.timestamp && data.level && data.message) {
-          onMessage(data as LogEntry);
-        }
-      } catch (error) {
-        console.error('Failed to parse log message:', error);
-      }
-    };
-
-    ws.onclose = () => {
-      this.logWebSocket = null;
-      
-      if (autoReconnect && !this.isReconnecting) {
-        this.isReconnecting = true;
-        this.reconnectTimeout = setTimeout(() => {
-          this.isReconnecting = false;
-          this.streamLogs(onMessage, options);
-        }, reconnectDelay);
-      }
-    };
-
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-    };
-
-    return ws;
-  }
-
-  disconnectLogs(): void {
-    if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout);
-      this.reconnectTimeout = null;
-    }
-    
-    this.isReconnecting = false;
-
-    if (this.logWebSocket) {
-      this.logWebSocket.close();
-      this.logWebSocket = null;
-    }
-  }
 
   // ========================================
   // LEGACY ARCHON TOOL ACCESS (For backward compatibility)
