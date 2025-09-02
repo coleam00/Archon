@@ -48,21 +48,25 @@ export interface KnowledgeItemsFilter {
   per_page?: number
 }
 
+export interface CrawlConfig {
+  allowed_domains?: string[]  // Whitelist of domains to crawl
+  excluded_domains?: string[] // Blacklist of domains to exclude
+  include_patterns?: string[] // URL patterns to include (glob-style)
+  exclude_patterns?: string[] // URL patterns to exclude (glob-style)
+}
+
 export interface CrawlRequest {
   url: string
   knowledge_type?: 'technical' | 'business'
   tags?: string[]
   update_frequency?: number
   max_depth?: number
+  crawl_config?: CrawlConfig  // Domain filtering configuration
   crawl_options?: {
     max_concurrent?: number
   }
 }
 
-export interface UploadMetadata {
-  knowledge_type?: 'technical' | 'business'
-  tags?: string[]
-}
 
 export interface SearchOptions {
   knowledge_type?: 'technical' | 'business'
@@ -205,33 +209,7 @@ class KnowledgeBaseService {
     })
   }
 
-  /**
-   * Upload a document to the knowledge base with progress tracking
-   */
-  async uploadDocument(file: File, metadata: UploadMetadata = {}) {
-    const formData = new FormData()
-    formData.append('file', file)
-    
-    // Send fields as expected by backend API
-    if (metadata.knowledge_type) {
-      formData.append('knowledge_type', metadata.knowledge_type)
-    }
-    if (metadata.tags && metadata.tags.length > 0) {
-      formData.append('tags', JSON.stringify(metadata.tags))
-    }
-    
-    const response = await fetch(`${API_BASE_URL}/documents/upload`, {
-      method: 'POST',
-      body: formData
-    })
 
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.error || `HTTP ${response.status}`)
-    }
-
-    return response.json()
-  }
 
   /**
    * Start crawling a URL with metadata
@@ -239,7 +217,10 @@ class KnowledgeBaseService {
   async crawlUrl(request: CrawlRequest) {
     console.log('📡 Sending crawl request:', request);
     
-    const response = await apiRequest('/knowledge-items/crawl', {
+    // Use v2 endpoint if crawl_config is present, otherwise use original endpoint
+    const endpoint = request.crawl_config ? '/knowledge-items/crawl-v2' : '/knowledge-items/crawl';
+    
+    const response = await apiRequest(endpoint, {
       method: 'POST',
       body: JSON.stringify(request)
     });

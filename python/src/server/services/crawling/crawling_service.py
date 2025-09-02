@@ -7,6 +7,7 @@ batch crawling, recursive crawling, and overall orchestration with progress trac
 """
 
 import asyncio
+import fnmatch
 import uuid
 from typing import Dict, Any, List, Optional, Callable, Awaitable
 from urllib.parse import urlparse
@@ -129,6 +130,73 @@ class CrawlingService:
         if self._cancelled:
             raise asyncio.CancelledError("Crawl operation was cancelled by user")
 
+    def _normalize_domain(self, domain: str) -> str:
+        """Normalize domain by removing www prefix and converting to lowercase."""
+        domain = domain.lower().strip()
+        if domain.startswith('www.'):
+            domain = domain[4:]
+        return domain
+
+    def _extract_domain(self, url: str) -> str:
+        """Extract and normalize domain from URL."""
+        try:
+            parsed = urlparse(url)
+            return self._normalize_domain(parsed.netloc)
+        except Exception:
+            return url.lower().strip()
+
+    def _build_filter_config(self, crawl_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Build filter configuration from crawl_config request parameter."""
+        if not crawl_config:
+            return {}
+        
+        return {
+            'allowed_domains': [self._normalize_domain(d) for d in crawl_config.get('allowed_domains', [])],
+            'excluded_domains': [self._normalize_domain(d) for d in crawl_config.get('excluded_domains', [])],
+            'include_patterns': crawl_config.get('include_patterns', []),
+            'exclude_patterns': crawl_config.get('exclude_patterns', [])
+        }
+
+    def _should_crawl_url(self, url: str, filter_config: Dict[str, Any]) -> bool:
+        """Check if URL should be crawled based on filter configuration."""
+        if not filter_config:
+            return True
+        
+        domain = self._extract_domain(url)
+        
+        # Check excluded domains first
+        excluded_domains = filter_config.get('excluded_domains', [])
+        if excluded_domains and domain in excluded_domains:
+            safe_logfire_info(f"Skipping URL due to excluded domain: {url} (domain: {domain})")
+            return False
+        
+        # Check allowed domains (whitelist)
+        allowed_domains = filter_config.get('allowed_domains', [])
+        if allowed_domains and domain not in allowed_domains:
+            safe_logfire_info(f"Skipping URL due to allowed domains filter: {url} (domain: {domain})")
+            return False
+        
+        # Check exclude patterns
+        exclude_patterns = filter_config.get('exclude_patterns', [])
+        for pattern in exclude_patterns:
+            if fnmatch.fnmatch(url, pattern):
+                safe_logfire_info(f"Skipping URL due to exclude pattern '{pattern}': {url}")
+                return False
+        
+        # Check include patterns
+        include_patterns = filter_config.get('include_patterns', [])
+        if include_patterns:
+            matches_include = False
+            for pattern in include_patterns:
+                if fnmatch.fnmatch(url, pattern):
+                    matches_include = True
+                    break
+            if not matches_include:
+                safe_logfire_info(f"Skipping URL due to include patterns filter: {url}")
+                return False
+        
+        return True
+
     async def _create_crawl_progress_callback(
         self, base_status: str
     ) -> Callable[[str, int, str], Awaitable[None]]:
@@ -231,9 +299,10 @@ class CrawlingService:
         progress_callback=None,
         start_progress: int = 10,
         end_progress: int = 60,
+        filter_func=None,
     ) -> List[Dict[str, Any]]:
         """Recursively crawl internal links from start URLs."""
-        return await self.recursive_strategy.crawl_recursive_with_progress(
+        results = await self.recursive_strategy.crawl_recursive_with_progress(
             start_urls,
             self.url_handler.transform_github_url,
             self.site_config.is_documentation_site,
@@ -243,6 +312,19 @@ class CrawlingService:
             start_progress,
             end_progress,
         )
+        
+        # Apply post-crawl filtering if filter function is provided
+        if filter_func and results:
+            original_count = len(results)
+            filtered_results = [result for result in results if filter_func(result.get('url', ''))]
+            filtered_count = len(filtered_results)
+            
+            if original_count != filtered_count:
+                safe_logfire_info(f"Domain filtering applied: {original_count} -> {filtered_count} pages")
+            
+            return filtered_results
+        
+        return results
 
     # Orchestration methods
     async def orchestrate_crawl(self, request: Dict[str, Any]) -> Dict[str, Any]:
@@ -304,6 +386,12 @@ class CrawlingService:
             url = str(request.get("url", ""))
             safe_logfire_info(f"Starting async crawl orchestration | url={url} | task_id={task_id}")
 
+            # Extract and build filter configuration from crawl_config
+            crawl_config = request.get('crawl_config')
+            filter_config = self._build_filter_config(crawl_config)
+            if filter_config:
+                safe_logfire_info(f"Using domain filter configuration: {filter_config}")
+
             # Generate unique source_id and display name from the original URL
             original_source_id = self.url_handler.generate_unique_source_id(url)
             source_display_name = self.url_handler.extract_display_name(url)
@@ -339,7 +427,7 @@ class CrawlingService:
             await update_mapped_progress("analyzing", 50, f"Analyzing URL type for {url}")
 
             # Detect URL type and perform crawl
-            crawl_results, crawl_type = await self._crawl_by_url_type(url, request)
+            crawl_results, crawl_type = await self._crawl_by_url_type(url, request, filter_config)
 
             # Check for cancellation after crawling
             self._check_cancellation()
@@ -492,7 +580,7 @@ class CrawlingService:
                     f"Unregistered orchestration service on error | progress_id={self.progress_id}"
                 )
 
-    async def _crawl_by_url_type(self, url: str, request: Dict[str, Any]) -> tuple:
+    async def _crawl_by_url_type(self, url: str, request: Dict[str, Any], filter_config: Dict[str, Any] = None) -> tuple:
         """
         Detect URL type and perform appropriate crawling.
 
@@ -531,6 +619,15 @@ class CrawlingService:
                 })
                 await update_crawl_progress(self.progress_id, self.progress_state)
             sitemap_urls = self.parse_sitemap(url)
+            
+            # Apply domain filtering to sitemap URLs if configured
+            if filter_config and sitemap_urls:
+                original_count = len(sitemap_urls)
+                sitemap_urls = [u for u in sitemap_urls if self._should_crawl_url(u, filter_config)]
+                filtered_count = len(sitemap_urls)
+                
+                if original_count != filtered_count:
+                    safe_logfire_info(f"Sitemap URL filtering: {original_count} -> {filtered_count} URLs")
 
             if sitemap_urls:
                 # Emit progress before starting batch crawl
@@ -561,17 +658,23 @@ class CrawlingService:
                 await update_crawl_progress(self.progress_id, self.progress_state)
 
             max_depth = request.get("max_depth", 1)
-            # Let the strategy handle concurrency from settings
-            # This will use CRAWL_MAX_CONCURRENT from database (default: 10)
-
-            crawl_results = await self.crawl_recursive_with_progress(
-                [url],
-                max_depth=max_depth,
-                max_concurrent=None,  # Let strategy use settings
-                progress_callback=await self._create_crawl_progress_callback("crawling"),
-                start_progress=10,
-                end_progress=20,
-            )
+            
+            # Filter starting URL if needed
+            if filter_config and not self._should_crawl_url(url, filter_config):
+                safe_logfire_info(f"Skipping crawl - starting URL filtered out: {url}")
+                crawl_results = []
+            else:
+                # Let the strategy handle concurrency from settings
+                # This will use CRAWL_MAX_CONCURRENT from database (default: 10)
+                crawl_results = await self.crawl_recursive_with_progress(
+                    [url],
+                    max_depth=max_depth,
+                    max_concurrent=None,  # Let strategy use settings
+                    progress_callback=await self._create_crawl_progress_callback("crawling"),
+                    start_progress=10,
+                    end_progress=20,
+                    filter_func=lambda u: self._should_crawl_url(u, filter_config) if filter_config else True,
+                )
             crawl_type = "webpage"
 
         return crawl_results, crawl_type

@@ -1,12 +1,11 @@
 """
-Knowledge Management API Module
+Advanced Crawling API Module
 
-This module handles all knowledge base operations including:
-- Crawling and indexing web content
-- Document upload and processing
+This module handles advanced web crawling operations including:
+- Advanced crawling with domain filtering configuration
 - RAG (Retrieval Augmented Generation) queries
 - Knowledge item management and search
-- Real-time progress tracking via WebSockets
+- Real-time crawling progress tracking via WebSockets
 """
 
 import asyncio
@@ -15,11 +14,11 @@ import time
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from typing import Optional
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..utils import get_supabase_client
-from ..services.storage import DocumentStorageService
 from ..services.search.rag_service import RAGService
 from ..services.knowledge import KnowledgeItemService, DatabaseMetricsService
 from ..services.crawling import CrawlOrchestrationService
@@ -27,7 +26,6 @@ from ..services.crawler_manager import get_crawler
 
 # Import unified logging
 from ..config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
-from ..utils.document_processing import extract_text_from_document
 
 # Get logger for this module
 logger = get_logger(__name__)
@@ -76,12 +74,20 @@ class KnowledgeItemRequest(BaseModel):
         }
 
 
+class CrawlConfig(BaseModel):
+    """Configuration for crawling domain and URL filtering"""
+    allowed_domains: list[str] = []  # Whitelist of domains to crawl
+    excluded_domains: list[str] = []  # Blacklist of domains to exclude
+    include_patterns: list[str] = []  # URL patterns to include (glob-style)
+    exclude_patterns: list[str] = []  # URL patterns to exclude (glob-style)
+
 class CrawlRequest(BaseModel):
     url: str
     knowledge_type: str = "general"
     tags: list[str] = []
     update_frequency: int = 7
     max_depth: int = 2  # Maximum crawl depth (1-5)
+    crawl_config: Optional[CrawlConfig] = None  # Domain filtering configuration  # Maximum crawl depth (1-5)
 
 
 class RagQueryRequest(BaseModel):
@@ -219,6 +225,8 @@ async def delete_knowledge_item(source_id: str):
             f"Failed to delete knowledge item | error={str(e)} | source_id={source_id}"
         )
         raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
 
 
 @router.get("/knowledge-items/{source_id}/code-examples")
@@ -363,6 +371,136 @@ async def refresh_knowledge_item(source_id: str):
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
+@router.post("/knowledge-items/crawl-v2")
+async def crawl_knowledge_item_v2(request: CrawlRequest):
+    """Crawl a URL with advanced domain filtering and add it to the knowledge base with progress tracking."""
+    # Validate URL
+    if not request.url:
+        raise HTTPException(status_code=422, detail="URL is required")
+
+    # Basic URL validation
+    if not request.url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=422, detail="URL must start with http:// or https://")
+
+    try:
+        safe_logfire_info(
+            f"Starting knowledge item crawl v2 | url={str(request.url)} | knowledge_type={request.knowledge_type} | tags={request.tags} | crawl_config={request.crawl_config}"
+        )
+        # Generate unique progress ID
+        progress_id = str(uuid.uuid4())
+        # Start progress tracking with initial state
+        await start_crawl_progress(
+            progress_id,
+            {
+                "progressId": progress_id,
+                "currentUrl": str(request.url),
+                "totalPages": 0,
+                "processedPages": 0,
+                "percentage": 0,
+                "status": "starting",
+                "logs": [f"Starting crawl of {request.url}"],
+                "eta": "Calculating...",
+            },
+        )
+        # Start background task IMMEDIATELY
+        task = asyncio.create_task(_perform_crawl_v2_with_progress(progress_id, request))
+        # Track the task for cancellation support
+        active_crawl_tasks[progress_id] = task
+        safe_logfire_info(
+            f"Crawl v2 started successfully | progress_id={progress_id} | url={str(request.url)}"
+        )
+        response_data = {
+            "success": True,
+            "progressId": progress_id,
+            "message": "Crawling started with domain filtering",
+            "estimatedDuration": "3-5 minutes",
+        }
+        return response_data
+    except Exception as e:
+        safe_logfire_error(f"Failed to start crawl v2 | error={str(e)} | url={str(request.url)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _perform_crawl_v2_with_progress(progress_id: str, request: CrawlRequest):
+    """Perform the actual crawl operation with domain filtering and progress tracking."""
+    # Add a small delay to allow frontend WebSocket subscription to be established
+    await asyncio.sleep(1.0)
+
+    # Acquire semaphore to limit concurrent crawls
+    async with crawl_semaphore:
+        safe_logfire_info(
+            f"Acquired crawl semaphore | progress_id={progress_id} | url={str(request.url)}"
+        )
+        try:
+            safe_logfire_info(
+                f"Starting crawl v2 with progress tracking | progress_id={progress_id} | url={str(request.url)}"
+            )
+
+            # Get crawler from CrawlerManager
+            try:
+                crawler = await get_crawler()
+                if crawler is None:
+                    raise Exception("Crawler not available - initialization may have failed")
+            except Exception as e:
+                safe_logfire_error(f"Failed to get crawler | error={str(e)}")
+                await error_crawl_progress(progress_id, f"Failed to initialize crawler: {str(e)}")
+                return
+
+            supabase_client = get_supabase_client()
+            orchestration_service = CrawlOrchestrationService(crawler, supabase_client)
+            orchestration_service.set_progress_id(progress_id)
+
+            # Store the current task in active_crawl_tasks for cancellation support
+            current_task = asyncio.current_task()
+            if current_task:
+                active_crawl_tasks[progress_id] = current_task
+                safe_logfire_info(
+                    f"Stored current task in active_crawl_tasks | progress_id={progress_id}"
+                )
+
+            # Convert request to dict for service
+            request_dict = {
+                "url": str(request.url),
+                "knowledge_type": request.knowledge_type,
+                "tags": request.tags or [],
+                "max_depth": request.max_depth,
+                "extract_code_examples": True,
+                "generate_summary": True,
+            }
+            
+            # Add crawl_config if present
+            if request.crawl_config:
+                request_dict["crawl_config"] = request.crawl_config.dict()
+
+            # Orchestrate the crawl
+            result = await orchestration_service.orchestrate_crawl(request_dict)
+
+            # Log that the task was started
+            safe_logfire_info(
+                f"Crawl v2 task started | progress_id={progress_id} | task_id={result.get('task_id')}"
+            )
+        except asyncio.CancelledError:
+            safe_logfire_info(f"Crawl v2 cancelled | progress_id={progress_id}")
+            await update_crawl_progress(
+                progress_id,
+                {"status": "cancelled", "percentage": -1, "message": "Crawl cancelled by user"},
+            )
+            raise
+        except Exception as e:
+            error_message = f"Crawling failed: {str(e)}"
+            safe_logfire_error(
+                f"Crawl v2 failed | progress_id={progress_id} | error={error_message} | exception_type={type(e).__name__}"
+            )
+            await error_crawl_progress(progress_id, error_message)
+        finally:
+            # Clean up task from registry when done (success or failure)
+            if progress_id in active_crawl_tasks:
+                del active_crawl_tasks[progress_id]
+                safe_logfire_info(
+                    f"Cleaned up crawl v2 task from registry | progress_id={progress_id}"
+                )
+
+
 @router.post("/knowledge-items/crawl")
 async def crawl_knowledge_item(request: KnowledgeItemRequest):
     """Crawl a URL and add it to the knowledge base with progress tracking."""
@@ -460,6 +598,10 @@ async def _perform_crawl_with_progress(progress_id: str, request: KnowledgeItemR
                 "extract_code_examples": request.extract_code_examples,
                 "generate_summary": True,
             }
+            
+            # Add crawl_config if present
+            if hasattr(request, 'crawl_config') and request.crawl_config:
+                request_dict["crawl_config"] = request.crawl_config.dict() if hasattr(request.crawl_config, 'dict') else request.crawl_config
 
             # Orchestrate the crawl (now returns immediately with task info)
             result = await orchestration_service.orchestrate_crawl(request_dict)
@@ -501,203 +643,6 @@ async def _perform_crawl_with_progress(progress_id: str, request: KnowledgeItemR
                 )
 
 
-@router.post("/documents/upload")
-async def upload_document(
-    file: UploadFile = File(...),
-    tags: str | None = Form(None),
-    knowledge_type: str = Form("technical"),
-):
-    """Upload and process a document with progress tracking."""
-    try:
-        safe_logfire_info(
-            f"Starting document upload | filename={file.filename} | content_type={file.content_type} | knowledge_type={knowledge_type}"
-        )
-
-        # Generate unique progress ID
-        progress_id = str(uuid.uuid4())
-
-        # Parse tags
-        tag_list = json.loads(tags) if tags else []
-
-        # Read file content immediately to avoid closed file issues
-        file_content = await file.read()
-        file_metadata = {
-            "filename": file.filename,
-            "content_type": file.content_type,
-            "size": len(file_content),
-        }
-        # Start progress tracking
-        await start_crawl_progress(
-            progress_id,
-            {
-                "progressId": progress_id,
-                "status": "starting",
-                "percentage": 0,
-                "currentUrl": f"file://{file.filename}",
-                "logs": [f"Starting upload of {file.filename}"],
-                "uploadType": "document",
-                "fileName": file.filename,
-                "fileType": file.content_type,
-            },
-        )
-        # Start background task for processing with file content and metadata
-        task = asyncio.create_task(
-            _perform_upload_with_progress(
-                progress_id, file_content, file_metadata, tag_list, knowledge_type
-            )
-        )
-        # Track the task for cancellation support
-        active_crawl_tasks[progress_id] = task
-        safe_logfire_info(
-            f"Document upload started successfully | progress_id={progress_id} | filename={file.filename}"
-        )
-        return {
-            "success": True,
-            "progressId": progress_id,
-            "message": "Document upload started",
-            "filename": file.filename,
-        }
-
-    except Exception as e:
-        safe_logfire_error(
-            f"Failed to start document upload | error={str(e)} | filename={file.filename} | error_type={type(e).__name__}"
-        )
-        raise HTTPException(status_code=500, detail={"error": str(e)})
-
-
-async def _perform_upload_with_progress(
-    progress_id: str,
-    file_content: bytes,
-    file_metadata: dict,
-    tag_list: list[str],
-    knowledge_type: str,
-):
-    """Perform document upload with progress tracking using service layer."""
-    # Add a small delay to allow frontend WebSocket subscription to be established
-    # This prevents the "Room has 0 subscribers" issue
-    await asyncio.sleep(1.0)
-
-    # Create cancellation check function for document uploads
-    def check_upload_cancellation():
-        """Check if upload task has been cancelled."""
-        task = active_crawl_tasks.get(progress_id)
-        if task and task.cancelled():
-            raise asyncio.CancelledError("Document upload was cancelled by user")
-
-    # Import ProgressMapper to prevent progress from going backwards
-    from ..services.crawling.progress_mapper import ProgressMapper
-    progress_mapper = ProgressMapper()
-
-    try:
-        filename = file_metadata["filename"]
-        content_type = file_metadata["content_type"]
-        # file_size = file_metadata['size']  # Not used currently
-
-        safe_logfire_info(
-            f"Starting document upload with progress tracking | progress_id={progress_id} | filename={filename} | content_type={content_type}"
-        )
-
-        # Socket.IO handles connection automatically - no need to wait
-
-        # Extract text from document with progress - use mapper for consistent progress
-        mapped_progress = progress_mapper.map_progress("processing", 50)
-        await update_crawl_progress(
-            progress_id,
-            {
-                "status": "processing",
-                "percentage": mapped_progress,
-                "currentUrl": f"file://{filename}",
-                "log": f"Reading {filename}...",
-            },
-        )
-
-        try:
-            extracted_text = extract_text_from_document(file_content, filename, content_type)
-            safe_logfire_info(
-                f"Document text extracted | filename={filename} | extracted_length={len(extracted_text)} | content_type={content_type}"
-            )
-        except Exception as e:
-            await error_crawl_progress(progress_id, f"Failed to extract text: {str(e)}")
-            return
-
-        # Use DocumentStorageService to handle the upload
-        doc_storage_service = DocumentStorageService(get_supabase_client())
-
-        # Generate source_id from filename
-        source_id = f"file_{filename.replace(' ', '_').replace('.', '_')}_{int(time.time())}"
-
-        # Create progress callback that emits to Socket.IO with mapped progress
-        async def document_progress_callback(
-            message: str, percentage: int, batch_info: dict = None
-        ):
-            """Progress callback that emits to Socket.IO with mapped progress"""
-            # Map the document storage progress to overall progress range
-            mapped_percentage = progress_mapper.map_progress("document_storage", percentage)
-
-            progress_data = {
-                "status": "document_storage",
-                "percentage": mapped_percentage,  # Use mapped progress to prevent backwards jumps
-                "currentUrl": f"file://{filename}",
-                "log": message,
-            }
-            if batch_info:
-                progress_data.update(batch_info)
-
-            await update_crawl_progress(progress_id, progress_data)
-
-        # Call the service's upload_document method
-        success, result = await doc_storage_service.upload_document(
-            file_content=extracted_text,
-            filename=filename,
-            source_id=source_id,
-            knowledge_type=knowledge_type,
-            tags=tag_list,
-            progress_callback=document_progress_callback,
-            cancellation_check=check_upload_cancellation,
-        )
-
-        if success:
-            # Complete the upload with 100% progress
-            final_progress = progress_mapper.map_progress("completed", 100)
-            await update_crawl_progress(
-                progress_id,
-                {
-                    "status": "completed",
-                    "percentage": final_progress,
-                    "currentUrl": f"file://{filename}",
-                    "log": "Document upload completed successfully!",
-                },
-            )
-
-            # Also send the completion event with details
-            await complete_crawl_progress(
-                progress_id,
-                {
-                    "chunksStored": result.get("chunks_stored", 0),
-                    "wordCount": result.get("total_word_count", 0),
-                    "sourceId": result.get("source_id"),
-                    "log": "Document upload completed successfully!",
-                },
-            )
-
-            safe_logfire_info(
-                f"Document uploaded successfully | progress_id={progress_id} | source_id={result.get('source_id')} | chunks_stored={result.get('chunks_stored')}"
-            )
-        else:
-            error_msg = result.get("error", "Unknown error")
-            await error_crawl_progress(progress_id, error_msg)
-
-    except Exception as e:
-        error_msg = f"Upload failed: {str(e)}"
-        safe_logfire_error(
-            f"Document upload failed | progress_id={progress_id} | filename={file_metadata.get('filename', 'unknown')} | error={str(e)}"
-        )
-        await error_crawl_progress(progress_id, error_msg)
-    finally:
-        # Clean up task from registry when done (success or failure)
-        if progress_id in active_crawl_tasks:
-            del active_crawl_tasks[progress_id]
-            safe_logfire_info(f"Cleaned up upload task from registry | progress_id={progress_id}")
 
 
 @router.post("/knowledge-items/search")

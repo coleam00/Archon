@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from 'react';
-import { Search, Grid, Plus, Upload, Link as LinkIcon, Brain, Filter, BoxIcon, List, BookOpen, CheckSquare } from 'lucide-react';
+import { Search, Grid, Plus, Link as LinkIcon, Brain, Filter, BoxIcon, List, BookOpen, CheckSquare, ChevronDown, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -69,6 +69,7 @@ export const KnowledgeBasePage = () => {
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
+  
   
   const { showToast } = useToast();
 
@@ -301,6 +302,7 @@ export const KnowledgeBasePage = () => {
   const handleAddKnowledge = () => {
     setIsAddModalOpen(true);
   };
+
   
   // Selection handlers
   const toggleSelectionMode = () => {
@@ -566,9 +568,7 @@ export const KnowledgeBasePage = () => {
     crawlProgressService.stopStreaming(data.progressId);
     
     // Show success toast
-    const message = data.uploadType === 'document' 
-      ? `Document "${data.fileName}" uploaded successfully!`
-      : `Crawling completed for ${data.currentUrl}!`;
+    const message = `Crawling completed for ${data.currentUrl}!`;
     showToast(message, 'success');
     
     // Remove from progress items after a brief delay to show completion
@@ -636,8 +636,8 @@ export const KnowledgeBasePage = () => {
       return;
     }
 
-    // Check if we have original crawl parameters, or at least a URL to retry
-    if (!progressItem.originalCrawlParams && !progressItem.originalUploadParams && !progressItem.currentUrl) {
+    // Check if we have original crawl parameters or URL to retry
+    if (!progressItem.originalCrawlParams && !progressItem.currentUrl) {
       showToast('Cannot retry: no URL or parameters found. Please start a new crawl manually.', 'warning');
       return;
     }
@@ -675,35 +675,6 @@ export const KnowledgeBasePage = () => {
           showToast('Crawl restarted successfully', 'success');
         } else {
           showToast('Crawl completed immediately', 'success');
-          loadKnowledgeItems();
-        }
-      } else if (progressItem.originalUploadParams) {
-        // Retry upload
-        showToast('Retrying upload...', 'info');
-        
-        const formData = new FormData();
-        formData.append('file', progressItem.originalUploadParams.file);
-        formData.append('knowledge_type', progressItem.originalUploadParams.knowledge_type || 'technical');
-        
-        if (progressItem.originalUploadParams.tags && progressItem.originalUploadParams.tags.length > 0) {
-          formData.append('tags', JSON.stringify(progressItem.originalUploadParams.tags));
-        }
-        
-        const result = await knowledgeBaseService.uploadDocument(formData);
-        
-        if ((result as any).progressId) {
-          // Start progress tracking with original parameters preserved
-          await handleStartCrawl((result as any).progressId, {
-            currentUrl: `file://${progressItem.originalUploadParams.file.name}`,
-            uploadType: 'document',
-            fileName: progressItem.originalUploadParams.file.name,
-            fileType: progressItem.originalUploadParams.file.type,
-            originalUploadParams: progressItem.originalUploadParams
-          });
-          
-          showToast('Upload restarted successfully', 'success');
-        } else {
-          showToast('Upload completed immediately', 'success');
           loadKnowledgeItems();
         }
       } else if (progressItem.currentUrl && !progressItem.currentUrl.startsWith('file://')) {
@@ -1212,15 +1183,25 @@ const AddKnowledgeModal = ({
   onSuccess,
   onStartCrawl
 }: AddKnowledgeModalProps) => {
-  const [method, setMethod] = useState<'url' | 'file'>('url');
   const [url, setUrl] = useState('');
   const [tags, setTags] = useState<string[]>([]);
   const [newTag, setNewTag] = useState('');
   const [knowledgeType, setKnowledgeType] = useState<'technical' | 'business'>('technical');
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [crawlDepth, setCrawlDepth] = useState(2);
   const [showDepthTooltip, setShowDepthTooltip] = useState(false);
+  
+  // Advanced domain configuration
+  const [showAdvancedConfig, setShowAdvancedConfig] = useState(false);
+  const [allowedDomains, setAllowedDomains] = useState<string[]>([]);
+  const [excludedDomains, setExcludedDomains] = useState<string[]>([]);
+  const [includePatterns, setIncludePatterns] = useState<string[]>([]);
+  const [excludePatterns, setExcludePatterns] = useState<string[]>([]);
+  const [newAllowedDomain, setNewAllowedDomain] = useState('');
+  const [newExcludedDomain, setNewExcludedDomain] = useState('');
+  const [newIncludePattern, setNewIncludePattern] = useState('');
+  const [newExcludePattern, setNewExcludePattern] = useState('');
+  
   const { showToast } = useToast();
 
   // URL validation function that checks domain existence
@@ -1288,99 +1269,92 @@ const AddKnowledgeModal = ({
     }
   };
 
+  // Helper functions for domain/pattern management
+  const parseDomainList = (input: string): string[] => {
+    return input.split(',')
+      .map(domain => domain.trim())
+      .filter(domain => domain.length > 0);
+  };
+
+  const addDomainsToList = (input: string, currentList: string[], setter: (list: string[]) => void) => {
+    const domains = parseDomainList(input);
+    const newDomains = domains.filter(domain => !currentList.includes(domain));
+    if (newDomains.length > 0) {
+      setter([...currentList, ...newDomains]);
+    }
+  };
+
+  const removeDomainFromList = (domain: string, currentList: string[], setter: (list: string[]) => void) => {
+    setter(currentList.filter(d => d !== domain));
+  };
+
+  const handleDomainInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, input: string, currentList: string[], setter: (list: string[]) => void, inputSetter: (value: string) => void) => {
+    if (e.key === 'Enter' && input.trim()) {
+      addDomainsToList(input, currentList, setter);
+      inputSetter('');
+    }
+  };
+
+  const handleDomainInputBlur = (input: string, currentList: string[], setter: (list: string[]) => void, inputSetter: (value: string) => void) => {
+    if (input.trim()) {
+      addDomainsToList(input, currentList, setter);
+      inputSetter('');
+    }
+  };
+
   const handleSubmit = async () => {
     try {
       setLoading(true);
       
-      if (method === 'url') {
-        if (!url.trim()) {
-          showToast('Please enter a URL', 'error');
-          return;
-        }
-        
-        // Validate URL and check domain existence
-        showToast('Validating URL...', 'info');
-        const validation = await validateUrl(url);
-        
-        if (!validation.isValid) {
-          showToast(validation.error || 'Invalid URL', 'error');
-          return;
-        }
-        
-        const formattedUrl = validation.formattedUrl!;
-        setUrl(formattedUrl); // Update the input field to show the corrected URL
-        
-        const result = await knowledgeBaseService.crawlUrl({
-          url: formattedUrl,
-          knowledge_type: knowledgeType,
-          tags,
-          max_depth: crawlDepth
+      if (!url.trim()) {
+        showToast('Please enter a URL', 'error');
+        return;
+      }
+      
+      // Validate URL and check domain existence
+      showToast('Validating URL...', 'info');
+      const validation = await validateUrl(url);
+      
+      if (!validation.isValid) {
+        showToast(validation.error || 'Invalid URL', 'error');
+        return;
+      }
+      
+      const formattedUrl = validation.formattedUrl!;
+      setUrl(formattedUrl); // Update the input field to show the corrected URL
+      
+      // Build crawl config if advanced options are configured
+      const crawlConfig = (allowedDomains.length > 0 || excludedDomains.length > 0 || 
+                         includePatterns.length > 0 || excludePatterns.length > 0) ? {
+        allowed_domains: allowedDomains,
+        excluded_domains: excludedDomains,
+        include_patterns: includePatterns,
+        exclude_patterns: excludePatterns
+      } : undefined;
+
+      const result = await knowledgeBaseService.crawlUrl({
+        url: formattedUrl,
+        knowledge_type: knowledgeType,
+        tags,
+        max_depth: crawlDepth,
+        crawl_config: crawlConfig
+      });
+      
+      // Check if result contains a progressId for streaming
+      if ((result as any).progressId) {
+        // Start progress tracking
+        onStartCrawl((result as any).progressId, {
+          status: 'initializing',
+          percentage: 0,
+          currentStep: 'Starting crawl'
         });
         
-        // Crawl URL result received
-        
-        // Check if result contains a progressId for streaming
-        if ((result as any).progressId) {
-          // Got progressId
-          // About to call onStartCrawl function
-          // onStartCrawl function ready
-          
-          // Start progress tracking
-          onStartCrawl((result as any).progressId, {
-            status: 'initializing',
-            percentage: 0,
-            currentStep: 'Starting crawl'
-          });
-          
-          // onStartCrawl called successfully
-          
-          showToast('Crawling started - tracking progress', 'success');
-          onClose(); // Close modal immediately
-        } else {
-          // No progressId in result
-          // Result structure logged
-          
-          // Fallback for non-streaming response
-          showToast((result as any).message || 'Crawling started', 'success');
-          onSuccess();
-        }
+        showToast('Crawling started - tracking progress', 'success');
+        onClose(); // Close modal immediately
       } else {
-        if (!selectedFile) {
-          showToast('Please select a file', 'error');
-          return;
-        }
-        
-        const result = await knowledgeBaseService.uploadDocument(selectedFile, {
-          knowledge_type: knowledgeType,
-          tags
-        });
-        
-        if (result.success && result.progressId) {
-          // Upload started with progressId
-          
-          // Start progress tracking for upload
-          onStartCrawl(result.progressId, {
-            currentUrl: `file://${selectedFile.name}`,
-            percentage: 0,
-            status: 'starting',
-            logs: [`Starting upload of ${selectedFile.name}`],
-            uploadType: 'document',
-            fileName: selectedFile.name,
-            fileType: selectedFile.type
-          });
-          
-          // onStartCrawl called successfully for upload
-          
-          showToast('Document upload started - tracking progress', 'success');
-          onClose(); // Close modal immediately
-        } else {
-          // No progressId in upload result
-          // Upload result structure logged
-          
-          // Fallback for non-streaming response
-          showToast((result as any).message || 'Document uploaded successfully', 'success');
-          onSuccess();
-        }
+        // Fallback for non-streaming response
+        showToast((result as any).message || 'Crawling started', 'success');
+        onSuccess();
       }
     } catch (error) {
       console.error('Failed to add knowledge:', error);
@@ -1390,10 +1364,10 @@ const AddKnowledgeModal = ({
     }
   };
 
-  return <div className="fixed inset-0 bg-gray-500/50 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <Card className="w-full max-w-2xl relative before:content-[''] before:absolute before:top-0 before:left-0 before:w-full before:h-[1px] before:bg-green-500 p-8">
+  return <div className="fixed inset-0 bg-gray-500/50 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto">
+      <Card className="w-full max-w-2xl relative before:content-[''] before:absolute before:top-0 before:left-0 before:w-full before:h-[1px] before:bg-green-500 p-8 my-8 max-h-[90vh] overflow-y-auto">
         <h2 className="text-xl font-bold text-gray-800 dark:text-white mb-8">
-          Add Knowledge Source
+          Crawl Website with Advanced Domain Filtering
         </h2>
         {/* Knowledge Type Selection */}
         <div className="mb-6">
@@ -1419,95 +1393,188 @@ const AddKnowledgeModal = ({
             </label>
           </div>
         </div>
-        {/* Source Type Selection */}
-        <div className="flex gap-4 mb-6">
-          <button onClick={() => setMethod('url')} className={`flex-1 p-4 rounded-md border ${method === 'url' ? 'border-blue-500 text-blue-600 dark:text-blue-500 bg-blue-50 dark:bg-blue-500/5' : 'border-gray-200 dark:border-zinc-900 text-gray-500 dark:text-zinc-400 hover:border-blue-300 dark:hover:border-blue-500/30'} transition flex items-center justify-center gap-2`}>
-            <LinkIcon className="w-4 h-4" />
-            <span>URL / Website</span>
-          </button>
-          <button onClick={() => setMethod('file')} className={`flex-1 p-4 rounded-md border ${method === 'file' ? 'border-pink-500 text-pink-600 dark:text-pink-500 bg-pink-50 dark:bg-pink-500/5' : 'border-gray-200 dark:border-zinc-900 text-gray-500 dark:text-zinc-400 hover:border-pink-300 dark:hover:border-pink-500/30'} transition flex items-center justify-center gap-2`}>
-            <Upload className="w-4 h-4" />
-            <span>Upload File</span>
-          </button>
-        </div>
         {/* URL Input */}
-        {method === 'url' && <div className="mb-6">
-            <Input 
-              label="URL to Scrape" 
-              type="url" 
-              value={url} 
-              onChange={e => setUrl(e.target.value)} 
-              placeholder="https://example.com or example.com" 
-              accentColor="blue" 
-            />
-            {url && !url.startsWith('http://') && !url.startsWith('https://') && (
-              <p className="text-amber-600 dark:text-amber-400 text-sm mt-1">
-                ℹ️ Will automatically add https:// prefix
-              </p>
-            )}
-          </div>}
-        {/* File Upload */}
-        {method === 'file' && (
-          <div className="mb-6">
-            <label className="block text-gray-600 dark:text-zinc-400 text-sm mb-2">
-              Upload Document
-            </label>
-            <div className="relative">
-              <input 
-                id="file-upload"
-                type="file"
-                accept=".pdf,.md,.doc,.docx,.txt"
-                onChange={e => setSelectedFile(e.target.files?.[0] || null)}
-                className="sr-only"
-              />
-              <label 
-                htmlFor="file-upload"
-                className="flex items-center justify-center gap-3 w-full p-6 rounded-md border-2 border-dashed cursor-pointer transition-all duration-300
-                  bg-blue-500/10 hover:bg-blue-500/20 
-                  border-blue-500/30 hover:border-blue-500/50
-                  text-blue-600 dark:text-blue-400
-                  hover:shadow-[0_0_15px_rgba(59,130,246,0.3)]
-                  backdrop-blur-sm"
-              >
-                <Upload className="w-6 h-6" />
-                <div className="text-center">
-                  <div className="font-medium">
-                    {selectedFile ? selectedFile.name : 'Choose File'}
-                  </div>
-                  <div className="text-sm opacity-75 mt-1">
-                    {selectedFile ? `${(selectedFile.size / 1024 / 1024).toFixed(2)} MB` : 'Click to browse or drag and drop'}
-                  </div>
-                </div>
-              </label>
-            </div>
-            <p className="text-gray-500 dark:text-zinc-600 text-sm mt-2">
-              Supports PDF, MD, DOC up to 10MB
+        <div className="mb-6">
+          <Input 
+            label="URL to Scrape" 
+            type="url" 
+            value={url} 
+            onChange={e => setUrl(e.target.value)} 
+            placeholder="https://example.com or example.com" 
+            accentColor="blue" 
+          />
+          {url && !url.startsWith('http://') && !url.startsWith('https://') && (
+            <p className="text-amber-600 dark:text-amber-400 text-sm mt-1">
+              ℹ️ Will automatically add https:// prefix
             </p>
-          </div>
-        )}
-        {/* Crawl Depth - Only for URLs */}
-        {method === 'url' && (
+          )}
+        </div>
+
+        {/* Crawl Depth */}
+        <div className="mb-6">
+          <label className="block text-gray-600 dark:text-zinc-400 text-sm mb-4">
+            Crawl Depth
+            <button
+              type="button"
+              className="ml-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+              onMouseEnter={() => setShowDepthTooltip(true)}
+              onMouseLeave={() => setShowDepthTooltip(false)}
+            >
+              <svg className="w-4 h-4 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </button>
+          </label>
+          
+          <GlassCrawlDepthSelector
+            value={crawlDepth}
+            onChange={setCrawlDepth}
+            showTooltip={showDepthTooltip}
+            onTooltipToggle={setShowDepthTooltip}
+          />
+        </div>
+
+        {/* Advanced Domain Configuration */}
+        <div className="mb-6">
+          <button
+            type="button"
+            onClick={() => setShowAdvancedConfig(!showAdvancedConfig)}
+            className="flex items-center justify-between w-full p-3 text-left bg-gray-50 dark:bg-zinc-900 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors"
+          >
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              Advanced Domain Configuration
+            </span>
+            <ChevronDown className={`w-4 h-4 transition-transform ${showAdvancedConfig ? 'rotate-180' : ''}`} />
+          </button>
+
+          {showAdvancedConfig && (
           <div className="mb-6">
-            <label className="block text-gray-600 dark:text-zinc-400 text-sm mb-4">
-              Crawl Depth
-              <button
-                type="button"
-                className="ml-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-                onMouseEnter={() => setShowDepthTooltip(true)}
-                onMouseLeave={() => setShowDepthTooltip(false)}
-              >
-                <svg className="w-4 h-4 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </button>
-            </label>
+            <button
+              type="button"
+              onClick={() => setShowAdvancedConfig(!showAdvancedConfig)}
+              className="flex items-center justify-between w-full p-3 text-left bg-gray-50 dark:bg-zinc-900 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors"
+            >
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                Advanced Domain Configuration
+              </span>
+              <ChevronDown className={`w-4 h-4 transition-transform ${showAdvancedConfig ? 'rotate-180' : ''}`} />
+            </button>
             
-            <GlassCrawlDepthSelector
-              value={crawlDepth}
-              onChange={setCrawlDepth}
-              showTooltip={showDepthTooltip}
-              onTooltipToggle={setShowDepthTooltip}
-            />
+            <div className={`mt-4 space-y-4 transition-all duration-200 ${showAdvancedConfig ? 'block' : 'hidden'}`}>
+              {/* Allowed Domains */}
+              <div>
+                <label className="block text-gray-600 dark:text-zinc-400 text-sm mb-2">
+                  Allowed Domains (Whitelist)
+                </label>
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {allowedDomains.map(domain => (
+                    <Badge key={domain} color="green" variant="outline" className="flex items-center gap-1">
+                      {domain}
+                      <X 
+                        className="w-3 h-3 cursor-pointer hover:text-red-500" 
+                        onClick={() => removeDomainFromList(domain, allowedDomains, setAllowedDomains)}
+                      />
+                    </Badge>
+                  ))}
+                </div>
+                <Input
+                  type="text"
+                  value={newAllowedDomain}
+                  onChange={e => setNewAllowedDomain(e.target.value)}
+                  onKeyDown={e => handleDomainInputKeyDown(e, newAllowedDomain, allowedDomains, setAllowedDomains, setNewAllowedDomain)}
+                  onBlur={() => handleDomainInputBlur(newAllowedDomain, allowedDomains, setAllowedDomains, setNewAllowedDomain)}
+                  placeholder="docs.example.com, api.example.com (comma-separated)"
+                  accentColor="green"
+                />
+              </div>
+
+              {/* Excluded Domains */}
+              <div>
+                <label className="block text-gray-600 dark:text-zinc-400 text-sm mb-2">
+                  Excluded Domains (Blacklist)
+                </label>
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {excludedDomains.map(domain => (
+                    <Badge key={domain} color="red" variant="outline" className="flex items-center gap-1">
+                      {domain}
+                      <X 
+                        className="w-3 h-3 cursor-pointer hover:text-red-500" 
+                        onClick={() => removeDomainFromList(domain, excludedDomains, setExcludedDomains)}
+                      />
+                    </Badge>
+                  ))}
+                </div>
+                <Input
+                  type="text"
+                  value={newExcludedDomain}
+                  onChange={e => setNewExcludedDomain(e.target.value)}
+                  onKeyDown={e => handleDomainInputKeyDown(e, newExcludedDomain, excludedDomains, setExcludedDomains, setNewExcludedDomain)}
+                  onBlur={() => handleDomainInputBlur(newExcludedDomain, excludedDomains, setExcludedDomains, setNewExcludedDomain)}
+                  placeholder="spam.example.com, ads.example.com (comma-separated)"
+                  accentColor="red"
+                />
+              </div>
+
+              {/* Include Patterns */}
+              <div>
+                <label className="block text-gray-600 dark:text-zinc-400 text-sm mb-2">
+                  Include URL Patterns (Glob-style)
+                </label>
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {includePatterns.map(pattern => (
+                    <Badge key={pattern} color="blue" variant="outline" className="flex items-center gap-1">
+                      {pattern}
+                      <X 
+                        className="w-3 h-3 cursor-pointer hover:text-red-500" 
+                        onClick={() => removeDomainFromList(pattern, includePatterns, setIncludePatterns)}
+                      />
+                    </Badge>
+                  ))}
+                </div>
+                <Input
+                  type="text"
+                  value={newIncludePattern}
+                  onChange={e => setNewIncludePattern(e.target.value)}
+                  onKeyDown={e => handleDomainInputKeyDown(e, newIncludePattern, includePatterns, setIncludePatterns, setNewIncludePattern)}
+                  onBlur={() => handleDomainInputBlur(newIncludePattern, includePatterns, setIncludePatterns, setNewIncludePattern)}
+                  placeholder="*/docs/*, */api/* (comma-separated)"
+                  accentColor="blue"
+                />
+              </div>
+
+              {/* Exclude Patterns */}
+              <div>
+                <label className="block text-gray-600 dark:text-zinc-400 text-sm mb-2">
+                  Exclude URL Patterns (Glob-style)
+                </label>
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {excludePatterns.map(pattern => (
+                    <Badge key={pattern} color="orange" variant="outline" className="flex items-center gap-1">
+                      {pattern}
+                      <X 
+                        className="w-3 h-3 cursor-pointer hover:text-red-500" 
+                        onClick={() => removeDomainFromList(pattern, excludePatterns, setExcludePatterns)}
+                      />
+                    </Badge>
+                  ))}
+                </div>
+                <Input
+                  type="text"
+                  value={newExcludePattern}
+                  onChange={e => setNewExcludePattern(e.target.value)}
+                  onKeyDown={e => handleDomainInputKeyDown(e, newExcludePattern, excludePatterns, setExcludePatterns, setNewExcludePattern)}
+                  onBlur={() => handleDomainInputBlur(newExcludePattern, excludePatterns, setExcludePatterns, setNewExcludePattern)}
+                  placeholder="*/admin/*, */private/* (comma-separated)"
+                  accentColor="orange"
+                />
+              </div>
+
+              <div className="text-xs text-gray-500 dark:text-zinc-600 mt-2">
+                <p>• Leave empty to crawl all pages found on the site</p>
+                <p>• Use allowed domains to restrict crawling to specific subdomains</p>
+                <p>• Use patterns to include/exclude specific URL structures</p>
+              </div>
+            </div>
           </div>
         )}
         
