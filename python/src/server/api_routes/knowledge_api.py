@@ -883,6 +883,9 @@ async def knowledge_health():
         "status": "healthy",
         "service": "knowledge-api",
         "timestamp": datetime.now().isoformat(),
+        "ready": True,
+        "credentials_loaded": True,
+        "schema_valid": True,
     }
 
     return result

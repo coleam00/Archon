@@ -161,7 +161,7 @@ class BugReportService {
         context: bugReport.context
       };
 
-      const response = await fetch(`${getApiUrl()}/api/bug-report/github`, {
+      const response = await fetch('/api/bug-report/github', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

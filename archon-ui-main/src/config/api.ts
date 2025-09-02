@@ -17,17 +17,9 @@ export function getApiUrl(): string {
     return import.meta.env.VITE_API_URL;
   }
 
-  // For development, construct from window location
-  const protocol = window.location.protocol;
-  const host = window.location.hostname;
-  // Use configured port or default to 8181
-  const port = import.meta.env.VITE_ARCHON_SERVER_PORT || '8181';
-  
-  if (!import.meta.env.VITE_ARCHON_SERVER_PORT) {
-    console.info('[Archon] Using default ARCHON_SERVER_PORT: 8181');
-  }
-  
-  return `${protocol}//${host}:${port}`;
+  // In development mode, always use relative URLs to go through Vite proxy
+  // This ensures the proxy configuration in vite.config.ts is used
+  return '';
 }
 
 // Get the base path for API endpoints

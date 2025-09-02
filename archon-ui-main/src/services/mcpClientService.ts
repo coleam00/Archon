@@ -96,7 +96,8 @@ import { getApiUrl } from '../config/api';
  * This service communicates with the standalone Python MCP client service
  */
 class MCPClientService {
-  private baseUrl = getApiUrl();
+  // Always use relative URLs to go through Vite proxy
+  private baseUrl = '';
 
   // ========================================
   // CLIENT MANAGEMENT
@@ -106,7 +107,7 @@ class MCPClientService {
    * Get all configured MCP clients
    */
   async getClients(): Promise<MCPClient[]> {
-    const response = await fetch(`${this.baseUrl}/api/mcp/clients/`);
+    const response = await fetch('/api/mcp/clients/');
 
     if (!response.ok) {
       throw new Error('Failed to get MCP clients');
@@ -119,7 +120,7 @@ class MCPClientService {
    * Create a new MCP client
    */
   async createClient(config: MCPClientConfig): Promise<MCPClient> {
-    const response = await fetch(`${this.baseUrl}/api/mcp/clients/`, {
+    const response = await fetch('/api/mcp/clients/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(config)
@@ -137,7 +138,7 @@ class MCPClientService {
    * Get a specific MCP client
    */
   async getClient(clientId: string): Promise<MCPClient> {
-    const response = await fetch(`${this.baseUrl}/api/mcp/clients/${clientId}`);
+    const response = await fetch(`/api/mcp/clients/${clientId}`);
 
     if (!response.ok) {
       const error = await response.json();
@@ -151,7 +152,7 @@ class MCPClientService {
    * Update an MCP client
    */
   async updateClient(clientId: string, updates: Partial<MCPClientConfig>): Promise<MCPClient> {
-    const response = await fetch(`${this.baseUrl}/api/mcp/clients/${clientId}`, {
+    const response = await fetch(`/api/mcp/clients/${clientId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates)
@@ -169,7 +170,7 @@ class MCPClientService {
    * Delete an MCP client
    */
   async deleteClient(clientId: string): Promise<{ success: boolean; message: string }> {
-    const response = await fetch(`${this.baseUrl}/api/mcp/clients/${clientId}`, {
+    const response = await fetch(`/api/mcp/clients/${clientId}`, {
       method: 'DELETE'
     });
 
@@ -189,7 +190,7 @@ class MCPClientService {
    * Connect to an MCP client
    */
   async connectClient(clientId: string): Promise<{ success: boolean; message: string }> {
-    const response = await fetch(`${this.baseUrl}/api/mcp/clients/${clientId}/connect`, {
+    const response = await fetch(`/api/mcp/clients/${clientId}/connect`, {
       method: 'POST'
     });
 
@@ -205,7 +206,7 @@ class MCPClientService {
    * Disconnect from an MCP client
    */
   async disconnectClient(clientId: string): Promise<{ success: boolean; message: string }> {
-    const response = await fetch(`${this.baseUrl}/api/mcp/clients/${clientId}/disconnect`, {
+    const response = await fetch(`/api/mcp/clients/${clientId}/disconnect`, {
       method: 'POST'
     });
 
@@ -221,7 +222,7 @@ class MCPClientService {
    * Get client status and health
    */
   async getClientStatus(clientId: string): Promise<ClientStatus> {
-    const response = await fetch(`${this.baseUrl}/api/mcp/clients/${clientId}/status`);
+    const response = await fetch(`/api/mcp/clients/${clientId}/status`);
 
     if (!response.ok) {
       const error = await response.json();
@@ -235,7 +236,7 @@ class MCPClientService {
    * Test a client configuration before saving
    */
   async testClientConfig(config: MCPClientConfig): Promise<{ success: boolean; message: string }> {
-    const response = await fetch(`${this.baseUrl}/api/mcp/clients/test-config`, {
+    const response = await fetch('/api/mcp/clients/test-config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(config)
@@ -257,7 +258,7 @@ class MCPClientService {
    * Get tools from a specific client
    */
   async getClientTools(clientId: string): Promise<ToolsResponse> {
-    const response = await fetch(`${this.baseUrl}/api/mcp/clients/${clientId}/tools`);
+    const response = await fetch(`/api/mcp/clients/${clientId}/tools`);
 
     if (!response.ok) {
       const error = await response.json();
@@ -271,7 +272,7 @@ class MCPClientService {
    * Call a tool on a specific client
    */
   async callClientTool(request: ToolCallRequest): Promise<any> {
-    const response = await fetch(`${this.baseUrl}/api/mcp/clients/tools/call`, {
+    const response = await fetch('/api/mcp/clients/tools/call', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request)
@@ -289,7 +290,7 @@ class MCPClientService {
    * Get tools from all connected clients (including Archon via MCP client)
    */
   async getAllAvailableTools(): Promise<AllToolsResponse> {
-    const response = await fetch(`${this.baseUrl}/api/mcp/clients/tools/all`);
+    const response = await fetch('/api/mcp/clients/tools/all');
 
     if (!response.ok) {
       const error = await response.json();
@@ -303,7 +304,7 @@ class MCPClientService {
    * Discover tools from a specific client (force refresh)
    */
   async discoverClientTools(clientId: string): Promise<ToolsResponse> {
-    const response = await fetch(`${this.baseUrl}/api/mcp/clients/${clientId}/tools/discover`, {
+    const response = await fetch(`/api/mcp/clients/${clientId}/tools/discover`, {
       method: 'POST'
     });
 

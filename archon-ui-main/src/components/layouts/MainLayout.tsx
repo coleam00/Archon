@@ -45,7 +45,8 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
         const timeoutId = setTimeout(() => controller.abort(), 5000);
         
         // Check if backend is responding with a simple health check
-        const response = await fetch(`${credentialsService['baseUrl']}/api/health`, {
+        // Always use the proxy endpoint to ensure it works through Vite proxy
+        const response = await fetch('/api/health', {
           method: 'GET',
           signal: controller.signal
         });

@@ -42,7 +42,8 @@ export interface TestStatus {
 import { getApiUrl, getWebSocketUrl } from '../config/api';
 
 // Use unified API configuration
-const API_BASE_URL = getApiUrl();
+// Always use relative URLs to go through Vite proxy
+const API_BASE_URL = '';
 
 // Error class for test service errors
 export class TestServiceError extends Error {
