@@ -28,7 +28,9 @@ def register_version_tools(mcp: FastMCP):
         ctx: Context,
         project_id: str,
         field_name: str,
-        content: Any,
+        # Explicit JSON-serializable types to satisfy MCP clients (no bare Any)
+        # Accept either an object (dict) or an array of objects for docs
+        content: dict[str, Any] | list[dict[str, Any]],
         change_summary: Optional[str] = None,
         document_id: Optional[str] = None,
         created_by: str = "system",
