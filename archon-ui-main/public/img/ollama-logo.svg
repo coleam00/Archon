@@ -1,0 +1,17 @@
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Ollama - simple, minimalist design with rounded elements -->
+  <defs>
+    <linearGradient id="ollama-blue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3B82F6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1D4ED8;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <!-- Main circular element -->
+  <circle cx="12" cy="12" r="9" fill="url(#ollama-blue)" opacity="0.9"/>
+  <!-- Inner design element -->
+  <circle cx="12" cy="12" r="6" fill="none" stroke="white" stroke-width="2" opacity="0.7"/>
+  <!-- Center dot -->
+  <circle cx="12" cy="12" r="2" fill="white"/>
+  <!-- Simple "O" representation -->
+  <path d="M12 6v12M8 8l8 8M8 16l8-8" stroke="white" stroke-width="1" opacity="0.3"/>
+</svg>
