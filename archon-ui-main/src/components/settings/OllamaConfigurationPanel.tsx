@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
@@ -41,6 +41,9 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
   const [showModelDiscoveryModal, setShowModelDiscoveryModal] = useState(false);
   const [selectedChatModel, setSelectedChatModel] = useState<string | null>(null);
   const [selectedEmbeddingModel, setSelectedEmbeddingModel] = useState<string | null>(null);
+  // Track temporary URL values for each instance to prevent aggressive updates
+  const [tempUrls, setTempUrls] = useState<Record<string, string>>({});
+  const updateTimeouts = useRef<Record<string, NodeJS.Timeout>>({});
   const { showToast } = useToast();
 
   // Load instances from database
@@ -258,18 +261,76 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
     }
   };
 
-  // Update instance URL
-  const handleUpdateInstanceUrl = async (instanceId: string, newUrl: string) => {
+  // Debounced URL update - only update after user stops typing for 1 second
+  const debouncedUpdateInstanceUrl = useCallback(async (instanceId: string, newUrl: string) => {
     try {
-      await credentialsService.updateOllamaInstance(instanceId, { 
-        baseUrl: newUrl, 
-        isHealthy: undefined, 
-        lastHealthCheck: undefined 
-      });
-      await loadInstances(); // Reload to get updated data
+      // Clear any existing timeout for this instance
+      if (updateTimeouts.current[instanceId]) {
+        clearTimeout(updateTimeouts.current[instanceId]);
+      }
+
+      // Set new timeout
+      updateTimeouts.current[instanceId] = setTimeout(async () => {
+        try {
+          await credentialsService.updateOllamaInstance(instanceId, { 
+            baseUrl: newUrl, 
+            isHealthy: undefined, 
+            lastHealthCheck: undefined 
+          });
+          await loadInstances(); // Reload to get updated data
+          // Clear the temporary URL after successful update
+          setTempUrls(prev => {
+            const updated = { ...prev };
+            delete updated[instanceId];
+            return updated;
+          });
+        } catch (error) {
+          console.error('Failed to update Ollama instance URL:', error);
+          showToast('Failed to update instance URL', 'error');
+        }
+      }, 1000); // 1 second debounce
     } catch (error) {
-      console.error('Failed to update Ollama instance URL:', error);
-      showToast('Failed to update instance URL', 'error');
+      console.error('Failed to set up URL update timeout:', error);
+    }
+  }, [showToast]);
+
+  // Handle immediate URL change (for UI responsiveness) without triggering API calls
+  const handleUrlChange = (instanceId: string, newUrl: string) => {
+    // Update temporary URL state for immediate UI feedback
+    setTempUrls(prev => ({ ...prev, [instanceId]: newUrl }));
+    // Trigger debounced update
+    debouncedUpdateInstanceUrl(instanceId, newUrl);
+  };
+
+  // Handle URL blur - immediately save if there are pending changes
+  const handleUrlBlur = async (instanceId: string) => {
+    const tempUrl = tempUrls[instanceId];
+    const instance = instances.find(inst => inst.id === instanceId);
+    
+    if (tempUrl && instance && tempUrl !== instance.baseUrl) {
+      // Clear the timeout since we're updating immediately
+      if (updateTimeouts.current[instanceId]) {
+        clearTimeout(updateTimeouts.current[instanceId]);
+        delete updateTimeouts.current[instanceId];
+      }
+
+      try {
+        await credentialsService.updateOllamaInstance(instanceId, { 
+          baseUrl: tempUrl, 
+          isHealthy: undefined, 
+          lastHealthCheck: undefined 
+        });
+        await loadInstances();
+        // Clear the temporary URL after successful update
+        setTempUrls(prev => {
+          const updated = { ...prev };
+          delete updated[instanceId];
+          return updated;
+        });
+      } catch (error) {
+        console.error('Failed to update Ollama instance URL:', error);
+        showToast('Failed to update instance URL', 'error');
+      }
     }
   };
 
@@ -384,6 +445,17 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
     }
   }, [isVisible, instances.length]);
 
+  // Cleanup timeouts on unmount
+  useEffect(() => {
+    return () => {
+      // Clear all pending timeouts
+      Object.values(updateTimeouts.current).forEach(timeout => {
+        if (timeout) clearTimeout(timeout);
+      });
+      updateTimeouts.current = {};
+    };
+  }, []);
+
   if (!isVisible) return null;
 
   const getConnectionStatusBadge = (instance: OllamaInstance) => {
@@ -491,13 +563,26 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
                   {getConnectionStatusBadge(instance)}
                 </div>
                 
-                <Input
-                  type="url"
-                  value={instance.baseUrl}
-                  onChange={(e) => handleUpdateInstanceUrl(instance.id, e.target.value)}
-                  placeholder="http://localhost:11434"
-                  className="text-sm"
-                />
+                <div className="relative">
+                  <Input
+                    type="url"
+                    value={tempUrls[instance.id] !== undefined ? tempUrls[instance.id] : instance.baseUrl}
+                    onChange={(e) => handleUrlChange(instance.id, e.target.value)}
+                    onBlur={() => handleUrlBlur(instance.id)}
+                    placeholder="http://localhost:11434"
+                    className={cn(
+                      "text-sm",
+                      tempUrls[instance.id] !== undefined && tempUrls[instance.id] !== instance.baseUrl 
+                        ? "border-yellow-300 dark:border-yellow-700 bg-yellow-50 dark:bg-yellow-900/20" 
+                        : ""
+                    )}
+                  />
+                  {tempUrls[instance.id] !== undefined && tempUrls[instance.id] !== instance.baseUrl && (
+                    <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                      <div className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" title="Changes will be saved after you stop typing" />
+                    </div>
+                  )}
+                </div>
                 
                 {instance.modelsAvailable !== undefined && (
                   <div className="text-xs text-gray-600 dark:text-gray-400">
