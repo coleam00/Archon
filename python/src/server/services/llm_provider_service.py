@@ -165,90 +165,33 @@ async def _get_optimal_ollama_instance(instance_type: str | None = None,
         return base_url_override if base_url_override.endswith('/v1') else f"{base_url_override}/v1"
 
     try:
-        # Get Ollama instances from credential service
-        ollama_instances = await credential_service.get_ollama_instances()
+        # For now, we don't have multi-instance support, so skip to single instance config
+        # TODO: Implement get_ollama_instances() method in CredentialService for multi-instance support
+        logger.info("Using single instance Ollama configuration")
+        
+        # Get single instance configuration from RAG settings
+        rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
 
-        if not ollama_instances:
-            # Fallback to single instance configuration from RAG settings
-            logger.info("No multi-instance Ollama configuration found, using single instance")
-            rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+        # Check if we need embedding provider and have separate embedding URL
+        if use_embedding_provider or instance_type == "embedding":
+            embedding_url = rag_settings.get("OLLAMA_EMBEDDING_URL")
+            if embedding_url:
+                return embedding_url if embedding_url.endswith('/v1') else f"{embedding_url}/v1"
 
-            # Check if we need embedding provider and have separate embedding URL
-            if use_embedding_provider or instance_type == "embedding":
-                embedding_url = rag_settings.get("OLLAMA_EMBEDDING_URL")
-                if embedding_url:
-                    return embedding_url if embedding_url.endswith('/v1') else f"{embedding_url}/v1"
-
-            # Default to LLM base URL for chat operations
-            fallback_url = rag_settings.get("LLM_BASE_URL", "http://localhost:11434")
-            return fallback_url if fallback_url.endswith('/v1') else f"{fallback_url}/v1"
-
-        # Determine preferred instance type
-        preferred_type = instance_type
-        if not preferred_type:
-            preferred_type = "embedding" if use_embedding_provider else "chat"
-
-        logger.debug(f"Looking for Ollama instance with type: {preferred_type}")
-
-        # Filter instances by type and health
-        suitable_instances = []
-        for instance in ollama_instances:
-            if not instance.get("isEnabled", True):
-                continue
-
-            inst_type = instance.get("instanceType", "both")
-            if inst_type == "both" or inst_type == preferred_type:
-                suitable_instances.append(instance)
-
-        if not suitable_instances:
-            logger.warning(f"No suitable Ollama instances found for type {preferred_type}")
-            # Fallback to any enabled instance
-            suitable_instances = [inst for inst in ollama_instances if inst.get("isEnabled", True)]
-
-        if not suitable_instances:
-            logger.error("No enabled Ollama instances found")
-            # Final fallback to localhost
-            return "http://localhost:11434/v1"
-
-        # Sort by preference: primary first, then by health status, then by response time
-        def instance_priority(inst):
-            priority_score = 0
-
-            # Primary instances get highest priority
-            if inst.get("isPrimary", False):
-                priority_score += 1000
-
-            # Healthy instances get bonus
-            if inst.get("isHealthy", False):
-                priority_score += 100
-                # Faster response times get additional bonus
-                response_time = inst.get("responseTimeMs", 1000)
-                priority_score += max(0, 100 - (response_time / 10))  # Faster = higher score
-
-            # Load balancing weight if available
-            weight = inst.get("loadBalancingWeight", 100)
-            priority_score += weight / 10
-
-            return priority_score
-
-        suitable_instances.sort(key=instance_priority, reverse=True)
-
-        # Select the best instance
-        selected_instance = suitable_instances[0]
-        base_url = selected_instance.get("baseUrl", "http://localhost:11434")
-
-        # Ensure URL ends with /v1 for OpenAI compatibility
-        if not base_url.endswith("/v1"):
-            base_url = f"{base_url}/v1"
-
-        logger.info(f"Selected Ollama instance: {selected_instance.get('name', 'unnamed')} ({base_url})")
-
-        return base_url
+        # Default to LLM base URL for chat operations
+        fallback_url = rag_settings.get("LLM_BASE_URL", "http://localhost:11434")
+        return fallback_url if fallback_url.endswith('/v1') else f"{fallback_url}/v1"
 
     except Exception as e:
-        logger.error(f"Error selecting optimal Ollama instance: {e}")
-        # Fallback to default
-        return "http://localhost:11434/v1"
+        logger.error(f"Error getting Ollama configuration: {e}")
+        # Final fallback to localhost only if we can't get RAG settings
+        try:
+            rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+            fallback_url = rag_settings.get("LLM_BASE_URL", "http://localhost:11434")
+            return fallback_url if fallback_url.endswith('/v1') else f"{fallback_url}/v1"
+        except Exception as fallback_error:
+            logger.error(f"Could not retrieve fallback configuration: {fallback_error}")
+            return "http://localhost:11434/v1"
 
 
 async def get_embedding_model(provider: str | None = None) -> str:
