@@ -388,12 +388,12 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
 
   const getConnectionStatusBadge = (instance: OllamaInstance) => {
     if (testingConnections.has(instance.id)) {
-      return <Badge variant="outline" className="animate-pulse">Testing...</Badge>;
+      return <Badge variant="outline" color="gray" className="animate-pulse">Testing...</Badge>;
     }
     
     if (instance.isHealthy === true) {
       return (
-        <Badge variant="solid" className="flex items-center gap-1 bg-green-100 text-green-800 border-green-200">
+        <Badge variant="solid" color="green" className="flex items-center gap-1">
           <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
           Online
           {instance.responseTimeMs && (
@@ -407,14 +407,14 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
     
     if (instance.isHealthy === false) {
       return (
-        <Badge variant="solid" className="flex items-center gap-1 bg-red-100 text-red-800 border-red-200">
+        <Badge variant="solid" color="pink" className="flex items-center gap-1">
           <div className="w-2 h-2 rounded-full bg-red-500" />
           Offline
         </Badge>
       );
     }
     
-    return <Badge variant="outline">Unknown</Badge>;
+    return <Badge variant="outline" color="gray">Unknown</Badge>;
   };
 
   return (
@@ -441,18 +441,18 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
           >
             {selectedChatModel || selectedEmbeddingModel ? 'Change Models' : 'Select Models'}
           </Button>
-          <Badge variant="outline" className="text-xs">
+          <Badge variant="outline" color="gray" className="text-xs">
             {instances.filter(inst => inst.isEnabled).length} Active
           </Badge>
           {(selectedChatModel || selectedEmbeddingModel) && (
             <div className="flex gap-1">
               {selectedChatModel && (
-                <Badge variant="solid" className="text-xs bg-blue-100 text-blue-800 border-blue-200">
+                <Badge variant="solid" color="blue" className="text-xs">
                   Chat: {selectedChatModel.split(':')[0]}
                 </Badge>
               )}
               {selectedEmbeddingModel && (
-                <Badge variant="solid" className="text-xs bg-purple-100 text-purple-800 border-purple-200">
+                <Badge variant="solid" color="purple" className="text-xs">
                   Embed: {selectedEmbeddingModel.split(':')[0]}
                 </Badge>
               )}
@@ -472,23 +472,19 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
                     {instance.name}
                   </span>
                   {instance.isPrimary && (
-                    <Badge variant="outline" className="text-xs">Primary</Badge>
+                    <Badge variant="outline" color="gray" className="text-xs">Primary</Badge>
                   )}
                   {instance.instanceType && instance.instanceType !== 'both' && (
                     <Badge 
                       variant="solid" 
-                      className={cn(
-                        "text-xs",
-                        instance.instanceType === 'chat' 
-                          ? "bg-blue-100 text-blue-800 border-blue-200" 
-                          : "bg-purple-100 text-purple-800 border-purple-200"
-                      )}
+                      color={instance.instanceType === 'chat' ? 'blue' : 'purple'}
+                      className="text-xs"
                     >
                       {instance.instanceType === 'chat' ? 'Chat' : 'Embedding'}
                     </Badge>
                   )}
                   {(!instance.instanceType || instance.instanceType === 'both') && separateHosts && (
-                    <Badge variant="outline" className="text-xs">
+                    <Badge variant="outline" color="gray" className="text-xs">
                       Both
                     </Badge>
                   )}
@@ -670,7 +666,7 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
                     {selectedChatModel}
                   </div>
                 </div>
-                <Badge variant="solid" className="bg-blue-600 text-white">
+                <Badge variant="solid" color="blue">
                   {instances.filter(inst => inst.instanceType === 'chat' || inst.instanceType === 'both').length} hosts
                 </Badge>
               </div>
@@ -686,7 +682,7 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
                     {selectedEmbeddingModel}
                   </div>
                 </div>
-                <Badge variant="solid" className="bg-purple-600 text-white">
+                <Badge variant="solid" color="purple">
                   {instances.filter(inst => inst.instanceType === 'embedding' || inst.instanceType === 'both').length} hosts
                 </Badge>
               </div>

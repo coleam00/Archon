@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Settings, Check, Save, Loader, ChevronDown, ChevronUp, Zap, Database, Trash2 } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Input } from '../ui/Input';
@@ -45,13 +45,6 @@ export const RAGSettings = ({
   ragSettings,
   setRagSettings
 }: RAGSettingsProps) => {
-  console.log('🏗️ RAGSettings component render:', {
-    'ragSettings.LLM_BASE_URL': ragSettings.LLM_BASE_URL,
-    'ragSettings.OLLAMA_EMBEDDING_URL': ragSettings.OLLAMA_EMBEDDING_URL,
-    'ragSettings keys': Object.keys(ragSettings),
-    timestamp: new Date().toISOString()
-  });
-  
   const [saving, setSaving] = useState(false);
   const [showCrawlingSettings, setShowCrawlingSettings] = useState(false);
   const [showStorageSettings, setShowStorageSettings] = useState(false);
@@ -75,49 +68,48 @@ export const RAGSettings = ({
     url: ragSettings.OLLAMA_EMBEDDING_URL || 'http://localhost:11434/v1'
   });
 
-  // Debug: Monitor ragSettings changes
-  useEffect(() => {
-    console.log('📊 ragSettings changed:', {
-      'LLM_BASE_URL': ragSettings.LLM_BASE_URL,
-      'OLLAMA_EMBEDDING_URL': ragSettings.OLLAMA_EMBEDDING_URL,
-      'LLM_PROVIDER': ragSettings.LLM_PROVIDER,
-      'all keys': Object.keys(ragSettings),
-      timestamp: new Date().toISOString()
-    });
-  }, [ragSettings]);
-
   // Update instance configs when ragSettings change (after loading from database)
+  // Use refs to prevent infinite loops
+  const lastLLMConfigRef = useRef({ url: '', name: '' });
+  const lastEmbeddingConfigRef = useRef({ url: '', name: '' });
+  
   useEffect(() => {
-    console.log('🔄 LLM useEffect triggered:', { 
-      'ragSettings.LLM_BASE_URL': ragSettings.LLM_BASE_URL,
-      'ragSettings.LLM_INSTANCE_NAME': ragSettings.LLM_INSTANCE_NAME,
-      'current llmInstanceConfig.url': llmInstanceConfig.url,
-      'current llmInstanceConfig.name': llmInstanceConfig.name
-    });
-    if (ragSettings.LLM_BASE_URL || ragSettings.LLM_INSTANCE_NAME) {
-      console.log('✅ Updating LLM instance config with URL:', ragSettings.LLM_BASE_URL, 'and name:', ragSettings.LLM_INSTANCE_NAME);
-      setLLMInstanceConfig(prev => ({
-        ...prev,
-        url: ragSettings.LLM_BASE_URL || prev.url,
-        name: ragSettings.LLM_INSTANCE_NAME || prev.name
-      }));
+    const newLLMUrl = ragSettings.LLM_BASE_URL || '';
+    const newLLMName = ragSettings.LLM_INSTANCE_NAME || '';
+    
+    if (newLLMUrl !== lastLLMConfigRef.current.url || newLLMName !== lastLLMConfigRef.current.name) {
+      lastLLMConfigRef.current = { url: newLLMUrl, name: newLLMName };
+      setLLMInstanceConfig(prev => {
+        const newConfig = {
+          url: newLLMUrl || prev.url,
+          name: newLLMName || prev.name
+        };
+        // Only update if actually different to prevent loops
+        if (newConfig.url !== prev.url || newConfig.name !== prev.name) {
+          return newConfig;
+        }
+        return prev;
+      });
     }
   }, [ragSettings.LLM_BASE_URL, ragSettings.LLM_INSTANCE_NAME]);
 
   useEffect(() => {
-    console.log('🔄 Embedding useEffect triggered:', { 
-      'ragSettings.OLLAMA_EMBEDDING_URL': ragSettings.OLLAMA_EMBEDDING_URL,
-      'ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME': ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME,
-      'current embeddingInstanceConfig.url': embeddingInstanceConfig.url,
-      'current embeddingInstanceConfig.name': embeddingInstanceConfig.name
-    });
-    if (ragSettings.OLLAMA_EMBEDDING_URL || ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME) {
-      console.log('✅ Updating embedding instance config with URL:', ragSettings.OLLAMA_EMBEDDING_URL, 'and name:', ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME);
-      setEmbeddingInstanceConfig(prev => ({
-        ...prev,
-        url: ragSettings.OLLAMA_EMBEDDING_URL || prev.url,
-        name: ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME || prev.name
-      }));
+    const newEmbeddingUrl = ragSettings.OLLAMA_EMBEDDING_URL || '';
+    const newEmbeddingName = ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME || '';
+    
+    if (newEmbeddingUrl !== lastEmbeddingConfigRef.current.url || newEmbeddingName !== lastEmbeddingConfigRef.current.name) {
+      lastEmbeddingConfigRef.current = { url: newEmbeddingUrl, name: newEmbeddingName };
+      setEmbeddingInstanceConfig(prev => {
+        const newConfig = {
+          url: newEmbeddingUrl || prev.url,
+          name: newEmbeddingName || prev.name
+        };
+        // Only update if actually different to prevent loops
+        if (newConfig.url !== prev.url || newConfig.name !== prev.name) {
+          return newConfig;
+        }
+        return prev;
+      });
     }
   }, [ragSettings.OLLAMA_EMBEDDING_URL, ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME]);
 
@@ -140,6 +132,9 @@ export const RAGSettings = ({
   }, []);
 
   // Reload API credentials when ragSettings change (e.g., after saving)
+  // Use a ref to track if we've loaded credentials to prevent infinite loops
+  const hasLoadedCredentialsRef = useRef(false);
+  
   useEffect(() => {
     const reloadApiCredentials = async () => {
       try {
@@ -149,16 +144,17 @@ export const RAGSettings = ({
           credentials[cred.key] = cred.value;
         });
         setApiCredentials(credentials);
+        hasLoadedCredentialsRef.current = true;
       } catch (error) {
         console.error('Failed to reload API credentials:', error);
       }
     };
 
-    // Only reload if we have ragSettings (avoid initial empty load)
-    if (Object.keys(ragSettings).length > 0) {
+    // Only reload if we have ragSettings and haven't loaded yet, or if LLM_PROVIDER changed
+    if (Object.keys(ragSettings).length > 0 && (!hasLoadedCredentialsRef.current || ragSettings.LLM_PROVIDER)) {
       reloadApiCredentials();
     }
-  }, [ragSettings]);
+  }, [ragSettings.LLM_PROVIDER]); // Only depend on LLM_PROVIDER changes
   
   // Status tracking
   const [llmStatus, setLLMStatus] = useState({ online: false, responseTime: null, checking: false });
@@ -406,31 +402,72 @@ export const RAGSettings = ({
   };
 
   // Auto-check status when instances are configured or when Ollama is selected
+  // Use refs to prevent infinite connection testing
+  const lastTestedLLMConfigRef = useRef({ url: '', name: '', provider: '' });
+  const lastTestedEmbeddingConfigRef = useRef({ url: '', name: '', provider: '' });
+  const lastMetricsFetchRef = useRef({ provider: '', llmUrl: '', embUrl: '', llmOnline: false, embOnline: false });
+  
   React.useEffect(() => {
-    // Only test if Ollama is selected and we have a real URL (not the default localhost)
-    if (ragSettings.LLM_PROVIDER === 'ollama' && 
-        llmInstanceConfig.url && 
-        llmInstanceConfig.name && 
-        llmInstanceConfig.url !== 'http://localhost:11434/v1') {
-      console.log('Auto-testing LLM connection:', llmInstanceConfig.url);
+    const currentConfig = {
+      url: llmInstanceConfig.url,
+      name: llmInstanceConfig.name,
+      provider: ragSettings.LLM_PROVIDER
+    };
+    
+    const shouldTest = ragSettings.LLM_PROVIDER === 'ollama' && 
+                      llmInstanceConfig.url && 
+                      llmInstanceConfig.name && 
+                      llmInstanceConfig.url !== 'http://localhost:11434/v1' &&
+                      (currentConfig.url !== lastTestedLLMConfigRef.current.url ||
+                       currentConfig.name !== lastTestedLLMConfigRef.current.name ||
+                       currentConfig.provider !== lastTestedLLMConfigRef.current.provider);
+    
+    if (shouldTest) {
+      lastTestedLLMConfigRef.current = currentConfig;
       testConnection(llmInstanceConfig.url, setLLMStatus);
     }
-  }, [llmInstanceConfig.url, llmInstanceConfig.name, ragSettings.LLM_PROVIDER]); // Run when config changes or provider changes
+  }, [llmInstanceConfig.url, llmInstanceConfig.name, ragSettings.LLM_PROVIDER]);
 
   React.useEffect(() => {
-    // Only test if Ollama is selected and we have a real URL (not the default localhost)
-    if (ragSettings.LLM_PROVIDER === 'ollama' && 
-        embeddingInstanceConfig.url && 
-        embeddingInstanceConfig.name && 
-        embeddingInstanceConfig.url !== 'http://localhost:11434/v1') {
-      console.log('Auto-testing Embedding connection:', embeddingInstanceConfig.url);
+    const currentConfig = {
+      url: embeddingInstanceConfig.url,
+      name: embeddingInstanceConfig.name,
+      provider: ragSettings.LLM_PROVIDER
+    };
+    
+    const shouldTest = ragSettings.LLM_PROVIDER === 'ollama' && 
+                      embeddingInstanceConfig.url && 
+                      embeddingInstanceConfig.name && 
+                      embeddingInstanceConfig.url !== 'http://localhost:11434/v1' &&
+                      (currentConfig.url !== lastTestedEmbeddingConfigRef.current.url ||
+                       currentConfig.name !== lastTestedEmbeddingConfigRef.current.name ||
+                       currentConfig.provider !== lastTestedEmbeddingConfigRef.current.provider);
+    
+    if (shouldTest) {
+      lastTestedEmbeddingConfigRef.current = currentConfig;
       testConnection(embeddingInstanceConfig.url, setEmbeddingStatus);
     }
-  }, [embeddingInstanceConfig.url, embeddingInstanceConfig.name, ragSettings.LLM_PROVIDER]); // Run when config changes or provider changes
+  }, [embeddingInstanceConfig.url, embeddingInstanceConfig.name, ragSettings.LLM_PROVIDER]);
 
   // Fetch Ollama metrics when component mounts or when Ollama provider is selected or status changes
   React.useEffect(() => {
-    if (ragSettings.LLM_PROVIDER === 'ollama') {
+    const currentMetrics = {
+      provider: ragSettings.LLM_PROVIDER,
+      llmUrl: llmInstanceConfig.url,
+      embUrl: embeddingInstanceConfig.url,
+      llmOnline: llmStatus.online,
+      embOnline: embeddingStatus.online
+    };
+    
+    const shouldFetch = ragSettings.LLM_PROVIDER === 'ollama' &&
+                       (currentMetrics.provider !== lastMetricsFetchRef.current.provider ||
+                        currentMetrics.llmUrl !== lastMetricsFetchRef.current.llmUrl ||
+                        currentMetrics.embUrl !== lastMetricsFetchRef.current.embUrl ||
+                        currentMetrics.llmOnline !== lastMetricsFetchRef.current.llmOnline ||
+                        currentMetrics.embOnline !== lastMetricsFetchRef.current.embOnline);
+    
+    if (shouldFetch) {
+      lastMetricsFetchRef.current = currentMetrics;
       fetchOllamaMetrics();
     }
   }, [ragSettings.LLM_PROVIDER, llmInstanceConfig.url, embeddingInstanceConfig.url, llmStatus.online, embeddingStatus.online]);
