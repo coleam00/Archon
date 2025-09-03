@@ -5,6 +5,13 @@ Handles source metadata, summaries, and management.
 Consolidates both utility functions and class-based service.
 """
 
+
+import os
+import asyncio
+import random
+from datetime import datetime, timezone
+
+import os
 from typing import Any
 
 from supabase import Client
@@ -14,6 +21,48 @@ from .client_manager import get_supabase_client
 from .llm_provider_service import get_llm_client
 
 logger = get_logger(__name__)
+
+
+def _get_model_choice(provider: str | None = None) -> str:
+    """Get MODEL_CHOICE with provider-aware fallback."""
+    try:
+        # Direct cache/env fallback
+        from .credential_service import credential_service
+
+        model = None
+        if credential_service._cache_initialized:
+            # Provider-specific override key if present, else global
+            if provider:
+                provider_key = f"MODEL_CHOICE__{provider}"
+                model = credential_service._cache.get(provider_key)
+            if not model:
+                model = credential_service._cache.get("MODEL_CHOICE")
+
+        if not model:
+            model = os.getenv("MODEL_CHOICE")
+
+        # Sane defaults per provider
+        if not model:
+            DEFAULT_MODEL_BY_PROVIDER = {
+                "openrouter": "openai/gpt-4.1-nano",
+                "openai": "gpt-4.1-nano",
+                "google": "gemini-1.5-flash",
+                "ollama": "llama3.1:8b",
+            }
+            model = DEFAULT_MODEL_BY_PROVIDER.get((provider or "openai").lower(), "gpt-4.1-nano")
+
+        logger.debug(f"Using model choice ({provider or 'default'}): {model}")
+        return model
+    except Exception as e:
+        logger.warning(f"Error getting model choice ({provider or 'default'}): {e}, using default")
+        # Mirror the normal defaulting path on error
+        fallback_provider = (provider or "openai").lower()
+        return {
+            "openrouter": "openai/gpt-4.1-nano",
+            "openai": "gpt-4.1-nano",
+            "google": "gemini-1.5-flash",
+            "ollama": "llama3.1:8b",
+        }.get(fallback_provider, "gpt-4.1-nano")
 
 
 async def extract_source_summary(
@@ -33,11 +82,24 @@ async def extract_source_summary(
     Returns:
         A summary string
     """
+    # Input validation
+    if not source_id or len(source_id.strip()) == 0:
+        raise ValueError("source_id cannot be empty")
+    if max_length <= 0 or max_length > 2000:
+        raise ValueError("max_length must be between 1 and 2000")
+    
+    # Sanitize source_id for prompt injection protection
+    safe_source_id = source_id.strip()[:200]  # Limit length and remove whitespace
+    
     # Default summary if we can't extract anything meaningful
-    default_summary = f"Content from {source_id}"
+    default_summary = f"Content from {safe_source_id}"
 
     if not content or len(content.strip()) == 0:
         return default_summary
+
+    # Get the model choice from credential service (RAG setting)
+    model_choice = _get_model_choice(provider)
+    search_logger.info(f"Generating summary for {safe_source_id} using model: {model_choice}")
 
     # Limit content length to avoid token limits
     truncated_content = content[:25000] if len(content) > 25000 else content
@@ -51,34 +113,46 @@ The above content is from the documentation for '{source_id}'. Please provide a 
 """
 
     try:
-        async with get_llm_client(provider=provider) as client:
-            # Get model choice from credential service
-            from .credential_service import credential_service
-            rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
-            model_choice = rag_settings.get("MODEL_CHOICE", "gpt-4.1-nano")
-
-            search_logger.info(f"Generating summary for {source_id} using model: {model_choice}")
-
-            # Call the LLM API to generate the summary
-            response = await client.chat.completions.create(
-                model=model_choice,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a helpful assistant that provides concise library/tool/framework summaries.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-            )
+            # Use the provider-aware LLM client
+            async with get_llm_client(provider=provider) as client:
+                search_logger.info("Successfully created LLM client for summary generation")
+                
+                # Call the LLM API with retries
+                last_err = None
+                for attempt in range(3):
+                    try:
+                        response = await client.chat.completions.create(
+                            model=model_choice,
+                            messages=[
+                                {
+                                    "role": "system",
+                                    "content": "You are a helpful assistant that provides concise library/tool/framework summaries.",
+                                },
+                                {"role": "user", "content": prompt},
+                            ],
+                        )
+                        break
+                    except Exception as e:
+                        last_err = e
+                        delay = min(2 ** attempt, 8) + random.random()
+                        search_logger.warning(
+                            f"Summary generation attempt {attempt+1} failed for {source_id}: {e}. "
+                            f"Retrying in {delay:.1f}s",
+                            exc_info=True,
+                        )
+                        await asyncio.sleep(delay)
+                else:
+                    # Exhausted retries
+                    raise last_err
 
             # Extract the generated summary with proper error handling
             if not response or not response.choices or len(response.choices) == 0:
-                search_logger.error(f"Empty or invalid response from LLM for {source_id}")
+                search_logger.error(f"Empty or invalid response from LLM for {safe_source_id}")
                 return default_summary
 
             message_content = response.choices[0].message.content
             if message_content is None:
-                search_logger.error(f"LLM returned None content for {source_id}")
+                search_logger.error(f"LLM returned None content for {safe_source_id}")
                 return default_summary
 
             summary = message_content.strip()
@@ -91,7 +165,8 @@ The above content is from the documentation for '{source_id}'. Please provide a 
 
     except Exception as e:
         search_logger.error(
-            f"Error generating summary with LLM for {source_id}: {e}. Using default summary."
+            f"Error generating summary with LLM for {safe_source_id}: {e}. Using default summary.",
+            exc_info=True,
         )
         return default_summary
 
@@ -102,7 +177,6 @@ async def generate_source_title_and_metadata(
     knowledge_type: str = "technical",
     tags: list[str] | None = None,
     provider: str = None,
-    original_url: str | None = None,
     source_display_name: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """
@@ -113,93 +187,94 @@ async def generate_source_title_and_metadata(
         content: Sample content from the source
         knowledge_type: Type of knowledge (default: "technical")
         tags: Optional list of tags
-        provider: Optional provider override
 
     Returns:
         Tuple of (title, metadata)
     """
-    # Default title is the source ID
-    title = source_id
+    # Input validation
+    if not source_id or len(source_id.strip()) == 0:
+        raise ValueError("source_id cannot be empty")
+    
+    # Sanitize source_id for prompt injection protection
+    safe_source_id = source_id.strip()[:200]
+    
+    # Default title is the safe source ID
+    title = safe_source_id
 
     # Try to generate a better title from content
     if content and len(content.strip()) > 100:
         try:
+            # Use the provider-aware LLM client
             async with get_llm_client(provider=provider) as client:
-                # Get model choice from credential service
-                from .credential_service import credential_service
-                rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
-                model_choice = rag_settings.get("MODEL_CHOICE", "gpt-4.1-nano")
+                model_choice = _get_model_choice(provider)
 
                 # Limit content for prompt
                 sample_content = content[:3000] if len(content) > 3000 else content
-
-                # Determine source type from URL patterns
-                source_type_info = ""
-                if original_url:
-                    if "llms.txt" in original_url:
-                        source_type_info = " (detected from llms.txt file)"
-                    elif "sitemap" in original_url:
-                        source_type_info = " (detected from sitemap)"
-                    elif any(doc_indicator in original_url for doc_indicator in ["docs", "documentation", "api"]):
-                        source_type_info = " (detected from documentation site)"
-                    else:
-                        source_type_info = " (detected from website)"
-
+                
                 # Use display name if available for better context
                 source_context = source_display_name if source_display_name else source_id
 
-                prompt = f"""You are creating a title for crawled content that identifies the SERVICE NAME and SOURCE TYPE.
+                prompt = f"""Based on this content from {source_context}, generate a concise, descriptive title (3-6 words) that captures what this source is about:
 
-Source ID: {source_id}
-Original URL: {original_url or 'Not provided'}
-Display Name: {source_context}
-{source_type_info}
-
-Content sample:
 {sample_content}
 
-Generate a title in this format: "[Service Name] [Source Type]"
+Provide only the title, nothing else."""
 
-Requirements:
-- Identify the service/platform name from the URL (e.g., "Anthropic", "OpenAI", "Supabase", "Mem0")
-- Identify the source type: Documentation, API Reference, llms.txt, Guide, etc.
-- Keep it concise (2-4 words total)
-- Use proper capitalization
+                # Call the LLM API with retries
+                last_err = None
+                for attempt in range(3):
+                    try:
+                        response = await client.chat.completions.create(
+                            model=model_choice,
+                            messages=[
+                                {
+                                    "role": "system",
+                                    "content": "You are a helpful assistant that generates concise titles.",
+                                },
+                                {"role": "user", "content": prompt},
+                            ],
+                        )
+                        break
+                    except Exception as e:
+                        last_err = e
+                        delay = min(2 ** attempt, 8) + random.random()
+                        search_logger.warning(
+                            f"Title generation attempt {attempt+1} failed for {source_id}: {e}. "
+                            f"Retrying in {delay:.1f}s",
+                            exc_info=True,
+                        )
+                        await asyncio.sleep(delay)
+                else:
+                    raise last_err
 
-Examples:
-- "Anthropic Documentation" 
-- "OpenAI API Reference"
-- "Mem0 llms.txt"
-- "Supabase Docs"
-- "GitHub Guide"
+            # Validate response and content
+            if not response or not getattr(response, "choices", None) or len(response.choices) == 0:
+                search_logger.error(f"Empty or invalid title response for {safe_source_id}")
+                source_type = "file" if source_id.startswith("file_") else "url"
+                return title, {"knowledge_type": knowledge_type, "tags": tags or [], "source_type": source_type, "auto_generated": True}
 
-Generate only the title, nothing else."""
+            message_content = response.choices[0].message.content
+            if message_content is None:
+                search_logger.error(f"LLM returned None title content for {safe_source_id}")
+                source_type = "file" if source_id.startswith("file_") else "url"
+                return title, {"knowledge_type": knowledge_type, "tags": tags or [], "source_type": source_type, "auto_generated": True}
 
-                response = await client.chat.completions.create(
-                    model=model_choice,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "You are a helpful assistant that generates concise titles.",
-                        },
-                        {"role": "user", "content": prompt},
-                    ],
-                )
-
-                generated_title = response.choices[0].message.content.strip()
-                # Clean up the title
-                generated_title = generated_title.strip("\"'")
-                if len(generated_title) < 50:  # Sanity check
-                    title = generated_title
+            generated_title = message_content.strip()
+            # Clean up the title
+            generated_title = generated_title.strip("\"'")
+            generated_title = " ".join(generated_title.splitlines())
+            generated_title = generated_title.strip("-–—:,. ")
+            if len(generated_title) < 50:  # Sanity check
+                title = generated_title
 
         except Exception as e:
-            search_logger.error(f"Error generating title for {source_id}: {e}")
+            search_logger.error(f"Error generating title for {safe_source_id}: {e}", exc_info=True)
 
     # Build metadata - source_type will be determined by caller based on actual URL
     # Default to "url" but this should be overridden by the caller
     metadata = {
-        "knowledge_type": knowledge_type,
-        "tags": tags or [],
+        "knowledge_type": knowledge_type, 
+        "tags": tags or [], 
         "source_type": "url",  # Default, should be overridden by caller based on actual URL
         "auto_generated": True
     }
@@ -219,6 +294,7 @@ async def update_source_info(
     original_url: str | None = None,
     source_url: str | None = None,
     source_display_name: str | None = None,
+    provider: str | None = None,
 ):
     """
     Update or insert source information in the sources table.
@@ -233,7 +309,6 @@ async def update_source_info(
         tags: List of tags
         update_frequency: Update frequency in days
     """
-    search_logger.info(f"Updating source {source_id} with knowledge_type={knowledge_type}")
     try:
         # First, check if source already exists to preserve title
         existing_source = (
@@ -253,7 +328,7 @@ async def update_source_info(
                 source_type = "file"
             else:
                 source_type = "url"
-
+            
             metadata = {
                 "knowledge_type": knowledge_type,
                 "tags": tags or [],
@@ -261,7 +336,6 @@ async def update_source_info(
                 "auto_generated": False,  # Mark as not auto-generated since we're preserving
                 "update_frequency": update_frequency,
             }
-            search_logger.info(f"Updating existing source {source_id} metadata: knowledge_type={knowledge_type}")
             if original_url:
                 metadata["original_url"] = original_url
 
@@ -272,13 +346,13 @@ async def update_source_info(
                 "metadata": metadata,
                 "updated_at": "now()",
             }
-
+            
             # Add new fields if provided
             if source_url:
                 update_data["source_url"] = source_url
             if source_display_name:
                 update_data["source_display_name"] = source_display_name
-
+            
             result = (
                 client.table("archon_sources")
                 .update(update_data)
@@ -294,7 +368,7 @@ async def update_source_info(
             if source_display_name:
                 # Use the display name directly as the title (truncated to prevent DB issues)
                 title = source_display_name[:100].strip()
-
+                
                 # Determine source_type based on source_url or original_url
                 if source_url and source_url.startswith("file://"):
                     source_type = "file"
@@ -302,7 +376,7 @@ async def update_source_info(
                     source_type = "file"
                 else:
                     source_type = "url"
-
+                
                 metadata = {
                     "knowledge_type": knowledge_type,
                     "tags": tags or [],
@@ -312,9 +386,9 @@ async def update_source_info(
             else:
                 # Fallback to AI generation only if no display name
                 title, metadata = await generate_source_title_and_metadata(
-                    source_id, content, knowledge_type, tags, original_url, source_display_name
+                    source_id, content, knowledge_type, tags, provider=provider, source_display_name=source_display_name
                 )
-
+                
                 # Override the source_type from AI with actual URL-based determination
                 if source_url and source_url.startswith("file://"):
                     metadata["source_type"] = "file"
@@ -327,6 +401,8 @@ async def update_source_info(
             metadata["update_frequency"] = update_frequency
             if original_url:
                 metadata["original_url"] = original_url
+                # Ensure source_type reflects the actual scheme
+                metadata["source_type"] = "file" if original_url.startswith("file://") else "url"
 
             search_logger.info(f"Creating new source {source_id} with knowledge_type={knowledge_type}")
             # Use upsert to avoid race conditions with concurrent crawls
@@ -337,18 +413,18 @@ async def update_source_info(
                 "total_word_count": word_count,
                 "metadata": metadata,
             }
-
+            
             # Add new fields if provided
             if source_url:
                 upsert_data["source_url"] = source_url
             if source_display_name:
                 upsert_data["source_display_name"] = source_display_name
-
+            
             client.table("archon_sources").upsert(upsert_data).execute()
             search_logger.info(f"Created/updated source {source_id} with title: {title}")
 
     except Exception as e:
-        search_logger.error(f"Error updating source {source_id}: {e}")
+        search_logger.error(f"Error updating source {source_id}: {e}", exc_info=True)
         raise  # Re-raise the exception so the caller knows it failed
 
 
@@ -384,7 +460,7 @@ class SourceManagementService:
             return True, {"sources": sources, "total_count": len(sources)}
 
         except Exception as e:
-            logger.error(f"Error retrieving sources: {e}")
+            logger.error(f"Error retrieving sources: {e}", exc_info=True)
             return False, {"error": f"Error retrieving sources: {str(e)}"}
 
     def delete_source(self, source_id: str) -> tuple[bool, dict[str, Any]]:
@@ -454,7 +530,7 @@ class SourceManagementService:
             }
 
         except Exception as e:
-            logger.error(f"Unexpected error in delete_source: {e}")
+            logger.error(f"Unexpected error in delete_source: {e}", exc_info=True)
             return False, {"error": f"Error deleting source: {str(e)}"}
 
     def update_source_metadata(
@@ -525,7 +601,7 @@ class SourceManagementService:
                 return False, {"error": f"Source with ID {source_id} not found"}
 
         except Exception as e:
-            logger.error(f"Error updating source metadata: {e}")
+            logger.error(f"Error updating source metadata: {e}", exc_info=True)
             return False, {"error": f"Error updating source metadata: {str(e)}"}
 
     async def create_source_info(
@@ -536,6 +612,7 @@ class SourceManagementService:
         knowledge_type: str = "technical",
         tags: list[str] = None,
         update_frequency: int = 7,
+        provider: str | None = None,
     ) -> tuple[bool, dict[str, Any]]:
         """
         Create source information entry.
@@ -556,7 +633,9 @@ class SourceManagementService:
                 tags = []
 
             # Generate source summary using the utility function
-            source_summary = await extract_source_summary(source_id, content_sample)
+            source_summary = await extract_source_summary(
+                source_id, content_sample, provider=provider
+            )
 
             # Create the source info using the utility function
             await update_source_info(
@@ -568,6 +647,7 @@ class SourceManagementService:
                 knowledge_type,
                 tags,
                 update_frequency,
+                provider=provider,
             )
 
             return True, {
@@ -579,7 +659,7 @@ class SourceManagementService:
             }
 
         except Exception as e:
-            logger.error(f"Error creating source info: {e}")
+            logger.error(f"Error creating source info: {e}", exc_info=True)
             return False, {"error": f"Error creating source info: {str(e)}"}
 
     def get_source_details(self, source_id: str) -> tuple[bool, dict[str, Any]]:
@@ -631,7 +711,7 @@ class SourceManagementService:
             }
 
         except Exception as e:
-            logger.error(f"Error getting source details: {e}")
+            logger.error(f"Error getting source details: {e}", exc_info=True)
             return False, {"error": f"Error getting source details: {str(e)}"}
 
     def list_sources_by_type(self, knowledge_type: str = None) -> tuple[bool, dict[str, Any]]:
@@ -674,5 +754,5 @@ class SourceManagementService:
             }
 
         except Exception as e:
-            logger.error(f"Error listing sources by type: {e}")
+            logger.error(f"Error listing sources by type: {e}", exc_info=True)
             return False, {"error": f"Error listing sources by type: {str(e)}"}

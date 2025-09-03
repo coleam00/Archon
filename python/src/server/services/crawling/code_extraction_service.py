@@ -1390,6 +1390,15 @@ class CodeExtractionService:
         # Use default max workers
         max_workers = 3
 
+        # Get the active LLM provider for code summary generation
+        try:
+            provider_config = await credential_service.get_active_provider("llm")
+            active_provider = provider_config.get("provider", "openai")
+            safe_logfire_info(f"Using LLM provider '{active_provider}' for code summary generation")
+        except Exception as e:
+            safe_logfire_error(f"Failed to get active LLM provider, falling back to OpenAI: {e}")
+            active_provider = "openai"
+
         # Extract just the code blocks for batch processing
         code_blocks_for_summaries = [item["block"] for item in all_code_blocks]
 

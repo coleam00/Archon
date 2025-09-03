@@ -6,12 +6,16 @@ Extracted from crawl_orchestration_service.py for better modularity.
 """
 
 import asyncio
+import inspect
+from typing import Dict, Any, List, Optional, Callable
 from collections.abc import Callable
 from typing import Any
 
 from ...config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
 from ..source_management_service import extract_source_summary, update_source_info
 from ..storage.document_storage_service import add_documents_to_supabase
+from ..source_management_service import update_source_info, extract_source_summary
+from ..credential_service import credential_service
 from ..storage.storage_services import DocumentStorageService
 from .code_extraction_service import CodeExtractionService
 
@@ -33,6 +37,21 @@ class DocumentStorageOperations:
         self.supabase_client = supabase_client
         self.doc_storage_service = DocumentStorageService(supabase_client)
         self.code_extraction_service = CodeExtractionService(supabase_client)
+    
+    async def _maybe_call_cancellation_check(self, fn):
+        if not fn:
+            return
+        try:
+            result = fn()
+            if inspect.isawaitable(result):
+                await result
+        except asyncio.CancelledError:
+            # Propagate cooperative cancellation
+            raise
+        except Exception as e:
+            safe_logfire_error(f"cancellation_check raised: {e}")
+            # Re-raise so upstream can stop the operation deterministically
+            raise
 
     async def process_and_store_documents(
         self,
@@ -64,6 +83,19 @@ class DocumentStorageOperations:
         # Reuse initialized storage service for chunking
         storage_service = self.doc_storage_service
 
+        # Get the active embedding provider for document embedding generation
+        try:
+            embedding_provider_config = await credential_service.get_active_provider("embedding")
+            active_embedding_provider = embedding_provider_config.get("provider", "openai")
+            # OpenRouter does not support embeddings—force OpenAI here
+            if active_embedding_provider.lower() == "openrouter":
+                safe_logfire_info("Embedding provider 'openrouter' not supported for embeddings, falling back to OpenAI")
+                active_embedding_provider = "openai"
+            safe_logfire_info(f"Using embedding provider '{active_embedding_provider}' for document embeddings")
+        except Exception as e:
+            safe_logfire_error(f"Failed to get active embedding provider, falling back to OpenAI: {e}")
+            active_embedding_provider = "openai"
+        
         # Prepare data for chunked storage
         all_urls = []
         all_chunk_numbers = []
@@ -77,7 +109,7 @@ class DocumentStorageOperations:
         for doc_index, doc in enumerate(crawl_results):
             # Check for cancellation during document processing
             if cancellation_check:
-                cancellation_check()
+                await self._maybe_call_cancellation_check(cancellation_check)
 
             doc_url = (doc.get('url') or '').strip()
             markdown_content = (doc.get('markdown') or '').strip()
@@ -104,7 +136,10 @@ class DocumentStorageOperations:
             for i, chunk in enumerate(chunks):
                 # Check for cancellation during chunk processing
                 if cancellation_check and i % 10 == 0:  # Check every 10 chunks
-                    cancellation_check()
+                    if asyncio.iscoroutinefunction(cancellation_check):
+                        await cancellation_check()
+                    else:
+                        cancellation_check()
 
                 all_urls.append(doc_url)
                 all_chunk_numbers.append(i)
@@ -163,7 +198,7 @@ class DocumentStorageOperations:
             batch_size=25,  # Increased from 10 for better performance
             progress_callback=progress_callback,  # Pass the callback for progress updates
             enable_parallel_batches=True,  # Enable parallel processing
-            provider=None,  # Use configured provider
+            provider=active_embedding_provider,  # Use configured embedding provider
             cancellation_check=cancellation_check,  # Pass cancellation check
         )
 
@@ -220,6 +255,15 @@ class DocumentStorageOperations:
             f"Found {len(unique_source_ids)} unique source_ids: {list(unique_source_ids)}"
         )
 
+        # Get the active LLM provider for summary generation
+        try:
+            provider_config = await credential_service.get_active_provider("llm")
+            active_provider = provider_config.get("provider", "openai")
+            safe_logfire_info(f"Using LLM provider '{active_provider}' for source summary generation")
+        except Exception as e:
+            safe_logfire_error(f"Failed to get active provider, falling back to OpenAI: {e}")
+            active_provider = "openai"
+        
         # Create source records for ALL unique source_ids
         for source_id in unique_source_ids:
             # Get combined content for this specific source_id
@@ -234,6 +278,7 @@ class DocumentStorageOperations:
             # Generate summary with fallback
             try:
                 # Call async extract_source_summary directly
+                summary = await extract_source_summary(source_id, combined_content, provider=active_provider)
                 summary = await extract_source_summary(source_id, combined_content)
             except Exception as e:
                 logger.error(f"Failed to generate AI summary for '{source_id}'", exc_info=True)
@@ -259,6 +304,7 @@ class DocumentStorageOperations:
                     tags=request.get("tags", []),
                     update_frequency=0,  # Set to 0 since we're using manual refresh
                     original_url=request.get("url"),  # Store the original crawl URL
+                    provider=active_provider,
                     source_url=source_url,
                     source_display_name=source_display_name,
                 )
