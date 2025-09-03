@@ -106,14 +106,9 @@ const MCPResponseSchema = z.object({
 export type MCPTool = z.infer<typeof MCPToolSchema>;
 export type MCPParameter = z.infer<typeof MCPParameterSchema>;
 
-import { getWebSocketUrl } from '../config/api';
 
 class MCPService {
   private baseUrl = ''; // Use relative URL to go through Vite proxy
-  private wsUrl = getWebSocketUrl(); // Use WebSocket URL from config
-  private logWebSocket: WebSocket | null = null;
-  private reconnectTimeout: NodeJS.Timeout | null = null;
-  public isReconnecting = false;
 
   // ========================================
   // SERVER MANAGEMENT (Original functionality)
@@ -216,68 +211,6 @@ class MCPService {
     return response.json();
   }
 
-  streamLogs(
-    onMessage: (log: LogEntry) => void,
-    options: StreamLogOptions = {}
-  ): WebSocket {
-    const { autoReconnect = false, reconnectDelay = 5000 } = options;
-
-    // Close existing connection if any
-    this.disconnectLogs();
-
-    const ws = new WebSocket(`${getWebSocketUrl()}/api/mcp/logs/stream`);
-    this.logWebSocket = ws;
-
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        
-        // Ignore ping messages
-        if (data.type === 'ping') {
-          return;
-        }
-
-        // Handle log entries
-        if (data.timestamp && data.level && data.message) {
-          onMessage(data as LogEntry);
-        }
-      } catch (error) {
-        console.error('Failed to parse log message:', error);
-      }
-    };
-
-    ws.onclose = () => {
-      this.logWebSocket = null;
-      
-      if (autoReconnect && !this.isReconnecting) {
-        this.isReconnecting = true;
-        this.reconnectTimeout = setTimeout(() => {
-          this.isReconnecting = false;
-          this.streamLogs(onMessage, options);
-        }, reconnectDelay);
-      }
-    };
-
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-    };
-
-    return ws;
-  }
-
-  disconnectLogs(): void {
-    if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout);
-      this.reconnectTimeout = null;
-    }
-    
-    this.isReconnecting = false;
-
-    if (this.logWebSocket) {
-      this.logWebSocket.close();
-      this.logWebSocket = null;
-    }
-  }
 
   // ========================================
   // CLIENT MANAGEMENT (New functionality)

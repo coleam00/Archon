@@ -5,7 +5,7 @@ import { ToolTestingPanel } from './ToolTestingPanel';
 import { Button } from '../ui/Button';
 import { mcpClientService, MCPClient, MCPClientConfig } from '../../services/mcpClientService';
 import { useToast } from '../../contexts/ToastContext';
-import { DeleteConfirmModal } from '../../pages/ProjectPage';
+import { DeleteConfirmModal } from '../common/DeleteConfirmModal';
 
 // Client interface (keeping for backward compatibility)
 export interface Client {

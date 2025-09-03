@@ -104,38 +104,6 @@ describe('API Configuration', () => {
     });
   });
 
-  describe('getWebSocketUrl', () => {
-    it('should convert http to ws', async () => {
-      (import.meta.env as any).VITE_API_URL = 'http://localhost:8181';
-      
-      const { getWebSocketUrl } = await import('../../src/config/api');
-      expect(getWebSocketUrl()).toBe('ws://localhost:8181');
-    });
-
-    it('should convert https to wss', async () => {
-      (import.meta.env as any).VITE_API_URL = 'https://secure.example.com:8443';
-      
-      const { getWebSocketUrl } = await import('../../src/config/api');
-      expect(getWebSocketUrl()).toBe('wss://secure.example.com:8443');
-    });
-
-    it('should handle production mode with https', async () => {
-      (import.meta.env as any).PROD = true;
-      delete (import.meta.env as any).VITE_API_URL;
-      
-      // Mock window.location
-      Object.defineProperty(window, 'location', {
-        value: {
-          protocol: 'https:',
-          host: 'app.example.com'
-        },
-        writable: true
-      });
-      
-      const { getWebSocketUrl } = await import('../../src/config/api');
-      expect(getWebSocketUrl()).toBe('wss://app.example.com');
-    });
-  });
 
   describe('Port validation', () => {
     it('should handle various port formats', async () => {

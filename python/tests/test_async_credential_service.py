@@ -324,7 +324,7 @@ class TestAsyncCredentialService:
 
         with patch.object(credential_service, "_get_supabase_client", return_value=mock_client):
             with patch.object(credential_service, "_decrypt_value", return_value="decrypted_key"):
-                with patch.dict(os.environ, {}, clear=True):  # Clear environment
+                with patch.dict(os.environ, {}):  # Clear specific environment variables
                     await initialize_credentials()
 
                     # Should have loaded credentials

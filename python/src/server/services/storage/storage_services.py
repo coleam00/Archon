@@ -7,8 +7,6 @@ These services extend the base storage functionality with specific implementatio
 
 from typing import Any
 
-from fastapi import WebSocket
-
 from ...config.logfire_config import get_logger, safe_span
 from .base_storage_service import BaseStorageService
 from .document_storage_service import add_documents_to_supabase
@@ -26,7 +24,6 @@ class DocumentStorageService(BaseStorageService):
         source_id: str,
         knowledge_type: str = "documentation",
         tags: list[str] | None = None,
-        websocket: WebSocket | None = None,
         progress_callback: Any | None = None,
         cancellation_check: Any | None = None,
     ) -> tuple[bool, dict[str, Any]]:
@@ -39,14 +36,13 @@ class DocumentStorageService(BaseStorageService):
             source_id: Source identifier
             knowledge_type: Type of knowledge
             tags: Optional list of tags
-            websocket: Optional WebSocket for progress
             progress_callback: Optional callback for progress
 
         Returns:
             Tuple of (success, result_dict)
         """
         logger.info(f"Document upload starting: {filename} as {knowledge_type} knowledge")
-        
+
         with safe_span(
             "upload_document",
             filename=filename,
@@ -56,16 +52,6 @@ class DocumentStorageService(BaseStorageService):
             try:
                 # Progress reporting helper
                 async def report_progress(message: str, percentage: int, batch_info: dict = None):
-                    if websocket:
-                        data = {
-                            "type": "upload_progress",
-                            "filename": filename,
-                            "progress": percentage,
-                            "message": message,
-                        }
-                        if batch_info:
-                            data.update(batch_info)
-                        await websocket.send_json(data)
                     if progress_callback:
                         await progress_callback(message, percentage, batch_info)
 
@@ -124,21 +110,18 @@ class DocumentStorageService(BaseStorageService):
                 url_to_full_document = {doc_url: file_content}
 
                 # Update source information
-                from ...utils import extract_source_summary, update_source_info
+                from ..source_management_service import extract_source_summary, update_source_info
 
-                source_summary = await self.threading_service.run_cpu_intensive(
-                    extract_source_summary, source_id, file_content[:5000]
-                )
+                source_summary = await extract_source_summary(source_id, file_content[:5000])
 
                 logger.info(f"Updating source info for {source_id} with knowledge_type={knowledge_type}")
-                await self.threading_service.run_io_bound(
-                    update_source_info,
+                await update_source_info(
                     self.supabase_client,
                     source_id,
                     source_summary,
                     total_word_count,
                     file_content[:1000],  # content for title generation
-                    knowledge_type,      # FIX: Pass knowledge_type parameter!
+                    knowledge_type,      # Pass knowledge_type parameter!
                     tags,               # FIX: Pass tags parameter!
                 )
 
@@ -183,12 +166,7 @@ class DocumentStorageService(BaseStorageService):
                 span.set_attribute("error", str(e))
                 logger.error(f"Error uploading document: {e}")
 
-                if websocket:
-                    await websocket.send_json({
-                        "type": "upload_error",
-                        "error": str(e),
-                        "filename": filename,
-                    })
+                # Error will be handled by caller
 
                 return False, {"error": f"Error uploading document: {str(e)}"}
 
@@ -198,7 +176,7 @@ class DocumentStorageService(BaseStorageService):
 
         Args:
             documents: List of documents to store
-            **kwargs: Additional options (websocket, progress_callback, etc.)
+            **kwargs: Additional options (progress_callback, etc.)
 
         Returns:
             Storage result
@@ -211,7 +189,6 @@ class DocumentStorageService(BaseStorageService):
                 source_id=doc.get("source_id", "upload"),
                 knowledge_type=doc.get("knowledge_type", "documentation"),
                 tags=doc.get("tags"),
-                websocket=kwargs.get("websocket"),
                 progress_callback=kwargs.get("progress_callback"),
                 cancellation_check=kwargs.get("cancellation_check"),
             )
