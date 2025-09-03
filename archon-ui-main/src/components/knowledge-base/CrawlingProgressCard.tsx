@@ -1,50 +1,80 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
-  ChevronDown, 
-  ChevronUp, 
-  AlertTriangle, 
-  CheckCircle, 
-  Clock, 
-  Globe, 
+  Activity,
+  AlertTriangle,
+  CheckCircle,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  Globe,
   FileText,
   RotateCcw,
   X,
+  FileCode,
+  Upload,
   Search,
-  Download,
   Cpu,
   Database,
   Code,
   Zap,
-  Square
+  Square,
+  Layers,
+  Download
 } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
-import { CrawlProgressData } from '../../services/crawlProgressService';
+import { Badge } from '../ui/Badge';
+import { CrawlProgressData } from '../../types/crawl';
+import { useCrawlProgressPolling } from '../../hooks/usePolling';
 import { useTerminalScroll } from '../../hooks/useTerminalScroll';
-import { knowledgeBaseService } from '../../services/knowledgeBaseService';
 
 interface CrawlingProgressCardProps {
-  progressData: CrawlProgressData;
-  onComplete: (data: CrawlProgressData) => void;
-  onError: (error: string) => void;
-  onProgress?: (data: CrawlProgressData) => void;
+  progressId: string;
+  initialData?: Partial<CrawlProgressData>;
+  onComplete?: (data: CrawlProgressData) => void;
+  onError?: (error: string) => void;
   onRetry?: () => void;
   onDismiss?: () => void;
   onStop?: () => void;
 }
 
-interface ProgressStep {
-  id: string;
-  label: string;
-  icon: React.ReactNode;
-  percentage: number;
-  status: 'pending' | 'active' | 'completed' | 'error';
-  message?: string;
-}
+// Simple mapping of backend status to UI display
+const STATUS_CONFIG = {
+  // Common statuses
+  'starting': { label: 'Starting', icon: <Activity className="w-4 h-4" />, color: 'blue' },
+  'initializing': { label: 'Initializing', icon: <Activity className="w-4 h-4" />, color: 'blue' },
+  
+  // Crawl statuses
+  'analyzing': { label: 'Analyzing URL', icon: <Search className="w-4 h-4" />, color: 'purple' },
+  'crawling': { label: 'Crawling Pages', icon: <Globe className="w-4 h-4" />, color: 'blue' },
+  'processing': { label: 'Processing Content', icon: <Cpu className="w-4 h-4" />, color: 'cyan' },
+  'source_creation': { label: 'Creating Source', icon: <FileText className="w-4 h-4" />, color: 'indigo' },
+  'document_storage': { label: 'Storing Documents', icon: <Database className="w-4 h-4" />, color: 'green' },
+  'code_extraction': { label: 'Extracting Code', icon: <Code className="w-4 h-4" />, color: 'yellow' },
+  'finalization': { label: 'Finalizing', icon: <Zap className="w-4 h-4" />, color: 'orange' },
+  
+  // Upload statuses
+  'reading': { label: 'Reading File', icon: <Download className="w-4 h-4" />, color: 'blue' },
+  'extracting': { label: 'Extracting Text', icon: <FileText className="w-4 h-4" />, color: 'blue' },
+  'chunking': { label: 'Chunking Content', icon: <Cpu className="w-4 h-4" />, color: 'blue' },
+  'creating_source': { label: 'Creating Source', icon: <Database className="w-4 h-4" />, color: 'blue' },
+  'summarizing': { label: 'Generating Summary', icon: <Search className="w-4 h-4" />, color: 'purple' },
+  'storing': { label: 'Storing Chunks', icon: <Database className="w-4 h-4" />, color: 'green' },
+  
+  // End states
+  'completed': { label: 'Completed', icon: <CheckCircle className="w-4 h-4" />, color: 'green' },
+  'error': { label: 'Error', icon: <AlertTriangle className="w-4 h-4" />, color: 'red' },
+  'failed': { label: 'Failed', icon: <AlertTriangle className="w-4 h-4" />, color: 'red' },
+  'cancelled': { label: 'Cancelled', icon: <X className="w-4 h-4" />, color: 'gray' },
+  'stopping': { label: 'Stopping', icon: <Square className="w-4 h-4" />, color: 'orange' },
+} as const;
 
 export const CrawlingProgressCard: React.FC<CrawlingProgressCardProps> = ({
-  progressData,
+  progressId,
+  initialData,
+  onComplete,
+  onError,
   onRetry,
   onDismiss,
   onStop
@@ -53,575 +83,499 @@ export const CrawlingProgressCard: React.FC<CrawlingProgressCardProps> = ({
   const [showLogs, setShowLogs] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   
-  // Use the terminal scroll hook for auto-scrolling logs
-  const logsContainerRef = useTerminalScroll([progressData.logs], showLogs);
-
-  // Handle stop crawl action
-  const handleStopCrawl = async () => {
-    console.log('🛑 Stop button clicked!');
-    console.log('🛑 Progress data:', progressData);
-    console.log('🛑 Progress ID:', progressData.progressId);
-    console.log('🛑 Is stopping:', isStopping);
-    console.log('🛑 onStop callback:', onStop);
+  // Track completion/error handling
+  const [hasHandledCompletion, setHasHandledCompletion] = useState(false);
+  const [hasHandledError, setHasHandledError] = useState(false);
+  
+  // Poll for progress updates
+  const { data: progressData } = useCrawlProgressPolling(progressId, {
+    onError: (error: Error) => {
+      if (error.message === 'Resource no longer exists') {
+        if (onDismiss) {
+          onDismiss();
+        }
+      }
+    }
+  });
+  
+  // Merge polled data with initial data - preserve important fields
+  const displayData = progressData ? {
+    ...initialData,
+    ...progressData,
+    // Ensure we don't lose these fields during polling
+    currentUrl: progressData.currentUrl || progressData.current_url || initialData?.currentUrl,
+    crawlType: progressData.crawlType || progressData.crawl_type || initialData?.crawlType,
+  } : {
+    progressId,
+    status: 'starting',
+    progress: 0,
+    message: 'Initializing...',
+    ...initialData
+  } as CrawlProgressData;
+  
+  // Use terminal scroll hook for logs
+  const logsContainerRef = useTerminalScroll(
+    displayData?.logs || [], 
+    showLogs
+  );
+  
+  // Handle status changes
+  useEffect(() => {
+    if (!progressData) return;
     
-    if (!progressData.progressId || isStopping) {
-      console.log('🛑 Stopping early - no progress ID or already stopping');
-      return;
+    if (progressData.status === 'completed' && !hasHandledCompletion && onComplete) {
+      setHasHandledCompletion(true);
+      onComplete(progressData);
+    } else if ((progressData.status === 'error' || progressData.status === 'failed') && !hasHandledError && onError) {
+      setHasHandledError(true);
+      onError(progressData.error || 'Unknown error');
+    }
+  }, [progressData?.status, hasHandledCompletion, hasHandledError, onComplete, onError]);
+  
+  // Get current status config with better fallback
+  const statusConfig = (() => {
+    const config = STATUS_CONFIG[displayData.status as keyof typeof STATUS_CONFIG];
+    if (config) {
+      return config;
     }
     
+    // Better fallbacks based on progress
+    if (displayData.progress >= 100) {
+      return STATUS_CONFIG.completed;
+    }
+    if (displayData.progress > 90) {
+      return STATUS_CONFIG.finalization;
+    }
+    
+    // Log unknown statuses for debugging
+    console.warn(`Unknown status: ${displayData.status}, progress: ${displayData.progress}%, message: ${displayData.message}`);
+    
+    return STATUS_CONFIG.processing;
+  })();
+  
+  // Debug log for status transitions
+  useEffect(() => {
+    if (displayData.status === 'finalization' || 
+        (displayData.status === 'starting' && displayData.progress > 90)) {
+      console.log('Status transition debug:', {
+        status: displayData.status,
+        progress: displayData.progress,
+        message: displayData.message,
+        hasStatusConfig: !!STATUS_CONFIG[displayData.status as keyof typeof STATUS_CONFIG]
+      });
+    }
+  }, [displayData.status, displayData.progress]);
+  
+  // Determine crawl type display
+  const getCrawlTypeDisplay = () => {
+    const crawlType = displayData.crawlType || 
+      (displayData.uploadType === 'document' ? 'upload' : 'normal');
+    
+    switch (crawlType) {
+      case 'sitemap':
+        return { icon: <Layers className="w-4 h-4" />, label: 'Sitemap Crawl' };
+      case 'llms-txt':
+      case 'text_file':
+        return { icon: <FileCode className="w-4 h-4" />, label: 'LLMs.txt Import' };
+      case 'upload':
+        return { icon: <Upload className="w-4 h-4" />, label: 'Document Upload' };
+      default:
+        return { icon: <Globe className="w-4 h-4" />, label: 'Web Crawl' };
+    }
+  };
+  
+  const crawlType = getCrawlTypeDisplay();
+  
+  // Handle stop
+  const handleStop = async () => {
+    if (isStopping || !onStop) return;
+    setIsStopping(true);
     try {
-      setIsStopping(true);
-      console.log('🛑 Stopping crawl with progress ID:', progressData.progressId);
-      
-      // Optimistic UI update - immediately show stopping status
-      progressData.status = 'stopping';
-      
-      // Call the onStop callback if provided - this will handle localStorage and API call
-      if (onStop) {
-        console.log('🛑 Calling onStop callback');
-        onStop();
-      }
-    } catch (error) {
-      console.error('Failed to stop crawl:', error);
-      // Revert optimistic update on error
-      progressData.status = progressData.status === 'stopping' ? 'processing' : progressData.status;
+      onStop();
     } finally {
       setIsStopping(false);
     }
   };
-
-  // Calculate individual progress steps based on current status and percentage
-  const getProgressSteps = (): ProgressStep[] => {
-    // Check if this is an upload operation
-    const isUpload = progressData.uploadType === 'document';
+  
+  // Get progress steps based on type
+  const getProgressSteps = () => {
+    const isUpload = displayData.uploadType === 'document';
     
-    const steps: ProgressStep[] = isUpload ? [
-      {
-        id: 'reading',
-        label: 'Reading File',
-        icon: <Download className="w-4 h-4" />,
-        percentage: 0,
-        status: 'pending'
-      },
-      {
-        id: 'extracting',
-        label: 'Text Extraction',
-        icon: <FileText className="w-4 h-4" />,
-        percentage: 0,
-        status: 'pending'
-      },
-      {
-        id: 'chunking',
-        label: 'Content Chunking',
-        icon: <Cpu className="w-4 h-4" />,
-        percentage: 0,
-        status: 'pending'
-      },
-      {
-        id: 'creating_source',
-        label: 'Creating Source',
-        icon: <Database className="w-4 h-4" />,
-        percentage: 0,
-        status: 'pending'
-      },
-      {
-        id: 'summarizing',
-        label: 'AI Summary',
-        icon: <Search className="w-4 h-4" />,
-        percentage: 0,
-        status: 'pending'
-      },
-      {
-        id: 'storing',
-        label: 'Storing Chunks',
-        icon: <Database className="w-4 h-4" />,
-        percentage: 0,
-        status: 'pending'
-      }
+    const steps = isUpload ? [
+      'reading', 'extracting', 'chunking', 'creating_source', 'summarizing', 'storing'
     ] : [
-      {
-        id: 'analyzing',
-        label: 'URL Analysis',
-        icon: <Search className="w-4 h-4" />,
-        percentage: 0,
-        status: 'pending'
-      },
-      {
-        id: 'crawling',
-        label: 'Web Crawling',
-        icon: <Globe className="w-4 h-4" />,
-        percentage: 0,
-        status: 'pending'
-      },
-      {
-        id: 'processing',
-        label: 'Content Processing',
-        icon: <Cpu className="w-4 h-4" />,
-        percentage: 0,
-        status: 'pending'
-      },
-      {
-        id: 'source_creation',
-        label: 'Source Creation',
-        icon: <FileText className="w-4 h-4" />,
-        percentage: 0,
-        status: 'pending'
-      },
-      {
-        id: 'document_storage',
-        label: 'Document Storage',
-        icon: <Database className="w-4 h-4" />,
-        percentage: 0,
-        status: 'pending'
-      },
-      {
-        id: 'code_storage',
-        label: 'Code Examples',
-        icon: <Code className="w-4 h-4" />,
-        percentage: 0,
-        status: 'pending'
-      },
-      {
-        id: 'finalization',
-        label: 'Finalization',
-        icon: <Zap className="w-4 h-4" />,
-        percentage: 0,
-        status: 'pending'
-      }
+      'analyzing', 'crawling', 'processing', 'source_creation', 'document_storage', 'code_extraction', 'finalization'
     ];
-
-    // Map current status directly to step progress
-    const currentStatus = progressData.status;
-    const currentPercentage = progressData.percentage || 0;
-
-    // Normalize status to handle backend/frontend naming differences
-    const normalizedStatus = currentStatus === 'code_extraction' ? 'code_storage' : currentStatus;
-
-    // Define step order for completion tracking
-    const stepOrder = isUpload 
-      ? ['reading', 'extracting', 'chunking', 'creating_source', 'summarizing', 'storing']
-      : ['analyzing', 'crawling', 'processing', 'source_creation', 'document_storage', 'code_storage', 'finalization'];
     
-    // Update step progress based on current status
-    steps.forEach((step) => {
-      const stepIndex = stepOrder.indexOf(step.id);
-      const currentStepIndex = stepOrder.indexOf(normalizedStatus);
+    return steps.map(stepId => {
+      const config = STATUS_CONFIG[stepId as keyof typeof STATUS_CONFIG];
+      const currentIndex = steps.indexOf(displayData.status || '');
+      const stepIndex = steps.indexOf(stepId);
       
-      if (currentStatus === 'error') {
-        if (stepIndex <= currentStepIndex) {
-          step.status = stepIndex === currentStepIndex ? 'error' : 'completed';
-          step.percentage = stepIndex === currentStepIndex ? currentPercentage : 100;
-        } else {
-          step.status = 'pending';
-          step.percentage = 0;
-        }
-      } else if (currentStatus === 'completed') {
-        step.status = 'completed';
-        step.percentage = 100;
-      } else if (step.id === normalizedStatus) {
-        // This is the active step
-        step.status = 'active';
-        // Calculate phase-specific percentage based on overall progress
-        // Each phase has a range in the overall progress:
-        // analyzing: 0-5%, crawling: 5-20%, processing/source_creation: 10-20%, 
-        // document_storage: 20-85%, code_storage: 85-95%, finalization: 95-100%
-        const phaseRanges = {
-          'analyzing': { start: 0, end: 5 },
-          'crawling': { start: 5, end: 20 },
-          'processing': { start: 10, end: 15 },
-          'source_creation': { start: 15, end: 20 },
-          'document_storage': { start: 20, end: 85 },
-          'code_storage': { start: 85, end: 95 },
-          'code_extraction': { start: 85, end: 95 },
-          'finalization': { start: 95, end: 100 }
-        };
-        
-        const range = phaseRanges[step.id as keyof typeof phaseRanges];
-        if (range && currentPercentage >= range.start) {
-          // Calculate percentage within this phase
-          const phaseProgress = ((currentPercentage - range.start) / (range.end - range.start)) * 100;
-          step.percentage = Math.min(Math.round(phaseProgress), 100);
-        } else {
-          step.percentage = currentPercentage;
-        }
-      } else if (stepIndex < currentStepIndex) {
-        // Previous steps are completed
-        step.status = 'completed';
-        step.percentage = 100;
-      } else {
-        // Future steps are pending
-        step.status = 'pending';
-        step.percentage = 0;
+      let status: 'pending' | 'active' | 'completed' | 'error' = 'pending';
+      
+      if (displayData.status === 'completed') {
+        status = 'completed';
+      } else if (displayData.status === 'error' || displayData.status === 'failed') {
+        status = stepIndex <= currentIndex ? 'error' : 'pending';
+      } else if (stepIndex < currentIndex) {
+        status = 'completed';
+      } else if (stepIndex === currentIndex) {
+        status = 'active';
       }
-
-      // Set specific messages based on current status
-      if (step.status === 'active') {
-        // Always use the log message from backend if available
-        if (progressData.log) {
-          step.message = progressData.log;
-        } else if (!progressData.log) {
-          // Only use fallback messages if no log provided
-          if (isUpload) {
-            switch (step.id) {
-              case 'reading':
-                step.message = `Reading ${progressData.fileName || 'file'}...`;
-                break;
-              case 'extracting':
-                step.message = `Extracting text from ${progressData.fileType || 'document'}...`;
-                break;
-              case 'chunking':
-                step.message = 'Breaking into chunks...';
-                break;
-              case 'creating_source':
-                step.message = 'Creating source entry...';
-                break;
-              case 'summarizing':
-                step.message = 'Generating AI summary...';
-                break;
-              case 'storing':
-                step.message = 'Storing in database...';
-                break;
-            }
-          } else {
-            switch (step.id) {
-              case 'analyzing':
-                step.message = 'Detecting URL type...';
-                break;
-              case 'crawling':
-                step.message = `${progressData.processedPages || 0} of ${progressData.totalPages || 0} pages`;
-                break;
-              case 'processing':
-                step.message = 'Chunking content...';
-                break;
-              case 'source_creation':
-                step.message = 'Creating source records...';
-                break;
-              case 'document_storage':
-                if (progressData.completedBatches !== undefined && progressData.totalBatches) {
-                  step.message = `Batch ${progressData.completedBatches}/${progressData.totalBatches} - Saving to database...`;
-                } else {
-                  step.message = 'Saving to database...';
-                }
-                break;
-              case 'code_storage':
-                step.message = 'Extracting code blocks...';
-                break;
-              case 'finalization':
-                step.message = 'Completing crawl...';
-                break;
-            }
-          }
-        }
-      } else if (step.status === 'completed' && step.percentage === 100 && currentPercentage < 95) {
-        // Add message for completed steps when overall progress is still ongoing
-        const isTextFile = progressData.currentUrl && 
-          (progressData.currentUrl.endsWith('.txt') || progressData.currentUrl.endsWith('.md'));
-        
-        switch (step.id) {
-          case 'crawling':
-            step.message = isTextFile ? 'Text file fetched, processing content...' : 'Crawling complete, processing...';
-            break;
-          case 'analyzing':
-            step.message = 'Analysis complete';
-            break;
-          case 'processing':
-            step.message = 'Processing complete';
-            break;
-          case 'source_creation':
-            step.message = 'Source created';
-            break;
-        }
-      }
+      
+      return {
+        id: stepId,
+        label: config.label,
+        icon: config.icon,
+        status
+      };
     });
-
-    return steps;
   };
-
+  
   const progressSteps = getProgressSteps();
-  const overallStatus = progressData.status;
-
-  const getOverallStatusDisplay = () => {
-    const isUpload = progressData.uploadType === 'document';
-    
-    switch (overallStatus) {
-      case 'starting':
-        return {
-          text: isUpload ? 'Starting upload...' : 'Starting crawl...',
-          color: 'blue' as const,
-          icon: <Clock className="w-4 h-4" />
-        };
-      case 'completed':
-        return {
-          text: isUpload ? 'Upload completed!' : 'Crawling completed!',
-          color: 'green' as const,
-          icon: <CheckCircle className="w-4 h-4" />
-        };
-      case 'error':
-        return {
-          text: isUpload ? 'Upload failed' : 'Crawling failed',
-          color: 'pink' as const,
-          icon: <AlertTriangle className="w-4 h-4" />
-        };
-      case 'stale':
-        return {
-          text: isUpload ? 'Upload appears stuck' : 'Crawl appears stuck',
-          color: 'pink' as const,
-          icon: <AlertTriangle className="w-4 h-4" />
-        };
-      case 'reading':
-        return {
-          text: 'Reading file...',
-          color: 'blue' as const,
-          icon: <Download className="w-4 h-4" />
-        };
-      case 'extracting':
-        return {
-          text: 'Extracting text...',
-          color: 'blue' as const,
-          icon: <FileText className="w-4 h-4" />
-        };
-      case 'chunking':
-        return {
-          text: 'Processing content...',
-          color: 'blue' as const,
-          icon: <Cpu className="w-4 h-4" />
-        };
-      case 'creating_source':
-        return {
-          text: 'Creating source...',
-          color: 'blue' as const,
-          icon: <Database className="w-4 h-4" />
-        };
-      case 'summarizing':
-        return {
-          text: 'Generating summary...',
-          color: 'blue' as const,
-          icon: <Search className="w-4 h-4" />
-        };
-      case 'storing':
-        return {
-          text: 'Storing chunks...',
-          color: 'blue' as const,
-          icon: <Database className="w-4 h-4" />
-        };
-      case 'source_creation':
-        return {
-          text: 'Creating source records...',
-          color: 'blue' as const,
-          icon: <FileText className="w-4 h-4" />
-        };
-      case 'document_storage':
-        return {
-          text: progressData.completedBatches !== undefined && progressData.totalBatches 
-            ? `Document Storage: ${progressData.completedBatches}/${progressData.totalBatches} batches`
-            : 'Storing documents...',
-          color: 'blue' as const,
-          icon: <Database className="w-4 h-4" />
-        };
-      case 'code_storage':
-      case 'code_extraction':
-        return {
-          text: 'Processing code examples...',
-          color: 'blue' as const,
-          icon: <Code className="w-4 h-4" />
-        };
-      case 'finalization':
-        return {
-          text: 'Finalizing...',
-          color: 'blue' as const,
-          icon: <Zap className="w-4 h-4" />
-        };
-      case 'cancelled':
-        return {
-          text: isUpload ? 'Upload cancelled' : 'Crawling cancelled',
-          color: 'pink' as const,
-          icon: <Square className="w-4 h-4" />
-        };
-      case 'stopping':
-        return {
-          text: isUpload ? 'Stopping upload...' : 'Stopping crawl...',
-          color: 'pink' as const,
-          icon: <Square className="w-4 h-4" />
-        };
-      default:
-        const activeStep = progressSteps.find(step => step.status === 'active');
-        return {
-          text: activeStep ? activeStep.label : 'Processing...',
-          color: 'blue' as const,
-          icon: activeStep ? activeStep.icon : <Clock className="w-4 h-4" />
-        };
-    }
-  };
-
-  const status = getOverallStatusDisplay();
-
-  const formatNumber = (num: number): string => {
-    return num.toLocaleString();
-  };
-
-  const getStepStatusColor = (stepStatus: string, isProcessingContinuing: boolean = false) => {
-    switch (stepStatus) {
-      case 'completed':
-        return isProcessingContinuing 
-          ? 'text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-500/10 animate-pulse'
-          : 'text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-500/10';
-      case 'active':
-        return 'text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-500/10';
-      case 'error':
-        return 'text-pink-600 dark:text-pink-400 bg-pink-100 dark:bg-pink-500/10';
-      default:
-        return 'text-gray-400 dark:text-gray-600 bg-gray-100 dark:bg-gray-500/10';
-    }
-  };
-
+  const isActive = !['completed', 'error', 'failed', 'cancelled'].includes(displayData.status || '');
+  
   return (
-    <Card accentColor={status.color} className="relative" data-testid="crawling-progress-card">
-      {/* Status Header */}
+    <Card className="relative overflow-hidden">
+      {/* Header */}
       <div className="flex items-center gap-3 mb-4">
-        <div className={`p-2 rounded-md ${
-          status.color === 'blue' ? 'bg-blue-100 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400' :
-          status.color === 'green' ? 'bg-green-100 dark:bg-green-500/10 text-green-600 dark:text-green-400' :
-          status.color === 'pink' ? 'bg-pink-100 dark:bg-pink-500/10 text-pink-600 dark:text-pink-400' :
-          'bg-gray-100 dark:bg-gray-500/10 text-gray-600 dark:text-gray-400'
-        }`}>
-          {status.icon}
-        </div>
-        <div className="flex-1 min-w-0 overflow-hidden">
-          <h3 className="font-medium text-gray-800 dark:text-white" data-testid="crawling-progress-title">
-            {status.text}
-          </h3>
-          {progressData.currentUrl && (
+        <Badge color={crawlType.label.includes('Sitemap') ? 'purple' : 'blue'} variant="solid">
+          {crawlType.icon}
+          <span className="ml-1">{crawlType.label}</span>
+        </Badge>
+        
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className={`
+              ${statusConfig.color === 'green' ? 'text-green-600 dark:text-green-400' :
+                statusConfig.color === 'red' ? 'text-red-600 dark:text-red-400' :
+                statusConfig.color === 'blue' ? 'text-blue-600 dark:text-blue-400' :
+                statusConfig.color === 'purple' ? 'text-purple-600 dark:text-purple-400' :
+                statusConfig.color === 'orange' ? 'text-orange-600 dark:text-orange-400' :
+                'text-gray-600 dark:text-gray-400'}
+              font-medium
+            `}>
+              {statusConfig.label}
+            </span>
+            {isActive && (
+              <motion.div
+                animate={{ rotate: 360 }}
+                transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
+              >
+                {statusConfig.icon}
+              </motion.div>
+            )}
+          </div>
+          {displayData.currentUrl && (
             <p className="text-sm text-gray-500 dark:text-zinc-400 truncate">
-              {progressData.currentUrl}
+              {displayData.currentUrl}
             </p>
           )}
         </div>
-
-        {/* Stop Button - only show for active crawls */}
-        {progressData.status !== 'completed' && 
-         progressData.status !== 'error' && 
-         progressData.status !== 'cancelled' && 
-         onStop && (
-          <div className="flex-shrink-0 ml-2">
-            <motion.button
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                console.log('🛑 Button click event triggered');
-                handleStopCrawl();
-              }}
-              disabled={isStopping}
-              data-testid="crawling-progress-stop"
-              className={`
-                relative rounded-full border-2 transition-all duration-300 p-2
-                border-red-400 hover:border-red-300
-                ${isStopping ? 
-                  'bg-gray-100 dark:bg-gray-800 opacity-50 cursor-not-allowed' : 
-                  'bg-gradient-to-b from-gray-900 to-black cursor-pointer'
-                }
-                shadow-[0_0_8px_rgba(239,68,68,0.6)] hover:shadow-[0_0_12px_rgba(239,68,68,0.8)]
-              `}
-              whileHover={{ scale: isStopping ? 1 : 1.05 }}
-              whileTap={{ scale: isStopping ? 1 : 0.95 }}
-              title={isStopping ? "Stopping..." : "Stop Crawl"}
-            >
-              {/* Simplified glow - no overflow issues */}
-              <motion.div
-                className="absolute inset-0 rounded-full border-2 border-red-400"
-                animate={{
-                  opacity: isStopping ? 0 : [0.4, 0.8, 0.4],
-                  scale: isStopping ? 1 : [1, 1.1, 1]
-                }}
-                transition={{
-                  duration: 2,
-                  repeat: Infinity,
-                  ease: "easeInOut"
-                }}
-              />
-
-              {/* Stop icon with simpler glow */}
-              <motion.div
-                className="relative z-10"
-                animate={{
-                  filter: isStopping ? 'none' : [
-                    'drop-shadow(0 0 4px rgb(239,68,68))',
-                    'drop-shadow(0 0 8px rgb(239,68,68))',
-                    'drop-shadow(0 0 4px rgb(239,68,68))'
-                  ]
-                }}
-                transition={{
-                  duration: 2,
-                  repeat: Infinity,
-                  ease: "easeInOut"
-                }}
-              >
-                <Square 
-                  className={`w-4 h-4 ${
-                    isStopping ? 'text-gray-600' : 'text-white'
-                  }`} 
-                  fill="currentColor"
-                />
-              </motion.div>
-            </motion.button>
-          </div>
+        
+        {/* Stop button */}
+        {isActive && onStop && (
+          <Button
+            onClick={handleStop}
+            disabled={isStopping}
+            variant="ghost"
+            size="sm"
+            className="text-red-600 hover:text-red-700 dark:text-red-400"
+          >
+            <Square className="w-4 h-4" />
+          </Button>
         )}
-
       </div>
-
+      
       {/* Main Progress Bar */}
-      {progressData.status !== 'completed' && progressData.status !== 'error' && (
+      {isActive && (
         <div className="mb-4">
           <div className="flex items-center justify-between mb-1">
             <span className="text-xs font-medium text-gray-600 dark:text-gray-400">
               Overall Progress
             </span>
             <span className="text-xs text-gray-500 dark:text-gray-400">
-              {Math.round(Math.max(0, Math.min(100, progressData.percentage || 0)))}%
+              {Math.round(displayData.progress || 0)}%
             </span>
           </div>
-          <div className="w-full bg-gray-200 dark:bg-zinc-700 rounded-full h-2" data-testid="crawling-progress-bar">
+          <div className="w-full bg-gray-200 dark:bg-zinc-700 rounded-full h-2">
             <motion.div
               className="h-2 rounded-full bg-gradient-to-r from-blue-500 to-blue-600"
               initial={{ width: 0 }}
-              animate={{ width: `${Math.max(0, Math.min(100, progressData.percentage || 0))}%` }}
+              animate={{ width: `${Math.max(0, Math.min(100, displayData.progress || 0))}%` }}
               transition={{ duration: 0.5, ease: 'easeOut' }}
             />
           </div>
+          
+          {/* Current message with numeric progress */}
+          {displayData.message && (
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              {displayData.message}
+              {displayData.status === 'crawling' && displayData.totalPages !== undefined && displayData.totalPages > 0 && (
+                <span className="ml-2 font-medium">
+                  ({displayData.processedPages || 0}/{displayData.totalPages} pages)
+                </span>
+              )}
+            </p>
+          )}
         </div>
       )}
-
-      {/* Show parallel workers info when available */}
-      {progressData.parallelWorkers && progressData.parallelWorkers > 1 && 
-       progressData.status === 'document_storage' && (
-        <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 rounded-md">
+      
+      {/* Finalization Progress */}
+      {isActive && displayData.status === 'finalization' && (
+        <div className="mb-4 p-3 bg-orange-50 dark:bg-orange-500/10 border border-orange-200 dark:border-orange-500/20 rounded-md">
           <div className="flex items-center gap-2">
-            <Cpu className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-            <span className="text-sm font-medium text-blue-700 dark:text-blue-400">
-              Processing with {progressData.parallelWorkers} parallel workers
+            <Zap className="w-4 h-4 text-orange-600 dark:text-orange-400 animate-pulse" />
+            <span className="text-sm font-medium text-orange-700 dark:text-orange-400">
+              Finalizing Results
             </span>
           </div>
-          {progressData.totalJobs && (
-            <div className="mt-1 text-xs text-blue-600 dark:text-blue-400/80">
-              Total batches to process: {progressData.totalJobs}
+          <p className="text-xs text-orange-600 dark:text-orange-400/80 mt-1">
+            Completing crawl and saving final metadata...
+          </p>
+        </div>
+      )}
+      
+      {/* Crawling Statistics - Show detailed crawl progress */}
+      {isActive && displayData.status === 'crawling' && (displayData.totalPages > 0 || displayData.processedPages > 0) && (
+        <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 rounded-md">
+          <div className="flex items-center gap-2 mb-2">
+            <Globe className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+            <span className="text-sm font-medium text-blue-700 dark:text-blue-300">
+              Crawling Progress
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <div className="text-xs text-blue-600 dark:text-blue-400/80">Pages Discovered</div>
+              <div className="text-2xl font-bold text-blue-700 dark:text-blue-300">
+                {displayData.totalPages || 0}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-blue-600 dark:text-blue-400/80">Pages Processed</div>
+              <div className="text-2xl font-bold text-blue-700 dark:text-blue-300">
+                {displayData.processedPages || 0}
+              </div>
+            </div>
+          </div>
+          {displayData.currentUrl && (
+            <div className="mt-2 pt-2 border-t border-blue-200/50 dark:border-blue-500/20">
+              <div className="text-xs text-blue-600 dark:text-blue-400/80">Currently crawling:</div>
+              <div className="text-xs text-blue-700 dark:text-blue-300 truncate mt-1">
+                {displayData.currentUrl}
+              </div>
             </div>
           )}
         </div>
       )}
-
-      {/* Show info when crawling is complete but processing continues */}
-      {progressData.status === 'document_storage' && progressData.percentage < 30 && (
-        <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 rounded-md">
-          <div className="flex items-center gap-2">
-            <Cpu className="w-4 h-4 text-blue-600 dark:text-blue-400 animate-pulse" />
-            <span className="text-sm text-blue-700 dark:text-blue-400">
-              Content fetched successfully. Processing and storing documents...
+      
+      {/* Code Extraction Progress - Special handling for long-running step */}
+      {isActive && displayData.status === 'code_extraction' && (
+        <div className="mb-4 p-3 bg-yellow-50 dark:bg-yellow-500/10 border border-yellow-200 dark:border-yellow-500/20 rounded-md">
+          <div className="flex items-center gap-2 mb-2">
+            <Code className="w-4 h-4 text-yellow-600 dark:text-yellow-400 animate-pulse" />
+            <span className="text-sm font-medium text-yellow-700 dark:text-yellow-400">
+              Extracting Code Examples
             </span>
+          </div>
+          
+          {/* Show document scanning progress if available */}
+          {(displayData.completedDocuments !== undefined || displayData.totalDocuments !== undefined) && 
+           displayData.completedDocuments < displayData.totalDocuments && (
+            <div className="mb-2">
+              <div className="text-xs text-yellow-600 dark:text-yellow-400/80">
+                Scanning documents: {displayData.completedDocuments || 0} / {displayData.totalDocuments || 0}
+              </div>
+              <div className="w-full bg-yellow-200/50 dark:bg-yellow-700/30 rounded-full h-1.5 mt-1">
+                <div 
+                  className="h-1.5 rounded-full bg-yellow-500 dark:bg-yellow-400"
+                  style={{ 
+                    width: `${Math.round(((displayData.completedDocuments || 0) / Math.max(1, displayData.totalDocuments || 1)) * 100)}%` 
+                  }}
+                />
+              </div>
+            </div>
+          )}
+          
+          {/* Show summary generation progress */}
+          {(displayData.completedSummaries !== undefined || displayData.totalSummaries !== undefined) && displayData.totalSummaries > 0 && (
+            <div className="mb-2">
+              <div className="text-xs text-yellow-600 dark:text-yellow-400/80">
+                Generating summaries: {displayData.completedSummaries || 0} / {displayData.totalSummaries || 0}
+              </div>
+              <div className="w-full bg-yellow-200/50 dark:bg-yellow-700/30 rounded-full h-1.5 mt-1">
+                <div 
+                  className="h-1.5 rounded-full bg-yellow-500 dark:bg-yellow-400"
+                  style={{ 
+                    width: `${Math.round(((displayData.completedSummaries || 0) / Math.max(1, displayData.totalSummaries || 1)) * 100)}%` 
+                  }}
+                />
+              </div>
+            </div>
+          )}
+          
+          {/* Show code blocks found and stored */}
+          <div className="grid grid-cols-2 gap-3">
+            {displayData.codeBlocksFound !== undefined && (
+              <div>
+                <div className="text-xs text-yellow-600 dark:text-yellow-400/80">Code Blocks Found</div>
+                <div className="text-2xl font-bold text-yellow-700 dark:text-yellow-300">
+                  {displayData.codeBlocksFound}
+                </div>
+              </div>
+            )}
+            {displayData.codeExamplesStored !== undefined && (
+              <div>
+                <div className="text-xs text-yellow-600 dark:text-yellow-400/80">Examples Stored</div>
+                <div className="text-2xl font-bold text-yellow-700 dark:text-yellow-300">
+                  {displayData.codeExamplesStored}
+                </div>
+              </div>
+            )}
+          </div>
+          
+          {/* Fallback to details if main fields not available */}
+          {!displayData.codeBlocksFound && displayData.details?.codeBlocksFound !== undefined && (
+            <div className="flex items-center gap-4">
+              <div>
+                <span className="text-2xl font-bold text-yellow-700 dark:text-yellow-300">
+                  {displayData.details.codeBlocksFound}
+                </span>
+                <span className="text-sm text-yellow-600 dark:text-yellow-400 ml-2">
+                  code blocks found
+                </span>
+              </div>
+              {displayData.details?.totalChunks && (
+                <div className="text-xs text-yellow-600 dark:text-yellow-400/60">
+                  Scanning chunk {displayData.details.currentChunk || 0} of {displayData.details.totalChunks}
+                </div>
+              )}
+            </div>
+          )}
+          
+          <p className="text-xs text-yellow-600 dark:text-yellow-400/60 mt-2">
+            {displayData.completedSummaries !== undefined && displayData.totalSummaries > 0 
+              ? `Generating AI summaries for ${displayData.totalSummaries} code examples...`
+              : displayData.completedDocuments !== undefined && displayData.totalDocuments > 0
+              ? `Scanning ${displayData.totalDocuments} document(s) for code blocks...`
+              : 'Analyzing content for code examples...'}
+          </p>
+        </div>
+      )}
+      
+      {/* Real-time Processing Stats */}
+      {isActive && displayData.status === 'document_storage' && (
+        <div className="mb-4 grid grid-cols-2 gap-3">
+          {displayData.details?.currentChunk !== undefined && displayData.details?.totalChunks && (
+            <div className="p-2 bg-blue-50 dark:bg-blue-500/10 rounded-md">
+              <div className="text-xs text-blue-600 dark:text-blue-400 font-medium">Chunks Processing</div>
+              <div className="text-lg font-bold text-blue-700 dark:text-blue-300">
+                {displayData.details.currentChunk} / {displayData.details.totalChunks}
+              </div>
+              <div className="text-xs text-blue-600 dark:text-blue-400/80">
+                {Math.round((displayData.details.currentChunk / displayData.details.totalChunks) * 100)}% complete
+              </div>
+            </div>
+          )}
+          
+          {displayData.details?.embeddingsCreated !== undefined && (
+            <div className="p-2 bg-green-50 dark:bg-green-500/10 rounded-md">
+              <div className="text-xs text-green-600 dark:text-green-400 font-medium">Embeddings</div>
+              <div className="text-lg font-bold text-green-700 dark:text-green-300">
+                {displayData.details.embeddingsCreated}
+              </div>
+              <div className="text-xs text-green-600 dark:text-green-400/80">created</div>
+            </div>
+          )}
+          
+          {displayData.details?.codeBlocksFound !== undefined && displayData.status === 'code_extraction' && (
+            <div className="p-2 bg-yellow-50 dark:bg-yellow-500/10 rounded-md">
+              <div className="text-xs text-yellow-600 dark:text-yellow-400 font-medium">Code Blocks</div>
+              <div className="text-lg font-bold text-yellow-700 dark:text-yellow-300">
+                {displayData.details.codeBlocksFound}
+              </div>
+              <div className="text-xs text-yellow-600 dark:text-yellow-400/80">extracted</div>
+            </div>
+          )}
+          
+          {displayData.details?.chunksPerSecond && (
+            <div className="p-2 bg-purple-50 dark:bg-purple-500/10 rounded-md">
+              <div className="text-xs text-purple-600 dark:text-purple-400 font-medium">Processing Speed</div>
+              <div className="text-lg font-bold text-purple-700 dark:text-purple-300">
+                {displayData.details.chunksPerSecond.toFixed(1)}
+              </div>
+              <div className="text-xs text-purple-600 dark:text-purple-400/80">chunks/sec</div>
+            </div>
+          )}
+          
+          {displayData.details?.estimatedTimeRemaining && (
+            <div className="p-2 bg-orange-50 dark:bg-orange-500/10 rounded-md">
+              <div className="text-xs text-orange-600 dark:text-orange-400 font-medium">Time Remaining</div>
+              <div className="text-lg font-bold text-orange-700 dark:text-orange-300">
+                {Math.ceil(displayData.details.estimatedTimeRemaining / 60)}m
+              </div>
+              <div className="text-xs text-orange-600 dark:text-orange-400/80">estimated</div>
+            </div>
+          )}
+        </div>
+      )}
+      
+      {/* Batch Processing Info - Enhanced */}
+      {(() => {
+        const shouldShowBatch = displayData.totalBatches && displayData.totalBatches > 0 && isActive && displayData.status === 'document_storage';
+        return shouldShowBatch;
+      })() && (
+        <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 rounded-md">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Cpu className="w-4 h-4 text-blue-600 dark:text-blue-400 animate-pulse" />
+              <span className="text-sm font-medium text-blue-700 dark:text-blue-400">
+                Batch Processing
+              </span>
+            </div>
+            <span className="text-sm font-bold text-blue-600 dark:text-blue-400">
+              {displayData.completedBatches || 0}/{displayData.totalBatches} batches
+            </span>
+          </div>
+          
+          {/* Batch progress bar */}
+          <div className="w-full bg-blue-200 dark:bg-blue-900/50 rounded-full h-1.5 mb-2">
+            <motion.div
+              className="h-1.5 rounded-full bg-blue-500 dark:bg-blue-400"
+              initial={{ width: 0 }}
+              animate={{ 
+                width: `${Math.round(((displayData.completedBatches || 0) / displayData.totalBatches) * 100)}%` 
+              }}
+              transition={{ duration: 0.5, ease: 'easeOut' }}
+            />
+          </div>
+          
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            {displayData.activeWorkers !== undefined && (
+              <div className="text-blue-600 dark:text-blue-400/80">
+                <span className="font-medium">{displayData.activeWorkers}</span> parallel {displayData.activeWorkers === 1 ? 'worker' : 'workers'}
+              </div>
+            )}
+            
+            {displayData.currentBatch && displayData.totalChunksInBatch && (
+              <div className="text-blue-600 dark:text-blue-400/80">
+                Current: <span className="font-medium">{displayData.chunksInBatch || 0}/{displayData.totalChunksInBatch}</span> chunks
+              </div>
+            )}
+            
+            {displayData.details?.totalChunks && (
+              <div className="text-blue-600 dark:text-blue-400/80 col-span-2">
+                Total progress: <span className="font-medium">{displayData.details.currentChunk || 0}/{displayData.details.totalChunks}</span> chunks processed
+              </div>
+            )}
           </div>
         </div>
       )}
-
-      {/* Detailed Progress Toggle */}
-      {progressData.status !== 'completed' && progressData.status !== 'error' && (
+      
+      {/* Detailed Progress Steps */}
+      {isActive && (
         <div className="mb-4">
           <button
             onClick={() => setShowDetailedProgress(!showDetailedProgress)}
@@ -633,10 +587,9 @@ export const CrawlingProgressCard: React.FC<CrawlingProgressCardProps> = ({
           </button>
         </div>
       )}
-
-      {/* Multi-Progress Bars */}
+      
       <AnimatePresence>
-        {showDetailedProgress && progressData.status !== 'completed' && progressData.status !== 'error' && (
+        {showDetailedProgress && isActive && (
           <motion.div
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
@@ -644,232 +597,117 @@ export const CrawlingProgressCard: React.FC<CrawlingProgressCardProps> = ({
             transition={{ duration: 0.3 }}
             className="overflow-hidden mb-4"
           >
-            <div className="space-y-3 p-3 bg-gray-50 dark:bg-zinc-900/50 rounded-md" data-testid="crawling-progress-details">
-              {/* Always show progress steps */}
+            <div className="space-y-2 p-3 bg-gray-50 dark:bg-zinc-900/50 rounded-md">
               {progressSteps.map((step) => (
-                <div key={step.id}>
-                  <div className="flex items-center gap-3">
-                    <div className={`p-1.5 rounded-md ${getStepStatusColor(
-                      step.status, 
-                      false // Never pulse for step icons - only the active step should animate via rotation
-                    )}`}>
-                      {step.status === 'active' && progressData.status !== 'completed' ? (
-                        <motion.div
-                          animate={{ rotate: 360 }}
-                          transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
-                        >
-                          {step.icon}
-                        </motion.div>
-                      ) : (
-                        step.icon
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                          {step.label}
-                        </span>
-                        <span className="text-xs text-gray-500 dark:text-gray-400">
-                          {Math.round(step.percentage)}%
-                        </span>
-                      </div>
-                      <div className="w-full bg-gray-200 dark:bg-zinc-700 rounded-full h-1.5">
-                        <motion.div
-                          className={`h-1.5 rounded-full ${
-                            step.status === 'completed' ? 'bg-green-500' :
-                            step.status === 'active' ? 'bg-blue-500' :
-                            step.status === 'error' ? 'bg-pink-500' :
-                            'bg-gray-300 dark:bg-gray-600'
-                          }`}
-                          initial={{ width: 0 }}
-                          animate={{ width: `${step.percentage}%` }}
-                          transition={{ duration: 0.5, ease: 'easeOut' }}
-                        />
-                      </div>
-                      {step.message && (
-                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 truncate">
-                          {step.message}
-                        </p>
-                      )}
-                    </div>
+                <div key={step.id} className="flex items-center gap-3">
+                  <div className={`
+                    p-1.5 rounded-md
+                    ${step.status === 'completed' ? 'bg-green-100 dark:bg-green-500/10 text-green-600 dark:text-green-400' :
+                      step.status === 'active' ? 'bg-blue-100 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400' :
+                      step.status === 'error' ? 'bg-red-100 dark:bg-red-500/10 text-red-600 dark:text-red-400' :
+                      'bg-gray-100 dark:bg-gray-500/10 text-gray-400 dark:text-gray-600'}
+                  `}>
+                    {step.status === 'active' ? (
+                      <motion.div
+                        animate={{ rotate: 360 }}
+                        transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
+                      >
+                        {step.icon}
+                      </motion.div>
+                    ) : (
+                      step.icon
+                    )}
                   </div>
-                  
-                  {/* Show simplified batch progress for document_storage step */}
-                  {step.id === 'document_storage' && (step.status === 'active' || step.status === 'completed') && 
-                   progressData.total_batches && progressData.total_batches > 0 && (
-                    <motion.div
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.3 }}
-                      className="mt-3 ml-8 space-y-3 border-l-2 border-gray-200 dark:border-zinc-700 pl-4"
-                    >
-                      {/* Batch progress info */}
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-medium text-gray-600 dark:text-gray-400">
-                            Batch Progress
+                  <div className="flex-1">
+                    <span className={`
+                      text-sm
+                      ${step.status === 'active' ? 'font-medium text-gray-700 dark:text-gray-300' :
+                        step.status === 'completed' ? 'text-gray-600 dark:text-gray-400' :
+                        'text-gray-400 dark:text-gray-600'}
+                    `}>
+                      {step.label}
+                    </span>
+                    
+                    {/* Show detailed progress for active step */}
+                    {step.status === 'active' && (
+                      <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        {step.id === 'document_storage' && displayData.completedBatches !== undefined && displayData.totalBatches ? (
+                          <span>Batch {displayData.completedBatches + 1} of {displayData.totalBatches}</span>
+                        ) : step.id === 'code_extraction' && displayData.details?.codeBlocksFound !== undefined ? (
+                          <span>{displayData.details.codeBlocksFound} code blocks found</span>
+                        ) : step.id === 'crawling' && (displayData.processedPages !== undefined || displayData.totalPages !== undefined) ? (
+                          <span>
+                            {displayData.processedPages !== undefined ? displayData.processedPages : '?'} of {displayData.totalPages !== undefined ? displayData.totalPages : '?'} pages
                           </span>
-                          <div className="flex items-center gap-2">
-                            {progressData.active_workers && progressData.active_workers > 0 && (
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 dark:bg-blue-500/10 text-blue-800 dark:text-blue-400">
-                                <Cpu className="w-3 h-3 mr-1" />
-                                {progressData.active_workers} {progressData.active_workers === 1 ? 'worker' : 'workers'}
-                              </span>
-                            )}
-                            <span className="text-xs text-gray-500 dark:text-gray-400">
-                              {progressData.completed_batches || 0}/{progressData.total_batches || 0}
-                            </span>
-                          </div>
-                        </div>
-                        
-                        {/* Single batch progress bar */}
-                        <div className="w-full bg-gray-200 dark:bg-zinc-700 rounded-full h-2">
-                          <motion.div
-                            className="h-2 rounded-full bg-blue-500 dark:bg-blue-400"
-                            initial={{ width: 0 }}
-                            animate={{ 
-                              width: `${Math.round(((progressData.completed_batches || 0) / (progressData.total_batches || 1)) * 100)}%` 
-                            }}
-                            transition={{ duration: 0.5, ease: 'easeOut' }}
-                          />
-                        </div>
-                        
-                        {/* Current batch details */}
-                        {progressData.current_batch && progressData.current_batch > 0 && (
-                          <div className="text-xs text-gray-600 dark:text-gray-400">
-                            <span className="font-medium">Processing batch {progressData.current_batch}:</span>
-                            {progressData.total_chunks_in_batch && progressData.total_chunks_in_batch > 0 && (
-                              <span className="ml-2">
-                                {progressData.chunks_in_batch || 0}/{progressData.total_chunks_in_batch} chunks processed
-                              </span>
-                            )}
-                          </div>
-                        )}
-                        
-                        {/* Status text */}
-                        <div className="text-xs text-gray-500 dark:text-gray-400">
-                          Completed: {progressData.completed_batches || 0} batches
-                          {progressData.current_batch && progressData.current_batch > 0 && 
-                            progressData.current_batch <= (progressData.total_batches || 0) && (
-                            <span> • In Progress: 1 batch</span>
-                          )}
-                        </div>
+                        ) : displayData.message ? (
+                          <span>{displayData.message}</span>
+                        ) : null}
                       </div>
-                    </motion.div>
-                  )}
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
           </motion.div>
         )}
       </AnimatePresence>
-
-
-      {/* Progress Details */}
-      <div className="grid grid-cols-2 gap-4 mb-4 text-sm">
-        {progressData.uploadType === 'document' ? (
-          // Upload-specific details
-          <>
-            {progressData.fileName && (
-              <div className="col-span-2">
-                <span className="text-gray-500 dark:text-zinc-400">File:</span>
-                <span className="ml-2 font-medium text-gray-800 dark:text-white">
-                  {progressData.fileName}
-                </span>
-              </div>
-            )}
-            {progressData.status === 'completed' && (
-              <>
-                {progressData.chunksStored && (
-                  <div>
-                    <span className="text-gray-500 dark:text-zinc-400">Chunks:</span>
-                    <span className="ml-2 font-medium text-gray-800 dark:text-white">
-                      {formatNumber(progressData.chunksStored)} chunks stored
-                    </span>
-                  </div>
-                )}
-                {progressData.wordCount && (
-                  <div>
-                    <span className="text-gray-500 dark:text-zinc-400">Words:</span>
-                    <span className="ml-2 font-medium text-gray-800 dark:text-white">
-                      {formatNumber(progressData.wordCount)} words processed
-                    </span>
-                  </div>
-                )}
-                {progressData.sourceId && (
-                  <div className="col-span-2">
-                    <span className="text-gray-500 dark:text-zinc-400">Source ID:</span>
-                    <span className="ml-2 font-medium text-gray-800 dark:text-white font-mono text-xs">
-                      {progressData.sourceId}
-                    </span>
-                  </div>
-                )}
-              </>
-            )}
-          </>
-        ) : (
-          // Crawl-specific details
-          <>
-            {progressData.totalPages && progressData.processedPages !== undefined && (
-              <div>
-                <span className="text-gray-500 dark:text-zinc-400">Pages:</span>
-                <span className="ml-2 font-medium text-gray-800 dark:text-white">
-                  {progressData.processedPages} of {progressData.totalPages} pages processed
-                </span>
-              </div>
-            )}
-            
-            {progressData.status === 'completed' && (
-              <>
-                {progressData.chunksStored && (
-                  <div>
-                    <span className="text-gray-500 dark:text-zinc-400">Chunks:</span>
-                    <span className="ml-2 font-medium text-gray-800 dark:text-white">
-                      {formatNumber(progressData.chunksStored)} chunks stored
-                    </span>
-                  </div>
-                )}
-                {progressData.wordCount && (
-                  <div>
-                    <span className="text-gray-500 dark:text-zinc-400">Words:</span>
-                    <span className="ml-2 font-medium text-gray-800 dark:text-white">
-                      {formatNumber(progressData.wordCount)} words processed
-                    </span>
-                  </div>
-                )}
-                {progressData.duration && (
-                  <div className="col-span-2">
-                    <span className="text-gray-500 dark:text-zinc-400">Duration:</span>
-                    <span className="ml-2 font-medium text-gray-800 dark:text-white">
-                      {progressData.duration}
-                    </span>
-                  </div>
-                )}
-              </>
-            )}
-          </>
-        )}
-      </div>
-
+      
+      {/* Statistics */}
+      {(displayData.status === 'completed' || !isActive) && (
+        <div className="grid grid-cols-2 gap-4 mb-4 text-sm">
+          {displayData.totalPages && (
+            <div>
+              <span className="text-gray-500 dark:text-zinc-400">Pages:</span>
+              <span className="ml-2 font-medium text-gray-800 dark:text-white">
+                {displayData.processedPages || 0} / {displayData.totalPages}
+              </span>
+            </div>
+          )}
+          {displayData.chunksStored && (
+            <div>
+              <span className="text-gray-500 dark:text-zinc-400">Chunks:</span>
+              <span className="ml-2 font-medium text-gray-800 dark:text-white">
+                {displayData.chunksStored}
+              </span>
+            </div>
+          )}
+          {displayData.details?.embeddingsCreated && (
+            <div>
+              <span className="text-gray-500 dark:text-zinc-400">Embeddings:</span>
+              <span className="ml-2 font-medium text-gray-800 dark:text-white">
+                {displayData.details.embeddingsCreated}
+              </span>
+            </div>
+          )}
+          {displayData.details?.codeBlocksFound && (
+            <div>
+              <span className="text-gray-500 dark:text-zinc-400">Code Blocks:</span>
+              <span className="ml-2 font-medium text-gray-800 dark:text-white">
+                {displayData.details.codeBlocksFound}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+      
       {/* Error Message */}
-      {progressData.status === 'error' && progressData.error && (
-        <div className="mb-4 p-3 bg-pink-50 dark:bg-pink-500/10 border border-pink-200 dark:border-pink-500/20 rounded-md">
-          <p className="text-pink-700 dark:text-pink-400 text-sm">
-            {progressData.error}
+      {displayData.error && (
+        <div className="mb-4 p-3 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-md">
+          <p className="text-red-700 dark:text-red-400 text-sm">
+            {displayData.error}
           </p>
         </div>
       )}
-
+      
       {/* Console Logs */}
-      {progressData.logs && progressData.logs.length > 0 && (
+      {displayData.logs && displayData.logs.length > 0 && (
         <div className="border-t border-gray-200 dark:border-zinc-800 pt-4">
           <button
             onClick={() => setShowLogs(!showLogs)}
             className="flex items-center gap-2 text-sm text-gray-600 dark:text-zinc-400 hover:text-gray-800 dark:hover:text-white transition-colors mb-2"
           >
             <FileText className="w-4 h-4" />
-            <span>View Console Output</span>
+            <span>Console Output ({displayData.logs.length} lines)</span>
             {showLogs ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
           </button>
           
@@ -884,10 +722,10 @@ export const CrawlingProgressCard: React.FC<CrawlingProgressCardProps> = ({
               >
                 <div 
                   ref={logsContainerRef}
-                  className="bg-gray-900 dark:bg-black rounded-md p-3 max-h-32 overflow-y-auto"
+                  className="bg-gray-900 dark:bg-black rounded-md p-3 max-h-48 overflow-y-auto"
                 >
                   <div className="space-y-1 font-mono text-xs">
-                    {progressData.logs.map((log, index) => (
+                    {displayData.logs.map((log, index) => (
                       <div key={index} className="text-green-400">
                         {log}
                       </div>
@@ -899,28 +737,19 @@ export const CrawlingProgressCard: React.FC<CrawlingProgressCardProps> = ({
           </AnimatePresence>
         </div>
       )}
-
+      
       {/* Action Buttons */}
-      {(progressData.status === 'error' || progressData.status === 'cancelled' || progressData.status === 'stale') && (onRetry || onDismiss) && (
+      {(displayData.status === 'error' || displayData.status === 'failed' || displayData.status === 'cancelled') && (
         <div className="flex justify-end gap-2 mt-4 pt-4 border-t border-gray-200 dark:border-zinc-800">
           {onDismiss && (
-            <Button 
-              onClick={onDismiss}
-              variant="ghost" 
-              className="text-sm"
-            >
-              <X className="w-4 h-4 mr-2" />
+            <Button onClick={onDismiss} variant="ghost" size="sm">
+              <X className="w-4 h-4 mr-1" />
               Dismiss
             </Button>
           )}
-          {onRetry && progressData.status !== 'stale' && (
-            <Button 
-              onClick={onRetry}
-              variant="primary" 
-              accentColor="blue"
-              className="text-sm"
-            >
-              <RotateCcw className="w-4 h-4 mr-2" />
+          {onRetry && (
+            <Button onClick={onRetry} variant="primary" size="sm">
+              <RotateCcw className="w-4 h-4 mr-1" />
               Retry
             </Button>
           )}
@@ -928,4 +757,4 @@ export const CrawlingProgressCard: React.FC<CrawlingProgressCardProps> = ({
       )}
     </Card>
   );
-}; 
+};

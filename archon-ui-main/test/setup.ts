@@ -10,7 +10,7 @@ afterEach(() => {
   cleanup()
 })
 
-// Simple mocks only - fetch and WebSocket
+// Simple mocks only - fetch
 global.fetch = vi.fn(() =>
   Promise.resolve({
     ok: true,
@@ -19,34 +19,6 @@ global.fetch = vi.fn(() =>
     status: 200,
   } as Response)
 ) as any
-
-// Mock WebSocket
-class MockWebSocket {
-  onopen: ((event: Event) => void) | null = null
-  onclose: ((event: CloseEvent) => void) | null = null
-  onerror: ((event: Event) => void) | null = null
-  onmessage: ((event: MessageEvent) => void) | null = null
-  readyState: number = WebSocket.CONNECTING
-  
-  constructor(public url: string) {
-    setTimeout(() => {
-      this.readyState = WebSocket.OPEN
-      if (this.onopen) {
-        this.onopen(new Event('open'))
-      }
-    }, 0)
-  }
-  
-  send() {}
-  close() {
-    this.readyState = WebSocket.CLOSED
-    if (this.onclose) {
-      this.onclose(new CloseEvent('close'))
-    }
-  }
-}
-
-window.WebSocket = MockWebSocket as any
 
 // Mock localStorage
 const localStorageMock = {

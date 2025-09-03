@@ -10,18 +10,29 @@ class ProgressMapper:
     """Maps sub-task progress to overall progress ranges"""
 
     # Define progress ranges for each stage
+    # Updated to reflect actual processing time distribution - code extraction is the longest
     STAGE_RANGES = {
-        "starting": (0, 0),
-        "analyzing": (0, 5),
-        "crawling": (5, 30),
-        "processing": (30, 35),
-        "document_storage": (35, 80),
-        "code_extraction": (80, 95),
-        "extracting": (80, 95),  # Alias for code_extraction
-        "finalization": (95, 100),
+        "starting": (0, 1),
+        "initializing": (0, 1),
+        "analyzing": (1, 2),       # URL analysis is very quick
+        "crawling": (2, 5),        # Crawling pages is relatively fast
+        "processing": (5, 8),      # Content processing/chunking is quick
+        "source_creation": (8, 10), # DB operations are fast
+        "document_storage": (10, 30), # Embeddings + batch processing - significant but not longest
+        "code_extraction": (30, 95),  # LONGEST PHASE: AI analysis of code examples
+        "code_storage": (30, 95),     # Alias
+        "extracting": (30, 95),       # Alias for code_extraction
+        "finalization": (95, 100),    # Quick final steps
         "completed": (100, 100),
-        "complete": (100, 100),  # Alias
-        "error": (-1, -1),  # Special case for errors
+        "complete": (100, 100),       # Alias
+        "error": (-1, -1),            # Special case for errors
+        # Upload-specific stages
+        "reading": (0, 5),
+        "extracting": (5, 10),
+        "chunking": (10, 15),
+        "creating_source": (15, 20),
+        "summarizing": (20, 30),
+        "storing": (30, 100),
     }
 
     def __init__(self):

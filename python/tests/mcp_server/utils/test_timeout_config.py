@@ -16,7 +16,7 @@ from src.mcp_server.utils.timeout_config import (
 
 def test_get_default_timeout_defaults():
     """Test default timeout values when no environment variables are set."""
-    with patch.dict(os.environ, {}, clear=True):
+    with patch.dict(os.environ, {}, clear=False):
         timeout = get_default_timeout()
 
         assert isinstance(timeout, httpx.Timeout)
@@ -43,7 +43,7 @@ def test_get_default_timeout_from_env():
 
 def test_get_polling_timeout_defaults():
     """Test default polling timeout values."""
-    with patch.dict(os.environ, {}, clear=True):
+    with patch.dict(os.environ, {}, clear=False):
         timeout = get_polling_timeout()
 
         assert isinstance(timeout, httpx.Timeout)
@@ -65,7 +65,7 @@ def test_get_polling_timeout_from_env():
 
 def test_get_max_polling_attempts_default():
     """Test default max polling attempts."""
-    with patch.dict(os.environ, {}, clear=True):
+    with patch.dict(os.environ, {}, clear=False):
         attempts = get_max_polling_attempts()
 
         assert attempts == 30
@@ -90,7 +90,7 @@ def test_get_max_polling_attempts_invalid_env():
 
 def test_get_polling_interval_base():
     """Test base polling interval (attempt 0)."""
-    with patch.dict(os.environ, {}, clear=True):
+    with patch.dict(os.environ, {}, clear=False):
         interval = get_polling_interval(0)
 
         assert interval == 1.0
@@ -98,7 +98,7 @@ def test_get_polling_interval_base():
 
 def test_get_polling_interval_exponential_backoff():
     """Test exponential backoff for polling intervals."""
-    with patch.dict(os.environ, {}, clear=True):
+    with patch.dict(os.environ, {}, clear=False):
         # Test exponential growth
         assert get_polling_interval(0) == 1.0
         assert get_polling_interval(1) == 2.0

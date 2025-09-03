@@ -52,12 +52,15 @@ async def test_create_project_success(mock_mcp, mock_context):
         "message": "Project creation started",
     }
 
-    # Mock list projects response for polling
+    # Mock list projects response for polling - API returns dict with projects array
     mock_list_response = MagicMock()
     mock_list_response.status_code = 200
-    mock_list_response.json.return_value = [
-        {"id": "project-123", "title": "Test Project", "created_at": "2024-01-01"}
-    ]
+    mock_list_response.json.return_value = {
+        "projects": [
+            {"id": "project-123", "title": "Test Project", "created_at": "2024-01-01"}
+        ],
+        "count": 1
+    }
 
     with patch("src.mcp_server.features.projects.project_tools.httpx.AsyncClient") as mock_client:
         mock_async_client = AsyncMock()
@@ -120,13 +123,16 @@ async def test_list_projects_success(mock_mcp, mock_context):
 
     assert list_projects is not None, "list_projects tool not registered"
 
-    # Mock HTTP response - API returns a list directly
+    # Mock HTTP response - API returns dict with projects array
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_response.json.return_value = [
-        {"id": "proj-1", "title": "Project 1", "created_at": "2024-01-01"},
-        {"id": "proj-2", "title": "Project 2", "created_at": "2024-01-02"},
-    ]
+    mock_response.json.return_value = {
+        "projects": [
+            {"id": "proj-1", "title": "Project 1", "created_at": "2024-01-01"},
+            {"id": "proj-2", "title": "Project 2", "created_at": "2024-01-02"},
+        ],
+        "count": 2
+    }
 
     with patch("src.mcp_server.features.projects.project_tools.httpx.AsyncClient") as mock_client:
         mock_async_client = AsyncMock()

@@ -2,7 +2,7 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useDrag, useDrop } from 'react-dnd';
 import { Check, Trash2, Edit, Tag, User, Bot, Clipboard, Save, Plus } from 'lucide-react';
 import { useToast } from '../../contexts/ToastContext';
-import { DeleteConfirmModal } from '../../pages/ProjectPage';
+import { DeleteConfirmModal } from '../common/DeleteConfirmModal';
 import { projectService } from '../../services/projectService';
 import { ItemTypes, getAssigneeIcon, getAssigneeGlow, getOrderColor, getOrderGlow } from '../../lib/task-utils';
 import { DraggableTaskCard } from './DraggableTaskCard';
@@ -11,7 +11,7 @@ export interface Task {
   id: string;
   title: string;
   description: string;
-  status: 'backlog' | 'in-progress' | 'review' | 'complete';
+  status: 'todo' | 'doing' | 'review' | 'done';
   assignee: {
     name: 'User' | 'Archon' | 'AI IDE Agent';
     avatar: string;
@@ -304,20 +304,12 @@ const DraggableTaskRow = ({
       </td>
       <td className="p-3">
         <EditableCell
-          value={task.status === 'backlog' ? 'Backlog' : 
-                task.status === 'in-progress' ? 'In Progress' : 
-                task.status === 'review' ? 'Review' : 'Complete'}
+          value={task.status}
           onSave={(value) => {
-            const statusMap: Record<string, Task['status']> = {
-              'Backlog': 'backlog',
-              'In Progress': 'in-progress', 
-              'Review': 'review',
-              'Complete': 'complete'
-            };
-            handleUpdateField('status', statusMap[value] || 'backlog');
+            handleUpdateField('status', value as Task['status']);
           }}
           type="select"
-          options={['Backlog', 'In Progress', 'Review', 'Complete']}
+          options={['todo', 'doing', 'review', 'done']}
           isEditing={editingField === 'status'}
           onEdit={() => setEditingField('status')}
           onCancel={() => setEditingField(null)}
@@ -429,7 +421,7 @@ const AddTaskRow = ({ onTaskCreate, tasks, statusFilter }: AddTaskRowProps) => {
   const [newTask, setNewTask] = useState<Omit<Task, 'id'>>({
     title: '',
     description: '',
-    status: statusFilter === 'all' ? 'backlog' : statusFilter,
+    status: statusFilter === 'all' ? 'todo' : statusFilter,
     assignee: { name: 'AI IDE Agent', avatar: '' },
     feature: '',
     featureColor: '#3b82f6',
@@ -504,24 +496,16 @@ const AddTaskRow = ({ onTaskCreate, tasks, statusFilter }: AddTaskRowProps) => {
       </td>
       <td className="p-3">
         <select
-          value={newTask.status === 'backlog' ? 'Backlog' : 
-                newTask.status === 'in-progress' ? 'In Progress' : 
-                newTask.status === 'review' ? 'Review' : 'Complete'}
+          value={newTask.status}
           onChange={(e) => {
-            const statusMap: Record<string, Task['status']> = {
-              'Backlog': 'backlog',
-              'In Progress': 'in-progress', 
-              'Review': 'review',
-              'Complete': 'complete'
-            };
-            setNewTask(prev => ({ ...prev, status: statusMap[e.target.value] || 'backlog' }));
+            setNewTask(prev => ({ ...prev, status: e.target.value as Task['status'] }));
           }}
           className="w-full bg-white/90 dark:bg-black/90 border border-cyan-300 dark:border-cyan-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-cyan-500 focus:shadow-[0_0_5px_rgba(34,211,238,0.3)]"
         >
-          <option value="Backlog">Backlog</option>
-          <option value="In Progress">In Progress</option>
-          <option value="Review">Review</option>
-          <option value="Complete">Complete</option>
+          <option value="todo">Todo</option>
+          <option value="doing">Doing</option>
+          <option value="review">Review</option>
+          <option value="done">Done</option>
         </select>
       </td>
       <td className="p-3">
@@ -567,7 +551,7 @@ export const TaskTableView = ({
   onTaskCreate,
   onTaskUpdate
 }: TaskTableViewProps) => {
-  const [statusFilter, setStatusFilter] = useState<Task['status'] | 'all'>('backlog');
+  const [statusFilter, setStatusFilter] = useState<Task['status'] | 'all'>('todo');
 
   // State for delete confirmation modal
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -700,7 +684,7 @@ export const TaskTableView = ({
   
   const filteredTasks = organizeTasksHierarchically(statusFilteredTasks);
   
-  const statuses: Task['status'][] = ['backlog', 'in-progress', 'review', 'complete'];
+  const statuses: Task['status'][] = ['todo', 'doing', 'review', 'done'];
 
   // Get column header color and glow based on header type (matching board view style)
   const getHeaderColor = (type: 'primary' | 'secondary') => {
@@ -732,12 +716,12 @@ export const TaskTableView = ({
           // Define colors for each status
           const getStatusColors = (status: Task['status']) => {
             switch (status) {
-              case 'backlog':
+              case 'todo':
                 return {
                   selected: 'bg-gray-100 dark:bg-gray-900/20 text-gray-600 dark:text-gray-400 ring-1 ring-gray-500/50 shadow-[0_0_8px_rgba(107,114,128,0.3)]',
                   unselected: 'bg-gray-100/70 dark:bg-gray-800/50 text-gray-600 dark:text-gray-400 hover:bg-gray-200/70 dark:hover:bg-gray-700/50'
                 };
-              case 'in-progress':
+              case 'doing':
                 return {
                   selected: 'bg-blue-100 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 ring-1 ring-blue-500/50 shadow-[0_0_8px_rgba(59,130,246,0.3)]',
                   unselected: 'bg-gray-100/70 dark:bg-gray-800/50 text-gray-600 dark:text-gray-400 hover:bg-blue-200/30 dark:hover:bg-blue-900/20'
@@ -747,7 +731,7 @@ export const TaskTableView = ({
                   selected: 'bg-purple-100 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400 ring-1 ring-purple-500/50 shadow-[0_0_8px_rgba(168,85,247,0.3)]',
                   unselected: 'bg-gray-100/70 dark:bg-gray-800/50 text-gray-600 dark:text-gray-400 hover:bg-purple-200/30 dark:hover:bg-purple-900/20'
                 };
-              case 'complete':
+              case 'done':
                 return {
                   selected: 'bg-green-100 dark:bg-green-900/20 text-green-600 dark:text-green-400 ring-1 ring-green-500/50 shadow-[0_0_8px_rgba(34,197,94,0.3)]',
                   unselected: 'bg-gray-100/70 dark:bg-gray-800/50 text-gray-600 dark:text-gray-400 hover:bg-green-200/30 dark:hover:bg-green-900/20'
@@ -771,9 +755,9 @@ export const TaskTableView = ({
                 ${statusFilter === status ? colors.selected : colors.unselected}
               `}
             >
-              {status === 'backlog' ? 'Backlog' : 
-               status === 'in-progress' ? 'In Progress' : 
-               status === 'review' ? 'Review' : 'Complete'}
+              {status === 'todo' ? 'Todo' : 
+               status === 'doing' ? 'Doing' : 
+               status === 'review' ? 'Review' : 'Done'}
             </button>
           );
         })}

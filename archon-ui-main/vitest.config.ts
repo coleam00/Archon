@@ -10,13 +10,8 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: './test/setup.ts',
     include: [
-      'test/components.test.tsx',
-      'test/pages.test.tsx', 
-      'test/user_flows.test.tsx',
-      'test/errors.test.tsx',
-      'test/services/projectService.test.ts',
-      'test/components/project-tasks/DocsTab.integration.test.tsx',
-      'test/config/api.test.ts'
+      'test/**/*.test.{ts,tsx}',
+      'test/**/*.spec.{ts,tsx}'
     ],
     exclude: ['node_modules', 'dist', '.git', '.cache', 'test.backup', '*.backup/**', 'test-backups'],
     reporters: ['dot', 'json'],

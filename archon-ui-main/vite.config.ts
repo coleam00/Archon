@@ -406,6 +406,7 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
           secure: false,
           ws: true,
           configure: (proxy) => {
+          configure: (proxy, options) => {
             proxy.on('error', (err, req, res) => {
               if (process.env.VITE_DEBUG_PROXY === '1') console.log('🚨 [VITE PROXY ERROR]:', err.message);
               if (process.env.VITE_DEBUG_PROXY === '1') console.log('🚨 [VITE PROXY ERROR] Target:', `http://${host}:${serverPort}`);

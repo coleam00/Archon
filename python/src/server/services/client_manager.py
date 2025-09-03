@@ -35,7 +35,7 @@ def get_supabase_client() -> Client:
         match = re.match(r"https://([^.]+)\.supabase\.co", url)
         if match:
             project_id = match.group(1)
-            search_logger.info(f"Supabase client initialized - project_id={project_id}")
+            search_logger.debug(f"Supabase client initialized - project_id={project_id}")
 
         return client
     except Exception as e:

@@ -8,7 +8,6 @@ import {
   Key,
   Brain,
   Code,
-  Activity,
   FileCode,
   Bug,
 } from "lucide-react";
@@ -20,7 +19,6 @@ import { FeaturesSection } from "../components/settings/FeaturesSection";
 import { APIKeysSection } from "../components/settings/APIKeysSection";
 import { RAGSettings } from "../components/settings/RAGSettings";
 import { CodeExtractionSettings } from "../components/settings/CodeExtractionSettings";
-import { TestStatus } from "../components/settings/TestStatus";
 import { IDEGlobalRules } from "../components/settings/IDEGlobalRules";
 import { ButtonPlayground } from "../components/settings/ButtonPlayground";
 import { CollapsibleSettingsCard } from "../components/ui/CollapsibleSettingsCard";
@@ -151,17 +149,6 @@ export const SettingsPage = () => {
               </CollapsibleSettingsCard>
             </motion.div>
           )}
-          <motion.div variants={itemVariants}>
-            <CollapsibleSettingsCard
-              title="Test Status"
-              icon={Activity}
-              accentColor="cyan"
-              storageKey="test-status"
-              defaultExpanded={true}
-            >
-              <TestStatus />
-            </CollapsibleSettingsCard>
-          </motion.div>
         </div>
 
         {/* Right Column */}

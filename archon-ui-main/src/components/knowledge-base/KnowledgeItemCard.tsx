@@ -151,6 +151,7 @@ export const KnowledgeItemCard = ({
   const [showEditModal, setShowEditModal] = useState(false);
   const [loadedCodeExamples, setLoadedCodeExamples] = useState<any[] | null>(null);
   const [isLoadingCodeExamples, setIsLoadingCodeExamples] = useState(false);
+  const [isRecrawling, setIsRecrawling] = useState(false);
 
   const statusColorMap = {
     active: 'green',
@@ -210,8 +211,14 @@ export const KnowledgeItemCard = ({
   };
 
   const handleRefresh = () => {
-    if (onRefresh) {
+    if (onRefresh && !isRecrawling) {
+      setIsRecrawling(true);
       onRefresh(item.source_id);
+      // Temporary fix: Auto-reset after timeout
+      // TODO: Reset based on actual crawl completion status from polling
+      setTimeout(() => {
+        setIsRecrawling(false);
+      }, 60000); // Reset after 60 seconds as a fallback
     }
   };
 
@@ -369,15 +376,18 @@ export const KnowledgeItemCard = ({
               {item.metadata.source_type === 'url' && (
                 <button
                   onClick={handleRefresh}
+                  disabled={isRecrawling}
                   className={`flex items-center gap-1 mb-1 px-2 py-1 transition-colors ${
-                    item.metadata.knowledge_type === 'technical' 
-                      ? 'text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300'
-                      : 'text-cyan-500 hover:text-cyan-600 dark:text-cyan-400 dark:hover:text-cyan-300'
+                    isRecrawling 
+                      ? 'text-gray-400 dark:text-gray-600 cursor-not-allowed'
+                      : item.metadata.knowledge_type === 'technical' 
+                        ? 'text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300'
+                        : 'text-cyan-500 hover:text-cyan-600 dark:text-cyan-400 dark:hover:text-cyan-300'
                   }`}
-                  title={`Refresh from: ${item.metadata.original_url || item.url || 'URL not available'}`}
+                  title={isRecrawling ? 'Recrawl in progress...' : `Refresh from: ${item.metadata.original_url || item.url || 'URL not available'}`}
                 >
-                  <RefreshCw className="w-3 h-3" />
-                  <span className="text-sm font-medium">Recrawl</span>
+                  <RefreshCw className={`w-3 h-3 ${isRecrawling ? 'animate-spin' : ''}`} />
+                  <span className="text-sm font-medium">{isRecrawling ? 'Recrawling...' : 'Recrawl'}</span>
                 </button>
               )}
               <span className="text-xs text-gray-500 dark:text-zinc-500">

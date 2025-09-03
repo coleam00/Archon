@@ -27,7 +27,7 @@ class TestCodeExtractionSourceId:
         # Track what gets passed to the internal extraction method
         extracted_blocks = []
         
-        async def mock_extract_blocks(crawl_results, source_id, progress_callback=None, start=0, end=100):
+        async def mock_extract_blocks(crawl_results, source_id, progress_callback=None, start=0, end=100, cancellation_check=None):
             # Simulate finding code blocks and verify source_id is passed correctly
             for doc in crawl_results:
                 extracted_blocks.append({
@@ -107,14 +107,15 @@ class TestCodeExtractionSourceId:
             100
         )
         
-        # Verify the correct source_id was passed
+        # Verify the correct source_id was passed (now with cancellation_check parameter)
         mock_extract.assert_called_once_with(
             crawl_results,
             url_to_full_document,
             source_id,  # This should be the third argument
             None,
             0,
-            100
+            100,
+            None  # cancellation_check parameter
         )
         assert result == 5
 
@@ -133,7 +134,7 @@ class TestCodeExtractionSourceId:
         source_ids_seen = []
         
         original_extract = code_service._extract_code_blocks_from_documents
-        async def track_source_id(crawl_results, source_id, progress_callback=None, start=0, end=100):
+        async def track_source_id(crawl_results, source_id, progress_callback=None, start=0, end=100, cancellation_check=None):
             source_ids_seen.append(source_id)
             return []  # Return empty list to skip further processing
         

@@ -7,12 +7,12 @@ Supports versioning of documents, features, and other project data.
 
 import json
 import logging
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urljoin
 
 import httpx
-from mcp.server.fastmcp import Context, FastMCP
 
+from mcp.server.fastmcp import Context, FastMCP
 from src.mcp_server.utils.error_handling import MCPErrorFormatter
 from src.mcp_server.utils.timeout_config import get_default_timeout
 from src.server.config.service_discovery import get_api_url
@@ -29,8 +29,8 @@ def register_version_tools(mcp: FastMCP):
         project_id: str,
         field_name: str,
         content: Any,
-        change_summary: Optional[str] = None,
-        document_id: Optional[str] = None,
+        change_summary: str | None = None,
+        document_id: str | None = None,
         created_by: str = "system",
     ) -> str:
         """
@@ -135,7 +135,7 @@ def register_version_tools(mcp: FastMCP):
                         if field_name == "docs":
                             return MCPErrorFormatter.format_error(
                                 error_type="validation_error",
-                                message=f"For field_name='docs', content must be an array. Example: [{{'id': 'doc1', 'title': 'Guide', 'content': {{...}}}}]",
+                                message="For field_name='docs', content must be an array. Example: [{'id': 'doc1', 'title': 'Guide', 'content': {...}}]",
                                 suggestion="Ensure content is an array of document objects",
                                 http_status=400,
                             )
@@ -171,7 +171,7 @@ def register_version_tools(mcp: FastMCP):
             return MCPErrorFormatter.from_exception(e, "create version")
 
     @mcp.tool()
-    async def list_versions(ctx: Context, project_id: str, field_name: Optional[str] = None) -> str:
+    async def list_versions(ctx: Context, project_id: str, field_name: str | None = None) -> str:
         """
         List version history for a project.
 

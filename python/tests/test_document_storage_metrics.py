@@ -179,11 +179,11 @@ class TestDocumentStorageMetrics:
                 # Mix of documents with various content states
                 crawl_results = [
                     {"url": "https://example.com/1", "markdown": "Content"},
-                    {"url": "https://example.com/2", "markdown": ""},  # Empty markdown
-                    {"url": "https://example.com/3", "markdown": None},  # None markdown
+                    {"url": "https://example.com/2", "markdown": ""},  # Empty markdown - skipped
+                    {"url": "https://example.com/3", "markdown": None},  # None markdown - skipped
                     {"url": "https://example.com/4", "markdown": "More content"},
-                    {"url": "https://example.com/5"},  # Missing markdown key
-                    {"url": "https://example.com/6", "markdown": "   "},  # Whitespace (counts as content)
+                    {"url": "https://example.com/5"},  # Missing markdown key - skipped
+                    {"url": "https://example.com/6", "markdown": "   "},  # Whitespace only - skipped
                 ]
                 
                 result = await doc_storage.process_and_store_documents(
@@ -195,11 +195,13 @@ class TestDocumentStorageMetrics:
                     source_display_name="Example"
                 )
                 
-                # Should process documents 1, 4, and 6 (has content including whitespace)
-                assert result["chunk_count"] == 3, "Should have 3 chunks (one per processed doc)"
+                # Should process only documents 1 and 4 (documents with actual content)
+                # Documents 2, 3, 5, 6 are skipped (empty, None, missing, or whitespace-only)
+                assert result["chunk_count"] == 2, "Should have 2 chunks (one per processed doc with content)"
                 
                 # Check url_to_full_document only has processed docs
-                assert len(result["url_to_full_document"]) == 3
+                assert len(result["url_to_full_document"]) == 2
                 assert "https://example.com/1" in result["url_to_full_document"]
                 assert "https://example.com/4" in result["url_to_full_document"]
-                assert "https://example.com/6" in result["url_to_full_document"]
+                # Documents with no content should not be in the result
+                assert "https://example.com/6" not in result["url_to_full_document"]

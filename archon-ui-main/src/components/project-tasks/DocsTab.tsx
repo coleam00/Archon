@@ -8,8 +8,7 @@ import { Input } from '../ui/Input';
 import { Card } from '../ui/Card';
 import { Badge } from '../ui/Badge';
 import { Select } from '../ui/Select';
-import { CrawlProgressData, crawlProgressService } from '../../services/crawlProgressService';
-import { WebSocketState } from '../../services/socketIOService';
+import { useCrawlProgressPolling } from '../../hooks/usePolling';
 import { MilkdownEditor } from './MilkdownEditor';
 import { VersionHistoryModal } from './VersionHistoryModal';
 import { PRPViewer } from '../prp';
@@ -344,8 +343,8 @@ const DOCUMENT_TEMPLATES = {
             database: 'Supabase PostgreSQL with proper indexing'
           },
           realtime: {
-            technology: 'Socket.IO for live updates',
-            patterns: 'Event-driven communication with proper error handling'
+            technology: 'HTTP polling for live updates',
+            patterns: 'ETag-based polling with smart pausing'
           },
           infrastructure: {
             deployment: 'Docker containers with orchestration',
@@ -356,7 +355,7 @@ const DOCUMENT_TEMPLATES = {
         data_flow: [
           'User interaction → Frontend validation → API call',
           'Backend processing → Database operations → Response',
-          'Real-time events → Socket.IO → UI updates'
+          'Real-time events → HTTP polling → UI updates'
         ],
         integration_points: [
           'External APIs and their usage patterns',
@@ -555,8 +554,11 @@ export const DocsTab = ({
   const [showAddSourceModal, setShowAddSourceModal] = useState(false);
   const [sourceType, setSourceType] = useState<'technical' | 'business'>('technical');
   const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([]);
-  const [progressItems, setProgressItems] = useState<CrawlProgressData[]>([]);
+  const [activeProgressId, setActiveProgressId] = useState<string | null>(null);
   const { showToast } = useToast();
+  
+  // Poll for crawl progress
+  const crawlProgress = useCrawlProgressPolling(activeProgressId);
 
   // Load project documents from the project data
   const loadProjectDocuments = async () => {
@@ -701,10 +703,10 @@ export const DocsTab = ({
     loadProjectDocuments();
     loadProjectData(); // Load saved sources
     
-    // Cleanup function to disconnect crawl progress service
+    // Cleanup function
     return () => {
-      console.log('🧹 DocsTab: Disconnecting crawl progress service');
-      crawlProgressService.disconnect();
+      console.log('🧹 DocsTab: Cleanup');
+      // Polling cleanup happens automatically in hooks
     };
   }, [project?.id]);
 
@@ -712,6 +714,24 @@ export const DocsTab = ({
   useEffect(() => {
     setSelectedDocument(null);
   }, [project?.id]);
+
+  // Handle crawl progress updates
+  useEffect(() => {
+    if (crawlProgress.data) {
+      const status = crawlProgress.data.status;
+      console.log('📊 Crawl progress update:', crawlProgress.data);
+      
+      if (status === 'completed') {
+        showToast('Crawling completed successfully', 'success');
+        loadKnowledgeItems(); // Reload knowledge items
+        setActiveProgressId(null); // Clear active progress
+      } else if (status === 'failed' || status === 'error') {
+        const errorMsg = crawlProgress.data.error || 'Crawling failed';
+        showToast(`Crawling failed: ${errorMsg}`, 'error');
+        setActiveProgressId(null); // Clear active progress
+      }
+    }
+  }, [crawlProgress.data, showToast]);
 
   // Existing knowledge loading function
   const loadKnowledgeItems = async (knowledgeType?: 'technical' | 'business') => {
@@ -790,72 +810,10 @@ export const DocsTab = ({
     }
   };
 
-  const handleProgressComplete = (data: CrawlProgressData) => {
-    console.log('Crawl completed:', data);
-    setProgressItems(prev => prev.filter(item => item.progressId !== data.progressId));
-    loadKnowledgeItems();
-    showToast('Crawling completed successfully', 'success');
-  };
-
-  const handleProgressError = (error: string) => {
-    console.error('Crawl error:', error);
-    showToast(`Crawling failed: ${error}`, 'error');
-  };
-
-  const handleProgressUpdate = (data: CrawlProgressData) => {
-    setProgressItems(prev => 
-      prev.map(item => 
-        item.progressId === data.progressId ? data : item
-      )
-    );
-  };
-
-  const handleStartCrawl = async (progressId: string, initialData: Partial<CrawlProgressData>) => {
-    console.log(`Starting crawl tracking for: ${progressId}`);
-    
-    const newProgressItem: CrawlProgressData = {
-      progressId,
-      status: 'starting',
-      percentage: 0,
-      logs: ['Starting crawl...'],
-      ...initialData
-    };
-    
-    setProgressItems(prev => [...prev, newProgressItem]);
-    
-    const progressCallback = (data: CrawlProgressData) => {
-      console.log(`📨 Progress callback called for ${progressId}:`, data);
-      
-      if (data.progressId === progressId) {
-        handleProgressUpdate(data);
-        
-        if (data.status === 'completed') {
-          handleProgressComplete(data);
-        } else if (data.status === 'error') {
-          handleProgressError(data.error || 'Crawling failed');
-        }
-      }
-    };
-    
-    try {
-      // Use the enhanced streamProgress method for better connection handling
-      await crawlProgressService.streamProgressEnhanced(progressId, {
-        onMessage: progressCallback,
-        onError: (error) => {
-          console.error(`❌ WebSocket error for ${progressId}:`, error);
-          handleProgressError(`Connection error: ${error.message}`);
-        }
-      }, {
-        autoReconnect: true,
-        reconnectDelay: 5000,
-        connectionTimeout: 10000
-      });
-      
-      console.log(`✅ WebSocket connected successfully for ${progressId}`);
-    } catch (error) {
-      console.error(`❌ Failed to establish WebSocket connection:`, error);
-      handleProgressError('Failed to connect to progress updates');
-    }
+  const handleStartCrawl = async (progressId: string, initialData: any) => {
+    console.log(`🚀 Starting crawl tracking for: ${progressId}`);
+    setActiveProgressId(progressId);
+    showToast('Crawling started - tracking progress', 'success');
   };
 
   const openAddSourceModal = (type: 'technical' | 'business') => {
@@ -1374,7 +1332,7 @@ interface AddKnowledgeModalProps {
   sourceType: 'technical' | 'business';
   onClose: () => void;
   onSuccess: () => void;
-  onStartCrawl: (progressId: string, initialData: Partial<CrawlProgressData>) => void;
+  onStartCrawl: (progressId: string, initialData: any) => void;
 }
 
 const AddKnowledgeModal = ({
@@ -1409,9 +1367,9 @@ const AddKnowledgeModal = ({
           update_frequency: parseInt(updateFrequency)
         });
         
-        // Check if result contains a progressId for streaming
+        // Check if result contains a progressId for progress tracking
         if ((result as any).progressId) {
-          // Start progress tracking
+          // Start progress tracking via polling
           onStartCrawl((result as any).progressId, {
             currentUrl: url.trim(),
             totalPages: 0,
@@ -1421,7 +1379,7 @@ const AddKnowledgeModal = ({
           showToast('Crawling started - tracking progress', 'success');
           onClose(); // Close modal immediately
         } else {
-          // Fallback for non-streaming response
+          // Fallback for immediate response
           showToast((result as any).message || 'Crawling started', 'success');
           onSuccess();
         }

@@ -83,11 +83,12 @@ def test_search_knowledge(client):
     assert response.status_code in [200, 400, 404, 422, 500]
 
 
-def test_websocket_connection(client):
-    """Test WebSocket/Socket.IO endpoint exists."""
-    response = client.get("/socket.io/")
-    # Socket.IO returns specific status codes
-    assert response.status_code in [200, 400, 404]
+def test_polling_endpoint(client):
+    """Test polling endpoints exist for progress tracking."""
+    # Test crawl progress endpoint
+    response = client.get("/api/knowledge/crawl-progress/test-id")
+    # Should return 200 with not_found status or actual progress
+    assert response.status_code in [200, 404, 500]
 
 
 def test_authentication(client):

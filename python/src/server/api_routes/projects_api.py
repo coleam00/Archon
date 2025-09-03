@@ -5,22 +5,22 @@ Handles:
 - Project management (CRUD operations)
 - Task management with hierarchical structure
 - Streaming project creation with DocumentAgent integration
-- Socket.IO progress updates for project creation
+- HTTP polling for progress updates
 """
 
-import asyncio
 import json
-import secrets
-import sys
+from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request, Response
+from fastapi import status as http_status
 from pydantic import BaseModel
 
 # Removed direct logging import - using unified config
 # Set up standard logger for background tasks
 from ..config.logfire_config import get_logger, logfire
 from ..utils import get_supabase_client
+from ..utils.etag_utils import check_etag, generate_etag
 
 logger = get_logger(__name__)
 
@@ -30,13 +30,11 @@ from ..services.projects import (
     ProjectService,
     SourceLinkingService,
     TaskService,
-    progress_service,
 )
 from ..services.projects.document_service import DocumentService
 from ..services.projects.versioning_service import VersioningService
 
-# Import Socket.IO broadcast functions from socketio_handlers
-from .socketio_handlers import broadcast_project_update
+# Using HTTP polling for real-time updates
 
 router = APIRouter(prefix="/api", tags=["projects"])
 
@@ -76,7 +74,11 @@ class CreateTaskRequest(BaseModel):
 
 
 @router.get("/projects")
-async def list_projects(include_content: bool = True):
+async def list_projects(
+    response: Response,
+    include_content: bool = True,
+    if_none_match: str | None = Header(None)
+):
     """
     List all projects.
     
@@ -85,7 +87,7 @@ async def list_projects(include_content: bool = True):
                         If False, returns lightweight metadata with statistics.
     """
     try:
-        logfire.info(f"Listing all projects | include_content={include_content}")
+        logfire.debug(f"Listing all projects | include_content={include_content}")
 
         # Use ProjectService to get projects with include_content parameter
         project_service = ProjectService()
@@ -106,21 +108,47 @@ async def list_projects(include_content: bool = True):
         # Monitor response size for optimization validation
         response_json = json.dumps(formatted_projects)
         response_size = len(response_json)
-        
+
         # Log response metrics
-        logfire.info(
+        logfire.debug(
             f"Projects listed successfully | count={len(formatted_projects)} | "
             f"size_bytes={response_size} | include_content={include_content}"
         )
-        
-        # Warning for large responses (>10KB)
-        if response_size > 10000:
-            logfire.warning(
-                f"Large response size detected | size_bytes={response_size} | "
+
+        # Log large responses at debug level (>100KB is worth noting, but normal for project data)
+        if response_size > 100000:
+            logfire.debug(
+                f"Large response size | size_bytes={response_size} | "
                 f"include_content={include_content} | project_count={len(formatted_projects)}"
             )
 
-        return formatted_projects
+        # Generate ETag from stable data (excluding timestamp)
+        etag_data = {
+            "projects": formatted_projects,
+            "count": len(formatted_projects)
+        }
+        current_etag = generate_etag(etag_data)
+
+        # Generate response with timestamp for polling
+        response_data = {
+            "projects": formatted_projects,
+            "timestamp": datetime.utcnow().isoformat(),
+            "count": len(formatted_projects)
+        }
+
+        # Check if client's ETag matches
+        if check_etag(if_none_match, current_etag):
+            response.status_code = http_status.HTTP_304_NOT_MODIFIED
+            response.headers["ETag"] = current_etag
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            return None
+
+        # Set headers
+        response.headers["ETag"] = current_etag
+        response.headers["Last-Modified"] = datetime.utcnow().isoformat()
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+
+        return response_data
 
     except HTTPException:
         raise
@@ -144,42 +172,6 @@ async def create_project(request: CreateProjectRequest):
             f"Creating new project | title={request.title} | github_repo={request.github_repo}"
         )
 
-        # Generate unique progress ID for this creation
-        progress_id = secrets.token_hex(16)
-
-        # Start tracking creation progress
-        progress_service.start_operation(
-            progress_id,
-            "project_creation",
-            {
-                "title": request.title,
-                "description": request.description or "",
-                "github_repo": request.github_repo,
-            },
-        )
-
-        # Start background task to create the project with AI assistance
-        asyncio.create_task(_create_project_with_ai(progress_id, request))
-
-        logfire.info(
-            f"Project creation started | progress_id={progress_id} | title={request.title}"
-        )
-
-        # Return progress_id immediately so frontend can connect to Socket.IO
-        return {
-            "progress_id": progress_id,
-            "status": "started",
-            "message": "Project creation started. Connect to Socket.IO for progress updates.",
-        }
-
-    except Exception as e:
-        logfire.error(f"Failed to start project creation | error={str(e)} | title={request.title}")
-        raise HTTPException(status_code=500, detail={"error": str(e)})
-
-
-async def _create_project_with_ai(progress_id: str, request: CreateProjectRequest):
-    """Background task to create project with AI assistance using ProjectCreationService."""
-    try:
         # Prepare kwargs for additional project fields
         kwargs = {}
         if request.pinned is not None:
@@ -189,10 +181,10 @@ async def _create_project_with_ai(progress_id: str, request: CreateProjectReques
         if request.data:
             kwargs["data"] = request.data
 
-        # Use ProjectCreationService to handle the entire workflow
-        creation_service = ProjectCreationService()
-        success, result = await creation_service.create_project_with_ai(
-            progress_id=progress_id,
+        # Create project directly with AI assistance
+        project_service = ProjectCreationService()
+        success, result = await project_service.create_project_with_ai(
+            progress_id="direct",  # No progress tracking needed
             title=request.title,
             description=request.description,
             github_repo=request.github_repo,
@@ -200,22 +192,21 @@ async def _create_project_with_ai(progress_id: str, request: CreateProjectReques
         )
 
         if success:
-            # Broadcast project list update
-            await broadcast_project_update()
-
-            # Complete the operation
-            await progress_service.complete_operation(
-                progress_id, {"project_id": result["project_id"]}
-            )
+            logfire.info(f"Project created successfully | project_id={result['project_id']}")
+            return {
+                "project_id": result["project_id"],
+                "project": result.get("project"),
+                "status": "completed",
+                "message": f"Project '{request.title}' created successfully",
+            }
         else:
-            # Error occurred
-            await progress_service.error_operation(
-                progress_id, result.get("error", "Unknown error")
-            )
+            raise HTTPException(status_code=500, detail=result)
 
     except Exception as e:
-        logfire.error(f"Project creation failed: {str(e)}")
-        await progress_service.error_operation(progress_id, str(e))
+        logfire.error(f"Failed to start project creation | error={str(e)} | title={request.title}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
 
 
 @router.get("/projects/health")
@@ -279,6 +270,67 @@ async def projects_health():
             "error": str(e),
             "schema": {"projects_table": False, "tasks_table": False, "valid": False},
         }
+
+
+@router.get("/projects/task-counts")
+async def get_all_task_counts(
+    request: Request,
+    response: Response,
+):
+    """
+    Get task counts for all projects in a single batch query.
+    Optimized endpoint to avoid N+1 query problem.
+    
+    Returns counts grouped by project_id with todo, doing, and done counts.
+    Review status is included in doing count to match frontend logic.
+    """
+    try:
+        # Get If-None-Match header for ETag comparison
+        if_none_match = request.headers.get("If-None-Match")
+
+        logfire.debug(f"Getting task counts for all projects | etag={if_none_match}")
+
+        # Use TaskService to get batch task counts
+        # Get client explicitly to ensure mocking works in tests
+        supabase_client = get_supabase_client()
+        task_service = TaskService(supabase_client)
+        success, result = task_service.get_all_project_task_counts()
+
+        if not success:
+            logfire.error(f"Failed to get task counts | error={result.get('error')}")
+            raise HTTPException(status_code=500, detail=result)
+
+        # Generate ETag from counts data
+        etag_data = {
+            "counts": result,
+            "count": len(result)
+        }
+        current_etag = generate_etag(etag_data)
+
+        # Check if client's ETag matches (304 Not Modified)
+        if check_etag(if_none_match, current_etag):
+            response.status_code = 304
+            response.headers["ETag"] = current_etag
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            logfire.debug(f"Task counts unchanged, returning 304 | etag={current_etag}")
+            return None
+
+        # Set ETag headers for successful response
+        response.headers["ETag"] = current_etag
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        response.headers["Last-Modified"] = datetime.utcnow().isoformat()
+
+        logfire.debug(
+            f"Task counts retrieved | project_count={len(result)} | etag={current_etag}"
+        )
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logfire.error(f"Failed to get task counts | error={str(e)}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
 @router.get("/projects/{project_id}")
@@ -419,9 +471,6 @@ async def update_project(project_id: str, request: UpdateProjectRequest):
         # Format project response with sources using SourceLinkingService
         formatted_project = source_service.format_project_with_sources(project)
 
-        # Broadcast project list update to Socket.IO clients
-        await broadcast_project_update()
-
         logfire.info(
             f"Project updated successfully | project_id={project_id} | title={project.get('title')} | technical_sources={len(formatted_project.get('technical_sources', []))} | business_sources={len(formatted_project.get('business_sources', []))}"
         )
@@ -450,9 +499,6 @@ async def delete_project(project_id: str):
                 raise HTTPException(status_code=404, detail=result)
             else:
                 raise HTTPException(status_code=500, detail=result)
-
-        # Broadcast project list update to Socket.IO clients
-        await broadcast_project_update()
 
         logfire.info(
             f"Project deleted successfully | project_id={project_id} | deleted_tasks={result.get('deleted_tasks', 0)}"
@@ -501,11 +547,20 @@ async def get_project_features(project_id: str):
 
 
 @router.get("/projects/{project_id}/tasks")
-async def list_project_tasks(project_id: str, include_archived: bool = False, exclude_large_fields: bool = False):
-    """List all tasks for a specific project. By default, filters out archived tasks."""
+async def list_project_tasks(
+    project_id: str,
+    request: Request,
+    response: Response,
+    include_archived: bool = False,
+    exclude_large_fields: bool = False
+):
+    """List all tasks for a specific project with ETag support for efficient polling."""
     try:
-        logfire.info(
-            f"Listing project tasks | project_id={project_id} | include_archived={include_archived} | exclude_large_fields={exclude_large_fields}"
+        # Get If-None-Match header for ETag comparison
+        if_none_match = request.headers.get("If-None-Match")
+
+        logfire.debug(
+            f"Listing project tasks | project_id={project_id} | include_archived={include_archived} | exclude_large_fields={exclude_large_fields} | etag={if_none_match}"
         )
 
         # Use TaskService to list tasks
@@ -522,8 +577,37 @@ async def list_project_tasks(project_id: str, include_archived: bool = False, ex
 
         tasks = result.get("tasks", [])
 
-        logfire.info(
-            f"Project tasks retrieved | project_id={project_id} | task_count={len(tasks)}"
+        # Generate ETag from task data (excluding timestamps for consistency)
+        etag_data = {
+            "tasks": [{
+                "id": task.get("id"),
+                "title": task.get("title"),
+                "status": task.get("status"),
+                "task_order": task.get("task_order"),
+                "assignee": task.get("assignee"),
+                "feature": task.get("feature")
+            } for task in tasks],
+            "project_id": project_id,
+            "count": len(tasks)
+        }
+        current_etag = generate_etag(etag_data)
+
+        # Check if client's ETag matches (304 Not Modified)
+        if check_etag(if_none_match, current_etag):
+            response.status_code = 304
+            response.headers["ETag"] = current_etag
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            response.headers["Last-Modified"] = datetime.utcnow().isoformat()
+            logfire.debug(f"Tasks unchanged, returning 304 | project_id={project_id} | etag={current_etag}")
+            return None
+
+        # Set ETag headers for successful response
+        response.headers["ETag"] = current_etag
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        response.headers["Last-Modified"] = datetime.utcnow().isoformat()
+
+        logfire.debug(
+            f"Project tasks retrieved | project_id={project_id} | task_count={len(tasks)} | etag={current_etag}"
         )
 
         return tasks
@@ -540,7 +624,7 @@ async def list_project_tasks(project_id: str, include_archived: bool = False, ex
 
 @router.post("/tasks")
 async def create_task(request: CreateTaskRequest):
-    """Create a new task with automatic reordering and real-time Socket.IO broadcasting."""
+    """Create a new task with automatic reordering."""
     try:
         # Use TaskService to create the task
         task_service = TaskService()
@@ -623,24 +707,24 @@ async def list_tasks(
                 "pages": (len(tasks) + per_page - 1) // per_page,
             },
         }
-        
+
         # Monitor response size for optimization validation
         response_json = json.dumps(response)
         response_size = len(response_json)
-        
+
         # Log response metrics
         logfire.info(
             f"Tasks listed successfully | count={len(paginated_tasks)} | "
             f"size_bytes={response_size} | exclude_large_fields={exclude_large_fields}"
         )
-        
+
         # Warning for large responses (>10KB)
         if response_size > 10000:
             logfire.warning(
                 f"Large task response size | size_bytes={response_size} | "
                 f"exclude_large_fields={exclude_large_fields} | task_count={len(paginated_tasks)}"
             )
-        
+
         return response
 
     except HTTPException:
@@ -718,7 +802,7 @@ class RestoreVersionRequest(BaseModel):
 
 @router.put("/tasks/{task_id}")
 async def update_task(task_id: str, request: UpdateTaskRequest):
-    """Update a task with real-time Socket.IO broadcasting."""
+    """Update a task."""
     try:
         # Build update fields dictionary
         update_fields = {}
@@ -762,7 +846,7 @@ async def update_task(task_id: str, request: UpdateTaskRequest):
 
 @router.delete("/tasks/{task_id}")
 async def delete_task(task_id: str):
-    """Archive a task (soft delete) with real-time Socket.IO broadcasting."""
+    """Archive a task (soft delete)."""
     try:
         # Use TaskService to archive the task
         task_service = TaskService()
@@ -787,15 +871,12 @@ async def delete_task(task_id: str):
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
-# WebSocket endpoints removed - use Socket.IO events instead
-
-
-# MCP endpoints now emit Socket.IO directly - no context manager needed
+# MCP endpoints for task operations
 
 
 @router.put("/mcp/tasks/{task_id}/status")
-async def mcp_update_task_status_with_socketio(task_id: str, status: str):
-    """Update task status via MCP tools with Socket.IO broadcasting using RAG pattern."""
+async def mcp_update_task_status(task_id: str, status: str):
+    """Update task status via MCP tools."""
     try:
         logfire.info(f"MCP task status update | task_id={task_id} | status={status}")
 
@@ -815,7 +896,7 @@ async def mcp_update_task_status_with_socketio(task_id: str, status: str):
         project_id = updated_task["project_id"]
 
         logfire.info(
-            f"Task status updated with Socket.IO broadcast | task_id={task_id} | project_id={project_id} | status={status}"
+            f"Task status updated | task_id={task_id} | project_id={project_id} | status={status}"
         )
 
         return {"message": "Task status updated successfully", "task": updated_task}
@@ -824,13 +905,12 @@ async def mcp_update_task_status_with_socketio(task_id: str, status: str):
         raise
     except Exception as e:
         logfire.error(
-            f"Failed to update task status with Socket.IO | error={str(e)} | task_id={task_id}"
+            f"Failed to update task status | error={str(e)} | task_id={task_id}"
         )
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Socket.IO Event Handlers moved to socketio_handlers.py
-# The handlers are automatically registered when socketio_handlers is imported above
+# Progress tracking via HTTP polling - see /api/progress endpoints
 
 # ==================== DOCUMENT MANAGEMENT ENDPOINTS ====================
 

@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { Play, Square, Copy, Clock, Server, AlertCircle, CheckCircle, Loader } from 'lucide-react';
+import { Play, Square, Copy, Server, AlertCircle, CheckCircle, Loader } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { useStaggeredEntrance } from '../hooks/useStaggeredEntrance';
 import { useToast } from '../contexts/ToastContext';
-import { mcpServerService, ServerStatus, LogEntry, ServerConfig } from '../services/mcpServerService';
+import { mcpServerService, ServerStatus, ServerConfig } from '../services/mcpServerService';
 import { IDEGlobalRules } from '../components/settings/IDEGlobalRules';
 // import { MCPClients } from '../components/mcp/MCPClients'; // Commented out - feature not implemented
 
@@ -22,8 +22,6 @@ type SupportedIDE = 'windsurf' | 'cursor' | 'claudecode' | 'cline' | 'kiro' | 'a
  *    - Start/stop the MCP server
  *    - Monitor server status and uptime
  *    - View and copy connection configuration
- *    - Real-time log streaming via WebSocket
- *    - Historical log viewing and clearing
  * 
  * 2. MCP Clients Tab:
  *    - Interactive client management interface
@@ -43,14 +41,11 @@ export const MCPPage = () => {
     logs: []
   });
   const [config, setConfig] = useState<ServerConfig | null>(null);
-  const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [selectedIDE, setSelectedIDE] = useState<SupportedIDE>('windsurf');
-  const logsEndRef = useRef<HTMLDivElement>(null);
-  const logsContainerRef = useRef<HTMLDivElement>(null);
-  const statusPollInterval = useRef<NodeJS.Timeout | null>(null);
+  const statusPollInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const { showToast } = useToast();
 
   // Tab state for switching between Server Control and Clients
@@ -74,39 +69,17 @@ export const MCPPage = () => {
       if (statusPollInterval.current) {
         clearInterval(statusPollInterval.current);
       }
-      mcpServerService.disconnectLogs();
     };
   }, []);
 
 
-  // Start WebSocket connection when server is running
+  // Ensure configuration is loaded when server is running
   useEffect(() => {
-    if (serverStatus.status === 'running') {
-      // Fetch historical logs first (last 100 entries)
-      mcpServerService.getLogs({ limit: 100 }).then(historicalLogs => {
-        setLogs(historicalLogs);
-      }).catch(console.error);
-
-      // Then start streaming new logs via WebSocket
-      mcpServerService.streamLogs((log) => {
-        setLogs(prev => [...prev, log]);
-      }, { autoReconnect: true });
-      
-      // Ensure configuration is loaded when server is running
-      if (!config) {
-        loadConfiguration();
-      }
-    } else {
-      mcpServerService.disconnectLogs();
+    if (serverStatus.status === 'running' && !config) {
+      loadConfiguration();
     }
   }, [serverStatus.status]);
 
-  // Auto-scroll logs to bottom when new logs arrive
-  useEffect(() => {
-    if (logsContainerRef.current && logsEndRef.current) {
-      logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight;
-    }
-  }, [logs]);
 
   /**
    * Load the current MCP server status
@@ -168,8 +141,6 @@ export const MCPPage = () => {
       setIsStopping(true);
       const response = await mcpServerService.stopServer();
       showToast(response.message, 'success');
-      // Clear logs when server stops
-      setLogs([]);
       // Immediately refresh status
       await loadStatus();
     } catch (error: any) {
@@ -179,15 +150,6 @@ export const MCPPage = () => {
     }
   };
 
-  const handleClearLogs = async () => {
-    try {
-      await mcpServerService.clearLogs();
-      setLogs([]);
-      showToast('Logs cleared', 'success');
-    } catch (error) {
-      showToast('Failed to clear logs', 'error');
-    }
-  };
 
   const handleCopyConfig = () => {
     if (!config) return;
@@ -363,13 +325,6 @@ export const MCPPage = () => {
     return `${hours}h ${minutes}m ${secs}s`;
   };
 
-  const formatLogEntry = (log: LogEntry | string): string => {
-    if (typeof log === 'string') {
-      return log;
-    }
-    return `[${log.level}] ${log.message}`;
-  };
-
   const getStatusIcon = () => {
     switch (serverStatus.status) {
       case 'running':
@@ -456,8 +411,8 @@ export const MCPPage = () => {
       {/* Server Control Tab */}
       {activeTab === 'server' && (
         <>
-          {/* Server Control + Server Logs */}
-          <motion.div className="grid grid-cols-1 lg:grid-cols-2 gap-6" variants={itemVariants}>
+          {/* Server Control */}
+          <motion.div className="grid grid-cols-1 gap-6" variants={itemVariants}>
             
             {/* Left Column: Archon MCP Server */}
             <div className="flex flex-col">
@@ -471,7 +426,7 @@ export const MCPPage = () => {
                 <div className="flex items-center justify-between">
                   <div 
                     className="flex items-center gap-3 cursor-help" 
-                    title={process.env.NODE_ENV === 'development' ? 
+                    title={import.meta.env.DEV ? 
                       `Debug Info:\nStatus: ${serverStatus.status}\nConfig: ${config ? 'loaded' : 'null'}\n${config ? `Details: ${JSON.stringify(config, null, 2)}` : ''}` : 
                       undefined
                     }
@@ -696,63 +651,6 @@ export const MCPPage = () => {
               </Card>
             </div>
 
-            {/* Right Column: Server Logs */}
-            <div className="flex flex-col">
-              <h2 className="text-xl font-semibold text-gray-800 dark:text-white mb-4 flex items-center">
-                <Clock className="mr-2 text-purple-500" size={20} />
-                Server Logs
-              </h2>
-              
-              <Card accentColor="purple" className="h-full flex flex-col">
-                <div className="flex items-center justify-between mb-4">
-                  <p className="text-sm text-gray-600 dark:text-zinc-400">
-                    {logs.length > 0 
-                      ? `Showing ${logs.length} log entries`
-                      : 'No logs available'
-                    }
-                  </p>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={handleClearLogs}
-                    disabled={logs.length === 0}
-                  >
-                    Clear Logs
-                  </Button>
-                </div>
-                
-                <div 
-                  id="mcp-logs-container"
-                  ref={logsContainerRef}
-                  className="bg-gray-50 dark:bg-black border border-gray-200 dark:border-zinc-900 rounded-md p-4 flex-1 overflow-y-auto font-mono text-sm max-h-[600px]"
-                >
-                  {logs.length === 0 ? (
-                    <p className="text-gray-500 dark:text-zinc-500 text-center py-8">
-                      {serverStatus.status === 'running' 
-                        ? 'Waiting for log entries...'
-                        : 'Start the server to see logs'
-                      }
-                    </p>
-                  ) : (
-                    logs.map((log, index) => (
-                      <div
-                        key={index}
-                        className={`py-1.5 border-b border-gray-100 dark:border-zinc-900 last:border-0 ${
-                          typeof log !== 'string' && log.level === 'ERROR' 
-                            ? 'text-red-600 dark:text-red-400' 
-                            : typeof log !== 'string' && log.level === 'WARNING'
-                            ? 'text-yellow-600 dark:text-yellow-400'
-                            : 'text-gray-600 dark:text-zinc-400'
-                        }`}
-                      >
-                        {formatLogEntry(log)}
-                      </div>
-                    ))
-                  )}
-                  <div ref={logsEndRef} />
-                </div>
-              </Card>
-            </div>
           </motion.div>
 
           {/* Global Rules Section */}

@@ -41,24 +41,14 @@ export const ArchonChatPanel: React.FC<ArchonChatPanelProps> = props => {
   const chatPanelRef = useRef<HTMLDivElement>(null);
   const sessionIdRef = useRef<string | null>(null);
   /**
-   * Initialize chat session and WebSocket connection
+   * Initialize chat session and connection
    */
   const initializeChat = React.useCallback(async () => {
       try {
-        // Check if WebSocket is enabled
-        const enableWebSocket = import.meta.env.VITE_ENABLE_WEBSOCKET !== 'false';
-        if (!enableWebSocket) {
-          console.warn('WebSocket connection is disabled by environment configuration');
-          setConnectionError('Agent chat is currently disabled');
-          setConnectionStatus('offline');
-          setIsInitialized(true);
-          return;
-        }
-        
         setConnectionStatus('connecting');
         
-        // Add a small delay to prevent WebSocket race conditions on page refresh
-        await new Promise(resolve => setTimeout(resolve, 500));
+        // Yield to next frame to avoid initialization race conditions
+        await new Promise(resolve => requestAnimationFrame(resolve));
         
         // Create a new chat session
         try {
@@ -68,68 +58,57 @@ export const ArchonChatPanel: React.FC<ArchonChatPanelProps> = props => {
           setSessionId(session_id);
           sessionIdRef.current = session_id;
           
-          // Subscribe to connection status changes
-          agentChatService.onStatusChange(session_id, (status) => {
-            setConnectionStatus(status);
-            if (status === 'offline') {
-              setConnectionError('Chat is offline. Please try reconnecting.');
-            } else if (status === 'online') {
-              setConnectionError(null);
-            } else if (status === 'connecting') {
-              setConnectionError('Reconnecting...');
-            }
-          });
+          // Load initial chat history
+          try {
+            const history = await agentChatService.getChatHistory(session_id);
+            console.log(`[CHAT PANEL] Loaded chat history:`, history);
+            setMessages(history || []);
+          } catch (error) {
+            console.error('Failed to load chat history:', error);
+            // Initialize with empty messages if history can't be loaded
+            setMessages([]);
+          }
           
-          // Load session data to get initial messages
-          const session = await agentChatService.getSession(session_id);
-          console.log(`[CHAT PANEL] Loaded session:`, session);
-          console.log(`[CHAT PANEL] Session agent_type: "${session.agent_type}"`);
-          console.log(`[CHAT PANEL] First message:`, session.messages?.[0]);
-          setMessages(session.messages || []);
-          
-          // Connect WebSocket for real-time communication
-          agentChatService.connectWebSocket(
-            session_id,
-            (message: ChatMessage) => {
-              setMessages(prev => [...prev, message]);
-              setConnectionError(null); // Clear any previous errors on successful message
-              setConnectionStatus('online');
-            },
-            (typing: boolean) => {
-              setIsTyping(typing);
-            },
-            (chunk: string) => {
-              // Handle streaming chunks
-              setStreamingMessage(prev => prev + chunk);
-              setIsStreaming(true);
-            },
-            () => {
-              // Handle stream completion
-              setIsStreaming(false);
-              setStreamingMessage('');
-            },
-            (error: Event) => {
-              console.error('WebSocket error:', error);
-              // Don't set error message here, let the status handler manage it
-            },
-            (event: CloseEvent) => {
-              console.log('WebSocket closed:', event);
-              // Don't set error message here, let the status handler manage it
-            }
-          );
+          // Start polling for new messages (will fail gracefully if backend is down)
+          try {
+            await agentChatService.streamMessages(
+              session_id,
+              (message: ChatMessage) => {
+                setMessages(prev => [...prev, message]);
+                setConnectionError(null); // Clear any previous errors on successful message
+                setConnectionStatus('online');
+              },
+              (error: Error) => {
+                console.error('Message streaming error:', error);
+                setConnectionStatus('offline');
+                setConnectionError('Chat service is offline. Messages will not be received.');
+              }
+            );
+          } catch (error) {
+            console.error('Failed to start message streaming:', error);
+            // Continue anyway - the chat will work in offline mode
+          }
           
           setIsInitialized(true);
           setConnectionStatus('online');
           setConnectionError(null);
         } catch (error) {
           console.error('Failed to initialize chat session:', error);
-          setConnectionError('Failed to initialize chat. Server may be offline.');
+          if (error instanceof Error && error.message.includes('not available')) {
+            setConnectionError('Agent chat service is disabled. Enable it in docker-compose to use this feature.');
+          } else {
+            setConnectionError('Failed to initialize chat. Server may be offline.');
+          }
           setConnectionStatus('offline');
         }
         
       } catch (error) {
         console.error('Failed to initialize chat:', error);
-        setConnectionError('Failed to connect to agent. Server may be offline.');
+        if (error instanceof Error && error.message.includes('not available')) {
+          setConnectionError('Agent chat service is disabled. Enable it in docker-compose to use this feature.');
+        } else {
+          setConnectionError('Failed to connect to agent. Server may be offline.');
+        }
         setConnectionStatus('offline');
       }
     }, []);
@@ -146,8 +125,8 @@ export const ArchonChatPanel: React.FC<ArchonChatPanelProps> = props => {
     return () => {
       if (sessionIdRef.current) {
         console.log('[CHAT PANEL] Component unmounting, cleaning up session:', sessionIdRef.current);
-        agentChatService.disconnectWebSocket(sessionIdRef.current);
-        agentChatService.offStatusChange(sessionIdRef.current);
+        // Stop streaming messages when component unmounts
+        agentChatService.stopStreaming(sessionIdRef.current);
       }
     };
   }, []); // Empty deps = only on unmount

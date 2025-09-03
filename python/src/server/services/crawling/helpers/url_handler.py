@@ -202,52 +202,52 @@ class URLHandler:
             A 16-character hexadecimal hash string
         """
         try:
-            from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
-            
+            from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
             # Canonicalize URL for consistent hashing
             parsed = urlparse(url.strip())
-            
+
             # Normalize scheme and netloc to lowercase
             scheme = (parsed.scheme or "").lower()
             netloc = (parsed.netloc or "").lower()
-            
+
             # Remove default ports
             if netloc.endswith(":80") and scheme == "http":
                 netloc = netloc[:-3]
             if netloc.endswith(":443") and scheme == "https":
                 netloc = netloc[:-4]
-            
+
             # Normalize path (remove trailing slash except for root)
             path = parsed.path or "/"
             if path.endswith("/") and len(path) > 1:
                 path = path.rstrip("/")
-            
+
             # Remove common tracking parameters and sort remaining
             tracking_params = {
                 "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
                 "gclid", "fbclid", "ref", "source"
             }
             query_items = [
-                (k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) 
+                (k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True)
                 if k not in tracking_params
             ]
             query = urlencode(sorted(query_items))
-            
+
             # Reconstruct canonical URL (fragment is dropped)
             canonical = urlunparse((scheme, netloc, path, "", query, ""))
-            
+
             # Generate SHA256 hash and take first 16 characters
             return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
-            
+
         except Exception as e:
             # Redact sensitive query params from error logs
             try:
                 redacted = url.split("?", 1)[0] if "?" in url else url
             except Exception:
                 redacted = "<unparseable-url>"
-            
+
             logger.error(f"Error generating unique source ID for {redacted}: {e}", exc_info=True)
-            
+
             # Fallback: use a hash of the error message + url to still get something unique
             fallback = f"error_{redacted}_{str(e)}"
             return hashlib.sha256(fallback.encode("utf-8")).hexdigest()[:16]
@@ -287,7 +287,7 @@ class URLHandler:
                 # Check if it's an API endpoint
                 if domain.startswith("api."):
                     return "GitHub API"
-                
+
                 parts = path.split("/")
                 if len(parts) >= 2:
                     owner = parts[0]
@@ -302,7 +302,7 @@ class URLHandler:
                 # Extract the service name from docs.X.com/org
                 service_name = domain.replace("docs.", "").split(".")[0]
                 base_name = f"{service_name.title()}" if service_name else "Documentation"
-                
+
                 # Special handling for special files - preserve the filename
                 if path:
                     # Check for llms.txt files
@@ -315,7 +315,7 @@ class URLHandler:
                     elif path.endswith(".txt"):
                         filename = path.split("/")[-1] if "/" in path else path
                         return f"{base_name} - {filename.title()}"
-                
+
                 return f"{base_name} Documentation" if service_name else "Documentation"
 
             # Handle readthedocs.io subdomains

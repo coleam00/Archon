@@ -44,7 +44,10 @@ class TestSourceRaceCondition:
         def create_source(thread_id):
             """Simulate creating a source from a thread."""
             try:
-                update_source_info(
+                # Run async function in new event loop for each thread
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(update_source_info(
                     client=mock_client,
                     source_id="test_source_123",
                     summary=f"Summary from thread {thread_id}",
@@ -55,7 +58,8 @@ class TestSourceRaceCondition:
                     update_frequency=0,
                     source_url="https://example.com",
                     source_display_name=f"Example Site {thread_id}"  # Will be used as title
-                )
+                ))
+                loop.close()
             except Exception as e:
                 failed_creates.append((thread_id, str(e)))
         
@@ -97,7 +101,10 @@ class TestSourceRaceCondition:
         mock_client.table.return_value.insert = track_insert
         mock_client.table.return_value.upsert = track_upsert
         
-        update_source_info(
+        # Run async function in sync context
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(update_source_info(
             client=mock_client,
             source_id="new_source",
             summary="Test summary",
@@ -105,7 +112,8 @@ class TestSourceRaceCondition:
             content="Test content",
             knowledge_type="documentation",
             source_display_name="Test Display Name"  # Will be used as title
-        )
+        ))
+        loop.close()
         
         # Should use upsert, not insert
         assert "upsert" in methods_called, "Should use upsert for new sources"
@@ -137,14 +145,18 @@ class TestSourceRaceCondition:
         mock_client.table.return_value.update = track_update
         mock_client.table.return_value.upsert = track_upsert
         
-        update_source_info(
+        # Run async function in sync context
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(update_source_info(
             client=mock_client,
             source_id="existing_source",
             summary="Updated summary",
             word_count=200,
             content="Updated content",
             knowledge_type="documentation"
-        )
+        ))
+        loop.close()
         
         # Should use update for existing sources
         assert "update" in methods_called, "Should use update for existing sources"
@@ -168,8 +180,7 @@ class TestSourceRaceCondition:
         
         async def create_source_async(task_id):
             """Async wrapper for source creation."""
-            await asyncio.to_thread(
-                update_source_info,
+            await update_source_info(
                 client=mock_client,
                 source_id=f"async_source_{task_id % 2}",  # Only 2 unique sources
                 summary=f"Summary {task_id}",
@@ -242,7 +253,10 @@ class TestSourceRaceCondition:
         
         def create_with_error_tracking(thread_id):
             try:
-                update_source_info(
+                # Run async function in new event loop for each thread
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(update_source_info(
                     client=mock_client,
                     source_id="race_source",
                     summary="Race summary",
@@ -250,7 +264,8 @@ class TestSourceRaceCondition:
                     content="Race content",
                     knowledge_type="documentation",
                     source_display_name="Race Display Name"  # Will be used as title
-                )
+                ))
+                loop.close()
             except Exception as e:
                 errors.append((thread_id, str(e)))
         
