@@ -85,7 +85,7 @@ async def get_configured_openai_model(model_name: str) -> OpenAIChatModel | str:
             try:
                 base_url = _validate_base_url(base_url)
             except ValueError as e:
-                logger.error(f"Invalid OPENAI_BASE_URL configuration: {e}")
+                logger.error("Invalid OPENAI_BASE_URL configuration", exc_info=True)
                 # Don't fall back silently - re-raise the error to fail fast
                 raise ValueError(f"Invalid OPENAI_BASE_URL configuration: {e}")
 
