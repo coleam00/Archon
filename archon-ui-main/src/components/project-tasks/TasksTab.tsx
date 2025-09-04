@@ -1,56 +1,22 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Table, LayoutGrid, Plus, Wifi, WifiOff, List } from 'lucide-react';
+import { Table, LayoutGrid, Plus } from 'lucide-react';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { Toggle } from '../ui/Toggle';
 import { projectService } from '../../services/projectService';
+import { useToast } from '../../contexts/ToastContext';
+import { debounce } from '../../utils/debounce';
+import { calculateReorderPosition, getDefaultTaskOrder } from '../../utils/taskOrdering';
 
-import { useTaskSocket } from '../../hooks/useTaskSocket';
-import type { CreateTaskRequest, UpdateTaskRequest, DatabaseTaskStatus } from '../../types/project';
+import type { CreateTaskRequest, UpdateTaskRequest } from '../../types/project';
 import { TaskTableView, Task } from './TaskTableView';
 import { TaskBoardView } from './TaskBoardView';
 import { EditTaskModal } from './EditTaskModal';
 
-// Assignee utilities
-const ASSIGNEE_OPTIONS = ['User', 'Archon', 'AI IDE Agent'] as const;
+// Type for optimistic task updates with operation tracking
+type OptimisticTask = Task & { _optimisticOperationId: string };
 
-// Mapping functions for status conversion
-const mapUIStatusToDBStatus = (uiStatus: Task['status']): DatabaseTaskStatus => {
-  switch (uiStatus) {
-    case 'backlog': return 'todo';
-    case 'in-progress': return 'doing';
-    case 'review': return 'review'; // Map UI 'review' to database 'review'
-    case 'complete': return 'done';
-    default: return 'todo';
-  }
-};
 
-const mapDBStatusToUIStatus = (dbStatus: DatabaseTaskStatus): Task['status'] => {
-  switch (dbStatus) {
-    case 'todo': return 'backlog';
-    case 'doing': return 'in-progress';
-    case 'review': return 'review'; // Map database 'review' to UI 'review'
-    case 'done': return 'complete';
-    default: return 'backlog';
-  }
-};
-
-// Helper function to map database task format to UI task format
-const mapDatabaseTaskToUITask = (dbTask: any): Task => {
-  return {
-    id: dbTask.id,
-    title: dbTask.title,
-    description: dbTask.description || '',
-    status: mapDBStatusToUIStatus(dbTask.status),
-    assignee: {
-      name: dbTask.assignee || 'User',
-      avatar: ''
-    },
-    feature: dbTask.feature || 'General',
-    featureColor: '#3b82f6', // Default blue color
-    task_order: dbTask.task_order || 0,
-  };
-};
 
 export const TasksTab = ({
   initialTasks,
@@ -61,6 +27,7 @@ export const TasksTab = ({
   onTasksChange: (tasks: Task[]) => void;
   projectId: string;
 }) => {
+  const { showToast } = useToast();
   const [viewMode, setViewMode] = useState<'table' | 'board'>('board');
   const [tasks, setTasks] = useState<Task[]>([]);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
@@ -68,129 +35,34 @@ export const TasksTab = ({
   const [projectFeatures, setProjectFeatures] = useState<any[]>([]);
   const [isLoadingFeatures, setIsLoadingFeatures] = useState(false);
   const [isSavingTask, setIsSavingTask] = useState<boolean>(false);
-  const [isWebSocketConnected, setIsWebSocketConnected] = useState(false);
+  const [optimisticTaskUpdates, setOptimisticTaskUpdates] = useState<Map<string, OptimisticTask>>(new Map());
   
-  // Initialize tasks
+  // Initialize tasks, but preserve optimistic updates
   useEffect(() => {
-    setTasks(initialTasks);
-  }, [initialTasks]);
+    if (optimisticTaskUpdates.size === 0) {
+      // No optimistic updates, use incoming data as-is
+      setTasks(initialTasks);
+    } else {
+      // Merge incoming data with optimistic updates
+      const mergedTasks = initialTasks.map(task => {
+        const optimisticUpdate = optimisticTaskUpdates.get(task.id);
+        if (optimisticUpdate) {
+          console.log(`[TasksTab] Preserving optimistic update for task ${task.id}:`, optimisticUpdate.status);
+          // Clean up internal tracking field before returning
+          const { _optimisticOperationId, ...cleanTask } = optimisticUpdate;
+          return cleanTask as Task; // Keep optimistic version without internal fields
+        }
+        return task; // Use polling data for non-optimistic tasks
+      });
+      setTasks(mergedTasks);
+    }
+  }, [initialTasks, optimisticTaskUpdates]);
 
   // Load project features on component mount
   useEffect(() => {
     loadProjectFeatures();
   }, [projectId]);
 
-  // Optimized socket handlers with conflict resolution
-  const handleTaskUpdated = useCallback((message: any) => {
-    const updatedTask = message.data || message;
-    const mappedTask = mapDatabaseTaskToUITask(updatedTask);
-    
-    // Skip updates while modal is open for the same task to prevent conflicts
-    if (isModalOpen && editingTask?.id === updatedTask.id) {
-      console.log('[Socket] Skipping update for task being edited:', updatedTask.id);
-      return;
-    }
-    
-    setTasks(prev => {
-      // Use server timestamp for conflict resolution
-      const existingTask = prev.find(task => task.id === updatedTask.id);
-      if (existingTask) {
-        // Check if this is a more recent update
-        const serverTimestamp = message.server_timestamp || Date.now();
-        const lastUpdate = existingTask.lastUpdate || 0;
-        
-        if (serverTimestamp <= lastUpdate) {
-          console.log('[Socket] Ignoring stale update for task:', updatedTask.id);
-          return prev;
-        }
-      }
-      
-      const updated = prev.map(task => 
-        task.id === updatedTask.id 
-          ? { ...mappedTask, lastUpdate: message.server_timestamp || Date.now() }
-          : task
-      );
-      
-      // Notify parent after state settles
-      setTimeout(() => onTasksChange(updated), 0);
-      return updated;
-    });
-  }, [onTasksChange, isModalOpen, editingTask?.id]);
-
-  const handleTaskCreated = useCallback((message: any) => {
-    const newTask = message.data || message;
-    console.log('🆕 Real-time task created:', newTask);
-    const mappedTask = mapDatabaseTaskToUITask(newTask);
-    
-    setTasks(prev => {
-      // Check if task already exists to prevent duplicates
-      if (prev.some(task => task.id === newTask.id)) {
-        console.log('Task already exists, skipping create');
-        return prev;
-      }
-      const updated = [...prev, mappedTask];
-      setTimeout(() => onTasksChange(updated), 0);
-      return updated;
-    });
-  }, [onTasksChange]);
-
-  const handleTaskDeleted = useCallback((message: any) => {
-    const deletedTask = message.data || message;
-    console.log('🗑️ Real-time task deleted:', deletedTask);
-    setTasks(prev => {
-      const updated = prev.filter(task => task.id !== deletedTask.id);
-      setTimeout(() => onTasksChange(updated), 0);
-      return updated;
-    });
-  }, [onTasksChange]);
-
-  const handleTaskArchived = useCallback((message: any) => {
-    const archivedTask = message.data || message;
-    console.log('📦 Real-time task archived:', archivedTask);
-    setTasks(prev => {
-      const updated = prev.filter(task => task.id !== archivedTask.id);
-      setTimeout(() => onTasksChange(updated), 0);
-      return updated;
-    });
-  }, [onTasksChange]);
-
-  const handleTasksReordered = useCallback((message: any) => {
-    const reorderData = message.data || message;
-    console.log('🔄 Real-time tasks reordered:', reorderData);
-    
-    // Handle bulk task reordering from server
-    if (reorderData.tasks && Array.isArray(reorderData.tasks)) {
-      const uiTasks: Task[] = reorderData.tasks.map(mapDatabaseTaskToUITask);
-      setTasks(uiTasks);
-      setTimeout(() => onTasksChange(uiTasks), 0);
-    }
-  }, [onTasksChange]);
-
-  const handleInitialTasks = useCallback((message: any) => {
-    const initialWebSocketTasks = message.data || message;
-    const uiTasks: Task[] = initialWebSocketTasks.map(mapDatabaseTaskToUITask);
-    setTasks(uiTasks);
-    onTasksChange(uiTasks);
-  }, [onTasksChange]);
-
-  // Simplified socket connection with better lifecycle management
-  const { isConnected, connectionState } = useTaskSocket({
-    projectId,
-    onTaskCreated: handleTaskCreated,
-    onTaskUpdated: handleTaskUpdated,
-    onTaskDeleted: handleTaskDeleted,
-    onTaskArchived: handleTaskArchived,
-    onTasksReordered: handleTasksReordered,
-    onInitialTasks: handleInitialTasks,
-    onConnectionStateChange: (state) => {
-      setIsWebSocketConnected(state === 'connected');
-    }
-  });
-
-  // Update connection state when hook state changes
-  useEffect(() => {
-    setIsWebSocketConnected(isConnected);
-  }, [isConnected]);
 
   const loadProjectFeatures = async () => {
     if (!projectId) return;
@@ -223,14 +95,13 @@ export const TasksTab = ({
     
     setIsSavingTask(true);
     try {
-      let parentTaskId = task.id;
       
       if (task.id) {
         // Update existing task
         const updateData: UpdateTaskRequest = {
           title: task.title,
           description: task.description,
-          status: mapUIStatusToDBStatus(task.status),
+          status: task.status,
           assignee: task.assignee?.name || 'User',
           task_order: task.task_order,
           ...(task.feature && { feature: task.feature }),
@@ -244,22 +115,21 @@ export const TasksTab = ({
           project_id: projectId,
           title: task.title,
           description: task.description,
-          status: mapUIStatusToDBStatus(task.status),
+          status: task.status,
           assignee: task.assignee?.name || 'User',
           task_order: task.task_order,
           ...(task.feature && { feature: task.feature }),
           ...(task.featureColor && { featureColor: task.featureColor })
         };
         
-        const createdTask = await projectService.createTask(createData);
-        parentTaskId = createdTask.id;
+        await projectService.createTask(createData);
       }
       
-      // Don't reload tasks - let socket updates handle synchronization
+      // Task saved - polling will pick up changes automatically
       closeModal();
     } catch (error) {
       console.error('Failed to save task:', error);
-      alert(`Failed to save task: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      showToast(`Failed to save task: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
     } finally {
       setIsSavingTask(false);
     }
@@ -271,18 +141,6 @@ export const TasksTab = ({
     onTasksChange(newTasks);
   };
 
-  // Helper function to reorder tasks by status to ensure no gaps (1,2,3...)
-  const reorderTasksByStatus = async (status: Task['status']) => {
-    const tasksInStatus = tasks
-      .filter(task => task.status === status)
-      .sort((a, b) => a.task_order - b.task_order);
-    
-    const updatePromises = tasksInStatus.map((task, index) => 
-      projectService.updateTask(task.id, { task_order: index + 1 })
-    );
-    
-    await Promise.all(updatePromises);
-  };
 
   // Helper function to get next available order number for a status
   const getNextOrderForStatus = (status: Task['status']): number => {
@@ -296,14 +154,7 @@ export const TasksTab = ({
     return maxOrder + 1;
   };
 
-  // Simple debounce function
-  const debounce = (func: Function, delay: number) => {
-    let timeoutId: NodeJS.Timeout;
-    return (...args: any[]) => {
-      clearTimeout(timeoutId);
-      timeoutId = setTimeout(() => func(...args), delay);
-    };
-  };
+  // Use shared debounce helper
 
   // Improved debounced persistence with better coordination
   const debouncedPersistSingleTask = useMemo(
@@ -320,11 +171,10 @@ export const TasksTab = ({
         
       } catch (error) {
         console.error('REORDER: Failed to persist task position:', error);
-        // Don't reload tasks immediately - let socket handle recovery
-        console.log('REORDER: Socket will handle state recovery');
+        // Polling will eventually sync the correct state
       }
     }, 800), // Slightly reduced delay for better responsiveness
-    [projectId]
+    []
   );
 
   // Optimized task reordering without optimistic update conflicts
@@ -360,49 +210,15 @@ export const TasksTab = ({
     const movingTask = statusTasks[movingTaskIndex];
     console.log('REORDER: Moving', movingTask.title, 'from', movingTaskIndex, 'to', targetIndex);
     
-    // Calculate new position using improved algorithm
-    let newPosition: number;
-    
-    if (targetIndex === 0) {
-      // Moving to first position
-      const firstTask = statusTasks[0];
-      newPosition = firstTask.task_order / 2;
-    } else if (targetIndex === statusTasks.length - 1) {
-      // Moving to last position
-      const lastTask = statusTasks[statusTasks.length - 1];
-      newPosition = lastTask.task_order + 1024;
-    } else {
-      // Moving between two items
-      let prevTask, nextTask;
-      
-      if (targetIndex > movingTaskIndex) {
-        // Moving down
-        prevTask = statusTasks[targetIndex];
-        nextTask = statusTasks[targetIndex + 1];
-      } else {
-        // Moving up
-        prevTask = statusTasks[targetIndex - 1];
-        nextTask = statusTasks[targetIndex];
-      }
-      
-      if (prevTask && nextTask) {
-        newPosition = (prevTask.task_order + nextTask.task_order) / 2;
-      } else if (prevTask) {
-        newPosition = prevTask.task_order + 1024;
-      } else if (nextTask) {
-        newPosition = nextTask.task_order / 2;
-      } else {
-        newPosition = 1024; // Fallback
-      }
-    }
+    // Calculate new position using shared ordering utility
+    const newPosition = calculateReorderPosition(statusTasks, movingTaskIndex, targetIndex);
     
     console.log('REORDER: New position calculated:', newPosition);
     
-    // Create updated task with new position and timestamp
+    // Create updated task with new position
     const updatedTask = {
       ...movingTask,
-      task_order: newPosition,
-      lastUpdate: Date.now() // Add timestamp for conflict resolution
+      task_order: newPosition
     };
     
     // Immediate UI update without optimistic tracking interference
@@ -415,54 +231,102 @@ export const TasksTab = ({
     debouncedPersistSingleTask(updatedTask);
   }, [tasks, updateTasks, debouncedPersistSingleTask]);
 
-  // Task move function (for board view)
+  // Task move function (for board view) - Optimistic Updates with Concurrent Operation Protection
   const moveTask = async (taskId: string, newStatus: Task['status']) => {
-    console.log(`[TasksTab] Attempting to move task ${taskId} to new status: ${newStatus}`);
+    // Generate unique operation ID to handle concurrent operations
+    const operationId = `${taskId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    console.log(`[TasksTab] Optimistically moving task ${taskId} to ${newStatus} (op: ${operationId})`);
+    
+    // Clear any previous errors (removed local error state)
+    
+    // Find the task and validate
+    const movingTask = tasks.find(task => task.id === taskId);
+    if (!movingTask) {
+      showToast('Task not found', 'error');
+      return;
+    }
+
+    // (pendingOperations removed)
+
+    // 1. Save current state for rollback
+    const previousTasks = [...tasks]; // Shallow clone sufficient
+    const newOrder = getNextOrderForStatus(newStatus);
+
+    // 2. Update UI immediately (optimistic update - no loader!)
+    const optimisticTask: OptimisticTask = { 
+      ...movingTask, 
+      status: newStatus, 
+      task_order: newOrder,
+      _optimisticOperationId: operationId // Track which operation created this
+    };
+    const optimisticTasks = tasks.map(task => 
+      task.id === taskId ? optimisticTask : task
+    );
+    
+    // Track this as an optimistic update with operation ID
+    setOptimisticTaskUpdates(prev => new Map(prev).set(taskId, optimisticTask));
+    updateTasks(optimisticTasks);
+
+    // 3. Call API in background
     try {
-      const movingTask = tasks.find(task => task.id === taskId);
-      if (!movingTask) {
-        console.warn(`[TasksTab] Task ${taskId} not found for move operation.`);
-        return;
-      }
-      
-      const oldStatus = movingTask.status;
-      const newOrder = getNextOrderForStatus(newStatus);
-
-      console.log(`[TasksTab] Moving task ${movingTask.title} from ${oldStatus} to ${newStatus} with order ${newOrder}`);
-
-      // Update the task with new status and order
       await projectService.updateTask(taskId, {
-        status: mapUIStatusToDBStatus(newStatus),
+        status: newStatus,
         task_order: newOrder,
         client_timestamp: Date.now()
       });
-      console.log(`[TasksTab] Successfully updated task ${taskId} status in backend.`);
       
-      // Don't update local state immediately - let socket handle it
-      console.log(`[TasksTab] Waiting for socket update for task ${taskId}.`);
+      console.log(`[TasksTab] Successfully moved task ${taskId} (op: ${operationId})`);
+      
+      // Only clear if this is still the current operation (no newer operation started)
+      setOptimisticTaskUpdates(prev => {
+        const currentOptimistic = prev.get(taskId);
+        if (currentOptimistic?._optimisticOperationId === operationId) {
+          const newMap = new Map(prev);
+          newMap.delete(taskId);
+          return newMap;
+        }
+        return prev; // Don't clear, newer operation is active
+      });
       
     } catch (error) {
-      console.error(`[TasksTab] Failed to move task ${taskId}:`, error);
-      alert(`Failed to move task: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      console.error(`[TasksTab] Failed to move task ${taskId} (op: ${operationId}):`, error);
+      
+      // Only rollback if this is still the current operation
+      setOptimisticTaskUpdates(prev => {
+        const currentOptimistic = prev.get(taskId);
+        if (currentOptimistic?._optimisticOperationId === operationId) {
+          // 4. Rollback on failure - revert to exact previous state
+          updateTasks(previousTasks);
+          
+          const newMap = new Map(prev);
+          newMap.delete(taskId);
+          
+          const errorMessage = error instanceof Error ? error.message : 'Failed to move task';
+          showToast(`Failed to move task: ${errorMessage}`, 'error');
+          
+          return newMap;
+        }
+        return prev; // Don't rollback, newer operation is active
+      });
+      
+    } finally {
+      // (pendingOperations cleanup removed)
     }
   };
 
   const completeTask = (taskId: string) => {
     console.log(`[TasksTab] Calling completeTask for ${taskId}`);
-    moveTask(taskId, 'complete');
+    moveTask(taskId, 'done');
   };
 
   const deleteTask = async (task: Task) => {
     try {
-      // Delete the task - backend will emit socket event
       await projectService.deleteTask(task.id);
-      console.log(`[TasksTab] Task ${task.id} deletion sent to backend`);
-      
-      // Don't update local state - let socket handle it
-      
+      updateTasks(tasks.filter(t => t.id !== task.id));
+      showToast(`Task "${task.title}" deleted`, 'success');
     } catch (error) {
       console.error('Failed to delete task:', error);
-      // Note: The toast notification for deletion is now handled by TaskBoardView and TaskTableView
+      showToast('Failed to delete task', 'error');
     }
   };
 
@@ -476,7 +340,7 @@ export const TasksTab = ({
         project_id: projectId,
         title: newTask.title,
         description: newTask.description,
-        status: mapUIStatusToDBStatus(newTask.status),
+        status: newTask.status,
         assignee: newTask.assignee?.name || 'User',
         task_order: nextOrder,
         ...(newTask.feature && { feature: newTask.feature }),
@@ -485,8 +349,8 @@ export const TasksTab = ({
       
       await projectService.createTask(createData);
       
-      // Don't reload tasks - let socket updates handle synchronization
-      console.log('[TasksTab] Task creation sent to backend, waiting for socket update');
+      // Task created - polling will pick up changes automatically
+      console.log('[TasksTab] Task created successfully');
       
     } catch (error) {
       console.error('Failed to create task:', error);
@@ -505,9 +369,8 @@ export const TasksTab = ({
       if (updates.title !== undefined) updateData.title = updates.title;
       if (updates.description !== undefined) updateData.description = updates.description;
       if (updates.status !== undefined) {
-        console.log(`[TasksTab] Mapping UI status ${updates.status} to DB status.`);
-        updateData.status = mapUIStatusToDBStatus(updates.status);
-        console.log(`[TasksTab] Mapped status for ${taskId}: ${updates.status} -> ${updateData.status}`);
+        console.log(`[TasksTab] Setting status for ${taskId}: ${updates.status}`);
+        updateData.status = updates.status;
       }
       if (updates.assignee !== undefined) updateData.assignee = updates.assignee.name;
       if (updates.task_order !== undefined) updateData.task_order = updates.task_order;
@@ -518,12 +381,12 @@ export const TasksTab = ({
       await projectService.updateTask(taskId, updateData);
       console.log(`[TasksTab] projectService.updateTask successful for ${taskId}.`);
       
-      // Don't update local state optimistically - let socket handle it
-      console.log(`[TasksTab] Waiting for socket update for task ${taskId}.`);
+      // Task updated - polling will pick up changes automatically
+      console.log(`[TasksTab] Task ${taskId} updated successfully`);
       
     } catch (error) {
       console.error(`[TasksTab] Failed to update task ${taskId} inline:`, error);
-      alert(`Failed to update task: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      showToast(`Failed to update task: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
       throw error;
     }
   };
@@ -603,30 +466,16 @@ export const TasksTab = ({
         {/* Fixed View Controls */}
         <div className="fixed bottom-6 left-0 right-0 flex justify-center z-50 pointer-events-none">
           <div className="flex items-center gap-4">
-            {/* WebSocket Status Indicator */}
-            <div className="flex items-center gap-2 px-3 py-2 bg-white/80 dark:bg-black/90 border border-gray-200 dark:border-gray-800 rounded-lg shadow-[0_0_20px_rgba(0,0,0,0.1)] dark:shadow-[0_0_20px_rgba(0,0,0,0.5)] backdrop-blur-md pointer-events-auto">
-              {isWebSocketConnected ? (
-                <>
-                  <Wifi className="w-4 h-4 text-green-500" />
-                  <span className="text-xs text-green-600 dark:text-green-400">Live</span>
-                </>
-              ) : (
-                <>
-                  <WifiOff className="w-4 h-4 text-red-500" />
-                  <span className="text-xs text-red-600 dark:text-red-400">Offline</span>
-                </>
-              )}
-            </div>
             
             {/* Add Task Button with Luminous Style */}
             <button 
               onClick={() => {
-                const defaultOrder = getTasksForPrioritySelection('backlog')[0]?.value || 1;
+                const defaultOrder = getDefaultTaskOrder(tasks.filter(t => t.status === 'todo'));
                 setEditingTask({
                   id: '',
                   title: '',
                   description: '',
-                  status: 'backlog',
+                  status: 'todo',
                   assignee: { name: 'AI IDE Agent', avatar: '' },
                   feature: '',
                   featureColor: '#3b82f6',

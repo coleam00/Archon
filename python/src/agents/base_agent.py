@@ -216,7 +216,7 @@ class BaseAgent(ABC, Generic[DepsT, OutputT]):
             self.logger.info(f"Agent {self.name} completed successfully")
             # PydanticAI returns a RunResult with data attribute
             return result.data
-        except TimeoutError:
+        except asyncio.TimeoutError:
             self.logger.error(f"Agent {self.name} timed out after 120 seconds")
             raise Exception(f"Agent {self.name} operation timed out - taking too long to respond")
         except Exception as e:

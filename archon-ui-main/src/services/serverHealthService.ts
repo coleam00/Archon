@@ -16,7 +16,6 @@ class ServerHealthService {
 
   // Settings
   private disconnectScreenEnabled: boolean = true;
-  private disconnectScreenDelay: number = 10000; // 10 seconds
   private maxMissedChecks: number = 2; // Show disconnect after 2 missed checks (60 seconds max with 30s interval)
   private checkInterval: number = HEALTH_CHECK_INTERVAL_MS; // Use constant for health check interval
 
@@ -126,7 +125,7 @@ class ServerHealthService {
 
   /**
    * Immediately trigger disconnect screen without waiting for health checks
-   * Used when WebSocket or other services detect immediate disconnection
+   * Used when services detect immediate disconnection (e.g., polling failures, fetch errors)
    */
   handleImmediateDisconnect() {
     console.log('🏥 [Health] Immediate disconnect triggered');
@@ -140,22 +139,21 @@ class ServerHealthService {
   }
 
   /**
-   * Handle when WebSocket reconnects - reset state but let health check confirm
+   * Handle when connection reconnects - reset state but let health check confirm
    */
-  handleWebSocketReconnect() {
-    console.log('🏥 [Health] WebSocket reconnected, resetting missed checks');
+  handleConnectionReconnect() {
+    console.log('🏥 [Health] Connection reconnected, resetting missed checks');
     this.missedChecks = 0;
     // Don't immediately mark as connected - let health check confirm server is actually healthy
   }
 
   getSettings() {
     return {
-      enabled: this.disconnectScreenEnabled,
-      delay: this.disconnectScreenDelay
+      enabled: this.disconnectScreenEnabled
     };
   }
 
-  async updateSettings(settings: { enabled?: boolean; delay?: number }) {
+  async updateSettings(settings: { enabled?: boolean }) {
     if (settings.enabled !== undefined) {
       this.disconnectScreenEnabled = settings.enabled;
       await credentialsService.createCredential({
@@ -165,11 +163,6 @@ class ServerHealthService {
         category: 'features',
         description: 'Enable disconnect screen when server is disconnected'
       });
-    }
-    
-    if (settings.delay !== undefined) {
-      this.disconnectScreenDelay = settings.delay;
-      // You could save this to credentials as well if needed
     }
   }
 }

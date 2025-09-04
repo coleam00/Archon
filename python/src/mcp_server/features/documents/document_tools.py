@@ -7,12 +7,12 @@ Supports various document types including specs, designs, notes, and PRPs.
 
 import json
 import logging
-from typing import Any, Optional, Dict, List
+from typing import Any
 from urllib.parse import urljoin
 
 import httpx
-from mcp.server.fastmcp import Context, FastMCP
 
+from mcp.server.fastmcp import Context, FastMCP
 from src.mcp_server.utils.error_handling import MCPErrorFormatter
 from src.mcp_server.utils.timeout_config import get_default_timeout
 from src.server.config.service_discovery import get_api_url
@@ -29,9 +29,9 @@ def register_document_tools(mcp: FastMCP):
         project_id: str,
         title: str,
         document_type: str,
-        content: Optional[Dict[str, Any]] = None,
-        tags: Optional[List[str]] = None,
-        author: Optional[str] = None,
+        content: dict[str, Any] | None = None,
+        tags: list[str] | None = None,
+        author: str | None = None,
     ) -> str:
         """
         Create a new document with automatic versioning.
@@ -216,10 +216,10 @@ def register_document_tools(mcp: FastMCP):
         ctx: Context,
         project_id: str,
         doc_id: str,
-        title: Optional[str] = None,
-        content: Optional[Dict[str, Any]] = None,
-        tags: Optional[List[str]] = None,
-        author: Optional[str] = None,
+        title: str | None = None,
+        content: dict[str, Any] | None = None,
+        tags: list[str] | None = None,
+        author: str | None = None,
     ) -> str:
         """
         Update a document's properties.
@@ -244,7 +244,7 @@ def register_document_tools(mcp: FastMCP):
             timeout = get_default_timeout()
 
             # Build update fields
-            update_fields: Dict[str, Any] = {}
+            update_fields: dict[str, Any] = {}
             if title is not None:
                 update_fields["title"] = title
             if content is not None:

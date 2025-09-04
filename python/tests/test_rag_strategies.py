@@ -493,7 +493,7 @@ class TestRAGConfiguration:
 
     def test_default_settings(self, rag_service):
         """Test default settings when environment variables not set"""
-        with patch.dict("os.environ", {}, clear=True):
+        with patch.dict("os.environ", {}):
             assert rag_service.get_bool_setting("NONEXISTENT_SETTING", True) is True
             assert rag_service.get_bool_setting("NONEXISTENT_SETTING", False) is False
 

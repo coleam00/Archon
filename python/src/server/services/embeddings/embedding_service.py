@@ -130,7 +130,6 @@ async def create_embedding(text: str, provider: str | None = None) -> list[float
 
 async def create_embeddings_batch(
     texts: list[str],
-    websocket: Any | None = None,
     progress_callback: Any | None = None,
     provider: str | None = None,
 ) -> EmbeddingBatchResult:
@@ -144,7 +143,6 @@ async def create_embeddings_batch(
 
     Args:
         texts: List of texts to create embeddings for
-        websocket: Optional WebSocket for progress updates
         progress_callback: Optional callback for progress reporting
         provider: Optional provider override
 
@@ -207,20 +205,12 @@ async def create_embeddings_batch(
 
                         # Create rate limit progress callback if we have a progress callback
                         rate_limit_callback = None
-                        if progress_callback or websocket:
+                        if progress_callback:
                             async def rate_limit_callback(data: dict):
                                 # Send heartbeat during rate limit wait
-                                if progress_callback:
-                                    processed = result.success_count + result.failure_count
-                                    message = f"Rate limited: {data.get('message', 'Waiting...')}"
-                                    await progress_callback(message, (processed / len(texts)) * 100)
-                                
-                                if websocket:
-                                    await websocket.send_json({
-                                        "type": "rate_limit_wait",
-                                        "message": data.get("message", "Rate limited, waiting..."),
-                                        "remaining_seconds": data.get("remaining_seconds", 0)
-                                    })
+                                processed = result.success_count + result.failure_count
+                                message = f"Rate limited: {data.get('message', 'Waiting...')}"
+                                await progress_callback(message, (processed / len(texts)) * 100)
 
                         # Rate limit each batch
                         async with threading_service.rate_limited_operation(batch_tokens, rate_limit_callback):
@@ -311,19 +301,6 @@ async def create_embeddings_batch(
                             message += f" ({result.failure_count} failed)"
 
                         await progress_callback(message, progress)
-
-                    # WebSocket update
-                    if websocket:
-                        processed = result.success_count + result.failure_count
-                        ws_progress = (processed / len(texts)) * 100
-                        await websocket.send_json({
-                            "type": "embedding_progress",
-                            "processed": processed,
-                            "successful": result.success_count,
-                            "failed": result.failure_count,
-                            "total": len(texts),
-                            "percentage": ws_progress,
-                        })
 
                     # Yield control
                     await asyncio.sleep(0.01)

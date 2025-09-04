@@ -15,7 +15,7 @@ export const useTerminalScroll = <T = any>(
 ) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [isUserScrolling, setIsUserScrolling] = useState(false);
-  const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Check if user is at bottom of scroll
   const isAtBottom = () => {
@@ -68,7 +68,8 @@ export const useTerminalScroll = <T = any>(
         }
       });
     }
-  }, [...dependencies, isUserScrolling]);
+  // Use length of dependencies array instead of spreading to avoid React warnings
+  }, [dependencies.length, enabled, isUserScrolling]);
 
   return scrollContainerRef;
 }; 

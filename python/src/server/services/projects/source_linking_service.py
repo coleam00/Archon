@@ -130,7 +130,7 @@ class SourceLinkingService:
     def format_project_with_sources(self, project: dict[str, Any]) -> dict[str, Any]:
         """
         Format a project dict with its linked sources included.
-        Also handles datetime conversion for Socket.IO compatibility.
+        Also handles datetime conversion for JSON compatibility.
 
         Returns:
             Formatted project dict with technical_sources and business_sources

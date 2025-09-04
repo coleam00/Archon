@@ -4,8 +4,7 @@
 // Database status enum mapping
 export type DatabaseTaskStatus = 'todo' | 'doing' | 'review' | 'done';
 
-// UI status enum (used in current TasksTab)
-export type UITaskStatus = 'backlog' | 'in-progress' | 'review' | 'complete';
+// Using database status values directly - no UI mapping needed
 
 // Priority levels
 export type TaskPriority = 'low' | 'medium' | 'high' | 'critical';
@@ -73,8 +72,7 @@ export interface Task {
   featureColor?: string;
   priority?: TaskPriority;
   
-  // UI-specific computed properties
-  uiStatus?: UITaskStatus; // Computed from database status
+  // No UI-specific status mapping needed
 }
 
 // Create project request
@@ -107,6 +105,13 @@ export interface UpdateProjectRequest {
 }
 
 // Create task request
+// Task counts for a project
+export interface TaskCounts {
+  todo: number;
+  doing: number;
+  done: number;
+}
+
 export interface CreateTaskRequest {
   project_id: string;
   title: string;
@@ -143,26 +148,6 @@ export interface MCPToolResponse<T = any> {
   message?: string;
 }
 
-// WebSocket event types for real-time updates
-export interface ProjectUpdateEvent {
-  type: 'PROJECT_UPDATED' | 'PROJECT_CREATED' | 'PROJECT_DELETED';
-  projectId: string;
-  userId: string;
-  timestamp: string;
-  data: Partial<Project>;
-}
-
-export interface TaskUpdateEvent {
-  type: 'TASK_MOVED' | 'TASK_CREATED' | 'TASK_UPDATED' | 'TASK_DELETED' | 'TASK_ARCHIVED';
-  taskId: string;
-  projectId: string;
-  userId: string;
-  timestamp: string;
-  data: Partial<Task>;
-}
-
-export type ProjectManagementEvent = ProjectUpdateEvent | TaskUpdateEvent;
-
 // Utility type for paginated responses
 export interface PaginatedResponse<T> {
   items: T[];
@@ -172,34 +157,4 @@ export interface PaginatedResponse<T> {
   hasMore: boolean;
 }
 
-// Status mapping utilities
-export const statusMappings = {
-  // Database to UI status mapping
-  dbToUI: {
-    'todo': 'backlog',
-    'doing': 'in-progress', 
-    'review': 'review', // Map database 'review' to UI 'review'
-    'done': 'complete'
-  } as const,
-  
-  // UI to Database status mapping
-  uiToDB: {
-    'backlog': 'todo',
-    'in-progress': 'doing',
-    'review': 'review', // Map UI 'review' to database 'review'
-    'complete': 'done'
-  } as const
-} as const;
-
-// Helper function to convert database task to UI task
-export function dbTaskToUITask(dbTask: Task): Task {
-  return {
-    ...dbTask,
-    uiStatus: statusMappings.dbToUI[dbTask.status]
-  };
-}
-
-// Helper function to convert UI status to database status  
-export function uiStatusToDBStatus(uiStatus: UITaskStatus): DatabaseTaskStatus {
-  return statusMappings.uiToDB[uiStatus];
-} 
+// No status mapping needed - using database values directly 

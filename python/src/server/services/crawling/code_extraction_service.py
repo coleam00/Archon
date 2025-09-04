@@ -139,6 +139,7 @@ class CodeExtractionService:
         progress_callback: Callable | None = None,
         start_progress: int = 0,
         end_progress: int = 100,
+        cancellation_check: Callable[[], None] | None = None,
     ) -> int:
         """
         Extract code examples from crawled documents and store them.
@@ -164,7 +165,7 @@ class CodeExtractionService:
 
         # Extract code blocks from all documents
         all_code_blocks = await self._extract_code_blocks_from_documents(
-            crawl_results, source_id, progress_callback, start_progress, extract_end
+            crawl_results, source_id, progress_callback, start_progress, extract_end, cancellation_check
         )
 
         if not all_code_blocks:
@@ -173,8 +174,11 @@ class CodeExtractionService:
             if progress_callback:
                 await progress_callback({
                     "status": "code_extraction",
-                    "percentage": end_progress,
+                    "progress": end_progress,
                     "log": "No code examples found to extract",
+                    "code_blocks_found": 0,
+                    "completed_documents": len(crawl_results),
+                    "total_documents": len(crawl_results),
                 })
             return 0
 
@@ -188,7 +192,7 @@ class CodeExtractionService:
 
         # Generate summaries for code blocks with mapped progress
         summary_results = await self._generate_code_summaries(
-            all_code_blocks, progress_callback, extract_end, summary_end
+            all_code_blocks, progress_callback, extract_end, summary_end, cancellation_check
         )
 
         # Prepare code examples for storage
@@ -206,6 +210,7 @@ class CodeExtractionService:
         progress_callback: Callable | None = None,
         start_progress: int = 0,
         end_progress: int = 100,
+        cancellation_check: Callable[[], None] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Extract code blocks from all documents.
@@ -224,6 +229,10 @@ class CodeExtractionService:
         completed_docs = 0
 
         for doc in crawl_results:
+            # Check for cancellation before processing each document
+            if cancellation_check:
+                cancellation_check()
+            
             try:
                 source_url = doc["url"]
                 html_content = doc.get("html", "")
@@ -330,10 +339,11 @@ class CodeExtractionService:
                     )
                     await progress_callback({
                         "status": "code_extraction",
-                        "percentage": mapped_progress,
-                        "log": f"Extracted code from {completed_docs}/{total_docs} documents",
+                        "progress": mapped_progress,
+                        "log": f"Extracted code from {completed_docs}/{total_docs} documents ({len(all_code_blocks)} code blocks found)",
                         "completed_documents": completed_docs,
                         "total_documents": total_docs,
+                        "code_blocks_found": len(all_code_blocks),
                     })
 
             except Exception as e:
@@ -1344,6 +1354,7 @@ class CodeExtractionService:
         progress_callback: Callable | None = None,
         start_progress: int = 0,
         end_progress: int = 100,
+        cancellation_check: Callable[[], None] | None = None,
     ) -> list[dict[str, str]]:
         """
         Generate summaries for all code blocks.
@@ -1368,7 +1379,7 @@ class CodeExtractionService:
             if progress_callback:
                 await progress_callback({
                     "status": "code_extraction",
-                    "percentage": end_progress,
+                    "progress": end_progress,
                     "log": f"Skipped AI summary generation (disabled). Using default summaries for {len(all_code_blocks)} code blocks.",
                 })
 
@@ -1387,23 +1398,56 @@ class CodeExtractionService:
         if progress_callback:
             # Create a wrapper that maps the progress to the correct range
             async def mapped_callback(data: dict):
-                # Map the percentage from generate_code_summaries_batch (0-100) to our range
-                if "percentage" in data:
-                    raw_percentage = data["percentage"]
+                # Check for cancellation during summary generation
+                if cancellation_check:
+                    cancellation_check()
+                
+                # Map the progress from generate_code_summaries_batch (0-100) to our range
+                if "progress" in data or "percentage" in data:
+                    raw_progress = data.get("progress", data.get("percentage", 0))
                     # Map from 0-100 to start_progress-end_progress
-                    mapped_percentage = start_progress + int(
-                        (raw_percentage / 100) * (end_progress - start_progress)
+                    mapped_progress = start_progress + int(
+                        (raw_progress / 100) * (end_progress - start_progress)
                     )
-                    data["percentage"] = mapped_percentage
+                    data["progress"] = mapped_progress
+                    # Remove old percentage field if present
+                    if "percentage" in data:
+                        del data["percentage"]
                     # Change the status to match what the orchestration expects
                     data["status"] = "code_extraction"
                 await progress_callback(data)
 
             summary_progress_callback = mapped_callback
 
-        return await generate_code_summaries_batch(
-            code_blocks_for_summaries, max_workers, progress_callback=summary_progress_callback
-        )
+        try:
+            results = await generate_code_summaries_batch(
+                code_blocks_for_summaries, max_workers, progress_callback=summary_progress_callback
+            )
+            
+            # Ensure all results are valid dicts
+            validated_results = []
+            for result in results:
+                if isinstance(result, dict):
+                    validated_results.append(result)
+                else:
+                    # Handle non-dict results (CancelledError, etc.)
+                    validated_results.append({
+                        "example_name": "Code Example",
+                        "summary": "Code example for demonstration purposes."
+                    })
+            
+            return validated_results
+        except asyncio.CancelledError:
+            # If cancelled, return default summaries for all blocks
+            default_summaries = []
+            for item in all_code_blocks:
+                block = item["block"]
+                language = block.get("language", "")
+                default_summaries.append({
+                    "example_name": f"Code Example{f' ({language})' if language else ''}",
+                    "summary": "Code example for demonstration purposes.",
+                })
+            return default_summaries
 
     def _prepare_code_examples_for_storage(
         self, all_code_blocks: list[dict[str, Any]], summary_results: list[dict[str, str]]
@@ -1425,8 +1469,14 @@ class CodeExtractionService:
             source_url = code_item["source_url"]
             source_id = code_item["source_id"]
 
-            summary = summary_result.get("summary", "Code example for demonstration purposes.")
-            example_name = summary_result.get("example_name", "Code Example")
+            # Handle cancellation errors or invalid summary results
+            if isinstance(summary_result, dict):
+                summary = summary_result.get("summary", "Code example for demonstration purposes.")
+                example_name = summary_result.get("example_name", "Code Example")
+            else:
+                # Handle CancelledError or other non-dict results
+                summary = "Code example for demonstration purposes."
+                example_name = "Code Example"
 
             code_urls.append(source_url)
             code_chunk_numbers.append(len(code_examples))
@@ -1475,16 +1525,16 @@ class CodeExtractionService:
             async def mapped_storage_callback(data: dict):
                 # Extract values from the dictionary
                 message = data.get("log", "")
-                percentage = data.get("percentage", 0)
+                progress_val = data.get("progress", data.get("percentage", 0))
 
                 # Map storage progress (0-100) to our range (start_progress to end_progress)
-                mapped_percentage = start_progress + int(
-                    (percentage / 100) * (end_progress - start_progress)
+                mapped_progress = start_progress + int(
+                    (progress_val / 100) * (end_progress - start_progress)
                 )
 
                 update_data = {
                     "status": "code_storage",
-                    "percentage": mapped_percentage,
+                    "progress": mapped_progress,
                     "log": message,
                 }
 
@@ -1516,8 +1566,10 @@ class CodeExtractionService:
             if progress_callback:
                 await progress_callback({
                     "status": "code_extraction",  # Keep status as code_extraction, not completed
-                    "percentage": end_progress,
+                    "progress": end_progress,
                     "log": f"Code extraction phase completed. Stored {len(storage_data['examples'])} code examples.",
+                    "code_blocks_found": len(storage_data['examples']),
+                    "code_examples_stored": len(storage_data['examples']),
                 })
 
             safe_logfire_info(f"Successfully stored {len(storage_data['examples'])} code examples")

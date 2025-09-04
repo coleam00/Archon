@@ -40,8 +40,6 @@ server = [
     "watchfiles>=0.18",
     # Web crawling
     "crawl4ai==0.6.2",
-    # Real-time communication
-    "python-socketio[asyncio]>=5.11.0",
     # Database and storage
     "supabase==2.15.1",
     "asyncpg>=0.29.0",
@@ -107,7 +105,6 @@ all = [
     "python-multipart>=0.0.20",
     "watchfiles>=0.18",
     "crawl4ai==0.6.2",
-    "python-socketio[asyncio]>=5.11.0",
     "supabase==2.15.1",
     "asyncpg>=0.29.0",
     "openai==1.71.0",

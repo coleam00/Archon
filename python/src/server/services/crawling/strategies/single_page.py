@@ -5,9 +5,11 @@ Handles crawling of individual web pages.
 """
 import asyncio
 import traceback
-from typing import Dict, Any, List, Optional, Callable, Awaitable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
-from crawl4ai import CrawlerRunConfig, CacheMode
+from crawl4ai import CacheMode, CrawlerRunConfig
+
 from ....config.logfire_config import get_logger
 
 logger = get_logger(__name__)
@@ -15,7 +17,7 @@ logger = get_logger(__name__)
 
 class SinglePageCrawlStrategy:
     """Strategy for crawling a single web page."""
-    
+
     def __init__(self, crawler, markdown_generator):
         """
         Initialize single page crawl strategy.
@@ -26,11 +28,11 @@ class SinglePageCrawlStrategy:
         """
         self.crawler = crawler
         self.markdown_generator = markdown_generator
-    
+
     def _get_wait_selector_for_docs(self, url: str) -> str:
         """Get appropriate wait selector based on documentation framework."""
         url_lower = url.lower()
-        
+
         # Common selectors for different documentation frameworks
         if 'docusaurus' in url_lower:
             return '.markdown, .theme-doc-markdown, article'
@@ -51,14 +53,14 @@ class SinglePageCrawlStrategy:
         else:
             # Simplified generic selector - just wait for body to have content
             return 'body'
-    
+
     async def crawl_single_page(
         self,
         url: str,
         transform_url_func: Callable[[str], str],
         is_documentation_site_func: Callable[[str], bool],
         retry_count: int = 3
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Crawl a single web page and return the result with retry logic.
         
@@ -74,9 +76,9 @@ class SinglePageCrawlStrategy:
         # Transform GitHub URLs to raw content URLs if applicable
         original_url = url
         url = transform_url_func(url)
-        
+
         last_error = None
-        
+
         for attempt in range(retry_count):
             try:
                 if not self.crawler:
@@ -85,18 +87,18 @@ class SinglePageCrawlStrategy:
                         "success": False,
                         "error": "No crawler instance available - crawler initialization may have failed"
                     }
-                
+
                 # Use ENABLED cache mode for better performance, BYPASS only on retries
                 cache_mode = CacheMode.BYPASS if attempt > 0 else CacheMode.ENABLED
-                
+
                 # Check if this is a documentation site that needs special handling
                 is_doc_site = is_documentation_site_func(url)
-                
+
                 # Enhanced configuration for documentation sites
                 if is_doc_site:
                     wait_selector = self._get_wait_selector_for_docs(url)
                     logger.info(f"Detected documentation site, using wait selector: {wait_selector}")
-                    
+
                     crawl_config = CrawlerRunConfig(
                         cache_mode=cache_mode,
                         stream=True,  # Enable streaming for faster parallel processing
@@ -131,10 +133,10 @@ class SinglePageCrawlStrategy:
                         delay_before_return_html=0.3,  # Reduced from 1.0s
                         scan_full_page=True  # Trigger lazy loading
                     )
-                
+
                 logger.info(f"Crawling {url} (attempt {attempt + 1}/{retry_count})")
                 logger.info(f"Using wait_until: {crawl_config.wait_until}, page_timeout: {crawl_config.page_timeout}")
-                
+
                 try:
                     result = await self.crawler.arun(url=url, config=crawl_config)
                 except Exception as e:
@@ -143,40 +145,40 @@ class SinglePageCrawlStrategy:
                     if attempt < retry_count - 1:
                         await asyncio.sleep(2 ** attempt)
                     continue
-                
+
                 if not result.success:
                     last_error = f"Failed to crawl {url}: {result.error_message}"
                     logger.warning(f"Crawl attempt {attempt + 1} failed: {last_error}")
-                    
+
                     # Exponential backoff before retry
                     if attempt < retry_count - 1:
                         await asyncio.sleep(2 ** attempt)
                     continue
-                
+
                 # Validate content
                 if not result.markdown or len(result.markdown.strip()) < 50:
                     last_error = f"Insufficient content from {url}"
                     logger.warning(f"Crawl attempt {attempt + 1}: {last_error}")
-                    
+
                     if attempt < retry_count - 1:
                         await asyncio.sleep(2 ** attempt)
                     continue
-                
+
                 # Success! Return both markdown AND HTML
                 # Debug logging to see what we got
                 markdown_sample = result.markdown[:1000] if result.markdown else "NO MARKDOWN"
                 has_triple_backticks = '```' in result.markdown if result.markdown else False
                 backtick_count = result.markdown.count('```') if result.markdown else 0
-                
+
                 logger.info(f"Crawl result for {url} | has_markdown={bool(result.markdown)} | markdown_length={len(result.markdown) if result.markdown else 0} | has_triple_backticks={has_triple_backticks} | backtick_count={backtick_count}")
-                
+
                 # Log markdown info for debugging if needed
                 if backtick_count > 0:
                     logger.info(f"Markdown has {backtick_count} code blocks for {url}")
-                
+
                 if 'getting-started' in url:
                     logger.info(f"Markdown sample for getting-started: {markdown_sample}")
-                
+
                 return {
                     "success": True,
                     "url": original_url,  # Use original URL for tracking
@@ -186,33 +188,33 @@ class SinglePageCrawlStrategy:
                     "links": result.links,
                     "content_length": len(result.markdown)
                 }
-                
-            except asyncio.TimeoutError:
+
+            except TimeoutError:
                 last_error = f"Timeout crawling {url}"
                 logger.warning(f"Crawl attempt {attempt + 1} timed out")
             except Exception as e:
                 last_error = f"Error crawling page: {str(e)}"
                 logger.error(f"Error on attempt {attempt + 1} crawling {url}: {e}")
                 logger.error(traceback.format_exc())
-            
+
             # Exponential backoff before retry
             if attempt < retry_count - 1:
                 await asyncio.sleep(2 ** attempt)
-        
+
         # All retries failed
         return {
             "success": False,
             "error": last_error or f"Failed to crawl {url} after {retry_count} attempts"
         }
-    
+
     async def crawl_markdown_file(
         self,
         url: str,
         transform_url_func: Callable[[str], str],
-        progress_callback: Optional[Callable] = None,
+        progress_callback: Callable[..., Awaitable[None]] | None = None,
         start_progress: int = 10,
         end_progress: int = 20
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Crawl a .txt or markdown file with comprehensive error handling and progress reporting.
         
@@ -231,29 +233,39 @@ class SinglePageCrawlStrategy:
             original_url = url
             url = transform_url_func(url)
             logger.info(f"Crawling markdown file: {url}")
-            
+
             # Define local report_progress helper like in other methods
-            async def report_progress(percentage: int, message: str):
+            async def report_progress(progress: int, message: str, **kwargs):
                 """Helper to report progress if callback is available"""
                 if progress_callback:
-                    await progress_callback('crawling', percentage, message)
-            
-            # Report initial progress
-            await report_progress(start_progress, f"Fetching text file: {url}")
-            
+                    await progress_callback('crawling', progress, message, **kwargs)
+
+            # Report initial progress (single file = 1 page)
+            await report_progress(
+                start_progress, 
+                f"Fetching text file: {url}",
+                total_pages=1,
+                processed_pages=0
+            )
+
             # Use consistent configuration even for text files
             crawl_config = CrawlerRunConfig(
                 cache_mode=CacheMode.ENABLED,
                 stream=False
             )
-            
+
             result = await self.crawler.arun(url=url, config=crawl_config)
             if result.success and result.markdown:
                 logger.info(f"Successfully crawled markdown file: {url}")
-                
+
                 # Report completion progress
-                await report_progress(end_progress, f"Text file crawled successfully: {original_url}")
-                
+                await report_progress(
+                    end_progress, 
+                    f"Text file crawled successfully: {original_url}",
+                    total_pages=1,
+                    processed_pages=1
+                )
+
                 return [{'url': original_url, 'markdown': result.markdown, 'html': result.html}]
             else:
                 logger.error(f"Failed to crawl {url}: {result.error_message}")

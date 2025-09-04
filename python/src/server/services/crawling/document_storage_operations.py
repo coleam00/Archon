@@ -6,13 +6,16 @@ Extracted from crawl_orchestration_service.py for better modularity.
 """
 
 import asyncio
-from typing import Dict, Any, List, Optional, Callable
+from collections.abc import Callable
+from typing import Any
 
-from ...config.logfire_config import safe_logfire_info, safe_logfire_error
-from ..storage.storage_services import DocumentStorageService
+from ...config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
+from ..source_management_service import extract_source_summary, update_source_info
 from ..storage.document_storage_service import add_documents_to_supabase
-from ..source_management_service import update_source_info, extract_source_summary
+from ..storage.storage_services import DocumentStorageService
 from .code_extraction_service import CodeExtractionService
+
+logger = get_logger(__name__)
 
 
 class DocumentStorageOperations:
@@ -33,15 +36,15 @@ class DocumentStorageOperations:
 
     async def process_and_store_documents(
         self,
-        crawl_results: List[Dict],
-        request: Dict[str, Any],
+        crawl_results: list[dict],
+        request: dict[str, Any],
         crawl_type: str,
         original_source_id: str,
-        progress_callback: Optional[Callable] = None,
-        cancellation_check: Optional[Callable] = None,
-        source_url: Optional[str] = None,
-        source_display_name: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        progress_callback: Callable | None = None,
+        cancellation_check: Callable | None = None,
+        source_url: str | None = None,
+        source_display_name: str | None = None,
+    ) -> dict[str, Any]:
         """
         Process crawled documents and store them in the database.
 
@@ -76,10 +79,12 @@ class DocumentStorageOperations:
             if cancellation_check:
                 cancellation_check()
 
-            doc_url = doc.get("url", "")
-            markdown_content = doc.get("markdown", "")
+            doc_url = (doc.get('url') or '').strip()
+            markdown_content = (doc.get('markdown') or '').strip()
 
-            if not markdown_content:
+            # Skip documents with empty or whitespace-only content or missing URLs
+            if not markdown_content or not doc_url:
+                logger.debug(f"Skipping document {doc_index}: empty {'URL' if not doc_url else 'content'}")
                 continue
 
             # Increment processed document count
@@ -89,7 +94,7 @@ class DocumentStorageOperations:
             url_to_full_document[doc_url] = markdown_content
 
             # CHUNK THE CONTENT
-            chunks = storage_service.smart_chunk_text(markdown_content, chunk_size=5000)
+            chunks = await storage_service.smart_chunk_text_async(markdown_content, chunk_size=5000)
 
             # Use the original source_id for all documents
             source_id = original_source_id
@@ -148,7 +153,7 @@ class DocumentStorageOperations:
         )
 
         # Call add_documents_to_supabase with the correct parameters
-        await add_documents_to_supabase(
+        storage_stats = await add_documents_to_supabase(
             client=self.supabase_client,
             urls=all_urls,  # Now has entry per chunk
             chunk_numbers=all_chunk_numbers,  # Proper chunk numbers (0, 1, 2, etc)
@@ -162,24 +167,26 @@ class DocumentStorageOperations:
             cancellation_check=cancellation_check,  # Pass cancellation check
         )
 
-        # Calculate actual chunk count
+        # Calculate chunk counts
         chunk_count = len(all_contents)
+        chunks_stored = storage_stats.get("chunks_stored", 0)
 
         return {
-            "chunk_count": chunk_count,
-            "total_word_count": sum(source_word_counts.values()),
-            "url_to_full_document": url_to_full_document,
-            "source_id": original_source_id,
+            'chunk_count': chunk_count,
+            'chunks_stored': chunks_stored,
+            'total_word_count': sum(source_word_counts.values()),
+            'url_to_full_document': url_to_full_document,
+            'source_id': original_source_id
         }
 
     async def _create_source_records(
         self,
-        all_metadatas: List[Dict],
-        all_contents: List[str],
-        source_word_counts: Dict[str, int],
-        request: Dict[str, Any],
-        source_url: Optional[str] = None,
-        source_display_name: Optional[str] = None,
+        all_metadatas: list[dict],
+        all_contents: list[str],
+        source_word_counts: dict[str, int],
+        request: dict[str, Any],
+        source_url: str | None = None,
+        source_display_name: str | None = None,
     ):
         """
         Create or update source records in the database.
@@ -207,7 +214,7 @@ class DocumentStorageOperations:
             # Track word counts per source_id
             if source_id not in source_id_word_counts:
                 source_id_word_counts[source_id] = 0
-            source_id_word_counts[source_id] += metadata.get("word_count", 0)
+            source_id_word_counts[source_id] += metadata.get('word_count', 0)
 
         safe_logfire_info(
             f"Found {len(unique_source_ids)} unique source_ids: {list(unique_source_ids)}"
@@ -224,13 +231,12 @@ class DocumentStorageOperations:
                 else:
                     break
 
-            # Generate summary with fallback (run in thread to avoid blocking async loop)
+            # Generate summary with fallback
             try:
-                # Run synchronous extract_source_summary in a thread pool
-                summary = await asyncio.to_thread(
-                    extract_source_summary, source_id, combined_content
-                )
+                # Call async extract_source_summary directly
+                summary = await extract_source_summary(source_id, combined_content)
             except Exception as e:
+                logger.error(f"Failed to generate AI summary for '{source_id}'", exc_info=True)
                 safe_logfire_error(
                     f"Failed to generate AI summary for '{source_id}': {str(e)}, using fallback"
                 )
@@ -242,15 +248,14 @@ class DocumentStorageOperations:
                 f"About to create/update source record for '{source_id}' (word count: {source_id_word_counts[source_id]})"
             )
             try:
-                # Run synchronous update_source_info in a thread pool
-                await asyncio.to_thread(
-                    update_source_info,
+                # Call async update_source_info directly
+                await update_source_info(
                     client=self.supabase_client,
                     source_id=source_id,
                     summary=summary,
                     word_count=source_id_word_counts[source_id],
                     content=combined_content,
-                    knowledge_type=request.get("knowledge_type", "technical"),
+                    knowledge_type=request.get("knowledge_type", "documentation"),
                     tags=request.get("tags", []),
                     update_frequency=0,  # Set to 0 since we're using manual refresh
                     original_url=request.get("url"),  # Store the original crawl URL
@@ -259,6 +264,7 @@ class DocumentStorageOperations:
                 )
                 safe_logfire_info(f"Successfully created/updated source record for '{source_id}'")
             except Exception as e:
+                logger.error(f"Failed to create/update source record for '{source_id}'", exc_info=True)
                 safe_logfire_error(
                     f"Failed to create/update source record for '{source_id}': {str(e)}"
                 )
@@ -271,23 +277,24 @@ class DocumentStorageOperations:
                         "summary": summary,
                         "total_word_count": source_id_word_counts[source_id],
                         "metadata": {
-                            "knowledge_type": request.get("knowledge_type", "technical"),
+                            "knowledge_type": request.get("knowledge_type", "documentation"),
                             "tags": request.get("tags", []),
                             "auto_generated": True,
                             "fallback_creation": True,
                             "original_url": request.get("url"),
                         },
                     }
-                    
+
                     # Add new fields if provided
                     if source_url:
                         fallback_data["source_url"] = source_url
                     if source_display_name:
                         fallback_data["source_display_name"] = source_display_name
-                    
+
                     self.supabase_client.table("archon_sources").upsert(fallback_data).execute()
                     safe_logfire_info(f"Fallback source creation succeeded for '{source_id}'")
                 except Exception as fallback_error:
+                    logger.error(f"Both source creation attempts failed for '{source_id}'", exc_info=True)
                     safe_logfire_error(
                         f"Both source creation attempts failed for '{source_id}': {str(fallback_error)}"
                     )
@@ -311,6 +318,7 @@ class DocumentStorageOperations:
                         )
                     safe_logfire_info(f"Source record verified for '{source_id}'")
                 except Exception as e:
+                    logger.error(f"Source verification failed for '{source_id}'", exc_info=True)
                     safe_logfire_error(f"Source verification failed for '{source_id}': {str(e)}")
                     raise
 
@@ -320,12 +328,13 @@ class DocumentStorageOperations:
 
     async def extract_and_store_code_examples(
         self,
-        crawl_results: List[Dict],
-        url_to_full_document: Dict[str, str],
+        crawl_results: list[dict],
+        url_to_full_document: dict[str, str],
         source_id: str,
-        progress_callback: Optional[Callable] = None,
+        progress_callback: Callable | None = None,
         start_progress: int = 85,
         end_progress: int = 95,
+        cancellation_check: Callable[[], None] | None = None,
     ) -> int:
         """
         Extract code examples from crawled documents and store them.
@@ -337,12 +346,13 @@ class DocumentStorageOperations:
             progress_callback: Optional callback for progress updates
             start_progress: Starting progress percentage
             end_progress: Ending progress percentage
+            cancellation_check: Optional function to check for cancellation
 
         Returns:
             Number of code examples stored
         """
         result = await self.code_extraction_service.extract_and_store_code_examples(
-            crawl_results, url_to_full_document, source_id, progress_callback, start_progress, end_progress
+            crawl_results, url_to_full_document, source_id, progress_callback, start_progress, end_progress, cancellation_check
         )
 
         return result
