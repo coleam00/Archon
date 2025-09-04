@@ -18,13 +18,13 @@ logger = logging.getLogger(__name__)
 def _validate_base_url(base_url: str) -> str:
     """
     Validate and normalize a base URL.
-    
+
     Args:
         base_url: The base URL to validate
-        
+
     Returns:
         The validated and normalized base URL
-        
+
     Raises:
         ValueError: If the URL is invalid or unsafe
     """
@@ -38,7 +38,7 @@ def _validate_base_url(base_url: str) -> str:
     try:
         parsed = urlparse(url)
     except Exception as e:
-        raise ValueError(f"Invalid URL format: {e}")
+        raise ValueError(f"Invalid URL format: {e}") from e
 
     # Ensure it has a valid scheme
     if not parsed.scheme:
@@ -65,14 +65,14 @@ def _validate_base_url(base_url: str) -> str:
 async def get_configured_openai_model(model_name: str) -> OpenAIChatModel | str:
     """
     Get a configured OpenAI model for PydanticAI agents.
-    
+
     If OPENAI_BASE_URL is configured in the system, returns an OpenAIChatModel
     with a custom OpenAIProvider. Otherwise, returns the standard model string
     format that PydanticAI handles automatically.
-    
+
     Args:
         model_name: The model name (e.g., "gpt-4o", "gpt-4o-mini")
-        
+
     Returns:
         Either an OpenAIChatModel with custom provider or a model string
     """
@@ -87,7 +87,7 @@ async def get_configured_openai_model(model_name: str) -> OpenAIChatModel | str:
             except ValueError as e:
                 logger.error("Invalid OPENAI_BASE_URL configuration", exc_info=True)
                 # Don't fall back silently - re-raise the error to fail fast
-                raise ValueError(f"Invalid OPENAI_BASE_URL configuration: {e}")
+                raise ValueError(f"Invalid OPENAI_BASE_URL configuration: {e}") from e
 
         if base_url:
             # Get API key
@@ -175,17 +175,81 @@ async def _get_openai_api_key() -> str | None:
         return os.getenv("OPENAI_API_KEY")
 
 
+async def get_openai_client_config() -> dict[str, str | None]:
+    """
+    Get OpenAI client configuration for creating openai.AsyncOpenAI instances.
+
+    This provides centralized configuration that honors OPENAI_BASE_URL settings
+    and applies the same validation and security checks as the PydanticAI agents.
+
+    Returns:
+        Dict with 'api_key' and 'base_url' keys. Both may be None if not configured.
+
+    Raises:
+        ValueError: If OPENAI_BASE_URL is configured but invalid or missing API key
+    """
+    try:
+        # Get base URL using same logic as get_configured_openai_model
+        base_url = await _get_openai_base_url()
+
+        # Validate and normalize base URL
+        if base_url:
+            try:
+                base_url = _validate_base_url(base_url)
+            except ValueError as e:
+                logger.error("Invalid OPENAI_BASE_URL configuration", exc_info=True)
+                # Don't fall back silently - re-raise the error to fail fast
+                raise ValueError(f"Invalid OPENAI_BASE_URL configuration: {e}") from e
+
+        # Get API key
+        api_key = await _get_openai_api_key()
+
+        # Apply same security check as in get_configured_openai_model
+        if base_url and not api_key:
+            # Fail fast when base URL is configured but API key is missing
+            # This prevents traffic from leaking to public endpoints when a proxy was explicitly configured
+            raise ValueError(
+                f"OPENAI_BASE_URL is configured ({base_url}) but no OpenAI API key is available. "
+                "When using a custom base URL, an API key must be provided for security reasons."
+            )
+
+        logger.debug(f"OpenAI client config: base_url={base_url}, has_api_key={bool(api_key)}")
+
+        return {
+            "api_key": api_key,
+            "base_url": base_url,
+        }
+
+    except Exception:
+        logger.error("Error getting OpenAI client configuration", exc_info=True)
+        # If a custom base URL was configured, fail fast to avoid leaking traffic.
+        base_url = None
+        try:
+            base_url = await _get_openai_base_url()
+        except Exception:
+            pass
+
+        if base_url:
+            raise
+
+        # Otherwise, return default configuration
+        return {
+            "api_key": None,
+            "base_url": None,
+        }
+
+
 def get_configured_openai_model_sync(model_name: str) -> str:
     """
     Synchronous version that returns model string format.
-    
+
     Since we can't easily call async functions from sync contexts,
     this returns the standard model string format and relies on
     PydanticAI's automatic configuration.
-    
+
     Args:
         model_name: The model name (e.g., "gpt-4o", "gpt-4o-mini")
-        
+
     Returns:
         Model string in "openai:model" format
     """

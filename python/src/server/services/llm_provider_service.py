@@ -94,14 +94,30 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
         logger.info(f"Creating LLM client for provider: {provider_name}")
 
         if provider_name == "openai":
-            if not api_key:
+            # Use centralized OpenAI configuration that honors OPENAI_BASE_URL
+            from ...agents.agent_provider_config import get_openai_client_config
+
+            try:
+                openai_config = await get_openai_client_config()
+                config_api_key = openai_config["api_key"]
+                config_base_url = openai_config["base_url"]
+            except Exception as e:
+                logger.error(f"Failed to get centralized OpenAI configuration: {e}")
+                raise ValueError(f"OpenAI configuration error: {e}") from e
+
+            # Use centralized API key if available, fall back to provider-specific key
+            final_api_key = config_api_key or api_key
+            if not final_api_key:
                 raise ValueError("OpenAI API key not found")
 
-            # Create client with optional base_url for custom OpenAI-compatible endpoints
-            client_kwargs = {"api_key": api_key}
-            if base_url:
-                client_kwargs["base_url"] = base_url
-                logger.info(f"OpenAI client created with custom base URL: {base_url}")
+            # Use centralized base URL if configured, otherwise use provider-specific base URL
+            final_base_url = config_base_url or base_url
+
+            # Create client with centralized configuration
+            client_kwargs = {"api_key": final_api_key}
+            if final_base_url:
+                client_kwargs["base_url"] = final_base_url
+                logger.info(f"OpenAI client created with custom base URL: {final_base_url}")
             else:
                 logger.info("OpenAI client created with default URL")
 
