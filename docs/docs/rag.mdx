@@ -436,47 +436,12 @@ EMBEDDING_MODEL=nomic-embed-text
 3. Use caching more aggressively
 4. Consider switching to local models (Ollama)
 
-## 🔒 Security Considerations for Proxy Usage
-
-When configuring custom OpenAI base URLs, follow these security best practices. These security measures apply to **all OpenAI API usage** throughout the system:
-
-<Admonition type="danger" title="Security Requirements">
-**Always provide an API key** when using custom base URLs. This prevents accidental traffic from being sent to unintended endpoints when a proxy is explicitly configured.
-</Admonition>
-
-### Network Security
-```bash
-# ✅ Use HTTPS endpoints in production
-OPENAI_BASE_URL=https://secure-proxy.example.com/v1
-
-# ⚠️ HTTP only for local development  
-OPENAI_BASE_URL=http://localhost:8000/v1  # Development only
-```
-
 ### API Key Management
 - **Separate Keys**: Use different API keys for proxy vs direct OpenAI access
 - **Key Rotation**: Regularly rotate API keys, especially for proxy endpoints
 - **Environment Variables**: Never hardcode keys in configuration files
 - **Least Privilege**: Proxy keys should have minimal required permissions
-
-### Proxy Validation
-Before deploying with a custom proxy:
-1. **Verify SSL/TLS certificates** for HTTPS endpoints
-2. **Test connectivity** and authentication
-3. **Validate response formats** match OpenAI API standards
-4. **Monitor for unexpected behavior** or response changes
-
-### Corporate Environments
-```bash
-# Corporate proxy with additional security headers
-OPENAI_BASE_URL=https://api-gateway.corp.com/openai/v1
-
-# Consider:
-# - Certificate pinning for additional security
-# - Network policies restricting outbound traffic
-# - Audit logging for all API requests
-# - Rate limiting and quota management
-```
+- **No Secrets in Logs**: Disable logging of Authorization headers and redact API keys in all logs.
 
 ## 🎯 Best Practices
 
