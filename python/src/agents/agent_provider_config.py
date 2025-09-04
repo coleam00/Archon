@@ -51,6 +51,10 @@ def _validate_base_url(base_url: str) -> str:
     if not parsed.hostname:
         raise ValueError("Base URL must include a valid hostname")
 
+    # Disallow embedding credentials in the URL
+    if parsed.username or parsed.password:
+        raise ValueError("Base URL must not embed credentials (userinfo)")
+
     # Log security consideration for non-HTTPS URLs
     if parsed.scheme == 'http' and not parsed.hostname.startswith(('localhost', '127.0.0.1', '0.0.0.0')):
         logger.warning(f"Using non-HTTPS URL for OpenAI base URL: {url}. Consider using HTTPS for production.")
