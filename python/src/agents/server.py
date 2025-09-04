@@ -251,7 +251,8 @@ async def stream_agent(agent_type: str, request: AgentRequest):
 
             # Use PydanticAI's run_stream method
             # run_stream returns an async context manager directly
-            async with agent.run_stream(request.prompt, deps) as stream:
+            stream_cm = await agent.run_stream(request.prompt, deps)
+            async with stream_cm as stream:
                 # Stream text chunks as they arrive
                 async for chunk in stream.stream_text():
                     event_data = json.dumps({"type": "stream_chunk", "content": chunk})

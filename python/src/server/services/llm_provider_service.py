@@ -97,8 +97,15 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
             if not api_key:
                 raise ValueError("OpenAI API key not found")
 
-            client = openai.AsyncOpenAI(api_key=api_key)
-            logger.info("OpenAI client created successfully")
+            # Create client with optional base_url for custom OpenAI-compatible endpoints
+            client_kwargs = {"api_key": api_key}
+            if base_url:
+                client_kwargs["base_url"] = base_url
+                logger.info(f"OpenAI client created with custom base URL: {base_url}")
+            else:
+                logger.info("OpenAI client created with default URL")
+
+            client = openai.AsyncOpenAI(**client_kwargs)
 
         elif provider_name == "ollama":
             # Ollama requires an API key in the client but doesn't actually use it

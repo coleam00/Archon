@@ -156,12 +156,14 @@ class BaseAgent(ABC, Generic[DepsT, OutputT]):
         name: str = None,
         retries: int = 3,
         enable_rate_limiting: bool = True,
+        use_custom_provider: bool = True,
         **agent_kwargs,
     ):
         self.model = model
         self.name = name or self.__class__.__name__
         self.retries = retries
         self.enable_rate_limiting = enable_rate_limiting
+        self.use_custom_provider = use_custom_provider
 
         # Initialize rate limiting
         if self.enable_rate_limiting:
@@ -169,16 +171,38 @@ class BaseAgent(ABC, Generic[DepsT, OutputT]):
         else:
             self.rate_limiter = None
 
-        # Initialize the PydanticAI agent
-        self._agent = self._create_agent(**agent_kwargs)
-
         # Setup logging
         self.logger = logging.getLogger(f"agents.{self.name}")
+        
+        # Initialize the PydanticAI agent (this may be async now)
+        self._agent = None
+        self._agent_kwargs = agent_kwargs
 
     @abstractmethod
-    def _create_agent(self, **kwargs) -> Agent:
+    async def _create_agent(self, **kwargs) -> Agent:
         """Create and configure the PydanticAI agent. Must be implemented by subclasses."""
         pass
+    
+    async def _ensure_agent_initialized(self):
+        """Ensure the PydanticAI agent is initialized."""
+        if self._agent is None:
+            self._agent = await self._create_agent(**self._agent_kwargs)
+    
+    async def _get_configured_model(self):
+        """Get the configured model for this agent."""
+        if self.use_custom_provider and self.model.startswith("openai:"):
+            # Extract model name from "openai:model" format
+            model_name = self.model.replace("openai:", "")
+            
+            try:
+                from .agent_provider_config import get_configured_openai_model
+                return await get_configured_openai_model(model_name)
+            except Exception as e:
+                self.logger.warning(f"Failed to get custom OpenAI provider, falling back to default: {e}")
+                return self.model
+        else:
+            # Use the model string as-is
+            return self.model
 
     @abstractmethod
     def get_system_prompt(self) -> str:
@@ -208,6 +232,9 @@ class BaseAgent(ABC, Generic[DepsT, OutputT]):
     async def _run_agent(self, user_prompt: str, deps: DepsT) -> OutputT:
         """Internal method to run the agent."""
         try:
+            # Ensure agent is initialized
+            await self._ensure_agent_initialized()
+            
             # Add timeout to prevent hanging
             result = await asyncio.wait_for(
                 self._agent.run(user_prompt, deps=deps),
@@ -223,7 +250,7 @@ class BaseAgent(ABC, Generic[DepsT, OutputT]):
             self.logger.error(f"Agent {self.name} failed: {str(e)}")
             raise
 
-    def run_stream(self, user_prompt: str, deps: DepsT):
+    async def run_stream(self, user_prompt: str, deps: DepsT):
         """
         Run the agent with streaming output.
 
@@ -236,6 +263,8 @@ class BaseAgent(ABC, Generic[DepsT, OutputT]):
         """
         # Note: Rate limiting not supported for streaming to avoid complexity
         # The async context manager pattern doesn't work well with rate limiting
+        await self._ensure_agent_initialized()
+        
         self.logger.info(f"Starting streaming for agent {self.name}")
         # run_stream returns an async context manager directly, not a coroutine
         return self._agent.run_stream(user_prompt, deps=deps)
