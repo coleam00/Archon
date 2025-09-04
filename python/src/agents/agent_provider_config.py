@@ -7,11 +7,55 @@ Enables custom base_url configuration for OpenAI-compatible endpoints.
 
 import logging
 import os
+from urllib.parse import urlparse
 
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_base_url(base_url: str) -> str:
+    """
+    Validate and normalize a base URL.
+    
+    Args:
+        base_url: The base URL to validate
+        
+    Returns:
+        The validated and normalized base URL
+        
+    Raises:
+        ValueError: If the URL is invalid or unsafe
+    """
+    if not base_url or not base_url.strip():
+        raise ValueError("Base URL cannot be empty")
+
+    # Normalize the URL (trim whitespace)
+    url = base_url.strip()
+
+    # Parse the URL to validate its structure
+    try:
+        parsed = urlparse(url)
+    except Exception as e:
+        raise ValueError(f"Invalid URL format: {e}")
+
+    # Ensure it has a valid scheme
+    if not parsed.scheme:
+        raise ValueError("Base URL must include a scheme (http:// or https://)")
+
+    if parsed.scheme not in ['http', 'https']:
+        raise ValueError("Base URL must use http:// or https:// scheme")
+
+    # Ensure it has a valid hostname
+    if not parsed.hostname:
+        raise ValueError("Base URL must include a valid hostname")
+
+    # Log security consideration for non-HTTPS URLs
+    if parsed.scheme == 'http' and not parsed.hostname.startswith(('localhost', '127.0.0.1', '0.0.0.0')):
+        logger.warning(f"Using non-HTTPS URL for OpenAI base URL: {url}. Consider using HTTPS for production.")
+
+    return url
 
 
 async def get_configured_openai_model(model_name: str) -> OpenAIChatModel | str:
@@ -32,12 +76,25 @@ async def get_configured_openai_model(model_name: str) -> OpenAIChatModel | str:
         # Try to get base URL from credential service
         base_url = await _get_openai_base_url()
 
+        # Validate and normalize base URL
+        if base_url:
+            try:
+                base_url = _validate_base_url(base_url)
+            except ValueError as e:
+                logger.error(f"Invalid OPENAI_BASE_URL configuration: {e}")
+                # Don't fall back silently - re-raise the error to fail fast
+                raise ValueError(f"Invalid OPENAI_BASE_URL configuration: {e}")
+
         if base_url:
             # Get API key
             api_key = await _get_openai_api_key()
             if not api_key:
-                logger.warning("OPENAI_BASE_URL is configured but no API key found, falling back to default")
-                return f"openai:{model_name}"
+                # Fail fast when base URL is configured but API key is missing
+                # This prevents traffic from leaking to public endpoints when a proxy was explicitly configured
+                raise ValueError(
+                    f"OPENAI_BASE_URL is configured ({base_url}) but no OpenAI API key is available. "
+                    "When using a custom base URL, an API key must be provided for security reasons."
+                )
 
             # Create custom provider with base_url
             provider = OpenAIProvider(

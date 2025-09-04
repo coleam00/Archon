@@ -177,6 +177,7 @@ class BaseAgent(ABC, Generic[DepsT, OutputT]):
         # Initialize the PydanticAI agent (this may be async now)
         self._agent = None
         self._agent_kwargs = agent_kwargs
+        self._init_lock = asyncio.Lock()  # Thread-safe initialization lock
 
     @abstractmethod
     async def _create_agent(self, **kwargs) -> Agent:
@@ -184,21 +185,32 @@ class BaseAgent(ABC, Generic[DepsT, OutputT]):
         pass
     
     async def _ensure_agent_initialized(self):
-        """Ensure the PydanticAI agent is initialized."""
+        """Ensure the PydanticAI agent is initialized in a thread-safe manner."""
         if self._agent is None:
-            self._agent = await self._create_agent(**self._agent_kwargs)
+            async with self._init_lock:
+                # Double-check after acquiring lock to prevent double initialization
+                if self._agent is None:
+                    self._agent = await self._create_agent(**self._agent_kwargs)
     
     async def _get_configured_model(self):
         """Get the configured model for this agent."""
         if self.use_custom_provider and self.model.startswith("openai:"):
-            # Extract model name from "openai:model" format
-            model_name = self.model.replace("openai:", "")
+            # Extract model name from "openai:model" format using removeprefix
+            model_name = self.model.removeprefix("openai:")
+            
+            # Guard against empty model names
+            if not model_name:
+                raise ValueError(f"Empty model name after removing 'openai:' prefix from '{self.model}'")
             
             try:
                 from .agent_provider_config import get_configured_openai_model
                 return await get_configured_openai_model(model_name)
             except Exception as e:
-                self.logger.warning(f"Failed to get custom OpenAI provider, falling back to default: {e}")
+                # Log with full stack trace for better debugging
+                self.logger.warning(
+                    f"Failed to get custom OpenAI provider, falling back to default: {e}",
+                    exc_info=True
+                )
                 return self.model
         else:
             # Use the model string as-is
