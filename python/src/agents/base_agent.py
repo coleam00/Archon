@@ -205,10 +205,17 @@ class BaseAgent(ABC, Generic[DepsT, OutputT]):
             try:
                 from .agent_provider_config import get_configured_openai_model
                 return await get_configured_openai_model(model_name)
-            except Exception as e:
-                # Log with full stack trace for better debugging
+            except ValueError:
+                # Misconfiguration of OPENAI_BASE_URL or missing API key: fail fast to avoid leaking traffic.
+                self.logger.error(
+                    "Custom OpenAI provider misconfigured; refusing to fall back to default",
+                    exc_info=True
+                )
+                raise
+            except Exception:
+                # Non-configuration error: log and fall back.
                 self.logger.warning(
-                    f"Failed to get custom OpenAI provider, falling back to default: {e}",
+                    "Failed to get custom OpenAI provider, falling back to default",
                     exc_info=True
                 )
                 return self.model
