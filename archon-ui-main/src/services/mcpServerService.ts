@@ -192,7 +192,7 @@ class MCPServerService {
 
   /**
    * Get available tools from the running Archon MCP server
-   * @deprecated Use mcpClientService for tool discovery instead
+   * @deprecated This method is deprecated
    */
   async getAvailableTools(): Promise<MCPTool[]> {
     try {
@@ -209,7 +209,7 @@ class MCPServerService {
 
   /**
    * Call a specific tool on the Archon MCP server
-   * @deprecated Use mcpClientService for tool calls instead
+   * @deprecated This method is deprecated
    */
   async callTool(name: string, arguments_: Record<string, any>): Promise<any> {
     try {
@@ -229,9 +229,9 @@ export const mcpServerService = new MCPServerService();
 
 /**
  * Legacy function - use mcpServerService.getAvailableTools() instead
- * @deprecated Use mcpServerService.getAvailableTools() or mcpClientService instead
+ * @deprecated Use mcpServerService.getAvailableTools() instead
  */
 export const getMCPTools = async () => {
-  console.warn('getMCPTools is deprecated. Use mcpServerService.getAvailableTools() or mcpClientService instead.');
+  console.warn('getMCPTools is deprecated. Use mcpServerService.getAvailableTools() instead.');
   return mcpServerService.getAvailableTools();
 }; 
