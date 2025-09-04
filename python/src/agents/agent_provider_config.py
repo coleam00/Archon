@@ -5,6 +5,7 @@ Handles OpenAI provider configuration for PydanticAI agents.
 Enables custom base_url configuration for OpenAI-compatible endpoints.
 """
 
+import ipaddress
 import logging
 import os
 from urllib.parse import urlparse
@@ -56,7 +57,14 @@ def _validate_base_url(base_url: str) -> str:
         raise ValueError("Base URL must not embed credentials (userinfo)")
 
     # Log security consideration for non-HTTPS URLs
-    if parsed.scheme == 'http' and not parsed.hostname.startswith(('localhost', '127.0.0.1', '0.0.0.0')):
+    is_private = False
+    try:
+        host_ip = ipaddress.ip_address(parsed.hostname)
+        is_private = host_ip.is_loopback or host_ip.is_private
+    except ValueError:
+        # Not an IP literal; accept common local hostnames
+        is_private = parsed.hostname in ('localhost', 'host.docker.internal')
+    if parsed.scheme == 'http' and not is_private:
         logger.warning(f"Using non-HTTPS URL for OpenAI base URL: {url}. Consider using HTTPS for production.")
 
     return url
