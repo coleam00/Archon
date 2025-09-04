@@ -313,7 +313,7 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 
 #### OpenAI Proxy Configuration
 
-Configure custom endpoints for advanced routing scenarios:
+Configure custom endpoints for advanced routing scenarios. These settings apply to **all OpenAI API usage** including RAG queries, embeddings, and background processing:
 
 <Tabs>
 <TabItem value="litellm" label="LiteLLM Proxy" default>
@@ -438,7 +438,7 @@ EMBEDDING_MODEL=nomic-embed-text
 
 ## 🔒 Security Considerations for Proxy Usage
 
-When configuring custom OpenAI base URLs, follow these security best practices:
+When configuring custom OpenAI base URLs, follow these security best practices. These security measures apply to **all OpenAI API usage** throughout the system:
 
 <Admonition type="danger" title="Security Requirements">
 **Always provide an API key** when using custom base URLs. This prevents accidental traffic from being sent to unintended endpoints when a proxy is explicitly configured.

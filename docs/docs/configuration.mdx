@@ -148,11 +148,20 @@ Configure in **Settings → RAG Settings → LLM Provider**
 
 #### OpenAI Base URL Configuration
 
-For advanced use cases, you can configure a custom OpenAI base URL to route requests through:
+For advanced use cases, you can configure a custom OpenAI base URL to route **all OpenAI API requests** through:
 - **LiteLLM proxy** for multi-provider access
 - **Azure OpenAI** endpoints
 - **Corporate proxies** or custom gateways
 - **Local OpenAI-compatible servers**
+
+<Admonition type="info" title="Centralized Configuration">
+The `OPENAI_BASE_URL` setting applies consistently across **all services**:
+- PydanticAI agents (RAG, document processing, task management)
+- LLM provider service (embeddings, contextual processing)
+- Background tasks and batch operations
+
+This ensures consistent proxy routing for all OpenAI API usage throughout the system.
+</Admonition>
 
 <Tabs>
 <TabItem value="ui" label="UI Configuration" default>
