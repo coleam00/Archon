@@ -113,11 +113,13 @@ async def get_configured_openai_model(model_name: str) -> OpenAIChatModel | str:
             logger.debug(f"Using default OpenAI configuration for model: {model_name}")
             return f"openai:{model_name}"
 
-    except Exception as e:
-        logger.error(f"Error configuring OpenAI model: {e}")
-        # Fallback to standard string format
+    except Exception:
+        logger.error("Error configuring OpenAI model", exc_info=True)
+        # If a custom base URL was configured, fail fast to avoid leaking traffic.
+        if "base_url" in locals() and base_url:
+            raise
+        # Otherwise, fall back to the default OpenAI configuration.
         return f"openai:{model_name}"
-
 
 async def _get_openai_base_url() -> str | None:
     """Get OpenAI base URL from credential service."""
