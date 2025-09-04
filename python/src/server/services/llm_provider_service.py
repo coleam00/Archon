@@ -145,9 +145,11 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
 
         yield client
 
-    except Exception as e:
+    except Exception:
         logger.error(
-            f"Error creating LLM client for provider {provider_name if 'provider_name' in locals() else 'unknown'}: {e}"
+            "Error creating LLM client for provider %s",
+            provider_name if 'provider_name' in locals() else 'unknown',
+            exc_info=True,
         )
         raise
     finally:
