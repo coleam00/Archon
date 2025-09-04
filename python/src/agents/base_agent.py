@@ -17,6 +17,16 @@ from pydantic_ai import Agent
 logger = logging.getLogger(__name__)
 
 
+class RateLimitExceededError(Exception):
+    """Raised when rate limit is exceeded after all retries."""
+    pass
+
+
+class AgentExecutionError(Exception):
+    """Raised when agent execution fails."""
+    pass
+
+
 @dataclass
 class ArchonDependencies:
     """Base dependencies for all Archon agents."""
@@ -89,9 +99,9 @@ class RateLimitHandler:
                                 "step": "ai_generation",
                                 "log": f"❌ Rate limit exceeded after {self.max_retries} retries",
                             })
-                        raise Exception(
+                        raise RateLimitExceededError(
                             f"Rate limit exceeded after {self.max_retries} retries: {full_error}"
-                        )
+                        ) from None
 
                     # Extract wait time from error message if available
                     wait_time = self._extract_wait_time(full_error)
@@ -133,7 +143,7 @@ class RateLimitHandler:
             match = re.search(r"try again in (\d+(?:\.\d+)?)s", error_message)
             if match:
                 return float(match.group(1))
-        except:
+        except Exception:
             pass
         return None
 
@@ -173,7 +183,7 @@ class BaseAgent(ABC, Generic[DepsT, OutputT]):
 
         # Setup logging
         self.logger = logging.getLogger(f"agents.{self.name}")
-        
+
         # Initialize the PydanticAI agent (this may be async now)
         self._agent = None
         self._agent_kwargs = agent_kwargs
@@ -183,7 +193,7 @@ class BaseAgent(ABC, Generic[DepsT, OutputT]):
     async def _create_agent(self, **kwargs) -> Agent:
         """Create and configure the PydanticAI agent. Must be implemented by subclasses."""
         pass
-    
+
     async def _ensure_agent_initialized(self):
         """Ensure the PydanticAI agent is initialized in a thread-safe manner."""
         if self._agent is None:
@@ -191,17 +201,17 @@ class BaseAgent(ABC, Generic[DepsT, OutputT]):
                 # Double-check after acquiring lock to prevent double initialization
                 if self._agent is None:
                     self._agent = await self._create_agent(**self._agent_kwargs)
-    
+
     async def _get_configured_model(self):
         """Get the configured model for this agent."""
         if self.use_custom_provider and self.model.startswith("openai:"):
             # Extract model name from "openai:model" format using removeprefix
             model_name = self.model.removeprefix("openai:")
-            
+
             # Guard against empty model names
             if not model_name:
                 raise ValueError(f"Empty model name after removing 'openai:' prefix from '{self.model}'")
-            
+
             try:
                 from .agent_provider_config import get_configured_openai_model
                 return await get_configured_openai_model(model_name)
@@ -253,7 +263,7 @@ class BaseAgent(ABC, Generic[DepsT, OutputT]):
         try:
             # Ensure agent is initialized
             await self._ensure_agent_initialized()
-            
+
             # Add timeout to prevent hanging
             result = await asyncio.wait_for(
                 self._agent.run(user_prompt, deps=deps),
@@ -262,12 +272,12 @@ class BaseAgent(ABC, Generic[DepsT, OutputT]):
             self.logger.info(f"Agent {self.name} completed successfully")
             # PydanticAI returns a RunResult with data attribute
             return result.data
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self.logger.error(f"Agent {self.name} timed out after 120 seconds")
-            raise Exception(f"Agent {self.name} operation timed out - taking too long to respond")
+            raise AgentExecutionError(f"Agent {self.name} operation timed out - taking too long to respond") from None
         except Exception as e:
-            self.logger.error(f"Agent {self.name} failed: {str(e)}")
-            raise
+            self.logger.error("Agent %s failed", self.name, exc_info=True)
+            raise AgentExecutionError(f"Agent {self.name} failed") from e
 
     async def run_stream(self, user_prompt: str, deps: DepsT):
         """
@@ -283,7 +293,7 @@ class BaseAgent(ABC, Generic[DepsT, OutputT]):
         # Note: Rate limiting not supported for streaming to avoid complexity
         # The async context manager pattern doesn't work well with rate limiting
         await self._ensure_agent_initialized()
-        
+
         self.logger.info(f"Starting streaming for agent {self.name}")
         # run_stream returns an async context manager directly, not a coroutine
         return self._agent.run_stream(user_prompt, deps=deps)
@@ -310,4 +320,6 @@ class BaseAgent(ABC, Generic[DepsT, OutputT]):
     @property
     def agent(self) -> Agent:
         """Get the underlying PydanticAI agent instance."""
+        if self._agent is None:
+            raise RuntimeError("Agent not initialized; call await _ensure_agent_initialized() first")
         return self._agent
