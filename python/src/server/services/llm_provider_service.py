@@ -5,6 +5,7 @@ Provides a unified interface for creating OpenAI-compatible clients for differen
 Supports OpenAI, Ollama, and Google Gemini.
 """
 
+import os
 import time
 from contextlib import asynccontextmanager
 from typing import Any
@@ -113,7 +114,11 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
             final_base_url = config_base_url or base_url
 
             # Create client with centralized configuration
-            client_kwargs = {"api_key": final_api_key}
+            client_kwargs = {
+                "api_key": final_api_key,
+                "timeout": float(os.getenv("OPENAI_TIMEOUT_SECONDS", "60")),
+                "max_retries": int(os.getenv("OPENAI_MAX_RETRIES", "5")),
+            }
             if final_base_url:
                 client_kwargs["base_url"] = final_base_url
                 logger.info(f"OpenAI client created with custom base URL: {final_base_url}")
@@ -127,6 +132,8 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
             client = openai.AsyncOpenAI(
                 api_key="ollama",  # Required but unused by Ollama
                 base_url=base_url or "http://localhost:11434/v1",
+                timeout=float(os.getenv("OPENAI_TIMEOUT_SECONDS", "60")),
+                max_retries=int(os.getenv("OPENAI_MAX_RETRIES", "5")),
             )
             logger.info(f"Ollama client created successfully with base URL: {base_url}")
 
@@ -137,6 +144,8 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
             client = openai.AsyncOpenAI(
                 api_key=api_key,
                 base_url=base_url or "https://generativelanguage.googleapis.com/v1beta/openai/",
+                timeout=float(os.getenv("OPENAI_TIMEOUT_SECONDS", "60")),
+                max_retries=int(os.getenv("OPENAI_MAX_RETRIES", "5")),
             )
             logger.info("Google Gemini client created successfully")
 
