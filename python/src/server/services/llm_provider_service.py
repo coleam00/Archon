@@ -102,9 +102,8 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
                 config_api_key = openai_config["api_key"]
                 config_base_url = openai_config["base_url"]
             except Exception as e:
-                logger.error(f"Failed to get centralized OpenAI configuration: {e}")
-                raise ValueError(f"OpenAI configuration error: {e}") from e
-
+                logger.error("Failed to get centralized OpenAI configuration", exc_info=True)
+                raise ValueError("OpenAI configuration error") from e
             # Use centralized API key if available, fall back to provider-specific key
             final_api_key = config_api_key or api_key
             if not final_api_key:
