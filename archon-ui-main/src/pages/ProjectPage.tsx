@@ -1,10 +1,11 @@
-import { ProjectsView } from '../features/projects';
+import { ProjectsViewWithBoundary } from '../features/projects';
 
 // Minimal wrapper for routing compatibility
 // All implementation is in features/projects/views/ProjectsView.tsx
+// Uses ProjectsViewWithBoundary for proper error handling
 
 function ProjectPage(props: any) {
-  return <ProjectsView {...props} />;
+  return <ProjectsViewWithBoundary {...props} />;
 }
 
 export { ProjectPage };

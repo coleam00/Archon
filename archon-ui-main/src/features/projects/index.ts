@@ -19,3 +19,4 @@ export * from "./hooks";
 export * from "./tasks";
 // Views
 export { ProjectsView } from "./views/ProjectsView";
+export { ProjectsViewWithBoundary } from "./views/ProjectsViewWithBoundary";
