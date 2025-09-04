@@ -866,6 +866,30 @@ async def add_code_examples_to_supabase(
         # Use only successful embeddings
         valid_embeddings = result.embeddings
         successful_texts = result.texts_processed
+        
+        # Get model information for tracking
+        from ..llm_provider_service import get_embedding_model
+        from ..credential_service import credential_service
+        
+        # Get embedding model name
+        embedding_model_name = await get_embedding_model(provider=provider)
+        
+        # Get LLM chat model (used for code summaries and contextual embeddings if enabled)
+        llm_chat_model = None
+        try:
+            # First check if contextual embeddings were used
+            if use_contextual_embeddings:
+                provider_config = await credential_service.get_active_provider("llm")
+                llm_chat_model = provider_config.get("chat_model", "")
+                if not llm_chat_model:
+                    # Fallback to MODEL_CHOICE
+                    llm_chat_model = await credential_service.get_credential("MODEL_CHOICE", "gpt-4o-mini")
+            else:
+                # For code summaries, we use MODEL_CHOICE
+                llm_chat_model = _get_model_choice()
+        except Exception as e:
+            search_logger.warning(f"Failed to get LLM chat model: {e}")
+            llm_chat_model = "gpt-4o-mini"  # Default fallback
 
         if not valid_embeddings:
             search_logger.warning("Skipping batch - no successful embeddings created")
@@ -899,6 +923,23 @@ async def add_code_examples_to_supabase(
                 parsed_url = urlparse(urls[idx])
                 source_id = parsed_url.netloc or parsed_url.path
 
+            # Determine the correct embedding column based on dimension
+            embedding_dim = len(embedding) if isinstance(embedding, list) else len(embedding.tolist())
+            embedding_column = None
+            
+            if embedding_dim == 768:
+                embedding_column = "embedding_768"
+            elif embedding_dim == 1024:
+                embedding_column = "embedding_1024"
+            elif embedding_dim == 1536:
+                embedding_column = "embedding_1536"
+            elif embedding_dim == 3072:
+                embedding_column = "embedding_3072"
+            else:
+                # Default to closest supported dimension
+                search_logger.warning(f"Unsupported embedding dimension {embedding_dim}, using embedding_1536")
+                embedding_column = "embedding_1536"
+            
             batch_data.append({
                 "url": urls[idx],
                 "chunk_number": chunk_numbers[idx],
@@ -906,7 +947,10 @@ async def add_code_examples_to_supabase(
                 "summary": summaries[idx],
                 "metadata": metadatas[idx],  # Store as JSON object, not string
                 "source_id": source_id,
-                "embedding": embedding,
+                embedding_column: embedding,
+                "llm_chat_model": llm_chat_model,  # Add LLM model tracking
+                "embedding_model": embedding_model_name,  # Add embedding model tracking
+                "embedding_dimension": embedding_dim,  # Add dimension tracking
             })
 
         if not batch_data:

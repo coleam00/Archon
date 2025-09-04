@@ -1,0 +1,25 @@
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="openai-teal" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#74aa9c;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#5a9e8c;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <!-- Hexagonal background -->
+  <path d="M12 2l8.66 5v10L12 22l-8.66-5V7L12 2z" fill="url(#openai-teal)"/>
+  <!-- Central flower/gear pattern with 6-fold symmetry -->
+  <g transform="translate(12,12)">
+    <!-- Petal 1 -->
+    <path d="M0,-4 C2,-2 2,2 0,4 C-2,2 -2,-2 0,-4z" fill="white" transform="rotate(0)"/>
+    <!-- Petal 2 -->
+    <path d="M0,-4 C2,-2 2,2 0,4 C-2,2 -2,-2 0,-4z" fill="white" transform="rotate(60)"/>
+    <!-- Petal 3 -->
+    <path d="M0,-4 C2,-2 2,2 0,4 C-2,2 -2,-2 0,-4z" fill="white" transform="rotate(120)"/>
+    <!-- Petal 4 -->
+    <path d="M0,-4 C2,-2 2,2 0,4 C-2,2 -2,-2 0,-4z" fill="white" transform="rotate(180)"/>
+    <!-- Petal 5 -->
+    <path d="M0,-4 C2,-2 2,2 0,4 C-2,2 -2,-2 0,-4z" fill="white" transform="rotate(240)"/>
+    <!-- Petal 6 -->
+    <path d="M0,-4 C2,-2 2,2 0,4 C-2,2 -2,-2 0,-4z" fill="white" transform="rotate(300)"/>
+  </g>
+</svg>
