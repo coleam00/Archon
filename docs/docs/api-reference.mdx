@@ -1466,6 +1466,7 @@ Retrieve all RAG configuration settings including LLM provider options.
     "USE_RERANKING": "true",
     "LLM_PROVIDER": "openai",
     "LLM_BASE_URL": null,
+    "OPENAI_BASE_URL": "http://localhost:8000/v1",
     "EMBEDDING_MODEL": null
   }
 }
@@ -1477,6 +1478,7 @@ Retrieve all RAG configuration settings including LLM provider options.
 |---------|------|-------------|
 | `LLM_PROVIDER` | string | Provider choice: `openai`, `ollama`, `google` |
 | `LLM_BASE_URL` | string | Custom base URL (required for Ollama) |
+| `OPENAI_BASE_URL` | string | Custom OpenAI endpoint for proxies (LiteLLM, Azure OpenAI) |
 | `EMBEDDING_MODEL` | string | Override default embedding model |
 | `MODEL_CHOICE` | string | Chat model for summaries and contextual embeddings |
 

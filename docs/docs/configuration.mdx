@@ -141,9 +141,47 @@ Configure in **Settings → RAG Settings → LLM Provider**
 
 <Admonition type="tip" title="Provider Setup">
 - **API Keys**: Add provider-specific keys in Settings → API Keys
+- **Custom Base URLs**: Configure custom endpoints for OpenAI-compatible proxies
 - **Ollama**: Requires local installation and custom base URL
 - **Models**: Each provider has different model naming conventions
 </Admonition>
+
+#### OpenAI Base URL Configuration
+
+For advanced use cases, you can configure a custom OpenAI base URL to route requests through:
+- **LiteLLM proxy** for multi-provider access
+- **Azure OpenAI** endpoints
+- **Corporate proxies** or custom gateways
+- **Local OpenAI-compatible servers**
+
+<Tabs>
+<TabItem value="ui" label="UI Configuration" default>
+
+1. Navigate to **Settings → RAG Settings**
+2. Select **OpenAI** as your LLM Provider
+3. Enter your custom **OpenAI Base URL** (optional)
+4. Examples:
+   - LiteLLM: `http://localhost:8000/v1`
+   - Azure OpenAI: `https://your-resource.openai.azure.com/openai/deployments/your-deployment`
+   - Custom proxy: `https://api.yourcompany.com/openai/v1`
+
+</TabItem>
+<TabItem value="env" label="Environment Variables">
+
+```bash
+# Optional - Custom OpenAI endpoint
+OPENAI_BASE_URL=http://localhost:8000/v1
+
+# Required when using custom base URL
+OPENAI_API_KEY=your-api-key-here
+```
+
+<Admonition type="warning" title="Security Requirements">
+When using a custom `OPENAI_BASE_URL`, an API key must be provided for security reasons. This prevents accidental traffic leaks to public endpoints when a proxy is explicitly configured.
+</Admonition>
+
+</TabItem>
+</Tabs>
 
 ### Socket.IO Configuration
 

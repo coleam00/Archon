@@ -303,9 +303,77 @@ USE_RERANKING=true
 LLM_PROVIDER=openai
 MODEL_CHOICE=gpt-4o-mini
 EMBEDDING_MODEL=text-embedding-3-small
-# Pros: Best accuracy, reliable API
+
+# Optional: Custom OpenAI endpoint
+OPENAI_BASE_URL=https://api.openai.com/v1
+
+# Pros: Best accuracy, reliable API, proxy support
 # Cons: Cost per query
 ```
+
+#### OpenAI Proxy Configuration
+
+Configure custom endpoints for advanced routing scenarios:
+
+<Tabs>
+<TabItem value="litellm" label="LiteLLM Proxy" default>
+
+```bash
+# LiteLLM proxy for multi-provider access
+LLM_PROVIDER=openai
+OPENAI_BASE_URL=http://localhost:8000/v1
+MODEL_CHOICE=gpt-4o-mini  # Route through LiteLLM
+OPENAI_API_KEY=your-litellm-key
+
+# Benefits:
+# - Multi-provider routing (OpenAI, Anthropic, etc.)
+# - Cost tracking and rate limiting
+# - Centralized API management
+```
+
+**LiteLLM Setup:**
+```bash
+# Install LiteLLM
+pip install litellm[proxy]
+
+# Start proxy server
+litellm --port 8000 --config litellm_config.yaml
+```
+
+</TabItem>
+<TabItem value="azure" label="Azure OpenAI">
+
+```bash
+# Azure OpenAI endpoint
+LLM_PROVIDER=openai
+OPENAI_BASE_URL=https://your-resource.openai.azure.com/openai/deployments/your-deployment
+MODEL_CHOICE=gpt-4o-mini
+OPENAI_API_KEY=your-azure-api-key
+
+# Benefits:
+# - Enterprise compliance and security
+# - Data residency control  
+# - Integrated with Azure services
+```
+
+</TabItem>
+<TabItem value="corporate" label="Corporate Proxy">
+
+```bash
+# Corporate gateway/proxy
+LLM_PROVIDER=openai
+OPENAI_BASE_URL=https://api.yourcompany.com/openai/v1
+MODEL_CHOICE=gpt-4o-mini
+OPENAI_API_KEY=your-internal-key
+
+# Benefits:
+# - Centralized billing and monitoring
+# - Security and compliance enforcement
+# - Custom authentication and authorization
+```
+
+</TabItem>
+</Tabs>
 
 ### Google Gemini
 ```bash
@@ -367,6 +435,48 @@ EMBEDDING_MODEL=nomic-embed-text
 2. Implement exponential backoff
 3. Use caching more aggressively
 4. Consider switching to local models (Ollama)
+
+## 🔒 Security Considerations for Proxy Usage
+
+When configuring custom OpenAI base URLs, follow these security best practices:
+
+<Admonition type="danger" title="Security Requirements">
+**Always provide an API key** when using custom base URLs. This prevents accidental traffic from being sent to unintended endpoints when a proxy is explicitly configured.
+</Admonition>
+
+### Network Security
+```bash
+# ✅ Use HTTPS endpoints in production
+OPENAI_BASE_URL=https://secure-proxy.example.com/v1
+
+# ⚠️ HTTP only for local development  
+OPENAI_BASE_URL=http://localhost:8000/v1  # Development only
+```
+
+### API Key Management
+- **Separate Keys**: Use different API keys for proxy vs direct OpenAI access
+- **Key Rotation**: Regularly rotate API keys, especially for proxy endpoints
+- **Environment Variables**: Never hardcode keys in configuration files
+- **Least Privilege**: Proxy keys should have minimal required permissions
+
+### Proxy Validation
+Before deploying with a custom proxy:
+1. **Verify SSL/TLS certificates** for HTTPS endpoints
+2. **Test connectivity** and authentication
+3. **Validate response formats** match OpenAI API standards
+4. **Monitor for unexpected behavior** or response changes
+
+### Corporate Environments
+```bash
+# Corporate proxy with additional security headers
+OPENAI_BASE_URL=https://api-gateway.corp.com/openai/v1
+
+# Consider:
+# - Certificate pinning for additional security
+# - Network policies restricting outbound traffic
+# - Audit logging for all API requests
+# - Rate limiting and quota management
+```
 
 ## 🎯 Best Practices
 
