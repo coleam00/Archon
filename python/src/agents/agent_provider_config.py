@@ -127,20 +127,16 @@ async def _get_openai_base_url() -> str | None:
         # Import here to avoid circular imports
         from ..server.services.credential_service import credential_service
 
-        # Get RAG settings which contain OPENAI_BASE_URL
-        rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
-        base_url = rag_settings.get("OPENAI_BASE_URL")
-
+        # Prefer direct credential lookup (handles decryption and consistent typing)
+        base_url = await credential_service.get_credential("OPENAI_BASE_URL", decrypt=True)
         if base_url:
-            logger.debug(f"Found OPENAI_BASE_URL in settings: {base_url}")
-            return base_url
-        else:
-            # Check environment variable as fallback
-            env_base_url = os.getenv("OPENAI_BASE_URL")
-            if env_base_url:
-                logger.debug(f"Found OPENAI_BASE_URL in environment: {env_base_url}")
-                return env_base_url
-
+            logger.debug("Found OPENAI_BASE_URL in credential service")
+            return str(base_url)
+        # Check environment variable as fallback
+        env_base_url = os.getenv("OPENAI_BASE_URL")
+        if env_base_url:
+            logger.debug(f"Found OPENAI_BASE_URL in environment: {env_base_url}")
+            return env_base_url
         return None
 
     except Exception as e:
