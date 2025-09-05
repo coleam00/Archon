@@ -343,7 +343,7 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
         reporter: ['text', 'json', 'html'],
         exclude: [
           'node_modules/',
-          'test/',
+          'tests/',
           '**/*.d.ts',
           '**/*.config.*',
           '**/mockData.ts',
