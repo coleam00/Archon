@@ -157,6 +157,7 @@ services:
       - HOST=${HOST:-localhost}
       - PROD=${PROD:-false}
       - VITE_ALLOWED_HOSTS=${VITE_ALLOWED_HOSTS:-}
+      - VITE_SHOW_DEVTOOLS=${VITE_SHOW_DEVTOOLS:-false}
     networks:
       - app-network
     healthcheck:

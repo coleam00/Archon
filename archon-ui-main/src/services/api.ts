@@ -110,6 +110,12 @@ export async function apiRequest<T>(
       }
       throw new Error(errorMessage);
     }
+    
+    // Handle 204 No Content responses (common for DELETE operations)
+    if (response.status === 204) {
+      return undefined as T;
+    }
+    
     return await response.json();
   } catch (error) {
     if (error instanceof Error) {

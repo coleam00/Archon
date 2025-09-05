@@ -19,7 +19,9 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-"paths": { "@/*": ["./src/*"] }
+
+    /* Path mapping */
+    "paths": { "@/*": ["./src/*"] }
   },
   "include": ["src", "test"],
   "references": [{ "path": "./tsconfig.node.json" }]
