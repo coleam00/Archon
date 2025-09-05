@@ -25,7 +25,7 @@ export function useProjects() {
     queryKey: projectKeys.lists(),
     queryFn: () => projectService.listProjects(),
     refetchInterval, // Smart interval based on page visibility/focus
-    refetchOnWindowFocus: false, // Avoid double refetch with polling
+    refetchOnWindowFocus: true, // Refetch immediately when tab gains focus (ETag makes this cheap)
     staleTime: 15000, // Consider data stale after 15 seconds
   });
 }

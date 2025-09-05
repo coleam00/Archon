@@ -22,6 +22,7 @@ export function useProjectTasks(projectId: string | undefined, enabled = true) {
     },
     enabled: !!projectId && enabled,
     refetchInterval, // Smart interval based on page visibility/focus
+    refetchOnWindowFocus: true, // Refetch immediately when tab gains focus (ETag makes this cheap)
     staleTime: 10000, // Consider data stale after 10 seconds
   });
 }
@@ -98,7 +99,7 @@ export function useUpdateTask(projectId: string) {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
 
-  return useMutation({
+  return useMutation<Task, Error, { taskId: string; updates: UpdateTaskRequest }, { previousTasks?: Task[] }>({
     mutationFn: ({ taskId, updates }: { taskId: string; updates: UpdateTaskRequest }) =>
       taskService.updateTask(taskId, updates),
     onMutate: async ({ taskId, updates }) => {
@@ -106,12 +107,12 @@ export function useUpdateTask(projectId: string) {
       await queryClient.cancelQueries({ queryKey: taskKeys.all(projectId) });
 
       // Snapshot the previous value
-      const previousTasks = queryClient.getQueryData(taskKeys.all(projectId));
+      const previousTasks = queryClient.getQueryData<Task[]>(taskKeys.all(projectId));
 
       // Optimistically update
-      queryClient.setQueryData(taskKeys.all(projectId), (old: Task[] | undefined) => {
+      queryClient.setQueryData<Task[]>(taskKeys.all(projectId), (old) => {
         if (!old) return old;
-        return old.map((task: Task) => (task.id === taskId ? { ...task, ...updates } : task));
+        return old.map((task) => (task.id === taskId ? { ...task, ...updates } : task));
       });
 
       return { previousTasks };
@@ -128,14 +129,17 @@ export function useUpdateTask(projectId: string) {
       queryClient.invalidateQueries({ queryKey: taskKeys.all(projectId) });
       queryClient.invalidateQueries({ queryKey: projectKeys.taskCounts() });
     },
-    onSuccess: (_, { updates }) => {
+    onSuccess: (data, { updates }) => {
+      // Merge server response to keep timestamps and computed fields in sync
+      queryClient.setQueryData<Task[]>(taskKeys.all(projectId), (old) =>
+        old ? old.map((t) => (t.id === data.id ? data : t)) : old,
+      );
       // Only invalidate counts if status changed (which affects counts)
       if (updates.status) {
         queryClient.invalidateQueries({ queryKey: projectKeys.taskCounts() });
         // Show toast for significant status changes
         showToast(`Task moved to ${updates.status}`, "success");
       }
-      // Don't refetch task list - trust optimistic update
     },
   });
 }

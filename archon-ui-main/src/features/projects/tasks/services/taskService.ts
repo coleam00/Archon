@@ -17,7 +17,7 @@ export const taskService = {
     try {
       const tasks = await callAPIWithETag<Task[]>(`/api/projects/${projectId}/tasks`);
 
-      // Convert database tasks to UI tasks with status mapping
+      // Return tasks as-is; UI uses DB status values (todo/doing/review/done)
       return tasks;
     } catch (error) {
       console.error(`Failed to get tasks for project ${projectId}:`, error);
@@ -130,7 +130,7 @@ export const taskService = {
    */
   async deleteTask(taskId: string): Promise<void> {
     try {
-      await callAPIWithETag(`/api/tasks/${taskId}`, {
+      await callAPIWithETag<void>(`/api/tasks/${taskId}`, {
         method: "DELETE",
       });
 

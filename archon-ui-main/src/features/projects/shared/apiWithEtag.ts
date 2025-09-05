@@ -12,10 +12,13 @@ const API_BASE_URL = "/api";
 const etagCache = new Map<string, string>();
 const dataCache = new Map<string, unknown>();
 
+// Debug flag for console logging (only in dev or when VITE_SHOW_DEVTOOLS is enabled)
+const ETAG_DEBUG = import.meta.env?.DEV === true;
+
 // Generate cache key from endpoint and options
 function getCacheKey(endpoint: string, options: RequestInit = {}): string {
-  // Include method in cache key (GET vs POST, etc)
-  const method = options.method || "GET";
+  // Include method in cache key (GET vs POST, etc), normalized to uppercase
+  const method = (options.method || "GET").toUpperCase();
   return `${method}:${endpoint}`;
 }
 
@@ -29,6 +32,7 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
     const cleanEndpoint = endpoint.startsWith("/api") ? endpoint.substring(4) : endpoint;
     const fullUrl = `${API_BASE_URL}${cleanEndpoint}`;
     const cacheKey = getCacheKey(fullUrl, options);
+    const method = (options.method || "GET").toUpperCase();
 
     // Get stored ETag for this endpoint
     const storedEtag = etagCache.get(cacheKey);
@@ -40,7 +44,7 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
     };
 
     // Only add If-None-Match for GET requests
-    if (storedEtag && (!options.method || options.method === "GET")) {
+    if (storedEtag && method === "GET") {
       headers["If-None-Match"] = storedEtag;
     }
 
@@ -54,13 +58,23 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
     if (response.status === 304) {
       const cachedData = dataCache.get(cacheKey);
       if (cachedData) {
-        // Console log for debugging (can be removed in production)
-        console.log(`%c[ETag] Cache hit (304) for ${cleanEndpoint}`, "color: #10b981; font-weight: bold");
+        // Console log for debugging
+        if (ETAG_DEBUG) {
+          console.log(`%c[ETag] Cache hit (304) for ${cleanEndpoint}`, "color: #10b981; font-weight: bold");
+        }
         return cachedData as T;
       }
-      // If no cached data (shouldn't happen), make a fresh request
-      console.warn(`[ETag] 304 received but no cached data for ${cleanEndpoint}`);
-      // Fall through to handle as a normal response
+      // Cache miss on 304 - this shouldn't happen but handle gracefully
+      if (ETAG_DEBUG) {
+        console.error(`[ETag] 304 received but no cached data for ${cleanEndpoint}`);
+      }
+      // Clear the stale ETag to prevent this from happening again
+      etagCache.delete(cacheKey);
+      throw new ProjectServiceError(
+        `Cache miss on 304 response for ${cleanEndpoint}. Please retry the request.`,
+        "CACHE_MISS",
+        304,
+      );
     }
 
     // Handle errors
@@ -96,15 +110,17 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
 
     // Store ETag if present (only for GET requests)
     const newEtag = response.headers.get("ETag");
-    if (newEtag && (!options.method || options.method === "GET")) {
+    if (newEtag && method === "GET") {
       etagCache.set(cacheKey, newEtag);
       // Store the data along with ETag
       dataCache.set(cacheKey, result);
-      console.log(
-        `%c[ETag] Cached new data for ${cleanEndpoint}`,
-        "color: #3b82f6; font-weight: bold",
-        `ETag: ${newEtag.substring(0, 12)}...`,
-      );
+      if (ETAG_DEBUG) {
+        console.log(
+          `%c[ETag] Cached new data for ${cleanEndpoint}`,
+          "color: #3b82f6; font-weight: bold",
+          `ETag: ${newEtag.substring(0, 12)}...`,
+        );
+      }
     }
 
     return result as T;
@@ -127,7 +143,9 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
 export function clearETagCache(): void {
   etagCache.clear();
   dataCache.clear();
-  console.debug("[ETag] Cache cleared");
+  if (ETAG_DEBUG) {
+    console.debug("[ETag] Cache cleared");
+  }
 }
 
 /**
@@ -137,11 +155,14 @@ export function clearETagCache(): void {
 export function invalidateETagCache(endpoint: string, method = "GET"): void {
   const cleanEndpoint = endpoint.startsWith("/api") ? endpoint.substring(4) : endpoint;
   const fullUrl = `${API_BASE_URL}${cleanEndpoint}`;
-  const cacheKey = `${method}:${fullUrl}`;
+  const normalizedMethod = method.toUpperCase();
+  const cacheKey = `${normalizedMethod}:${fullUrl}`;
 
   etagCache.delete(cacheKey);
   dataCache.delete(cacheKey);
-  console.debug(`[ETag] Cache invalidated for ${cleanEndpoint}`);
+  if (ETAG_DEBUG) {
+    console.debug(`[ETag] Cache invalidated for ${cleanEndpoint}`);
+  }
 }
 
 /**
@@ -150,11 +171,11 @@ export function invalidateETagCache(endpoint: string, method = "GET"): void {
 export function getETagCacheStats(): {
   etagCount: number;
   dataCacheSize: number;
-  endpoints: string[];
+  keys: string[];
 } {
   return {
     etagCount: etagCache.size,
     dataCacheSize: dataCache.size,
-    endpoints: Array.from(etagCache.keys()),
+    keys: Array.from(etagCache.keys()),
   };
 }
