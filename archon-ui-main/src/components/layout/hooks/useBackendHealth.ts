@@ -1,46 +1,29 @@
 import { useQuery } from "@tanstack/react-query";
-import { getApiUrl } from "../../../config/api";
-
-interface HealthResponse {
-  ready: boolean;
-  message?: string;
-  server_status?: string;
-  credentials_status?: string;
-  database_status?: string;
-  uptime?: number;
-}
+import { callAPIWithETag } from "../../../features/projects/shared/apiWithEtag";
+import type { HealthResponse } from "../types";
 
 /**
  * Hook to monitor backend health status using TanStack Query
- * Replaces the direct fetch polling in old MainLayout
+ * Uses ETag caching for bandwidth reduction (~70% savings per project docs)
  */
 export function useBackendHealth() {
   return useQuery<HealthResponse>({
     queryKey: ["backend", "health"],
-    queryFn: async () => {
+    queryFn: ({ signal }) => {
+      // Use existing ETag infrastructure with timeout
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-      try {
-        const response = await fetch(`${getApiUrl()}/api/health`, {
-          method: "GET",
-          signal: controller.signal,
-        });
-
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-          throw new Error(`Health check failed: ${response.status}`);
-        }
-
-        return response.json();
-      } catch (error) {
-        clearTimeout(timeoutId);
-        if (error instanceof Error && error.name === "AbortError") {
-          throw new Error("Health check timeout (5s)");
-        }
-        throw error;
+      
+      // Chain signals: React Query's signal + our timeout
+      if (signal) {
+        signal.addEventListener('abort', () => controller.abort());
       }
+
+      return callAPIWithETag<HealthResponse>("/api/health", {
+        signal: controller.signal,
+      }).finally(() => {
+        clearTimeout(timeoutId);
+      });
     },
     // Retry configuration for startup scenarios
     retry: (failureCount) => {
