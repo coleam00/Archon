@@ -746,6 +746,63 @@ async def get_mcp_tools():
             }
 
 
+@router.get("/clients")
+async def get_mcp_clients():
+    """Get connected MCP clients with type detection."""
+    with safe_span("api_mcp_clients") as span:
+        safe_set_attribute(span, "endpoint", "/api/mcp/clients")
+        safe_set_attribute(span, "method", "GET")
+        
+        try:
+            # TODO: Implement real client detection in the future
+            # For now, return mock data
+            api_logger.debug("Getting MCP clients - returning mock data")
+            
+            return {
+                "clients": [],
+                "total": 0,
+                "message": "Client detection not yet implemented"
+            }
+        except Exception as e:
+            api_logger.error(f"Failed to get MCP clients - error={str(e)}")
+            safe_set_attribute(span, "error", str(e))
+            return {
+                "clients": [],
+                "total": 0,
+                "error": str(e)
+            }
+
+
+@router.get("/sessions")
+async def get_mcp_sessions():
+    """Get MCP session information."""
+    with safe_span("api_mcp_sessions") as span:
+        safe_set_attribute(span, "endpoint", "/api/mcp/sessions")
+        safe_set_attribute(span, "method", "GET")
+        
+        try:
+            # Basic session info for now
+            status = mcp_manager.get_status()
+            
+            session_info = {
+                "active_sessions": 0,  # TODO: Implement real session tracking
+                "session_timeout": 3600,  # 1 hour default
+            }
+            
+            # Add uptime if server is running
+            if status.get("status") == "running" and status.get("uptime"):
+                session_info["server_uptime_seconds"] = status["uptime"]
+            
+            api_logger.debug(f"MCP session info - sessions={session_info.get('active_sessions')}")
+            safe_set_attribute(span, "active_sessions", session_info.get("active_sessions"))
+            
+            return session_info
+        except Exception as e:
+            api_logger.error(f"Failed to get MCP sessions - error={str(e)}")
+            safe_set_attribute(span, "error", str(e))
+            raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/health")
 async def mcp_health():
     """Health check for MCP API."""
