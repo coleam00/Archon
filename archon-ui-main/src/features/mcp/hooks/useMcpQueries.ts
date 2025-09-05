@@ -20,6 +20,7 @@ export function useMcpStatus() {
     refetchInterval,
     refetchOnWindowFocus: false,
     staleTime: 3000,
+    throwOnError: true,
   });
 }
 
@@ -28,6 +29,7 @@ export function useMcpConfig() {
     queryKey: mcpKeys.config(),
     queryFn: () => mcpApi.getConfig(),
     staleTime: Infinity, // Config rarely changes
+    throwOnError: true,
   });
 }
 
@@ -40,6 +42,7 @@ export function useMcpClients() {
     refetchInterval,
     refetchOnWindowFocus: false,
     staleTime: 8000,
+    throwOnError: true,
   });
 }
 
@@ -52,5 +55,6 @@ export function useMcpSessionInfo() {
     refetchInterval,
     refetchOnWindowFocus: false,
     staleTime: 8000,
+    throwOnError: true,
   });
 }

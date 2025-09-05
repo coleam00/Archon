@@ -25,12 +25,7 @@ export const mcpApi = {
       return response;
     } catch (error) {
       console.error("Failed to get MCP config:", error);
-      // Return default config as fallback
-      return {
-        transport: "streamable-http",
-        host: "localhost",
-        port: 8051,
-      };
+      throw error;
     }
   },
 
@@ -53,7 +48,7 @@ export const mcpApi = {
       return response.clients || [];
     } catch (error) {
       console.error("Failed to get MCP clients:", error);
-      return [];
+      throw error;
     }
   },
 };

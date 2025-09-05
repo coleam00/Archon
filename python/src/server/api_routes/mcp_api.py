@@ -55,10 +55,10 @@ def get_container_status() -> dict[str, Any]:
             "uptime": None,
             "logs": [],
             "container_status": "not_found",
-            "message": "MCP container not found. Run: docker-compose up -d archon-mcp"
+            "message": "MCP container not found. Run: docker compose up -d archon-mcp"
         }
     except Exception as e:
-        api_logger.error(f"Failed to get container status: {str(e)}")
+        api_logger.error("Failed to get container status", exc_info=True)
         return {
             "status": "error",
             "uptime": None,
@@ -127,7 +127,7 @@ async def get_mcp_config():
 
             return config
         except Exception as e:
-            api_logger.error("Failed to get MCP configuration", error=str(e))
+            api_logger.error("Failed to get MCP configuration", exc_info=True)
             safe_set_attribute(span, "error", str(e))
             raise HTTPException(status_code=500, detail={"error": str(e)})
 
