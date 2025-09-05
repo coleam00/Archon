@@ -88,7 +88,7 @@ export const McpView: React.FC = () => {
 
       {/* Status Bar */}
       <motion.div variants={itemVariants}>
-        <McpStatusBar status={status} sessionInfo={sessionInfo} />
+        <McpStatusBar status={status} sessionInfo={sessionInfo} config={config} />
       </motion.div>
 
       {/* Connected Clients */}

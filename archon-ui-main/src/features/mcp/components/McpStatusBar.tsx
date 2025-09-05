@@ -1,17 +1,19 @@
 import React from 'react';
 import { cn, glassmorphism } from '../../ui/primitives';
 import { CheckCircle, AlertCircle, Clock, Server, Users } from 'lucide-react';
-import type { McpServerStatus, McpSessionInfo } from '../types';
+import type { McpServerStatus, McpSessionInfo, McpServerConfig } from '../types';
 
 interface McpStatusBarProps {
   status: McpServerStatus;
   sessionInfo?: McpSessionInfo;
+  config?: McpServerConfig;
   className?: string;
 }
 
 export const McpStatusBar: React.FC<McpStatusBarProps> = ({
   status,
   sessionInfo,
+  config,
   className
 }) => {
   const formatUptime = (seconds: number): string => {
@@ -94,7 +96,11 @@ export const McpStatusBar: React.FC<McpStatusBarProps> = ({
       <div className="w-px h-4 bg-zinc-700 ml-auto" />
       <div className="flex items-center gap-2">
         <span className="text-zinc-400">TRANSPORT</span>
-        <span className="text-cyan-400">HTTP/SSE</span>
+        <span className="text-cyan-400">
+          {config?.transport === 'streamable-http' ? 'HTTP' : 
+           config?.transport === 'sse' ? 'SSE' : 
+           config?.transport || 'HTTP'}
+        </span>
       </div>
     </div>
   );
