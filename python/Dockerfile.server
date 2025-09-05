@@ -1,5 +1,5 @@
 # Server Service - Web crawling and document processing microservice
-FROM python:3.12 AS builder
+FROM python:3.13-slim AS builder
 
 WORKDIR /build
 
@@ -18,7 +18,7 @@ RUN uv venv /venv && \
     uv pip install --group server --group server-reranking
 
 # Runtime stage
-FROM python:3.12-slim
+FROM python:3.13-slim
 
 WORKDIR /app
 

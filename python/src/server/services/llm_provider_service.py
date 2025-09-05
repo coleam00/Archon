@@ -101,9 +101,9 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
             logger.info("OpenAI client created successfully")
 
         elif provider_name == "ollama":
-            # Ollama requires an API key in the client but doesn't actually use it
+            # Ollama can use a dummy API key if none provided
             client = openai.AsyncOpenAI(
-                api_key="ollama",  # Required but unused by Ollama
+                api_key=api_key,  # Use provided key or dummy value
                 base_url=base_url or "http://localhost:11434/v1",
             )
             logger.info(f"Ollama client created successfully with base URL: {base_url}")

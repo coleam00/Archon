@@ -444,7 +444,7 @@ class CredentialService:
         key_mapping = {
             "openai": "OPENAI_API_KEY",
             "google": "GOOGLE_API_KEY",
-            "ollama": None,  # No API key needed
+            "ollama": "OPENAI_API_KEY",  # 复用 OPENAI key for Ollama
         }
 
         key_name = key_mapping.get(provider)
