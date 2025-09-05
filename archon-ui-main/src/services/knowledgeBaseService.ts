@@ -324,6 +324,7 @@ class KnowledgeBaseService {
       count: number
     }>(`/knowledge-items/${sourceId}/code-examples`);
   }
+
 }
 
 // Export singleton instance
