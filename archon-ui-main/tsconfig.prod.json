@@ -10,7 +10,6 @@
     "src/features/testing/**",
     "test/**",
     "tests/**",
-    "coverage/**",
-    "**/*.d.ts"
+    "coverage/**"
   ]
 }
