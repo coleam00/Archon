@@ -28,7 +28,7 @@ def register_version_tools(mcp: FastMCP):
         ctx: Context,
         project_id: str,
         field_name: str,
-        content: Any,
+        content: dict[str, Any] | list[dict[str, Any]],
         change_summary: str | None = None,
         document_id: str | None = None,
         created_by: str = "system",
