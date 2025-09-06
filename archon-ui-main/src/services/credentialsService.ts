@@ -102,8 +102,8 @@ class CredentialsService {
           if (value && typeof value === "object" && value.is_encrypted) {
             return {
               key,
-              value: undefined,
-              encrypted_value: value.encrypted_value,
+              value: "[ENCRYPTED]",
+              encrypted_value: undefined,
               is_encrypted: true,
               category,
               description: value.description,
