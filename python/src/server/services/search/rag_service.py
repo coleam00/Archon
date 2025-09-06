@@ -204,10 +204,19 @@ class RAGService:
                 use_hybrid_search = self.get_bool_setting("USE_HYBRID_SEARCH", False)
                 use_reranking = self.get_bool_setting("USE_RERANKING", False)
 
+                # If reranking is enabled, fetch more candidates for the reranker to evaluate
+                # This allows the reranker to see a broader set of results
+                search_match_count = match_count
+                if use_reranking and self.reranking_strategy:
+                    # Fetch 5x the requested amount when reranking is enabled
+                    # The reranker will select the best from this larger pool
+                    search_match_count = match_count * 5
+                    logger.debug(f"Reranking enabled - fetching {search_match_count} candidates for {match_count} final results")
+
                 # Step 1 & 2: Get results (with hybrid search if enabled)
                 results = await self.search_documents(
                     query=query,
-                    match_count=match_count,
+                    match_count=search_match_count,
                     filter_metadata=filter_metadata,
                     use_hybrid_search=use_hybrid_search,
                 )
@@ -234,14 +243,18 @@ class RAGService:
                 reranking_applied = False
                 if self.reranking_strategy and formatted_results:
                     try:
+                        # Pass top_k to limit results to the originally requested count
                         formatted_results = await self.reranking_strategy.rerank_results(
-                            query, formatted_results, content_key="content"
+                            query, formatted_results, content_key="content", top_k=match_count
                         )
                         reranking_applied = True
-                        logger.debug(f"Reranking applied to {len(formatted_results)} results")
+                        logger.debug(f"Reranking applied: {search_match_count} candidates -> {len(formatted_results)} final results")
                     except Exception as e:
                         logger.warning(f"Reranking failed: {e}")
                         reranking_applied = False
+                        # If reranking fails but we fetched extra results, trim to requested count
+                        if len(formatted_results) > match_count:
+                            formatted_results = formatted_results[:match_count]
 
                 # Build response
                 response_data = {
@@ -313,6 +326,12 @@ class RAGService:
                 use_hybrid_search = self.get_bool_setting("USE_HYBRID_SEARCH", False)
                 use_reranking = self.get_bool_setting("USE_RERANKING", False)
 
+                # If reranking is enabled, fetch more candidates
+                search_match_count = match_count
+                if use_reranking and self.reranking_strategy:
+                    search_match_count = match_count * 5
+                    logger.debug(f"Reranking enabled for code search - fetching {search_match_count} candidates")
+
                 # Prepare filter
                 filter_metadata = {"source": source_id} if source_id and source_id.strip() else None
 
@@ -320,7 +339,7 @@ class RAGService:
                     # Use hybrid search for code examples
                     results = await self.hybrid_strategy.search_code_examples_hybrid(
                         query=query,
-                        match_count=match_count,
+                        match_count=search_match_count,
                         filter_metadata=filter_metadata,
                         source_id=source_id,
                     )
@@ -328,7 +347,7 @@ class RAGService:
                     # Use standard agentic search
                     results = await self.agentic_strategy.search_code_examples(
                         query=query,
-                        match_count=match_count,
+                        match_count=search_match_count,
                         filter_metadata=filter_metadata,
                         source_id=source_id,
                     )
@@ -337,10 +356,14 @@ class RAGService:
                 if self.reranking_strategy and results:
                     try:
                         results = await self.reranking_strategy.rerank_results(
-                            query, results, content_key="content"
+                            query, results, content_key="content", top_k=match_count
                         )
+                        logger.debug(f"Code reranking applied: {search_match_count} candidates -> {len(results)} final results")
                     except Exception as e:
                         logger.warning(f"Code reranking failed: {e}")
+                        # If reranking fails but we fetched extra results, trim to requested count
+                        if len(results) > match_count:
+                            results = results[:match_count]
 
                 # Format results
                 formatted_results = []
