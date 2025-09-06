@@ -349,6 +349,11 @@ async def add_documents_to_supabase(
 
                     # Simple batch completion info
                     batch_info = {
+                        # Stage-specific batch fields to prevent contamination with code examples
+                        "document_completed_batches": completed_batches,
+                        "document_total_batches": total_batches,
+                        "document_current_batch": batch_num,
+                        # Keep generic fields for backward compatibility
                         "completed_batches": completed_batches,
                         "total_batches": total_batches,
                         "current_batch": batch_num,
@@ -401,12 +406,12 @@ async def add_documents_to_supabase(
                     "document_storage",
                     100,  # Ensure we report 100%
                     f"Document storage completed: {len(contents)} chunks stored in {total_batches} batches",
-                completed_batches=total_batches,
-                total_batches=total_batches,
-                current_batch=total_batches,
-                chunks_processed=len(contents),
-                # DON'T send 'status': 'completed' - that's for the orchestration service only!
-            )
+                    completed_batches=total_batches,
+                    total_batches=total_batches,
+                    current_batch=total_batches,
+                    chunks_processed=len(contents),
+                    # DON'T send 'status': 'completed' - that's for the orchestration service only!
+                )
             except Exception as e:
                 search_logger.warning(f"Progress callback failed during completion: {e}. Storage still successful.")
 

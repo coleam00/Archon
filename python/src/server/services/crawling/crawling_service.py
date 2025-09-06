@@ -526,6 +526,40 @@ class CrawlingService:
                     f"Unregistered orchestration service on error | progress_id={self.progress_id}"
                 )
 
+    def _is_self_link(self, link: str, base_url: str) -> bool:
+        """
+        Check if a link is a self-referential link to the base URL.
+        Handles query parameters, fragments, trailing slashes, and normalizes
+        scheme/host/ports for accurate comparison.
+        
+        Args:
+            link: The link to check
+            base_url: The base URL to compare against
+            
+        Returns:
+            True if the link is self-referential, False otherwise
+        """
+        try:
+            from urllib.parse import urlparse
+
+            def _core(u: str) -> str:
+                p = urlparse(u)
+                scheme = (p.scheme or "http").lower()
+                host = (p.hostname or "").lower()
+                port = p.port
+                if (scheme == "http" and port in (None, 80)) or (scheme == "https" and port in (None, 443)):
+                    port_part = ""
+                else:
+                    port_part = f":{port}" if port else ""
+                path = p.path.rstrip("/")
+                return f"{scheme}://{host}{port_part}{path}"
+
+            return _core(link) == _core(base_url)
+        except Exception as e:
+            logger.warning(f"Error checking if link is self-referential: {e}", exc_info=True)
+            # Fallback to simple string comparison
+            return link.rstrip('/') == base_url.rstrip('/')
+
     async def _crawl_by_url_type(self, url: str, request: dict[str, Any]) -> tuple:
         """
         Detect URL type and perform appropriate crawling.
@@ -536,8 +570,8 @@ class CrawlingService:
         crawl_results = []
         crawl_type = None
 
-        if self.url_handler.is_txt(url):
-            # Handle text files
+        if self.url_handler.is_txt(url) or self.url_handler.is_markdown(url):
+            # Handle text files  
             crawl_type = "llms-txt" if "llms" in url.lower() else "text_file"
             if self.progress_tracker:
                 await self.progress_tracker.update(
@@ -550,9 +584,54 @@ class CrawlingService:
             crawl_results = await self.crawl_markdown_file(
                 url,
                 progress_callback=await self._create_crawl_progress_callback("crawling"),
-                start_progress=10,
-                end_progress=20,
+                start_progress=5,
+                end_progress=10,
             )
+            # Check if this is a link collection file and extract links
+            if crawl_results and len(crawl_results) > 0:
+                content = crawl_results[0].get('markdown', '')
+                if self.url_handler.is_link_collection_file(url, content):
+                    # Extract links from the content
+                    extracted_links = self.url_handler.extract_markdown_links(content, url)
+                    
+                    # Filter out self-referential links to avoid redundant crawling
+                    if extracted_links:
+                        original_count = len(extracted_links)
+                        extracted_links = [
+                            link for link in extracted_links
+                            if not self._is_self_link(link, url)
+                        ]
+                        self_filtered_count = original_count - len(extracted_links)
+                        if self_filtered_count > 0:
+                            logger.info(f"Filtered out {self_filtered_count} self-referential links from {original_count} extracted links")
+                    
+                    # Filter out binary files (PDFs, images, archives, etc.) to avoid wasteful crawling
+                    if extracted_links:
+                        original_count = len(extracted_links)
+                        extracted_links = [link for link in extracted_links if not self.url_handler.is_binary_file(link)]
+                        filtered_count = original_count - len(extracted_links)
+                        if filtered_count > 0:
+                            logger.info(f"Filtered out {filtered_count} binary files from {original_count} extracted links")
+                    
+                    if extracted_links:
+                        # Crawl the extracted links using batch crawling
+                        logger.info(f"Crawling {len(extracted_links)} extracted links from {url}")
+                        batch_results = await self.crawl_batch_with_progress(
+                            extracted_links,
+                            max_concurrent=request.get('max_concurrent'),  # None -> use DB settings
+                            progress_callback=await self._create_crawl_progress_callback("crawling"),
+                            start_progress=10,
+                            end_progress=20,
+                        )
+                        
+                        # Combine original text file results with batch results
+                        crawl_results.extend(batch_results)
+                        crawl_type = "link_collection_with_crawled_links"
+                        
+                        logger.info(f"Link collection crawling completed: {len(crawl_results)} total results (1 text file + {len(batch_results)} extracted links)")
+                    else:
+                        logger.info(f"No valid links found in link collection file: {url}")
+                        logger.info(f"Text file crawling completed: {len(crawl_results)} results")
 
         elif self.url_handler.is_sitemap(url):
             # Handle sitemaps
