@@ -20,13 +20,14 @@ router = APIRouter(prefix="/api/mcp", tags=["mcp"])
 
 def get_container_status() -> dict[str, Any]:
     """Get simple MCP container status without Docker management."""
+    docker_client = None
     try:
         docker_client = docker.from_env()
         container = docker_client.containers.get("archon-mcp")
-        
+
         # Get container status
         container_status = container.status
-        
+
         # Map Docker statuses to simple statuses
         if container_status == "running":
             status = "running"
@@ -41,14 +42,14 @@ def get_container_status() -> dict[str, Any]:
         else:
             status = "stopped"
             uptime = None
-        
+
         return {
             "status": status,
             "uptime": uptime,
             "logs": [],  # No log streaming anymore
             "container_status": container_status
         }
-        
+
     except NotFound:
         return {
             "status": "not_found",
@@ -66,6 +67,12 @@ def get_container_status() -> dict[str, Any]:
             "container_status": "error",
             "error": str(e)
         }
+    finally:
+        if docker_client is not None:
+            try:
+                docker_client.close()
+            except Exception:
+                pass
 
 
 @router.get("/status")
@@ -138,12 +145,12 @@ async def get_mcp_clients():
     with safe_span("api_mcp_clients") as span:
         safe_set_attribute(span, "endpoint", "/api/mcp/clients")
         safe_set_attribute(span, "method", "GET")
-        
+
         try:
             # TODO: Implement real client detection in the future
             # For now, return empty array as expected by frontend
             api_logger.debug("Getting MCP clients - returning empty array")
-            
+
             return {
                 "clients": [],
                 "total": 0
@@ -164,23 +171,23 @@ async def get_mcp_sessions():
     with safe_span("api_mcp_sessions") as span:
         safe_set_attribute(span, "endpoint", "/api/mcp/sessions")
         safe_set_attribute(span, "method", "GET")
-        
+
         try:
             # Basic session info for now
             status = get_container_status()
-            
+
             session_info = {
                 "active_sessions": 0,  # TODO: Implement real session tracking
                 "session_timeout": 3600,  # 1 hour default
             }
-            
+
             # Add uptime if server is running
             if status.get("status") == "running" and status.get("uptime"):
                 session_info["server_uptime_seconds"] = status["uptime"]
-            
+
             api_logger.debug(f"MCP session info - sessions={session_info.get('active_sessions')}")
             safe_set_attribute(span, "active_sessions", session_info.get("active_sessions"))
-            
+
             return session_info
         except Exception as e:
             api_logger.error(f"Failed to get MCP sessions - error={str(e)}")
