@@ -47,7 +47,7 @@ class BugReportResponse(BaseModel):
 class GitHubService:
     def __init__(self):
         self.token = os.getenv("GITHUB_TOKEN")
-        self.repo = os.getenv("GITHUB_REPO", "dynamous-community/Archon-V2-Alpha")
+        self.repo = os.getenv("GITHUB_REPO", "coleam00/Archon")
 
     async def create_issue(self, bug_report: BugReportRequest) -> dict[str, Any]:
         """Create a GitHub issue from a bug report."""
@@ -243,14 +243,14 @@ def _create_manual_submission_response(bug_report: BugReportRequest) -> BugRepor
     import urllib.parse
 
     base_url = f"https://github.com/{github_service.repo}/issues/new"
+    
+    # Don't use template for manual submission - this allows the body to be pre-filled
+    # The template parameter doesn't support pre-filling individual form fields
     params = {
-        "template": "bug_report.yml",
-        "title": bug_report.title,
+        "title": f"🐛 {bug_report.title}",
         "labels": f"bug,auto-report,severity:{bug_report.severity},component:{bug_report.component}",
+        "body": issue_body,
     }
-
-    # Add the formatted body as a parameter
-    params["body"] = issue_body
 
     # Build the URL
     query_string = urllib.parse.urlencode(params)
@@ -275,6 +275,6 @@ async def bug_report_health():
         "status": "healthy" if github_configured else "degraded",
         "github_token_configured": github_configured,
         "github_repo_configured": repo_configured,
-        "repo": os.getenv("GITHUB_REPO", "dynamous-community/Archon-V2-Alpha"),
+        "repo": os.getenv("GITHUB_REPO", "coleam00/Archon"),
         "message": "Bug reporting is ready" if github_configured else "GitHub token not configured",
     }

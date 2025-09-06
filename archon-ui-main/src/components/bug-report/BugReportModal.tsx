@@ -24,7 +24,7 @@ export const BugReportModal: React.FC<BugReportModalProps> = ({
   context,
 }) => {
   const [report, setReport] = useState<Omit<BugReportData, "context">>({
-    title: `🐛 ${context.error.name}: ${context.error.message}`,
+    title: "",
     description: "",
     stepsToReproduce: "",
     expectedBehavior: "",
@@ -39,6 +39,11 @@ export const BugReportModal: React.FC<BugReportModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (!report.title.trim()) {
+      showToast("Please provide a title for the bug report", "error");
+      return;
+    }
 
     if (!report.description.trim()) {
       showToast(
@@ -188,7 +193,7 @@ export const BugReportModal: React.FC<BugReportModalProps> = ({
                 {/* Error Preview */}
                 <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-3">
                   <div className="font-medium text-red-800 dark:text-red-200 text-sm">
-                    {context.error.name}: {context.error.message}
+                    {context.error.message || "Manual bug report"}
                   </div>
                   {context.error.stack && (
                     <details className="mt-2">

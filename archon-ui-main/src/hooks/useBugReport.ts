@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { bugReportService, BugContext } from '../services/bugReportService';
+import { useState } from "react";
+import { bugReportService, BugContext } from "../services/bugReportService";
 
 export const useBugReport = () => {
   const [isOpen, setIsOpen] = useState(false);
@@ -8,36 +8,36 @@ export const useBugReport = () => {
 
   const openBugReport = async (error?: Error) => {
     setLoading(true);
-    
+
     try {
       const bugContext = await bugReportService.collectBugContext(error);
       setContext(bugContext);
       setIsOpen(true);
     } catch (contextError) {
-      console.error('Failed to collect bug context:', contextError);
+      console.error("Failed to collect bug context:", contextError);
       // Still open the modal but with minimal context
       setContext({
         error: {
-          message: error?.message || 'Manual bug report',
+          message: error?.message || "Manual bug report",
           stack: error?.stack,
-          name: error?.name || 'UserReportedError'
+          name: error?.name || "Bug Report",
         },
         app: {
-          version: 'unknown',
+          version: "unknown",
           url: window.location.href,
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
         },
         system: {
           platform: navigator.platform,
           userAgent: navigator.userAgent,
-          memory: 'unknown'
+          memory: "unknown",
         },
         services: {
           server: false,
           mcp: false,
-          agents: false
+          agents: false,
         },
-        logs: ['Failed to collect logs']
+        logs: ["Failed to collect logs"],
       });
       setIsOpen(true);
     } finally {
@@ -55,6 +55,6 @@ export const useBugReport = () => {
     context,
     loading,
     openBugReport,
-    closeBugReport
+    closeBugReport,
   };
 };
