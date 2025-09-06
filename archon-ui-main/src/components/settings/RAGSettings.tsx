@@ -59,28 +59,34 @@ export const RAGSettings = ({
             <Select
               label="LLM Provider"
               value={ragSettings.LLM_PROVIDER || 'openai'}
-              onChange={e => setRagSettings({
-                ...ragSettings,
-                LLM_PROVIDER: e.target.value
-              })}
+              onChange={e => {
+                const provider = e.target.value;
+                setRagSettings({
+                  ...ragSettings,
+                  LLM_PROVIDER: provider,
+                  ...(provider === 'ollama' && !ragSettings.LLM_BASE_URL
+                    ? { LLM_BASE_URL: 'http://localhost:11434/v1' }
+                    : {})
+                });
+              }}
               accentColor="green"
               options={[
                 { value: 'openai', label: 'OpenAI' },
                 { value: 'google', label: 'Google Gemini' },
-                { value: 'ollama', label: 'Ollama (Coming Soon)' },
+                { value: 'ollama', label: 'Ollama (Local)' },
               ]}
             />
           </div>
           {ragSettings.LLM_PROVIDER === 'ollama' && (
             <div>
               <Input
-                label="Ollama Base URL"
+                label="Base URL"
                 value={ragSettings.LLM_BASE_URL || 'http://localhost:11434/v1'}
                 onChange={e => setRagSettings({
                   ...ragSettings,
                   LLM_BASE_URL: e.target.value
                 })}
-                placeholder="http://localhost:11434/v1"
+                placeholder="http://localhost:11434/v1 (OpenAI-compatible)"
                 accentColor="green"
               />
             </div>
@@ -95,6 +101,17 @@ export const RAGSettings = ({
               onClick={async () => {
                 try {
                   setSaving(true);
+                  // Validate Ollama base URL if Ollama is selected
+                  if (ragSettings.LLM_PROVIDER === 'ollama') {
+                    const url = (ragSettings.LLM_BASE_URL || '').trim();
+                    const hasScheme = /^https?:\/\//i.test(url);
+                    const hasPath = /\/v1\/?$/.test(url);
+                    if (!hasScheme || !hasPath) {
+                      showToast('Please provide a valid Ollama base URL (e.g., http://localhost:11434/v1)', 'error');
+                      setSaving(false);
+                      return;
+                    }
+                  }
                   await credentialsService.updateRagSettings(ragSettings);
                   showToast('RAG settings saved successfully!', 'success');
                 } catch (err) {
