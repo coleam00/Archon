@@ -458,6 +458,9 @@ class CredentialService:
             return rag_settings.get("LLM_BASE_URL", "http://localhost:11434/v1")
         elif provider == "google":
             return "https://generativelanguage.googleapis.com/v1beta/openai/"
+        elif provider == "openai":
+            # Allow custom OpenAI-compatible endpoint
+            return rag_settings.get("OPENAI_BASE_URL")
         return None  # Use default for OpenAI
 
     async def set_active_provider(self, provider: str, service_type: str = "llm") -> bool:

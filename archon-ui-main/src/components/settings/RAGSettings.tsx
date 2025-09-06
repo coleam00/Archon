@@ -17,6 +17,7 @@ interface RAGSettingsProps {
     USE_RERANKING: boolean;
     LLM_PROVIDER?: string;
     LLM_BASE_URL?: string;
+    OPENAI_BASE_URL?: string;
     EMBEDDING_MODEL?: string;
     // Crawling Performance Settings
     CRAWL_BATCH_SIZE?: number;
@@ -81,6 +82,20 @@ export const RAGSettings = ({
                   LLM_BASE_URL: e.target.value
                 })}
                 placeholder="http://localhost:11434/v1"
+                accentColor="green"
+              />
+            </div>
+          )}
+          {ragSettings.LLM_PROVIDER === 'openai' && (
+            <div>
+              <Input
+                label="OpenAI Base URL (optional)"
+                value={ragSettings.OPENAI_BASE_URL || ''}
+                onChange={e => setRagSettings({
+                  ...ragSettings,
+                  OPENAI_BASE_URL: e.target.value
+                })}
+                placeholder="https://api.openai.com/v1"
                 accentColor="green"
               />
             </div>

@@ -541,27 +541,55 @@ Format your response as JSON:
 
             import openai
 
+            # Get API key using proper credential service API
             api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                # Try to get from credential service with direct fallback
-                from ..credential_service import credential_service
+            base_url = os.getenv("OPENAI_BASE_URL")  # Add environment variable fallback
 
-                if (
-                    credential_service._cache_initialized
-                    and "OPENAI_API_KEY" in credential_service._cache
-                ):
-                    cached_key = credential_service._cache["OPENAI_API_KEY"]
-                    if isinstance(cached_key, dict) and cached_key.get("is_encrypted"):
-                        api_key = credential_service._decrypt_value(cached_key["encrypted_value"])
-                    else:
-                        api_key = cached_key
-                else:
-                    api_key = os.getenv("OPENAI_API_KEY", "")
+            # Try to get from credential service using proper async API
+            # Note: This is a sync context, so we'll try the sync fallback first
+            from ..credential_service import credential_service
+
+            try:
+                # Try to get API key from credential service if not in env
+                if not api_key:
+                    # In sync context, we can only access already-cached credentials
+                    if credential_service._cache_initialized and "OPENAI_API_KEY" in credential_service._cache:
+                        cached_key = credential_service._cache["OPENAI_API_KEY"]
+                        if isinstance(cached_key, dict) and cached_key.get("is_encrypted"):
+                            try:
+                                api_key = credential_service._decrypt_value(cached_key["encrypted_value"])
+                            except Exception as e:
+                                search_logger.debug(f"Failed to decrypt API key from cache: {e}")
+                        else:
+                            api_key = cached_key
+
+                # Try to get base URL from RAG settings cache if not in env
+                # This is still accessing cache but with better error handling
+                if not base_url and hasattr(credential_service, '_rag_settings_cache') and credential_service._rag_settings_cache:
+                    base_url = credential_service._rag_settings_cache.get("OPENAI_BASE_URL")
+
+            except Exception as e:
+                search_logger.debug(f"Failed to retrieve credentials from service: {e}")
+
+            # Normalize base URL (trim whitespace, convert empty strings to None)
+            if base_url:
+                base_url = base_url.strip()
+                if not base_url:
+                    base_url = None
+
+            # Final fallback for API key
+            if not api_key:
+                api_key = os.getenv("OPENAI_API_KEY", "")
 
             if not api_key:
                 raise ValueError("No OpenAI API key available")
 
-            client = openai.OpenAI(api_key=api_key)
+            # Create client with optional base_url for custom OpenAI-compatible endpoints
+            client_kwargs = {"api_key": api_key}
+            if base_url:
+                client_kwargs["base_url"] = base_url
+
+            client = openai.OpenAI(**client_kwargs)
         except Exception as e:
             search_logger.error(
                 f"Failed to create LLM client fallback: {e} - returning default values"
