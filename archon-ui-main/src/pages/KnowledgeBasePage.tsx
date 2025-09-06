@@ -16,6 +16,7 @@ import { KnowledgeGridSkeleton, KnowledgeTableSkeleton } from '../components/kno
 import { GroupCreationModal } from '../components/knowledge-base/GroupCreationModal';
 import { AddKnowledgeModal } from '../components/knowledge-base/AddKnowledgeModal';
 import { CrawlingTab } from '../components/knowledge-base/CrawlingTab';
+import { DocumentBrowser } from '../components/knowledge-base/DocumentBrowser';
 
 interface GroupedKnowledgeItem {
   id: string;
@@ -52,6 +53,10 @@ export const KnowledgeBasePage = () => {
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
+  
+  // Document browser state
+  const [documentBrowserSourceId, setDocumentBrowserSourceId] = useState<string | null>(null);
+  const [isDocumentBrowserOpen, setIsDocumentBrowserOpen] = useState(false);
   
   const { showToast } = useToast();
 
@@ -266,6 +271,11 @@ export const KnowledgeBasePage = () => {
   // Handlers
   const handleAddKnowledge = () => {
     setIsAddModalOpen(true);
+  };
+
+  const handleBrowseDocuments = (sourceId: string) => {
+    setDocumentBrowserSourceId(sourceId);
+    setIsDocumentBrowserOpen(true);
   };
   
   const toggleSelectionMode = () => {
@@ -749,6 +759,7 @@ export const KnowledgeBasePage = () => {
                       onDelete={handleDeleteItem} 
                       onUpdate={loadKnowledgeItems} 
                       onRefresh={handleRefreshItem}
+                      onBrowseDocuments={handleBrowseDocuments}
                       isSelectionMode={isSelectionMode}
                       isSelected={selectedItems.has(item.id)}
                       onToggleSelection={(e) => toggleItemSelection(item.id, index, e)}
@@ -787,6 +798,18 @@ export const KnowledgeBasePage = () => {
             setIsGroupModalOpen(false);
             toggleSelectionMode();
             loadKnowledgeItems();
+          }}
+        />
+      )}
+      
+      {/* Document Browser Modal */}
+      {isDocumentBrowserOpen && documentBrowserSourceId && (
+        <DocumentBrowser
+          sourceId={documentBrowserSourceId}
+          isOpen={isDocumentBrowserOpen}
+          onClose={() => {
+            setIsDocumentBrowserOpen(false);
+            setDocumentBrowserSourceId(null);
           }}
         />
       )}
