@@ -313,9 +313,9 @@ class CodeExtractionService:
                     )
                     from ..storage.code_storage_service import extract_code_blocks
 
-                    # Use dynamic minimum for markdown extraction
-                    base_min_length = 250  # Default for markdown
-                    code_blocks = extract_code_blocks(md, min_length=base_min_length)
+                    # Use dynamic minimum for markdown extraction (from settings)
+                    dynamic_min_length = await self._get_min_code_length()
+                    code_blocks = extract_code_blocks(md, min_length=dynamic_min_length)
                     safe_logfire_info(
                         f"Found {len(code_blocks)} code blocks from markdown | url={source_url}"
                     )
@@ -1208,6 +1208,17 @@ class CodeExtractionService:
         # Basic checks
         if not code or len(code.strip()) < 20:
             return False
+
+        # Light-weight acceptance for low-complexity snippet languages
+        low_complexity_langs = {"bash", "sh", "shell", "console", "yaml", "yml", "json", "toml", "ini"}
+        lang = (language or "").lower()
+        if lang in low_complexity_langs:
+            # Accept small, valid-looking snippets without strict indicator checks
+            # Require at least 2 lines or braces/colons common in configs
+            lines = [ln for ln in code.split("\n") if ln.strip()]
+            has_config_chars = (":" in code) or ("{" in code) or ("[" in code) or ("- " in code)
+            if len(lines) >= 2 or has_config_chars:
+                return True
 
         # Skip diagram languages if filtering is enabled
         if await self._is_diagram_filtering_enabled():

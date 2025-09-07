@@ -1,0 +1,172 @@
+---
+title: Server Monitoring
+sidebar_position: 6
+---
+
+import Admonition from '@theme/Admonition';
+
+# 📊 Server Monitoring & Health
+
+<div className="hero hero--primary">
+  <div className="container">
+    <h2 className="hero__subtitle">
+      **Monitor your Archon services**: Health checks, performance metrics, and troubleshooting tools
+    </h2>
+  </div>
+</div>
+
+Archon provides built-in monitoring and health checking across all services to help you maintain optimal performance and quickly troubleshoot issues.
+
+## 🏥 Health Checks
+
+### API Health Endpoints
+
+Each service provides health check endpoints:
+
+```bash
+# Server API health
+curl http://localhost:8080/api/projects/health
+curl http://localhost:8080/api/settings/health
+
+# MCP Server health  
+curl http://localhost:8051/health
+
+# Database health
+curl http://localhost:8080/api/database/metrics
+```
+
+### Service Status
+
+Monitor the status of all Archon services:
+
+| Service | Port | Health Endpoint | Purpose |
+|---------|------|----------------|---------|
+| **Server** | 8080 | `/api/projects/health` | Main API status |
+| **MCP** | 8051 | `/health` | MCP server status |
+| **Frontend** | 3737 | Direct access | Web UI availability |
+| **Docs** | 3838 | Direct access | Documentation site |
+
+## 📈 Performance Monitoring
+
+### Key Metrics
+
+Archon tracks important performance metrics:
+
+- **RAG Query Performance**: Average search times and accuracy
+- **Database Performance**: Connection pool health and query times
+- **Memory Usage**: Adaptive processing based on available resources
+- **API Response Times**: Endpoint performance across all services
+
+### Real-Time Updates
+
+Socket.IO connections provide real-time monitoring:
+
+- **Progress Tracking**: Live updates during document processing
+- **Connection Health**: Automatic reconnection handling
+- **Service Communication**: Inter-service request monitoring
+
+## 🔧 Troubleshooting
+
+<Admonition type="tip" title="Quick Debugging">
+Use the health endpoints and browser developer tools to quickly diagnose issues with your Archon installation.
+</Admonition>
+
+### Common Issues
+
+| Symptom | Likely Cause | Solution |
+|---------|--------------|----------|
+| Slow search responses | High memory usage | System automatically adjusts batch sizes |
+| Connection errors | Service startup order | Restart services with `docker-compose restart` |
+| Missing search results | Database connection | Check Supabase configuration |
+| UI not loading | Frontend build issues | Check frontend service logs |
+
+### Docker Logs
+
+Monitor service logs:
+
+```bash
+# All services
+docker-compose logs -f
+
+# Specific service
+docker-compose logs -f archon-server
+docker-compose logs -f archon-mcp
+```
+
+### Database Monitoring
+
+Check database health and metrics:
+
+```bash
+# Database metrics
+curl http://localhost:8080/api/database/metrics
+
+# Returns:
+# - Table record counts
+# - Connection status
+# - Performance indicators
+```
+
+## 🛠️ Configuration
+
+### Environment Monitoring
+
+Monitor key environment variables:
+
+```bash
+# Database connectivity
+SUPABASE_URL=your_supabase_url
+SUPABASE_SERVICE_KEY=your_service_key
+
+# AI services
+OPENAI_API_KEY=your_openai_key
+
+# Unified Logging Configuration
+LOGFIRE_ENABLED=false              # true=Logfire logging, false=standard logging
+LOGFIRE_TOKEN=your_logfire_token    # Only required when LOGFIRE_ENABLED=true
+
+# Service communication
+API_BASE_URL=http://archon-server:8080
+```
+
+### Unified Logging System
+
+Archon includes a unified logging system with optional [Logfire](https://logfire.pydantic.dev/) integration:
+
+**Standard Logging (Default)**:
+```bash
+LOGFIRE_ENABLED=false
+```
+- Uses Python's standard logging framework
+- Logs to console with structured format
+- Perfect for development and basic monitoring
+- Zero external dependencies
+
+**Enhanced Logging with Logfire**:
+```bash
+LOGFIRE_ENABLED=true
+LOGFIRE_TOKEN=your_logfire_token    # Get from logfire.pydantic.dev
+```
+- Real-time traces and performance monitoring
+- Advanced debugging for RAG queries and MCP tool calls
+- Automatic request/response tracking
+- Visual dashboards and analytics
+
+**Key Benefits**:
+- 🔄 **Seamless Toggle**: Switch between modes with a single environment variable
+- 🛡️ **Graceful Fallback**: Always works even without Logfire
+- 📊 **Consistent Format**: Same log structure in both modes
+- 🚀 **Zero Setup**: Standard logging works out of the box
+
+### Resource Management
+
+Archon automatically manages resources:
+
+- **Memory Adaptive Processing**: Adjusts concurrency based on available memory
+- **Rate Limiting**: Prevents API quota exhaustion
+- **Connection Pooling**: Optimizes database performance
+- **Batch Processing**: Efficiently handles large document sets
+
+---
+
+**Need Help?** Check the [Troubleshooting Guide](./troubleshooting) for detailed debugging steps.

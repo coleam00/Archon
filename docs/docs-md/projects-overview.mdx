@@ -1,0 +1,786 @@
+---
+title: Archon Projects Overview
+sidebar_position: 1
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import Admonition from '@theme/Admonition';
+
+# 📊 Archon Projects: AI-Powered Project Management
+
+<div className="hero hero--primary">
+  <div className="container">
+    <h2 className="hero__subtitle">
+      **Manage your development projects** with AI assistance. Track tasks, organize documentation, and connect your entire workflow with Cursor, Windsurf, and other AI coding assistants.
+    </h2>
+  </div>
+</div>
+
+Archon Projects brings intelligent project management to your AI development workflow. Your AI assistants can understand project context, create and update tasks, manage documentation, and help you stay organized while you code.
+
+## 🎯 Overview
+
+The Archon task management system provides:
+
+- **Project Organization**: Structured project management with PRDs, features, and documentation
+- **Task Organization**: Organize and group related tasks
+- **Status Tracking**: Todo, Doing, Review, Done status management
+- **MCP Integration**: AI agents can create, update, and query tasks autonomously
+- **Reference Management**: Link tasks to code examples and documentation sources
+- **GitHub Integration**: Connect projects to repositories for context
+
+## 🏗️ System Architecture
+
+```mermaid
+%%{init:{
+  'theme':'base',
+  'themeVariables': {
+    'primaryColor':'#1f2937',
+    'primaryTextColor':'#ffffff',
+    'primaryBorderColor':'#8b5cf6',
+    'lineColor':'#a855f7',
+    'textColor':'#ffffff',
+    'fontFamily':'Inter',
+    'fontSize':'14px',
+    'background':'#000000',
+    'mainBkg':'#1f2937',
+    'secondBkg':'#111827',
+    'borderColor':'#8b5cf6',
+    'clusterBkg':'#111827',
+    'clusterBorder':'#8b5cf6'
+  }
+}}%%
+graph TB
+    subgraph "Frontend (React)"
+        TaskUI(Project Management UI)
+        ProjectUI(Project Dashboard)
+    end
+    
+    subgraph "Backend API"
+        ProjectAPI["Projects API<br/>Service Layer"]
+        TaskAPI["Task Management<br/>Endpoints"]
+        MCPTools["MCP Project Tools<br/>5 consolidated tools"]
+    end
+    
+    subgraph "Service Layer"
+        ProjectService["ProjectService<br/>Project operations"]
+        TaskService["TaskService<br/>Task operations"]
+        DocumentService["DocumentService<br/>Document operations"]
+        VersioningService["VersioningService<br/>Version control"]
+    end
+    
+    subgraph "Database (Supabase)"
+        ProjectsTable(("projects table"))
+        TasksTable(("tasks table"))
+        VersionsTable(("document_versions"))
+    end
+    
+    subgraph "AI Clients"
+        Cursor(Cursor IDE)
+        Windsurf(Windsurf IDE)
+        Claude(Claude Code)
+    end
+    
+    TaskUI --> ProjectAPI
+    ProjectUI --> ProjectAPI
+    
+    ProjectAPI --> ProjectService
+    ProjectAPI --> TaskService
+    ProjectAPI --> DocumentService
+    
+    MCPTools --> ProjectService
+    MCPTools --> TaskService
+    MCPTools --> DocumentService
+    MCPTools --> VersioningService
+    
+    ProjectService --> ProjectsTable
+    TaskService --> TasksTable
+    DocumentService --> ProjectsTable
+    VersioningService --> VersionsTable
+    
+    Cursor --> MCPTools
+    Windsurf --> MCPTools
+    Claude --> MCPTools
+```
+
+## 📊 Data Structure
+
+Archon uses a simple but flexible data structure:
+
+- **Projects**: Main containers with title, description, PRD, features, and GitHub integration
+- **Tasks**: Organized under projects with logical grouping  
+- **Documents**: JSONB-based document storage for PRDs, specs, and other project docs
+- **Status Tracking**: Simple workflow - Todo → Doing → Review → Done
+
+## 🚀 Getting Started
+
+### Creating Your First Project
+
+#### Via Web Interface
+
+1. **Open Archon**: Navigate to http://localhost:3737
+2. **Go to Projects**: Click the "Projects" tab in the navigation
+3. **Create Project**: Click "New Project"
+4. **Fill Details**:
+   - **Title**: "My Documentation Project"
+   - **Description**: Brief project overview
+   - **GitHub Repo**: (optional) Repository URL
+5. **Save Project**: Click "Create"
+
+#### Via API
+
+```bash
+curl -X POST "http://localhost:8080/api/projects" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "API Documentation Overhaul",
+    "prd": {
+      "overview": "Improve API documentation for better developer experience",
+      "goals": [
+        "Add comprehensive examples",
+        "Improve navigation structure",
+        "Add interactive API explorer"
+      ],
+      "success_criteria": [
+        "Reduce support tickets by 30%",
+        "Increase API adoption by 50%"
+      ]
+    },
+    "github_repo": "https://github.com/company/api-docs"
+  }'
+```
+
+#### Via MCP (AI Agent)
+
+AI agents can autonomously create projects:
+
+```
+User: "I need to start a new project to improve our API documentation"
+AI: [Uses create_project MCP tool] 
+    "I've created a new project 'API Documentation Improvement' with a comprehensive PRD..."
+```
+
+### Creating Tasks
+
+#### Via Web Interface
+
+1. **Select Project**: Choose your project from the project list
+2. **Add Task**: Click "New Task"
+3. **Fill Details**:
+   - **Title**: Clear, actionable task name
+   - **Description**: Detailed requirements
+   - **Status**: Initial status (usually "todo")
+   - **Assignee**: Choose from User, Archon, or AI IDE Agent
+   - **Sources**: Add reference documentation
+   - **Code Examples**: Add relevant code snippets
+4. **Save Task**: Click "Create"
+
+#### Via API
+
+```bash
+curl -X POST "http://localhost:8080/api/tasks" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_id": "550e8400-e29b-41d4-a716-446655440000",
+    "title": "Create authentication examples",
+    "description": "Write comprehensive examples showing how to implement JWT authentication with our API, including token generation, validation, and error handling.",
+    "assignee": "Archon",
+    "sources": [
+      {
+        "name": "JWT.io Introduction",
+        "url": "https://jwt.io/introduction/",
+        "description": "Basic JWT concepts and structure"
+      },
+      {
+        "name": "FastAPI Security",
+        "url": "https://fastapi.tiangolo.com/tutorial/security/",
+        "description": "FastAPI authentication patterns"
+      }
+    ],
+    "code_examples": [
+      {
+        "language": "python",
+        "description": "JWT token generation",
+        "code": "import jwt\nfrom datetime import datetime, timedelta\n\ndef create_token(user_id: str) -> str:\n    payload = {\n        'user_id': user_id,\n        'exp': datetime.utcnow() + timedelta(hours=24)\n    }\n    return jwt.encode(payload, SECRET_KEY, algorithm='HS256')"
+      }
+    ],
+    "status": "todo"
+  }'
+```
+
+## 🔧 Task Management Features
+
+### Task Organization
+
+Break down complex work into manageable tasks:
+
+<Tabs>
+<TabItem value="api" label="API Example">
+
+```bash
+# Create main task
+curl -X POST "http://localhost:8080/api/tasks" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_id": "550e8400-e29b-41d4-a716-446655440000",
+    "title": "Implement user authentication system",
+    "description": "Complete authentication system with JWT tokens",
+    "status": "todo"
+  }'
+
+# Create related tasks
+curl -X POST "http://localhost:8080/api/tasks" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_id": "550e8400-e29b-41d4-a716-446655440000",
+    "title": "Design JWT token structure",
+    "description": "Define token payload and expiration strategy",
+    "status": "todo",
+    "feature": "Authentication"
+  }'
+```
+
+</TabItem>
+<TabItem value="mcp" label="MCP (AI) Example">
+
+```
+User: "Break down the authentication task into smaller pieces"
+AI: [Uses create_task MCP tool multiple times]
+    "I've broken down your authentication task into 5 related tasks:
+    1. Design JWT token structure
+    2. Implement token generation
+    3. Create middleware for validation
+    4. Add authentication endpoints
+    5. Write comprehensive tests"
+```
+
+</TabItem>
+</Tabs>
+
+### Status Management
+
+Update task status as work progresses:
+
+<Tabs>
+<TabItem value="api" label="API Status Update">
+
+```bash
+# Update task status
+curl -X PATCH "http://localhost:8080/api/tasks/task-uuid-here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "status": "doing",
+    "description": "Started implementing JWT token generation. Updated payload structure to include user roles and permissions."
+  }'
+```
+
+</TabItem>
+<TabItem value="mcp" label="MCP Status Update">
+
+```
+User: "I finished implementing the authentication middleware"
+AI: [Uses update_task_status MCP tool]
+    "Great! I've updated the authentication middleware task to 'done' and added your completion notes."
+```
+
+</TabItem>
+</Tabs>
+
+#### Status Workflow
+
+```mermaid
+%%{init:{
+  'theme':'base',
+  'themeVariables': {
+    'primaryColor':'#1f2937',
+    'primaryTextColor':'#ffffff',
+    'primaryBorderColor':'#8b5cf6',
+    'lineColor':'#a855f7',
+    'textColor':'#ffffff',
+    'fontFamily':'Inter',
+    'fontSize':'14px',
+    'background':'#000000',
+    'mainBkg':'#1f2937',
+    'secondBkg':'#111827',
+    'borderColor':'#8b5cf6'
+  }
+}}%%
+flowchart TD
+    A["Task Created"] --> B["todo"]
+    B --> C{"Dependencies Met?"}
+    C -->|Yes| D["doing"]
+    C -->|No| E["review"]
+    E --> F{"Dependencies Resolved?"}
+    F -->|Yes| D
+    F -->|No| E
+    D --> G{"Work Complete?"}
+    G -->|Yes| H["done"]
+    G -->|No| I{"Blocked?"}
+    I -->|Yes| E
+    I -->|No| D
+```
+
+### Task Filtering and Queries
+
+#### Get Tasks by Status
+
+```bash
+# Get all "doing" tasks
+curl "http://localhost:8080/api/tasks?status=doing"
+
+# Get all tasks for a project
+curl "http://localhost:8080/api/tasks?project_id=550e8400-e29b-41d4-a716-446655440000"
+
+# Get tasks by feature
+curl "http://localhost:8080/api/tasks?project_id=550e8400-e29b-41d4-a716-446655440000&feature=Authentication"
+```
+
+#### Advanced Filtering
+
+```bash
+# Get tasks by status with project filter
+curl "http://localhost:8080/api/tasks?project_id=550e8400-e29b-41d4-a716-446655440000&status=review"
+```
+
+## 🤖 MCP Integration
+
+AI coding assistants can autonomously manage tasks through MCP tools:
+
+### Available MCP Tools (5 Consolidated Tools)
+
+<Admonition type="success" title="Streamlined MCP Tools">
+  Following MCP best practices, we've consolidated 22 individual tools into 5 flexible, action-based tools. This provides better performance, easier maintenance, and more intuitive usage for AI agents.
+</Admonition>
+
+#### Consolidated Project & Task Tools
+
+| Tool | Actions | Description | Parameters |
+|------|---------|-------------|------------|
+| **`manage_project`** | `create`, `list`, `get`, `delete` | Complete project lifecycle | `action`, `project_id`, `title`, `prd`, `github_repo` |
+| **`manage_task`** | `create`, `list`, `get`, `update`, `delete`, `archive` | All task operations | `action`, `task_id`, `project_id`, `filter_by`, `filter_value`, `update_fields` |
+| **`manage_document`** | `add`, `list`, `get`, `update`, `delete` | Document management *(Not yet implemented)* | `action`, `project_id`, `doc_id`, `document_type`, `title`, `content`, `metadata` |
+| **`manage_versions`** | `create`, `list`, `get`, `restore` | Version control *(Not yet implemented)* | `action`, `project_id`, `field_name`, `version_number`, `content` |
+| **`get_project_features`** | *(query only)* | Retrieve features | `project_id` |
+
+<Admonition type="info" title="Implementation Status">
+  The `manage_document` and `manage_versions` tools are defined in the MCP module but require corresponding Server API endpoints to be implemented. Currently, these tools will return "not yet implemented" errors. The other tools (`manage_project`, `manage_task`, and `get_project_features`) are fully functional.
+</Admonition>
+
+#### Action Patterns
+
+<Tabs>
+<TabItem value="project" label="Project Operations">
+
+```python
+# Create a new project
+result = await manage_project(
+    action="create",
+    title="AI Documentation System",
+    prd={"overview": "Automated docs generation", "goals": ["Generate API docs", "Maintain accuracy"]},
+    github_repo="https://github.com/user/ai-docs"
+)
+
+# List all projects
+projects = await manage_project(action="list")
+
+# Get specific project
+project = await manage_project(
+    action="get",
+    project_id="550e8400-e29b-41d4-a716-446655440000"
+)
+```
+
+</TabItem>
+<TabItem value="task" label="Task Operations">
+
+```python
+# Create a task
+task = await manage_task(
+    action="create",
+    project_id="project-uuid",
+    title="Implement JWT authentication",
+    description="Add JWT-based auth to all API endpoints",
+    assignee="Archon"
+)
+
+# Update task status
+await manage_task(
+    action="update",
+    task_id="task-uuid",
+    update_fields={"status": "done", "description": "Completed with tests"}
+)
+
+# List tasks by status
+tasks = await manage_task(
+    action="list",
+    filter_by="status",
+    filter_value="doing",
+    project_id="project-uuid"
+)
+
+# Get tasks by feature
+tasks = await manage_task(
+    action="list",
+    project_id="project-uuid",
+    feature="Authentication"
+)
+```
+
+</TabItem>
+<TabItem value="document" label="Document Operations">
+
+```python
+# Add a document (MUST use clean MCP format)
+doc = await manage_document(
+    action="add",
+    project_id="project-uuid",
+    document_type="prd",
+    title="System Architecture Document",
+    content={
+        "project_overview": {
+            "description": "Microservices architecture",
+            "target_completion": "Q2 2024"
+        },
+        "architecture": {
+            "frontend": ["React", "TypeScript"],
+            "backend": ["FastAPI", "PostgreSQL"]
+        }
+    },
+    metadata={
+        "tags": ["architecture", "technical"],
+        "author": "System Architect"
+    }
+)
+
+# Update document
+await manage_document(
+    action="update",
+    project_id="project-uuid",
+    doc_id="doc-uuid",
+    content={
+        "project_overview": {
+            "description": "Updated microservices architecture with event sourcing"
+        }
+    }
+)
+```
+
+</TabItem>
+</Tabs>
+
+<Admonition type="warning" title="Document Format Requirements">
+  When using `manage_document` with `add` or `update` actions, the `content` field MUST follow the structured MCP format. The UI will automatically convert this to editable blocks. Do not use flat text or unstructured data.
+</Admonition>
+
+### AI-Driven Task Management Examples
+
+#### Scenario 1: Project Planning
+
+**User Prompt**:
+```
+I need to plan a new feature for user profile management. 
+Create a project and break it down into tasks.
+```
+
+**AI Actions**:
+1. `manage_project` with `action="create"` - Creates "User Profile Management" project with comprehensive PRD
+2. `perform_rag_query` - Finds existing user management patterns in knowledge base
+3. `manage_task` with `action="create"` (multiple calls) - Creates structured task breakdown:
+   - Design user profile schema
+   - Implement profile CRUD endpoints
+   - Add profile validation
+   - Create profile UI components
+   - Write integration tests
+4. Links relevant documentation in task sources
+
+#### Scenario 2: Progress Tracking
+
+**User Prompt**:
+```
+I just finished implementing the user registration endpoint. 
+Update my tasks and suggest what to work on next.
+```
+
+**AI Actions**:
+1. `manage_task` with `action="list"` and `filter_by="project"` - Gets current project tasks
+2. `manage_task` with `filter_by="status"` and `filter_value="doing"` - Finds active tasks
+3. `manage_task` with `action="update"` - Marks registration task as "done"
+4. `manage_task` with `filter_by="status"` and `filter_value="todo"` - Finds next tasks
+5. Provides recommendations for next priority tasks
+
+#### Scenario 3: Code Review Integration
+
+**User Prompt**:
+```
+Review this authentication code and create tasks for any improvements needed:
+[code snippet]
+```
+
+**AI Actions**:
+1. `perform_rag_query` - Finds coding standards and security patterns
+2. Analyzes code against documented best practices
+3. `manage_task` with `action="create"` - Creates improvement tasks:
+   - Add input validation
+   - Implement rate limiting
+   - Add comprehensive error handling
+   - Improve test coverage
+4. `manage_document` with `action="add"` - Documents findings
+5. Sets appropriate priorities and dependencies
+
+## 📊 Project Management Patterns
+
+### PRD (Product Requirements Document) Structure
+
+When creating projects, Archon automatically generates a structured PRD:
+
+```json
+{
+  "prd": {
+    "overview": "Clear description of what we're building and why",
+    "problem_statement": "What problem are we solving?",
+    "goals": [
+      "Specific, measurable objectives",
+      "User experience improvements",
+      "Technical achievements"
+    ],
+    "success_criteria": [
+      "Quantifiable success metrics",
+      "User satisfaction targets",
+      "Performance benchmarks"
+    ],
+    "scope": {
+      "in_scope": ["Features to include"],
+      "out_of_scope": ["Features explicitly excluded"]
+    },
+    "technical_requirements": [
+      "Performance requirements",
+      "Security requirements",
+      "Scalability requirements"
+    ],
+    "stakeholders": [
+      {
+        "name": "Product Manager",
+        "role": "Requirements owner",
+        "contact": "pm@company.com"
+      }
+    ]
+  }
+}
+```
+
+### Document Management
+
+Projects can contain various types of documents:
+
+- **PRD (Product Requirements Document)**: Project overview, goals, and technical requirements
+- **Technical Specs**: Detailed implementation plans and architecture
+- **Feature Plans**: Feature breakdowns and user stories  
+- **Meeting Notes**: Team discussions and decisions
+
+Documents are stored in a structured format that works well with AI agents while providing rich editing through the BlockNote editor.
+
+### Feature Tracking
+
+Track feature development progress:
+
+```json
+{
+  "features": [
+    {
+      "name": "User Authentication",
+      "status": "done",
+      "priority": "high",
+      "effort_estimate": "5 days",
+      "actual_effort": "4 days",
+      "dependencies": [],
+      "tasks": [
+        "660e8400-e29b-41d4-a716-446655440001",
+        "660e8400-e29b-41d4-a716-446655440002"
+      ]
+    },
+    {
+      "name": "User Profile Management",
+      "status": "in_progress",
+      "priority": "medium",
+      "effort_estimate": "8 days",
+      "dependencies": ["User Authentication"],
+      "blockers": []
+    }
+  ]
+}
+```
+
+## 🎨 Frontend Integration
+
+The React frontend (`ProjectPage.tsx` - 593 lines) provides intuitive task management interfaces:
+
+### Project Dashboard Features
+
+- **Project Overview**: Title, description, GitHub integration
+- **Task Summary**: Status breakdown, progress indicators
+- **Document Management**: PRD viewer, document creation
+- **Feature Tracking**: Feature status and dependencies
+
+### Task Management Interface
+
+- **Task List**: Filterable by status, searchable
+- **Task Details**: Full task information, sources, code examples
+- **Status Updates**: Drag-and-drop status changes
+- **Task Grouping**: Organize tasks by feature or category
+
+### Real-time Updates
+
+The frontend receives real-time updates via Socket.IO connections when:
+- Tasks are created or updated by AI agents
+- Project status changes
+- Documents are added or modified
+
+## 📈 Progress Tracking
+
+Archon provides built-in progress tracking:
+
+- **Project completion percentage** based on completed tasks
+- **Task velocity** showing development pace over time  
+- **Status distribution** showing work distribution across todo/doing/review/done
+- **Real-time updates** via Socket.IO when AI agents or users update tasks
+
+## 🔍 Best Practices
+
+### Task Writing Guidelines
+
+#### Good Task Examples
+
+✅ **Good**: "Implement JWT authentication middleware for FastAPI"
+- Specific technology mentioned
+- Clear deliverable
+- Actionable
+
+✅ **Good**: "Write unit tests for user registration endpoint covering happy path and validation errors"
+- Specific scope
+- Clear acceptance criteria
+- Testable outcome
+
+#### Poor Task Examples
+
+❌ **Poor**: "Fix authentication"
+- Too vague
+- No clear scope
+- Not actionable
+
+❌ **Poor**: "Make the app better"
+- No specific deliverable
+- Subjective criteria
+- Not measurable
+
+### Project Organization
+
+#### Recommended Project Structure
+
+```
+Project: "User Management System"
+├── Epic: "Authentication"
+│   ├── Task: "Design JWT token structure"
+│   ├── Task: "Implement login endpoint"
+│   ├── Task: "Implement logout endpoint"
+│   └── Task: "Add authentication middleware"
+├── Epic: "User Profiles"
+│   ├── Task: "Design user profile schema"
+│   ├── Task: "Implement profile CRUD endpoints"
+│   └── Task: "Add profile validation"
+└── Epic: "Testing & Documentation"
+    ├── Task: "Write integration tests"
+    ├── Task: "Update API documentation"
+    └── Task: "Create user guides"
+```
+
+### Status Management Best Practices
+
+#### When to Use Each Status
+
+- **Todo**: Task is ready to start, all dependencies met
+- **Doing**: Work is actively in progress
+- **Blocked**: Cannot proceed due to external dependencies
+- **Done**: Task is completed and verified
+
+#### Status Transition Guidelines
+
+```mermaid
+flowchart TD
+    A["Task Created"] --> B["todo"]
+    B --> C{"Dependencies Met?"}
+    C -->|Yes| D["doing"]
+    C -->|No| E["review"]
+    E --> F{"Dependencies Resolved?"}
+    F -->|Yes| D
+    F -->|No| E
+    D --> G{"Work Complete?"}
+    G -->|Yes| H["done"]
+    G -->|No| I{"Blocked?"}
+    I -->|Yes| E
+    I -->|No| D
+```
+
+## 🚀 Integration Examples
+
+### Cursor IDE Integration
+
+Example of AI-assisted task management in Cursor:
+
+```
+User: "I need to implement user authentication for our API"
+
+AI Response:
+I'll help you plan the authentication implementation. Let me create a project and break this down into manageable tasks.
+
+[AI uses MCP tools to:]
+1. manage_project(action="create") with authentication project details
+2. perform_rag_query("FastAPI authentication JWT")
+3. manage_task(action="create") for each implementation step
+4. Link relevant documentation from knowledge base
+
+I've created a project "User Authentication System" with the following tasks:
+
+1. ✅ Design JWT token structure
+   - Status: todo
+   - Sources: FastAPI Security docs, JWT.io guide
+   - Code examples: Token generation and validation
+
+2. ✅ Implement authentication middleware
+   - Status: todo  
+   - Sources: FastAPI middleware documentation
+   - Code examples: Dependency injection patterns
+
+3. ✅ Create login/logout endpoints
+   - Status: todo
+   - Sources: FastAPI routing documentation
+   - Code examples: Request/response models
+
+4. ✅ Add password hashing
+   - Status: todo
+   - Sources: Security best practices
+   - Code examples: bcrypt implementation
+
+5. ✅ Write authentication tests
+   - Status: todo
+   - Sources: FastAPI testing guide
+   - Code examples: Test fixtures and mocks
+
+Would you like me to start with any specific task?
+```
+
+### GitHub Integration
+
+Projects can be linked to GitHub repositories for context. Future versions will include bidirectional sync with GitHub issues and pull requests.
+
+## 🔮 What's Next
+
+Upcoming features include time tracking, task templates, team collaboration, and enhanced GitHub integration.
+
+---
+
+**Next Steps**:
+- Learn about [RAG System](./rag) for knowledge-driven task creation
+- Explore [User Interface](./ui) for task management workflows
+- Check [API Reference](./api-reference) for programmatic task management
+- Review [MCP Integration](./mcp-overview) for AI client setup 

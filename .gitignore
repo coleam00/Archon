@@ -2,9 +2,11 @@ __pycache__
 .env
 .serena
 .claude/settings.local.json
+.claude/hooks/logs/
 PRPs/local
 PRPs/completed/
 /logs/
 .zed
 tmp/
 temp/
+.specstory

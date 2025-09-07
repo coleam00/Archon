@@ -1,0 +1,265 @@
+---
+title: Coding Best Practices
+description: Practical patterns and anti-patterns from real-world Archon development
+sidebar_position: 15
+---
+
+# Coding Best Practices
+
+Essential patterns and pitfalls to avoid when developing Archon.
+
+## Async/Await Patterns
+
+### ❌ DON'T: Lambda Functions Returning Unawaited Coroutines
+
+```python
+# This will break - the coroutine is never awaited
+progress_callback=lambda data: update_progress(progress_id, data)
+```
+
+### ✅ DO: Use asyncio.create_task for Async Callbacks
+
+```python
+# Properly schedule async function execution
+progress_callback=lambda data: asyncio.create_task(update_progress(progress_id, data))
+```
+
+### ❌ DON'T: Call Sync Functions from Async Context
+
+```python
+# This causes "event loop already running" errors
+async def process_data():
+    embeddings = create_embeddings_batch(texts)  # Sync function in async context
+```
+
+### ✅ DO: Use Async Versions in Async Context
+
+```python
+async def process_data():
+    embeddings = await create_embeddings_batch_async(texts)
+```
+
+## Socket.IO Best Practices
+
+### Room-Based Broadcasting
+
+Always broadcast to specific rooms, not all clients:
+
+```python
+# ✅ Good - targeted broadcast
+await sio.emit('crawl_progress', data, room=progress_id)
+
+# ❌ Bad - broadcasts to everyone
+await sio.emit('crawl_progress', data)
+```
+
+### Simple Event Handlers
+
+Keep Socket.IO handlers simple and direct:
+
+```python
+# ✅ Good - simple, clear purpose
+@sio.event
+async def crawl_subscribe(sid, data):
+    progress_id = data.get('progress_id')
+    if progress_id:
+        await sio.enter_room(sid, progress_id)
+        await sio.emit('crawl_subscribe_ack', {'status': 'subscribed'}, to=sid)
+```
+
+## Service Layer Patterns
+
+### Progress Callbacks
+
+When services need progress callbacks, ensure proper async handling:
+
+```python
+# ✅ Good - service accepts optional async callback
+async def process_with_progress(data, progress_callback=None):
+    if progress_callback:
+        await progress_callback({'status': 'processing', 'percentage': 50})
+```
+
+### Error Handling in Services
+
+Always provide fallbacks for external service failures:
+
+```python
+# ✅ Good - graceful degradation
+try:
+    embeddings = await create_embeddings_batch_async(texts)
+except Exception as e:
+    logger.warning(f"Embedding creation failed: {e}")
+    # Return zero embeddings as fallback
+    return [[0.0] * 1536 for _ in texts]
+```
+
+## Common Pitfalls
+
+### Event Loop Issues
+
+**Problem**: "This event loop is already running"
+
+**Solution**: Check if you're in an async context before using sync functions:
+
+```python
+try:
+    loop = asyncio.get_running_loop()
+    # Already in async context - use async version
+    result = await async_function()
+except RuntimeError:
+    # No event loop - safe to use sync version
+    result = sync_function()
+```
+
+### Socket.IO Progress Updates
+
+**Problem**: Progress updates not reaching the UI
+
+**Solution**: Ensure the client is in the correct room and progressId is included:
+
+```python
+# Always include progressId in the data
+data['progressId'] = progress_id
+await sio.emit('crawl_progress', data, room=progress_id)
+```
+
+### Embedding Service Optimization
+
+**Problem**: Synchronous embedding calls blocking async operations
+
+**Solution**: Always use async versions and batch operations:
+
+```python
+# Process in batches with rate limiting
+async def create_embeddings_for_documents(documents):
+    batch_size = 20  # OpenAI limit
+    for i in range(0, len(documents), batch_size):
+        batch = documents[i:i + batch_size]
+        embeddings = await create_embeddings_batch_async(batch)
+        await asyncio.sleep(0.5)  # Rate limiting
+```
+
+## Testing Async Code
+
+### Mock Async Functions Properly
+
+```python
+# ✅ Good - proper async mock
+mock_update = AsyncMock()
+with patch('module.update_progress', mock_update):
+    await function_under_test()
+    mock_update.assert_called_once()
+```
+
+### Test Socket.IO Events
+
+```python
+# ✅ Good - test room management
+@patch('src.server.socketio_app.sio')
+async def test_subscribe_joins_room(mock_sio):
+    await crawl_subscribe('sid-123', {'progress_id': 'progress-456'})
+    mock_sio.enter_room.assert_called_with('sid-123', 'progress-456')
+```
+
+## React/Frontend Best Practices
+
+### Performance Anti-Patterns to Avoid
+
+#### ❌ DON'T: Update State on Every Keystroke Without Debouncing
+```typescript
+// This causes excessive re-renders
+<input
+  value={formData.title}
+  onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+/>
+```
+
+#### ✅ DO: Use Debounced Inputs or Local State
+```typescript
+// Use a debounced input component
+<DebouncedInput
+  value={formData.title}
+  onChange={handleTitleChange}
+  delay={300}
+/>
+```
+
+#### ❌ DON'T: Create New Functions in Render
+```typescript
+// Creates new function every render
+<button onClick={() => handleAction(item.id)}>Click</button>
+```
+
+#### ✅ DO: Use useCallback for Stable References
+```typescript
+const handleClick = useCallback((id) => {
+  handleAction(id);
+}, []);
+
+<button onClick={() => handleClick(item.id)}>Click</button>
+```
+
+### Socket.IO Client-Side Patterns
+
+#### Room Subscription Pattern
+```typescript
+useEffect(() => {
+  const ws = createWebSocketService();
+  
+  const connect = async () => {
+    await ws.connect('/'); // Always default namespace
+    
+    // Join room
+    ws.send({ 
+      type: 'join_project', 
+      data: { project_id: projectId } 
+    });
+    
+    // Handle messages
+    ws.addMessageHandler('task_updated', handleTaskUpdate);
+  };
+  
+  connect();
+  return () => ws.disconnect();
+}, [projectId]);
+```
+
+### State Management Patterns
+
+#### Batch Updates
+```typescript
+// ✅ Good - Single render
+setState(prev => ({
+  ...prev,
+  field1: value1,
+  field2: value2,
+  field3: value3
+}));
+
+// ❌ Bad - Three renders
+setField1(value1);
+setField2(value2);
+setField3(value3);
+```
+
+#### Local State for Transient Values
+```typescript
+// Keep form inputs local until save
+const [localTitle, setLocalTitle] = useState(title);
+
+const handleSave = () => {
+  onSave({ title: localTitle });
+};
+```
+
+## Key Takeaways
+
+1. **Always await async functions** - Never let coroutines go unawaited
+2. **Use rooms for Socket.IO** - Target specific audiences, not everyone
+3. **Handle async boundaries** - Know when you're in an async context
+4. **Fail gracefully** - Always have fallbacks for external services
+5. **Test async code properly** - Use AsyncMock and proper async test patterns
+6. **Optimize React renders** - Use memo, useCallback, and debouncing
+7. **Batch state updates** - Minimize renders with single setState calls
+8. **Use local state** - Keep transient values local to components

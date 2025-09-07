@@ -41,8 +41,8 @@ class BaseStorageService(ABC):
         Split text into chunks intelligently, preserving context.
 
         This function implements a context-aware chunking strategy that:
-        1. Preserves code blocks (```) as complete units when possible
-        2. Prefers to break at paragraph boundaries (\\n\\n)
+        1. Preserves code blocks (```, ~~~, <pre>) as complete units when possible
+        2. Prefers to break at paragraph boundaries (\n\n)
         3. Falls back to sentence boundaries (. ) if needed
         4. Only splits mid-content when absolutely necessary
 
@@ -57,9 +57,63 @@ class BaseStorageService(ABC):
             logger.warning("Invalid text provided for chunking")
             return []
 
-        chunks = []
+        import re
+
+        def find_fence_ranges(src: str) -> list[tuple[int, int]]:
+            """Return list of (start, end) indices for fenced code blocks.
+
+            Supports triple backticks (```), tildes (~~~), and <pre> blocks.
+            """
+            ranges: list[tuple[int, int]] = []
+
+            def scan_marker(marker: str):
+                pos = 0
+                pattern = re.compile(rf"{re.escape(marker)}[^\n]*\n")
+                while True:
+                    m = pattern.search(src, pos)
+                    if not m:
+                        break
+                    start_i = m.start()
+                    close = src.find(marker, m.end())
+                    if close == -1:
+                        break  # unmatched; stop
+                    end_i = close + len(marker)
+                    ranges.append((start_i, end_i))
+                    pos = end_i
+
+            scan_marker("```")
+            scan_marker("~~~")
+
+            try:
+                for m in re.finditer(r"<pre[\s\S]*?>[\s\S]*?</pre>", src, re.IGNORECASE):
+                    ranges.append((m.start(), m.end()))
+            except Exception:
+                pass
+
+            if not ranges:
+                return []
+            ranges.sort(key=lambda x: x[0])
+            merged: list[tuple[int, int]] = []
+            cur_s, cur_e = ranges[0]
+            for s, e in ranges[1:]:
+                if s <= cur_e:
+                    cur_e = max(cur_e, e)
+                else:
+                    merged.append((cur_s, cur_e))
+                    cur_s, cur_e = s, e
+            merged.append((cur_s, cur_e))
+            return merged
+
+        def end_inside_fence(idx: int, fr: list[tuple[int, int]]) -> int | None:
+            for s, e in fr:
+                if s < idx < e:
+                    return e
+            return None
+
+        chunks: list[str] = []
         start = 0
         text_length = len(text)
+        fence_ranges = find_fence_ranges(text)
 
         while start < text_length:
             # Determine the end of this chunk
@@ -67,37 +121,39 @@ class BaseStorageService(ABC):
 
             # If we're at the end of the text, take what's left
             if end >= text_length:
-                chunk = text[start:].strip()
-                if chunk:
-                    chunks.append(chunk)
+                tail = text[start:].strip()
+                if tail:
+                    chunks.append(tail)
                 break
 
-            # Try to find a good break point
-            chunk = text[start:end]
+            window = text[start:end]
 
-            # First, try to break at a code block boundary
-            code_block_pos = chunk.rfind("```")
-            if code_block_pos != -1 and code_block_pos > chunk_size * 0.3:
-                end = start + code_block_pos
+            # If end falls inside a fenced block, advance to fence end
+            if fence_ranges:
+                adjusted = end_inside_fence(end, fence_ranges)
+                if adjusted is not None:
+                    end = adjusted
+                    window = text[start:end]
 
-            # If no code block, try paragraph break
-            elif "\n\n" in chunk:
-                last_break = chunk.rfind("\n\n")
-                if last_break > chunk_size * 0.3:
-                    end = start + last_break
+            # Try paragraph break within window
+            if end == start + chunk_size:
+                if "\n\n" in window:
+                    last_break = window.rfind("\n\n")
+                    if last_break > chunk_size * 0.3:
+                        end = start + last_break
+                        window = text[start:end]
 
-            # If no paragraph break, try sentence break
-            elif ". " in chunk:
-                last_period = chunk.rfind(". ")
-                if last_period > chunk_size * 0.3:
-                    end = start + last_period + 1
+            # Try sentence break
+            if end == start + chunk_size:
+                if ". " in window:
+                    last_period = window.rfind(". ")
+                    if last_period > chunk_size * 0.3:
+                        end = start + last_period + 1
 
-            # Extract chunk and clean it up
-            chunk = text[start:end].strip()
-            if chunk:
-                chunks.append(chunk)
+            out = text[start:end].strip()
+            if out:
+                chunks.append(out)
 
-            # Move start position for next chunk
             start = end
 
         return chunks
@@ -169,7 +225,7 @@ class BaseStorageService(ABC):
             "char_count": len(chunk),
             "word_count": len(chunk.split()),
             "line_count": len(chunk.splitlines()),
-            "has_code": "```" in chunk,
+            "has_code": ("```" in chunk) or ("~~~" in chunk) or ("<pre" in chunk.lower()),
             "has_links": "http" in chunk or "www." in chunk,
         }
 

@@ -1,0 +1,829 @@
+---
+title: UI
+sidebar_position: 10
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# UI
+
+Built with React and Vite.
+
+## Directory Structure
+
+```text
+src/
+├── components/
+│   ├── animations/
+│   │   └── Animations.tsx
+│   ├── knowledge-base/
+│   │   └── KnowledgeTable.tsx
+│   ├── layouts/
+│   │   ├── ArchonChatPanel.tsx
+│   │   ├── MainLayout.tsx
+│   │   └── SideNavigation.tsx
+│   ├── mcp/
+│   │   ├── ClientCard.tsx
+│   │   ├── MCPClients.tsx
+│   │   └── ToolTestingPanel.tsx
+│   ├── project-tasks/
+│   │   ├── BlockNoteEditor.tsx
+│   │   ├── DataTab.tsx
+│   │   ├── DocsTab.tsx
+│   │   ├── DraggableTaskCard.tsx
+│   │   ├── FeaturesTab.tsx
+│   │   ├── Tabs.tsx
+│   │   ├── TaskBoardView.tsx
+│   │   ├── TaskTableView.tsx
+│   │   └── VersionHistoryModal.tsx
+│   ├── settings/
+│   │   ├── APIKeysSection.tsx
+│   │   ├── FeaturesSection.tsx
+│   │   ├── IDEGlobalRules.tsx
+│   │   ├── RAGSettings.tsx
+│   │   └── TestStatus.tsx
+│   ├── ui/
+│   │   ├── Badge.tsx
+│   │   ├── Button.tsx
+│   │   ├── Card.tsx
+│   │   ├── Input.tsx
+│   │   ├── Select.tsx
+│   │   ├── ThemeToggle.tsx
+│   │   └── Toggle.tsx
+│   ├── CrawlingProgressCard.tsx
+│   └── ProjectCreationProgressCard.tsx
+├── contexts/
+│   ├── SettingsContext.tsx
+│   ├── ThemeContext.tsx
+│   └── ToastContext.tsx
+├── hooks/
+│   ├── useNeonGlow.ts
+│   └── useStaggeredEntrance.ts
+├── lib/
+│   ├── projectSchemas.ts
+│   ├── task-utils.tsx
+│   └── utils.ts
+├── pages/
+│   ├── KnowledgeBasePage.tsx
+│   ├── MCPPage.tsx
+│   ├── ProjectPage.tsx
+│   └── SettingsPage.tsx
+├── services/
+│   ├── agentChatService.ts
+│   ├── api.ts
+│   ├── crawlProgressService.ts
+│   ├── credentialsService.ts
+│   ├── knowledgeBaseService.ts
+│   ├── mcpClientService.ts
+│   ├── mcpServerService.ts
+│   ├── mcpService.ts
+│   ├── projectCreationProgressService.ts
+│   ├── projectService.ts
+│   ├── testService.ts
+│   └── webSocketService.ts
+└── types/
+    ├── knowledge.ts
+    └── project.ts
+```
+
+## Environment Variables
+
+| Variable                  | Description                       |
+|---------------------------|-----------------------------------|
+| VITE_API_URL              | Backend API base URL              |
+| VITE_API_BASE_URL         | Base URL used by some services    |
+
+## Running Locally
+
+```bash
+cd archon-ui-main
+npm install
+npm run dev
+```
+
+## Component Communication
+
+```mermaid
+%%{init:{
+  'theme':'base',
+  'themeVariables': {
+    'primaryColor':'#0a0a0a',
+    'primaryTextColor':'#ffffff',
+    'primaryBorderColor':'#6f55ff',
+    'secondaryColor':'#111111',
+    'secondaryBorderColor':'#3fb1ff',
+    'tertiaryColor':'#1a1a1a',
+    'tertiaryBorderColor':'#00d38a',
+    'lineColor':'#3fb1ff',
+    'textColor':'#ffffff',
+    'fontFamily':'Inter',
+    'fontSize':'14px',
+    'background':'#0a0a0a',
+    'mainBkg':'#111111',
+    'secondBkg':'#1a1a1a',
+    'clusterBkg':'rgba(17, 17, 17, 0.8)',
+    'nodeTextColor':'#ffffff'
+  }
+}}%%
+flowchart LR
+  A["User"] --> B["React Form"]
+  B --> C["API Call"]
+  C --> D["Display Answer"]
+```
+
+See [Getting Started](getting-started) for details.
+
+# Archon UI - Knowledge Engine Web Interface
+
+A modern React-based web interface for the Archon Knowledge Engine MCP Server. Built with TypeScript, Vite, and Tailwind CSS.
+
+## 🎨 UI Overview
+
+Archon UI provides a comprehensive dashboard for managing your AI's knowledge base:
+
+![UI Architecture](https://via.placeholder.com/800x400?text=Archon+UI+Architecture)
+
+### Key Features
+
+- **📊 MCP Dashboard**: Monitor and control the MCP server
+- **⚙️ Settings Management**: Configure credentials and RAG strategies
+- **📚 Knowledge Management**: Browse, search, and organize knowledge items
+- **📈 Real-time Updates**: Socket.IO-based live updates across the UI
+
+## 🏗️ Architecture
+
+### Technology Stack
+
+- **React 18.3**: Modern React with hooks and functional components
+- **TypeScript**: Full type safety and IntelliSense support
+- **Vite**: Fast build tool and dev server
+- **Tailwind CSS**: Utility-first styling
+- **Framer Motion**: Smooth animations and transitions
+- **Lucide Icons**: Beautiful and consistent iconography
+- **React Router**: Client-side routing
+
+
+## 📄 Pages Documentation
+
+### 1. Knowledge Base (`/`)
+
+Browse and manage your knowledge items with multiple view modes.
+
+**Components:**
+- **Knowledge Grid**: Card-based knowledge display with domain grouping
+- **Knowledge Table**: Full-width table view with sortable columns
+- **Search/Filter**: Search by title, type, tags
+- **Crawling Progress**: Real-time progress tracking for URL crawling
+- **Actions**: Delete, add sources, file upload
+
+**Features:**
+- Grid and table view modes
+- Real-time updates via Socket.IO
+- Type-based filtering (technical/business)
+- Domain-based grouping for URLs
+- Tag tooltips for overflow
+- Progress tracking for crawling operations
+
+### 2. Projects (`/projects`)
+
+Project dashboard with task management and documentation tabs.
+
+**Components:**
+- **Project List**: Create and select projects
+- **Task Tabs**: Manage tasks, features, docs and data
+- **Progress Cards**: Real-time project creation status
+
+**Features:**
+- Hierarchical tasks
+- GitHub repository links
+- Socket.IO project progress
+
+### 3. Settings (`/settings`)
+
+Comprehensive configuration management with organized sections.
+
+**Sections:**
+- **Features**: 
+  - Projects toggle (enable/disable Projects feature)
+  - Other feature flags
+- **API Keys**: 
+  - OpenAI API key (encrypted storage)
+  - Other API credentials
+- **RAG Settings**:
+  - Contextual Embeddings toggle
+  - Hybrid Search toggle
+  - Agentic RAG (code extraction) toggle
+  - Reranking toggle
+  - Model selection
+- **Archon Unit Tests** (Collapsible):
+  - Python MCP tests with real-time output
+  - React UI tests with local execution
+  - Pretty/Raw view modes
+  - Error summary display
+
+**Features:**
+- Secure credential storage with encryption
+- Real-time test execution and monitoring
+- Toast notifications for actions
+- Collapsible test section (collapsed by default)
+
+### 4. MCP Dashboard (`/mcp`)
+
+Central control panel for the MCP server.
+
+**Components:**
+- **Server Control Panel**: Start/stop server, view status, select transport mode
+- **Server Logs Viewer**: Real-time log streaming with auto-scroll
+- **Available Tools Table**: Dynamic tool discovery and documentation
+- **MCP Test Panel**: Interactive tool testing interface
+
+**Features:**
+- Dual transport support (SSE/stdio)
+- Real-time status polling (5-second intervals)
+- Socket.IO-based log streaming
+- Copy-to-clipboard configuration
+- Tool parameter validation
+
+Browse and manage your knowledge items.
+
+**Components:**
+- **Knowledge Grid**: Card-based knowledge display
+- **Search/Filter**: Search by title, type, tags
+- **Knowledge Details**: View full item details
+- **Actions**: Delete, refresh, organize
+
+**Features:**
+- Pagination support
+- Real-time updates via Socket.IO
+- Type-based filtering (technical/business)
+- Metadata display
+
+
+## 🧩 Component Library
+
+### Base UI Components
+
+#### Button
+```tsx
+<Button 
+  variant="primary|secondary|ghost" 
+  size="sm|md|lg"
+  accentColor="blue|green|purple|orange|pink"
+  onClick={handleClick}
+>
+  Click me
+</Button>
+```
+
+#### Card
+```tsx
+<Card accentColor="blue" className="p-6">
+  <h3>Card Title</h3>
+  <p>Card content</p>
+</Card>
+```
+
+#### LoadingSpinner
+```tsx
+<LoadingSpinner size="sm|md|lg" />
+```
+
+### Layout Components
+
+#### Sidebar
+- Collapsible navigation
+- Active route highlighting
+- Icon + text navigation items
+- Responsive design
+
+#### Header
+- Dark mode toggle
+- User menu
+- Breadcrumb navigation
+
+### Animation Components
+
+#### PageTransition
+Wraps pages with smooth fade/slide animations:
+```tsx
+<PageTransition>
+  <YourPageContent />
+</PageTransition>
+```
+
+## 🔌 Socket.IO Integration
+
+All real-time connections use **Socket.IO** with a room-based architecture on the default namespace for improved reliability and organization:
+
+### Key Services Using Socket.IO
+
+| Service | Purpose | Room Pattern | Status |
+|---------|---------|--------------|--------|
+| `crawlProgressService` | Progress tracking for crawling | `progress_{id}` | ✅ Room-based |
+| `projectCreationProgressService` | Project creation progress | `progress_{id}` | ✅ Room-based |
+| `webSocketService` | Socket.IO client wrapper | Default namespace | ✅ Room-based |
+| `taskUpdateService` | Real-time task updates | `{project_id}` | ✅ Room-based |
+| `agentChatService` | Agent chat streaming | `chat_{session_id}` | ✅ Room-based |
+
+### Room-Based Socket.IO Pattern
+
+```typescript
+import { createWebSocketService } from './services/webSocketService';
+
+// Always connect to default namespace
+const wsService = createWebSocketService({
+  maxReconnectAttempts: 5,
+  reconnectInterval: 1000
+});
+
+// Connect to default namespace only
+await wsService.connect('/');
+
+// Join specific rooms via subscription events
+wsService.send({
+  type: 'subscribe_progress',
+  data: { progress_id: progressId }
+});
+
+// Handle room-specific messages
+wsService.addMessageHandler('progress_update', (message) => {
+  updateProgressUI(message.data);
+});
+
+// Clean up (rooms cleaned automatically)
+wsService.disconnect();
+```
+
+### Component Integration with Rooms
+
+```typescript
+useEffect(() => {
+  const ws = createWebSocketService();
+  
+  // Connect to default namespace
+  ws.connect('/').then(() => {
+    // Join relevant rooms
+    ws.send({
+      type: 'join_project',
+      data: { project_id: projectId }
+    });
+    
+    // Handle room messages
+    ws.addMessageHandler('task_created', (message) => {
+      setTasks(prev => [...prev, message.data]);
+    });
+  });
+  
+  return () => ws.disconnect();
+}, [projectId]); // Stable dependencies only
+```
+
+### Room Subscription Patterns
+
+<Tabs>
+<TabItem value="project" label="Project Rooms">
+
+```typescript
+// Subscribe to project-specific updates
+const subscribeToProject = (projectId: string) => {
+  wsService.send({
+    type: 'join_project',
+    data: { project_id: projectId }
+  });
+  
+  // Handle project room events
+  wsService.addMessageHandler('task_created', handleTaskCreated);
+  wsService.addMessageHandler('task_updated', handleTaskUpdated);
+  wsService.addMessageHandler('task_deleted', handleTaskDeleted);
+};
+```
+
+</TabItem>
+<TabItem value="progress" label="Progress Rooms">
+
+```typescript
+// Subscribe to progress tracking
+const subscribeToProgress = (progressId: string) => {
+  wsService.send({
+    type: 'subscribe_progress',
+    data: { progress_id: progressId }
+  });
+  
+  // Handle progress updates
+  wsService.addMessageHandler('project_progress', (message) => {
+    updateProgressBar(message.data.percentage);
+    updateStatus(message.data.status);
+  });
+};
+```
+
+</TabItem>
+<TabItem value="list" label="List Rooms">
+
+```typescript
+// Subscribe to project list updates
+const subscribeToProjectList = () => {
+  wsService.send({ type: 'subscribe_projects' });
+  
+  // Handle list updates
+  wsService.addMessageHandler('projects_update', (message) => {
+    setProjects(message.data.projects);
+  });
+};
+```
+
+</TabItem>
+</Tabs>
+
+## 🔌 Services
+
+### mcpService
+Handles all MCP server communication:
+- `startServer()`: Start the MCP server
+- `stopServer()`: Stop the MCP server
+- `getStatus()`: Get current server status
+- `streamLogs()`: Socket.IO log streaming
+- `getAvailableTools()`: Fetch MCP tools
+
+### api
+Base API configuration with:
+- Automatic error handling
+- Request/response interceptors
+- Base URL configuration
+- TypeScript generics
+
+### chatService
+RAG query interface:
+- `sendMessage()`: Send RAG query
+- `streamResponse()`: Stream responses
+- `getSources()`: Get available sources
+
+## 🎨 Styling
+
+### Tailwind Configuration
+- Custom color palette
+- Dark mode support
+- Custom animations
+- Responsive breakpoints
+
+### Theme Variables
+```css
+--primary: Blue accent colors
+--secondary: Gray/neutral colors
+--success: Green indicators
+--warning: Orange indicators
+--error: Red indicators
+```
+
+## 🚀 Development
+
+### Setup
+```bash
+# Install dependencies
+npm install
+
+# Start dev server
+npm run dev
+
+# Build for production
+npm run build
+
+# Run tests
+npm test
+```
+
+### Environment Variables
+```env
+VITE_API_URL=http://localhost:8080
+VITE_API_BASE_URL=http://localhost:8080
+```
+
+### Hot Module Replacement
+Vite provides instant HMR for:
+- React components
+- CSS modules
+- TypeScript files
+
+## 🧪 Testing
+
+### Unit Tests
+- Component testing with React Testing Library
+- Service mocking with MSW
+- Hook testing with @testing-library/react-hooks
+
+### Integration Tests
+- Page-level testing
+- API integration tests
+- Socket.IO testing
+
+## 📦 Build & Deployment
+
+### Docker Support
+```dockerfile
+FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+EXPOSE 5173
+CMD ["npm", "run", "preview"]
+```
+
+### Production Optimization
+- Code splitting by route
+- Lazy loading for pages
+- Image optimization
+- Bundle size analysis
+
+## 🔧 Configuration Files
+
+### vite.config.ts
+- Path aliases
+- Build optimization
+- Development server config
+
+### tsconfig.json
+- Strict type checking
+- Path mappings
+- Compiler options
+
+### tailwind.config.js
+- Custom theme
+- Plugin configuration
+- Purge settings
+
+## ✅ Frontend Development Standards
+
+### Performance Best Practices
+
+#### Input Performance Optimization
+
+**Problem**: Typing lag and screen flickering in modals/forms due to excessive re-renders.
+
+**Real Example**: EditTaskModal had 148 renders during typing!
+
+**Solution**: Use debounced input components that manage their own state:
+
+```typescript
+// ✅ GOOD: Debounced input component
+export const DebouncedInput = memo(({ value, onChange, delay = 300 }) => {
+  const [localValue, setLocalValue] = useState(value);
+  
+  // Local state for immediate feedback
+  const handleChange = (e) => {
+    setLocalValue(e.target.value);
+    // Debounced parent update
+    debouncedOnChange(e.target.value);
+  };
+  
+  return <input value={localValue} onChange={handleChange} />;
+});
+
+// Usage in modal
+<DebouncedInput
+  value={task.title}
+  onChange={handleTitleChange}
+/>
+```
+
+**❌ BAD: Direct state updates**
+```typescript
+// Causes re-render on every keystroke
+<input
+  value={formData.title}
+  onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+/>
+```
+
+#### State Management Best Practices
+
+**1. Use React.memo with Custom Comparison**
+```typescript
+export const MyComponent = memo(({ props }) => {
+  // Component logic
+}, (prevProps, nextProps) => {
+  // Return true to skip re-render
+  return prevProps.id === nextProps.id &&
+         prevProps.status === nextProps.status;
+});
+```
+
+**2. Stable Event Handlers with useCallback**
+```typescript
+// ✅ GOOD: Stable reference
+const handleChange = useCallback((value: string) => {
+  setData(prev => ({ ...prev, field: value }));
+}, []); // Empty deps = stable forever
+
+// ❌ BAD: New function every render
+onChange={(e) => setData({ ...data, field: e.target.value })}
+```
+
+**3. Batch State Updates**
+```typescript
+// ✅ GOOD: Single update
+setFormData(prev => ({
+  ...prev,
+  title: newTitle,
+  description: newDescription,
+  status: newStatus
+}));
+
+// ❌ BAD: Multiple updates = multiple renders
+setTitle(newTitle);
+setDescription(newDescription);
+setStatus(newStatus);
+```
+
+### Real-time Updates Best Practices
+
+#### When to Use Socket.IO (Real-time)
+
+Use Socket.IO for features that require immediate updates across users:
+
+**1. Progress Tracking**
+- **Example**: CrawlingProgressCard
+- **Why**: Users need to see live crawling progress
+- **Pattern**: Progress room subscription
+```typescript
+// Subscribe to crawl progress
+ws.send({
+  type: 'crawl_subscribe',
+  data: { progress_id: crawlId }
+});
+
+ws.addMessageHandler('crawl_progress', (message) => {
+  updateProgressBar(message.data.percentage);
+  updateCurrentUrl(message.data.current_url);
+});
+```
+
+**2. AI Agent Communication**
+- **Example**: ArchonChatPanel
+- **Why**: Stream AI responses as they generate
+- **Pattern**: Chat session room
+```typescript
+// Join chat session
+ws.send({
+  type: 'join_chat',
+  data: { session_id: sessionId }
+});
+
+ws.addMessageHandler('agent_message', (message) => {
+  appendToChat(message.data.content);
+});
+```
+
+**3. Collaborative Features**
+- **Example**: TasksTab with MCP agent updates
+- **Why**: Multiple agents/users updating tasks
+- **Pattern**: Project room subscription
+```typescript
+// Real-time task updates from AI agents
+ws.send({
+  type: 'join_project',
+  data: { project_id: projectId }
+});
+
+ws.addMessageHandler('task_updated', (message) => {
+  // Update task immediately when AI agent modifies it
+  updateTaskInUI(message.data);
+});
+```
+
+#### When NOT to Use Socket.IO
+
+Use REST API calls for:
+- User-triggered actions (save, delete, create)
+- Initial data loading
+- Infrequent updates
+- Actions that need confirmation
+
+### Performance Testing
+
+Add this to components during development:
+```typescript
+const renderCount = useRef(0);
+useEffect(() => {
+  renderCount.current++;
+  console.log(`[ComponentName] Render #${renderCount.current}`);
+});
+```
+
+**Performance Targets**:
+- Typing: < 5 renders/second
+- Modal open/close: < 3 renders
+- State changes: 1-2 renders per action
+
+### Socket.IO Room-Based Best Practices
+
+**DO:**
+- ✅ Always connect to default namespace `/` only
+- ✅ Use room subscription events to join specific rooms
+- ✅ Handle room-specific messages with clear event names
+- ✅ Clean up connections in useEffect return (rooms auto-cleanup)
+- ✅ Use typed message handlers with proper data extraction
+- ✅ Follow the subscription pattern: connect → subscribe → handle messages
+
+**DON'T:**
+- ❌ Use custom namespaces like `/chat`, `/project`, `/crawl`
+- ❌ Create direct WebSocket instances or native Socket.IO clients
+- ❌ Broadcast to all clients - use rooms for targeting
+- ❌ Include unstable functions in useCallback dependencies
+- ❌ Create multiple connections to the same endpoint
+- ❌ Forget to handle reconnection scenarios
+
+### Room Subscription Pattern
+
+```typescript
+// ✅ CORRECT: Room-based subscription
+useEffect(() => {
+  const ws = createWebSocketService();
+  
+  const connectAndSubscribe = async () => {
+    // Always connect to default namespace
+    await ws.connect('/');
+    
+    // Subscribe to specific rooms
+    ws.send({
+      type: 'subscribe_progress',
+      data: { progress_id: progressId }
+    });
+    
+    // Handle room messages
+    ws.addMessageHandler('progress_update', (message) => {
+      setProgress(message.data);
+    });
+  };
+  
+  connectAndSubscribe();
+  return () => ws.disconnect();
+}, [progressId]);
+
+// ❌ WRONG: Custom namespace connection
+await ws.connect('/project-creation-progress/123'); // Don't do this
+```
+
+### Stable Dependencies Pattern
+
+```typescript
+// ✅ CORRECT: Only stable dependencies
+const handleUpdate = useCallback(() => {
+  updateData(value);
+  showToast('Updated', 'success'); // Can call without dependency
+}, [value]); // Only primitive values
+
+// ❌ WRONG: Unstable function dependencies
+const handleUpdate = useCallback(() => {
+  updateData(value);
+  showToast('Updated', 'success');
+}, [value, showToast]); // showToast causes re-renders
+```
+
+### Event Handling Pattern
+
+**Single Source of Truth**: Avoid duplicate event handlers for the same action.
+
+```typescript
+// ✅ CORRECT: One place handles completion
+const handleSocketMessage = (message) => {
+  if (message.type === 'completed') {
+    showToast('Operation completed', 'success');
+    refreshData();
+  }
+};
+
+// ❌ WRONG: Multiple handlers for same event
+// In Socket.IO handler:
+showToast('Operation completed', 'success');
+// In API callback:
+showToast('Operation completed', 'success');
+// Causes duplicate toasts!
+```
+
+### Components Requiring Performance Optimization
+
+Based on code analysis, these components need performance improvements:
+
+#### High Priority
+1. **RAGSettings** (`/components/settings/RAGSettings.tsx`)
+   - 11 onChange handlers without optimization
+   - Direct state updates on every change
+   - Fix: Implement debounced inputs or batch updates
+
+2. **DataTab - EditTableModal** (`/components/project-tasks/DataTab.tsx`)
+   - 6+ onChange handlers for table columns
+   - Multiple state updates per edit
+   - Fix: Use local state with save button
+
+3. **EditKnowledgeItemModal** (`/components/knowledge-base/EditKnowledgeItemModal.tsx`)
+   - Direct state updates in onChange
+   - Fix: Apply DebouncedInput pattern
+
+#### Medium Priority
+4. **APIKeysSection** - Dynamic list with multiple input fields
+5. **ToolTestingPanel** - Complex parameter inputs
+6. **ArchonChatPanel** - Consider virtualization for long chat histories
+

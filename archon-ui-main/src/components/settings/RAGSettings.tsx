@@ -253,6 +253,48 @@ export const RAGSettings = ({
               label="Use Agentic RAG" 
               description="Enables code extraction and specialized search for technical content" 
             />
+            {/* Similarity Threshold slider/input */}
+            <div className="mt-4">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1" htmlFor="similarityThreshold">
+                Similarity Threshold
+              </label>
+              <div className="flex items-center gap-3">
+                <input
+                  id="similarityThreshold"
+                  type="range"
+                  min="0.05"
+                  max="0.5"
+                  step="0.01"
+                  value={ragSettings.SIMILARITY_THRESHOLD ?? 0.15}
+                  onChange={e => setRagSettings({
+                    ...ragSettings,
+                    SIMILARITY_THRESHOLD: parseFloat(e.target.value)
+                  })}
+                  className="flex-1"
+                />
+                {/* Percent input (accepts 5–50, converts to 0.05–0.50) */}
+                <div className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    min={5}
+                    max={50}
+                    step={1}
+                    value={Math.round((ragSettings.SIMILARITY_THRESHOLD ?? 0.15) * 100)}
+                    onChange={e => {
+                      const v = parseInt(e.target.value || '15', 10);
+                      const clamped = Math.min(50, Math.max(5, v));
+                      setRagSettings({
+                        ...ragSettings,
+                        SIMILARITY_THRESHOLD: clamped / 100
+                      })
+                    }}
+                    className="w-16 px-2 py-1 border border-green-500/30 rounded-md bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white focus:border-green-500 focus:ring-1 focus:ring-green-500"
+                  />
+                  <span className="text-sm text-gray-600 dark:text-gray-400">%</span>
+                </div>
+              </div>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Lower for broader recall (more results), higher for stricter precision.</p>
+            </div>
           </div>
         </div>
         

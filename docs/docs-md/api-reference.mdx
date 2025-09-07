@@ -1,0 +1,2046 @@
+---
+title: API Reference
+sidebar_position: 4
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import Admonition from '@theme/Admonition';
+
+# API Reference
+
+Archon provides a comprehensive REST API built with FastAPI for knowledge management, document processing, and project automation. This reference covers all endpoints with detailed examples, request/response schemas, and integration patterns.
+
+## 🌐 Base URL & Authentication
+
+**Base URL**: `http://localhost:8080`
+
+**Interactive Documentation**: 
+- Swagger UI: `http://localhost:8080/docs`
+- ReDoc: `http://localhost:8080/redoc`
+
+**Authentication**: Currently API key-based through settings. Future versions will support JWT tokens.
+
+## 🏗️ Modular API Architecture
+
+Archon uses a modular FastAPI architecture with separate routers for different functionalities:
+
+- **`knowledge_api.py`**: Knowledge items, web crawling, and document management 
+- **`mcp_api.py`**: MCP server control and Socket.IO communications 
+- **`settings_api.py`**: Application settings and credential management 
+- **`projects_api.py`**: Project and task management (refactored with service layer)
+- **`agent_chat_api.py`**: AI agent chat interface 
+- **`tests_api.py`**: Testing endpoints with real-time streaming
+
+All routers are mounted with the `/api` prefix and provide comprehensive OpenAPI documentation.
+
+## Endpoint Index
+- [Knowledge Management](#knowledge-management-api)
+- [Document Management](#document-management-api)
+- [RAG API](#rag-retrieval-augmented-generation-api)
+- [MCP Server](#mcp-server-management-api)
+- [Project Management](#project-management-api)
+- [Task Management](#task-management-api)
+- [Settings](#settings-management-api)
+- [Credentials](#credentials-api)
+- [Agent Chat](#agent-chat-api)
+- [Testing](#testing-api)
+- [System Info](#system-information-api)
+
+
+## 📚 Knowledge Management API
+
+### List Knowledge Items
+
+**GET** `/api/knowledge-items`
+
+Retrieve all knowledge items with optional filtering and pagination.
+
+#### Query Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `page` | integer | ❌ | Page number (default: 1) |
+| `per_page` | integer | ❌ | Items per page (default: 20, max: 100) |
+| `knowledge_type` | string | ❌ | Filter by knowledge type (`technical`, `business`, `general`) |
+| `tags` | string[] | ❌ | Filter by tags |
+| `status` | string | ❌ | Filter by status (`active`, `archived`) |
+| `source_type` | string | ❌ | Filter by source type (`url`, `file`) |
+
+#### Example Request
+
+```bash
+curl -X GET "http://localhost:8080/api/knowledge-items?page=1&per_page=10&knowledge_type=technical" \
+  -H "Accept: application/json"
+```
+
+#### Example Response
+
+```json
+{
+  "items": [
+    {
+      "id": 123,
+      "url": "https://docs.python.org/3/tutorial/",
+      "title": "Python Tutorial",
+      "content": "Python is an easy to learn, powerful programming language...",
+      "knowledge_type": "technical",
+      "tags": ["python", "tutorial", "programming"],
+      "metadata": {
+        "source_id": "docs.python.org",
+        "char_count": 5234,
+        "word_count": 1250,
+        "headers": ["Introduction", "Getting Started"]
+      },
+      "created_at": "2024-01-15T10:30:00Z",
+      "updated_at": "2024-01-15T10:30:00Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "per_page": 20,
+    "total": 156,
+    "total_pages": 8,
+    "has_next": true,
+    "has_prev": false
+  }
+}
+```
+
+### Update Knowledge Item
+
+**PUT** `/api/knowledge-items/{source_id}`
+
+Update metadata for a knowledge item.
+
+#### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `source_id` | string | ✅ | Source identifier |
+
+#### Request Body
+
+```json
+{
+  "title": "Updated Title",
+  "knowledge_type": "technical",
+  "tags": ["python", "updated"],
+  "status": "active",
+  "update_frequency": 14
+}
+```
+
+#### Example Response
+
+```json
+{
+  "success": true,
+  "message": "Successfully updated knowledge item docs.python.org",
+  "source_id": "docs.python.org"
+}
+```
+
+### Delete Knowledge Source
+
+**DELETE** `/api/knowledge-items/{source_id}`
+
+Delete all knowledge items from a specific source.
+
+#### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `source_id` | string | ✅ | Source identifier (URL domain or document name) |
+
+#### Example Request
+
+```bash
+curl -X DELETE "http://localhost:8080/api/knowledge-items/docs.python.org" \
+  -H "Accept: application/json"
+```
+
+#### Example Response
+
+```json
+{
+  "success": true,
+  "message": "Successfully deleted 45 items from source",
+  "deleted_count": 45,
+  "source_id": "docs.python.org"
+}
+```
+
+### Smart Crawl Website
+
+**POST** `/api/knowledge-items/crawl`
+
+Initiate intelligent web crawling for a URL with automatic content type detection and real-time progress tracking.
+
+Archon automatically detects the content type and applies the appropriate crawling strategy:
+- **Sitemap URLs** (ending in `sitemap.xml`): Extracts and crawls all URLs from the sitemap
+- **Text Files** (`.txt` files): Downloads and processes the file directly  
+- **Regular Webpages**: Performs recursive crawling following internal links
+
+#### Request Body
+
+```json
+{
+  "url": "https://docs.python.org/3/tutorial/",
+  "knowledge_type": "technical",
+  "tags": ["python", "tutorial"],
+  "update_frequency": 7,
+  "max_depth": 2
+}
+```
+
+#### Request Schema
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `url` | string | ✅ | Target URL to crawl (webpage, sitemap.xml, or .txt file) |
+| `knowledge_type` | string | ✅ | Knowledge classification (`technical`, `business`, `general`) |
+| `tags` | string[] | ❌ | Tags for categorization |
+| `update_frequency` | integer | ❌ | How often to refresh content (days, default: 7) |
+| `max_depth` | integer | ❌ | Maximum crawl depth (1-5, default: 2) |
+
+**Smart Crawling Behavior:**
+- **Max Depth**: Configurable 1-5 levels for recursive webpage crawling
+- **Max Concurrent**: 5 simultaneous crawl workers  
+- **Chunk Size**: 5000 characters per knowledge chunk
+- **Automatic Detection**: Content type determined by URL pattern
+
+#### Example Request
+
+```bash
+curl -X POST "http://localhost:8080/api/knowledge-items/crawl" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://docs.python.org/3/tutorial/",
+    "knowledge_type": "technical",
+    "tags": ["python", "tutorial"],
+    "update_frequency": 7
+  }'
+```
+
+#### Example Response
+
+```json
+{
+  "success": true,
+  "progress_id": "183e2615-fca4-4a71-a051-ab5a0292f9ff",
+  "message": "Crawling started",
+  "estimated_duration": "3-5 minutes"
+}
+```
+
+### Socket.IO Knowledge Stream
+
+**Socket.IO Namespace** `/knowledge`
+
+Real-time updates for knowledge items changes.
+
+#### Connection Example
+
+```javascript
+import { io } from 'socket.io-client';
+
+// Connect to knowledge namespace
+const socket = io('/knowledge');
+
+// Handle source updates
+socket.on('source_added', (data) => {
+  console.log('New source added:', data.source_id);
+});
+
+socket.on('source_updated', (data) => {
+  console.log('Source updated:', data.source_id);
+});
+```
+
+### Socket.IO Progress Tracking
+
+**Socket.IO Namespace** `/crawl`
+
+Real-time progress updates for crawling operations using Socket.IO for improved reliability and automatic reconnection.
+
+#### Connection Example
+
+```javascript
+import { io } from 'socket.io-client';
+
+// Connect to crawl namespace
+const socket = io('/crawl');
+
+// Subscribe to specific progress
+const progressId = '183e2615-fca4-4a71-a051-ab5a0292f9ff';
+socket.emit('subscribe', { progress_id: progressId });
+
+// Handle progress updates
+socket.on('progress_update', (data) => {
+  console.log('Progress:', data.percentage + '%');
+  console.log('Status:', data.status);
+  console.log('Logs:', data.logs);
+});
+
+// Handle completion
+socket.on('progress_complete', (data) => {
+  console.log('Crawl completed!');
+  console.log('Chunks stored:', data.chunksStored);
+  console.log('Word count:', data.wordCount);
+});
+
+// Handle errors
+socket.on('progress_error', (data) => {
+  console.error('Crawl failed:', data.error);
+});
+```
+
+#### Progress Message Format
+
+**New Progress Features:**
+- **📊 Smooth Progress**: Linear 0-100% progression across all document batches
+- **📦 Detailed Batch Info**: "Batch 3/9: Processing items 31-45..." with accurate percentages
+- **🔄 Real-Time Updates**: Socket.IO broadcasts for each processing step
+- **⏱️ No Progress Jumps**: Progress bar advances smoothly without resetting
+
+```json
+{
+  "type": "crawl_progress",
+  "data": {
+    "progressId": "183e2615-fca4-4a71-a051-ab5a0292f9ff",
+    "status": "document_storage",
+    "percentage": 35,  // Smooth progression, not jumping
+    "start_time": "2024-01-15T10:30:00Z",
+    "currentUrl": "https://docs.python.org/3/tutorial/",
+    "totalPages": 12,
+    "processedPages": 5,
+    "log": "Batch 3/9: Processing items 31-45 of 129",
+    "logs": [
+      "Starting crawl...",
+      "Analyzing URL type: https://docs.python.org/3/tutorial/",
+      "Detected webpage, starting recursive crawl...",
+      "Processed 5/12 pages",
+      "Processing 129 pages into chunks...",
+      "Batch 1/9: Processing items 1-15 of 129",
+      "Batch 2/9: Processing items 16-30 of 129",
+      "Batch 3/9: Processing items 31-45 of 129"
+    ]
+  }
+}
+```
+
+#### Progress Phases
+
+1. **`analyzing`** (0-5%): URL type detection and strategy selection
+2. **`crawling`** (5-25%): Web page retrieval and content extraction
+3. **`processing`** (25-30%): Document chunking and preparation
+4. **`source_creation`** (30-35%): Creating source records in database
+5. **`document_storage`** (35-90%): Batch processing with contextual embeddings
+   - Each batch shows: "Batch X/Y: Processing items..."
+   - Sub-steps: Creating embeddings → Storing in database
+6. **`code_storage`** (90-95%): Extracting and storing code examples
+7. **`finalization`** (95-100%): Completing crawl and cleanup
+
+## 📄 Document Management API
+
+### Upload Document
+
+**POST** `/api/documents/upload`
+
+Upload and process documents (PDF, Word, Markdown, Text).
+
+#### Request (Multipart Form)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `file` | file | ✅ | Document file to upload |
+| `knowledge_type` | string | ❌ | Knowledge classification (default: "technical") |
+| `tags` | string | ❌ | JSON array of tags |
+
+#### Supported File Types
+
+| Extension | MIME Type | Max Size | Processing Engine |
+|-----------|-----------|----------|-------------------|
+| `.pdf` | `application/pdf` | 50MB | PyPDF2 + pdfplumber |
+| `.docx` | `application/vnd.openxmlformats-officedocument.wordprocessingml.document` | 25MB | python-docx |
+| `.doc` | `application/msword` | 25MB | python-docx |
+| `.md` | `text/markdown` | 10MB | Direct processing |
+| `.txt` | `text/plain` | 10MB | Direct processing |
+
+#### Example Request
+
+```bash
+curl -X POST "http://localhost:8080/api/documents/upload" \
+  -F "file=@python-guide.pdf" \
+  -F "knowledge_type=technical" \
+  -F "tags=[\"python\", \"guide\", \"programming\"]"
+```
+
+#### Example Response
+
+```json
+{
+  "success": true,
+  "message": "Document uploaded and processed successfully",
+  "document": {
+    "id": 456,
+    "filename": "python-guide.pdf",
+    "knowledge_type": "technical",
+    "tags": ["python", "guide", "programming"],
+    "file_size": 2048576,
+    "chunks_created": 89,
+    "processing_time": 12.5,
+    "created_at": "2024-01-15T10:45:00Z"
+  }
+}
+```
+
+## 🔍 RAG (Retrieval-Augmented Generation) API
+
+### Query Knowledge Base
+
+**POST** `/api/rag/query`
+
+Perform semantic search across the knowledge base.
+
+#### Request Body
+
+```json
+{
+  "query": "How to handle exceptions in Python?",
+  "source": "docs.python.org",
+  "match_count": 10
+}
+```
+
+#### Request Schema
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `query` | string | ✅ | Search query text |
+| `source` | string | ❌ | Filter by specific source domain |
+| `match_count` | integer | ❌ | Maximum results (default: 5, max: 50) |
+
+#### Example Request
+
+```bash
+curl -X POST "http://localhost:8080/api/rag/query" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "How to handle exceptions in Python?",
+    "source": "docs.python.org",
+    "match_count": 5
+  }'
+```
+
+#### Example Response
+
+```json
+{
+  "success": true,
+  "query": "How to handle exceptions in Python?",
+  "results": [
+    {
+      "id": 789,
+      "title": "Python Exception Handling",
+      "content": "Python uses try-except blocks to handle exceptions. When an error occurs...",
+      "url": "https://docs.python.org/3/tutorial/errors.html",
+      "similarity_score": 0.92,
+      "metadata": {
+        "source_id": "docs.python.org",
+        "char_count": 450,
+        "word_count": 89,
+        "headers": ["Exception Handling", "Try-Except Blocks"]
+      }
+    }
+  ],
+  "total_results": 1,
+  "processing_time": 0.245
+}
+```
+
+### Get Available Sources
+
+**GET** `/api/rag/sources`
+
+Retrieve all available knowledge sources for filtering.
+
+#### Example Response
+
+```json
+{
+  "success": true,
+  "sources": [
+    {
+      "source_id": "docs.python.org",
+      "title": "Python Official Documentation",
+      "description": "Official Python documentation and tutorials",
+      "created_at": "2024-01-10T00:00:00Z",
+      "last_updated": "2024-01-15T10:45:00Z"
+    },
+    {
+      "source_id": "fastapi.tiangolo.com",
+      "title": "FastAPI Documentation",
+      "description": "FastAPI framework documentation",
+      "created_at": "2024-01-12T00:00:00Z",
+      "last_updated": "2024-01-14T08:30:00Z"
+    }
+  ],
+  "total_count": 2
+}
+```
+
+### Delete Source
+
+**DELETE** `/api/sources/{source_id}`
+
+Delete a source and all its associated data (crawled pages, code examples, embeddings).
+
+#### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `source_id` | string | ✅ | Source identifier to delete |
+
+#### Example Request
+
+```bash
+curl -X DELETE "http://localhost:8080/api/sources/docs.python.org" \
+  -H "Accept: application/json"
+```
+
+#### Example Response
+
+```json
+{
+  "success": true,
+  "message": "Successfully deleted source docs.python.org",
+  "source_id": "docs.python.org",
+  "pages_deleted": 145,
+  "code_examples_deleted": 89,
+  "total_chunks_removed": 1450
+}
+```
+
+#### Error Response
+
+```json
+{
+  "error": "Source not found"
+}
+```
+
+## 🔧 MCP Server Management API
+
+### Get MCP Server Status
+
+**GET** `/api/mcp/status`
+
+Retrieve current MCP Docker container status and health information.
+
+#### Example Response
+
+```json
+{
+  "status": "running",
+  "container_id": "a1b2c3d4e5f6",
+  "container_name": "Archon-MCP",
+  "uptime": 3600,
+  "start_time": "2024-01-15T09:44:30Z",
+  "health": {
+    "status": "healthy",
+    "port": 8051,
+    "transport": "sse"
+  }
+}
+```
+
+### Start MCP Server
+
+**POST** `/api/mcp/start`
+
+Start the MCP Docker container.
+
+<Admonition type="info" title="Container Management">
+The MCP server runs as a Docker container named `Archon-MCP`. Ensure Docker is running and the container exists (created by docker-compose).
+</Admonition>
+
+#### Example Response
+
+```json
+{
+  "success": true,
+  "message": "MCP server started successfully",
+  "status": "running",
+  "container_id": "a1b2c3d4e5f6"
+}
+```
+
+### Stop MCP Server
+
+**POST** `/api/mcp/stop`
+
+Stop the running MCP Docker container.
+
+#### Example Response
+
+```json
+{
+  "success": true,
+  "message": "MCP server stopped successfully",
+  "status": "stopped"
+}
+```
+
+### Get MCP Logs
+
+**GET** `/api/mcp/logs`
+
+Retrieve recent MCP server logs.
+
+#### Query Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `limit` | integer | ❌ | Number of log entries (default: 100) |
+
+#### Example Response
+
+```json
+{
+  "logs": [
+    {
+      "timestamp": "2024-01-15T10:45:30Z",
+      "level": "INFO",
+      "message": "MCP server started successfully"
+    },
+    {
+      "timestamp": "2024-01-15T10:45:31Z",
+      "level": "INFO",
+      "message": "Registered 14 tools"
+    }
+  ]
+}
+```
+
+### Clear MCP Logs
+
+**DELETE** `/api/mcp/logs`
+
+Clear the MCP server log buffer.
+
+#### Example Response
+
+```json
+{
+  "success": true,
+  "message": "Logs cleared successfully"
+}
+```
+
+### Get MCP Configuration
+
+**GET** `/api/mcp/config`
+
+Retrieve MCP server configuration.
+
+#### Example Response
+
+```json
+{
+  "host": "localhost",
+  "port": 8051,
+  "transport": "sse",
+  "model_choice": "gpt-4o-mini",
+  "use_contextual_embeddings": false,
+  "use_hybrid_search": false,
+  "use_agentic_rag": false,
+  "use_reranking": false
+}
+```
+
+### Save MCP Configuration
+
+**POST** `/api/mcp/config`
+
+Save MCP server configuration.
+
+#### Request Body
+
+```json
+{
+  "transport": "sse",
+  "host": "localhost",
+  "port": 8051
+}
+```
+
+#### Example Response
+
+```json
+{
+  "success": true,
+  "message": "Configuration saved"
+}
+```
+
+### MCP Server Logs Stream
+
+**Socket.IO Namespace** `/logs`
+
+Real-time MCP server log streaming using Socket.IO.
+
+#### Connection Example
+
+```javascript
+import { io } from 'socket.io-client';
+
+// Connect to logs namespace
+const socket = io('/logs');
+
+// Handle connection
+socket.on('connect', () => {
+  console.log('Connected to log stream');
+});
+
+// Handle log entries
+socket.on('log_entry', (data) => {
+  console.log(`[${data.timestamp}] ${data.level}: ${data.message}`);
+});
+
+// Handle batch logs
+socket.on('log_batch', (logs) => {
+  logs.forEach(log => {
+    console.log(`[${log.timestamp}] ${log.level}: ${log.message}`);
+  });
+});
+```
+
+### Get MCP Tools
+
+**GET** `/api/mcp/tools`
+
+Get list of available MCP tools.
+
+#### Example Response
+
+```json
+{
+  "tools": [
+    {
+      "name": "perform_rag_query",
+      "description": "Search the knowledge base using semantic search",
+      "module": "rag",
+      "parameters": [
+        {"name": "query", "type": "string", "required": true},
+        {"name": "source", "type": "string", "required": false},
+        {"name": "match_count", "type": "integer", "required": false}
+      ]
+    }
+  ],
+  "count": 14,
+  "server_running": true,
+  "source": "mcp_server"
+}
+```
+
+### MCP Health Check
+
+**GET** `/api/mcp/health`
+
+Health check for MCP API module.
+
+#### Example Response
+
+```json
+{
+  "status": "healthy",
+  "service": "mcp"
+}
+```
+
+## 📋 Project Management API
+
+<Admonition type="info" title="Project Structure">
+Projects in Archon use JSONB fields for flexible document storage:
+- `prd`: Product Requirements Document
+- `docs`: Array of project documents
+- `features`: Array of feature specifications
+- `data`: Custom project data
+
+**Service Layer Architecture:**
+- **ProjectService**: Core CRUD operations for projects
+- **TaskService**: Task management with archiving
+- **ProjectCreationService**: AI-assisted project creation with GitHub integration
+- **ProgressService**: Real-time progress tracking for long-running operations
+- **SourceLinkingService**: Manages relationships between projects and knowledge sources
+</Admonition>
+
+### List Projects
+
+**GET** `/api/projects`
+
+Retrieve all projects with associated knowledge sources.
+
+#### Query Parameters
+
+None - returns all projects.
+
+#### Example Response
+
+```json
+[
+  {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "title": "Archon Documentation",
+    "description": "Comprehensive API documentation project",
+    "github_repo": "https://github.com/user/archon",
+    "prd": {
+      "overview": "Documentation project",
+      "goals": ["Complete API docs", "Add examples"]
+    },
+    "features": [],
+    "docs": [],
+    "technical_sources": [
+      {
+        "source_id": "fastapi.tiangolo.com",
+        "title": "FastAPI Documentation"
+      }
+    ],
+    "business_sources": [],
+    "pinned": false,
+    "created_at": "2024-01-15T10:00:00Z",
+    "updated_at": "2024-01-15T10:45:00Z"
+  }
+]
+```
+
+### Create Project
+
+**POST** `/api/projects`
+
+Create a new project with AI-assisted setup and optional GitHub repository processing. Returns immediately with a progress ID for real-time updates via Socket.IO.
+
+#### Request Body
+
+```json
+{
+  "title": "New Documentation Project",
+  "description": "A comprehensive documentation project",
+  "github_repo": "https://github.com/user/project",
+  "color": "blue",
+  "icon": "Briefcase",
+  "prd": {
+    "overview": "Project overview",
+    "goals": ["Goal 1", "Goal 2"],
+    "requirements": ["Requirement 1", "Requirement 2"]
+  },
+  "features": [],
+  "technical_sources": ["fastapi.tiangolo.com"],
+  "business_sources": [],
+  "pinned": false
+}
+```
+
+#### Request Schema
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `title` | string | ✅ | Project title |
+| `description` | string | ❌ | Project description |
+| `github_repo` | string | ❌ | GitHub repository URL for processing |
+| `color` | string | ❌ | Project color (default: 'blue') |
+| `icon` | string | ❌ | Project icon (default: 'Briefcase') |
+| `prd` | object | ❌ | Product Requirements Document |
+| `features` | array | ❌ | Feature specifications |
+| `technical_sources` | array | ❌ | Technical knowledge source IDs |
+| `business_sources` | array | ❌ | Business knowledge source IDs |
+| `pinned` | boolean | ❌ | Pin to top of project list |
+
+#### Example Response
+
+```json
+{
+  "progress_id": "a1b2c3d4e5f6789012345678",
+  "status": "started",
+  "message": "Project creation started. Connect to Socket.IO for progress updates."
+}
+```
+
+<Admonition type="tip" title="Real-time Progress">
+Connect to Socket.IO to receive real-time progress updates using the returned `progress_id`. The project creation process includes GitHub repository analysis, feature generation, and task creation.
+</Admonition>
+
+### Get Project Details
+
+**GET** `/api/projects/{project_id}`
+
+Get detailed information about a specific project.
+
+#### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | ✅ | Project UUID |
+
+#### Example Response
+
+```json
+{
+  "success": true,
+  "project": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "title": "Archon Documentation",
+    "github_repo": "https://github.com/user/archon",
+    "prd": {
+      "overview": "Documentation project",
+      "goals": ["Complete API docs", "Add examples"]
+    },
+    "features": [
+      {
+        "id": "feat-001",
+        "name": "API Documentation",
+        "description": "Complete API reference"
+      }
+    ],
+    "docs": [
+      {
+        "id": "doc-001",
+        "title": "Getting Started",
+        "type": "guide"
+      }
+    ],
+    "created_at": "2024-01-15T10:00:00Z",
+    "updated_at": "2024-01-15T10:45:00Z"
+  }
+}
+```
+
+### Update Project
+
+**PUT** `/api/projects/{project_id}`
+
+Update project information.
+
+#### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | ✅ | Project UUID |
+
+#### Request Body
+
+```json
+{
+  "title": "Updated Project Title",
+  "github_repo": "https://github.com/user/new-repo",
+  "prd": {
+    "overview": "Updated overview"
+  }
+}
+```
+
+### Delete Project
+
+**DELETE** `/api/projects/{project_id}`
+
+Delete a project and all associated tasks.
+
+#### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | ✅ | Project UUID |
+
+### Get Project Features
+
+**GET** `/api/projects/{project_id}/features`
+
+Retrieve features from a project's features JSONB field.
+
+#### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | ✅ | Project UUID |
+
+#### Example Response
+
+```json
+{
+  "success": true,
+  "features": [
+    {
+      "id": "feat-001",
+      "name": "User Authentication",
+      "description": "JWT-based auth system",
+      "priority": "high",
+      "status": "in_progress"
+    }
+  ]
+}
+```
+
+### Get Project Tasks
+
+**GET** `/api/projects/{project_id}/tasks`
+
+Get all tasks for a specific project.
+
+#### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | ✅ | Project UUID |
+
+### Health Check
+
+**GET** `/api/projects/health`
+
+Projects API health check.
+
+#### Example Response
+
+```json
+{
+  "status": "healthy",
+  "service": "projects"
+}
+```
+
+### Socket.IO Real-time Updates
+
+**Socket.IO Connection** (Root namespace `/`)
+
+<Admonition type="info" title="Simplified 2025 Socket.IO Pattern">
+Archon uses the simplified Socket.IO pattern with direct event handlers on the root namespace. No complex namespaces or classes are used for better performance and maintainability.
+</Admonition>
+
+#### Connection Example
+
+```javascript
+import { io } from 'socket.io-client';
+
+// Connect to root namespace 
+const socket = io('http://localhost:8080');
+
+socket.on('connect', () => {
+  console.log('Connected to Archon Socket.IO server');
+  
+  // Join project room for updates
+  socket.emit('join_project', { project_id: 'your-project-id' });
+  
+  // Join progress room for operation tracking
+  socket.emit('join_progress', { progress_id: 'your-progress-id' });
+});
+```
+
+#### Progress Updates (Project Creation)
+
+```javascript
+// Listen for progress updates during project creation
+socket.on('progress_update', (data) => {
+  console.log(`Progress: ${data.percentage}% - ${data.status}`);
+  console.log(`Message: ${data.message}`);
+});
+
+socket.on('progress_complete', (data) => {
+  console.log('Operation completed:', data.result);
+});
+
+socket.on('progress_error', (data) => {
+  console.error('Operation failed:', data.error);
+});
+```
+
+#### Project and Task Updates
+
+```javascript
+// Project-level updates (broadcasted to project room)
+socket.on('project_updated', (project) => {
+  console.log('Project updated:', project.title);
+});
+
+socket.on('task_updated', (task) => {
+  console.log('Task updated:', task.title, 'Status:', task.status);
+});
+
+socket.on('projects_list_updated', () => {
+  console.log('Projects list has been updated, refresh your view');
+});
+```
+
+#### Available Events
+
+| Event | Direction | Description |
+|-------|-----------|-------------|
+| `join_project` | Client → Server | Join project room for updates |
+| `join_progress` | Client → Server | Join progress tracking room |
+| `progress_update` | Server → Client | Progress percentage and status |
+| `progress_complete` | Server → Client | Operation completed successfully |
+| `progress_error` | Server → Client | Operation failed with error |
+| `project_updated` | Server → Client | Project data changed |
+| `task_updated` | Server → Client | Task data changed |
+| `projects_list_updated` | Server → Client | Projects list changed |
+
+## 📝 Task Management API
+
+### List Tasks
+
+**GET** `/api/tasks`
+
+Retrieve tasks with filtering options.
+
+#### Query Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | ❌ | Filter by project ID |
+| `status` | string | ❌ | Filter by status (`todo`, `doing`, `review`, `done`) |
+| `assignee` | string | ❌ | Filter by assignee |
+
+#### Example Response
+
+```json
+{
+  "success": true,
+  "tasks": [
+    {
+      "id": "660e8400-e29b-41d4-a716-446655440001",
+      "project_id": "550e8400-e29b-41d4-a716-446655440000",
+      "title": "Write API documentation",
+      "description": "Create comprehensive API reference documentation",
+      "sources": [
+        {"name": "FastAPI docs", "url": "https://fastapi.tiangolo.com"}
+      ],
+      "code_examples": [
+        {
+          "language": "python",
+          "code": "@app.get('/api/example')\nasync def example():\n    return {'message': 'Hello'}"
+        }
+      ],
+      "status": "doing",
+      "created_at": "2024-01-15T10:15:00Z",
+      "updated_at": "2024-01-15T10:30:00Z"
+    }
+  ],
+  "total_count": 1
+}
+```
+
+### Create Task
+
+**POST** `/api/tasks`
+
+Create a new task under a project.
+
+#### Request Body
+
+```json
+{
+  "project_id": "550e8400-e29b-41d4-a716-446655440000",
+  "title": "Implement user authentication",
+  "description": "Add JWT-based authentication to the API",
+  "sources": [
+    {"name": "JWT Guide", "url": "https://jwt.io/introduction"}
+  ],
+  "code_examples": [],
+  "status": "todo"
+}
+```
+
+### Get Task Details
+
+**GET** `/api/tasks/{task_id}`
+
+Get detailed information about a specific task.
+
+#### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `task_id` | string | ✅ | Task UUID |
+
+### Update Task
+
+**PUT** `/api/tasks/{task_id}`
+
+Update an existing task.
+
+#### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `task_id` | string | ✅ | Task UUID |
+
+#### Request Body
+
+```json
+{
+  "title": "Updated task title",
+  "description": "Updated description",
+  "status": "done",
+  "assignee": "User",
+  "sources": [
+    {"name": "New source", "url": "https://example.com"}
+  ]
+}
+```
+
+### Delete Task
+
+**DELETE** `/api/tasks/{task_id}`
+
+Delete a task.
+
+#### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `task_id` | string | ✅ | Task UUID |
+
+
+### Update Task Status (MCP)
+
+**PUT** `/api/mcp/tasks/{task_id}/status`
+
+Update task status (MCP compatibility endpoint).
+
+#### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `task_id` | string | ✅ | Task UUID |
+
+#### Request Body
+
+```json
+{
+  "status": "doing"
+}
+```
+
+## ⚙️ Settings Management API
+
+### List All Credentials
+
+**GET** `/api/credentials`
+
+List all credentials and their metadata.
+
+#### Example Response
+
+```json
+[
+  {
+    "key": "OPENAI_API_KEY",
+    "value": "sk-proj-...",
+    "is_encrypted": true,
+    "category": "api_keys",
+    "description": "OpenAI API Key for embedding model"
+  }
+]
+```
+
+### Get Specific Credential
+
+**GET** `/api/credentials/{key}`
+
+Get a specific credential by key.
+
+#### Example Response
+
+```json
+{
+  "key": "OPENAI_API_KEY",
+  "value": "sk-proj-...",
+  "is_encrypted": true
+}
+```
+
+### Settings Health Check
+
+**GET** `/api/settings/health`
+
+Settings API health check.
+
+#### Example Response
+
+```json
+{
+  "status": "healthy",
+  "service": "settings"
+}
+```
+
+## 🔐 Credentials API
+
+### List All Credentials
+
+**GET** `/api/credentials`
+
+Retrieve all stored credentials.
+
+#### Query Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `category` | string | ❌ | Filter by category |
+
+#### Example Response
+
+```json
+[
+  {
+    "key": "OPENAI_API_KEY",
+    "value": "***masked***",
+    "encrypted_value": null,
+    "is_encrypted": false,
+    "category": "api_keys",
+    "description": "OpenAI API key for embeddings"
+  },
+  {
+    "key": "GITHUB_TOKEN",
+    "value": null,
+    "encrypted_value": "encrypted_base64_string",
+    "is_encrypted": true,
+    "category": "api_keys",
+    "description": "GitHub personal access token"
+  }
+]
+```
+
+### Get Credentials by Category
+
+**GET** `/api/credentials/categories/{category}`
+
+Get all credentials for a specific category.
+
+#### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `category` | string | ✅ | Category name |
+
+#### Example Response
+
+```json
+{
+  "credentials": {
+    "OPENAI_API_KEY": "sk-proj-...",
+    "ANTHROPIC_API_KEY": "sk-ant-..."
+  }
+}
+```
+
+### Create/Update Credential
+
+**POST** `/api/credentials`
+
+Create or update a credential.
+
+#### Request Body
+
+```json
+{
+  "key": "GITHUB_TOKEN",
+  "value": "ghp_...",
+  "is_encrypted": true,
+  "category": "api_keys",
+  "description": "GitHub personal access token"
+}
+```
+
+#### Example Response
+
+```json
+{
+  "success": true,
+  "message": "Credential GITHUB_TOKEN encrypted and saved successfully"
+}
+```
+
+### Get Specific Credential
+
+**GET** `/api/credentials/{key}`
+
+Get a specific credential by key.
+
+#### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `key` | string | ✅ | Credential key |
+
+#### Query Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `decrypt` | boolean | ❌ | Decrypt if encrypted (default: true) |
+
+#### Example Response
+
+```json
+{
+  "key": "GITHUB_TOKEN",
+  "value": "ghp_...",
+  "is_encrypted": true
+}
+```
+
+### Update Credential
+
+**PUT** `/api/credentials/{key}`
+
+Update an existing credential.
+
+#### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `key` | string | ✅ | Credential key |
+
+#### Request Body
+
+```json
+{
+  "value": "new_value",
+  "is_encrypted": true,
+  "category": "api_keys",
+  "description": "Updated description"
+}
+```
+
+### Delete Credential
+
+**DELETE** `/api/credentials/{key}`
+
+Delete a stored credential.
+
+#### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `key` | string | ✅ | Credential key |
+
+#### Example Response
+
+```json
+{
+  "success": true,
+  "message": "Credential GITHUB_TOKEN deleted successfully"
+}
+```
+
+### Initialize Credentials
+
+**POST** `/api/credentials/initialize`
+
+Reload credentials from database.
+
+#### Example Response
+
+```json
+{
+  "success": true,
+  "message": "Credentials reloaded from database"
+}
+```
+
+### RAG Settings
+
+**GET** `/api/credentials/categories/rag_strategy`
+
+Retrieve all RAG configuration settings including LLM provider options.
+
+#### Example Response
+
+```json
+{
+  "credentials": {
+    "MODEL_CHOICE": "gpt-4o-mini",
+    "USE_CONTEXTUAL_EMBEDDINGS": "true",
+    "USE_HYBRID_SEARCH": "true",
+    "USE_AGENTIC_RAG": "true",
+    "USE_RERANKING": "true",
+    "LLM_PROVIDER": "openai",
+    "LLM_BASE_URL": null,
+    "EMBEDDING_MODEL": null
+  }
+}
+```
+
+#### Available Settings
+
+| Setting | Type | Description |
+|---------|------|-------------|
+| `LLM_PROVIDER` | string | Provider choice: `openai`, `ollama`, `google` |
+| `LLM_BASE_URL` | string | Custom base URL (required for Ollama) |
+| `EMBEDDING_MODEL` | string | Override default embedding model |
+| `MODEL_CHOICE` | string | Chat model for summaries and contextual embeddings |
+
+## 💬 Agent Chat API
+
+<Admonition type="warning" title="Integration Note">
+The Agent Chat API is currently being refactored to use HTTP calls to the separate Agents service. Some endpoints may be temporarily unavailable.
+</Admonition>
+
+### Create Chat Session
+
+**POST** `/api/agent-chat/sessions`
+
+Create a new chat session.
+
+#### Request Body
+
+```json
+{
+  "agent_type": "rag",
+  "context": {
+    "project_id": "550e8400-e29b-41d4-a716-446655440000"
+  }
+}
+```
+
+#### Example Response
+
+```json
+{
+  "success": true,
+  "session": {
+    "id": "chat-session-uuid",
+    "agent_type": "rag",
+    "created_at": "2024-01-15T10:45:00Z"
+  }
+}
+```
+
+### Get Session Details
+
+**GET** `/api/agent-chat/sessions/{session_id}`
+
+Get chat session details and history.
+
+#### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `session_id` | string | ✅ | Session UUID |
+
+### Send Message
+
+**POST** `/api/agent-chat/sessions/{session_id}/messages`
+
+Send a message in a chat session.
+
+#### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `session_id` | string | ✅ | Session UUID |
+
+#### Request Body
+
+```json
+{
+  "message": "Help me implement authentication in my API"
+}
+```
+
+#### Example Response
+
+```json
+{
+  "success": true,
+  "message": {
+    "id": "msg-uuid",
+    "role": "assistant",
+    "content": "I'll help you implement authentication. Based on your project, here's what I recommend...",
+    "metadata": {
+      "sources_used": [
+        {
+          "title": "JWT Authentication Guide",
+          "url": "https://jwt.io/introduction",
+          "relevance": 0.92
+        }
+      ],
+      "processing_time": 1.234
+    },
+    "created_at": "2024-01-15T10:45:30Z"
+  }
+}
+```
+
+### Socket.IO Chat
+
+**Socket.IO Namespace** `/chat`
+
+Real-time chat communication.
+
+#### Connection Example
+
+```javascript
+import { io } from 'socket.io-client';
+
+// Connect to chat namespace
+const socket = io('/chat');
+
+// Join session
+const sessionId = 'session-uuid';
+socket.emit('join_session', { session_id: sessionId });
+
+ws.onmessage = function(event) {
+  const data = JSON.parse(event.data);
+  if (data.type === 'message') {
+    console.log('Agent:', data.content);
+  } else if (data.type === 'thinking') {
+    console.log('Agent is thinking...');
+  }
+};
+
+// Send message
+ws.send(JSON.stringify({
+  type: 'message',
+  content: 'Help me with authentication'
+}));
+```
+
+### Agent Status
+
+**GET** `/api/agent-chat/status`
+
+Get agent chat service status.
+
+#### Example Response
+
+```json
+{
+  "status": "healthy",
+  "active_sessions": 3,
+  "available_agents": ["rag", "document", "task"],
+  "total_messages_processed": 1250
+}
+```
+
+### Debug Token Usage
+
+**GET** `/api/agent-chat/debug/token-usage`
+
+Get token usage statistics for debugging.
+
+#### Example Response
+
+```json
+{
+  "total_tokens_used": 125000,
+  "sessions": [
+    {
+      "session_id": "session-uuid",
+      "tokens_used": 5000,
+      "messages_count": 10
+    }
+  ]
+}
+```
+
+## 🧪 Testing API
+
+### Run MCP Tests
+
+**POST** `/api/tests/mcp/run`
+
+Run MCP integration tests.
+
+#### Request Body
+
+```json
+{
+  "test_filter": "test_rag_query",
+  "verbose": true
+}
+```
+
+#### Example Response
+
+```json
+{
+  "success": true,
+  "execution_id": "test-exec-uuid",
+  "message": "MCP tests started",
+  "test_count": 5
+}
+```
+
+### Run UI Tests
+
+**POST** `/api/tests/ui/run`
+
+Run UI component tests.
+
+#### Request Body
+
+```json
+{
+  "test_filter": "KnowledgeTable",
+  "coverage": true
+}
+```
+
+### Get Test Status
+
+**GET** `/api/tests/status/{execution_id}`
+
+Get test execution status.
+
+#### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `execution_id` | string | ✅ | Test execution UUID |
+
+#### Example Response
+
+```json
+{
+  "execution_id": "test-exec-uuid",
+  "status": "completed",
+  "start_time": "2024-01-15T10:00:00Z",
+  "end_time": "2024-01-15T10:01:30Z",
+  "duration": 90.5,
+  "test_type": "mcp",
+  "results": {
+    "total": 5,
+    "passed": 4,
+    "failed": 1,
+    "skipped": 0
+  }
+}
+```
+
+### Get Test History
+
+**GET** `/api/tests/history`
+
+Get test execution history.
+
+#### Query Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `limit` | integer | ❌ | Maximum results (default: 20) |
+| `test_type` | string | ❌ | Filter by test type (mcp/ui) |
+
+### Delete Test Execution
+
+**DELETE** `/api/tests/execution/{execution_id}`
+
+Delete test execution records.
+
+#### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `execution_id` | string | ✅ | Test execution UUID |
+
+### Socket.IO Test Stream
+
+**Socket.IO Namespace** `/tests`
+
+Real-time test execution output streaming.
+
+## 🔍 System Information API
+
+### Health Check
+
+**GET** `/health`
+
+System health and status check.
+
+#### Example Response
+
+```json
+{
+  "status": "healthy",
+  "service": "archon-backend",
+  "timestamp": "2024-01-15T10:45:00Z"
+}
+```
+
+### Database Metrics
+
+**GET** `/api/database/metrics`
+
+Get database statistics and health information.
+
+#### Example Response
+
+```json
+{
+  "status": "healthy",
+  "database": "supabase",
+  "tables": {
+    "projects": 5,
+    "tasks": 42,
+    "crawled_pages": 1250,
+    "credentials": 8
+  },
+  "total_records": 1305,
+  "timestamp": "2024-01-15T10:45:00Z"
+}
+```
+
+### API Health Check
+
+**GET** `/api/health`
+
+General API health check endpoint.
+
+#### Example Response
+
+```json
+{
+  "status": "healthy",
+  "service": "knowledge-api",
+  "timestamp": "2024-01-15T10:45:00Z"
+}
+```
+
+## 🚨 Error Handling
+
+### Standard Error Response Format
+
+All API errors follow a consistent format:
+
+```json
+{
+  "success": false,
+  "error": "Invalid request parameters",
+  "details": {
+    "field": "knowledge_type",
+    "message": "Must be one of: technical, business, general"
+  },
+  "timestamp": "2024-01-15T10:45:00Z"
+}
+```
+
+### Common Error Codes
+
+| HTTP Status | Error Type | Description |
+|-------------|------------|-------------|
+| 400 | `Bad Request` | Invalid request parameters |
+| 404 | `Not Found` | Resource not found |
+| 422 | `Unprocessable Entity` | Validation error |
+| 500 | `Internal Server Error` | Server error |
+
+## 📊 Rate Limiting
+
+### Default Limits
+
+| Endpoint Category | Rate Limit | Window |
+|------------------|------------|--------|
+| Document Upload | 10 requests | 1 minute |
+| RAG Queries | 100 requests | 1 minute |
+| Crawling | 5 requests | 5 minutes |
+| General API | 1000 requests | 1 hour |
+
+## 🔧 SDK & Integration Examples
+
+### Python SDK Example
+
+```python
+import requests
+import json
+from typing import List, Dict, Any
+
+class ArchonClient:
+    def __init__(self, base_url: str = "http://localhost:8080"):
+        self.base_url = base_url
+        self.session = requests.Session()
+    
+    def upload_document(self, file_path: str, knowledge_type: str, tags: List[str] = None) -> Dict[str, Any]:
+        """Upload a document to Archon"""
+        with open(file_path, 'rb') as f:
+            files = {'file': f}
+            data = {
+                'knowledge_type': knowledge_type,
+                'tags': json.dumps(tags or [])
+            }
+            response = self.session.post(f"{self.base_url}/api/documents/upload", files=files, data=data)
+            response.raise_for_status()
+            return response.json()
+    
+    def query_knowledge(self, query: str, source: str = None, match_count: int = 5) -> Dict[str, Any]:
+        """Query the knowledge base"""
+        payload = {
+            "query": query,
+            "source": source,
+            "match_count": match_count
+        }
+        response = self.session.post(f"{self.base_url}/api/rag/query", json=payload)
+        response.raise_for_status()
+        return response.json()
+    
+    def start_crawl(self, url: str, knowledge_type: str, tags: List[str] = None, update_frequency: int = 7) -> Dict[str, Any]:
+        """Start smart crawling a website"""
+        payload = {
+            "url": url,
+            "knowledge_type": knowledge_type,
+            "tags": tags or [],
+            "update_frequency": update_frequency
+        }
+        response = self.session.post(f"{self.base_url}/api/knowledge-items/crawl", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+# Usage example
+client = ArchonClient()
+
+# Upload a document
+result = client.upload_document(
+    file_path="./python-guide.pdf",
+    knowledge_type="technical",
+    tags=["python", "programming"]
+)
+print(f"Document uploaded: {result['document']['id']}")
+
+# Start smart crawling
+crawl_result = client.start_crawl(
+    url="https://docs.python.org/3/tutorial/",
+    knowledge_type="technical", 
+    tags=["python", "tutorial"],
+    update_frequency=7
+)
+print(f"Crawling started with progress ID: {crawl_result['progress_id']}")
+
+# Query knowledge
+results = client.query_knowledge(
+    query="How to handle exceptions in Python?",
+    source="docs.python.org"
+)
+print(f"Found {len(results['results'])} relevant documents")
+```
+
+### JavaScript/Node.js Example
+
+```javascript
+class ArchonClient {
+  constructor(baseUrl = 'http://localhost:8080') {
+    this.baseUrl = baseUrl;
+  }
+
+  async uploadDocument(file, knowledgeType, tags = []) {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('knowledge_type', knowledgeType);
+    formData.append('tags', JSON.stringify(tags));
+
+    const response = await fetch(`${this.baseUrl}/api/documents/upload`, {
+      method: 'POST',
+      body: formData
+    });
+
+    if (!response.ok) {
+      throw new Error(`Upload failed: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  async queryKnowledge(query, source = null, matchCount = 5) {
+    const payload = {
+      query,
+      source,
+      match_count: matchCount
+    };
+
+    const response = await fetch(`${this.baseUrl}/api/rag/query`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      throw new Error(`Query failed: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  async startCrawl(url, knowledgeType, tags = [], updateFrequency = 7) {
+    const payload = {
+      url,
+      knowledge_type: knowledgeType,
+      tags,
+      update_frequency: updateFrequency
+    };
+
+    const response = await fetch(`${this.baseUrl}/api/knowledge-items/crawl`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      throw new Error(`Crawl failed: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  // Socket.IO connection for real-time updates
+  connectToProgress(progressId, onMessage) {
+    import { io } from 'socket.io-client';
+    const socket = io('/crawl');
+    
+    // Subscribe to progress updates
+    socket.emit('subscribe', { progress_id: progressId });
+    
+    socket.on('progress_update', (data) => {
+      onMessage(data);
+    });
+    
+    socket.on('crawl_completed', (data) => {
+      onMessage(data);
+    });
+
+    socket.on('connect_error', (error) => {
+      console.error('Socket.IO error:', error);
+    };
+
+    return socket;
+  }
+}
+
+// Usage example
+const client = new ArchonClient();
+
+// Start smart crawling
+client.startCrawl('https://docs.python.org/3/tutorial/', 'technical', ['python', 'tutorial'], 7)
+  .then(result => {
+    console.log('Crawl started:', result.progress_id);
+    
+    // Connect to progress updates
+    const ws = client.connectToProgress(result.progress_id, (progress) => {
+      console.log(`Progress: ${progress.percentage}% - ${progress.currentUrl}`);
+      console.log(`Status: ${progress.status} - ${progress.log}`);
+      
+      if (progress.status === 'completed') {
+        console.log(`Crawl completed! Stored ${progress.chunksStored} chunks`);
+        ws.close();
+      }
+    });
+  });
+```
+
+---
+
+**Next Steps**: 
+- Explore [MCP Integration](./mcp-overview) to connect AI clients
+- Learn about [RAG Strategies](./rag) for optimal search performance  
+- Check [Socket.IO Communication](./websockets) for real-time features
+- Review [Testing Guide](./testing) for API testing examples 

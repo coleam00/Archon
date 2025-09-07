@@ -1,0 +1,215 @@
+{
+  "models": [
+    {
+      "title": "Open WebUI + Archon RAG",
+      "provider": "openai",
+      "model": "gpt-4o",
+      "apiBase": "http://localhost:3000/api/v1",
+      "apiKey": "sk-YOUR-OPEN-WEBUI-API-KEY",
+      "contextLength": 8192,
+      "completionOptions": {
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "presence_penalty": 0.1,
+        "frequency_penalty": 0.1,
+        "max_tokens": 4096,
+        "stop": []
+      },
+      "systemMessage": "You are a helpful coding assistant with access to a comprehensive knowledge base through Archon RAG. When answering questions, leverage the available documentation and code examples. Provide clear, concise answers with relevant code examples.",
+      "requestOptions": {
+        "timeout": 30000,
+        "headers": {
+          "Authorization": "Bearer sk-YOUR-OPEN-WEBUI-API-KEY"
+        }
+      },
+      "useLegacyCompletionsEndpoint": false
+    },
+    {
+      "title": "Code Autocomplete",
+      "provider": "openai",
+      "model": "codellama:7b-code",
+      "apiBase": "http://localhost:3000/api/v1",
+      "apiKey": "sk-YOUR-OPEN-WEBUI-API-KEY",
+      "contextLength": 4096,
+      "completionOptions": {
+        "temperature": 0.2,
+        "max_tokens": 500,
+        "stop": ["\n\n", "```", "</code>"]
+      },
+      "systemMessage": "Complete the code concisely and accurately.",
+      "useLegacyCompletionsEndpoint": false
+    }
+  ],
+  "tabAutocompleteModel": {
+    "title": "Code Autocomplete",
+    "provider": "openai",
+    "model": "codellama:7b-code",
+    "apiBase": "http://localhost:3000/api/v1",
+    "apiKey": "sk-YOUR-OPEN-WEBUI-API-KEY"
+  },
+  "embeddingsProvider": {
+    "provider": "openai",
+    "model": "text-embedding-ada-002",
+    "apiBase": "http://localhost:3000/api/v1",
+    "apiKey": "sk-YOUR-OPEN-WEBUI-API-KEY"
+  },
+  "contextProviders": [
+    {
+      "name": "code",
+      "params": {
+        "maxChars": 10000,
+        "maxLines": 1000,
+        "includeTypes": [
+          ".py", ".js", ".ts", ".jsx", ".tsx", 
+          ".java", ".cpp", ".c", ".h", ".hpp",
+          ".go", ".rs", ".rb", ".php", ".swift",
+          ".kt", ".scala", ".r", ".jl", ".lua",
+          ".sh", ".bash", ".zsh", ".ps1", ".bat",
+          ".sql", ".graphql", ".proto",
+          ".html", ".css", ".scss", ".sass", ".less",
+          ".json", ".yaml", ".yml", ".toml", ".xml",
+          ".md", ".mdx", ".rst", ".txt"
+        ]
+      }
+    },
+    {
+      "name": "diff",
+      "params": {
+        "maxChars": 5000
+      }
+    },
+    {
+      "name": "terminal",
+      "params": {
+        "maxLines": 100
+      }
+    },
+    {
+      "name": "problems",
+      "params": {
+        "maxProblems": 10
+      }
+    },
+    {
+      "name": "folder",
+      "params": {
+        "maxDepth": 3,
+        "maxFiles": 50
+      }
+    },
+    {
+      "name": "codebase",
+      "params": {
+        "maxResults": 10,
+        "useReranking": true
+      }
+    }
+  ],
+  "slashCommands": [
+    {
+      "name": "edit",
+      "description": "Edit selected code"
+    },
+    {
+      "name": "comment",
+      "description": "Add comments to the selected code"
+    },
+    {
+      "name": "share",
+      "description": "Share the current code context"
+    },
+    {
+      "name": "cmd",
+      "description": "Generate a shell command"
+    },
+    {
+      "name": "test",
+      "description": "Generate tests for the selected code"
+    },
+    {
+      "name": "explain",
+      "description": "Explain the selected code in detail"
+    },
+    {
+      "name": "refactor",
+      "description": "Refactor the selected code"
+    },
+    {
+      "name": "fix",
+      "description": "Fix issues in the selected code"
+    },
+    {
+      "name": "optimize",
+      "description": "Optimize the selected code for performance"
+    },
+    {
+      "name": "docs",
+      "description": "Generate documentation for the selected code"
+    },
+    {
+      "name": "archon",
+      "description": "Search Archon knowledge base",
+      "params": {
+        "systemMessage": "Use the Archon RAG tool to search the knowledge base for relevant information."
+      }
+    }
+  ],
+  "customCommands": [
+    {
+      "name": "archon-search",
+      "description": "Search Archon knowledge base",
+      "prompt": "Search the Archon knowledge base for: {{{ input }}}",
+      "systemMessage": "Use the archon_rag_query tool to search for relevant information."
+    },
+    {
+      "name": "archon-code",
+      "description": "Find code examples in Archon",
+      "prompt": "Find code examples for: {{{ input }}}",
+      "systemMessage": "Use the archon_code_search tool to find relevant code examples."
+    }
+  ],
+  "experimental": {
+    "quickActions": [
+      {
+        "title": "Search Archon",
+        "prompt": "Search knowledge base for: "
+      },
+      {
+        "title": "Find Examples",
+        "prompt": "Find code examples for: "
+      }
+    ],
+    "modelRoles": {
+      "inlineEdit": "Open WebUI + Archon RAG",
+      "applyCodeBlock": "Open WebUI + Archon RAG",
+      "repoMapGeneration": "Open WebUI + Archon RAG"
+    }
+  },
+  "allowAnonymousTelemetry": false,
+  "docs": {
+    "enabled": true,
+    "provider": "custom",
+    "apiBase": "http://localhost:8181/api",
+    "apiKey": ""
+  },
+  "ui": {
+    "fontSize": 14,
+    "theme": "dark",
+    "showWelcomeMessage": false
+  },
+  "features": {
+    "codebaseIndexing": true,
+    "smartPaste": true,
+    "inlineEdit": true
+  },
+  "requestOptions": {
+    "timeout": 30000,
+    "verifySsl": false,
+    "proxy": null
+  },
+  "reranker": {
+    "name": "voyage",
+    "apiKey": "",
+    "enabled": false
+  }
+}

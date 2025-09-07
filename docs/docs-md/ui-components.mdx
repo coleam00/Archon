@@ -1,0 +1,404 @@
+---
+title: UI Components Reference
+sidebar_position: 3
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import Admonition from '@theme/Admonition';
+
+# 🎨 UI Components Reference
+
+<div className="hero hero--secondary">
+  <div className="container">
+    <h2 className="hero__subtitle">
+      Complete reference for Archon's React component library built with Vite, Tailwind CSS, and modern UI patterns.
+    </h2>
+  </div>
+</div>
+
+## 📁 Component Structure
+
+```
+src/components/
+├── animations/          # Animation components
+├── knowledge-base/      # Knowledge management UI
+├── layouts/            # Layout components
+├── mcp/                # MCP client components
+├── project-tasks/      # Project management UI
+├── settings/           # Settings components
+└── shared/             # Shared/common components
+```
+
+## 🎭 Animation Components
+
+### Animations.tsx
+**Purpose**: Provides animated UI elements and transitions
+
+**Key Components**:
+- `FadeIn`: Fade-in animation wrapper
+- `SlideIn`: Slide-in from direction
+- `LoadingSpinner`: Animated loading indicator
+- `ProgressBar`: Animated progress display
+
+**Usage Example**:
+```jsx
+<FadeIn duration={500}>
+  <YourContent />
+</FadeIn>
+```
+
+## 📚 Knowledge Base Components
+
+### KnowledgeTable.tsx
+**Purpose**: Display and manage knowledge base entries
+
+**Features**:
+- Sortable columns
+- Search/filter functionality
+- Source management actions
+- Real-time updates
+
+**Props**:
+| Prop | Type | Description |
+|------|------|-------------|
+| `sources` | `Source[]` | Array of knowledge sources |
+| `onDelete` | `(id: string) => void` | Delete handler |
+| `onRefresh` | `(id: string) => void` | Refresh handler |
+| `loading` | `boolean` | Loading state |
+
+### CrawlProgress.tsx
+**Purpose**: Real-time crawling progress display
+
+**Features**:
+- Socket.IO connection for live updates
+- Progress bar with percentage
+- Current URL display
+- Log message stream
+
+**Performance Notes**:
+- Uses Socket.IO room subscription for targeted updates
+- Minimal re-renders - only updates on progress changes
+- Example of proper real-time pattern
+
+## 🏗️ Layout Components
+
+### MainLayout.tsx
+**Purpose**: Primary application layout wrapper
+
+**Structure**:
+```jsx
+<MainLayout>
+  <SideNavigation />
+  <main>
+    {children}
+  </main>
+  <ArchonChatPanel />
+</MainLayout>
+```
+
+### SideNavigation.tsx
+**Purpose**: Left sidebar navigation menu
+
+**Features**:
+- Collapsible menu
+- Active route highlighting
+- Icon-based navigation
+- Responsive design
+
+**Menu Items**:
+- Knowledge Base
+- Projects
+- MCP Clients
+- Settings
+
+### ArchonChatPanel.tsx
+**Purpose**: AI chat interface panel
+
+**Features**:
+- Collapsible right panel
+- Message history
+- Real-time responses
+- Context awareness
+
+**Performance Considerations**:
+- Uses Socket.IO for streaming AI responses
+- Consider virtualization for long chat histories
+- Implements proper cleanup in useEffect returns
+
+## 🔌 MCP Components
+
+### MCPClients.tsx
+**Purpose**: Manage MCP server connections
+
+**Features**:
+- Add/remove MCP servers
+- Connection status display
+- Tool exploration
+- Test interface
+
+### ClientCard.tsx
+**Purpose**: Individual MCP client display card
+
+**Props**:
+| Prop | Type | Description |
+|------|------|-------------|
+| `client` | `MCPClient` | Client configuration |
+| `onConnect` | `() => void` | Connect handler |
+| `onDisconnect` | `() => void` | Disconnect handler |
+| `onDelete` | `() => void` | Delete handler |
+
+### ToolTestingPanel.tsx
+**Purpose**: Interactive MCP tool testing interface
+
+**Features**:
+- Tool selection dropdown
+- Dynamic parameter inputs
+- Execute tool calls
+- Display results
+- Error handling
+
+## 📊 Project & Task Components
+
+### TaskBoardView.tsx
+**Purpose**: Kanban board for task management
+
+**Features**:
+- Drag-and-drop between columns
+- Status-based organization
+- Task quick actions
+- Real-time updates
+
+**Columns**:
+- Todo
+- Doing
+- Review
+- Done
+
+**Performance Notes**:
+- Uses Socket.IO for real-time task updates from AI agents
+- Implements React DnD for smooth drag operations
+- Optimized with React.memo to prevent unnecessary re-renders
+
+### TaskTableView.tsx
+**Purpose**: Table view for task management
+
+**Features**:
+- Sortable columns
+- Inline editing
+- Bulk actions
+- Filter by status/assignee
+
+### DraggableTaskCard.tsx
+**Purpose**: Individual task card component
+
+**Props**:
+| Prop | Type | Description |
+|------|------|-------------|
+| `task` | `Task` | Task data |
+| `onUpdate` | `(task: Task) => void` | Update handler |
+| `onDelete` | `(id: string) => void` | Delete handler |
+| `isDragging` | `boolean` | Drag state |
+
+### BlockNoteEditor.tsx
+**Purpose**: Rich text editor for documents
+
+**Features**:
+- WYSIWYG editing
+- Markdown support
+- Code blocks
+- Image embedding
+- Auto-save
+
+### Project Tab Components
+
+#### DocsTab.tsx
+**Purpose**: Project documentation management
+
+**Features**:
+- Document list
+- Create/edit documents
+- Version history
+- Search functionality
+
+#### FeaturesTab.tsx
+**Purpose**: Project features organization
+
+**Features**:
+- Feature list display
+- Task grouping by feature
+- Progress tracking
+- Priority indicators
+
+#### DataTab.tsx
+**Purpose**: Project data and analytics
+
+**Features**:
+- Task statistics
+- Progress charts
+- Team performance
+- Timeline views
+
+## ⚙️ Settings Components
+
+### SettingsPanel.tsx
+**Purpose**: Application settings management
+
+**Sections**:
+- API Keys
+- Model Configuration
+- UI Preferences
+- Data Management
+
+**⚠️ Performance Warning**:
+- RAGSettings component has 11 onChange handlers without optimization
+- Needs debounced inputs or local state pattern
+- See performance best practices in UI documentation
+
+### CredentialManager.tsx
+**Purpose**: Secure credential storage UI
+
+**Features**:
+- Add/edit credentials
+- Encrypted storage
+- Category organization
+- Validation
+
+## 🔄 Shared Components
+
+### Button.tsx
+**Purpose**: Consistent button styling
+
+**Variants**:
+- `primary`: Main actions
+- `secondary`: Secondary actions
+- `danger`: Destructive actions
+- `ghost`: Minimal styling
+
+### Modal.tsx
+**Purpose**: Modal dialog wrapper
+
+**Props**:
+| Prop | Type | Description |
+|------|------|-------------|
+| `isOpen` | `boolean` | Open state |
+| `onClose` | `() => void` | Close handler |
+| `title` | `string` | Modal title |
+| `size` | `'sm' \| 'md' \| 'lg'` | Modal size |
+
+### SearchInput.tsx
+**Purpose**: Reusable search input
+
+**Features**:
+- Debounced input
+- Clear button
+- Loading state
+- Keyboard shortcuts
+
+## 🎨 Styling System
+
+### Tailwind Configuration
+```javascript
+// tailwind.config.js
+module.exports = {
+  theme: {
+    extend: {
+      colors: {
+        primary: '#8b5cf6',
+        secondary: '#1f2937',
+        accent: '#a855f7'
+      }
+    }
+  }
+}
+```
+
+### Component Styling Pattern
+```jsx
+// Consistent class naming
+const buttonClasses = clsx(
+  'px-4 py-2 rounded-lg font-medium transition-colors',
+  {
+    'bg-primary text-white hover:bg-primary-dark': variant === 'primary',
+    'bg-gray-200 text-gray-800 hover:bg-gray-300': variant === 'secondary'
+  }
+);
+```
+
+## 🔗 Component Integration
+
+### With Socket.IO
+```jsx
+// Real-time updates in components
+useEffect(() => {
+  socket.on('task:updated', (task) => {
+    updateTaskInState(task);
+  });
+  
+  return () => socket.off('task:updated');
+}, []);
+```
+
+### With API Services
+```jsx
+// Service integration pattern
+const KnowledgeTable = () => {
+  const { data, loading, error } = useKnowledgeBase();
+  
+  if (loading) return <LoadingSpinner />;
+  if (error) return <ErrorDisplay error={error} />;
+  
+  return <Table data={data} />;
+};
+```
+
+### Performance Patterns
+
+#### Optimized Input Components
+```jsx
+// Use DebouncedInput for forms/modals
+import { DebouncedInput } from './components/project-tasks/TaskInputComponents';
+
+<DebouncedInput
+  value={formData.title}
+  onChange={handleTitleChange}
+  placeholder="Enter title..."
+  delay={300}
+/>
+```
+
+#### Real-time Update Pattern
+```jsx
+// Efficient real-time updates
+const TaskComponent = memo(({ task }) => {
+  // Component only re-renders when task changes
+  return <TaskCard {...task} />;
+}, (prev, next) => prev.task.id === next.task.id);
+```
+
+## 📱 Responsive Design
+
+### Breakpoint Usage
+- `sm`: 640px - Mobile landscape
+- `md`: 768px - Tablets
+- `lg`: 1024px - Small desktops
+- `xl`: 1280px - Large desktops
+
+### Mobile Adaptations
+- Collapsible navigation
+- Stack layouts on small screens
+- Touch-friendly interactions
+- Simplified table views
+
+## 🔗 Related Documentation
+
+- [UI Overview](./ui) - UI architecture, setup, and **performance best practices**
+- [Socket.IO Integration](./socketio) - Real-time features and room patterns
+- [Frontend Testing](./testing-vitest-strategy) - Component testing
+- [API Reference](./api-reference) - Backend integration
+- [Coding Best Practices](./coding-best-practices) - React patterns and anti-patterns
+
+### Performance Resources
+- See **Performance Best Practices** section in [UI Documentation](./ui#performance-best-practices)
+- Example implementation: `TaskInputComponents.tsx` for debounced inputs
+- Components needing optimization listed in [UI docs](./ui#components-requiring-performance-optimization)

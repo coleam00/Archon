@@ -1,0 +1,441 @@
+---
+title: Python Testing Strategy
+sidebar_position: 9
+---
+
+# Python Testing Strategy with pytest
+
+This document outlines Archon's Python testing strategy for our multi-container architecture, emphasizing simplicity and effectiveness.
+
+## 🎯 Testing Philosophy
+
+Our Python testing follows these core principles:
+
+1. **Fast Tests**: Each test runs in milliseconds, entire suite in &lt;30 seconds
+2. **Simple Names**: `test_<what>_<condition>_<expected_result>` pattern
+3. **Independent Tests**: No shared state, each test is self-contained
+4. **Minimal Fixtures**: Only essential mocks, no complex hierarchies
+5. **Container Isolation**: Test each container's boundaries separately
+
+## 📁 Multi-Container Test Structure
+
+```
+python/tests/
+├── conftest.py              # Minimal shared fixtures
+├── pytest.ini               # Simple pytest configuration
+├── server/                  # Server container tests (FastAPI + Socket.IO)
+│   ├── test_api.py         # API endpoint tests
+│   ├── test_services.py    # Service layer tests
+│   └── test_socketio.py    # Socket.IO event tests
+├── mcp/                     # MCP container tests
+│   ├── test_server.py      # MCP server lifecycle
+│   └── test_tools.py       # Tool execution tests
+├── agents/                  # Agents container tests
+│   ├── test_rag.py         # RAG agent tests
+│   └── test_document.py    # Document agent tests
+└── integration/             # Cross-container tests
+    └── test_workflows.py   # End-to-end scenarios
+```
+
+## 🔧 Minimal Configuration
+
+### pytest.ini
+
+```ini
+[pytest]
+testpaths = tests
+python_files = test_*.py
+python_functions = test_*
+addopts = -v --tb=short --strict-markers
+markers =
+    server: Server container tests
+    mcp: MCP container tests
+    agents: Agents container tests
+    integration: Cross-container tests
+    slow: Slow tests (skip with -m "not slow")
+asyncio_mode = auto
+```
+
+### pyproject.toml
+
+```toml
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-mock>=3.12.0",
+    "httpx>=0.24.0",
+    "pytest-cov>=4.1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "--cov=src",
+    "--cov-report=term-missing:skip-covered",
+    "--cov-fail-under=80"
+]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["*/tests/*", "*/__init__.py"]
+```
+
+## 🧪 Container-Specific Testing Patterns
+
+### 1. Server Container Tests (FastAPI + Socket.IO)
+
+```python
+# tests/server/test_api.py
+import pytest
+from httpx import AsyncClient
+
+@pytest.mark.server
+class TestKnowledgeAPI:
+    """API contract tests - verify endpoint behavior without implementation details."""
+    
+    async def test_upload_document_returns_success(self, client: AsyncClient):
+        """Upload endpoint should return 200 with document_id."""
+        # Arrange
+        files = {"file": ("test.pdf", b"PDF content", "application/pdf")}
+        
+        # Act
+        response = await client.post("/api/documents/upload", files=files)
+        
+        # Assert
+        assert response.status_code == 200
+        assert "document_id" in response.json()
+    
+    async def test_upload_invalid_file_returns_400(self, client: AsyncClient):
+        """Upload endpoint should reject invalid files."""
+        # Arrange
+        files = {"file": ("test.exe", b"EXE content", "application/x-executable")}
+        
+        # Act
+        response = await client.post("/api/documents/upload", files=files)
+        
+        # Assert
+        assert response.status_code == 400
+```
+
+```python
+# tests/server/test_socketio.py
+import pytest
+from unittest.mock import AsyncMock, patch
+
+@pytest.mark.server
+class TestSocketIO:
+    """Test Socket.IO events with focus on room management and broadcasting."""
+    
+    @patch('src.server.socketio_app.sio')
+    async def test_crawl_subscribe_joins_room(self, mock_sio):
+        """crawl_subscribe should add client to progress room."""
+        # Arrange
+        sid = "test-sid-123"
+        progress_id = "progress-456"
+        
+        # Act
+        from src.server.fastapi.socketio_handlers import crawl_subscribe
+        await crawl_subscribe(sid, {"progress_id": progress_id})
+        
+        # Assert
+        mock_sio.enter_room.assert_called_once_with(sid, progress_id)
+```
+
+### 2. MCP Container Tests
+
+```python
+# tests/mcp/test_tools.py
+import pytest
+import json
+
+@pytest.mark.mcp
+class TestMCPTools:
+    """Test MCP tools with focus on input/output contracts."""
+    
+    async def test_health_check_returns_status(self, mcp_server):
+        """health_check tool should return system status."""
+        # Act
+        result = await mcp_server.call_tool("health_check", {})
+        
+        # Assert
+        assert len(result) > 0
+        data = json.loads(result[0].text)
+        assert data["status"] in ["healthy", "degraded", "unhealthy"]
+    
+    async def test_manage_project_creates_project(self, mcp_server):
+        """manage_project with action=create should return project."""
+        # Arrange
+        params = {
+            "action": "create",
+            "title": "Test Project"
+        }
+        
+        # Act
+        result = await mcp_server.call_tool("manage_project", params)
+        
+        # Assert
+        data = json.loads(result[0].text)
+        assert data["success"] is True
+        assert "project_id" in data
+```
+
+### 3. Agents Container Tests
+
+```python
+# tests/agents/test_rag.py
+import pytest
+
+@pytest.mark.agents
+class TestRAGAgent:
+    """Test RAG agent query/response functionality."""
+    
+    async def test_rag_query_returns_results(self, rag_agent_client):
+        """RAG query should return relevant documents."""
+        # Arrange
+        query = "How to implement authentication?"
+        
+        # Act
+        response = await rag_agent_client.post("/query", json={"query": query})
+        
+        # Assert
+        assert response.status_code == 200
+        data = response.json()
+        assert "results" in data
+        assert len(data["results"]) > 0
+```
+
+### 4. Integration Tests
+
+```python
+# tests/integration/test_workflows.py
+import pytest
+
+@pytest.mark.integration
+class TestCrossContainerWorkflows:
+    """Test complete workflows across containers."""
+    
+    async def test_crawl_to_query_workflow(self, server_client, mcp_client):
+        """Test full crawl -> store -> query workflow."""
+        # Step 1: Start crawl via Server
+        crawl_response = await server_client.post("/api/knowledge/crawl", json={
+            "url": "https://example.com"
+        })
+        assert crawl_response.status_code == 200
+        progress_id = crawl_response.json()["progress_id"]
+        
+        # Step 2: Wait for completion (simplified)
+        await asyncio.sleep(2)
+        
+        # Step 3: Query via MCP
+        result = await mcp_client.call_tool("perform_rag_query", {
+            "query": "What is example.com about?",
+            "source": "example.com"
+        })
+        
+        # Assert
+        assert len(result) > 0
+        data = json.loads(result[0].text)
+        assert data["success"] is True
+```
+
+## 🔧 Minimal Fixtures
+
+```python
+# tests/conftest.py - Keep it simple!
+import pytest
+from httpx import AsyncClient, ASGITransport
+from unittest.mock import AsyncMock
+
+@pytest.fixture
+async def server_client():
+    """Test client for Server container."""
+    from src.server.main import app
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+
+@pytest.fixture
+async def mcp_server():
+    """Mock MCP server for testing tools."""
+    from src.mcp.mcp_server import ArchonMCPServer
+    server = ArchonMCPServer()
+    # Mock dependencies
+    server.supabase_client = AsyncMock()
+    server.supabase_client.from_.return_value.select.return_value.execute.return_value.data = []
+    return server
+
+@pytest.fixture
+def mock_supabase():
+    """Simple Supabase mock."""
+    mock = AsyncMock()
+    mock.from_.return_value.select.return_value.execute.return_value.data = []
+    mock.from_.return_value.insert.return_value.execute.return_value.data = [{"id": "test-123"}]
+    return mock
+
+# That's it! No complex factories, no session management, just the basics.
+```
+
+## 🚀 Testing Commands
+
+### Running Tests
+
+```bash
+# Run all tests
+pytest
+
+# Run with coverage
+pytest --cov=src --cov-report=html
+
+# Run specific test categories
+pytest -m unit              # Unit tests only
+pytest -m integration       # Integration tests only
+pytest -m "not slow"       # Skip slow tests
+
+# Run specific test file or directory
+pytest tests/unit/test_services/
+pytest tests/unit/test_services/test_project_service.py::TestProjectService::test_create_project_with_valid_data_should_succeed
+
+# Run with different verbosity
+pytest -v     # Verbose output
+pytest -vv    # Very verbose output
+pytest -q     # Quiet mode
+
+# Run tests in parallel
+pytest -n auto  # Requires pytest-xdist
+
+# Run with specific Python warnings
+pytest -W error  # Treat warnings as errors
+```
+
+### Debugging Tests
+
+```bash
+# Drop into debugger on failure
+pytest --pdb
+
+# Show local variables on failure
+pytest -l
+
+# Show full diff on assertion failure
+pytest -vv
+
+# Run only last failed tests
+pytest --lf
+
+# Run failed tests first, then others
+pytest --ff
+```
+
+## 📊 Code Coverage
+
+### Coverage Requirements
+
+- **Overall Coverage**: Minimum 80%
+- **Critical Paths**: 95%+ (authentication, payments, data operations)
+- **New Code**: 90%+ coverage required for all PRs
+
+### Coverage Reports
+
+```bash
+# Generate HTML coverage report
+pytest --cov=src --cov-report=html
+# Open htmlcov/index.html in browser
+
+# Generate terminal report
+pytest --cov=src --cov-report=term-missing
+
+# Generate XML for CI/CD
+pytest --cov=src --cov-report=xml
+
+# Check coverage thresholds
+pytest --cov=src --cov-fail-under=80
+```
+
+## 🔄 CI/CD Integration
+
+### GitHub Actions Workflow
+
+```yaml
+name: Python Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[test]"
+    
+    - name: Run tests with coverage
+      run: |
+        pytest --cov=src --cov-report=xml --cov-report=term
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        fail_ci_if_error: true
+```
+
+## 🎯 Testing Checklist
+
+### For New Features
+
+- [ ] Write unit tests for all new functions/methods
+- [ ] Write integration tests for API endpoints
+- [ ] Add edge case tests
+- [ ] Add error handling tests
+- [ ] Update or add fixtures as needed
+- [ ] Ensure 90%+ coverage for new code
+- [ ] Run full test suite locally
+- [ ] Update documentation
+
+### For Bug Fixes
+
+- [ ] Write a failing test that reproduces the bug
+- [ ] Fix the bug
+- [ ] Ensure test now passes
+- [ ] Add regression tests
+- [ ] Check for similar issues elsewhere
+- [ ] Run related test suites
+
+## 📚 Best Practices Summary
+
+1. **Use Descriptive Test Names**: Test names should describe what is being tested and expected outcome
+2. **Follow AAA Pattern**: Arrange, Act, Assert for clear test structure
+3. **One Assertion Per Test**: Keep tests focused on single behavior
+4. **Use Fixtures Wisely**: Share setup code but avoid over-coupling
+5. **Mock External Dependencies**: Keep tests fast and deterministic
+6. **Parameterize Similar Tests**: Use `@pytest.mark.parametrize` for test variations
+7. **Test Edge Cases**: Include boundary conditions and error scenarios
+8. **Keep Tests Fast**: Aim for entire suite to run in under 5 minutes
+9. **Use Markers**: Organize tests with markers for selective execution
+10. **Continuous Improvement**: Regularly review and refactor tests
+
+---
+
+For more details, see:
+- [Testing Overview](./testing) - General testing documentation
+- [Vitest Strategy](./testing-vitest-strategy) - Frontend testing with Vitest
+- [API Reference](./api-reference) - API endpoint documentation

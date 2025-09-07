@@ -1,0 +1,718 @@
+---
+title: Server Deployment
+sidebar_position: 5
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import Admonition from '@theme/Admonition';
+
+# 🐳 Server Deployment & Configuration
+
+<div className="hero hero--primary">
+  <div className="container">
+    <h2 className="hero__subtitle">
+      Deploy Archon with Docker: **Production-ready microservices** with health checks, scaling, and monitoring
+    </h2>
+  </div>
+</div>
+
+This guide covers deploying Archon's server architecture using Docker and Docker Compose, including configuration, scaling, and production best practices.
+
+## 📁 Project Structure
+
+<details>
+<summary>📂 **Click to expand complete project structure**</summary>
+
+```
+archon/
+├── python/                      # Python backend microservices
+│   ├── src/                     # Main application source
+│   │   ├── main.py              # FastAPI application entry point
+│   │   ├── socketio_app.py      # Socket.IO configuration
+│   │   ├── mcp_server.py        # MCP server implementation
+│   │   ├── config.py            # Configuration management
+│   │   ├── utils.py             # Utility functions (compatibility layer)
+│   │   ├── logfire_config.py    # Unified logging configuration
+│   │   ├── api/                 # 🎯 Modular API routers (6 modules)
+│   │   │   ├── knowledge_api.py # Knowledge & crawling endpoints
+│   │   │   ├── mcp_api.py       # MCP server control & monitoring
+│   │   │   ├── settings_api.py  # Settings & credential management
+│   │   │   ├── projects_api.py  # Project & task management
+│   │   │   ├── agent_chat_api.py# AI agent chat interface
+│   │   │   └── tests_api.py     # Test execution with streaming
+│   │   ├── agents/              # 🤖 AI agent microservice
+│   │   │   ├── server.py        # Agents service FastAPI app
+│   │   │   ├── base_agent.py    # Base agent class
+│   │   │   ├── document_agent.py# Documentation processing agent
+│   │   │   └── rag_agent.py     # RAG operations agent
+│   │   ├── config/              # 🔧 Service configuration
+│   │   │   ├── __init__.py      # Config module init
+│   │   │   └── service_discovery.py # Inter-service communication
+│   │   ├── modules/             # 📦 MCP tool modules (14 total tools)
+│   │   │   ├── models.py        # Pydantic data models
+│   │   │   ├── rag_module.py    # RAG functionality (7 MCP tools)
+│   │   │   └── project_module.py# Project & task management (7 MCP tools)
+│   │   ├── services/            # 🔧 Modular service layer (20+ services)
+│   │   │   ├── embeddings/              # Embedding operations
+│   │   │   │   ├── embedding_service.py # OpenAI embeddings with rate limiting
+│   │   │   │   └── contextual_embedding_service.py # Contextual embeddings
+│   │   │   ├── storage/                 # Storage operations
+│   │   │   │   ├── document_storage_service.py # Document storage with parallel processing
+│   │   │   │   └── code_storage_service.py     # Code example extraction & storage
+│   │   │   ├── search/                  # Search operations
+│   │   │   │   └── vector_search_service.py    # Vector similarity search
+│   │   │   ├── projects/                # Project management services
+│   │   │   │   ├── project_service.py   # Core project operations
+│   │   │   │   ├── task_service.py      # Task management operations
+│   │   │   │   ├── document_service.py  # Document operations
+│   │   │   │   └── versioning_service.py# Version control operations
+│   │   │   ├── rag/                     # RAG services
+│   │   │   │   ├── crawling_service.py  # Web crawling functionality
+│   │   │   │   ├── document_storage_service.py # RAG document storage
+│   │   │   │   ├── search_service.py    # RAG search & reranking
+│   │   │   │   └── source_management_service.py# Source management
+│   │   │   ├── client_manager.py        # Database client management
+│   │   │   ├── credential_service.py    # Credential management (in services/)
+│   │   │   ├── source_management_service.py    # Source metadata management
+│   │   │   ├── threading_service.py     # Thread pool & rate limiting
+│   │   │   ├── mcp_service_client.py    # MCP HTTP client
+│   │   │   ├── mcp_session_manager.py   # MCP session handling
+│   │   │   └── prompt_service.py        # Prompt management
+│   │   └── models/              # 📊 Data models
+│   ├── Dockerfile.server        # Server service container
+│   ├── Dockerfile.mcp           # MCP service container
+│   ├── Dockerfile.agents        # Agents service container
+│   ├── pyproject.toml           # Python project configuration
+│   └── uv.lock                  # Dependency lock file
+├── archon-ui-main/              # React frontend application
+│   ├── src/                     # Frontend source code
+│   │   ├── components/          # React components
+│   │   ├── pages/               # Page components
+│   │   ├── services/            # API service layer
+│   │   └── types/               # TypeScript definitions
+│   ├── Dockerfile               # Frontend container
+│   └── vite.config.ts           # Vite configuration
+├── docs/                        # Docusaurus documentation
+├── migration/                   # Database migration scripts
+├── docker-compose.yml           # Container orchestration
+└── .env                         # Environment configuration
+```
+
+</details>
+
+## 🐳 Docker Deployment
+
+### Microservices Configuration
+
+<Tabs>
+<TabItem value="docker-compose" label="🐳 docker-compose.yml">
+
+```yaml title="docker-compose.yml"
+services:
+  # Server Service (FastAPI + Socket.IO)
+  archon-server:
+    build:
+      context: ./python
+      dockerfile: Dockerfile.server
+    container_name: Archon-Server
+    ports:
+      - "8080:8080"
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - LOGFIRE_TOKEN=${LOGFIRE_TOKEN:-}
+      - SERVICE_DISCOVERY_MODE=docker_compose
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./python/src:/app/src:ro
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # MCP Server Service
+  archon-mcp:
+    build:
+      context: ./python
+      dockerfile: Dockerfile.mcp
+    container_name: archon-mcp
+    ports:
+      - "8051:8051"
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - LOGFIRE_TOKEN=${LOGFIRE_TOKEN:-}
+      - SERVICE_DISCOVERY_MODE=docker_compose
+      - TRANSPORT=sse
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./python/src:/app/src:ro
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.connect(('localhost', 8051)); s.close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # AI Agents Service
+  archon-agents:
+    build:
+      context: ./python
+      dockerfile: Dockerfile.agents
+    container_name: archon-agents
+    ports:
+      - "8052:8052"
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - LOGFIRE_TOKEN=${LOGFIRE_TOKEN:-}
+      - SERVICE_DISCOVERY_MODE=docker_compose
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./python/src:/app/src:ro
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8052/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Frontend
+  frontend:
+    build: ./archon-ui-main
+    container_name: archon-frontend
+    ports:
+      - "3737:5173"
+    environment:
+      - VITE_API_URL=http://localhost:8080
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5173"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - ./archon-ui-main/src:/app/src
+      - ./archon-ui-main/public:/app/public
+    depends_on:
+      - archon-server
+
+  # Documentation
+  docs:
+    build:
+      context: ./docs
+      dockerfile: Dockerfile
+    container_name: archon-docs
+    ports:
+      - "3838:80"
+    networks:
+      - app-network
+    depends_on:
+      - archon-server
+      - frontend
+
+networks:
+  app-network:
+    driver: bridge
+```
+
+</TabItem>
+<TabItem value="dockerfiles" label="🐳 Dockerfiles">
+
+#### Server Service Dockerfile
+
+```dockerfile title="Dockerfile.server"
+# Multi-stage build for smaller image size
+FROM python:3.12-slim AS builder
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv for faster dependency installation
+RUN pip install --no-cache-dir uv
+
+# Copy dependency files
+COPY pyproject.toml uv.lock ./
+
+# Install dependencies
+RUN uv sync --all-extras
+
+# Copy application files
+COPY src/ src/
+
+# Compile Python files for faster startup
+RUN python -m compileall src/
+
+# Runtime stage
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Copy virtual environment from builder
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/src /app/src
+
+# Set environment variables
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONPATH="/app/src:$PYTHONPATH"
+ENV PYTHONUNBUFFERED=1
+
+# Expose port
+EXPOSE 8080
+
+# Run the FastAPI application with Socket.IO
+CMD ["python", "-m", "uvicorn", "src.main:socket_app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+```
+
+#### MCP Service Dockerfile
+
+```dockerfile title="Dockerfile.mcp"
+FROM python:3.12-slim AS builder
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv
+RUN pip install --no-cache-dir uv
+
+# Copy dependency files
+COPY pyproject.toml uv.lock ./
+
+# Install dependencies
+RUN uv sync --all-extras
+
+# Copy application files
+COPY src/ src/
+
+# Compile Python files
+RUN python -m compileall src/
+
+# Runtime stage
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Copy virtual environment from builder
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/src /app/src
+
+# Set environment variables
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONPATH="/app/src:$PYTHONPATH"
+ENV PYTHONUNBUFFERED=1
+
+# Default to SSE transport
+ENV TRANSPORT=sse
+ENV MCP_PORT=8051
+
+# Expose port
+EXPOSE 8051
+
+# Run the MCP server
+CMD ["python", "src/mcp_server.py"]
+```
+
+#### Agents Service Dockerfile
+
+```dockerfile title="Dockerfile.agents"
+FROM python:3.12-slim AS builder
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv
+RUN pip install --no-cache-dir uv
+
+# Copy dependency files
+COPY pyproject.toml uv.lock ./
+
+# Install dependencies
+RUN uv sync --all-extras
+
+# Copy application files
+COPY src/ src/
+
+# Compile Python files
+RUN python -m compileall src/
+
+# Runtime stage
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Copy virtual environment from builder
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/src /app/src
+
+# Set environment variables
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONPATH="/app/src:$PYTHONPATH"
+ENV PYTHONUNBUFFERED=1
+
+# Expose port
+EXPOSE 8052
+
+# Run the Agents service
+CMD ["python", "-m", "uvicorn", "src.agents.server:app", "--host", "0.0.0.0", "--port", "8052"]
+```
+
+</TabItem>
+</Tabs>
+
+## ⚙️ Environment Configuration
+
+### Required Environment Variables
+
+Create a `.env` file in the project root:
+
+```bash title=".env"
+# Database Configuration
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_KEY=your-service-key-here
+
+# OpenAI Configuration
+OPENAI_API_KEY=sk-your-openai-api-key
+
+# Unified Logging Configuration
+LOGFIRE_ENABLED=false              # true=Logfire logging, false=standard logging
+LOGFIRE_TOKEN=your-logfire-token    # Only required when LOGFIRE_ENABLED=true
+
+# Service Configuration
+SERVICE_DISCOVERY_MODE=docker_compose
+LOG_LEVEL=INFO
+
+# Optional: Custom Ports
+API_PORT=8080
+MCP_PORT=8051
+AGENTS_PORT=8052
+FRONTEND_PORT=3737
+DOCS_PORT=3838
+```
+
+### Environment Variable Reference
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SUPABASE_URL` | ✅ | - | Supabase project URL |
+| `SUPABASE_SERVICE_KEY` | ✅ | - | Supabase service role key |
+| `OPENAI_API_KEY` | ✅ | - | OpenAI API key for embeddings |
+| `LOGFIRE_ENABLED` | ❌ | `false` | Enable unified Logfire logging (`true`/`false`) |
+| `LOGFIRE_TOKEN` | ❌ | - | Logfire token (only required when enabled) |
+| `SERVICE_DISCOVERY_MODE` | ❌ | `local` | Service discovery mode (`docker_compose` or `local`) |
+| `LOG_LEVEL` | ❌ | `INFO` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `TRANSPORT` | ❌ | `sse` | MCP transport mode (`sse`, `stdio`, `websocket`) |
+
+## 🚀 Quick Start
+
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/archon/archon.git
+   cd archon
+   ```
+
+2. **Set up environment variables**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your credentials
+   ```
+
+3. **Start all services**
+   ```bash
+   docker compose up -d
+   ```
+
+4. **Verify services are running**
+   ```bash
+   docker compose ps
+   # All services should show as "healthy"
+   ```
+
+5. **Access the application**
+   - Web UI: http://localhost:3737
+   - API Docs: http://localhost:8080/docs
+   - MCP Connection: http://localhost:8051/sse
+   - Agents API: http://localhost:8052/docs
+   - Documentation: http://localhost:3838
+
+## 📈 Performance Optimization
+
+### Service-Specific Optimizations
+
+1. **Server Service**
+   - Connection pooling for database
+   - Request caching with Redis
+   - Async request handling
+
+2. **MCP Service**
+   - Tool execution timeout management
+   - Connection recycling
+   - Memory-efficient streaming
+
+3. **Agents Service**
+   - PydanticAI agent orchestration
+   - MCP tool call optimization
+   - Intelligent request routing to appropriate tools
+
+### Resource Limits
+
+Add resource limits for production deployments:
+
+```yaml title="docker-compose.prod.yml"
+services:
+  archon-server:
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+
+  archon-mcp:
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+  archon-agents:
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+```
+
+## 🔄 Scaling Services
+
+Each microservice can be scaled independently:
+
+```bash
+# Scale the Agents service for more processing power
+docker compose up -d --scale archon-agents=3
+
+# Scale the Server service for more concurrent requests
+docker compose up -d --scale archon-server=2
+
+# MCP typically doesn't need scaling as it's connection-based
+```
+
+### Load Balancing
+
+For production deployments with multiple instances, use a load balancer:
+
+```yaml title="docker-compose.lb.yml"
+services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - archon-server
+    networks:
+      - app-network
+```
+
+## 🔒 Security Best Practices
+
+### 1. Use Docker Secrets
+
+```yaml title="docker-compose.secrets.yml"
+services:
+  archon-server:
+    environment:
+      - OPENAI_API_KEY_FILE=/run/secrets/openai_key
+    secrets:
+      - openai_key
+
+secrets:
+  openai_key:
+    file: ./secrets/openai_key.txt
+```
+
+### 2. Network Isolation
+
+```yaml
+networks:
+  frontend-network:
+    driver: bridge
+  backend-network:
+    driver: bridge
+    internal: true
+```
+
+### 3. Read-Only Volumes
+
+Mount source code as read-only in production:
+
+```yaml
+volumes:
+  - ./python/src:/app/src:ro
+```
+
+## 🛠️ Development Mode
+
+For local development with hot reloading:
+
+```yaml title="docker-compose.dev.yml"
+services:
+  archon-server:
+    command: ["python", "-m", "uvicorn", "src.main:socket_app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
+    volumes:
+      - ./python/src:/app/src
+    environment:
+      - LOG_LEVEL=DEBUG
+```
+
+## 📊 Monitoring & Health Checks
+
+### Service Health Endpoints
+
+- **Server**: `http://localhost:8080/health`
+- **MCP**: `http://localhost:8051/sse` (SSE endpoint)
+- **Agents**: `http://localhost:8052/health`
+
+### Docker Health Checks
+
+All services include health checks that:
+- Run every 30 seconds
+- Timeout after 10 seconds
+- Retry 3 times before marking unhealthy
+- Wait 40 seconds before first check
+
+### Monitoring Commands
+
+```bash
+# View service logs
+docker compose logs -f archon-server
+
+# Check service health
+docker inspect archon-server | grep -A 5 Health
+
+# Monitor resource usage
+docker stats
+
+# View running processes
+docker compose top
+```
+
+## 🔧 Troubleshooting
+
+### Common Issues
+
+#### Services Not Starting
+
+```bash
+# Check logs for specific service
+docker compose logs archon-server
+
+# Verify environment variables
+docker compose config
+
+# Rebuild images
+docker compose build --no-cache
+```
+
+#### Database Connection Issues
+
+```bash
+# Test database connectivity
+docker exec archon-server python -c "
+from src.services.client_manager import get_supabase_client
+client = get_supabase_client()
+print('Database connected successfully')
+"
+```
+
+#### Port Conflicts
+
+```bash
+# Check for port usage
+lsof -i :8080
+netstat -tulpn | grep 8080
+
+# Use alternative ports in .env
+API_PORT=8090
+MCP_PORT=8061
+```
+
+## 🚢 Production Deployment
+
+### 1. Use Production Images
+
+```bash
+# Build optimized images
+docker compose -f docker-compose.yml -f docker-compose.prod.yml build
+
+# Push to registry
+docker tag archon-server:latest your-registry/archon-server:v1.0.0
+docker push your-registry/archon-server:v1.0.0
+```
+
+### 2. Enable Swarm Mode
+
+```bash
+# Initialize swarm
+docker swarm init
+
+# Deploy stack
+docker stack deploy -c docker-compose.yml archon
+```
+
+### 3. Configure Logging
+
+```yaml
+services:
+  archon-server:
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+```
+
+---
+
+**Next Steps**: 
+- Learn about [Server Monitoring](./server-monitoring) with Logfire
+- Review [Server Services](./server-services) documentation
+- Explore the [API Reference](./api-reference) for endpoints
+- Check [MCP Server Setup](./mcp-server) for AI client integration

@@ -1,0 +1,194 @@
+# Code Extraction Rules
+
+This document outlines the sophisticated rules and algorithms used by Archon's code extraction service to identify, extract, and validate code examples from various sources.
+
+## Overview
+
+The code extraction service intelligently extracts meaningful code examples from crawled documents while filtering out non-code content like diagrams, prose, and malformed snippets. It uses dynamic thresholds, language-specific patterns, and quality validation to ensure high-quality code examples.
+
+## Key Features
+
+### 1. Dynamic Minimum Length Calculation
+
+Instead of using a fixed minimum length, the service calculates appropriate thresholds based on:
+
+- **Language characteristics**: Different languages have different verbosity levels
+- **Context clues**: Words like "example", "snippet", "implementation" adjust expectations
+- **Base thresholds by language**:
+  - JSON/YAML/XML: 100 characters
+  - HTML/CSS/SQL: 150 characters  
+  - Python/Go: 200 characters
+  - JavaScript/TypeScript/Rust/C: 250 characters
+  - Java/C++: 300 characters
+
+### 2. Complete Code Block Detection
+
+The service extends code blocks to natural boundaries rather than cutting off at arbitrary character limits:
+
+- Looks for closing braces, parentheses, or language-specific patterns
+- Extends up to 5000 characters to find complete functions/classes
+- Uses language-specific block end patterns (e.g., unindented line for Python)
+- Recognizes common code boundaries like double newlines or next function declarations
+
+### 3. HTML Span Handling
+
+Sophisticated handling of syntax-highlighted code from various documentation sites:
+
+- Detects when spans are used for syntax highlighting (no spaces between `</span><span>`)
+- Preserves code structure while removing HTML markup
+- Handles various highlighting libraries: Prism.js, highlight.js, Shiki, CodeMirror, Monaco
+- Special extraction for complex editors like CodeMirror that use nested divs
+
+### 4. Enhanced Quality Validation
+
+Multi-layer validation ensures only actual code is extracted:
+
+#### Exclusion Filters
+- Diagram languages (Mermaid, PlantUML, GraphViz)
+- Prose detection (>15% prose indicators like "the", "this", "however")
+- Excessive comments (>70% comment lines)
+- Malformed code (concatenated keywords, unresolved HTML entities)
+
+#### Inclusion Requirements
+- Minimum 3 code indicators from:
+  - Function calls: `function()`
+  - Assignments: `var = value`
+  - Control flow: `if`, `for`, `while`
+  - Declarations: `class`, `function`, `const`
+  - Imports: `import`, `require`
+  - Operators and brackets
+- Language-specific indicators (at least 2 required)
+- Reasonable structure (3+ non-empty lines, reasonable line lengths)
+
+### 5. Language-Specific Patterns
+
+Tailored extraction patterns for major languages:
+
+```javascript
+// TypeScript/JavaScript
+{
+  block_start: /^\s*(export\s+)?(class|interface|function|const|type|enum)\s+\w+/,
+  block_end: /^\}(\s*;)?$/,
+  min_indicators: [':', '{', '}', '=>', 'function', 'class']
+}
+
+// Python
+{
+  block_start: /^\s*(class|def|async\s+def)\s+\w+/,
+  block_end: /^\S/, // Unindented line
+  min_indicators: ['def', ':', 'return', 'self', 'import', 'class']
+}
+```
+
+### 6. Context-Aware Extraction
+
+The service considers surrounding context to make intelligent decisions:
+
+- Adjusts minimum length based on context words ("example" → shorter, "implementation" → longer)
+- Uses context to detect language when not explicitly specified
+- Preserves 1000 characters of context before/after for better summarization
+
+## Extraction Sources
+
+### HTML Code Blocks
+
+Supports extraction from 30+ different HTML patterns including:
+
+- GitHub/GitLab highlight blocks
+- Docusaurus code blocks
+- VitePress/Astro documentation
+- Raw `<pre><code>` blocks
+- Standalone `<code>` tags (if multiline)
+
+### Plain Text Files
+
+Special handling for `.txt` and `.md` files:
+
+- Triple backtick blocks with language specifiers
+- Language-labeled sections (e.g., "TypeScript:", "Python example:")
+- Consistently indented blocks (4+ spaces)
+
+### Markdown Content
+
+Falls back to markdown extraction when HTML extraction fails:
+
+- Standard markdown code blocks
+- Handles corrupted markdown (e.g., entire file wrapped in backticks)
+
+## Code Cleaning Pipeline
+
+1. **HTML Entity Decoding**: Converts `&lt;`, `&gt;`, etc. to actual characters
+2. **Tag Removal**: Strips HTML tags while preserving code structure
+3. **Spacing Fixes**: Repairs concatenated keywords from span removal
+4. **Backtick Removal**: Removes wrapping backticks if present
+5. **Indentation Preservation**: Maintains original code formatting
+
+## Quality Metrics
+
+The service logs detailed metrics for monitoring:
+
+- Number of code blocks found per document
+- Validation pass/fail reasons
+- Language detection results
+- Extraction source types (HTML vs markdown vs text)
+- Character counts before/after cleaning
+
+## Best Practices for Content Creators
+
+To ensure your code examples are properly extracted:
+
+1. **Use standard markdown code blocks** with language specifiers
+2. **Include complete, runnable code examples** rather than fragments
+3. **Avoid mixing code with extensive inline comments**
+4. **Ensure proper HTML structure** if using custom syntax highlighting
+5. **Keep examples focused** - not too short (under 100 chars) or too long (over 5000 chars)
+
+## Configuration
+
+The extraction behavior can be tuned through the Settings page in the UI:
+
+### Available Settings
+
+#### Length Settings
+- **MIN_CODE_BLOCK_LENGTH**: Base minimum length for code blocks (default: 250 chars)
+- **MAX_CODE_BLOCK_LENGTH**: Maximum length before stopping extension (default: 5000 chars)
+- **CONTEXT_WINDOW_SIZE**: Characters of context before/after code blocks (default: 1000)
+
+#### Detection Features
+- **ENABLE_COMPLETE_BLOCK_DETECTION**: Extend code blocks to natural boundaries (default: true)
+- **ENABLE_LANGUAGE_SPECIFIC_PATTERNS**: Use language-specific patterns (default: true)
+- **ENABLE_CONTEXTUAL_LENGTH**: Adjust minimum length based on context (default: true)
+
+#### Content Filtering
+- **ENABLE_PROSE_FILTERING**: Filter out documentation text (default: true)
+- **MAX_PROSE_RATIO**: Maximum allowed prose percentage (default: 0.15)
+- **MIN_CODE_INDICATORS**: Minimum required code patterns (default: 3)
+- **ENABLE_DIAGRAM_FILTERING**: Filter out diagram languages (default: true)
+
+#### Processing Settings
+- **CODE_EXTRACTION_MAX_WORKERS**: Parallel workers for code summaries (default: 3)
+- **ENABLE_CODE_SUMMARIES**: Generate AI summaries for code examples (default: true)
+
+### How Settings Work
+
+1. **Dynamic Loading**: Settings are loaded from the database on demand, not cached as environment variables
+2. **Real-time Updates**: Changes take effect on the next extraction run without server restart
+3. **Graceful Fallbacks**: If settings can't be loaded, sensible defaults are used
+4. **Type Safety**: Settings are validated and converted to appropriate types
+
+### Best Practices
+
+- **Start with defaults**: The default values work well for most content
+- **Adjust gradually**: Make small changes and test the results
+- **Monitor logs**: Check extraction logs to see how settings affect results
+- **Language-specific tuning**: Different content types may need different settings
+
+## Future Enhancements
+
+Potential improvements under consideration:
+
+- Machine learning-based code detection
+- Support for notebook formats (Jupyter, Observable)
+- API response extraction from documentation
+- Multi-file code example correlation
+- Language-specific AST validation

@@ -1,0 +1,176 @@
+---
+title: MCP Server
+sidebar_position: 6
+---
+
+# MCP Server
+
+The MCP service provides a Model Context Protocol interface for AI clients to access Archon's functionality via HTTP.
+
+## Architecture
+
+MCP is a **protocol adapter** that:
+1. Receives MCP tool calls from AI clients
+2. Translates them to HTTP requests to the Server API
+3. Returns formatted responses to AI clients
+
+```
+AI Client (Cursor/Windsurf) → MCP Protocol → MCP Server → HTTP → Server API
+```
+
+## Available Tools
+
+### RAG Tools (7)
+
+| Tool | Purpose | Server Endpoint |
+|------|---------|----------------|
+| `perform_rag_query` | Semantic search | `POST /api/rag/query` |
+| `search_code_examples` | Code search | `POST /api/rag/code-search` |
+| `crawl_single_page` | Crawl one URL | `POST /api/knowledge-items/crawl` |
+| `smart_crawl_url` | Smart crawling | `POST /api/knowledge-items/crawl` |
+| `get_available_sources` | List sources | `GET /api/rag/sources` |
+| `upload_document` | Upload docs | `POST /api/documents/upload` |
+| `delete_source` | Delete source | `DELETE /api/sources/{id}` |
+
+### Project Tools (5)
+
+| Tool | Actions | Description |
+|------|---------|-------------|
+| `manage_project` | create, list, get, delete | Project CRUD operations |
+| `manage_task` | create, list, get, update, delete, archive | Task management |
+| `manage_document` | add, list, get, update, delete | Document management |
+| `manage_versions` | create, list, get, restore | Version control |
+| `get_project_features` | - | Get project features |
+
+### System Tools (2)
+
+| Tool | Purpose |
+|------|---------|
+| `health_check` | System health status |
+| `session_info` | Active session info |
+
+## Implementation Pattern
+
+All MCP tools follow the same pattern:
+
+```python
+@mcp.tool()
+async def delete_source(ctx: Context, source: str) -> str:
+    """Delete a source via HTTP call to Server API"""
+    client = get_mcp_service_client()
+    async with httpx.AsyncClient() as http:
+        response = await http.delete(
+            f"{client.api_url}/api/sources/{source}",
+            headers=client._get_headers()
+        )
+        return json.dumps(response.json())
+```
+
+## Configuration
+
+### Environment Variables
+
+```bash
+# Server connection
+API_BASE_URL=http://archon-server:8080
+AGENTS_BASE_URL=http://archon-agents:8052
+
+# Authentication
+MCP_SERVICE_KEY=your-service-key
+
+# Unified Logging Configuration (Optional)
+LOGFIRE_ENABLED=false              # true=Logfire logging, false=standard logging
+LOGFIRE_TOKEN=your-logfire-token    # Only required when LOGFIRE_ENABLED=true
+```
+
+### Docker Service
+
+```yaml
+archon-mcp:
+  build: ./python
+  ports:
+    - "8051:8000"
+  environment:
+    - API_BASE_URL=http://archon-server:8080
+  command: ["python", "-m", "src.mcp.mcp_server"]
+```
+
+## Client Configuration
+
+Archon MCP server uses **SSE (Server-Sent Events) transport only**.
+
+### Cursor IDE
+
+Add to MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "archon": {
+      "uri": "http://localhost:8051/sse"
+    }
+  }
+}
+```
+
+### Claude Code
+
+```bash
+claude mcp add --transport sse archon http://localhost:8051/sse
+```
+
+### Windsurf IDE
+
+Add to settings:
+
+```json
+{
+  "mcp.servers": {
+    "archon": {
+      "uri": "http://localhost:8051/sse"
+    }
+  }
+}
+```
+
+## Tool Usage Examples
+
+### RAG Query
+```typescript
+const results = await mcp.perform_rag_query({
+  query: "How to implement authentication",
+  source: "fastapi.tiangolo.com",
+  match_count: 5
+});
+```
+
+### Create Project
+```typescript
+const project = await mcp.manage_project({
+  action: "create",
+  title: "New AI Project",
+  github_repo: "https://github.com/user/repo"
+});
+```
+
+### Delete Source
+```typescript
+const result = await mcp.delete_source({
+  source: "outdated-docs.com"
+});
+```
+
+## Monitoring
+
+All MCP operations are tracked in Logfire:
+- Tool invocation metrics
+- HTTP request/response times
+- Error rates and debugging
+- Session management
+
+## Important Notes
+
+- **No business logic** - MCP only translates protocols
+- **HTTP-only communication** - No direct database access
+- **Stateless operations** - Each tool call is independent
+- **Full observability** - Every operation is logged

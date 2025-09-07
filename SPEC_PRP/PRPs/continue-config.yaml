@@ -1,0 +1,51 @@
+name: Local Agent
+version: 1.0.0
+schema: v1
+models:
+  - name: Open WebUI + Archon RAG
+    provider: openai
+    model: gpt-4o  # or claude-3.5-sonnet, or any non-thinking model
+    apiBase: http://localhost:8080/api/v1
+    apiKey: sk-78c30707dcb0479a8b15354acdd34885
+    stream: true
+    useLegacyCompletionsEndpoint: false
+    requestOptions:
+      timeout: 60000
+      headers:
+        Accept: application/json
+        Content-Type: application/json
+    defaultCompletionOptions:
+      temperature: 0.1
+      maxTokens: 4096
+      response_format: { "type": "text" }
+    roles:
+      - chat
+      - edit
+
+  - name: Code Autocomplete
+    provider: openai
+    model: codellama:7b-code
+    apiBase: http://localhost:8080/api/v1
+    apiKey: sk-YOUR-OPEN-WEBUI-API-KEY
+    defaultCompletionOptions:
+      temperature: 0.2
+      maxTokens: 500
+    roles:
+      - autocomplete
+
+tabAutocompleteModel: Code Autocomplete
+
+slashCommands:
+  - name: edit
+    description: Edit selected code
+  - name: comment
+    description: Add comments to code
+  - name: share
+    description: Share code context
+
+customCommands:
+  - name: archon
+    description: Search Archon knowledge base
+    prompt: Search the Archon knowledge base for {{{ input }}}
+
+allowAnonymousTelemetry: false

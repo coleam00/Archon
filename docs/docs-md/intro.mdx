@@ -1,0 +1,206 @@
+---
+title: Welcome to Archon
+sidebar_position: 1
+---
+
+<div className="hero hero--primary">
+  <div className="container">
+    <h1 className="hero__title">Archon</h1>
+    <p className="hero__subtitle">Supercharge your AI development workflow. Plug Claude Code, Cursor, Windsurf, or any AI IDE into Archon to unlock instant access to your business knowledge, technical docs, project requirements, and development tasks. Your AI gets smarter, your code gets better.</p>
+    <div>
+      <a 
+        className="button button--green-neon button--lg" 
+        href="/docs/getting-started"
+      >
+        Get Started - Quick Setup ⚡
+      </a>
+    </div>
+  </div>
+</div>
+
+## 🎯 What is Archon?
+
+Archon is a powerful knowledge engine that integrates the [Model Context Protocol (MCP)](https://modelcontextprotocol.io) with [Crawl4AI](https://crawl4ai.com) and [Supabase](https://supabase.com/) to create a centralized knowledge base for your AI agents and coding assistants.
+
+**Connect your Cursor or Windsurf agents to Archon** and give them access to:
+- Your technical documentation
+- Your business/project documentation  
+- Any website content you've crawled
+- Uploaded documents (PDFs, Word docs, markdown files)
+- A searchable knowledge base with advanced RAG capabilities
+
+With Archon's web interface, you can **manage all your knowledge in one place** - crawl websites, upload documents, organize by type, and even chat with your knowledge base to test queries before your AI agents use them.
+
+## ✨ Core Features
+
+<div className="row">
+  <div className="col col--6">
+    <div className="card">
+      <div className="card__header">
+        <h3>🧠 Archon Knowledge</h3>
+      </div>
+      <div className="card__body">
+        <p>
+          <strong>Build your AI's memory bank</strong> with powerful knowledge management:
+        </p>
+        <ul>
+          <li>📚 Crawl entire documentation sites automatically</li>
+          <li>📄 Upload PDFs, Word docs, and markdown files</li>
+          <li>🔍 Semantic search with AI-enhanced results</li>
+          <li>💻 Code example extraction and indexing</li>
+          <li>🎯 Source filtering for precise queries</li>
+        </ul>
+        <a href="/docs/knowledge-overview" className="button button--primary">
+          Explore Archon Knowledge →
+        </a>
+      </div>
+    </div>
+  </div>
+  <div className="col col--6">
+    <div className="card">
+      <div className="card__header">
+        <h3>📊 Archon Projects</h3>
+      </div>
+      <div className="card__body">
+        <p>
+          <strong>AI-powered project management</strong> integrated with your workflow:
+        </p>
+        <ul>
+          <li>📋 Hierarchical task management</li>
+          <li>🤖 AI agents can create and update tasks</li>
+          <li>📝 Rich document editing with version control</li>
+          <li>🔗 GitHub repository integration</li>
+          <li>📈 Kanban and table views</li>
+        </ul>
+        <a href="/docs/projects-overview" className="button button--primary">
+          Explore Archon Projects →
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+
+## 🔌 Universal AI Integration
+
+<div className="row margin-top--lg">
+  <div className="col col--4">
+    <div className="text--center">
+      <img src="/img/cursor.svg" alt="Cursor" style={{height: '60px', marginBottom: '1rem'}} />
+      <h4>Cursor IDE</h4>
+      <p>One-click setup with deeplink support</p>
+    </div>
+  </div>
+  <div className="col col--4">
+    <div className="text--center">
+      <img src="/img/windsurf-white-symbol.svg" alt="Windsurf" style={{height: '60px', marginBottom: '1rem'}} />
+      <h4>Windsurf</h4>
+      <p>Native MCP integration</p>
+    </div>
+  </div>
+  <div className="col col--4">
+    <div className="text--center">
+      <img src="/img/claude-logo.svg" alt="Claude" style={{height: '60px', marginBottom: '1rem'}} />
+      <h4>Claude Code</h4>
+      <p>Full MCP tool support</p>
+    </div>
+  </div>
+</div>
+
+## 🚀 Quick Start
+
+Ready to get started? Follow our comprehensive setup guide:
+
+👉 **[Getting Started Guide](./getting-started)** - Complete setup from installation to first knowledge base
+
+## 📚 Documentation Sections
+
+| Section | Description |
+|---------|-------------|
+| **[Getting Started](./getting-started)** | Complete setup guide from prerequisites to first crawl |
+| **[Configuration](./configuration)** | Environment variables, database setup, and service configuration |
+| **[MCP Integration](./mcp-overview)** | Connect AI clients like Cursor, Windsurf, Claude Desktop |
+| **[API Reference](./api-reference)** | Complete REST API documentation with examples |
+| **[Socket.IO Communication](./websockets)** | Real-time updates, progress tracking, and troubleshooting |
+| **[RAG Strategies](./rag)** | Configure advanced retrieval strategies for optimal performance |
+| **[Task Management](./tasks)** | Organize projects and tasks with AI agent integration |
+| **[Web Interface](./ui)** | Comprehensive guide to the React frontend |
+| **[Server Architecture](./server)** | Technical details about the backend and MCP server |
+| **[Testing](./testing)** | Testing strategies and troubleshooting guides |
+| **[Deployment](./deployment)** | Production deployment with Docker and scaling |
+
+## 🛠️ Architecture Overview
+
+```mermaid
+%%{init:{
+  'theme':'base',
+  'themeVariables': {
+    'primaryColor':'#1f2937',
+    'primaryTextColor':'#ffffff',
+    'primaryBorderColor':'#8b5cf6',
+    'lineColor':'#a855f7',
+    'textColor':'#ffffff',
+    'fontFamily':'Inter',
+    'fontSize':'14px',
+    'background':'#000000',
+    'mainBkg':'#1f2937',
+    'secondBkg':'#111827',
+    'borderColor':'#8b5cf6',
+    'clusterBkg':'#111827',
+    'clusterBorder':'#8b5cf6'
+  }
+}}%%
+graph TB
+    subgraph "AI Clients"
+        Cursor(Cursor IDE)
+        Windsurf(Windsurf IDE)
+        Claude(Claude Desktop)
+    end
+    
+    subgraph "Archon Microservices"
+        UI["Frontend Service<br/>archon-frontend<br/>Port 3737"]
+        API["Server Service<br/>Archon-Server<br/>Port 8080"]
+        MCP["MCP Service<br/>archon-mcp<br/>Port 8051"]
+        Agents["Agents Service<br/>archon-agents<br/>Port 8052"]
+        Docs["Documentation<br/>archon-docs<br/>Port 3838"]
+    end
+
+    subgraph "External Services"
+        Supabase["Supabase<br/>PostgreSQL + Vector DB"]
+        OpenAI["OpenAI API<br/>Embeddings"]
+    end
+    
+    Cursor -.->|MCP Protocol| MCP
+    Windsurf -.->|MCP Protocol| MCP
+    Claude -.->|MCP Protocol| MCP
+    
+    UI --> API
+    MCP --> API
+    API --> Agents
+    API --> Supabase
+    Agents --> OpenAI
+    MCP --> Supabase
+```
+
+## 🔮 Real-Time Features
+
+Archon implements comprehensive real-time communication:
+
+- **🔄 Live Progress Tracking**: Real-time updates during crawling operations
+- **📡 Server Log Streaming**: Socket.IO-based log streaming from MCP server to UI
+- **🎯 Progress Callbacks**: Business logic reports progress via callbacks to Socket.IO broadcasts
+- **🔗 Auto-Reconnection**: Robust connection handling with automatic reconnect on failures
+- **📱 Responsive UI Updates**: Instant feedback without polling or page refreshes
+
+📋 **[Complete Socket.IO Guide](./server#socket-io-communication)** - Implementation patterns and best practices
+
+## 🎯 Next Steps
+
+1. **[Set up Archon](./getting-started)** - Get your knowledge engine running
+2. **[Connect your AI client](./mcp-overview)** - Integrate with Cursor, Windsurf, or Claude Desktop  
+3. **[Build your knowledge base](./getting-started#building-your-knowledge-base)** - Start crawling and uploading content
+4. **[Optimize for your use case](./rag)** - Configure RAG strategies
+5. **[Deploy to production](./deployment)** - Scale for team or enterprise use
+
+---
+
+**Transform your AI coding experience with Archon** - *Build once, query everywhere* 

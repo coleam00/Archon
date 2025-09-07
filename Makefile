@@ -5,7 +5,7 @@ SHELL := /bin/bash
 # Docker compose command - prefer newer 'docker compose' plugin over standalone 'docker-compose'
 COMPOSE ?= $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
 
-.PHONY: help dev dev-docker stop test test-fe test-be lint lint-fe lint-be clean install check
+.PHONY: help dev dev-docker stop test test-fe test-be lint lint-fe lint-be clean install check logs logs-backend logs-all logs-clear
 
 help:
 	@echo "Archon Development Commands"
@@ -22,6 +22,12 @@ help:
 	@echo "  make clean      - Remove containers and volumes"
 	@echo "  make install    - Install dependencies"
 	@echo "  make check      - Check environment setup"
+	@echo ""
+	@echo "  Logging Commands:"
+	@echo "  make logs       - Follow all container logs"
+	@echo "  make logs-backend - Follow backend logs only"
+	@echo "  make logs-all   - Show all logs from container start"
+	@echo "  make logs-clear - Clear terminal and follow logs"
 
 # Install dependencies
 install:
@@ -105,5 +111,23 @@ clean:
 	else \
 		echo "Cancelled"; \
 	fi
+
+# Logging commands
+logs:
+	@echo "📜 Following all container logs (Ctrl+C to stop)..."
+	@$(COMPOSE) logs -f --tail=100
+
+logs-backend:
+	@echo "📜 Following backend logs (Ctrl+C to stop)..."
+	@$(COMPOSE) logs -f --tail=100 archon-backend
+
+logs-all:
+	@echo "📜 Showing all logs from container start..."
+	@$(COMPOSE) logs -f
+
+logs-clear:
+	@clear
+	@echo "📜 Following all container logs (Ctrl+C to stop)..."
+	@$(COMPOSE) logs -f --tail=50
 
 .DEFAULT_GOAL := help

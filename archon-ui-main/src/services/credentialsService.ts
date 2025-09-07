@@ -16,6 +16,7 @@ export interface RagSettings {
   USE_HYBRID_SEARCH: boolean;
   USE_AGENTIC_RAG: boolean;
   USE_RERANKING: boolean;
+  SIMILARITY_THRESHOLD?: number;
   MODEL_CHOICE: string;
   LLM_PROVIDER?: string;
   LLM_BASE_URL?: string;
@@ -149,6 +150,7 @@ class CredentialsService {
       USE_HYBRID_SEARCH: true,
       USE_AGENTIC_RAG: true,
       USE_RERANKING: true,
+      SIMILARITY_THRESHOLD: 0.15,
       MODEL_CHOICE: "gpt-4.1-nano",
       LLM_PROVIDER: "openai",
       LLM_BASE_URL: "",
@@ -208,6 +210,8 @@ class CredentialsService {
         // Float fields
         else if (cred.key === "CRAWL_DELAY_BEFORE_HTML") {
           settings[cred.key] = parseFloat(cred.value || "0.5") || 0.5;
+        } else if (cred.key === "SIMILARITY_THRESHOLD") {
+          (settings as any)[cred.key] = parseFloat(cred.value || "0.15");
         }
         // Boolean fields
         else {

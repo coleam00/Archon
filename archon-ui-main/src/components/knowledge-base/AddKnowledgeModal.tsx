@@ -4,7 +4,10 @@ import {
   Upload, 
   BoxIcon, 
   Brain,
-  Plus
+  Plus,
+  Folder,
+  Files,
+  File as FileIcon
 } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
@@ -32,6 +35,10 @@ export const AddKnowledgeModal = ({
   const [newTag, setNewTag] = useState('');
   const [knowledgeType, setKnowledgeType] = useState<'technical' | 'business'>('technical');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [groupByFolder, setGroupByFolder] = useState(false);
+  const [groupAsSingle, setGroupAsSingle] = useState(false);
+  const [groupDisplayName, setGroupDisplayName] = useState('');
   const [loading, setLoading] = useState(false);
   const [crawlDepth, setCrawlDepth] = useState(2);
   const [showDepthTooltip, setShowDepthTooltip] = useState(false);
@@ -146,36 +153,66 @@ export const AddKnowledgeModal = ({
           onSuccess();
         }
       } else {
-        if (!selectedFile) {
-          showToast('Please select a file', 'error');
+        const filesToSend = selectedFiles.length > 0 ? selectedFiles : (selectedFile ? [selectedFile] : []);
+        if (filesToSend.length === 0) {
+          showToast('Please select at least one file', 'error');
           return;
         }
-        
-        const result = await knowledgeBaseService.uploadDocument(selectedFile, {
-          knowledge_type: knowledgeType,
-          tags
-        });
-        
-        if (result.success && result.progressId) {
-          onStartCrawl(result.progressId, {
-            currentUrl: `file://${selectedFile.name}`,
-            progress: 0,
-            status: 'starting',
-            uploadType: 'document',
-            fileName: selectedFile.name,
-            fileType: selectedFile.type,
-            originalUploadParams: {
-              file: selectedFile,
-              knowledge_type: knowledgeType,
-              tags
-            }
+
+        if (filesToSend.length === 1 && !groupByFolder && !groupAsSingle) {
+          const single = filesToSend[0];
+          const result = await knowledgeBaseService.uploadDocument(single, {
+            knowledge_type: knowledgeType,
+            tags
           });
-          
-          showToast('Document upload started', 'success');
-          onClose();
+          if (result.success && result.progressId) {
+            onStartCrawl(result.progressId, {
+              currentUrl: `file://${single.name}`,
+              progress: 0,
+              status: 'starting',
+              uploadType: 'document',
+              fileName: single.name,
+              fileType: single.type,
+              originalUploadParams: {
+                file: single,
+                knowledge_type: knowledgeType,
+                tags
+              }
+            });
+            showToast('Document upload started', 'success');
+            onClose();
+          } else {
+            showToast(result.message || 'Document uploaded', 'success');
+            onSuccess();
+          }
         } else {
-          showToast(result.message || 'Document uploaded', 'success');
-          onSuccess();
+          const result = await knowledgeBaseService.uploadDocumentsBatch(filesToSend, {
+            knowledge_type: knowledgeType,
+            tags,
+            groupBy: groupAsSingle ? 'batch' : (groupByFolder ? 'folder' : 'file'),
+            groupDisplayName: groupAsSingle ? groupDisplayName : undefined,
+          });
+          if (result.success && result.progressId) {
+            onStartCrawl(result.progressId, {
+              currentUrl: `files://${filesToSend[0].name}`,
+              progress: 0,
+              status: 'starting',
+              uploadType: groupAsSingle ? 'batch-single-source' : (groupByFolder ? 'batch-folder' : 'batch'),
+              fileName: `${filesToSend[0].name} +${filesToSend.length - 1} more`,
+              fileType: 'batch',
+              fileCount: filesToSend.length,
+              originalUploadParams: {
+                files: filesToSend,
+                knowledge_type: knowledgeType,
+                tags
+              }
+            });
+            showToast(`Batch upload started for ${filesToSend.length} files`, 'success');
+            onClose();
+          } else {
+            showToast(result.message || 'Batch upload started', 'success');
+            onSuccess();
+          }
         }
       }
     } catch (error) {
@@ -263,7 +300,7 @@ export const AddKnowledgeModal = ({
                 : 'border-gray-200 dark:border-zinc-900 text-gray-500 dark:text-zinc-400 hover:border-pink-300 dark:hover:border-pink-500/30'}`}
           >
             <Upload className="w-4 h-4" />
-            <span>Upload File</span>
+            <span>Upload Files</span>
           </button>
         </div>
 
@@ -290,41 +327,181 @@ export const AddKnowledgeModal = ({
         {method === 'file' && (
           <div className="mb-6">
             <label className="block text-gray-600 dark:text-zinc-400 text-sm mb-2">
-              Upload Document
+              Upload Files
             </label>
             <div className="relative">
               <input 
                 id="file-upload"
                 type="file"
-                accept=".pdf,.md,.doc,.docx,.txt"
-                onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+                accept=".pdf,.md,.doc,.docx,.txt,.html,.py,.js,.ts,.tsx"
+                multiple
+                onChange={(e) => {
+                  const list = Array.from(e.target.files || []);
+                  setSelectedFiles(list);
+                  setSelectedFile(list[0] || null);
+                }}
                 className="sr-only"
               />
-              <label 
-                htmlFor="file-upload"
-                className="flex items-center justify-center gap-3 w-full p-6 rounded-md border-2 border-dashed cursor-pointer transition-all duration-300
-                  bg-blue-500/10 hover:bg-blue-500/20 
-                  border-blue-500/30 hover:border-blue-500/50
-                  text-blue-600 dark:text-blue-400
-                  hover:shadow-[0_0_15px_rgba(59,130,246,0.3)]
-                  backdrop-blur-sm"
+              {/* Hidden input for single file selection */}
+              <input
+                id="single-file-upload"
+                type="file"
+                accept=".pdf,.md,.doc,.docx,.txt,.html,.py,.js,.ts,.tsx"
+                onChange={(e) => {
+                  const file = e.target.files?.[0] || null;
+                  setSelectedFile(file);
+                  setSelectedFiles(file ? [file] : []);
+                  // Single-file mode should not auto-group
+                  setGroupAsSingle(false);
+                  setGroupByFolder(false);
+                }}
+                className="sr-only"
+              />
+
+              {/* Separate hidden input for folder selection */}
+              <input
+                id="folder-upload"
+                type="file"
+                accept=".pdf,.md,.doc,.docx,.txt,.html,.py,.js,.ts,.tsx"
+                multiple
+                webkitdirectory="true"
+                onChange={(e) => {
+                  const list = Array.from(e.target.files || []);
+                  setSelectedFiles(list);
+                  setSelectedFile(list[0] || null);
+                  // Folder heuristic: presence of webkitRelativePath
+                  const anyWithRel = list.some((f: any) => !!(f as any).webkitRelativePath);
+                  if (anyWithRel) {
+                    setGroupAsSingle(true);
+                    setGroupByFolder(false);
+                    const firstRel = (list[0] as any).webkitRelativePath as string | undefined;
+                    if (firstRel) {
+                      const topFolder = firstRel.replace(/\\/g, '/').split('/')[0] || 'Batch Upload';
+                      if (!groupDisplayName) {
+                        setGroupDisplayName(topFolder);
+                      }
+                    }
+                  }
+                }}
+                className="sr-only"
+              />
+              <div
+                className="w-full p-6 rounded-md border-2 border-dashed transition-all duration-300
+                  bg-blue-500/10
+                  border-blue-500/30
+                  text-blue-600 dark:text-blue-400 backdrop-blur-sm"
               >
-                <Upload className="w-6 h-6" />
-                <div className="text-center">
+                <div className="flex items-center justify-center gap-3 mb-5">
+                  <Upload className="w-6 h-6" />
+                  <div className="font-semibold tracking-wide">Choose what to upload</div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <Button
+                    variant="primary"
+                    accentColor="blue"
+                    className="w-full py-4 text-base"
+                    onClick={() => document.getElementById('single-file-upload')?.click()}
+                  >
+                    <FileIcon className="w-4 h-4 mr-2" /> Single File
+                  </Button>
+                  <Button
+                    variant="primary"
+                    accentColor="blue"
+                    className="w-full py-4 text-base"
+                    onClick={() => document.getElementById('file-upload')?.click()}
+                  >
+                    <Files className="w-4 h-4 mr-2" /> Multiple Files
+                  </Button>
+                  <Button
+                    variant="primary"
+                    accentColor="blue"
+                    className="w-full py-4 text-base"
+                    onClick={() => document.getElementById('folder-upload')?.click()}
+                  >
+                    <Folder className="w-4 h-4 mr-2" /> Folder
+                  </Button>
+                </div>
+                <div className="text-center mt-5">
                   <div className="font-medium">
-                    {selectedFile ? selectedFile.name : 'Choose File'}
+                    {selectedFiles.length > 1
+                      ? `${selectedFiles[0].name} +${selectedFiles.length - 1} more`
+                      : selectedFile
+                        ? selectedFile.name
+                        : 'No selection yet'}
                   </div>
                   <div className="text-sm opacity-75 mt-1">
-                    {selectedFile 
-                      ? `${(selectedFile.size / 1024 / 1024).toFixed(2)} MB` 
-                      : 'Click to browse or drag and drop'}
+                    {selectedFiles.length > 1
+                      ? `${selectedFiles.length} items`
+                      : selectedFile 
+                        ? `${(selectedFile.size / 1024 / 1024).toFixed(2)} MB` 
+                        : 'Single file, multiple files, or an entire folder'}
                   </div>
                 </div>
-              </label>
+              </div>
+          </div>
+          {/* Grouping options */}
+          <div className="mt-3 flex flex-col gap-2 text-sm text-gray-600 dark:text-zinc-400">
+            <label className="flex items-center gap-2">
+              <input
+                id="group-by-folder"
+                type="checkbox"
+                checked={groupByFolder}
+                onChange={(e) => {
+                  setGroupByFolder(e.target.checked);
+                  if (e.target.checked) setGroupAsSingle(false);
+                }}
+                className="rounded border-gray-300"
+              />
+              <span>Group uploaded files by top-level folder</span>
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                id="group-as-single"
+                type="checkbox"
+                checked={groupAsSingle}
+                onChange={(e) => {
+                  setGroupAsSingle(e.target.checked);
+                  if (e.target.checked) setGroupByFolder(false);
+                }}
+                className="rounded border-gray-300"
+              />
+              <span>Group all selected files as a single source</span>
+            </label>
+            {groupAsSingle && (
+              <div className="flex items-center gap-2">
+                <Input
+                  label="Source Title (optional)"
+                  type="text"
+                  value={groupDisplayName}
+                  onChange={(e) => setGroupDisplayName(e.target.value)}
+                  placeholder="e.g., ADK Full Docs"
+                  accentColor="pink"
+                />
+              </div>
+            )}
+          </div>
+            <div className="flex items-center justify-between mt-2 gap-3 flex-wrap">
+              <p className="text-gray-500 dark:text-zinc-600 text-sm">
+                Supports PDF, MD, DOC, HTML, and code files (.py, .js, .ts, .tsx) up to 10MB
+              </p>
+              <div className="flex items-center gap-4">
+                <label
+                  htmlFor="single-file-upload"
+                  className="text-sm text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                  title="Select a single file"
+                >
+                  Select single file
+                </label>
+                <span className="text-gray-400">|</span>
+                <label
+                  htmlFor="folder-upload"
+                  className="text-sm text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                  title="Select an entire folder"
+                >
+                  Select folder
+                </label>
+              </div>
             </div>
-            <p className="text-gray-500 dark:text-zinc-600 text-sm mt-2">
-              Supports PDF, MD, DOC up to 10MB
-            </p>
           </div>
         )}
 

@@ -1,0 +1,1 @@
+Alright now please create a handful of context filled prompts using @.claude/commands/PRPs/prp-task-create.md and @templates/prp_task.md with the objective of sizing them appropriately enough so they can be done in 1 shot by a lower level model like haiku or gemini model.

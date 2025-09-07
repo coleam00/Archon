@@ -1,0 +1,170 @@
+---
+title: Archon Projects Features
+sidebar_position: 2
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import Admonition from '@theme/Admonition';
+
+# 📊 Archon Projects: Complete Feature Reference
+
+<div className="hero hero--secondary">
+  <div className="container">
+    <h2 className="hero__subtitle">
+      Everything you can do with Archon Projects - from simple task tracking to complex project orchestration with AI assistance.
+    </h2>
+  </div>
+</div>
+
+## 🎯 Core Project Management Features
+
+### Project Organization
+- **Organized Structure**: Projects contain tasks, documents, and features
+- **GitHub Integration**: Link projects to repositories for seamless context
+- **PRD Management**: Store and version Product Requirements Documents
+- **Feature Tracking**: Organize work by features with associated tasks
+
+### Task Management
+- **Status Workflow**: Todo → Doing → Review → Done
+- **Task Organization**: Group related tasks together
+- **Task Assignment**: Assign to User, Archon, or AI IDE Agent
+- **Priority Levels**: High, Medium, Low priority organization
+- **Archive Support**: Soft delete with recovery options
+
+### Document Management
+- **Multiple Document Types**: PRDs, specs, notes, documentation
+- **Version Control**: Automatic versioning with restore capabilities
+- **Rich Text Editing**: BlockNote editor for formatted content
+- **Metadata Tracking**: Tags, status, author information
+
+## 🤖 AI Integration Features
+
+### MCP Tools Available
+
+<div className="row">
+  <div className="col col--6">
+    <div className="card">
+      <div className="card__header">
+        <h4>Project Tools</h4>
+      </div>
+      <div className="card__body">
+        <ul>
+          <li><code>manage_project</code> - Create, list, get, delete projects</li>
+          <li><code>manage_task</code> - Full task lifecycle management</li>
+          <li><code>manage_document</code> - Document CRUD operations</li>
+          <li><code>manage_versions</code> - Version control operations</li>
+          <li><code>get_project_features</code> - Retrieve project features</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div className="col col--6">
+    <div className="card">
+      <div className="card__header">
+        <h4>AI Capabilities</h4>
+      </div>
+      <div className="card__body">
+        <ul>
+          <li>AI can create projects from requirements</li>
+          <li>Automatic task breakdown from descriptions</li>
+          <li>Smart task prioritization</li>
+          <li>Context-aware task suggestions</li>
+          <li>Automated status updates</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+## 🎨 User Interface Features
+
+### Views Available
+1. **Board View**: Kanban-style task organization
+2. **Table View**: Spreadsheet-like task management
+3. **Project Dashboard**: Overview with tabs for Docs, Features, Data
+
+### Interactive Elements
+- **Drag & Drop**: Move tasks between status columns
+- **Quick Actions**: Single-click status updates
+- **Real-time Updates**: Socket.IO powered live synchronization
+- **Search & Filter**: Find tasks by status, assignee, or text
+
+## 🔧 Technical Capabilities
+
+### Backend Services
+- **Project Service**: Core project operations
+- **Task Service**: Task management logic
+- **Document Service**: Document handling
+- **Versioning Service**: Version control system
+
+### Database Schema
+- **Projects Table**: Stores project metadata and JSONB fields
+- **Tasks Table**: Task storage with project relationships
+- **Project Versions**: Complete version history
+
+### API Endpoints
+- `POST /api/projects` - Create new project
+- `GET /api/projects` - List all projects
+- `GET /api/projects/:id` - Get project details
+- `DELETE /api/projects/:id` - Delete project
+- `GET /api/tasks` - List tasks with filters
+- `POST /api/tasks` - Create new task
+- `PATCH /api/tasks/:id` - Update task
+- `POST /api/tasks/:id/archive` - Archive task
+
+## 🚀 Advanced Features
+
+### Workflow Automation
+- **Smart Task Creation**: AI analyzes requirements and creates tasks
+- **Automatic Linking**: Connect tasks to code examples and documentation
+- **Progress Tracking**: Real-time progress updates via Socket.IO
+
+### Integration Points
+- **Knowledge Base**: Link tasks to documentation
+- **Code Examples**: Attach relevant code snippets
+- **Source References**: Connect to crawled content
+
+### Collaboration Features
+- **Multi-Agent Support**: Multiple AI assistants can work on tasks
+- **Activity Tracking**: See who (human or AI) did what
+- **Comment System**: Discussion threads on tasks
+
+## 📊 Usage Examples
+
+### Creating a Project with AI
+```
+AI Assistant: "Create a new project for building a user authentication system"
+```
+The AI will:
+1. Create the project with appropriate metadata
+2. Generate initial tasks based on common patterns
+3. Set up a basic PRD structure
+4. Link to relevant documentation
+
+### Task Breakdown
+```
+AI Assistant: "Break down the 'Implement login form' task into smaller tasks"
+```
+The AI will create:
+- Design login UI component
+- Implement form validation
+- Add authentication API call
+- Handle error states
+- Write unit tests
+
+### Smart Status Updates
+```
+AI Assistant: "Update all testing tasks to 'In Progress'"
+```
+The AI will:
+- Find all tasks with "test" in the title
+- Update their status appropriately
+- Add notes about the changes
+
+## 🔗 Related Documentation
+
+- [Projects Overview](./projects-overview) - High-level introduction
+- [API Reference](./api-reference#project-management-api) - Detailed API documentation
+- [MCP Tools Reference](./mcp-tools#project-tools) - MCP tool specifications
+- [Task Agent Documentation](./agent-task) - How the AI manages tasks

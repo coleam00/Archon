@@ -1,0 +1,499 @@
+---
+title: MCP Tools Reference
+sidebar_position: 3
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import Admonition from '@theme/Admonition';
+
+# 🛠️ MCP Tools Reference
+
+<div className="hero hero--secondary">
+  <div className="container">
+    <h2 className="hero__subtitle">
+      Complete reference for all 14 MCP tools available in Archon, with parameters, return types, and usage examples.
+    </h2>
+  </div>
+</div>
+
+<Admonition type="info" icon="📚" title="Tool Organization">
+
+Archon provides 14 MCP tools organized into three categories:
+- **🧠 RAG & Knowledge Management** (7 tools)
+- **📊 Project & Task Management** (5 tools)
+- **🏥 System & Monitoring** (2 tools)
+
+All tools communicate with the Server service via HTTP APIs.
+
+</Admonition>
+
+## 🧠 RAG & Knowledge Management Tools
+
+### perform_rag_query
+
+**Purpose**: Perform semantic search across your knowledge base
+
+**Parameters**:
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `query` | `string` | ✅ | Search query text |
+| `source` | `string` | ❌ | Filter by source domain |
+| `match_count` | `integer` | ❌ | Max results (default: 5) |
+
+**Returns**:
+```json
+{
+  "results": [
+    {
+      "id": 123,
+      "content": "Matched content...",
+      "url": "https://source.com/page",
+      "title": "Page Title",
+      "similarity_score": 0.92,
+      "metadata": {
+        "source_id": "source.com",
+        "headers": ["Section 1", "Section 2"]
+      }
+    }
+  ],
+  "query": "original query",
+  "total_results": 5
+}
+```
+
+**Example Usage**:
+```
+"Search for React hooks documentation"
+
+Tool call:
+perform_rag_query(
+  query="React hooks useState useEffect",
+  source="react-docs",
+  match_count=10
+)
+```
+
+### search_code_examples
+
+**Purpose**: Search for code examples with AI-generated summaries
+
+**Parameters**:
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `query` | `string` | ✅ | Code search query |
+| `source_id` | `string` | ❌ | Filter by source |
+| `match_count` | `integer` | ❌ | Max results (default: 5) |
+
+**Returns**:
+```json
+{
+  "results": [
+    {
+      "id": 456,
+      "code": "const [state, setState] = useState(initialValue);",
+      "language": "javascript",
+      "file_path": "hooks/useState.js",
+      "summary": "React useState hook initialization",
+      "url": "https://source.com/examples",
+      "similarity_score": 0.89
+    }
+  ],
+  "total_results": 3
+}
+```
+
+### crawl_single_page
+
+**Purpose**: Crawl and index a single web page
+
+**Parameters**:
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `url` | `string` | ✅ | URL to crawl |
+| `chunk_size` | `integer` | ❌ | Chunk size (default: 5000) |
+
+**Returns**:
+```json
+{
+  "success": true,
+  "url": "https://example.com/page",
+  "title": "Page Title",
+  "chunks_created": 12,
+  "content_length": 45000,
+  "metadata": {
+    "crawled_at": "2024-01-15T10:30:00Z",
+    "processing_time": 2.5
+  }
+}
+```
+
+### smart_crawl_url
+
+**Purpose**: Intelligently crawl based on URL type (sitemap, text file, or webpage)
+
+**Parameters**:
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `url` | `string` | ✅ | URL to crawl |
+| `max_depth` | `integer` | ❌ | Max crawl depth (default: 3) |
+| `chunk_size` | `integer` | ❌ | Chunk size (default: 5000) |
+
+**Returns**:
+```json
+{
+  "success": true,
+  "crawl_type": "sitemap",
+  "urls_processed": 150,
+  "chunks_created": 1250,
+  "errors": [],
+  "duration": 180.5,
+  "source_id": "docs.example.com"
+}
+```
+
+**Crawl Types**:
+- **Sitemap**: Automatically detects and processes sitemap.xml
+- **Text File**: Direct processing of .txt files
+- **Webpage**: Recursive crawling following links
+
+### get_available_sources
+
+**Purpose**: List all indexed sources in the knowledge base
+
+**Parameters**: None
+
+**Returns**:
+```json
+{
+  "sources": [
+    {
+      "source_id": "react-docs",
+      "title": "React Documentation",
+      "description": "Official React documentation",
+      "url": "https://react.dev",
+      "document_count": 450,
+      "last_updated": "2024-01-14T08:00:00Z",
+      "tags": ["react", "javascript", "frontend"]
+    }
+  ],
+  "total_count": 12
+}
+```
+
+### upload_document
+
+**Purpose**: Upload and process documents (PDF, Word, Markdown, Text)
+
+**Parameters**:
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `filename` | `string` | ✅ | Name of the document |
+| `content` | `string` | ✅ | Document content (base64 for binary) |
+| `doc_type` | `string` | ❌ | Type: general/technical/business |
+
+**Returns**:
+```json
+{
+  "success": true,
+  "document": {
+    "id": 789,
+    "filename": "architecture.pdf",
+    "doc_type": "technical",
+    "chunks_created": 45,
+    "processing_time": 5.2,
+    "file_size": 2048576
+  }
+}
+```
+
+### delete_source
+
+**Purpose**: Remove all content from a specific source
+
+**Parameters**:
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `source` | `string` | ✅ | Source identifier to delete |
+
+**Returns**:
+```json
+{
+  "success": true,
+  "source": "old-docs.com",
+  "documents_deleted": 125,
+  "chunks_deleted": 890,
+  "code_examples_deleted": 45
+}
+```
+
+## 📊 Project & Task Management Tools
+
+### manage_project
+
+**Purpose**: Unified project management with action-based patterns
+
+**Parameters**:
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `action` | `string` | ✅ | Action: create/list/get/delete |
+| `project_id` | `string` | Conditional | Required for get/delete |
+| `title` | `string` | Conditional | Required for create |
+| `prd` | `object` | ❌ | Product requirements document |
+| `github_repo` | `string` | ❌ | GitHub repository URL |
+
+**Actions & Returns**:
+
+<Tabs>
+<TabItem value="create" label="Create">
+
+```json
+// Request
+{
+  "action": "create",
+  "title": "Authentication System",
+  "github_repo": "https://github.com/team/auth"
+}
+
+// Response
+{
+  "success": true,
+  "project": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "title": "Authentication System",
+    "github_repo": "https://github.com/team/auth",
+    "created_at": "2024-01-15T10:00:00Z"
+  }
+}
+```
+
+</TabItem>
+<TabItem value="list" label="List">
+
+```json
+// Request
+{
+  "action": "list"
+}
+
+// Response
+{
+  "success": true,
+  "projects": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "title": "Authentication System",
+      "updated_at": "2024-01-15T10:00:00Z"
+    }
+  ],
+  "total_count": 5
+}
+```
+
+</TabItem>
+<TabItem value="get" label="Get">
+
+```json
+// Request
+{
+  "action": "get",
+  "project_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+
+// Response
+{
+  "success": true,
+  "project": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "title": "Authentication System",
+    "prd": {...},
+    "features": [...],
+    "docs": [...]
+  }
+}
+```
+
+</TabItem>
+<TabItem value="delete" label="Delete">
+
+```json
+// Request
+{
+  "action": "delete",
+  "project_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+
+// Response
+{
+  "success": true,
+  "message": "Project deleted successfully"
+}
+```
+
+</TabItem>
+</Tabs>
+
+### manage_task
+
+**Purpose**: Complete task lifecycle management
+
+**Parameters**:
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `action` | `string` | ✅ | Action: create/list/get/update/delete/archive |
+| `task_id` | `string` | Conditional | Required for get/update/delete/archive |
+| `project_id` | `string` | Conditional | Required for create, optional for list |
+| `filter_by` | `string` | ❌ | Filter: status/project |
+| `filter_value` | `string` | ❌ | Value for filter |
+| `title` | `string` | Conditional | Required for create |
+| `description` | `string` | ❌ | Task description |
+| `assignee` | `string` | ❌ | User/Archon/AI IDE Agent |
+| `update_fields` | `object` | Conditional | Fields to update |
+
+**Example Task Creation**:
+```json
+{
+  "action": "create",
+  "project_id": "550e8400-e29b-41d4-a716-446655440000",
+  "title": "Implement login endpoint",
+  "description": "Create POST /api/auth/login endpoint",
+  "assignee": "AI IDE Agent",
+  "sources": [
+    {"name": "Auth Spec", "url": "https://docs/auth"}
+  ]
+}
+```
+
+### manage_document
+
+**Purpose**: Document management within projects
+
+**Parameters**:
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `action` | `string` | ✅ | Action: add/list/get/update/delete |
+| `project_id` | `string` | ✅ | Project UUID |
+| `doc_id` | `string` | Conditional | Required for get/update/delete |
+| `document_type` | `string` | Conditional | Required for add |
+| `title` | `string` | Conditional | Required for add |
+| `content` | `object` | ❌ | Document content |
+| `metadata` | `object` | ❌ | Tags, status, version |
+
+### manage_versions
+
+**Purpose**: Document version control
+
+**Parameters**:
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `action` | `string` | ✅ | Action: create/list/get/restore |
+| `project_id` | `string` | ✅ | Project UUID |
+| `field_name` | `string` | ✅ | Field to version |
+| `version_number` | `integer` | Conditional | For get/restore |
+| `content` | `object` | Conditional | For create |
+| `change_summary` | `string` | ❌ | Version description |
+
+### get_project_features
+
+**Purpose**: Retrieve features from a project
+
+**Parameters**:
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `project_id` | `string` | ✅ | Project UUID |
+
+**Returns**:
+```json
+{
+  "success": true,
+  "features": [
+    {
+      "id": "feat-001",
+      "name": "User Authentication",
+      "description": "Login/logout functionality",
+      "priority": "high",
+      "tasks": ["task-001", "task-002"]
+    }
+  ]
+}
+```
+
+## 🏥 System & Monitoring Tools
+
+### health_check
+
+**Purpose**: Check system health and service status
+
+**Parameters**: None
+
+**Returns**:
+```json
+{
+  "status": "healthy",
+  "services": {
+    "server": "running",
+    "database": "connected",
+    "mcp": "active"
+  },
+  "tools_available": 14,
+  "version": "2.0.0",
+  "uptime": "5:23:45",
+  "last_error": null
+}
+```
+
+### session_info
+
+**Purpose**: Get MCP session information
+
+**Parameters**: None
+
+**Returns**:
+```json
+{
+  "current_session": {
+    "id": "abc-123-def",
+    "created_at": "2024-01-15T10:00:00Z",
+    "last_activity": "2024-01-15T10:45:00Z",
+    "client_type": "cursor"
+  },
+  "active_sessions": 3,
+  "total_tool_calls": 1250,
+  "uptime_seconds": 19425
+}
+```
+
+## 🎯 Best Practices
+
+### Error Handling
+All tools return consistent error responses:
+```json
+{
+  "success": false,
+  "error": "Error message",
+  "error_type": "ValidationError",
+  "details": {
+    "field": "url",
+    "message": "Invalid URL format"
+  }
+}
+```
+
+### Performance Tips
+1. **Use source filters** when searching to improve speed
+2. **Batch operations** when possible (e.g., multiple task creates)
+3. **Set appropriate chunk_size** for your content type
+4. **Use match_count** wisely - more results = slower
+
+### Tool Selection
+- Use `perform_rag_query` for general searches
+- Use `search_code_examples` specifically for code
+- Use `smart_crawl_url` for unknown URL types
+- Use `manage_*` tools for CRUD operations
+
+## 🔗 Related Documentation
+
+- [MCP Server Setup](./mcp-server) - Configure MCP server
+- [MCP Overview](./mcp-overview) - Architecture overview
+- [API Reference](./api-reference) - REST API details
+- [Agent Documentation](./agents-overview) - How agents use tools

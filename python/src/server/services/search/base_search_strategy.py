@@ -6,6 +6,7 @@ This is the core semantic search functionality.
 """
 
 from typing import Any
+import os
 
 from supabase import Client
 
@@ -13,8 +14,8 @@ from ...config.logfire_config import get_logger, safe_span
 
 logger = get_logger(__name__)
 
-# Fixed similarity threshold for vector results
-SIMILARITY_THRESHOLD = 0.15
+# Default similarity threshold for vector results (overridable via settings/env)
+DEFAULT_SIMILARITY_THRESHOLD = 0.15
 
 
 class BaseSearchStrategy:
@@ -47,6 +48,24 @@ class BaseSearchStrategy:
         """
         with safe_span("base_vector_search", table=table_rpc, match_count=match_count) as span:
             try:
+                # Resolve similarity threshold from credentials or environment
+                similarity_threshold = DEFAULT_SIMILARITY_THRESHOLD
+                try:
+                    from ..credential_service import credential_service  # lazy import
+
+                    rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+                    th_val = rag_settings.get("SIMILARITY_THRESHOLD") or os.getenv(
+                        "SIMILARITY_THRESHOLD",
+                        str(DEFAULT_SIMILARITY_THRESHOLD),
+                    )
+                    similarity_threshold = float(th_val)
+                except Exception:
+                    try:
+                        similarity_threshold = float(
+                            os.getenv("SIMILARITY_THRESHOLD", str(DEFAULT_SIMILARITY_THRESHOLD))
+                        )
+                    except Exception:
+                        similarity_threshold = DEFAULT_SIMILARITY_THRESHOLD
                 # Build RPC parameters
                 rpc_params = {"query_embedding": query_embedding, "match_count": match_count}
 
@@ -68,7 +87,7 @@ class BaseSearchStrategy:
                 if response.data:
                     for result in response.data:
                         similarity = float(result.get("similarity", 0.0))
-                        if similarity >= SIMILARITY_THRESHOLD:
+                        if similarity >= similarity_threshold:
                             filtered_results.append(result)
 
                 span.set_attribute("results_found", len(filtered_results))
@@ -76,6 +95,7 @@ class BaseSearchStrategy:
                     "results_filtered",
                     len(response.data) - len(filtered_results) if response.data else 0,
                 )
+                span.set_attribute("similarity_threshold", similarity_threshold)
 
                 return filtered_results
 

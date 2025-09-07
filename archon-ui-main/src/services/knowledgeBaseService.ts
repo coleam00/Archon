@@ -263,6 +263,43 @@ class KnowledgeBaseService {
   }
 
   /**
+   * Upload multiple documents with progress tracking
+   */
+  async uploadDocumentsBatch(files: File[], metadata: UploadMetadata & { groupBy?: 'file' | 'folder' | 'batch', groupDisplayName?: string } = {}) {
+    const formData = new FormData()
+    for (const f of files) {
+      const anyFile = f as any;
+      const rel = (anyFile.webkitRelativePath as string) || f.name;
+      formData.append('files', f, rel)
+    }
+
+    if (metadata.knowledge_type) {
+      formData.append('knowledge_type', metadata.knowledge_type)
+    }
+    if (metadata.tags && metadata.tags.length > 0) {
+      formData.append('tags', JSON.stringify(metadata.tags))
+    }
+    if (metadata.groupBy) {
+      formData.append('group_by', metadata.groupBy)
+    }
+    if (metadata.groupDisplayName) {
+      formData.append('group_display_name', metadata.groupDisplayName)
+    }
+
+    const response = await fetch(`${API_BASE_URL}/documents/upload-batch`, {
+      method: 'POST',
+      body: formData
+    })
+
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.error || `HTTP ${response.status}`)
+    }
+
+    return response.json()
+  }
+
+  /**
    * Start crawling a URL with metadata
    */
   async crawlUrl(request: CrawlRequest) {
@@ -291,12 +328,15 @@ class KnowledgeBaseService {
    * Search across the knowledge base
    */
   async searchKnowledgeBase(query: string, options: SearchOptions = {}) {
+    // Backend expects 'match_count' not 'limit'. Map if provided.
+    const body: any = { query, ...options };
+    if (typeof (options as any).limit !== 'undefined') {
+      body.match_count = (options as any).limit;
+      delete body.limit;
+    }
     return apiRequest('/knowledge-items/search', {
       method: 'POST',
-      body: JSON.stringify({
-        query,
-        ...options
-      })
+      body: JSON.stringify(body)
     })
   }
 

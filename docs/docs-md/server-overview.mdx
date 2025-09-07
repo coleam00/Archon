@@ -1,0 +1,119 @@
+---
+title: Server Overview
+sidebar_position: 3
+---
+
+# Server Overview
+
+The Server service is the core of Archon, containing all business logic, services, and data operations.
+
+## Architecture
+
+### Service Responsibilities
+
+| Service | Port | Purpose | Contains |
+|---------|------|---------|----------|
+| **Server** | 8080 | Core API & business logic | Services, ML models, data operations |
+| **MCP** | 8051 | Protocol adapter for AI clients | HTTP client, MCP tool definitions |
+| **Agents** | 8052 | AI processing | PydanticAI agents only |
+| **Frontend** | 3737 | Web UI | React application |
+| **Docs** | 3838 | Documentation | Docusaurus site |
+
+### Communication Flow
+
+```
+Frontend → Server API ← MCP (via HTTP) ← AI Clients
+             ↓
+         Services
+             ↓
+         Database
+```
+
+## Docker Services
+
+```yaml
+services:
+  archon-server:     # FastAPI + Socket.IO (port 8080)
+  archon-mcp:        # MCP Server (port 8051)
+  archon-agents:     # AI Agents (port 8052)
+  archon-frontend:   # React UI (port 3737)
+  archon-docs:       # Documentation (port 3838)
+```
+
+## Key Components
+
+### FastAPI Application
+- REST API endpoints
+- Socket.IO server for real-time communication
+- Service layer integration
+
+### Service Layer
+All business logic is organized into service modules:
+- **RAG Services**: Crawling, search, document storage
+- **Project Services**: Project and task management
+- **Core Services**: Authentication, configuration
+- **Storage Services**: Database operations
+- **Embedding Services**: Vector generation
+
+### External Services
+- **Supabase**: PostgreSQL + pgvector for data storage
+- **OpenAI API**: Embeddings generation
+
+## API Structure
+
+| Router | Path | Purpose |
+|--------|------|---------|
+| `knowledge_api.py` | `/api/knowledge-items` | Knowledge management, crawling |
+| `projects_api.py` | `/api/projects` | Project and task management |
+| `mcp_api.py` | `/api/mcp` | MCP server control |
+| `settings_api.py` | `/api/settings` | Configuration management |
+| `agent_chat_api.py` | `/api/agent-chat` | AI agent interactions |
+
+## Environment Configuration
+
+Key environment variables:
+
+```bash
+# Database
+SUPABASE_URL=your_supabase_url
+SUPABASE_SERVICE_KEY=your_service_key
+
+# AI Services  
+OPENAI_API_KEY=your_openai_key
+
+# Unified Logging Configuration (Optional)
+LOGFIRE_ENABLED=false              # true=Logfire logging, false=standard logging
+LOGFIRE_TOKEN=your_logfire_token    # Only required when LOGFIRE_ENABLED=true
+
+# Service URLs (for inter-service communication)
+API_BASE_URL=http://archon-server:8080
+AGENTS_BASE_URL=http://archon-agents:8052
+```
+
+## Development Setup
+
+1. **Clone repository**
+   ```bash
+   git clone https://github.com/ArchonInnovations/archon.git
+   cd archon
+   ```
+
+2. **Start services**
+   ```bash
+   docker-compose up
+   ```
+
+3. **Access services**
+   - API Docs: http://localhost:8080/docs
+   - Frontend: http://localhost:3737
+   - Documentation: http://localhost:3838
+
+## Monitoring
+
+Logfire provides real-time observability:
+- Request/response tracking
+- Performance metrics
+- Error monitoring
+- Service health checks
+
+Access your Logfire dashboard to monitor all services in real-time.

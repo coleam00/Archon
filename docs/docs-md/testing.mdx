@@ -1,0 +1,204 @@
+---
+title: Testing
+sidebar_position: 7
+---
+
+# Testing
+
+Archon uses a comprehensive testing strategy across all services.
+
+## Testing Stack
+
+| Service | Framework | Test Types | Coverage Target |
+|---------|-----------|------------|-----------------|
+| **Frontend** | Vitest + React Testing Library | Unit, Component, Integration | 80% |
+| **Server** | Pytest + FastAPI TestClient | Unit, Integration, E2E | 85% |
+| **MCP** | Pytest | Unit, Protocol | 80% |
+| **Agents** | Pytest + PydanticAI | Unit, Agent behavior | 75% |
+
+## Running Tests
+
+### All Services
+```bash
+# Run all tests
+./scripts/test-all.sh
+
+# With coverage
+./scripts/test-all.sh --coverage
+```
+
+### Frontend Tests
+```bash
+cd ui
+npm test                 # Run tests
+npm run test:coverage    # With coverage
+npm run test:watch      # Watch mode
+```
+
+### Python Tests
+```bash
+cd python
+pytest                          # All tests
+pytest tests/test_server.py     # Specific file
+pytest -k "test_delete_source"  # Specific test
+pytest --cov=src               # With coverage
+```
+
+## Test Organization
+
+### Frontend Structure
+```
+ui/
+├── src/
+│   ├── components/
+│   │   ├── Button.tsx
+│   │   └── Button.test.tsx
+│   └── hooks/
+│       ├── useAuth.ts
+│       └── useAuth.test.ts
+└── tests/
+    ├── setup.ts
+    └── e2e/
+```
+
+### Python Structure
+```
+python/
+├── src/
+│   └── server/
+│       └── services/
+└── tests/
+    ├── conftest.py
+    ├── test_server.py
+    ├── test_services.py
+    └── fixtures/
+```
+
+## Key Testing Patterns
+
+### FastAPI Testing
+```python
+from fastapi.testclient import TestClient
+from src.server.main import app
+
+client = TestClient(app)
+
+def test_delete_source():
+    response = client.delete("/api/sources/test-source")
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+```
+
+### Service Testing
+```python
+import pytest
+from src.server.services.source_management_service import SourceManagementService
+
+@pytest.fixture
+def source_service(mock_supabase):
+    return SourceManagementService(mock_supabase)
+
+def test_delete_source_success(source_service):
+    success, result = source_service.delete_source("test-id")
+    assert success is True
+    assert result["source_id"] == "test-id"
+```
+
+### React Component Testing
+```typescript
+import { render, screen, fireEvent } from '@testing-library/react';
+import { DeleteButton } from './DeleteButton';
+
+test('calls onDelete when clicked', () => {
+  const handleDelete = jest.fn();
+  render(<DeleteButton onDelete={handleDelete} />);
+  
+  fireEvent.click(screen.getByRole('button'));
+  expect(handleDelete).toHaveBeenCalledTimes(1);
+});
+```
+
+## Mocking Strategies
+
+### Mock Supabase
+```python
+@pytest.fixture
+def mock_supabase():
+    client = Mock()
+    client.table.return_value.delete.return_value.eq.return_value.execute.return_value = Mock(data=[])
+    return client
+```
+
+### Mock HTTP Calls
+```python
+@pytest.fixture
+def mock_httpx():
+    with patch('httpx.AsyncClient') as mock:
+        yield mock
+```
+
+### Mock Socket.IO
+```python
+@pytest.fixture
+async def websocket_client():
+    async with TestClient(app).websocket_connect("/ws") as ws:
+        yield ws
+```
+
+## CI/CD Integration
+
+### GitHub Actions
+```yaml
+name: Tests
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run Tests
+        run: ./scripts/test-all.sh --coverage
+      - name: Upload Coverage
+        uses: codecov/codecov-action@v3
+```
+
+## Best Practices
+
+1. **Test Isolation** - Each test should be independent
+2. **Mock External Services** - Don't call real APIs in tests
+3. **Use Fixtures** - Share common test setup
+4. **Test Business Logic** - Focus on services, not just endpoints
+5. **Fast Tests** - Keep unit tests under 100ms
+6. **Descriptive Names** - `test_delete_source_removes_all_related_data`
+
+## Performance Testing
+
+```python
+import pytest
+import time
+
+@pytest.mark.performance
+def test_bulk_delete_performance(source_service):
+    start = time.time()
+    for i in range(100):
+        source_service.delete_source(f"source-{i}")
+    duration = time.time() - start
+    assert duration < 5.0  # Should complete in under 5 seconds
+```
+
+## Debugging Tests
+
+```bash
+# Verbose output
+pytest -vv
+
+# Show print statements
+pytest -s
+
+# Drop into debugger on failure
+pytest --pdb
+
+# Run specific test with debugging
+pytest -vvs -k "test_delete" --pdb
+```

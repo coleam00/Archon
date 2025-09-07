@@ -733,6 +733,52 @@ async def _perform_upload_with_progress(
         )
 
         if success:
+            # Document stored; attempt code example extraction for uploads too
+            try:
+                await tracker.update(
+                    status="code_extraction",
+                    progress=progress_mapper.map_progress("code_extraction", 5),
+                    log="Starting code example extraction...",
+                )
+
+                from ..services.crawling import CodeExtractionService
+
+                supabase_client = get_supabase_client()
+                code_service = CodeExtractionService(supabase_client)
+
+                # Build minimal crawl_results and url mapping from the uploaded document
+                doc_url = f"file://{filename}"
+                crawl_results = [{"url": doc_url, "markdown": extracted_text}]
+                url_to_full_document = {doc_url: extracted_text}
+
+                async def code_progress_callback(data: dict):
+                    # Map internal progress (percentage or progress) into overall tracker
+                    raw = int(data.get("progress", data.get("percentage", 0)) or 0)
+                    mapped = progress_mapper.map_progress("code_extraction", raw)
+                    await tracker.update(
+                        status=data.get("status", "code_extraction"),
+                        progress=mapped,
+                        log=data.get("log", "Extracting code examples from document..."),
+                        **{k: v for k, v in data.items() if k not in ("status", "progress", "percentage", "log")}
+                    )
+
+                examples_stored = await code_service.extract_and_store_code_examples(
+                    crawl_results,
+                    url_to_full_document,
+                    source_id,
+                    progress_callback=code_progress_callback,
+                    start_progress=0,
+                    end_progress=100,
+                )
+
+                safe_logfire_info(
+                    f"Upload code extraction completed | source_id={source_id} | code_examples_stored={examples_stored}"
+                )
+            except Exception as code_err:
+                safe_logfire_error(
+                    f"Code example extraction failed for upload | source_id={source_id} | error={str(code_err)}"
+                )
+
             # Complete the upload with 100% progress
             await tracker.complete({
                 "log": "Document uploaded successfully!",
@@ -758,6 +804,303 @@ async def _perform_upload_with_progress(
         if progress_id in active_crawl_tasks:
             del active_crawl_tasks[progress_id]
             safe_logfire_info(f"Cleaned up upload task from registry | progress_id={progress_id}")
+
+
+@router.post("/documents/upload-batch")
+async def upload_documents_batch(
+    files: list[UploadFile] = File(...),
+    tags: str | None = Form(None),
+    knowledge_type: str = Form("technical"),
+    group_by: str | None = Form(None),
+    group_display_name: str | None = Form(None),
+):
+    """Upload and process multiple documents with progress tracking.
+
+    Processes files sequentially, preserving per-file progress and mapping it into an overall progress bar.
+    """
+    try:
+        if not files:
+            raise HTTPException(status_code=422, detail={"error": "At least one file is required"})
+
+        # Generate unique progress ID
+        progress_id = str(uuid.uuid4())
+
+        # Parse tags
+        try:
+            tag_list = json.loads(tags) if tags else []
+            if tag_list is None:
+                tag_list = []
+            if not isinstance(tag_list, list) or not all(isinstance(t, str) for t in tag_list):
+                raise HTTPException(status_code=422, detail={"error": "tags must be a JSON array of strings"})
+        except json.JSONDecodeError as ex:
+            raise HTTPException(status_code=422, detail={"error": f"Invalid tags JSON: {str(ex)}"})
+
+        # Read all file bytes up front (avoid closed file issues)
+        files_data: list[dict] = []
+        for f in files:
+            content = await f.read()
+            files_data.append(
+                {
+                    "filename": f.filename,
+                    "content_type": f.content_type,
+                    "content": content,
+                }
+            )
+
+        # Initialize tracker immediately
+        from ..utils.progress.progress_tracker import ProgressTracker
+
+        tracker = ProgressTracker(progress_id, operation_type="upload")
+        await tracker.start(
+            {
+                "status": "initializing",
+                "progress": 0,
+                "log": f"Starting batch upload for {len(files_data)} file(s)",
+                "file_count": len(files_data),
+            }
+        )
+
+        # Start background batch processing
+        task = asyncio.create_task(
+            _perform_upload_batch_with_progress(
+                progress_id, files_data, tag_list, knowledge_type, tracker, group_by, group_display_name
+            )
+        )
+        active_crawl_tasks[progress_id] = task
+
+        safe_logfire_info(
+            f"Batch document upload started | progress_id={progress_id} | files={len(files_data)}"
+        )
+
+        return {
+            "success": True,
+            "progressId": progress_id,
+            "message": "Batch document upload started",
+            "fileCount": len(files_data),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        safe_logfire_error(
+            f"Failed to start batch document upload | error={str(e)} | file_count={len(files) if files else 0}"
+        )
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
+async def _perform_upload_batch_with_progress(
+    progress_id: str,
+    files_data: list[dict],
+    tag_list: list[str],
+    knowledge_type: str,
+    tracker: "ProgressTracker",
+    group_by: str | None = None,
+    group_display_name: str | None = None,
+):
+    """Perform batch document upload with per-file progress mapping."""
+    from ..services.crawling.progress_mapper import ProgressMapper
+
+    progress_mapper = ProgressMapper()
+    try:
+        supabase_client = get_supabase_client()
+        doc_storage_service = DocumentStorageService(supabase_client)
+
+        total = max(len(files_data), 1)
+        successes = 0
+        failures: list[dict] = []
+        # Aggregate per-source stats for grouped updates
+        per_source_stats: dict[str, dict] = {}
+        # helper to record aggregation
+        def _record_source_stats(sid: str, content_sample: str, display_name: str | None = None):
+            entry = per_source_stats.setdefault(sid, {"word_count": 0, "content": "", "display_name": display_name})
+            # Append up to ~15000 chars of content for summary
+            if len(entry["content"]) < 15000 and content_sample:
+                remaining = 15000 - len(entry["content"])
+                entry["content"] += ("\n\n" + content_sample[:max(0, remaining)])
+            if display_name and not entry.get("display_name"):
+                entry["display_name"] = display_name
+
+        # When grouping by folder, derive a stable source_id per top-level folder
+        import os
+        folder_source_map: dict[str, str] = {}
+        batch_source_id: str | None = None
+        if (group_by or "").lower() == "batch":
+            # Prefer display name for source_id slug if provided
+            if group_display_name and group_display_name.strip():
+                slug = group_display_name.strip().replace(' ', '_').replace('.', '_')[:40]
+                batch_source_id = f"batch_{slug}_{uuid.uuid4().hex[:6]}"
+            else:
+                batch_source_id = f"batch_{uuid.uuid4().hex[:8]}"
+
+        def get_top_folder_from_filename(name: str) -> str:
+            norm = name.replace("\\", "/")
+            parts = [p for p in norm.split("/") if p]
+            return parts[0] if len(parts) > 1 else "root"
+
+        for idx, data in enumerate(files_data):
+            filename = data.get("filename", f"file_{idx}")
+            content_type = data.get("content_type", "application/octet-stream")
+            await tracker.update(
+                status="processing",
+                progress=progress_mapper.map_progress("processing", int((idx / total) * 100)),
+                log=f"Processing {idx + 1}/{total}: {filename}",
+            )
+
+            # Extract text per file
+            try:
+                extracted_text = extract_text_from_document(
+                    data.get("content", b""), filename, content_type
+                )
+            except Exception as ex:
+                failures.append({"filename": filename, "error": str(ex)})
+                await tracker.update(
+                    status="error",
+                    progress=progress_mapper.map_progress("processing", int((idx / total) * 100)),
+                    log=f"Failed to extract text from {filename}: {ex}",
+                )
+                continue
+
+            # Map per-file progress into overall progress range
+            base = int((idx / total) * 100)
+            next_base = int(((idx + 1) / total) * 100)
+            step = max(next_base - base, 1)
+
+            async def per_file_callback(message: str, percentage: int, batch_info: dict | None = None):
+                mapped = base + int((percentage / 100) * step)
+                await tracker.update(
+                    status="document_storage",
+                    progress=mapped,
+                    log=f"[{idx + 1}/{total}] {filename}: {message}",
+                )
+
+            # Compute source_id (per file or per top-level folder)
+            if (group_by or "").lower() == "batch" and batch_source_id:
+                source_id = batch_source_id
+            elif (group_by or "").lower() == "folder":
+                folder = get_top_folder_from_filename(filename)
+                if folder not in folder_source_map:
+                    folder_source_map[folder] = f"folder_{folder.replace(' ', '_').replace('.', '_')}_{uuid.uuid4().hex[:8]}"
+                source_id = folder_source_map[folder]
+            else:
+                source_id = f"file_{filename.replace(' ', '_').replace('.', '_')}_{uuid.uuid4().hex[:8]}"
+
+            success, result = await doc_storage_service.upload_document(
+                file_content=extracted_text,
+                filename=filename,
+                source_id=source_id,
+                knowledge_type=knowledge_type,
+                tags=tag_list,
+                progress_callback=per_file_callback,
+            )
+
+            if success:
+                successes += 1
+                # Attempt per-file code extraction for uploads
+                try:
+                    await tracker.update(
+                        status="code_extraction",
+                        progress=base + int(0.1 * step),
+                        log=f"[{idx + 1}/{total}] {filename}: Extracting code examples...",
+                    )
+
+                    from ..services.crawling import CodeExtractionService
+
+                    code_service = CodeExtractionService(supabase_client)
+                    doc_url = f"file://{filename}"
+                    crawl_results = [{"url": doc_url, "markdown": extracted_text}]
+                    url_to_full_document = {doc_url: extracted_text}
+
+                    async def per_file_code_cb(data: dict):
+                        raw = int(data.get("progress", data.get("percentage", 0)) or 0)
+                        mapped = base + int((raw / 100) * step)
+                        await tracker.update(
+                            status=data.get("status", "code_extraction"),
+                            progress=mapped,
+                            log=f"[{idx + 1}/{total}] {filename}: {data.get('log', 'Extracting code examples...')}",
+                        )
+
+                    await code_service.extract_and_store_code_examples(
+                        crawl_results,
+                        url_to_full_document,
+                        source_id,
+                        progress_callback=per_file_code_cb,
+                        start_progress=0,
+                        end_progress=100,
+                    )
+                except Exception as code_err:
+                    safe_logfire_error(
+                        f"Batch upload code extraction failed | file={filename} | error={str(code_err)}"
+                    )
+                # Track totals per grouped source
+                wc = int(result.get("total_word_count", 0) or 0)
+                # Set display name from folder when grouping by folder
+                display_name = None
+                if (group_by or "").lower() == "folder":
+                    display_name = get_top_folder_from_filename(filename)
+                elif (group_by or "").lower() == "batch":
+                    display_name = group_display_name or "Batch Upload"
+                per_source_stats.setdefault(source_id, {"word_count": 0, "content": "", "display_name": display_name})
+                per_source_stats[source_id]["word_count"] += wc
+                _record_source_stats(source_id, extracted_text[:3000], display_name)
+            else:
+                failures.append({"filename": filename, "error": result.get("error")})
+
+        # Final aggregated update per source (for grouped modes)
+        try:
+            if per_source_stats:
+                from ..services.source_management_service import update_source_info, extract_source_summary
+                for sid, info in per_source_stats.items():
+                    # Generate summary from combined content
+                    combined = info.get("content", "")
+                    display_name = info.get("display_name") or group_display_name or "Batch Upload"
+                    total_wc = int(info.get("word_count", 0) or 0)
+                    try:
+                        summary = await extract_source_summary(sid, combined)
+                    except Exception:
+                        summary = f"Batch upload: {display_name} ({total_wc} words)"
+                    await update_source_info(
+                        supabase_client,
+                        sid,
+                        summary,
+                        total_wc,
+                        combined[:1000],
+                        knowledge_type,
+                        tag_list,
+                        0,
+                        original_url=None,
+                        source_url=f"file://{display_name}",
+                        source_display_name=display_name,
+                    )
+        except Exception as e:
+            safe_logfire_error(f"Aggregated source update failed | error={str(e)}")
+
+        # Final update
+        await tracker.update(
+            status="completed",
+            progress=100,
+            log=f"Batch upload finished: {successes}/{total} succeeded; {len(failures)} failed",
+        )
+
+    except asyncio.CancelledError:
+        safe_logfire_info(f"Batch upload cancelled | progress_id={progress_id}")
+        raise
+    except Exception as e:
+        import traceback
+
+        tb = traceback.format_exc()
+        safe_logfire_error(
+            f"Batch upload failed | progress_id={progress_id} | error={str(e)} | traceback={tb}"
+        )
+        try:
+            await tracker.error(f"Batch upload failed: {e}")
+        except Exception:
+            pass
+    finally:
+        if progress_id in active_crawl_tasks:
+            del active_crawl_tasks[progress_id]
+            safe_logfire_info(
+                f"Cleaned up batch upload task from registry | progress_id={progress_id}"
+            )
 
 
 @router.post("/knowledge-items/search")

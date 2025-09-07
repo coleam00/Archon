@@ -1,0 +1,158 @@
+---
+title: Architecture
+sidebar_position: 2
+---
+
+# Architecture
+
+## System Overview
+
+Archon uses a microservices architecture with clear separation of concerns:
+
+```
+Frontend (React)          AI Clients (Cursor/Windsurf)
+       |                              |
+       v                              v
+Server API (FastAPI:8080)      MCP Server (:8051)
+       |                              |
+       |                              v
+       |                        HTTP Calls
+       |                              |
+       v                              v
+Service Layer  <----------------------+
+       |
+       v
+Database (Supabase/pgvector)
+```
+
+## Core Principles
+
+1. **Server contains ALL business logic** - Services, ML models, data operations
+2. **MCP is HTTP-only** - Makes HTTP calls to Server, no direct imports
+3. **FastAPI uses services directly** - For performance, no intermediate layers
+4. **No cross-dependencies** - Each layer only knows about the layer below
+
+## Service Architecture
+
+### Service Layer Organization
+
+| Service Category | Services | Purpose |
+|-----------------|----------|---------|
+| **RAG Services** | `CrawlingService` | Web crawling operations |
+| **Storage Services** | `DocumentStorageService`<br/>`BaseStorageService` | Document storage and processing |
+| **Search Services** | `SearchService` | Vector search and RAG queries |
+| **Core Services** | `SourceManagementService` | Knowledge source management |
+| **Project Services** | `ProjectService`<br/>`TaskService`<br/>`DocumentService`<br/>`VersioningService` | Project management |
+| **Core Services** | `CredentialService`<br/>`PromptService`<br/>`ThreadingService` | System utilities |
+| **Storage Services** | `add_documents_to_supabase`<br/>`extract_code_blocks`<br/>`add_code_examples_to_supabase` | Data persistence |
+| **Embedding Services** | `create_embeddings_batch`<br/>`generate_contextual_embedding` | Vector operations |
+
+### Access Patterns
+
+```python
+# FastAPI Endpoint - Direct Service Usage
+from ..services.source_management_service import SourceManagementService
+
+@router.delete("/sources/{source_id}")
+async def delete_source(source_id: str):
+    service = SourceManagementService(get_supabase_client())
+    success, result = service.delete_source(source_id)
+    return {"success": success, **result}
+```
+
+```python
+# MCP Tool - HTTP Call to Server
+import httpx
+
+@mcp.tool()
+async def delete_source(ctx: Context, source: str) -> str:
+    async with httpx.AsyncClient() as client:
+        response = await client.delete(f"{API_URL}/api/sources/{source}")
+        return response.json()
+```
+
+## Key Components
+
+### Server Service (Port 8080)
+- FastAPI application
+- REST API endpoints
+- Socket.IO real-time communication
+- Direct service layer access
+- Business logic implementation
+
+### MCP Service (Port 8051)
+- MCP protocol server
+- 14 tools (7 RAG + 7 Project)
+- HTTP client for Server API
+- No business logic
+- SSE transport for AI clients
+
+### Service Layer
+- Modular service classes
+- Shared by FastAPI endpoints
+- Contains all business logic
+- Database operations
+- ML model integration
+
+## Data Flow Examples
+
+### Delete Source Operation
+```
+1. User clicks delete in UI
+2. UI calls DELETE /api/knowledge-items/{id}
+3. FastAPI endpoint uses SourceManagementService.delete_source() from `/services/`
+4. Service deletes from database
+5. Response sent to UI
+
+OR
+
+1. AI client calls MCP delete_source tool
+2. MCP makes HTTP DELETE to /api/sources/{id}
+3. Server endpoint uses SourceManagementService.delete_source() from `/services/`
+4. Service deletes from database
+5. Response sent through MCP to AI client
+```
+
+### Smart Crawl Operation (Simplified Socket.IO)
+```
+1. User initiates crawl
+2. UI calls POST /api/knowledge-items/crawl
+3. FastAPI endpoint:
+   - Uses CrawlingService to detect URL type
+   - Calls appropriate crawl method
+   - Services emit Socket.IO progress directly to rooms
+   - Uses DocumentStorageService from `/services/storage/` for chunking
+4. UI listens to Socket.IO room for real-time updates
+```
+
+### Task Update Flow (Simplified)
+```
+1. MCP tool calls POST /api/tasks
+2. API endpoint creates task using TaskService
+3. TaskService emits Socket.IO event directly to project room
+4. UI subscribed to project room receives update immediately
+5. No database polling needed
+```
+
+## Simplified Real-Time Architecture
+
+### Simplified Socket.IO (2025 Pattern)
+```
+MCP Tools → HTTP API → Services → @sio.event → Rooms → UI
+```
+
+Key improvements:
+- **No database polling** - Eliminated 2-second polling system
+- **Simple @sio.event handlers** - Official Socket.IO 2025 pattern
+- **Direct room management** - `sio.enter_room()` and `sio.emit()` calls
+- **No namespace classes** - Removed complex abstraction layers
+- **Single root namespace** - Everything on `/` namespace for simplicity
+
+## Important Notes
+
+- **No MCP imports in FastAPI** - Services only
+- **No direct DB access in MCP** - HTTP only
+- **Services are the single source of truth** - All logic here
+- **Simple @sio.event handlers** - Official Socket.IO 2025 pattern
+- **Root namespace only** - No complex namespace management
+- **Direct room management** - Simple `sio.enter_room()` and `sio.emit()` calls

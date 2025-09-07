@@ -1,0 +1,219 @@
+---
+title: Crawling Configuration Guide
+sidebar_position: 12
+---
+
+import Admonition from '@theme/Admonition';
+
+# Crawling Configuration Guide
+
+This guide explains how to configure and optimize the Archon crawling system powered by Crawl4AI.
+
+## Overview
+
+Archon uses [Crawl4AI](https://github.com/unclecode/crawl4ai) for web crawling, which provides powerful features for extracting content from various types of websites. The system automatically detects content types and applies appropriate crawling strategies.
+
+## Basic Configuration
+
+### Default Settings
+
+The crawling service uses simple, reliable defaults:
+
+```python
+CrawlerRunConfig(
+    cache_mode=CacheMode.BYPASS,  # Fresh content
+    stream=False,                 # Complete pages
+    markdown_generator=DefaultMarkdownGenerator()
+)
+```
+
+<Admonition type="info" title="Simplicity First">
+The default configuration works well for most sites. Only add complexity when needed.
+</Admonition>
+
+## Content Type Detection
+
+The system automatically detects and handles three main content types:
+
+### 1. Text Files (.txt)
+- Direct content extraction
+- No HTML parsing needed
+- Fast and efficient
+
+### 2. Sitemaps (sitemap.xml)
+- Parses XML structure
+- Extracts all URLs
+- Batch crawls pages in parallel
+
+### 3. Web Pages (HTML)
+- Recursive crawling to specified depth
+- Follows internal links
+- Extracts structured content
+
+## Code Extraction Configuration
+
+### Minimum Length Setting
+
+Code blocks must meet a minimum length to be extracted:
+
+```bash
+# Environment variable (optional)
+CODE_BLOCK_MIN_LENGTH=1000  # Default: 1000 characters
+```
+
+This prevents extraction of small snippets and ensures only substantial code examples are indexed.
+
+### Supported Code Formats
+
+1. **Markdown Code Blocks**
+   ````markdown
+   ```language
+   // Code here (must be ≥ 1000 chars)
+   ```
+   ````
+
+2. **HTML Code Elements**
+   ```html
+   <pre><code class="language-javascript">
+   // Code here
+   </code></pre>
+   ```
+
+## Advanced Configuration
+
+### When to Use Advanced Features
+
+<Admonition type="warning" title="Use Sparingly">
+Advanced features like `wait_for` and `js_code` can cause timeouts and should only be used when absolutely necessary.
+</Admonition>
+
+### JavaScript Execution
+
+For sites that require JavaScript interaction:
+
+```python
+# Only if content doesn't load otherwise
+js_code = [
+    "window.scrollTo(0, document.body.scrollHeight);",
+    "document.querySelector('.load-more')?.click();"
+]
+```
+
+### Wait Conditions
+
+For dynamic content loading:
+
+```python
+# CSS selector format
+wait_for = "css:.content-loaded"
+
+# JavaScript condition
+wait_for = "js:() => document.querySelectorAll('.item').length > 10"
+```
+
+## Performance Optimization
+
+### Batch Crawling
+
+For multiple URLs, use batch processing:
+
+```python
+dispatcher = MemoryAdaptiveDispatcher(
+    memory_threshold_percent=70.0,
+    check_interval=1.0,
+    max_session_permit=10  # Concurrent sessions
+)
+```
+
+### Caching Strategy
+
+- **CacheMode.ENABLED**: Use for development/testing
+- **CacheMode.BYPASS**: Use for production (fresh content)
+
+## Troubleshooting Common Issues
+
+### JavaScript-Heavy Sites
+
+**Problem**: Content not loading on React/Vue/Angular sites
+
+**Solution**: The default configuration should work. If not:
+1. Check if content is server-side rendered
+2. Verify the page loads without JavaScript in a browser
+3. Consider if the content is behind authentication
+
+### Timeouts
+
+**Problem**: Crawling times out on certain pages
+
+**Solution**: 
+1. Remove `wait_for` conditions
+2. Simplify or remove `js_code`
+3. Reduce `page_timeout` for faster failures
+
+### Code Not Extracted
+
+**Problem**: Code blocks aren't being found
+
+**Solution**:
+1. Check code block length (≥ 1000 chars)
+2. Verify markdown formatting (triple backticks)
+3. Check logs for `backtick_count`
+4. Ensure markdown generator is using correct settings
+
+## Best Practices
+
+1. **Start Simple**: Use default configuration first
+2. **Monitor Logs**: Check for extraction counts and errors
+3. **Test Incrementally**: Crawl single pages before batch/recursive
+4. **Respect Rate Limits**: Don't overwhelm target servers
+5. **Cache Wisely**: Use caching during development
+
+## Configuration Examples
+
+### Documentation Site
+
+```python
+# Handles most documentation sites well
+config = CrawlerRunConfig(
+    cache_mode=CacheMode.BYPASS,
+    stream=False,
+    markdown_generator=DefaultMarkdownGenerator()
+)
+```
+
+### Blog with Code Examples
+
+```python
+# Ensures code extraction works properly
+config = CrawlerRunConfig(
+    cache_mode=CacheMode.BYPASS,
+    stream=False,
+    markdown_generator=DefaultMarkdownGenerator(
+        content_source="cleaned_html",
+        options={
+            "mark_code": True,
+            "handle_code_in_pre": True,
+            "body_width": 0
+        }
+    )
+)
+```
+
+### Dynamic SPA (Use Cautiously)
+
+```python
+# Only if content doesn't load otherwise
+config = CrawlerRunConfig(
+    cache_mode=CacheMode.BYPASS,
+    stream=False,
+    wait_for="css:.main-content",
+    js_code=["window.scrollTo(0, 1000);"],
+    page_timeout=30000
+)
+```
+
+## Related Documentation
+
+- [Knowledge Features](./knowledge-features) - Overview of knowledge management
+- [Server Services](./server-services) - Technical service details
+- [API Reference](./api-reference#knowledge-management-api) - API endpoints
