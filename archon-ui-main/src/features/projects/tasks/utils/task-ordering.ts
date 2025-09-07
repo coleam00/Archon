@@ -1,7 +1,5 @@
 /**
  * Task ordering utilities that ensure integer precision
- *
- * Following alpha principles: detailed errors and no silent failures
  */
 
 import type { Task } from "../types";

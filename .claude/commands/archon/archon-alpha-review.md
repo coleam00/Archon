@@ -1,11 +1,11 @@
 ---
-description: Perform comprehensive code review for Archon V2 Alpha, this command will save a report to `code-review.md`.
+description: Perform comprehensive code review for Archon V2 Beta, this command will save a report to `code-review.md`.
 argument-hint: <PR number, branch name, file path, or leave empty for staged changes>
 allowed-tools: Bash(*), Read, Grep, LS, Write
 thinking: auto
 ---
 
-# Code Review for Archon V2 Alpha
+# Code Review for Archon V2 Beta
 
 **Review scope**: $ARGUMENTS
 
@@ -13,7 +13,7 @@ I'll perform a comprehensive code review and generate a report saved to the root
 
 ## Context
 
-You're reviewing code for Archon V2 Alpha, which uses:
+You're reviewing code for Archon V2 Beta, which uses:
 
 - **Frontend**: React + TypeScript + Vite + TailwindCSS
 - **Backend**: Python 3.12+ with FastAPI, PydanticAI, Supabase
@@ -32,7 +32,7 @@ Determine what needs reviewing:
 
 ## Review Focus
 
-### CRITICAL: Alpha Error Handling Philosophy
+### CRITICAL: Beta Error Handling Philosophy
 
 **Following CLAUDE.md principles - We want DETAILED ERRORS, not graceful failures!**
 
@@ -59,7 +59,7 @@ Look for:
 
 - **Type hints** on all functions and proper use of Python 3.12+ features
 - **Pydantic v2 patterns** (ConfigDict, model_dump, field_validator)
-- **Error handling following alpha principles**:
+- **Error handling following beta principles**:
 
   ```python
   # BAD - Silent failure

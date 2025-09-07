@@ -25,14 +25,14 @@ module.exports = {
   plugins: ['react-refresh'],
   rules: {
     /**
-     * LINTING STRATEGY FOR ALPHA DEVELOPMENT:
+     * LINTING STRATEGY FOR BETA DEVELOPMENT:
      * 
      * Development: Warnings don't block local development, allowing rapid iteration
      * CI/PR: Run with --max-warnings 0 to treat warnings as errors before merge
      * 
      * Philosophy:
      * - Strict typing where it helps AI assistants (Claude Code, Copilot, etc.)
-     * - Pragmatic flexibility for alpha-stage rapid development
+     * - Pragmatic flexibility for beta-stage rapid development
      * - Console.log allowed locally but caught in CI
      * - Progressive enhancement: stricter rules in /features (new code) vs /components (legacy)
      */

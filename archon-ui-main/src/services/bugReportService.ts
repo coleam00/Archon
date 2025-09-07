@@ -1,5 +1,5 @@
 /**
- * Bug Report Service for Archon V2 Alpha
+ * Bug Report Service for Archon Beta
  * 
  * Handles automatic context collection and GitHub issue creation for bug reports.
  */

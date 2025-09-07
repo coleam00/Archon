@@ -1,11 +1,11 @@
 ---
-description: Generate Root Cause Analysis report for Archon V2 Alpha issues
+description: Generate Root Cause Analysis report for Archon V2 Beta issues
 argument-hint: <issue description or error message>
 allowed-tools: Bash(*), Read, Grep, LS, Write
 thinking: auto
 ---
 
-# Root Cause Analysis for Archon V2 Alpha
+# Root Cause Analysis for Archon V2 Beta
 
 **Issue to investigate**: $ARGUMENTS
 
@@ -13,7 +13,7 @@ investigate this issue systematically and generate an RCA report saved to `RCA.m
 
 ## Context About Archon
 
-You're working with Archon V2 Alpha, a microservices-based AI knowledge management system:
+You're working with Archon V2 Beta, a microservices-based AI knowledge management system:
 
 - **Frontend**: React + TypeScript on port 3737
 - **Main Server**: FastAPI + Socket.IO on port 8181
@@ -45,7 +45,7 @@ Check if all services are running properly:
 
 ### 3. Error Handling Analysis
 
-**Remember: In Alpha, we want DETAILED ERRORS that help us fix issues fast!**
+**Remember: In Beta, we want DETAILED ERRORS that help us fix issues fast!**
 
 Look for these error patterns:
 

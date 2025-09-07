@@ -82,7 +82,7 @@ export class FeatureErrorBoundary extends Component<Props, State> {
                   An error occurred in this feature. The error has been logged for investigation.
                 </p>
 
-                {/* Show detailed error in alpha/development (following CLAUDE.md principles) */}
+                {/* Show detailed error in development */}
                 {isDevelopment && error && (
                   <div
                     className={cn(
