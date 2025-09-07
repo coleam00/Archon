@@ -11,7 +11,7 @@ description: |
 argument-hint: <service> <Specific focus>
 ---
 
-You're about to work on the Archon V2 Alpha codebase. This is a microservices-based knowledge management system with MCP integration. Here's what you need to know:
+You're about to work on the Archon V2 Beta codebase. This is a microservices-based knowledge management system with MCP integration. Here's what you need to know:
 
 ## Today's Focus area
 
@@ -171,4 +171,4 @@ Follow the guidelines in CLAUDE.md
 - Frontend uses Vite proxy for API calls in development
 - Python backend uses `uv` for dependency management
 
-Remember: This is alpha software. Prioritize functionality over production patterns. Make it work, make it right, then make it fast.
+Remember: This is beta software. Prioritize functionality over production patterns. Make it work, make it right, then make it fast.

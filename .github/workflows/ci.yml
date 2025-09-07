@@ -254,7 +254,7 @@ jobs:
         
       - name: Create test summary
         run: |
-          echo "# 🧪 Archon V2 Alpha - CI Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "# 🧪 Archon V2 Beta - CI Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           # Frontend Results
