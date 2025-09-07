@@ -46,7 +46,6 @@ export const ProviderStep = ({ onSaved, onSkip }: ProviderStepProps) => {
       localStorage.setItem("onboardingDismissed", "true");
       onSaved();
     } catch (error) {
-      // Log error for debugging per alpha principles
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
       console.error("Failed to save API key:", error);

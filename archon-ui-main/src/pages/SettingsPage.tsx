@@ -204,8 +204,7 @@ export const SettingsPage = () => {
             >
               <div className="space-y-4">
                 <p className="text-sm text-gray-600 dark:text-gray-400">
-                  Found a bug or issue? Report it to help improve Archon V2
-                  Alpha.
+                  Found a bug or issue? Report it to help improve Archon Beta.
                 </p>
                 <div className="flex justify-start">
                   <BugReportButton variant="secondary" size="md">

@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Alpha Development Guidelines
+## Beta Development Guidelines
 
 **Local-only deployment** - each user runs their own instance.
 
@@ -10,11 +10,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **No backwards compatibility** - remove deprecated code immediately
 - **Detailed errors over graceful failures** - we want to identify and fix issues fast
-- **Break things to improve them** - alpha is for rapid iteration
+- **Break things to improve them** - beta is for rapid iteration
 
 ### Error Handling
 
-**Core Principle**: In alpha, we need to intelligently decide when to fail hard and fast to quickly address issues, and when to allow processes to complete in critical services despite failures. Read below carefully and make intelligent decisions on a case-by-case basis.
+**Core Principle**: In beta, we need to intelligently decide when to fail hard and fast to quickly address issues, and when to allow processes to complete in critical services despite failures. Read below carefully and make intelligent decisions on a case-by-case basis.
 
 #### When to Fail Fast and Loud (Let it Crash!)
 
@@ -101,6 +101,7 @@ def process_batch(items):
 - Prioritize functionality over production-ready patterns
 - Focus on user experience and feature completeness
 - When updating code, don't reference what is changing (avoid keywords like LEGACY, CHANGED, REMOVED), instead focus on comments that document just the functionality of the code
+- When commenting on code in the codebase, only comment on the functionality and reasoning behind the code. Refrain from speaking to Archon being in "beta" or referencing anything else that comes from these global rules.
 
 ## Development Commands
 
@@ -174,7 +175,7 @@ make test-be             # Backend tests only
 
 ## Architecture Overview
 
-Archon V2 Alpha is a microservices-based knowledge management system with MCP (Model Context Protocol) integration:
+Archon Beta is a microservices-based knowledge management system with MCP (Model Context Protocol) integration:
 
 ### Service Architecture
 
