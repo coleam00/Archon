@@ -197,3 +197,90 @@ BEGIN
     END;
     
 END $$;
+
+-- ======================================================================
+-- VALIDATION COMPLETE - SUPABASE-FRIENDLY STATUS REPORT
+-- ======================================================================
+-- This final SELECT statement consolidates validation results for 
+-- display in Supabase SQL Editor (users only see the last query result)
+
+WITH validation_results AS (
+    -- Check if all required columns exist
+    SELECT 
+        COUNT(*) FILTER (WHERE column_name IN ('embedding_384', 'embedding_768', 'embedding_1024', 'embedding_1536', 'embedding_3072')) as embedding_columns,
+        COUNT(*) FILTER (WHERE column_name IN ('llm_chat_model', 'embedding_model', 'embedding_dimension')) as tracking_columns
+    FROM information_schema.columns 
+    WHERE table_name = 'archon_crawled_pages'
+),
+function_check AS (
+    -- Check if required functions exist
+    SELECT 
+        COUNT(*) FILTER (WHERE routine_name IN ('match_archon_crawled_pages_multi', 'match_archon_code_examples_multi', 'detect_embedding_dimension', 'get_embedding_column_name')) as functions_count
+    FROM information_schema.routines 
+    WHERE routine_type = 'FUNCTION'
+),
+index_check AS (
+    -- Check if indexes exist
+    SELECT 
+        COUNT(*) FILTER (WHERE indexname LIKE '%embedding_%') as embedding_indexes
+    FROM pg_indexes 
+    WHERE tablename IN ('archon_crawled_pages', 'archon_code_examples')
+),
+data_sample AS (
+    -- Get sample of data with new columns
+    SELECT 
+        COUNT(*) as total_records,
+        COUNT(*) FILTER (WHERE embedding_model IS NOT NULL) as records_with_model_tracking,
+        COUNT(*) FILTER (WHERE embedding_384 IS NOT NULL OR embedding_768 IS NOT NULL OR embedding_1024 IS NOT NULL OR embedding_1536 IS NOT NULL OR embedding_3072 IS NOT NULL) as records_with_multi_dim_embeddings
+    FROM archon_crawled_pages
+),
+overall_status AS (
+    SELECT 
+        CASE 
+            WHEN v.embedding_columns = 5 AND v.tracking_columns = 3 AND f.functions_count >= 4 AND i.embedding_indexes > 0 
+            THEN '✅ MIGRATION VALIDATION SUCCESSFUL!'
+            ELSE '❌ MIGRATION VALIDATION FAILED!'
+        END as status,
+        v.embedding_columns,
+        v.tracking_columns, 
+        f.functions_count,
+        i.embedding_indexes,
+        d.total_records,
+        d.records_with_model_tracking,
+        d.records_with_multi_dim_embeddings
+    FROM validation_results v, function_check f, index_check i, data_sample d
+)
+SELECT 
+    status,
+    CASE 
+        WHEN embedding_columns = 5 AND tracking_columns = 3 AND functions_count >= 4 AND embedding_indexes > 0 
+        THEN 'All validation checks passed successfully'
+        ELSE 'Some validation checks failed - please review the results'
+    END as message,
+    json_build_object(
+        'embedding_columns_added', embedding_columns || '/5',
+        'tracking_columns_added', tracking_columns || '/3', 
+        'search_functions_created', functions_count || '+ functions',
+        'embedding_indexes_created', embedding_indexes || '+ indexes'
+    ) as technical_validation,
+    json_build_object(
+        'total_records', total_records,
+        'records_with_model_tracking', records_with_model_tracking,
+        'records_with_multi_dimensional_embeddings', records_with_multi_dim_embeddings
+    ) as data_status,
+    CASE 
+        WHEN embedding_columns = 5 AND tracking_columns = 3 AND functions_count >= 4 AND embedding_indexes > 0 
+        THEN ARRAY[
+            '1. Restart Archon services: docker compose restart',
+            '2. Test with a small crawl to verify functionality', 
+            '3. Configure your preferred models in Settings',
+            '4. New crawls will automatically use model tracking'
+        ]
+        ELSE ARRAY[
+            '1. Check migration logs for specific errors',
+            '2. Re-run upgrade_database.sql if needed',
+            '3. Ensure database has sufficient permissions',
+            '4. Contact support if issues persist'
+        ]
+    END as next_steps
+FROM overall_status;

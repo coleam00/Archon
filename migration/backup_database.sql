@@ -73,12 +73,35 @@ DROP FUNCTION get_backup_timestamp();
 
 COMMIT;
 
--- Final success message
-DO $$
-BEGIN
-    RAISE NOTICE '';
-    RAISE NOTICE '🎉 BACKUP COMPLETE! Your data is now safely backed up.';
-    RAISE NOTICE '';
-    RAISE NOTICE 'Next step: Run upgrade_to_model_tracking.sql to upgrade your installation.';
-    RAISE NOTICE '';
-END $$;
+-- ======================================================================
+-- BACKUP COMPLETE - SUPABASE-FRIENDLY STATUS REPORT
+-- ======================================================================
+-- This final SELECT statement shows backup status in Supabase SQL Editor
+
+WITH backup_info AS (
+    SELECT 
+        to_char(now(), 'YYYYMMDD_HH24MISS') as backup_suffix,
+        (SELECT COUNT(*) FROM archon_crawled_pages) as crawled_count,
+        (SELECT COUNT(*) FROM archon_code_examples) as code_count,
+        (SELECT COUNT(*) FROM archon_sources) as sources_count
+)
+SELECT 
+    '🎉 ARCHON DATABASE BACKUP COMPLETED! 🎉' AS status,
+    'Your data is now safely backed up' AS message,
+    ARRAY[
+        'archon_crawled_pages_backup_' || backup_suffix,
+        'archon_code_examples_backup_' || backup_suffix,
+        'archon_sources_backup_' || backup_suffix
+    ] AS backup_tables_created,
+    json_build_object(
+        'crawled_pages', crawled_count,
+        'code_examples', code_count,
+        'sources', sources_count
+    ) AS records_backed_up,
+    ARRAY[
+        '1. Run upgrade_database.sql to upgrade your installation',
+        '2. Run validate_migration.sql to verify the upgrade',
+        '3. Backup tables will be kept for safety'
+    ] AS next_steps,
+    'DROP TABLE archon_crawled_pages; ALTER TABLE archon_crawled_pages_backup_' || backup_suffix || ' RENAME TO archon_crawled_pages;' AS restore_command_example
+FROM backup_info;

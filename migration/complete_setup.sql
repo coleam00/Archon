@@ -229,8 +229,8 @@ CREATE INDEX IF NOT EXISTS idx_archon_crawled_pages_embedding_384 ON archon_craw
 CREATE INDEX IF NOT EXISTS idx_archon_crawled_pages_embedding_768 ON archon_crawled_pages USING ivfflat (embedding_768 vector_cosine_ops) WITH (lists = 100);
 CREATE INDEX IF NOT EXISTS idx_archon_crawled_pages_embedding_1024 ON archon_crawled_pages USING ivfflat (embedding_1024 vector_cosine_ops) WITH (lists = 100);
 CREATE INDEX IF NOT EXISTS idx_archon_crawled_pages_embedding_1536 ON archon_crawled_pages USING ivfflat (embedding_1536 vector_cosine_ops) WITH (lists = 100);
--- Note: 3072 dimensions exceed HNSW limit of 2000, using brute force for now
--- CREATE INDEX IF NOT EXISTS idx_archon_crawled_pages_embedding_3072 ON archon_crawled_pages USING hnsw (embedding_3072 vector_cosine_ops);
+-- Note: 3072-dimensional embeddings cannot have vector indexes due to PostgreSQL vector extension 2000 dimension limit
+-- The embedding_3072 column exists but cannot be indexed with current pgvector version
 
 -- Other indexes for archon_crawled_pages
 CREATE INDEX idx_archon_crawled_pages_metadata ON archon_crawled_pages USING GIN (metadata);
@@ -278,8 +278,8 @@ CREATE INDEX IF NOT EXISTS idx_archon_code_examples_embedding_384 ON archon_code
 CREATE INDEX IF NOT EXISTS idx_archon_code_examples_embedding_768 ON archon_code_examples USING ivfflat (embedding_768 vector_cosine_ops) WITH (lists = 100);
 CREATE INDEX IF NOT EXISTS idx_archon_code_examples_embedding_1024 ON archon_code_examples USING ivfflat (embedding_1024 vector_cosine_ops) WITH (lists = 100);
 CREATE INDEX IF NOT EXISTS idx_archon_code_examples_embedding_1536 ON archon_code_examples USING ivfflat (embedding_1536 vector_cosine_ops) WITH (lists = 100);
--- Note: 3072 dimensions exceed HNSW limit of 2000, using brute force for now
--- CREATE INDEX IF NOT EXISTS idx_archon_code_examples_embedding_3072 ON archon_code_examples USING hnsw (embedding_3072 vector_cosine_ops);
+-- Note: 3072-dimensional embeddings cannot have vector indexes due to PostgreSQL vector extension 2000 dimension limit
+-- The embedding_3072 column exists but cannot be indexed with current pgvector version
 
 -- Other indexes for archon_code_examples
 CREATE INDEX idx_archon_code_examples_metadata ON archon_code_examples USING GIN (metadata);

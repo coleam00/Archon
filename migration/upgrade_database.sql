@@ -214,8 +214,9 @@ WITH (lists = 100);
 
 -- Note: 3072 dimensions exceed HNSW limit of 2000 in some configurations
 -- Using brute force search for now, can be optimized later
--- CREATE INDEX IF NOT EXISTS idx_archon_crawled_pages_embedding_3072 
--- ON archon_crawled_pages USING hnsw (embedding_3072 vector_cosine_ops);
+-- HNSW index for 3072 dimensions
+CREATE INDEX IF NOT EXISTS idx_archon_crawled_pages_embedding_3072 
+ON archon_crawled_pages USING hnsw (embedding_3072 vector_cosine_ops);
 
 -- Create indexes for archon_code_examples (multi-dimensional support)
 CREATE INDEX IF NOT EXISTS idx_archon_code_examples_embedding_384 
@@ -235,8 +236,9 @@ ON archon_code_examples USING ivfflat (embedding_1536 vector_cosine_ops)
 WITH (lists = 100);
 
 -- Note: 3072 dimensions exceed HNSW limit of 2000 in some configurations
--- CREATE INDEX IF NOT EXISTS idx_archon_code_examples_embedding_3072 
--- ON archon_code_examples USING hnsw (embedding_3072 vector_cosine_ops);
+-- HNSW index for 3072 dimensions
+CREATE INDEX IF NOT EXISTS idx_archon_code_examples_embedding_3072 
+ON archon_code_examples USING hnsw (embedding_3072 vector_cosine_ops);
 
 -- Create indexes for model tracking columns
 CREATE INDEX IF NOT EXISTS idx_archon_crawled_pages_embedding_model 
@@ -441,32 +443,32 @@ $$;
 COMMIT;
 
 -- ======================================================================
--- MIGRATION COMPLETE - SUCCESS NOTIFICATION
+-- MIGRATION COMPLETE - SUPABASE-FRIENDLY STATUS REPORT
 -- ======================================================================
+-- This final SELECT statement consolidates all status information for
+-- display in Supabase SQL Editor (users only see the last query result)
 
-DO $$
-BEGIN
-    RAISE NOTICE '====================================================================';
-    RAISE NOTICE '           ARCHON MODEL TRACKING UPGRADE COMPLETED!';
-    RAISE NOTICE '====================================================================';
-    RAISE NOTICE 'Successfully upgraded your Archon installation with:';
-    RAISE NOTICE '';
-    RAISE NOTICE '✅ Multi-dimensional embedding support (384, 768, 1024, 1536, 3072)';
-    RAISE NOTICE '✅ Model tracking fields (llm_chat_model, embedding_model, embedding_dimension)';
-    RAISE NOTICE '✅ Optimized indexes for improved search performance';
-    RAISE NOTICE '✅ Enhanced search functions with dimension-aware querying';
-    RAISE NOTICE '✅ Legacy compatibility maintained for existing code';
-    RAISE NOTICE '✅ Existing embedding data migrated (if any was found)';
-    RAISE NOTICE '';
-    RAISE NOTICE 'Your Archon installation is now ready for:';
-    RAISE NOTICE '• Multiple embedding providers (OpenAI, Ollama, Google, etc.)';
-    RAISE NOTICE '• Automatic model detection and tracking';
-    RAISE NOTICE '• Improved search accuracy with dimension-specific indexing';
-    RAISE NOTICE '• Full audit trail of which models processed your data';
-    RAISE NOTICE '';
-    RAISE NOTICE 'Next steps:';
-    RAISE NOTICE '1. Restart your Archon services';
-    RAISE NOTICE '2. New crawls will automatically use the enhanced features';
-    RAISE NOTICE '3. Check the Settings page to configure your preferred models';
-    RAISE NOTICE '====================================================================';
-END $$;
+SELECT 
+    '🎉 ARCHON MODEL TRACKING UPGRADE COMPLETED! 🎉' AS status,
+    'Successfully upgraded your Archon installation' AS message,
+    ARRAY[
+        '✅ Multi-dimensional embedding support (384, 768, 1024, 1536, 3072)',
+        '✅ Model tracking fields (llm_chat_model, embedding_model, embedding_dimension)',
+        '✅ Optimized indexes for improved search performance',
+        '✅ Enhanced search functions with dimension-aware querying',
+        '✅ Legacy compatibility maintained for existing code',
+        '✅ Existing embedding data migrated (if any was found)',
+        '✅ HNSW indexes enabled for 3072-dimensional vectors'
+    ] AS features_added,
+    ARRAY[
+        '• Multiple embedding providers (OpenAI, Ollama, Google, etc.)',
+        '• Automatic model detection and tracking',
+        '• Improved search accuracy with dimension-specific indexing',
+        '• Full audit trail of which models processed your data'
+    ] AS capabilities_enabled,
+    ARRAY[
+        '1. Restart your Archon services: docker compose restart',
+        '2. New crawls will automatically use the enhanced features',
+        '3. Check the Settings page to configure your preferred models',
+        '4. Run validate_migration.sql to verify everything works'
+    ] AS next_steps;

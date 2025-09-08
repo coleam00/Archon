@@ -4,7 +4,7 @@ This folder contains database migration scripts for upgrading existing Archon in
 
 ## Available Migration Scripts
 
-### 1. `backup_before_migration.sql` - Pre-Migration Backup
+### 1. `backup_database.sql` - Pre-Migration Backup
 **Always run this FIRST before any migration!**
 
 Creates timestamped backup tables of all your existing data:
@@ -14,7 +14,7 @@ Creates timestamped backup tables of all your existing data:
 - ✅ Easy restore commands provided
 - ✅ Row count verification
 
-### 2. `upgrade_to_model_tracking.sql` - Main Migration Script
+### 2. `upgrade_database.sql` - Main Migration Script
 **Use this migration if you:**
 - Have an existing Archon installation from before multi-dimensional embedding support
 - Want to upgrade to the latest features including model tracking
@@ -42,13 +42,13 @@ Validates your migration results:
 
 ### Step 1: Backup Your Data
 ```sql
--- Run: backup_before_migration.sql
+-- Run: backup_database.sql
 -- This creates timestamped backup tables of all your data
 ```
 
 ### Step 2: Run the Main Migration
 ```sql  
--- Run: upgrade_to_model_tracking.sql
+-- Run: upgrade_database.sql
 -- This adds all the new features and migrates existing data
 ```
 
@@ -70,7 +70,7 @@ docker compose restart
 2. Go to **SQL Editor**
 3. Copy and paste the contents of the migration file
 4. Click **Run** to execute the migration
-5. Check the output for success notifications
+5. **Important**: Supabase only shows the result of the last query - all our scripts end with a status summary table that shows the complete results
 
 ### Method 2: Using psql Command Line
 ```bash
@@ -78,7 +78,7 @@ docker compose restart
 psql -h your-supabase-host -p 5432 -U postgres -d postgres
 
 # Run the migration
-\i /path/to/upgrade_to_model_tracking.sql
+\i /path/to/upgrade_database.sql
 
 # Exit
 \q
@@ -87,10 +87,10 @@ psql -h your-supabase-host -p 5432 -U postgres -d postgres
 ### Method 3: Using Docker (if using local Supabase)
 ```bash
 # Copy migration to container
-docker cp upgrade_to_model_tracking.sql supabase-db:/tmp/
+docker cp upgrade_database.sql supabase-db:/tmp/
 
 # Execute migration
-docker exec -it supabase-db psql -U postgres -d postgres -f /tmp/upgrade_to_model_tracking.sql
+docker exec -it supabase-db psql -U postgres -d postgres -f /tmp/upgrade_database.sql
 ```
 
 ## Migration Safety
@@ -161,7 +161,7 @@ If you encounter issues with the migration:
 
 ## Version Compatibility
 
-- **Archon v2.0+**: Use `upgrade_to_model_tracking.sql`
+- **Archon v2.0+**: Use `upgrade_database.sql`
 - **Earlier versions**: Use `complete_setup.sql` for fresh installations
 
 This migration is designed to bring any Archon installation up to the latest schema standards while preserving all existing data and functionality.
