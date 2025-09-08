@@ -435,15 +435,18 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
     onConfigChange(instances);
   }, [instances, onConfigChange]);
 
-  // Auto-test primary instance when component becomes visible
+  // Auto-test instances when they haven't been tested yet
   useEffect(() => {
     if (isVisible && instances.length > 0) {
-      const primaryInstance = instances.find(inst => inst.isPrimary);
-      if (primaryInstance && primaryInstance.isHealthy === undefined) {
-        handleTestConnection(primaryInstance.id);
-      }
+      // Auto-test any instance that hasn't been tested yet (not just primary)
+      instances.forEach(instance => {
+        if (instance.isHealthy === undefined && !testingConnections.has(instance.id)) {
+          // Stagger the tests to avoid overwhelming the server
+          setTimeout(() => handleTestConnection(instance.id), Math.random() * 1000 + 500);
+        }
+      });
     }
-  }, [isVisible, instances.length]);
+  }, [isVisible, instances.length, instances]);
 
   // Cleanup timeouts on unmount
   useEffect(() => {
@@ -486,7 +489,14 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
       );
     }
     
-    return <Badge variant="outline" color="gray">Unknown</Badge>;
+    // For instances that haven't been tested yet (isHealthy === undefined)
+    // Show a "checking" status - the auto-test will be handled by useEffect
+    return (
+      <Badge variant="outline" color="blue" className="animate-pulse">
+        <div className="w-2 h-2 rounded-full bg-blue-500 animate-ping mr-1" />
+        Checking...
+      </Badge>
+    );
   };
 
   return (

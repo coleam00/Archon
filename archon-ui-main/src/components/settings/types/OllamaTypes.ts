@@ -14,7 +14,7 @@ export interface OllamaInstance {
   isEnabled: boolean;
   isPrimary: boolean;
   healthStatus: {
-    isHealthy: boolean;
+    isHealthy?: boolean;
     lastChecked: Date;
     responseTimeMs?: number;
     error?: string;

@@ -64,7 +64,7 @@ export const OllamaInstanceHealthIndicator: React.FC<HealthIndicatorProps> = ({
       );
     }
     
-    if (instance.healthStatus.isHealthy) {
+    if (instance.healthStatus.isHealthy === true) {
       return (
         <Badge 
           variant="solid" 
@@ -76,13 +76,26 @@ export const OllamaInstanceHealthIndicator: React.FC<HealthIndicatorProps> = ({
       );
     }
     
+    if (instance.healthStatus.isHealthy === false) {
+      return (
+        <Badge 
+          variant="solid" 
+          className="flex items-center gap-1 bg-red-100 text-red-800 border-red-200 dark:bg-red-900 dark:text-red-100 dark:border-red-700"
+        >
+          <div className="w-2 h-2 rounded-full bg-red-500" />
+          Offline
+        </Badge>
+      );
+    }
+    
+    // For instances that haven't been tested yet (isHealthy === undefined)
     return (
       <Badge 
-        variant="solid" 
-        className="flex items-center gap-1 bg-red-100 text-red-800 border-red-200 dark:bg-red-900 dark:text-red-100 dark:border-red-700"
+        variant="outline" 
+        className="animate-pulse flex items-center gap-1 bg-blue-50 text-blue-800 border-blue-200 dark:bg-blue-900 dark:text-blue-100 dark:border-blue-700"
       >
-        <div className="w-2 h-2 rounded-full bg-red-500" />
-        Offline
+        <div className="w-2 h-2 rounded-full bg-blue-500 animate-ping" />
+        Checking...
       </Badge>
     );
   };
