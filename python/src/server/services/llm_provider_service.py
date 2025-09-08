@@ -101,10 +101,28 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
 
         if provider_name == "openai":
             if not api_key:
-                raise ValueError("OpenAI API key not found")
-
-            client = openai.AsyncOpenAI(api_key=api_key)
-            logger.info("OpenAI client created successfully")
+                # Check if Ollama instances are available as fallback
+                logger.warning("OpenAI API key not found, attempting Ollama fallback")
+                try:
+                    # Try to get an optimal Ollama instance for fallback
+                    ollama_base_url = await _get_optimal_ollama_instance(
+                        instance_type="embedding" if use_embedding_provider else "chat",
+                        use_embedding_provider=use_embedding_provider
+                    )
+                    if ollama_base_url:
+                        logger.info(f"Falling back to Ollama instance: {ollama_base_url}")
+                        provider_name = "ollama"
+                        api_key = "ollama"  # Ollama doesn't need a real API key
+                        base_url = ollama_base_url
+                    else:
+                        raise ValueError("OpenAI API key not found and no Ollama instances available")
+                except Exception as ollama_error:
+                    logger.error(f"Ollama fallback failed: {ollama_error}")
+                    raise ValueError("OpenAI API key not found and Ollama fallback failed") from ollama_error
+            # Only create OpenAI client if we're still using OpenAI (not fallen back to Ollama)
+            if provider_name == "openai":
+                client = openai.AsyncOpenAI(api_key=api_key)
+                logger.info("OpenAI client created successfully")
 
         elif provider_name == "ollama":
             # Enhanced Ollama client creation with multi-instance support
@@ -168,7 +186,7 @@ async def _get_optimal_ollama_instance(instance_type: str | None = None,
         # For now, we don't have multi-instance support, so skip to single instance config
         # TODO: Implement get_ollama_instances() method in CredentialService for multi-instance support
         logger.info("Using single instance Ollama configuration")
-        
+
         # Get single instance configuration from RAG settings
         rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
 
