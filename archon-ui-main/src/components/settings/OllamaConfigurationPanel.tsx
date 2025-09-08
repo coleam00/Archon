@@ -307,6 +307,8 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
             delete updated[instanceId];
             return updated;
           });
+          // Test connection after URL is saved (debounced, only after user stops typing)
+          handleTestConnection(instanceId);
         } catch (error) {
           console.error('Failed to update Ollama instance URL:', error);
           showToast('Failed to update instance URL', 'error');
@@ -350,6 +352,8 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
           delete updated[instanceId];
           return updated;
         });
+        // Test connection after URL is saved (on blur/save)
+        handleTestConnection(instanceId);
       } catch (error) {
         console.error('Failed to update Ollama instance URL:', error);
         showToast('Failed to update instance URL', 'error');
@@ -458,18 +462,9 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
     onConfigChange(instances);
   }, [instances, onConfigChange]);
 
-  // Auto-test instances when they haven't been tested yet
-  useEffect(() => {
-    if (isVisible && instances.length > 0) {
-      // Auto-test any instance that hasn't been tested yet (not just primary)
-      instances.forEach(instance => {
-        if (instance.isHealthy === undefined && !testingConnections.has(instance.id)) {
-          // Stagger the tests to avoid overwhelming the server
-          setTimeout(() => handleTestConnection(instance.id), Math.random() * 1000 + 500);
-        }
-      });
-    }
-  }, [isVisible, instances.length, instances]);
+  // Note: Auto-testing removed to prevent unnecessary API calls on every keystroke
+  // Connection testing now only happens on manual "Test Connection" button clicks
+  // or when "Save Changes" is clicked in edit modals
 
   // Cleanup timeouts on unmount
   useEffect(() => {
