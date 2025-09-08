@@ -655,9 +655,9 @@ def _assess_archon_compatibility(model) -> dict[str, Any]:
     model_name = model.name.lower()
     capabilities = getattr(model, 'capabilities', [])
 
-    # Define known compatible models (removed hardcoded deepseek from partial support)
+    # Define known compatible models
     full_support_patterns = [
-        'qwen', 'llama', 'mistral', 'phi', 'codeqwen', 'codellama'
+        'qwen', 'llama', 'mistral', 'phi', 'codeqwen', 'codellama', 'deepseek'
     ]
 
     partial_support_patterns = [

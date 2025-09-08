@@ -120,7 +120,12 @@ export const RAGSettings = ({
         const apiKeysCredentials = await credentialsService.getCredentialsByCategory('api_keys');
         const credentials: {[key: string]: string} = {};
         apiKeysCredentials.forEach((cred) => {
-          credentials[cred.key] = cred.value;
+          // Handle both encrypted and unencrypted credentials
+          if (cred.is_encrypted && cred.encrypted_value) {
+            credentials[cred.key] = cred.encrypted_value; // Use encrypted_value for encrypted credentials
+          } else {
+            credentials[cred.key] = cred.value || '';
+          }
         });
         setApiCredentials(credentials);
       } catch (error) {
@@ -135,26 +140,45 @@ export const RAGSettings = ({
   // Use a ref to track if we've loaded credentials to prevent infinite loops
   const hasLoadedCredentialsRef = useRef(false);
   
+  // Manual reload function for external calls
+  const reloadApiCredentials = async () => {
+    try {
+      const apiKeysCredentials = await credentialsService.getCredentialsByCategory('api_keys');
+      const credentials: {[key: string]: string} = {};
+      apiKeysCredentials.forEach((cred) => {
+        // Handle both encrypted and unencrypted credentials
+        if (cred.is_encrypted && cred.encrypted_value) {
+          credentials[cred.key] = cred.encrypted_value; // Use encrypted_value for encrypted credentials
+        } else {
+          credentials[cred.key] = cred.value || '';
+        }
+      });
+      console.log('🔄 Reloaded API credentials:', Object.keys(credentials), 'Encrypted credentials:', apiKeysCredentials.filter(c => c.is_encrypted).map(c => c.key));
+      setApiCredentials(credentials);
+      hasLoadedCredentialsRef.current = true;
+    } catch (error) {
+      console.error('Failed to reload API credentials:', error);
+    }
+  };
+  
   useEffect(() => {
-    const reloadApiCredentials = async () => {
-      try {
-        const apiKeysCredentials = await credentialsService.getCredentialsByCategory('api_keys');
-        const credentials: {[key: string]: string} = {};
-        apiKeysCredentials.forEach((cred) => {
-          credentials[cred.key] = cred.value;
-        });
-        setApiCredentials(credentials);
-        hasLoadedCredentialsRef.current = true;
-      } catch (error) {
-        console.error('Failed to reload API credentials:', error);
-      }
-    };
-
     // Only reload if we have ragSettings and haven't loaded yet, or if LLM_PROVIDER changed
     if (Object.keys(ragSettings).length > 0 && (!hasLoadedCredentialsRef.current || ragSettings.LLM_PROVIDER)) {
       reloadApiCredentials();
     }
   }, [ragSettings.LLM_PROVIDER]); // Only depend on LLM_PROVIDER changes
+  
+  // Reload credentials periodically to catch updates from other components (like onboarding)
+  useEffect(() => {
+    // Set up periodic reload every 2 seconds when component is active  
+    const interval = setInterval(() => {
+      if (Object.keys(ragSettings).length > 0) {
+        reloadApiCredentials();
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [ragSettings.LLM_PROVIDER]); // Only restart interval if provider changes
   
   // Status tracking
   const [llmStatus, setLLMStatus] = useState({ online: false, responseTime: null, checking: false });
@@ -476,12 +500,22 @@ export const RAGSettings = ({
   const getProviderStatus = (providerKey: string): 'configured' | 'missing' | 'partial' => {
     switch (providerKey) {
       case 'openai':
-        // Check if OpenAI API key is configured
-        const hasOpenAIKey = apiCredentials.OPENAI_API_KEY && apiCredentials.OPENAI_API_KEY.trim().length > 0;
+        // Check if OpenAI API key is configured (case insensitive)
+        const openAIKey = Object.keys(apiCredentials).find(key => key.toUpperCase() === 'OPENAI_API_KEY');
+        const keyValue = openAIKey ? apiCredentials[openAIKey] : undefined;
+        const hasOpenAIKey = openAIKey && keyValue && keyValue.trim().length > 0;
+        console.log('🔍 OpenAI status check:', { 
+          openAIKey, 
+          keyValue: keyValue ? `${keyValue.substring(0, 10)}...` : keyValue, 
+          hasValue: !!keyValue, 
+          hasOpenAIKey,
+          allCredentials: Object.keys(apiCredentials)
+        });
         return hasOpenAIKey ? 'configured' : 'missing';
       case 'google':
-        // Check if Google API key is configured  
-        const hasGoogleKey = apiCredentials.GOOGLE_API_KEY && apiCredentials.GOOGLE_API_KEY.trim().length > 0;
+        // Check if Google API key is configured (case insensitive)
+        const googleKey = Object.keys(apiCredentials).find(key => key.toUpperCase() === 'GOOGLE_API_KEY');
+        const hasGoogleKey = googleKey && apiCredentials[googleKey] && apiCredentials[googleKey].trim().length > 0;
         return hasGoogleKey ? 'configured' : 'missing';
       case 'ollama':
         // Check if both LLM and embedding instances are configured and online
@@ -489,16 +523,19 @@ export const RAGSettings = ({
         if (llmStatus.online || embeddingStatus.online) return 'partial';
         return 'missing';
       case 'anthropic':
-        // Check if Anthropic API key is configured
-        const hasAnthropicKey = apiCredentials.ANTHROPIC_API_KEY && apiCredentials.ANTHROPIC_API_KEY.trim().length > 0;
+        // Check if Anthropic API key is configured (case insensitive)
+        const anthropicKey = Object.keys(apiCredentials).find(key => key.toUpperCase() === 'ANTHROPIC_API_KEY');
+        const hasAnthropicKey = anthropicKey && apiCredentials[anthropicKey] && apiCredentials[anthropicKey].trim().length > 0;
         return hasAnthropicKey ? 'configured' : 'missing';
       case 'grok':
-        // Check if Grok API key is configured
-        const hasGrokKey = apiCredentials.GROK_API_KEY && apiCredentials.GROK_API_KEY.trim().length > 0;
+        // Check if Grok API key is configured (case insensitive)
+        const grokKey = Object.keys(apiCredentials).find(key => key.toUpperCase() === 'GROK_API_KEY');
+        const hasGrokKey = grokKey && apiCredentials[grokKey] && apiCredentials[grokKey].trim().length > 0;
         return hasGrokKey ? 'configured' : 'missing';
       case 'openrouter':
-        // Check if OpenRouter API key is configured
-        const hasOpenRouterKey = apiCredentials.OPENROUTER_API_KEY && apiCredentials.OPENROUTER_API_KEY.trim().length > 0;
+        // Check if OpenRouter API key is configured (case insensitive)
+        const openRouterKey = Object.keys(apiCredentials).find(key => key.toUpperCase() === 'OPENROUTER_API_KEY');
+        const hasOpenRouterKey = openRouterKey && apiCredentials[openRouterKey] && apiCredentials[openRouterKey].trim().length > 0;
         return hasOpenRouterKey ? 'configured' : 'missing';
       default:
         return 'missing';
@@ -652,13 +689,36 @@ export const RAGSettings = ({
                           {llmStatus.checking ? (
                             <Loader className="w-4 h-4 animate-spin inline mr-1" />
                           ) : null}
-                          {ollamaMetrics.loading ? 'Loading...' : `${ollamaMetrics.totalModels} models available`}
+                          {ollamaMetrics.loading ? 'Loading...' : `${ollamaMetrics.llmInstanceModels.total} models available`}
                         </div>
                       </>
                     ) : (
                       <div className="text-center py-8">
                         <div className="text-gray-400 text-sm mb-2">No LLM instance configured</div>
                         <div className="text-gray-500 text-xs mb-4">Configure an instance to use LLM features</div>
+                        
+                        {/* Quick setup for single host users */}
+                        {!embeddingInstanceConfig.url && (
+                          <div className="flex flex-col gap-2">
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              className="text-green-400 border-green-400 mb-1"
+                              onClick={() => {
+                                // Quick setup: configure both instances with default values
+                                const defaultUrl = 'http://localhost:11434/v1';
+                                const defaultName = 'Default Ollama';
+                                setLLMInstanceConfig({ name: defaultName, url: defaultUrl });
+                                setEmbeddingInstanceConfig({ name: defaultName, url: defaultUrl });
+                                setShowEditLLMModal(true);
+                              }}
+                            >
+                              ⚡ Quick Setup (Single Host)
+                            </Button>
+                            <div className="text-gray-500 text-xs mb-2">Sets up both LLM and Embedding for one host</div>
+                          </div>
+                        )}
+                        
                         <Button 
                           variant="outline" 
                           size="sm" 
@@ -748,7 +808,7 @@ export const RAGSettings = ({
                           {embeddingStatus.checking ? (
                             <Loader className="w-4 h-4 animate-spin inline mr-1" />
                           ) : null}
-                          {ollamaMetrics.loading ? 'Loading...' : `${ollamaMetrics.totalModels} models available`}
+                          {ollamaMetrics.loading ? 'Loading...' : `${ollamaMetrics.embeddingInstanceModels.total} models available`}
                         </div>
                       </>
                     ) : (
@@ -798,6 +858,22 @@ export const RAGSettings = ({
                   )}
                 </div>
               </div>
+
+              {/* Single Host Indicator */}
+              {llmInstanceConfig.url && embeddingInstanceConfig.url && 
+               llmInstanceConfig.url === embeddingInstanceConfig.url && (
+                <div className="bg-green-900/30 border border-green-500/30 rounded-lg p-3 mb-4">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                    <span className="text-green-300 font-medium">Single Host Setup</span>
+                  </div>
+                  <p className="text-green-200/80 text-sm mt-1 ml-7">
+                    Both LLM and Embedding instances are using the same Ollama host ({llmInstanceConfig.name})
+                  </p>
+                </div>
+              )}
 
               {/* Configuration Summary */}
               <div className="bg-gray-700 rounded-lg p-4">
@@ -974,36 +1050,20 @@ export const RAGSettings = ({
             >
               {saving ? 'Saving...' : 'Save Settings'}
             </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                console.log('🔄 Manual credential reload triggered');
+                reloadApiCredentials();
+              }}
+              className="ml-2"
+            >
+              Debug: Reload Credentials
+            </Button>
           </div>
         </div>
 
-        {/* Model Settings Row */}
-        <div className="grid grid-cols-2 gap-4 mb-6">
-          <div>
-            <Input 
-              label="Chat Model" 
-              value={getDisplayedChatModel(ragSettings)} 
-              onChange={e => setRagSettings({
-                ...ragSettings,
-                MODEL_CHOICE: e.target.value
-              })} 
-              placeholder={getModelPlaceholder(ragSettings.LLM_PROVIDER || 'openai')}
-              accentColor="green" 
-            />
-          </div>
-          <div>
-            <Input
-              label="Embedding Model"
-              value={getDisplayedEmbeddingModel(ragSettings)}
-              onChange={e => setRagSettings({
-                ...ragSettings,
-                EMBEDDING_MODEL: e.target.value
-              })}
-              placeholder={getEmbeddingPlaceholder(ragSettings.LLM_PROVIDER || 'openai')}
-              accentColor="green"
-            />
-          </div>
-        </div>
         
         {/* Second row: Contextual Embeddings, Max Workers, and description */}
         <div className="grid grid-cols-8 gap-4 mb-4 p-4 rounded-lg border border-green-500/20 shadow-[0_2px_8px_rgba(34,197,94,0.1)]">
@@ -1341,7 +1401,7 @@ export const RAGSettings = ({
 
         {/* Edit LLM Instance Modal */}
         {showEditLLMModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center pt-20 z-50">
             <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-96 max-w-md">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Edit LLM Instance</h3>
               
@@ -1349,16 +1409,57 @@ export const RAGSettings = ({
                 <Input
                   label="Instance Name"
                   value={llmInstanceConfig.name}
-                  onChange={(e) => setLLMInstanceConfig({...llmInstanceConfig, name: e.target.value})}
+                  onChange={(e) => {
+                    const newName = e.target.value;
+                    setLLMInstanceConfig({...llmInstanceConfig, name: newName});
+                    
+                    // Auto-sync embedding instance name if URLs are the same (single host setup)
+                    if (llmInstanceConfig.url === embeddingInstanceConfig.url && embeddingInstanceConfig.url !== '') {
+                      setEmbeddingInstanceConfig({...embeddingInstanceConfig, name: newName});
+                    }
+                  }}
                   placeholder="Enter instance name"
                 />
                 
                 <Input
                   label="Instance URL"
                   value={llmInstanceConfig.url}
-                  onChange={(e) => setLLMInstanceConfig({...llmInstanceConfig, url: e.target.value})}
+                  onChange={(e) => {
+                    const newUrl = e.target.value;
+                    setLLMInstanceConfig({...llmInstanceConfig, url: newUrl});
+                    
+                    // Auto-populate embedding instance if it's empty (convenience for single-host users)
+                    if (!embeddingInstanceConfig.url || !embeddingInstanceConfig.name) {
+                      setEmbeddingInstanceConfig({
+                        name: llmInstanceConfig.name || 'Default Ollama',
+                        url: newUrl
+                      });
+                    }
+                  }}
                   placeholder="http://localhost:11434/v1"
                 />
+                
+                {/* Convenience checkbox for single host setup */}
+                <div className="flex items-center gap-2 mt-3">
+                  <input
+                    type="checkbox"
+                    id="use-same-host"
+                    checked={llmInstanceConfig.url === embeddingInstanceConfig.url && llmInstanceConfig.url !== ''}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        // Sync embedding instance with LLM instance
+                        setEmbeddingInstanceConfig({
+                          name: llmInstanceConfig.name || 'Default Ollama',
+                          url: llmInstanceConfig.url
+                        });
+                      }
+                    }}
+                    className="w-4 h-4 text-purple-600 bg-gray-100 border-gray-300 rounded focus:ring-purple-500 dark:focus:ring-purple-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
+                  />
+                  <label htmlFor="use-same-host" className="text-sm text-gray-600 dark:text-gray-400">
+                    Use same host for embedding instance
+                  </label>
+                </div>
               </div>
               
               <div className="flex gap-2 mt-6">
@@ -1392,7 +1493,7 @@ export const RAGSettings = ({
 
         {/* Edit Embedding Instance Modal */}
         {showEditEmbeddingModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center pt-20 z-50">
             <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-96 max-w-md">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Edit Embedding Instance</h3>
               

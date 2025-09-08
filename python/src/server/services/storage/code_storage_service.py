@@ -506,6 +506,20 @@ def generate_code_example_summary(
     Returns:
         A dictionary with 'summary' and 'example_name'
     """
+    import asyncio
+    
+    # Run the async version in the current thread
+    return asyncio.run(_generate_code_example_summary_async(code, context_before, context_after, language, provider))
+
+
+async def _generate_code_example_summary_async(
+    code: str, context_before: str, context_after: str, language: str = "", provider: str = None
+) -> dict[str, str]:
+    """
+    Async version of generate_code_example_summary using unified LLM provider service.
+    """
+    from ..llm_provider_service import get_llm_client
+    
     # Get model choice from credential service (RAG setting)
     model_choice = _get_model_choice()
 
@@ -536,89 +550,57 @@ Format your response as JSON:
 """
 
     try:
-        # Get LLM client using fallback
-        try:
-            import os
-
-            import openai
-
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                # Try to get from credential service with direct fallback
-                from ..credential_service import credential_service
-
-                if (
-                    credential_service._cache_initialized
-                    and "OPENAI_API_KEY" in credential_service._cache
-                ):
-                    cached_key = credential_service._cache["OPENAI_API_KEY"]
-                    if isinstance(cached_key, dict) and cached_key.get("is_encrypted"):
-                        api_key = credential_service._decrypt_value(cached_key["encrypted_value"])
-                    else:
-                        api_key = cached_key
-                else:
-                    api_key = os.getenv("OPENAI_API_KEY", "")
-
-            if not api_key:
-                raise ValueError("No OpenAI API key available")
-
-            client = openai.OpenAI(api_key=api_key)
-        except Exception as e:
-            search_logger.error(
-                f"Failed to create LLM client fallback: {e} - returning default values"
+        # Use unified LLM provider service
+        async with get_llm_client(provider=provider) as client:
+            search_logger.info(
+                f"Generating summary for {hash(code) & 0xffffff:06x} using model: {model_choice}"
             )
-            return {
-                "example_name": f"Code Example{f' ({language})' if language else ''}",
-                "summary": "Code example for demonstration purposes.",
+            
+            response = await client.chat.completions.create(
+                model=model_choice,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a helpful assistant that analyzes code examples and provides JSON responses with example names and summaries.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={"type": "json_object"},
+                max_tokens=500,
+                temperature=0.3,
+            )
+
+            response_content = response.choices[0].message.content.strip()
+            search_logger.debug(f"LLM API response: {repr(response_content[:200])}...")
+
+            result = json.loads(response_content)
+
+            # Validate the response has the required fields
+            if not result.get("example_name") or not result.get("summary"):
+                search_logger.warning(f"Incomplete response from LLM: {result}")
+
+            final_result = {
+                "example_name": result.get(
+                    "example_name", f"Code Example{f' ({language})' if language else ''}"
+                ),
+                "summary": result.get("summary", "Code example for demonstration purposes."),
             }
 
-        search_logger.debug(
-            f"Calling OpenAI API with model: {model_choice}, language: {language}, code length: {len(code)}"
-        )
-
-        response = client.chat.completions.create(
-            model=model_choice,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant that analyzes code examples and provides JSON responses with example names and summaries.",
-                },
-                {"role": "user", "content": prompt},
-            ],
-            response_format={"type": "json_object"},
-        )
-
-        response_content = response.choices[0].message.content.strip()
-        search_logger.debug(f"OpenAI API response: {repr(response_content[:200])}...")
-
-        result = json.loads(response_content)
-
-        # Validate the response has the required fields
-        if not result.get("example_name") or not result.get("summary"):
-            search_logger.warning(f"Incomplete response from OpenAI: {result}")
-
-        final_result = {
-            "example_name": result.get(
-                "example_name", f"Code Example{f' ({language})' if language else ''}"
-            ),
-            "summary": result.get("summary", "Code example for demonstration purposes."),
-        }
-
-        search_logger.info(
-            f"Generated code example summary - Name: '{final_result['example_name']}', Summary length: {len(final_result['summary'])}"
-        )
-        return final_result
+            search_logger.info(
+                f"Generated code example summary - Name: '{final_result['example_name']}', Summary length: {len(final_result['summary'])}"
+            )
+            return final_result
 
     except json.JSONDecodeError as e:
         search_logger.error(
-            f"Failed to parse JSON response from OpenAI: {e}, Response: {repr(response_content) if 'response_content' in locals() else 'No response'}"
+            f"Failed to parse JSON response from LLM: {e}, Response: {repr(response_content) if 'response_content' in locals() else 'No response'}"
         )
         return {
             "example_name": f"Code Example{f' ({language})' if language else ''}",
             "summary": "Code example for demonstration purposes.",
         }
     except Exception as e:
-        search_logger.error(f"Error generating code example summary: {e}, Model: {model_choice}")
+        search_logger.error(f"Error generating code summary using unified LLM provider: {e}")
         return {
             "example_name": f"Code Example{f' ({language})' if language else ''}",
             "summary": "Code example for demonstration purposes.",
