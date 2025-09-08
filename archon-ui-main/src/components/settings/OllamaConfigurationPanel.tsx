@@ -307,8 +307,7 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
             delete updated[instanceId];
             return updated;
           });
-          // Test connection after URL is saved (debounced, only after user stops typing)
-          handleTestConnection(instanceId);
+          // Connection test removed - only manual testing via "Test" button per user request
         } catch (error) {
           console.error('Failed to update Ollama instance URL:', error);
           showToast('Failed to update instance URL', 'error');
@@ -352,8 +351,7 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
           delete updated[instanceId];
           return updated;
         });
-        // Test connection after URL is saved (on blur/save)
-        handleTestConnection(instanceId);
+        // Connection test removed - only manual testing via "Test" button per user request
       } catch (error) {
         console.error('Failed to update Ollama instance URL:', error);
         showToast('Failed to update instance URL', 'error');
@@ -462,9 +460,9 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
     onConfigChange(instances);
   }, [instances, onConfigChange]);
 
-  // Note: Auto-testing removed to prevent unnecessary API calls on every keystroke
-  // Connection testing now only happens on manual "Test Connection" button clicks
-  // or when "Save Changes" is clicked in edit modals
+  // Note: Auto-testing completely removed to prevent API calls on every keystroke
+  // Connection testing now ONLY happens on manual "Test Connection" button clicks
+  // No automatic testing on URL changes, saves, or blur events per user request
 
   // Cleanup timeouts on unmount
   useEffect(() => {
@@ -508,7 +506,7 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
     }
     
     // For instances that haven't been tested yet (isHealthy === undefined)
-    // Show a "checking" status - the auto-test will be handled by useEffect
+    // Show a "checking" status until manually tested via "Test" button
     return (
       <Badge variant="outline" color="blue" className="animate-pulse">
         <div className="w-2 h-2 rounded-full bg-blue-500 animate-ping mr-1" />
