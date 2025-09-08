@@ -5,6 +5,18 @@ import '@testing-library/jest-dom/vitest'
 // Set required environment variables for tests
 process.env.ARCHON_SERVER_PORT = '8181'
 
+// Mock import.meta.env for tests
+Object.defineProperty(import.meta, 'env', {
+  value: {
+    DEV: true,
+    PROD: false,
+    VITE_HOST: 'localhost',
+    VITE_PORT: '8181',
+    VITE_ALLOWED_HOSTS: '',
+  },
+  configurable: true,
+})
+
 // Clean up after each test
 afterEach(() => {
   cleanup()
@@ -17,6 +29,7 @@ global.fetch = vi.fn(() =>
     json: () => Promise.resolve({}),
     text: () => Promise.resolve(''),
     status: 200,
+    headers: new Headers(),
   } as Response)
 ) as any
 

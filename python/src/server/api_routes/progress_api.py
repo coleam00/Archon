@@ -107,15 +107,18 @@ async def list_active_operations():
         active_operations = []
 
         # Get active operations from ProgressTracker
+        # Include all non-completed statuses
         for op_id, operation in ProgressTracker._progress_states.items():
-            if operation.get("status") in ["starting", "running"]:
+            status = operation.get("status", "unknown")
+            # Include all operations that aren't completed or failed
+            if status not in ["completed", "failed", "error"]:
                 active_operations.append({
                     "operation_id": op_id,
                     "operation_type": operation.get("type", "unknown"),
                     "status": operation.get("status"),
                     "progress": operation.get("progress", 0),
                     "message": operation.get("log", "Processing..."),
-                    "started_at": operation.get("start_time", datetime.utcnow()).isoformat() if operation.get("start_time") else None
+                    "started_at": operation.get("start_time") or datetime.utcnow().isoformat()
                 })
 
         logfire.info(f"Active operations listed | count={len(active_operations)}")

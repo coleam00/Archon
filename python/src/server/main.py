@@ -11,7 +11,6 @@ Modules:
 - projects_api: Project and task management with streaming
 """
 
-import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -32,7 +31,6 @@ from .api_routes.settings_api import router as settings_router
 
 # Import Logfire configuration
 from .config.logfire_config import api_logger, setup_logfire
-from .services.background_task_manager import cleanup_task_manager
 from .services.crawler_manager import cleanup_crawler, initialize_crawler
 
 # Import utilities and core classes
@@ -107,16 +105,6 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             api_logger.warning(f"Could not initialize prompt service: {e}")
 
-        # Set the main event loop for background tasks
-        try:
-            from .services.background_task_manager import get_task_manager
-
-            task_manager = get_task_manager()
-            current_loop = asyncio.get_running_loop()
-            task_manager.set_main_loop(current_loop)
-            api_logger.info("✅ Main event loop set for background tasks")
-        except Exception as e:
-            api_logger.warning(f"Could not set main event loop: {e}")
 
         # MCP Client functionality removed from architecture
         # Agents now use MCP tools directly
@@ -144,12 +132,6 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             api_logger.warning("Could not cleanup crawling context", error=str(e))
 
-        # Cleanup background task manager
-        try:
-            await cleanup_task_manager()
-            api_logger.info("Background task manager cleaned up")
-        except Exception as e:
-            api_logger.warning("Could not cleanup background task manager", error=str(e))
 
         api_logger.info("✅ Cleanup completed")
 
@@ -287,7 +269,7 @@ async def _check_database_schema():
         client = get_supabase_client()
 
         # Try to query the new columns directly - if they exist, schema is up to date
-        test_query = client.table('archon_sources').select('source_url, source_display_name').limit(1).execute()
+        client.table('archon_sources').select('source_url, source_display_name').limit(1).execute()
 
         # Cache successful result permanently
         _schema_check_cache["valid"] = True

@@ -649,7 +649,7 @@ class SourceManagementService:
 
             if knowledge_type:
                 # Filter by metadata->knowledge_type
-                query = query.filter("metadata->>knowledge_type", "eq", knowledge_type)
+                query = query.contains("metadata", {"knowledge_type": knowledge_type})
 
             response = query.execute()
 

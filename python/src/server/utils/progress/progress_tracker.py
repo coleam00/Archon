@@ -191,48 +191,105 @@ class ProgressTracker:
         )
 
     async def update_crawl_stats(
-        self, processed_pages: int, total_pages: int, current_url: str | None = None
+        self, 
+        processed_pages: int, 
+        total_pages: int, 
+        current_url: str | None = None,
+        pages_found: int | None = None
     ):
         """
-        Update crawling statistics.
+        Update crawling statistics with detailed metrics.
 
         Args:
             processed_pages: Number of pages processed
             total_pages: Total pages to process
             current_url: Currently processing URL
+            pages_found: Total pages discovered during crawl
         """
         progress_val = int((processed_pages / max(total_pages, 1)) * 100)
         log = f"Processing page {processed_pages}/{total_pages}"
         if current_url:
             log += f": {current_url}"
 
-        await self.update(
-            status="crawling",
-            progress=progress_val,
-            log=log,
-            processed_pages=processed_pages,
-            total_pages=total_pages,
-            current_url=current_url,
-        )
+        update_data = {
+            "status": "crawling",
+            "progress": progress_val,
+            "log": log,
+            "processed_pages": processed_pages,
+            "total_pages": total_pages,
+            "current_url": current_url,
+        }
+        
+        if pages_found is not None:
+            update_data["pages_found"] = pages_found
+            
+        await self.update(**update_data)
 
     async def update_storage_progress(
-        self, chunks_stored: int, total_chunks: int, operation: str = "storing"
+        self, 
+        chunks_stored: int, 
+        total_chunks: int, 
+        operation: str = "storing",
+        word_count: int | None = None,
+        embeddings_created: int | None = None
     ):
         """
-        Update document storage progress.
+        Update document storage progress with detailed metrics.
 
         Args:
             chunks_stored: Number of chunks stored
             total_chunks: Total chunks to store
             operation: Storage operation description
+            word_count: Total word count processed
+            embeddings_created: Number of embeddings created
         """
         progress_val = int((chunks_stored / max(total_chunks, 1)) * 100)
+        
+        update_data = {
+            "status": "document_storage",
+            "progress": progress_val,
+            "log": f"{operation}: {chunks_stored}/{total_chunks} chunks",
+            "chunks_stored": chunks_stored,
+            "total_chunks": total_chunks,
+        }
+        
+        if word_count is not None:
+            update_data["word_count"] = word_count
+        if embeddings_created is not None:
+            update_data["embeddings_created"] = embeddings_created
+            
+        await self.update(**update_data)
+    
+    async def update_code_extraction_progress(
+        self,
+        completed_summaries: int,
+        total_summaries: int,
+        code_blocks_found: int,
+        current_file: str | None = None
+    ):
+        """
+        Update code extraction progress with detailed metrics.
+        
+        Args:
+            completed_summaries: Number of code summaries completed
+            total_summaries: Total code summaries to generate
+            code_blocks_found: Total number of code blocks found
+            current_file: Current file being processed
+        """
+        progress_val = int((completed_summaries / max(total_summaries, 1)) * 100)
+        
+        log = f"Extracting code: {completed_summaries}/{total_summaries} summaries"
+        if current_file:
+            log += f" - {current_file}"
+        
         await self.update(
-            status="document_storage",
+            status="code_extraction",
             progress=progress_val,
-            log=f"{operation}: {chunks_stored}/{total_chunks} chunks",
-            chunks_stored=chunks_stored,
-            total_chunks=total_chunks,
+            log=log,
+            completed_summaries=completed_summaries,
+            total_summaries=total_summaries,
+            code_blocks_found=code_blocks_found,
+            current_file=current_file
         )
 
     def _update_state(self):

@@ -36,8 +36,6 @@ class BatchCrawlStrategy:
         is_documentation_site_func: Callable[[str], bool],
         max_concurrent: int | None = None,
         progress_callback: Callable[..., Awaitable[None]] | None = None,
-        start_progress: int = 15,
-        end_progress: int = 60,
         cancellation_check: Callable[[], None] | None = None,
     ) -> list[dict[str, Any]]:
         """
@@ -49,8 +47,7 @@ class BatchCrawlStrategy:
             is_documentation_site_func: Function to check if URL is a documentation site
             max_concurrent: Maximum concurrent crawls
             progress_callback: Optional callback for progress updates
-            start_progress: Starting progress percentage
-            end_progress: Ending progress percentage
+            cancellation_check: Optional function to check for cancellation
 
         Returns:
             List of crawl results
@@ -227,7 +224,7 @@ class BatchCrawlStrategy:
                     )
 
         await report_progress(
-            end_progress,
+            100,
             f"Batch crawling completed: {len(successful_results)}/{total_urls} pages successful",
             total_pages=total_urls,
             processed_pages=processed,

@@ -3,7 +3,7 @@ import { Code, Check, Save, Loader } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
-import { useToast } from '../../contexts/ToastContext';
+import { useToast } from '../../features/ui/hooks/useToast';
 import { credentialsService } from '../../services/credentialsService';
 
 interface CodeExtractionSettingsProps {

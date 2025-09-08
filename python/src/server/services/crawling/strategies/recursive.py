@@ -40,8 +40,6 @@ class RecursiveCrawlStrategy:
         max_depth: int = 3,
         max_concurrent: int | None = None,
         progress_callback: Callable[..., Awaitable[None]] | None = None,
-        start_progress: int = 10,
-        end_progress: int = 60,
         cancellation_check: Callable[[], None] | None = None,
     ) -> list[dict[str, Any]]:
         """
@@ -54,8 +52,7 @@ class RecursiveCrawlStrategy:
             max_depth: Maximum crawl depth
             max_concurrent: Maximum concurrent crawls
             progress_callback: Optional callback for progress updates
-            start_progress: Starting progress percentage
-            end_progress: Ending progress percentage
+            cancellation_check: Optional function to check for cancellation
 
         Returns:
             List of crawl results
@@ -165,15 +162,10 @@ class RecursiveCrawlStrategy:
                 break
 
             # Calculate progress for this depth level
-            depth_start = start_progress + int(
-                (depth / max_depth) * (end_progress - start_progress) * 0.8
-            )
-            depth_end = start_progress + int(
-                ((depth + 1) / max_depth) * (end_progress - start_progress) * 0.8
-            )
+            depth_progress = int((depth / max_depth) * 80)
 
             await report_progress(
-                depth_start,
+                depth_progress,
                 f"Crawling depth {depth + 1}/{max_depth}: {len(urls_to_crawl)} URLs to process",
                 total_pages=total_discovered,
                 processed_pages=total_processed,
@@ -200,9 +192,7 @@ class RecursiveCrawlStrategy:
                     url_mapping[transformed] = url
 
                 # Calculate progress for this batch within the depth
-                batch_progress = depth_start + int(
-                    (batch_idx / len(urls_to_crawl)) * (depth_end - depth_start)
-                )
+                batch_progress = int((batch_idx / len(urls_to_crawl)) * 100)
                 await report_progress(
                     batch_progress,
                     f"Depth {depth + 1}: crawling URLs {batch_idx + 1}-{batch_end_idx} of {len(urls_to_crawl)}",
@@ -263,9 +253,7 @@ class RecursiveCrawlStrategy:
                     # Report progress every few URLs
                     current_idx = batch_idx + i + 1
                     if current_idx % 5 == 0 or current_idx == len(urls_to_crawl):
-                        current_progress = depth_start + int(
-                            (current_idx / len(urls_to_crawl)) * (depth_end - depth_start)
-                        )
+                        current_progress = int((current_idx / len(urls_to_crawl)) * 100)
                         await report_progress(
                             current_progress,
                             f"Depth {depth + 1}: processed {current_idx}/{len(urls_to_crawl)} URLs ({depth_successful} successful)",
@@ -278,14 +266,14 @@ class RecursiveCrawlStrategy:
 
             # Report completion of this depth
             await report_progress(
-                depth_end,
+                int(((depth + 1) / max_depth) * 100),
                 f"Depth {depth + 1} completed: {depth_successful} pages crawled, {len(next_level_urls)} URLs found for next depth",
                 total_pages=total_discovered,
                 processed_pages=total_processed,
             )
 
         await report_progress(
-            end_progress,
+            100,
             f"Recursive crawling completed: {len(results_all)} total pages crawled across {max_depth} depth levels",
             total_pages=total_discovered,
             processed_pages=total_processed,

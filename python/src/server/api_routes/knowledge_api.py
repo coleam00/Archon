@@ -20,8 +20,8 @@ from pydantic import BaseModel
 # Import unified logging
 from ..config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
 from ..services.crawler_manager import get_crawler
-from ..services.crawling import CrawlOrchestrationService
-from ..services.knowledge import DatabaseMetricsService, KnowledgeItemService
+from ..services.crawling import CrawlingService
+from ..services.knowledge import DatabaseMetricsService, KnowledgeItemService, KnowledgeSummaryService
 from ..services.search.rag_service import RAGService
 from ..services.storage import DocumentStorageService
 from ..utils import get_supabase_client
@@ -88,48 +88,6 @@ class RagQueryRequest(BaseModel):
     match_count: int = 5
 
 
-@router.get("/crawl-progress/{progress_id}")
-async def get_crawl_progress(progress_id: str):
-    """Get crawl progress for polling.
-    
-    Returns the current state of a crawl operation.
-    Frontend should poll this endpoint to track crawl progress.
-    """
-    try:
-        from ..utils.progress.progress_tracker import ProgressTracker
-        from ..models.progress_models import create_progress_response
-
-        # Get progress from the tracker's in-memory storage
-        progress_data = ProgressTracker.get_progress(progress_id)
-        safe_logfire_info(f"Crawl progress requested | progress_id={progress_id} | found={progress_data is not None}")
-
-        if not progress_data:
-            # Return 404 if no progress exists - this is correct behavior
-            raise HTTPException(status_code=404, detail={"error": f"No progress found for ID: {progress_id}"})
-
-        # Ensure we have the progress_id in the data
-        progress_data["progress_id"] = progress_id
-        
-        # Get operation type for proper model selection
-        operation_type = progress_data.get("type", "crawl")
-        
-        # Create standardized response using Pydantic model
-        progress_response = create_progress_response(operation_type, progress_data)
-        
-        # Convert to dict with camelCase fields for API response
-        response_data = progress_response.model_dump(by_alias=True, exclude_none=True)
-        
-        safe_logfire_info(
-            f"Progress retrieved | operation_id={progress_id} | status={response_data.get('status')} | "
-            f"progress={response_data.get('progress')} | totalPages={response_data.get('totalPages')} | "
-            f"processedPages={response_data.get('processedPages')}"
-        )
-
-        return response_data
-    except Exception as e:
-        safe_logfire_error(f"Failed to get crawl progress | error={str(e)} | progress_id={progress_id}")
-        raise HTTPException(status_code=500, detail={"error": str(e)})
-
 
 @router.get("/knowledge-items/sources")
 async def get_knowledge_sources():
@@ -159,6 +117,34 @@ async def get_knowledge_items(
     except Exception as e:
         safe_logfire_error(
             f"Failed to get knowledge items | error={str(e)} | page={page} | per_page={per_page}"
+        )
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
+@router.get("/knowledge-items/summary")
+async def get_knowledge_items_summary(
+    page: int = 1, per_page: int = 20, knowledge_type: str | None = None, search: str | None = None
+):
+    """
+    Get lightweight summaries of knowledge items.
+    
+    Returns minimal data optimized for frequent polling:
+    - Only counts, no actual document/code content
+    - Basic metadata for display
+    - Efficient batch queries
+    
+    Use this endpoint for card displays and frequent polling.
+    """
+    try:
+        service = KnowledgeSummaryService(get_supabase_client())
+        result = await service.get_summaries(
+            page=page, per_page=per_page, knowledge_type=knowledge_type, search=search
+        )
+        return result
+
+    except Exception as e:
+        safe_logfire_error(
+            f"Failed to get knowledge summaries | error={str(e)} | page={page} | per_page={per_page}"
         )
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
@@ -238,15 +224,50 @@ async def delete_knowledge_item(source_id: str):
 
 
 @router.get("/knowledge-items/{source_id}/chunks")
-async def get_knowledge_item_chunks(source_id: str, domain_filter: str | None = None):
-    """Get all document chunks for a specific knowledge item with optional domain filtering."""
+async def get_knowledge_item_chunks(
+    source_id: str, 
+    domain_filter: str | None = None,
+    limit: int = 20,
+    offset: int = 0
+):
+    """
+    Get document chunks for a specific knowledge item with pagination.
+    
+    Args:
+        source_id: The source ID
+        domain_filter: Optional domain filter for URLs
+        limit: Maximum number of chunks to return (default 20, max 100)
+        offset: Number of chunks to skip (for pagination)
+    
+    Returns:
+        Paginated chunks with metadata
+    """
     try:
-        safe_logfire_info(f"Fetching chunks for source_id: {source_id}, domain_filter: {domain_filter}")
+        # Validate pagination parameters
+        limit = min(limit, 100)  # Cap at 100 to prevent excessive data transfer
+        limit = max(limit, 1)    # At least 1
+        offset = max(offset, 0)   # Can't be negative
+        
+        safe_logfire_info(
+            f"Fetching chunks | source_id={source_id} | domain_filter={domain_filter} | "
+            f"limit={limit} | offset={offset}"
+        )
 
-        # Query document chunks with content for this specific source
         supabase = get_supabase_client()
         
-        # Build the query
+        # First get total count
+        count_query = supabase.from_("archon_crawled_pages").select(
+            "id", count="exact", head=True
+        )
+        count_query = count_query.eq("source_id", source_id)
+        
+        if domain_filter:
+            count_query = count_query.ilike("url", f"%{domain_filter}%")
+        
+        count_result = count_query.execute()
+        total = count_result.count if hasattr(count_result, "count") else 0
+        
+        # Build the main query with pagination
         query = supabase.from_("archon_crawled_pages").select(
             "id, source_id, content, metadata, url"
         )
@@ -254,31 +275,107 @@ async def get_knowledge_item_chunks(source_id: str, domain_filter: str | None = 
 
         # Apply domain filtering if provided
         if domain_filter:
-            # Case-insensitive URL match
             query = query.ilike("url", f"%{domain_filter}%")
 
         # Deterministic ordering (URL then id)
         query = query.order("url", desc=False).order("id", desc=False)
+        
+        # Apply pagination
+        query = query.range(offset, offset + limit - 1)
 
         result = query.execute()
-        if getattr(result, "error", None):
+        # Check for error more explicitly to work with mocks
+        if hasattr(result, "error") and result.error is not None:
             safe_logfire_error(
                 f"Supabase query error | source_id={source_id} | error={result.error}"
             )
             raise HTTPException(status_code=500, detail={"error": str(result.error)})
 
         chunks = result.data if result.data else []
-
-        safe_logfire_info(f"Found {len(chunks)} chunks for {source_id}")
+        
+        # Extract useful fields from metadata to top level for frontend
+        # This ensures the API response matches the TypeScript DocumentChunk interface
+        for chunk in chunks:
+            metadata = chunk.get("metadata", {}) or {}
+            
+            # Generate meaningful titles from available data
+            title = None
+            
+            # Try to get title from various metadata fields
+            if metadata.get("filename"):
+                title = metadata.get("filename")
+            elif metadata.get("headers"):
+                title = metadata.get("headers").split(";")[0].strip("# ")
+            elif metadata.get("title") and metadata.get("title").strip():
+                title = metadata.get("title").strip()
+            else:
+                # Try to extract from content first for more specific titles
+                if chunk.get("content"):
+                    content = chunk.get("content", "").strip()
+                    # Look for markdown headers at the start
+                    lines = content.split("\n")[:5]
+                    for line in lines:
+                        line = line.strip()
+                        if line.startswith("# "):
+                            title = line[2:].strip()
+                            break
+                        elif line.startswith("## "):
+                            title = line[3:].strip()
+                            break
+                        elif line.startswith("### "):
+                            title = line[4:].strip()
+                            break
+                    
+                    # Fallback: use first meaningful line that looks like a title
+                    if not title:
+                        for line in lines:
+                            line = line.strip()
+                            # Skip code blocks, empty lines, and very short lines
+                            if (line and not line.startswith("```") and not line.startswith("Source:") 
+                                and len(line) > 15 and len(line) < 80
+                                and not line.startswith("from ") and not line.startswith("import ")
+                                and "=" not in line and "{" not in line):
+                                title = line
+                                break
+                
+                # If no content-based title found, generate from URL
+                if not title:
+                    url = chunk.get("url", "")
+                    if url:
+                        # Extract meaningful part from URL
+                        if url.endswith(".txt"):
+                            title = url.split("/")[-1].replace(".txt", "").replace("-", " ").title()
+                        else:
+                            # Get domain and path info
+                            from urllib.parse import urlparse
+                            parsed = urlparse(url)
+                            if parsed.path and parsed.path != "/":
+                                title = parsed.path.strip("/").replace("-", " ").replace("_", " ").title()
+                            else:
+                                title = parsed.netloc.replace("www.", "").title()
+            
+            chunk["title"] = title or ""
+            chunk["section"] = metadata.get("headers", "").replace(";", " > ") if metadata.get("headers") else None
+            chunk["source_type"] = metadata.get("source_type")
+            chunk["knowledge_type"] = metadata.get("knowledge_type")
+        
+        safe_logfire_info(
+            f"Fetched {len(chunks)} chunks for {source_id} | total={total}"
+        )
 
         return {
             "success": True,
             "source_id": source_id,
             "domain_filter": domain_filter,
             "chunks": chunks,
-            "count": len(chunks),
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < total,
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         safe_logfire_error(
             f"Failed to fetch chunks | error={str(e)} | source_id={source_id}"
@@ -287,29 +384,79 @@ async def get_knowledge_item_chunks(source_id: str, domain_filter: str | None = 
 
 
 @router.get("/knowledge-items/{source_id}/code-examples")
-async def get_knowledge_item_code_examples(source_id: str):
-    """Get all code examples for a specific knowledge item."""
+async def get_knowledge_item_code_examples(
+    source_id: str,
+    limit: int = 20,
+    offset: int = 0
+):
+    """
+    Get code examples for a specific knowledge item with pagination.
+    
+    Args:
+        source_id: The source ID
+        limit: Maximum number of examples to return (default 20, max 100)
+        offset: Number of examples to skip (for pagination)
+    
+    Returns:
+        Paginated code examples with metadata
+    """
     try:
-        safe_logfire_info(f"Fetching code examples for source_id: {source_id}")
+        # Validate pagination parameters
+        limit = min(limit, 100)  # Cap at 100 to prevent excessive data transfer
+        limit = max(limit, 1)    # At least 1
+        offset = max(offset, 0)   # Can't be negative
+        
+        safe_logfire_info(
+            f"Fetching code examples | source_id={source_id} | limit={limit} | offset={offset}"
+        )
 
-        # Query code examples with full content for this specific source
         supabase = get_supabase_client()
+        
+        # First get total count
+        count_result = (
+            supabase.from_("archon_code_examples")
+            .select("id", count="exact", head=True)
+            .eq("source_id", source_id)
+            .execute()
+        )
+        total = count_result.count if hasattr(count_result, "count") else 0
+        
+        # Get paginated code examples
         result = (
             supabase.from_("archon_code_examples")
             .select("id, source_id, content, summary, metadata")
             .eq("source_id", source_id)
+            .order("id", desc=False)  # Deterministic ordering
+            .range(offset, offset + limit - 1)
             .execute()
         )
 
         code_examples = result.data if result.data else []
 
-        safe_logfire_info(f"Found {len(code_examples)} code examples for {source_id}")
+        # Extract title and example_name from metadata to top level for frontend
+        # This ensures the API response matches the TypeScript CodeExample interface
+        for example in code_examples:
+            metadata = example.get("metadata", {}) or {}
+            # Extract fields to match frontend TypeScript types
+            example["title"] = metadata.get("title")  # AI-generated title
+            example["example_name"] = metadata.get("example_name")  # Same as title for compatibility
+            example["language"] = metadata.get("language")  # Programming language
+            example["file_path"] = metadata.get("file_path")  # Original file path if available
+            # Note: content field is already at top level from database
+            # Note: summary field is already at top level from database
+
+        safe_logfire_info(
+            f"Fetched {len(code_examples)} code examples for {source_id} | total={total}"
+        )
 
         return {
             "success": True,
             "source_id": source_id,
             "code_examples": code_examples,
-            "count": len(code_examples),
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < total,
         }
 
     except Exception as e:
@@ -376,7 +523,7 @@ async def refresh_knowledge_item(source_id: str):
             )
 
         # Use the same crawl orchestration as regular crawl
-        crawl_service = CrawlOrchestrationService(
+        crawl_service = CrawlingService(
             crawler=crawler, supabase_client=get_supabase_client()
         )
         crawl_service.set_progress_id(progress_id)
@@ -456,7 +603,7 @@ async def crawl_knowledge_item(request: KnowledgeItemRequest):
             "url": url_str,
             "current_url": url_str,
             "crawl_type": crawl_type,
-            "status": "initializing",
+            # Don't override status - let tracker.start() set it to "starting"
             "progress": 0,
             "log": f"Starting crawl for {request.url}"
         })
@@ -494,7 +641,7 @@ async def crawl_knowledge_item(request: KnowledgeItemRequest):
 
 
 async def _perform_crawl_with_progress(
-    progress_id: str, request: KnowledgeItemRequest, tracker: "ProgressTracker"
+    progress_id: str, request: KnowledgeItemRequest, tracker
 ):
     """Perform the actual crawl operation with progress tracking using service layer."""
     # Acquire semaphore to limit concurrent crawls
@@ -518,7 +665,7 @@ async def _perform_crawl_with_progress(
                 return
 
             supabase_client = get_supabase_client()
-            orchestration_service = CrawlOrchestrationService(crawler, supabase_client)
+            orchestration_service = CrawlingService(crawler, supabase_client)
             orchestration_service.set_progress_id(progress_id)
 
             # Store the current task in active_crawl_tasks for cancellation support
@@ -656,7 +803,7 @@ async def _perform_upload_with_progress(
     file_metadata: dict,
     tag_list: list[str],
     knowledge_type: str,
-    tracker: "ProgressTracker",
+    tracker,
 ):
     """Perform document upload with progress tracking using service layer."""
     # Create cancellation check function for document uploads
@@ -944,25 +1091,6 @@ async def knowledge_health():
 
     return result
 
-
-@router.get("/knowledge-items/task/{task_id}")
-async def get_crawl_task_status(task_id: str):
-    """Get status of a background crawl task."""
-    try:
-        from ..services.background_task_manager import get_task_manager
-
-        task_manager = get_task_manager()
-        status = await task_manager.get_task_status(task_id)
-
-        if "error" in status and status["error"] == "Task not found":
-            raise HTTPException(status_code=404, detail={"error": "Task not found"})
-
-        return status
-    except HTTPException:
-        raise
-    except Exception as e:
-        safe_logfire_error(f"Failed to get task status | error={str(e)} | task_id={task_id}")
-        raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
 @router.post("/knowledge-items/stop/{progress_id}")

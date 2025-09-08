@@ -48,7 +48,7 @@ class KnowledgeItemService:
 
             # Apply knowledge type filter at database level if provided
             if knowledge_type:
-                query = query.eq("metadata->>knowledge_type", knowledge_type)
+                query = query.contains("metadata", {"knowledge_type": knowledge_type})
 
             # Apply search filter at database level if provided
             if search:
@@ -65,7 +65,7 @@ class KnowledgeItemService:
 
             # Apply same filters to count query
             if knowledge_type:
-                count_query = count_query.eq("metadata->>knowledge_type", knowledge_type)
+                count_query = count_query.contains("metadata", {"knowledge_type": knowledge_type})
 
             if search:
                 search_pattern = f"%{search}%"

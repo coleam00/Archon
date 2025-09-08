@@ -18,6 +18,7 @@ export * from "./combobox";
 export * from "./dialog";
 export * from "./dropdown-menu";
 export * from "./input";
+export * from "./inspector-dialog";
 export * from "./select";
 // Export style utilities
 export * from "./styles";

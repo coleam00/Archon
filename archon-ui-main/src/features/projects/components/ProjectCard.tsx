@@ -28,8 +28,7 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
   onDelete,
 }) => {
   return (
-    <motion.div
-      role="listitem"
+    <motion.li
       onClick={() => onSelect(project)}
       className={cn(
         "relative rounded-xl backdrop-blur-md w-72 min-h-[180px] cursor-pointer overflow-visible group flex flex-col",
@@ -253,6 +252,6 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
           onDelete={(e) => onDelete(e, project.id, project.title)}
         />
       </div>
-    </motion.div>
+    </motion.li>
   );
 };
