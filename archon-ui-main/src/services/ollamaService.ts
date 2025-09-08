@@ -381,28 +381,51 @@ class OllamaService {
   }
 
   /**
-   * Test connectivity to a single Ollama instance (quick health check)
+   * Test connectivity to a single Ollama instance (quick health check) with retry logic
    */
-  async testConnection(instanceUrl: string): Promise<{ isHealthy: boolean; responseTime?: number; error?: string }> {
-    try {
-      const startTime = Date.now();
-      
-      const healthResponse = await this.checkInstanceHealth([instanceUrl], false);
-      const responseTime = Date.now() - startTime;
-      
-      const instanceStatus = healthResponse.instance_status[instanceUrl];
-      
-      return {
-        isHealthy: instanceStatus?.is_healthy || false,
-        responseTime: instanceStatus?.response_time_ms || responseTime,
-        error: instanceStatus?.error_message,
-      };
-    } catch (error) {
-      return {
-        isHealthy: false,
-        error: error instanceof Error ? error.message : String(error),
-      };
+  async testConnection(instanceUrl: string, retryCount = 3): Promise<{ isHealthy: boolean; responseTime?: number; error?: string }> {
+    const maxRetries = retryCount;
+    let lastError: Error | null = null;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const startTime = Date.now();
+        
+        const healthResponse = await this.checkInstanceHealth([instanceUrl], false);
+        const responseTime = Date.now() - startTime;
+        
+        const instanceStatus = healthResponse.instance_status[instanceUrl];
+        
+        const result = {
+          isHealthy: instanceStatus?.is_healthy || false,
+          responseTime: instanceStatus?.response_time_ms || responseTime,
+          error: instanceStatus?.error_message,
+        };
+
+        // If successful, return immediately
+        if (result.isHealthy) {
+          return result;
+        }
+
+        // If not healthy but we got a valid response, store error for potential retry
+        lastError = new Error(result.error || 'Instance not available');
+        
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error('Unknown error');
+      }
+
+      // If this wasn't the last attempt, wait before retrying
+      if (attempt < maxRetries) {
+        const delayMs = Math.pow(2, attempt - 1) * 1000; // Exponential backoff: 1s, 2s, 4s
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
     }
+
+    // All retries failed, return error result
+    return {
+      isHealthy: false,
+      error: lastError?.message || 'Connection failed after retries',
+    };
   }
 
   /**
