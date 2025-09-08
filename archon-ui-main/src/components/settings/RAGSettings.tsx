@@ -431,47 +431,51 @@ export const RAGSettings = ({
   const lastTestedEmbeddingConfigRef = useRef({ url: '', name: '', provider: '' });
   const lastMetricsFetchRef = useRef({ provider: '', llmUrl: '', embUrl: '', llmOnline: false, embOnline: false });
   
-  React.useEffect(() => {
-    const currentConfig = {
-      url: llmInstanceConfig.url,
-      name: llmInstanceConfig.name,
-      provider: ragSettings.LLM_PROVIDER
-    };
-    
-    const shouldTest = ragSettings.LLM_PROVIDER === 'ollama' && 
-                      llmInstanceConfig.url && 
-                      llmInstanceConfig.name && 
-                      llmInstanceConfig.url !== 'http://localhost:11434/v1' &&
-                      (currentConfig.url !== lastTestedLLMConfigRef.current.url ||
-                       currentConfig.name !== lastTestedLLMConfigRef.current.name ||
-                       currentConfig.provider !== lastTestedLLMConfigRef.current.provider);
-    
-    if (shouldTest) {
-      lastTestedLLMConfigRef.current = currentConfig;
-      testConnection(llmInstanceConfig.url, setLLMStatus);
-    }
-  }, [llmInstanceConfig.url, llmInstanceConfig.name, ragSettings.LLM_PROVIDER]);
+  // Auto-testing disabled to prevent API calls on every keystroke per user request
+  // Connection testing should only happen on manual "Test Connection" or "Save Changes" button clicks
+  // React.useEffect(() => {
+  //   const currentConfig = {
+  //     url: llmInstanceConfig.url,
+  //     name: llmInstanceConfig.name,
+  //     provider: ragSettings.LLM_PROVIDER
+  //   };
+  //   
+  //   const shouldTest = ragSettings.LLM_PROVIDER === 'ollama' && 
+  //                     llmInstanceConfig.url && 
+  //                     llmInstanceConfig.name && 
+  //                     llmInstanceConfig.url !== 'http://localhost:11434/v1' &&
+  //                     (currentConfig.url !== lastTestedLLMConfigRef.current.url ||
+  //                      currentConfig.name !== lastTestedLLMConfigRef.current.name ||
+  //                      currentConfig.provider !== lastTestedLLMConfigRef.current.provider);
+  //   
+  //   if (shouldTest) {
+  //     lastTestedLLMConfigRef.current = currentConfig;
+  //     testConnection(llmInstanceConfig.url, setLLMStatus);
+  //   }
+  // }, [llmInstanceConfig.url, llmInstanceConfig.name, ragSettings.LLM_PROVIDER]);
 
-  React.useEffect(() => {
-    const currentConfig = {
-      url: embeddingInstanceConfig.url,
-      name: embeddingInstanceConfig.name,
-      provider: ragSettings.LLM_PROVIDER
-    };
-    
-    const shouldTest = ragSettings.LLM_PROVIDER === 'ollama' && 
-                      embeddingInstanceConfig.url && 
-                      embeddingInstanceConfig.name && 
-                      embeddingInstanceConfig.url !== 'http://localhost:11434/v1' &&
-                      (currentConfig.url !== lastTestedEmbeddingConfigRef.current.url ||
-                       currentConfig.name !== lastTestedEmbeddingConfigRef.current.name ||
-                       currentConfig.provider !== lastTestedEmbeddingConfigRef.current.provider);
-    
-    if (shouldTest) {
-      lastTestedEmbeddingConfigRef.current = currentConfig;
-      testConnection(embeddingInstanceConfig.url, setEmbeddingStatus);
-    }
-  }, [embeddingInstanceConfig.url, embeddingInstanceConfig.name, ragSettings.LLM_PROVIDER]);
+  // Auto-testing disabled to prevent API calls on every keystroke per user request
+  // Connection testing should only happen on manual "Test Connection" or "Save Changes" button clicks
+  // React.useEffect(() => {
+  //   const currentConfig = {
+  //     url: embeddingInstanceConfig.url,
+  //     name: embeddingInstanceConfig.name,
+  //     provider: ragSettings.LLM_PROVIDER
+  //   };
+  //   
+  //   const shouldTest = ragSettings.LLM_PROVIDER === 'ollama' && 
+  //                     embeddingInstanceConfig.url && 
+  //                     embeddingInstanceConfig.name && 
+  //                     embeddingInstanceConfig.url !== 'http://localhost:11434/v1' &&
+  //                     (currentConfig.url !== lastTestedEmbeddingConfigRef.current.url ||
+  //                      currentConfig.name !== lastTestedEmbeddingConfigRef.current.name ||
+  //                      currentConfig.provider !== lastTestedEmbeddingConfigRef.current.provider);
+  //   
+  //   if (shouldTest) {
+  //     lastTestedEmbeddingConfigRef.current = currentConfig;
+  //     testConnection(embeddingInstanceConfig.url, setEmbeddingStatus);
+  //   }
+  // }, [embeddingInstanceConfig.url, embeddingInstanceConfig.name, ragSettings.LLM_PROVIDER]);
 
   // Fetch Ollama metrics when component mounts or when Ollama provider is selected or status changes
   React.useEffect(() => {
