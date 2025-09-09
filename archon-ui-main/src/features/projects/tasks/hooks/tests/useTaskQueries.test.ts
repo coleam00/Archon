@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { taskKeys, useProjectTasks, useCreateTask } from '../useTaskQueries';
+import { taskKeys, useProjectTasks, useCreateTask, useTaskDetails } from '../useTaskQueries';
 import type { Task } from '../../types';
 import React from 'react';
 
@@ -9,6 +9,7 @@ import React from 'react';
 vi.mock('../../services', () => ({
   taskService: {
     getTasksByProject: vi.fn(),
+    getTaskDetails: vi.fn(),
     createTask: vi.fn(),
     updateTask: vi.fn(),
     deleteTask: vi.fn(),
@@ -53,6 +54,43 @@ describe('useTaskQueries', () => {
       expect(taskKeys.all('project-123')).toEqual(['projects', 'project-123', 'tasks']);
     });
   });
+
+    it('should generate details key for a task', () => {
+      expect(taskKeys.details('task-42')).toEqual(['tasks', 'task-42', 'details']);
+    });
+
+    describe('useTaskDetails', () => {
+      it('fetches details when enabled (default) and returns data', async () => {
+        const fullTask: Task = {
+          id: 'detail-1', project_id: 'project-1', title: 'T', description: 'Long', status: 'todo', assignee: 'User', task_order: 1,
+          created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z'
+        };
+        const { taskService } = await import('../../services');
+        vi.mocked(taskService.getTaskDetails).mockResolvedValue(fullTask as Task);
+
+        const wrapper = createWrapper();
+        const { result } = renderHook(() => useTaskDetails('detail-1'), { wrapper });
+
+        await waitFor(() => {
+          expect(result.current.isSuccess).toBe(true);
+          expect(result.current.data?.id).toBe('detail-1');
+        });
+        expect(taskService.getTaskDetails).toHaveBeenCalledWith('detail-1');
+      });
+
+      it('respects enabled=false and does not fetch', async () => {
+        const { taskService } = await import('../../services');
+        const spy = vi.spyOn(taskService, 'getTaskDetails');
+
+        const wrapper = createWrapper();
+        const { result } = renderHook(() => useTaskDetails('detail-2', { enabled: false }), { wrapper });
+
+        expect(result.current.isLoading).toBe(false);
+        expect(result.current.data).toBeUndefined();
+        expect(spy).not.toHaveBeenCalled();
+      });
+    });
+
 
   describe('useProjectTasks', () => {
     it('should fetch tasks for a project', async () => {
