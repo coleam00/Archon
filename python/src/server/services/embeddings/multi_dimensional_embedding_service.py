@@ -14,11 +14,12 @@ from ...config.logfire_config import get_logger
 logger = get_logger(__name__)
 
 # Supported embedding dimensions based on tested database schema
+# Note: Model lists are dynamically determined by providers, not hardcoded
 SUPPORTED_DIMENSIONS = {
-    768: ["text-embedding-004", "gemini-text-embedding"],  # Google models
-    1024: ["mxbai-embed-large", "ollama-embed-large"],     # Ollama models
-    1536: ["text-embedding-3-small", "text-embedding-ada-002"], # OpenAI models
-    3072: ["text-embedding-3-large"]  # OpenAI large model
+    768: [],   # Common dimensions for various providers (Google, etc.)
+    1024: [],  # Ollama and other providers
+    1536: [],  # OpenAI models (text-embedding-3-small, ada-002)
+    3072: []   # OpenAI large models (text-embedding-3-large)
 }
 
 class MultiDimensionalEmbeddingService:
@@ -32,20 +33,30 @@ class MultiDimensionalEmbeddingService:
         return SUPPORTED_DIMENSIONS.copy()
     
     def get_dimension_for_model(self, model_name: str) -> int:
-        """Get the embedding dimension for a specific model name."""
-        # Check exact matches first
-        for dimension, models in SUPPORTED_DIMENSIONS.items():
-            if model_name in models:
-                return dimension
+        """Get the embedding dimension for a specific model name using heuristics."""
+        model_lower = model_name.lower()
         
-        # Check for partial matches (e.g., for Ollama models with tags)
-        model_base = model_name.split(':')[0].lower()
-        for dimension, models in SUPPORTED_DIMENSIONS.items():
-            for model in models:
-                if model_base in model.lower() or model.lower() in model_base:
-                    return dimension
+        # Use heuristics to determine dimension based on model name patterns
+        # OpenAI models
+        if "text-embedding-3-large" in model_lower:
+            return 3072
+        elif "text-embedding-3-small" in model_lower or "text-embedding-ada" in model_lower:
+            return 1536
         
-        # Default fallback for unknown models (OpenAI default)
+        # Google models
+        elif "text-embedding-004" in model_lower or "gemini-text-embedding" in model_lower:
+            return 768
+            
+        # Ollama models (common patterns)
+        elif "mxbai-embed" in model_lower:
+            return 1024
+        elif "nomic-embed" in model_lower:
+            return 768
+        elif "embed" in model_lower:
+            # Generic embedding model, assume common dimension
+            return 768
+        
+        # Default fallback for unknown models (most common OpenAI dimension)
         logger.warning(f"Unknown model {model_name}, defaulting to 1536 dimensions")
         return 1536
     

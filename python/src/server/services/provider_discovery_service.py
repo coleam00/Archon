@@ -22,6 +22,31 @@ logger = get_logger(__name__)
 _provider_cache: dict[str, tuple[Any, float]] = {}
 _CACHE_TTL_SECONDS = 300  # 5 minutes
 
+# Default Ollama instance URL (configurable via environment/settings)
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
+
+# Model pattern detection for dynamic capabilities (no hardcoded model names)
+CHAT_MODEL_PATTERNS = ["llama", "qwen", "mistral", "codellama", "phi", "gemma", "vicuna", "orca"]
+EMBEDDING_MODEL_PATTERNS = ["embed", "embedding"]
+VISION_MODEL_PATTERNS = ["vision", "llava", "moondream"]
+
+# Context window estimates by model family (heuristics, not hardcoded requirements)
+MODEL_CONTEXT_WINDOWS = {
+    "llama3": 8192,
+    "qwen": 32768,
+    "mistral": 8192,
+    "codellama": 16384,
+    "phi": 4096,
+    "gemma": 8192,
+}
+
+# Embedding dimensions for common models (heuristics)
+EMBEDDING_DIMENSIONS = {
+    "nomic-embed": 768,
+    "mxbai-embed": 1024,
+    "all-minilm": 384,
+}
+
 @dataclass
 class ModelSpec:
     """Model specification with capabilities and constraints."""
@@ -143,7 +168,7 @@ class ProviderDiscoveryService:
             logger.debug(f"Tool support test failed for {model_name}: {e}")
             # Fall back to name-based heuristics for known models
             return any(pattern in model_name.lower() 
-                      for pattern in ["llama3", "qwen", "mistral", "codellama", "phi"])
+                      for pattern in CHAT_MODEL_PATTERNS)
         
         finally:
             if 'client' in locals():
@@ -261,25 +286,23 @@ class ProviderDiscoveryService:
                             # Test for function calling capabilities via actual API calls
                             supports_tools = await self._test_tool_support(model_name, api_url)
                             # Vision support is typically indicated by name patterns (reliable indicator)
-                            supports_vision = "vision" in model_name.lower() or "llava" in model_name.lower()
+                            supports_vision = any(pattern in model_name.lower() for pattern in VISION_MODEL_PATTERNS)
                             # Embedding support is typically indicated by name patterns (reliable indicator)  
-                            supports_embeddings = "embed" in model_name.lower()
+                            supports_embeddings = any(pattern in model_name.lower() for pattern in EMBEDDING_MODEL_PATTERNS)
 
                             # Estimate context window based on model family
                             context_window = 4096  # Default
-                            if "llama3" in model_name.lower():
-                                context_window = 8192
-                            elif "qwen" in model_name.lower():
-                                context_window = 32768
-                            elif "mistral" in model_name.lower():
-                                context_window = 32768
+                            for family, window_size in MODEL_CONTEXT_WINDOWS.items():
+                                if family in model_name.lower():
+                                    context_window = window_size
+                                    break
 
                             # Set embedding dimensions for known embedding models
                             embedding_dims = None
-                            if "nomic-embed" in model_name.lower():
-                                embedding_dims = 768
-                            elif "mxbai-embed" in model_name.lower():
-                                embedding_dims = 1024
+                            for model_pattern, dims in EMBEDDING_DIMENSIONS.items():
+                                if model_pattern in model_name.lower():
+                                    embedding_dims = dims
+                                    break
 
                             spec = ModelSpec(
                                 name=model_info.get("name", model_name),
@@ -383,7 +406,7 @@ class ProviderDiscoveryService:
                         return ProviderStatus(provider, False, response_time, f"HTTP {response.status}")
 
             elif provider == "ollama":
-                base_urls = config.get("base_urls", [config.get("base_url", "http://localhost:11434")])
+                base_urls = config.get("base_urls", [config.get("base_url", DEFAULT_OLLAMA_URL)])
                 if isinstance(base_urls, str):
                     base_urls = [base_urls]
 
@@ -465,7 +488,7 @@ class ProviderDiscoveryService:
                 providers["google"] = await self.discover_google_models(google_key)
 
             # Ollama
-            ollama_urls = [rag_settings.get("LLM_BASE_URL", "http://localhost:11434")]
+            ollama_urls = [rag_settings.get("LLM_BASE_URL", DEFAULT_OLLAMA_URL)]
             providers["ollama"] = await self.discover_ollama_models(ollama_urls)
 
             # Anthropic
