@@ -13,4 +13,5 @@ export type { TaskCardProps } from "./TaskCard";
 export { TaskCard } from "./TaskCard";
 export { TaskCardActions } from "./TaskCardActions";
 export { TaskEditModal } from "./TaskEditModal";
+export { TaskEditModalLazy } from "./TaskEditModalLazy";
 export { TaskPriority as TaskPriorityComponent } from "./TaskPriority";

@@ -11,19 +11,56 @@ Scope (isolated)
 - Integrate into create/update paths in services/routes
 
 Acceptance criteria
-- Requests with `description` > 50,000 characters are rejected with clear 4xx error.
+- Requests with `description` > 50,000 characters are rejected with HTTP 422 (Unprocessable Entity).
+- Error response format:
+  ```json
+  {
+    "error_code": "TASK_DESCRIPTION_TOO_LONG",
+    "message": "Task description exceeds maximum length of 50000 characters",
+    "max_length": 50000,
+    "provided_length": <actual_length>
+  }
+  ```
 - Valid requests continue to work unchanged.
 
 Implementation checklist
 1) Add Pydantic schemas:
    ```python
-   from pydantic import BaseModel, constr
+   from pydantic import BaseModel, Field, field_validator
+   from typing import Optional
 
    class TaskUpdate(BaseModel):
-       description: constr(max_length=50000) | None = None
+       description: Optional[str] = Field(None, max_length=50000)
        # add other fields as needed
+       
+       @field_validator('description')
+       @classmethod
+       def validate_description_length(cls, v: Optional[str]) -> Optional[str]:
+           if v and len(v) > 50000:
+               raise ValueError(f"Description length {len(v)} exceeds maximum of 50000")
+           return v
    ```
-2) Use schema in update/create handlers; return explicit errors on validation failure.
+2) Handle validation errors in API routes:
+   ```python
+   from fastapi import HTTPException
+   from pydantic import ValidationError
+   
+   try:
+       task_data = TaskUpdate(**request.dict())
+   except ValidationError as e:
+       for error in e.errors():
+           if error['loc'] == ('description',) and 'exceeds maximum' in str(error['msg']):
+               raise HTTPException(
+                   status_code=422,
+                   detail={
+                       "error_code": "TASK_DESCRIPTION_TOO_LONG",
+                       "message": "Task description exceeds maximum length of 50000 characters",
+                       "max_length": 50000,
+                       "provided_length": len(request.description) if request.description else 0
+                   }
+               )
+       raise HTTPException(status_code=422, detail=e.errors())
+   ```
 3) Add detailed logging for validation errors.
 
 Tests (backend)

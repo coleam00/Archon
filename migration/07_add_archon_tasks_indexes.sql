@@ -26,7 +26,8 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_archon_tasks_project_status_order
 --                             ORDER BY task_order
 --                             LIMIT 50;
 --   3) Usage stats:          SELECT * FROM pg_stat_user_indexes WHERE indexrelname LIKE 'idx_archon_tasks_%';
--- Rollback:
---   DROP INDEX IF EXISTS idx_archon_tasks_project_status_order;
---   -- DROP INDEX IF EXISTS idx_archon_tasks_description_gin;
-
+-- =====================================================
+-- Rollback (if needed):
+--   Non-blocking, idempotent rollback commands:
+--   DROP INDEX CONCURRENTLY IF EXISTS idx_archon_tasks_project_status_order;
+--   DROP INDEX CONCURRENTLY IF EXISTS idx_archon_tasks_description_gin;

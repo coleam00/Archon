@@ -30,8 +30,9 @@ Validation steps
 3) Inspect `pg_stat_user_indexes` for usage
 
 Rollback
-- Drop created indexes if necessary.
-
+- DROP INDEX CONCURRENTLY IF EXISTS public.idx_archon_tasks_project_status_order;
+- DROP INDEX CONCURRENTLY IF EXISTS public.idx_archon_tasks_description_tsv_gin;
+- DROP INDEX CONCURRENTLY IF EXISTS public.idx_archon_tasks_description_trgm;
 Time estimate
 - 30–45 minutes
 

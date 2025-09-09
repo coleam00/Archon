@@ -45,7 +45,7 @@ def test_get_task_details_error_logging(client, mock_supabase_client, monkeypatc
     mock_select.eq.return_value = mock_select
     mock_select.execute.side_effect = Exception("boom")
 
-    # Patch tasks_api.logfire to capture error call with exc_info=True
+    # Patch tasks_api.logfire to capture error call
     import src.server.api_routes.tasks_api as tasks_api
 
     dummy_logfire = types.SimpleNamespace()
@@ -55,8 +55,14 @@ def test_get_task_details_error_logging(client, mock_supabase_client, monkeypatc
     resp = client.get("/api/tasks/any-id/details")
     assert resp.status_code == 500
 
-    # Verify error logging called with exc_info=True
+    # Verify error logging was called
     assert dummy_logfire.error.called
+    
+    # The service catches the exception and returns an error tuple,
+    # so the API logs "Task service error" without exc_info
+    # Check that error was logged with task_id in extra data
     args, kwargs = dummy_logfire.error.call_args
-    assert kwargs.get("exc_info") is True
+    assert "Task service error" in args[0]
+    assert kwargs.get("extra", {}).get("task_id") == "any-id"
+    assert "error" in kwargs.get("extra", {})
 

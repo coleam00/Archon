@@ -53,43 +53,43 @@ describe('useTaskQueries', () => {
     it('should generate correct query keys', () => {
       expect(taskKeys.all('project-123')).toEqual(['projects', 'project-123', 'tasks']);
     });
-  });
 
     it('should generate details key for a task', () => {
       expect(taskKeys.details('task-42')).toEqual(['tasks', 'task-42', 'details']);
     });
+  });
 
-    describe('useTaskDetails', () => {
-      it('fetches details when enabled (default) and returns data', async () => {
-        const fullTask: Task = {
-          id: 'detail-1', project_id: 'project-1', title: 'T', description: 'Long', status: 'todo', assignee: 'User', task_order: 1,
-          created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z'
-        };
-        const { taskService } = await import('../../services');
-        vi.mocked(taskService.getTaskDetails).mockResolvedValue(fullTask as Task);
+  describe('useTaskDetails', () => {
+    it('fetches details when enabled (default) and returns data', async () => {
+      const fullTask: Task = {
+        id: 'detail-1', project_id: 'project-1', title: 'T', description: 'Long', status: 'todo', assignee: 'User', task_order: 1,
+        created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z'
+      };
+      const { taskService } = await import('../../services');
+      vi.mocked(taskService.getTaskDetails).mockResolvedValue(fullTask as Task);
 
-        const wrapper = createWrapper();
-        const { result } = renderHook(() => useTaskDetails('detail-1'), { wrapper });
+      const wrapper = createWrapper();
+      const { result } = renderHook(() => useTaskDetails('detail-1'), { wrapper });
 
-        await waitFor(() => {
-          expect(result.current.isSuccess).toBe(true);
-          expect(result.current.data?.id).toBe('detail-1');
-        });
-        expect(taskService.getTaskDetails).toHaveBeenCalledWith('detail-1');
+      await waitFor(() => {
+        expect(result.current.isSuccess).toBe(true);
+        expect(result.current.data?.id).toBe('detail-1');
       });
-
-      it('respects enabled=false and does not fetch', async () => {
-        const { taskService } = await import('../../services');
-        const spy = vi.spyOn(taskService, 'getTaskDetails');
-
-        const wrapper = createWrapper();
-        const { result } = renderHook(() => useTaskDetails('detail-2', { enabled: false }), { wrapper });
-
-        expect(result.current.isLoading).toBe(false);
-        expect(result.current.data).toBeUndefined();
-        expect(spy).not.toHaveBeenCalled();
-      });
+      expect(taskService.getTaskDetails).toHaveBeenCalledWith('detail-1');
     });
+
+    it('respects enabled=false and does not fetch', async () => {
+      const { taskService } = await import('../../services');
+      const spy = vi.spyOn(taskService, 'getTaskDetails');
+
+      const wrapper = createWrapper();
+      const { result } = renderHook(() => useTaskDetails('detail-2', { enabled: false }), { wrapper });
+
+      expect(result.current.isLoading).toBe(false);
+      expect(result.current.data).toBeUndefined();
+      expect(spy).not.toHaveBeenCalled();
+    });
+  });
 
 
   describe('useProjectTasks', () => {

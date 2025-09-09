@@ -545,9 +545,16 @@ async def list_project_tasks(
     request: Request,
     response: Response,
     include_archived: bool = False,
-    exclude_large_fields: bool = True
+    exclude_large_fields: bool = False  # Keep backward compatibility - clients must opt-in to reduced payloads
 ):
-    """List all tasks for a specific project with ETag support for efficient polling."""
+    """List all tasks for a specific project with ETag support for efficient polling.
+    
+    Args:
+        exclude_large_fields: When True, excludes description and other large fields to reduce payload size.
+                            Default is False for backward compatibility.
+                            NOTE: In future versions, this will default to True for performance.
+                            Clients should explicitly set this parameter based on their needs.
+    """
     try:
         # Get If-None-Match header for ETag comparison
         if_none_match = request.headers.get("If-None-Match")

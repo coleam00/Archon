@@ -18,7 +18,7 @@ The current task management system uses HTTP polling with significant performanc
 
 ### 1. Data Flow (Actual Implementation)
 
-```
+```text
 Frontend (5s intervals) → HTTP API → Supabase → Full Task Data
      ↓                      ↓           ↓            ↓
 TanStack Query         FastAPI      PostgreSQL   All descriptions
@@ -48,7 +48,7 @@ Smart Polling         TaskService     No indexes    250KB+ payload
 ### 3. Current API Endpoints
 
 #### Task Management
-```
+```text
 GET /api/projects/{id}/tasks     - Lists all tasks (with descriptions)
 GET /api/tasks/{id}              - Single task details
 POST /api/tasks                  - Create task
@@ -112,13 +112,21 @@ CREATE INDEX idx_archon_tasks_status ON archon_tasks(status);
 
 #### 1.1 Database Optimizations
 ```sql
--- Add missing indexes
-CREATE INDEX CONCURRENTLY idx_archon_tasks_description_gin 
-  ON archon_tasks USING gin(to_tsvector('english', description));
-CREATE INDEX CONCURRENTLY idx_archon_tasks_description_btree 
-  ON archon_tasks(description);
+-- Add Full-Text Search with Generated Column (self-maintaining)
+ALTER TABLE archon_tasks
+  ADD COLUMN search_vector tsvector
+  GENERATED ALWAYS AS (to_tsvector('english', coalesce(title,'') || ' ' || coalesce(description,''))) STORED;
+
+-- Create GIN index for FTS (run CONCURRENTLY to avoid locks)
+CREATE INDEX CONCURRENTLY idx_tasks_search_vector
+  ON archon_tasks USING gin(search_vector);
+
+-- Composite index for efficient filtering and sorting  
 CREATE INDEX CONCURRENTLY idx_archon_tasks_composite 
   ON archon_tasks(project_id, status, task_order);
+
+-- Note: CONCURRENTLY must run outside transaction blocks
+-- Configure migration tool accordingly (e.g., Alembic: transactional_ddl=False)
 ```
 
 #### 1.2 API Optimizations
@@ -152,7 +160,7 @@ def create_socketio_app(app: FastAPI):
 ```
 
 #### 2.2 Event-Based Updates
-- **Task Events:** `task_created`, `task_updated`, `task_deleted`
+- **Task Events:** `task:created`, `task:updated`, `task:deleted` (consistent colon notation)
 - **Project Rooms:** Users join project-specific rooms
 - **Selective Broadcasting:** Only send relevant updates
 
@@ -188,7 +196,7 @@ def create_socketio_app(app: FastAPI):
 - **User Experience:** Immediate, no breaking changes
 
 ### Phase 2 Results
-- **Real-time Updates:** Instant (0ms vs 5000ms polling)
+- **Real-time Updates:** <100ms vs 5000ms polling (realistic latency)
 - **Network Efficiency:** -90% (only changes transmitted)
 - **Scalability:** 10x improvement (500+ concurrent users)
 - **Battery Life:** +40% on mobile (no constant polling)
@@ -291,13 +299,17 @@ def create_socketio_app(app: FastAPI):
 
 ### Database Schema Changes
 ```sql
--- Phase 1: Performance indexes
-CREATE INDEX CONCURRENTLY idx_tasks_description_search
-  ON archon_tasks USING gin(to_tsvector('english', description));
+-- Phase 1: Performance indexes with generated column
+ALTER TABLE archon_tasks
+  ADD COLUMN search_vector tsvector
+  GENERATED ALWAYS AS (to_tsvector('english', coalesce(title,'') || ' ' || coalesce(description,''))) STORED;
 
--- Phase 3: Pagination support
-ALTER TABLE archon_tasks ADD COLUMN search_vector tsvector;
-CREATE INDEX idx_tasks_search_vector ON archon_tasks USING gin(search_vector);
+CREATE INDEX CONCURRENTLY idx_tasks_search_vector
+  ON archon_tasks USING gin(search_vector);
+
+-- Note: For prefix/ILIKE search, consider pg_trgm extension:
+-- CREATE EXTENSION IF NOT EXISTS pg_trgm;
+-- CREATE INDEX CONCURRENTLY idx_tasks_title_trgm ON archon_tasks USING gin(title gin_trgm_ops);
 ```
 
 ### API Endpoint Specifications
@@ -322,11 +334,24 @@ useEffect(() => {
   socket.on('task:updated', handleTaskUpdate);
 }, []);
 
-// Phase 3: Virtual scrolling
+// Phase 3: Virtual scrolling with accessibility
 const { virtualItems } = useVirtualizer({
   count: totalTasks,
   getScrollElement: () => scrollElementRef.current,
-  estimateSize: () => 140,
+  estimateSize: useCallback((index) => {
+    // Dynamic size estimation based on task content
+    const task = tasks[index];
+    const hasDescription = task?.description?.length > 0;
+    return hasDescription ? 180 : 140; // Adjust based on content
+  }, [tasks]),
+  overscan: 5, // Render 5 items outside viewport for smooth scrolling
+  // Maintain keyboard navigation and ARIA relationships
+  scrollToFn: (offset) => {
+    scrollElementRef.current?.scrollTo({
+      top: offset,
+      behavior: 'smooth'
+    });
+  }
 });
 ```
 
@@ -352,6 +377,43 @@ const { virtualItems } = useVirtualizer({
 - **Search results:** <200ms response time
 - **Memory usage:** Constant regardless of task count
 
+## 📊 Measurement Plan
+
+### Key Performance Indicators (KPIs)
+
+| Metric | Current | Phase 1 Target | Phase 2 Target | Phase 3 Target | Owner |
+|--------|---------|----------------|----------------|----------------|-------|
+| Network KB/request | 250KB | 75KB | 10KB (updates) | 50KB (paginated) | Backend Team |
+| List response p95 | 2.3s | 0.8s | 0.8s | 0.5s | Full Stack |
+| Socket event lag p95 | N/A | N/A | <100ms | <100ms | Infrastructure |
+| Memory usage (100 tasks) | 15MB | 8MB | 8MB | 3MB (virtualized) | Frontend Team |
+
+### Monitoring Dashboard
+- **Grafana:** Real-time performance metrics
+- **Sentry:** Error tracking and performance monitoring
+- **Custom Analytics:** User interaction patterns
+
+### Migration Notes
+
+#### Database Migrations
+- Use `CONCURRENTLY` for all index creation to avoid locking tables
+- Run migrations outside transaction blocks for CONCURRENTLY operations
+- Example Alembic configuration:
+```python
+def upgrade():
+    # Set non-transactional DDL for CONCURRENTLY
+    op.execute('SET SESSION statement_timeout = 0;')
+    op.execute('SET SESSION lock_timeout = 0;')
+    with op.get_context().autocommit_block():
+        op.create_index(
+            'idx_tasks_search_vector',
+            'archon_tasks',
+            ['search_vector'],
+            postgresql_using='gin',
+            postgresql_concurrently=True
+        )
+```
+
 ---
 
-**Status:** Analysis complete. Ready for implementation approval and resource allocation.
+**Status:** Analysis complete with comprehensive implementation guidance. Ready for phased rollout.
