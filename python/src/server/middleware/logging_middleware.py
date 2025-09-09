@@ -36,9 +36,12 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         # Record start time
         start_time = time.time()
 
+        # Lightweight request/response size capture (header-based only)
+        req_size = request.headers.get("content-length", "unknown")
+
         # Log the request
         self.logger.info(
-            f"HTTP Request | method={request.method} | path={request.url.path} | client={request.client.host if request.client else 'unknown'}"
+            f"HTTP Request | method={request.method} | path={request.url.path} | client={request.client.host if request.client else 'unknown'} | req_bytes={req_size}"
         )
 
         try:
@@ -48,18 +51,22 @@ class LoggingMiddleware(BaseHTTPMiddleware):
             # Calculate duration
             duration = time.time() - start_time
 
+            # Response size (if available)
+            resp_size = response.headers.get("content-length", "unknown")
+
             # Log the response
             self.logger.info(
-                f"HTTP Response | method={request.method} | path={request.url.path} | status_code={response.status_code} | duration_ms={round(duration * 1000, 2)}"
+                f"HTTP Response | method={request.method} | path={request.url.path} | status_code={response.status_code} | duration_ms={round(duration * 1000, 2)} | resp_bytes={resp_size}"
             )
 
             return response
 
         except Exception as e:
-            # Log errors
+            # Log errors with stacktrace
             duration = time.time() - start_time
             self.logger.error(
-                f"HTTP Error | method={request.method} | path={request.url.path} | error={str(e)} | duration_ms={round(duration * 1000, 2)}"
+                f"HTTP Error | method={request.method} | path={request.url.path} | error={str(e)} | duration_ms={round(duration * 1000, 2)}",
+                exc_info=True,
             )
             raise
 

@@ -19,6 +19,8 @@ import { MigrationBanner } from './components/ui/MigrationBanner';
 import { serverHealthService } from './services/serverHealthService';
 import { useMigrationStatus } from './hooks/useMigrationStatus';
 
+import { usePerformanceMetrics } from './hooks/usePerformanceMetrics';
+
 // Create a client with optimized settings for our polling use case
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -43,7 +45,7 @@ const queryClient = new QueryClient({
 
 const AppRoutes = () => {
   const { projectsEnabled } = useSettings();
-  
+
   return (
     <Routes>
       <Route path="/" element={<KnowledgeBasePage />} />
@@ -71,6 +73,9 @@ const AppContent = () => {
   });
   const [migrationBannerDismissed, setMigrationBannerDismissed] = useState(false);
   const migrationStatus = useMigrationStatus();
+
+  // Track client-side performance metrics (best-effort, console only in beta)
+  usePerformanceMetrics();
 
   useEffect(() => {
     // Load initial settings
