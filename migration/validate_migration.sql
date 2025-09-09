@@ -167,6 +167,7 @@ BEGIN
     -- Show sample of existing data if any
     DECLARE
         sample_count INTEGER;
+        r RECORD;  -- Declare the loop variable as RECORD type
     BEGIN
         SELECT COUNT(*) INTO sample_count FROM archon_crawled_pages LIMIT 1;
         IF sample_count > 0 THEN
