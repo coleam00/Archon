@@ -396,6 +396,18 @@ CREATE TABLE IF NOT EXISTS archon_tasks (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- -----------------------------------------------------
+-- Indexes for archon_tasks (initial setup)
+-- Note: Using non-CONCURRENTLY here since this is run during initial setup
+-- and typically within a transaction and/or without live writes.
+CREATE INDEX IF NOT EXISTS idx_archon_tasks_project_status_order
+  ON archon_tasks(project_id, status, task_order);
+
+-- Optional: enable only if full-text search on description is required
+-- CREATE INDEX IF NOT EXISTS idx_archon_tasks_description_gin
+--   ON archon_tasks USING gin(to_tsvector('english', description));
+
+
 -- Project Sources junction table for many-to-many relationship
 CREATE TABLE IF NOT EXISTS archon_project_sources (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
