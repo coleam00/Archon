@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 from fastapi import status as http_status
 from pydantic import BaseModel
+from ..schemas.tasks import TaskCreate as CreateTaskRequest, TaskUpdate as UpdateTaskRequest
 
 # Removed direct logging import - using unified config
 # Set up standard logger for background tasks
@@ -63,14 +64,6 @@ class UpdateProjectRequest(BaseModel):
     pinned: bool | None = None  # Whether this project is pinned to top
 
 
-class CreateTaskRequest(BaseModel):
-    project_id: str
-    title: str
-    description: str | None = None
-    status: str | None = "todo"
-    assignee: str | None = "User"
-    task_order: int | None = 0
-    feature: str | None = None
 
 
 @router.get("/projects")
@@ -763,13 +756,6 @@ async def get_task(task_id: str):
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
-class UpdateTaskRequest(BaseModel):
-    title: str | None = None
-    description: str | None = None
-    status: str | None = None
-    assignee: str | None = None
-    task_order: int | None = None
-    feature: str | None = None
 
 
 class CreateDocumentRequest(BaseModel):

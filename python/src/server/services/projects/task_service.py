@@ -15,6 +15,9 @@ from ...config.logfire_config import get_logger
 
 logger = get_logger(__name__)
 
+# Enforce 50k description length limit per Beta Guidelines
+MAX_DESCRIPTION_LENGTH = 50_000
+
 # Task updates are handled via polling - no broadcasting needed
 
 
@@ -71,6 +74,13 @@ class TaskService:
             is_valid, error_msg = self.validate_assignee(assignee)
             if not is_valid:
                 return False, {"error": error_msg}
+
+            # Validate description length (fail fast, do not truncate)
+            if description is not None and isinstance(description, str) and len(description) > MAX_DESCRIPTION_LENGTH:
+                logger.error(
+                    f"Description too long | length={len(description)} > max={MAX_DESCRIPTION_LENGTH}"
+                )
+                return False, {"error": f"description exceeds {MAX_DESCRIPTION_LENGTH} characters"}
 
             task_status = "todo"
 
@@ -335,7 +345,13 @@ class TaskService:
                 update_data["title"] = update_fields["title"]
 
             if "description" in update_fields:
-                update_data["description"] = update_fields["description"]
+                desc_val = update_fields["description"]
+                if desc_val is not None and isinstance(desc_val, str) and len(desc_val) > MAX_DESCRIPTION_LENGTH:
+                    logger.error(
+                        f"Update rejected: description too long | length={len(desc_val)} > max={MAX_DESCRIPTION_LENGTH}"
+                    )
+                    return False, {"error": f"description exceeds {MAX_DESCRIPTION_LENGTH} characters"}
+                update_data["description"] = desc_val
 
             if "status" in update_fields:
                 is_valid, error_msg = self.validate_status(update_fields["status"])
