@@ -552,7 +552,7 @@ async def list_project_tasks(
     request: Request,
     response: Response,
     include_archived: bool = False,
-    exclude_large_fields: bool = False
+    exclude_large_fields: bool = True
 ):
     """List all tasks for a specific project with ETag support for efficient polling."""
     try:

@@ -162,12 +162,10 @@ class TaskService:
         try:
             # Start with base query
             if exclude_large_fields:
-                # Select all fields except large JSONB ones
+                # Select only lightweight fields (exclude description, sources, code_examples)
                 query = self.supabase_client.table("archon_tasks").select(
-                    "id, project_id, parent_task_id, title, description, "
-                    "status, assignee, task_order, feature, archived, "
-                    "archived_at, archived_by, created_at, updated_at, "
-                    "sources, code_examples"  # Still fetch for counting, but will process differently
+                    "id, project_id, parent_task_id, title, status, assignee, task_order, "
+                    "feature, archived, archived_at, archived_by, created_at, updated_at"
                 )
             else:
                 query = self.supabase_client.table("archon_tasks").select("*")
@@ -246,7 +244,6 @@ class TaskService:
                     "id": task["id"],
                     "project_id": task["project_id"],
                     "title": task["title"],
-                    "description": task["description"],
                     "status": task["status"],
                     "assignee": task.get("assignee", "User"),
                     "task_order": task.get("task_order", 0),
@@ -257,15 +254,10 @@ class TaskService:
                 }
 
                 if not exclude_large_fields:
-                    # Include full JSONB fields
+                    # Include description and full JSONB fields
+                    task_data["description"] = task.get("description", "")
                     task_data["sources"] = task.get("sources", [])
                     task_data["code_examples"] = task.get("code_examples", [])
-                else:
-                    # Add counts instead of full content
-                    task_data["stats"] = {
-                        "sources_count": len(task.get("sources", [])),
-                        "code_examples_count": len(task.get("code_examples", []))
-                    }
 
                 tasks.append(task_data)
 
@@ -300,8 +292,9 @@ class TaskService:
                 self.supabase_client.table("archon_tasks").select("*").eq("id", task_id).execute()
             )
 
-            if response.data:
-                task = response.data[0]
+            data = getattr(response, "data", None)
+            if isinstance(data, list) and len(data) > 0:
+                task = data[0]
                 return True, {"task": task}
             else:
                 return False, {"error": f"Task with ID {task_id} not found"}
@@ -309,6 +302,20 @@ class TaskService:
         except Exception as e:
             logger.error(f"Error getting task: {e}")
             return False, {"error": f"Error getting task: {str(e)}"}
+
+    def get_task_details(self, task_id: str) -> tuple[bool, dict[str, Any]]:
+        """
+        Get full task details by ID. This returns the complete task object.
+
+        Returns:
+            Tuple of (success, result_dict)
+        """
+        try:
+            # Reuse existing get_task logic for now; kept as a separate method for clarity/extension
+            return self.get_task(task_id)
+        except Exception as e:
+            logger.error(f"Error getting task details: {e}")
+            return False, {"error": f"Error getting task details: {str(e)}"}
 
     async def update_task(
         self, task_id: str, update_fields: dict[str, Any]
@@ -418,9 +425,9 @@ class TaskService:
     def get_all_project_task_counts(self) -> tuple[bool, dict[str, dict[str, int]]]:
         """
         Get task counts for all projects in a single optimized query.
-        
+
         Returns task counts grouped by project_id and status.
-        
+
         Returns:
             Tuple of (success, counts_dict) where counts_dict is:
             {"project-id": {"todo": 5, "doing": 2, "review": 3, "done": 10}}

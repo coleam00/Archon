@@ -30,6 +30,8 @@ from .api_routes.projects_api import router as projects_router
 # Import modular API routers
 from .api_routes.settings_api import router as settings_router
 
+from .api_routes.tasks_api import router as tasks_router
+
 # Import Logfire configuration
 from .config.logfire_config import api_logger, setup_logfire
 from .services.background_task_manager import cleanup_task_manager
@@ -197,6 +199,8 @@ app.include_router(settings_router)
 app.include_router(mcp_router)
 # app.include_router(mcp_client_router)  # Removed - not part of new architecture
 app.include_router(knowledge_router)
+app.include_router(tasks_router)
+
 app.include_router(projects_router)
 app.include_router(progress_router)
 app.include_router(agent_chat_router)
