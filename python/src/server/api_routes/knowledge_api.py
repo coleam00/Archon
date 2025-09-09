@@ -89,6 +89,48 @@ class RagQueryRequest(BaseModel):
     match_count: int = 5
 
 
+@router.get("/crawl-progress/{progress_id}")
+async def get_crawl_progress(progress_id: str):
+    """Get crawl progress for polling.
+    
+    Returns the current state of a crawl operation.
+    Frontend should poll this endpoint to track crawl progress.
+    """
+    try:
+        from ..models.progress_models import create_progress_response
+        from ..utils.progress.progress_tracker import ProgressTracker
+
+        # Get progress from the tracker's in-memory storage
+        progress_data = ProgressTracker.get_progress(progress_id)
+        safe_logfire_info(f"Crawl progress requested | progress_id={progress_id} | found={progress_data is not None}")
+
+        if not progress_data:
+            # Return 404 if no progress exists - this is correct behavior
+            raise HTTPException(status_code=404, detail={"error": f"No progress found for ID: {progress_id}"})
+
+        # Ensure we have the progress_id in the data
+        progress_data["progress_id"] = progress_id
+
+        # Get operation type for proper model selection
+        operation_type = progress_data.get("type", "crawl")
+
+        # Create standardized response using Pydantic model
+        progress_response = create_progress_response(operation_type, progress_data)
+
+        # Convert to dict with camelCase fields for API response
+        response_data = progress_response.model_dump(by_alias=True, exclude_none=True)
+
+        safe_logfire_info(
+            f"Progress retrieved | operation_id={progress_id} | status={response_data.get('status')} | "
+            f"progress={response_data.get('progress')} | totalPages={response_data.get('totalPages')} | "
+            f"processedPages={response_data.get('processedPages')}"
+        )
+
+        return response_data
+    except Exception as e:
+        safe_logfire_error(f"Failed to get crawl progress | error={str(e)} | progress_id={progress_id}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
 
 @router.get("/knowledge-items/sources")
 async def get_knowledge_sources():
@@ -748,6 +790,7 @@ async def upload_document(
     file: UploadFile = File(...),
     tags: str | None = Form(None),
     knowledge_type: str = Form("technical"),
+    extract_code_examples: bool = Form(True),
 ):
     """Upload and process a document with progress tracking."""
     try:
@@ -793,7 +836,7 @@ async def upload_document(
         # Upload tasks can be tracked directly since they don't spawn sub-tasks
         upload_task = asyncio.create_task(
             _perform_upload_with_progress(
-                progress_id, file_content, file_metadata, tag_list, knowledge_type, tracker
+                progress_id, file_content, file_metadata, tag_list, knowledge_type, extract_code_examples, tracker
             )
         )
         # Track the task for cancellation support
@@ -821,7 +864,8 @@ async def _perform_upload_with_progress(
     file_metadata: dict,
     tag_list: list[str],
     knowledge_type: str,
-    tracker,
+    extract_code_examples: bool,
+    tracker: "ProgressTracker",
 ):
     """Perform document upload with progress tracking using service layer."""
     # Create cancellation check function for document uploads
@@ -900,6 +944,7 @@ async def _perform_upload_with_progress(
             source_id=source_id,
             knowledge_type=knowledge_type,
             tags=tag_list,
+            extract_code_examples=extract_code_examples,
             progress_callback=document_progress_callback,
             cancellation_check=check_upload_cancellation,
         )
@@ -909,10 +954,11 @@ async def _perform_upload_with_progress(
             await tracker.complete({
                 "log": "Document uploaded successfully!",
                 "chunks_stored": result.get("chunks_stored"),
+                "code_examples_stored": result.get("code_examples_stored", 0),
                 "sourceId": result.get("source_id"),
             })
             safe_logfire_info(
-                f"Document uploaded successfully | progress_id={progress_id} | source_id={result.get('source_id')} | chunks_stored={result.get('chunks_stored')}"
+                f"Document uploaded successfully | progress_id={progress_id} | source_id={result.get('source_id')} | chunks_stored={result.get('chunks_stored')} | code_examples_stored={result.get('code_examples_stored', 0)}"
             )
         else:
             error_msg = result.get("error", "Unknown error")
