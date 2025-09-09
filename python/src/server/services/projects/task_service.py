@@ -268,6 +268,17 @@ class TaskService:
                     task_data["description"] = task.get("description", "")
                     task_data["sources"] = task.get("sources", [])
                     task_data["code_examples"] = task.get("code_examples", [])
+                else:
+                    # Lightweight mode: exclude large fields but include counts if available
+                    stats = {}
+                    src = task.get("sources")
+                    if isinstance(src, list):
+                        stats["sources_count"] = len(src)
+                    code = task.get("code_examples")
+                    if isinstance(code, list):
+                        stats["code_examples_count"] = len(code)
+                    if stats:
+                        task_data["stats"] = stats
 
                 tasks.append(task_data)
 
