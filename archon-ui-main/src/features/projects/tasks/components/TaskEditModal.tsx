@@ -18,6 +18,7 @@ import {
   TextArea,
 } from "../../../ui/primitives";
 import { useTaskEditor } from "../hooks";
+import { useTaskDetails } from "../hooks/useTaskQueries";
 import type { Assignee, Task } from "../types";
 import { FeatureSelect } from "./FeatureSelect";
 import type { Priority } from "./TaskPriority";
@@ -38,6 +39,14 @@ export const TaskEditModal = memo(
     const [localTask, setLocalTask] = useState<Partial<Task> | null>(null);
 
     // Use business logic hook
+
+    const isEditingExisting = !!editingTask?.id;
+    const {
+      data: taskDetails,
+      isLoading: isDetailsLoading,
+      isError: isDetailsError,
+      refetch: refetchDetails,
+    } = useTaskDetails(editingTask?.id, { enabled: isModalOpen && isEditingExisting });
     const { projectFeatures, saveTask, isLoadingFeatures, isSaving: isSavingTask } = useTaskEditor(projectId);
 
     // Sync local state with editingTask when it changes
@@ -57,12 +66,20 @@ export const TaskEditModal = memo(
       }
     }, [editingTask]);
 
+	    // When full details arrive for existing tasks, hydrate local state
+	    useEffect(() => {
+	      if (taskDetails && isEditingExisting) {
+	        setLocalTask(taskDetails);
+	      }
+	    }, [taskDetails, isEditingExisting]);
+
     // Memoized handlers for input changes
     const handleTitleChange = useCallback((value: string) => {
       setLocalTask((prev) => (prev ? { ...prev, title: value } : null));
     }, []);
 
     const handleDescriptionChange = useCallback((value: string) => {
+
       setLocalTask((prev) => (prev ? { ...prev, description: value } : null));
     }, []);
 
@@ -71,12 +88,15 @@ export const TaskEditModal = memo(
     }, []);
 
     const handleSave = useCallback(() => {
-      // All validation is now in the hook
+      // Guard against partial writes when editing existing task without details
+      if (isEditingExisting && (isDetailsLoading || isDetailsError || !taskDetails)) {
+        return;
+      }
       saveTask(localTask, editingTask, () => {
         onSaved?.();
         onClose();
       });
-    }, [localTask, editingTask, saveTask, onSaved, onClose]);
+    }, [localTask, editingTask, saveTask, onSaved, onClose, isEditingExisting, isDetailsLoading, isDetailsError, taskDetails]);
 
     const handleClose = useCallback(() => {
       onClose();
@@ -89,103 +109,116 @@ export const TaskEditModal = memo(
             <DialogTitle>{editingTask?.id ? "Edit Task" : "New Task"}</DialogTitle>
           </DialogHeader>
 
-          <div className="space-y-4">
-            <FormField>
-              <Label required>Title</Label>
-              <Input
-                value={localTask?.title || ""}
-                onChange={(e) => handleTitleChange(e.target.value)}
-                placeholder="Enter task title"
-              />
-            </FormField>
+          {isEditingExisting && isModalOpen && isDetailsLoading && (
+            <div className="py-12 text-center text-muted-foreground">Loading task details...</div>
+          )}
 
-            <FormField>
-              <Label>Description</Label>
-              <TextArea
-                value={localTask?.description || ""}
-                onChange={(e) => handleDescriptionChange(e.target.value)}
-                rows={5}
-                placeholder="Enter task description"
-              />
-            </FormField>
+          {isEditingExisting && isModalOpen && isDetailsError && (
+            <div className="py-12 text-center space-y-3">
+              <p className="text-red-500">Failed to load task details.</p>
+              <Button variant="outline" onClick={() => refetchDetails()}>Retry</Button>
+            </div>
+          )}
 
-            <FormGrid columns={2}>
+          {(!isEditingExisting || (!isDetailsLoading && !isDetailsError)) && (
+            <div className="space-y-4">
               <FormField>
-                <Label>Status</Label>
-                <Select
-                  value={localTask?.status || "todo"}
-                  onValueChange={(value) =>
-                    setLocalTask((prev) => (prev ? { ...prev, status: value as Task["status"] } : null))
-                  }
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="todo">Todo</SelectItem>
-                    <SelectItem value="doing">Doing</SelectItem>
-                    <SelectItem value="review">Review</SelectItem>
-                    <SelectItem value="done">Done</SelectItem>
-                  </SelectContent>
-                </Select>
-              </FormField>
-
-              <FormField>
-                <Label>Priority</Label>
-                <Select
-                  value={(localTask as Task & { priority?: Priority })?.priority || "medium"}
-                  onValueChange={(value) =>
-                    setLocalTask((prev) => (prev ? { ...prev, priority: value as Priority } : null))
-                  }
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="critical">Critical</SelectItem>
-                    <SelectItem value="high">High</SelectItem>
-                    <SelectItem value="medium">Medium</SelectItem>
-                    <SelectItem value="low">Low</SelectItem>
-                  </SelectContent>
-                </Select>
-              </FormField>
-            </FormGrid>
-
-            <FormGrid columns={2}>
-              <FormField>
-                <Label>Assignee</Label>
-                <Select
-                  value={localTask?.assignee || "User"}
-                  onValueChange={(value) =>
-                    setLocalTask((prev) => (prev ? { ...prev, assignee: value as Assignee } : null))
-                  }
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {ASSIGNEE_OPTIONS.map((option) => (
-                      <SelectItem key={option} value={option}>
-                        {option}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </FormField>
-
-              <FormField>
-                <Label>Feature</Label>
-                <FeatureSelect
-                  value={localTask?.feature || ""}
-                  onChange={handleFeatureChange}
-                  projectFeatures={projectFeatures}
-                  isLoadingFeatures={isLoadingFeatures}
-                  placeholder="Select or create feature..."
-                  className="w-full"
+                <Label required>Title</Label>
+                <Input
+                  value={localTask?.title || ""}
+                  onChange={(e) => handleTitleChange(e.target.value)}
+                  placeholder="Enter task title"
                 />
               </FormField>
-            </FormGrid>
-          </div>
+
+              <FormField>
+                <Label>Description</Label>
+                <TextArea
+                  value={localTask?.description || ""}
+                  onChange={(e) => handleDescriptionChange(e.target.value)}
+                  rows={5}
+                  placeholder="Enter task description"
+                />
+              </FormField>
+
+              <FormGrid columns={2}>
+                <FormField>
+                  <Label>Status</Label>
+                  <Select
+                    value={localTask?.status || "todo"}
+                    onValueChange={(value) =>
+                      setLocalTask((prev) => (prev ? { ...prev, status: value as Task["status"] } : null))
+                    }
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="todo">Todo</SelectItem>
+                      <SelectItem value="doing">Doing</SelectItem>
+                      <SelectItem value="review">Review</SelectItem>
+                      <SelectItem value="done">Done</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </FormField>
+
+                <FormField>
+                  <Label>Priority</Label>
+                  <Select
+                    value={(localTask as Task & { priority?: Priority })?.priority || "medium"}
+                    onValueChange={(value) =>
+                      setLocalTask((prev) => (prev ? { ...prev, priority: value as Priority } : null))
+                    }
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="critical">Critical</SelectItem>
+                      <SelectItem value="high">High</SelectItem>
+                      <SelectItem value="medium">Medium</SelectItem>
+                      <SelectItem value="low">Low</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </FormField>
+              </FormGrid>
+
+              <FormGrid columns={2}>
+                <FormField>
+                  <Label>Assignee</Label>
+                  <Select
+                    value={localTask?.assignee || "User"}
+                    onValueChange={(value) =>
+                      setLocalTask((prev) => (prev ? { ...prev, assignee: value as Assignee } : null))
+                    }
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ASSIGNEE_OPTIONS.map((option) => (
+                        <SelectItem key={option} value={option}>
+                          {option}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </FormField>
+
+                <FormField>
+                  <Label>Feature</Label>
+                  <FeatureSelect
+                    value={localTask?.feature || ""}
+                    onChange={handleFeatureChange}
+                    projectFeatures={projectFeatures}
+                    isLoadingFeatures={isLoadingFeatures}
+                    placeholder="Select or create feature..."
+                    className="w-full"
+                  />
+                </FormField>
+              </FormGrid>
+            </div>
+          )}
 
           <DialogFooter>
             <Button onClick={handleClose} variant="outline" disabled={isSavingTask}>
@@ -195,7 +228,11 @@ export const TaskEditModal = memo(
               onClick={handleSave}
               variant="cyan"
               loading={isSavingTask}
-              disabled={isSavingTask || !localTask?.title}
+              disabled={
+                isSavingTask ||
+                !localTask?.title ||
+                (isEditingExisting && (isDetailsLoading || isDetailsError || !taskDetails))
+              }
             >
               {editingTask?.id ? "Update Task" : "Create Task"}
             </Button>
