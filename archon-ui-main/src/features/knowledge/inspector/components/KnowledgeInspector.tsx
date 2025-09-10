@@ -3,7 +3,7 @@
  * Orchestrates split-view design with sidebar navigation and content viewer
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { InspectorDialog, InspectorDialogContent, InspectorDialogTitle } from "../../../ui/primitives";
 import type { CodeExample, DocumentChunk, InspectorSelectedItem, KnowledgeItem } from "../../types";
 import { useInspectorPagination } from "../hooks/useInspectorPagination";
@@ -40,42 +40,42 @@ export const KnowledgeInspector: React.FC<KnowledgeInspectorProps> = ({ item, op
   const isFetchingNextPage = paginationData.isFetchingNextPage;
 
   // Use metadata counts like KnowledgeCard does - don't rely on loaded data length
-  const totalDocumentCount = item.document_count || item.metadata?.document_count || 0;
-  const totalCodeCount = item.code_examples_count || item.metadata?.code_examples_count || 0;
+  const totalDocumentCount = item.document_count ?? item.metadata?.document_count ?? 0;
+  const totalCodeCount = item.code_examples_count ?? item.metadata?.code_examples_count ?? 0;
 
   // Auto-select first item when data loads
-  useMemo(() => {
-    if (!selectedItem && currentItems.length > 0) {
-      const firstItem = currentItems[0];
-      if (viewMode === "documents") {
-        const firstDoc = firstItem as DocumentChunk;
-        setSelectedItem({
-          type: "document",
-          id: firstDoc.id,
-          content: firstDoc.content || "",
-          metadata: {
-            title: firstDoc.title || firstDoc.metadata?.title,
-            section: firstDoc.section || firstDoc.metadata?.section,
-            relevance_score: firstDoc.metadata?.relevance_score,
-            url: firstDoc.url || firstDoc.metadata?.url,
-            tags: firstDoc.metadata?.tags,
-          },
-        });
-      } else {
-        const firstCode = firstItem as CodeExample;
-        setSelectedItem({
-          type: "code",
-          id: firstCode.id || "",
-          content: firstCode.content || firstCode.code || "",
-          metadata: {
-            language: firstCode.language,
-            file_path: firstCode.file_path,
-            summary: firstCode.summary,
-            relevance_score: firstCode.metadata?.relevance_score,
-            title: firstCode.title || firstCode.example_name,
-          },
-        });
-      }
+  useEffect(() => {
+    if (selectedItem || currentItems.length === 0) return;
+    
+    const firstItem = currentItems[0];
+    if (viewMode === "documents") {
+      const firstDoc = firstItem as DocumentChunk;
+      setSelectedItem({
+        type: "document",
+        id: firstDoc.id,
+        content: firstDoc.content || "",
+        metadata: {
+          title: firstDoc.title || firstDoc.metadata?.title,
+          section: firstDoc.section || firstDoc.metadata?.section,
+          relevance_score: firstDoc.metadata?.relevance_score,
+          url: firstDoc.url || firstDoc.metadata?.url,
+          tags: firstDoc.metadata?.tags,
+        },
+      });
+    } else {
+      const firstCode = firstItem as CodeExample;
+      setSelectedItem({
+        type: "code",
+        id: firstCode.id || "",
+        content: firstCode.content || firstCode.code || "",
+        metadata: {
+          language: firstCode.language,
+          file_path: firstCode.file_path,
+          summary: firstCode.summary,
+          relevance_score: firstCode.metadata?.relevance_score,
+          title: firstCode.title || firstCode.example_name,
+        },
+      });
     }
   }, [viewMode, currentItems, selectedItem]);
 
