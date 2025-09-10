@@ -27,7 +27,7 @@ class VersioningService:
         self,
         project_id: str,
         field_name: str,
-        content: dict[str, Any],
+        content: Any,
         change_summary: str = None,
         change_type: str = "update",
         document_id: str = None,
