@@ -141,12 +141,12 @@ class CleanProviderService {
   }
 
   /**
-   * Deactivate an API key for a provider
+   * Permanently delete an API key for a provider
    */
-  async deactivateApiKey(
+  async deleteApiKey(
     provider: ProviderType
-  ): Promise<{ status: string; provider: string }> {
-    return apiRequest(`${API_BASE}/api-keys/${provider}`, {
+  ): Promise<{ status: string; provider: string; action: string }> {
+    return apiRequest(`${API_BASE}/api-keys/${provider}/permanent`, {
       method: "DELETE",
     });
   }

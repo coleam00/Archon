@@ -168,21 +168,26 @@ class APIKeyService:
 
             return result
 
-    async def test_provider_key(self, provider: str) -> bool:
-        """Test if a provider's API key is configured and valid.
-
+    async def delete_api_key(self, provider: str) -> bool:
+        """Permanently delete an API key for a provider.
+        
         Args:
             provider: Provider name
-
+            
         Returns:
-            True if key exists and appears valid
+            True if deleted successfully
         """
-        # Special case for ollama (no key required)
-        if provider == "ollama":
-            return True
-
-        key = await self.get_api_key(provider)
-        return bool(key and len(key) > 10)  # Basic validation
+        async with self.uow:
+            result = await self.uow.api_keys.delete_key(provider)
+            await self.uow.commit()
+            
+            # Remove from environment variables if present
+            if provider in self.ENV_MAPPINGS:
+                env_var = self.ENV_MAPPINGS[provider]
+                if env_var in os.environ:
+                    del os.environ[env_var]
+            
+            return result
 
     async def setup_environment(self) -> Dict[str, bool]:
         """Set up environment variables from stored API keys.

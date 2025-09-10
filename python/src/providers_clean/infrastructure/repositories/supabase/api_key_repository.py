@@ -142,6 +142,24 @@ class SupabaseApiKeyRepository(IApiKeyRepository):
             print(f"Error deactivating key for {provider}: {e}")
             return False
     
+    async def delete_key(self, provider: str) -> bool:
+        """Permanently delete an API key for a provider.
+        
+        Args:
+            provider: Provider name
+            
+        Returns:
+            True if deleted successfully, False if not found
+        """
+        try:
+            response = self.db.table(self.table_name).delete().eq("provider", provider).execute()
+            
+            return len(response.data) > 0 if response.data else False
+            
+        except Exception as e:
+            print(f"Error deleting key for {provider}: {e}")
+            return False
+    
     async def rotate_key(self, provider: str, new_encrypted_key: str) -> bool:
         """Rotate an API key for a provider.
         

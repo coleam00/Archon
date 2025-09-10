@@ -31,7 +31,7 @@ export const agentApi = {
   setApiKey: (provider: ProviderType, apiKey: string, baseUrl?: string) =>
     cleanProviderService.setApiKey(provider, apiKey, baseUrl),
   removeApiKey: (provider: ProviderType) =>
-    cleanProviderService.deactivateApiKey(provider),
+    cleanProviderService.deleteApiKey(provider),
   testApiKey: (provider: ProviderType) =>
     cleanProviderService.testApiKey(provider),
 };

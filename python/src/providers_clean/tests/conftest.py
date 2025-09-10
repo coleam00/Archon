@@ -90,6 +90,12 @@ class MockApiKeyRepository(IApiKeyRepository):
             return True
         return False
 
+    async def delete_key(self, provider: str) -> bool:
+        if provider in self._keys:
+            del self._keys[provider]
+            return True
+        return False
+
 
 class MockUsageRepository(IUsageRepository):
     """Mock implementation of usage repository."""

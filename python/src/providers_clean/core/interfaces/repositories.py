@@ -147,6 +147,18 @@ class IApiKeyRepository(ABC):
         """
         pass
 
+    @abstractmethod
+    async def delete_key(self, provider: str) -> bool:
+        """Permanently delete an API key for a provider.
+
+        Args:
+            provider: Provider name
+
+        Returns:
+            True if deleted successfully, False if not found
+        """
+        pass
+
 
 class IUsageRepository(ABC):
     """Repository interface for usage tracking."""
