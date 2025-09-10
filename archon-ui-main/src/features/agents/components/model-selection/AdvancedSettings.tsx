@@ -70,7 +70,9 @@ export const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                   onTemperatureChange(clampedValue);
                 }}
                 className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer"
-                style={getRangeSliderStyle(temperature, 2)}
+                style={{
+                  background: getRangeSliderStyle(temperature, 2).background,
+                }}
               />
               <div className="flex justify-between text-xs text-gray-600 mt-1">
                 <span>Precise</span>
@@ -98,7 +100,9 @@ export const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                   }
                 }}
                 className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer"
-                style={getRangeSliderStyle(maxTokens, 4000)}
+                style={{
+                  background: getRangeSliderStyle(maxTokens, 4000).background,
+                }}
               />
               <div className="flex justify-between text-xs text-gray-600 mt-1">
                 <span>Short</span>
