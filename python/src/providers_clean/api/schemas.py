@@ -1,6 +1,6 @@
 """Shared request/response schemas for provider API routes."""
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field, SecretStr
 
@@ -82,3 +82,12 @@ class MonthlyCostEstimate(BaseModel):
     """Response schema for monthly cost estimate."""
     estimated_monthly_cost: float
     based_on_days: int = 7
+
+
+class UsageTrackRequest(BaseModel):
+    """Request to track usage for a service"""
+    service_name: str = Field(..., description="Service name (e.g., 'rag_agent')")
+    model_string: str = Field(..., description="Model string (e.g., 'openai:gpt-4o')")
+    input_tokens: int = Field(..., description="Number of input tokens", gt=0)
+    output_tokens: int = Field(..., description="Number of output tokens", gt=0)
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Optional metadata dictionary")
