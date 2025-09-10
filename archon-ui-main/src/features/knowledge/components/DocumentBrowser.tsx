@@ -22,8 +22,18 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({ sourceId, open
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedChunks, setExpandedChunks] = useState<Set<string>>(new Set());
 
-  const { data: chunksData, isLoading: chunksLoading } = useKnowledgeItemChunks(sourceId);
-  const { data: codeData, isLoading: codeLoading } = useCodeExamples(sourceId);
+  const {
+    data: chunksData,
+    isLoading: chunksLoading,
+    isError: chunksError,
+    error: chunksErrorObj,
+  } = useKnowledgeItemChunks(sourceId);
+  const {
+    data: codeData,
+    isLoading: codeLoading,
+    isError: codeError,
+    error: codeErrorObj,
+  } = useCodeExamples(sourceId);
 
   const chunks = chunksData?.chunks || [];
   const codeExamples = codeData?.code_examples || [];
@@ -97,6 +107,11 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({ sourceId, open
             <div className="h-full overflow-y-auto">
               {chunksLoading ? (
                 <div className="text-center py-8 text-gray-400">Loading documents...</div>
+              ) : chunksError ? (
+                <div className="text-center py-8 text-red-400">
+                  Failed to load documents for source {sourceId}.
+                  {chunksErrorObj?.message && ` ${chunksErrorObj.message}`}
+                </div>
               ) : filteredChunks.length === 0 ? (
                 <div className="text-center py-8 text-gray-400">
                   {searchQuery ? "No documents match your search" : "No documents available"}
@@ -171,6 +186,11 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({ sourceId, open
             <div className="h-full overflow-y-auto">
               {codeLoading ? (
                 <div className="text-center py-8 text-gray-400">Loading code examples...</div>
+              ) : codeError ? (
+                <div className="text-center py-8 text-red-400">
+                  Failed to load code examples for source {sourceId}.
+                  {codeErrorObj?.message && ` ${codeErrorObj.message}`}
+                </div>
               ) : filteredCode.length === 0 ? (
                 <div className="text-center py-8 text-gray-400">
                   {searchQuery ? "No code examples match your search" : "No code examples available"}
