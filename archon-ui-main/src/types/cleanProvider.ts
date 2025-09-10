@@ -81,9 +81,10 @@ export interface ServiceStatus {
   service_name: ServiceType;
   model_string: string;
   provider: ProviderType;
-  is_configured: boolean;
-  health: ProviderHealth;
-  last_used?: string;
+  model: string;
+  api_key_configured: boolean;
+  temperature: number;
+  max_tokens?: number;
 }
 
 // Usage tracking
