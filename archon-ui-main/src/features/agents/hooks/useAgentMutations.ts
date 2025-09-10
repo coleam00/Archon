@@ -134,43 +134,6 @@ export const useAddProvider = () => {
         }
       );
 
-      // Optimistically update available models by adding placeholder models for the new provider
-      // This will be replaced with actual models when the server responds
-      queryClient.setQueryData(
-        modelKeys.available(),
-        (old: any[] | undefined) => {
-          if (!old) return [];
-
-          // Add some common model placeholders for the provider
-          const placeholderModels = [
-            {
-              provider,
-              model: `${provider}-model-1`,
-              model_string: `${provider}/model-1`,
-              display_name: `${provider} Model 1`,
-              has_api_key: true,
-              cost_tier: "medium" as const,
-              is_embedding: false,
-            },
-            {
-              provider,
-              model: `${provider}-model-2`,
-              model_string: `${provider}/model-2`,
-              display_name: `${provider} Model 2`,
-              has_api_key: true,
-              cost_tier: "medium" as const,
-              is_embedding: false,
-            },
-          ];
-
-          // Remove any existing models for this provider and add the new ones
-          const filteredModels = old.filter(
-            (model: any) => model.provider !== provider
-          );
-          return [...filteredModels, ...placeholderModels];
-        }
-      );
-
       // Show immediate success feedback
       showToast(`${provider} added successfully`, "success");
 
