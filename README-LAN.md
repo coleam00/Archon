@@ -16,20 +16,20 @@ git clone <repo-url>
 cd Archon
 
 # Configure environment
-cp .env.lan.example .env
+cp .env.unified.lan .env
 # Edit .env with your Supabase credentials
 
 # Deploy with LAN configuration (standalone file)
-docker-compose -f docker-compose-lan.yml up -d
+docker-compose -f docker-compose.unified.yml up -d
 
-# Access at: https://archon.mcdonaldhomelab.com
+# Access at: https://archon.yourDomain.com
 ```
 
 ## What This Gives You
 
 ### 🌐 Production-Ready LAN Access
 - **HTTPS with SSL**: Automatic Let's Encrypt certificates via Traefik
-- **Domain Access**: `https://archon.mcdonaldhomelab.com`
+- **Domain Access**: `https://archon.yourDomain.com`
 - **Path Routing**: API at `/api/*`, frontend at `/`
 - **Security**: No direct port access, all traffic through Traefik
 

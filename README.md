@@ -62,7 +62,7 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
 2. **Environment Configuration**:
 
    ```bash
-   cp .env.example .env
+   cp .env.unified.local .env
    # Edit .env and add your Supabase credentials:
    # SUPABASE_URL=https://your-project.supabase.co
    # SUPABASE_SERVICE_KEY=your-service-key-here
@@ -79,7 +79,7 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
    **Full Docker Mode (Recommended for Normal Archon Usage)**
 
    ```bash
-   docker compose up --build -d
+   docker compose -f docker-compose.unified.yml up --build -d
    ```
 
    This starts all core microservices in Docker:
@@ -208,7 +208,7 @@ To upgrade Archon to the latest version:
 
 3. **Rebuild and restart**:
    ```bash
-   docker compose up -d --build
+   docker compose -f docker-compose.unified.yml up -d --build
    ```
 
 This is the same command used for initial setup - it rebuilds containers with the latest code and restarts services.
