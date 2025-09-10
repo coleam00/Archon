@@ -427,7 +427,7 @@ async def crawl_knowledge_item(request: KnowledgeItemRequest):
     """Crawl a URL and add it to the knowledge base with progress tracking."""
     # Validate URL
     if not request.url:
-        raise HTTPException(status_code=422, detail="URL is required")
+        raise HTTPException(status_code=422, detail={"error": {"type": "validation_error", "message": "URL is required", "details": {"field": "url"}}})
 
     # Basic URL validation
     if not request.url.startswith(("http://", "https://")):
@@ -765,10 +765,10 @@ async def search_knowledge_items(request: RagQueryRequest):
     """Search knowledge items - alias for RAG query."""
     # Validate query
     if not request.query:
-        raise HTTPException(status_code=422, detail="Query is required")
+        raise HTTPException(status_code=422, detail={"error": {"type": "validation_error", "message": "Query is required", "details": {"field": "query"}}})
 
     if not request.query.strip():
-        raise HTTPException(status_code=422, detail="Query cannot be empty")
+        raise HTTPException(status_code=422, detail={"error": {"type": "validation_error", "message": "Query cannot be empty", "details": {"field": "query"}}})
 
     # Delegate to the RAG query handler
     return await perform_rag_query(request)
@@ -779,10 +779,10 @@ async def perform_rag_query(request: RagQueryRequest):
     """Perform a RAG query on the knowledge base using service layer."""
     # Validate query
     if not request.query:
-        raise HTTPException(status_code=422, detail="Query is required")
+        raise HTTPException(status_code=422, detail={"error": {"type": "validation_error", "message": "Query is required", "details": {"field": "query"}}})
 
     if not request.query.strip():
-        raise HTTPException(status_code=422, detail="Query cannot be empty")
+        raise HTTPException(status_code=422, detail={"error": {"type": "validation_error", "message": "Query cannot be empty", "details": {"field": "query"}}})
 
     try:
         # Use RAGService for RAG query

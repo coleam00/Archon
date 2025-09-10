@@ -51,7 +51,8 @@ class DocumentService:
             if not project_response.data:
                 return False, {"error": f"Project with ID {project_id} not found"}
 
-            current_docs = project_response.data[0].get("docs", [])
+            current_docs_raw = project_response.data[0].get("docs")
+            current_docs = self._normalize_docs_field(current_docs_raw)
 
             # Create new document entry
             new_doc = {
@@ -119,30 +120,32 @@ class DocumentService:
             if not response.data:
                 return False, {"error": f"Project with ID {project_id} not found"}
 
-            docs = response.data[0].get("docs", [])
+            docs_raw = response.data[0].get("docs")
+            docs = self._normalize_docs_field(docs_raw)
 
             # Format documents for response
             documents = []
             for doc in docs:
-                if include_content:
-                    # Return full document
-                    documents.append(doc)
-                else:
-                    # Return metadata only
-                    documents.append({
-                        "id": doc.get("id"),
-                        "document_type": doc.get("document_type"),
-                        "title": doc.get("title"),
-                        "status": doc.get("status"),
-                        "version": doc.get("version"),
-                        "tags": doc.get("tags", []),
-                        "author": doc.get("author"),
-                        "created_at": doc.get("created_at"),
-                        "updated_at": doc.get("updated_at"),
-                        "stats": {
-                            "content_size": len(str(doc.get("content", {})))
-                        }
-                    })
+                if isinstance(doc, dict):
+                    if include_content:
+                        # Return full document
+                        documents.append(doc)
+                    else:
+                        # Return metadata only
+                        documents.append({
+                            "id": doc.get("id"),
+                            "document_type": doc.get("document_type"),
+                            "title": doc.get("title"),
+                            "status": doc.get("status"),
+                            "version": doc.get("version"),
+                            "tags": doc.get("tags", []),
+                            "author": doc.get("author"),
+                            "created_at": doc.get("created_at"),
+                            "updated_at": doc.get("updated_at"),
+                            "stats": {
+                                "content_size": len(str(doc.get("content", {})))
+                            }
+                        })
 
             return True, {
                 "project_id": project_id,
@@ -153,6 +156,33 @@ class DocumentService:
         except Exception as e:
             logger.error(f"Error listing documents: {e}")
             return False, {"error": f"Error listing documents: {str(e)}"}
+
+    def _normalize_docs_field(self, docs: Any) -> list[dict[str, Any]]:
+        """
+        Normalize the docs field to ensure it's always a list of documents.
+        Handles cases where docs might be stored as different formats.
+        """
+        if docs is None:
+            return []
+        elif isinstance(docs, list):
+            return docs
+        elif isinstance(docs, dict):
+            # Handle object format with metadata and documents
+            if "documents" in docs and isinstance(docs["documents"], list):
+                return docs["documents"]
+            # Handle other dict formats - treat as single document
+            return [docs]
+        elif isinstance(docs, str):
+            # Handle string format (shouldn't happen but defensive)
+            try:
+                import json
+                parsed = json.loads(docs)
+                return self._normalize_docs_field(parsed)
+            except:
+                return []
+        else:
+            # Unknown format, return empty list
+            return []
 
     def get_document(self, project_id: str, doc_id: str) -> tuple[bool, dict[str, Any]]:
         """
@@ -172,12 +202,13 @@ class DocumentService:
             if not response.data:
                 return False, {"error": f"Project with ID {project_id} not found"}
 
-            docs = response.data[0].get("docs", [])
+            docs_raw = response.data[0].get("docs")
+            docs = self._normalize_docs_field(docs_raw)
 
             # Find the specific document
             document = None
             for doc in docs:
-                if doc.get("id") == doc_id:
+                if isinstance(doc, dict) and doc.get("id") == doc_id:
                     document = doc
                     break
 
@@ -216,7 +247,8 @@ class DocumentService:
             if not project_response.data:
                 return False, {"error": f"Project with ID {project_id} not found"}
 
-            current_docs = project_response.data[0].get("docs", [])
+            current_docs_raw = project_response.data[0].get("docs")
+            current_docs = self._normalize_docs_field(current_docs_raw)
 
             # Create version snapshot if requested
             if create_version and current_docs:
@@ -241,12 +273,12 @@ class DocumentService:
                     )
 
             # Make a copy to modify
-            docs = current_docs.copy()
+            docs = current_docs.copy() if isinstance(current_docs, list) else current_docs[:]
 
             # Find and update the document
             updated = False
             for i, doc in enumerate(docs):
-                if doc.get("id") == doc_id:
+                if isinstance(doc, dict) and doc.get("id") == doc_id:
                     # Update allowed fields
                     if "title" in update_fields:
                         docs[i]["title"] = update_fields["title"]

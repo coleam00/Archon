@@ -162,10 +162,10 @@ async def create_project(request: CreateProjectRequest):
     """Create a new project with streaming progress."""
     # Validate title
     if not request.title:
-        raise HTTPException(status_code=422, detail="Title is required")
+        raise HTTPException(status_code=422, detail={"error": {"type": "validation_error", "message": "Title is required", "details": {"field": "title"}}})
 
     if not request.title.strip():
-        raise HTTPException(status_code=422, detail="Title cannot be empty")
+        raise HTTPException(status_code=422, detail={"error": {"type": "validation_error", "message": "Title cannot be empty", "details": {"field": "title"}}})
 
     try:
         logfire.info(

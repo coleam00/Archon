@@ -245,15 +245,18 @@ class TaskService:
                 task_data = {
                     "id": task["id"],
                     "project_id": task["project_id"],
+                    "parent_task_id": task.get("parent_task_id"),
                     "title": task["title"],
                     "description": task["description"],
                     "status": task["status"],
                     "assignee": task.get("assignee", "User"),
                     "task_order": task.get("task_order", 0),
                     "feature": task.get("feature"),
+                    "archived": task.get("archived", False),
+                    "archived_at": task.get("archived_at"),
+                    "archived_by": task.get("archived_by"),
                     "created_at": task["created_at"],
                     "updated_at": task["updated_at"],
-                    "archived": task.get("archived", False),
                 }
 
                 if not exclude_large_fields:

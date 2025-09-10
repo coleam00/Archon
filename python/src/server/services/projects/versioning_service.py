@@ -147,7 +147,6 @@ class VersioningService:
                 version = result.data[0]
                 return True, {
                     "version": version,
-                    "content": version["content"],
                     "field_name": field_name,
                     "version_number": version_number,
                 }
