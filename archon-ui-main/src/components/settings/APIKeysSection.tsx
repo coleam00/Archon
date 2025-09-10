@@ -7,10 +7,10 @@ import { useToast } from "../../contexts/ToastContext";
 import type { ProviderType } from "../../types/cleanProvider";
 
 export const APIKeysSection = () => {
-  const [providers, setProviders] = useState<string[] | null>(null);
-  const [providersLoading, setProvidersLoading] = useState(true);
+  const [providers, setProviders] = useState<ProviderType[] | null>(null);
+  const [isLoadingProviders, setIsLoadingProviders] = useState(true);
   const [providerKey, setProviderKey] = useState("");
-  const [selectedProvider, setSelectedProvider] = useState<string>("");
+  const [selectedProvider, setSelectedProvider] = useState<ProviderType | null>(null);
 
   const { showToast } = useToast();
 
@@ -22,7 +22,7 @@ export const APIKeysSection = () => {
 
   const loadProviders = async () => {
     try {
-      setProvidersLoading(true);
+      setIsLoadingProviders(true);
       const list = await cleanProviderService.getProviders();
       setProviders(list);
       if (list.length > 0 && !selectedProvider) setSelectedProvider(list[0]);
@@ -30,7 +30,7 @@ export const APIKeysSection = () => {
       // If 404, providers table is empty
       setProviders([]);
     } finally {
-      setProvidersLoading(false);
+      setIsLoadingProviders(false);
     }
   };
 
@@ -41,7 +41,7 @@ export const APIKeysSection = () => {
     }
     try {
       await cleanProviderService.setApiKey(
-        selectedProvider as ProviderType,
+        selectedProvider,
         providerKey
       );
       showToast(
@@ -66,7 +66,7 @@ export const APIKeysSection = () => {
             <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200">
               Providers
             </h3>
-            {providersLoading ? (
+            {isLoadingProviders ? (
               <span className="text-xs text-gray-500">Loading…</span>
             ) : providers && providers.length === 0 ? (
               <div className="flex items-center gap-2">
@@ -85,8 +85,8 @@ export const APIKeysSection = () => {
           {providers && providers.length > 0 && (
             <div className="flex gap-2 items-center">
               <select
-                value={selectedProvider}
-                onChange={(e) => setSelectedProvider(e.target.value)}
+                value={selectedProvider || ""}
+                onChange={(e) => setSelectedProvider(e.target.value as ProviderType)}
                 className="px-3 py-2 rounded-md bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 text-sm"
                 aria-label="Select AI provider"
               >
