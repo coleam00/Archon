@@ -571,19 +571,19 @@ async def get_mcp_config():
         try:
             api_logger.info("Getting MCP server configuration")
 
-            # Get actual MCP port from environment or use default
+            # Get MCP configuration using service discovery
             import os
+            from urllib.parse import urlparse
 
-            mcp_port = int(os.getenv("ARCHON_MCP_PORT", "8051"))
-
-            # Configuration for SSE-only mode with actual port
-            host = os.getenv("HOST", "localhost")
-            protocol = os.getenv("VITE_MCP_PROTOCOL", "http")
+            # Use service discovery to get the proper MCP URL
+            mcp_url = get_mcp_url()
+            parsed_url = urlparse(mcp_url)
+            
             config = {
-                "host": host,
-                "port": mcp_port,
+                "host": parsed_url.hostname,
+                "port": parsed_url.port,
                 "transport": "sse",
-                "protocol": protocol,
+                "protocol": parsed_url.scheme,
             }
 
             # Get only model choice from database
