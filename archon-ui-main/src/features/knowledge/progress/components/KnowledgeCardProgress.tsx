@@ -19,16 +19,13 @@ export const KnowledgeCardProgress: React.FC<KnowledgeCardProgressProps> = ({ pr
     pollingInterval: 1000,
   });
 
-  // Type assertion to help TypeScript understand the progress structure
-  const typedProgress = progress as ProgressResponse | undefined;
-
   // Hide if no progress or completed/failed
-  if (!isActive || !typedProgress || isLoading) {
+  if (!isActive || !progress || isLoading) {
     return null;
   }
 
   const getStatusIcon = () => {
-    switch (typedProgress.status) {
+    switch (progress.status) {
       case "completed":
         return <CheckCircle2 className="w-3 h-3" />;
       case "failed":
@@ -40,7 +37,7 @@ export const KnowledgeCardProgress: React.FC<KnowledgeCardProgressProps> = ({ pr
   };
 
   const getStatusColor = () => {
-    switch (typedProgress.status) {
+    switch (progress.status) {
       case "completed":
         return "text-green-500 bg-green-500/10 border-green-500/20";
       case "failed":
@@ -55,13 +52,13 @@ export const KnowledgeCardProgress: React.FC<KnowledgeCardProgressProps> = ({ pr
   };
 
   // Use the main progress field from backend (0-100)
-  const progressPercentage = typedProgress.progress || 0;
+  const progressPercentage = progress.progress || 0;
   // Use current_step if available, otherwise format the status
   const currentStep =
-    typedProgress.current_step ||
-    typedProgress.message ||
-    typedProgress.status.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
-  const stats = typedProgress.stats || typedProgress.progress_data;
+    progress.current_step ||
+    progress.message ||
+    progress.status.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+  const stats = progress.stats || progress.progress_data;
 
   return (
     <AnimatePresence>
