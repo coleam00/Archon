@@ -1,6 +1,6 @@
 /**
  * Provider Display Utilities
- * 
+ *
  * Centralized functions for generating provider display information
  * and metadata handling across agent components
  */
@@ -79,7 +79,10 @@ export const getProviderDisplayName = (provider: string): string => {
     openrouter: "OpenRouter",
   };
 
-  return nameMap[provider.toLowerCase()] || provider.charAt(0).toUpperCase() + provider.slice(1);
+  return (
+    nameMap[provider.toLowerCase()] ||
+    provider.charAt(0).toUpperCase() + provider.slice(1)
+  );
 };
 
 /**
@@ -87,26 +90,43 @@ export const getProviderDisplayName = (provider: string): string => {
  */
 export const formatProviderMetadata = (metadata: ProviderMetadata) => {
   return {
-    modelCount: metadata.model_count,
-    maxContext: metadata.max_context_length > 0 
-      ? metadata.max_context_length >= 1000000
-        ? `${Math.floor(metadata.max_context_length / 1000000)}M`
-        : metadata.max_context_length >= 1000
-        ? `${Math.floor(metadata.max_context_length / 1000)}K`
-        : metadata.max_context_length
-      : null,
-    costRange: metadata.min_input_cost > 0 ? {
-      min: metadata.min_input_cost < 1
-        ? metadata.min_input_cost.toFixed(3)
-        : metadata.min_input_cost.toFixed(2),
-      max: metadata.max_input_cost !== metadata.min_input_cost
-        ? metadata.max_input_cost.toFixed(2)
+    modelCount:
+      typeof metadata.model_count === "number" && isFinite(metadata.model_count)
+        ? metadata.model_count
         : null,
-    } : null,
+    maxContext:
+      typeof metadata.max_context_length === "number" &&
+      isFinite(metadata.max_context_length) &&
+      metadata.max_context_length > 0
+        ? metadata.max_context_length >= 1000000
+          ? `${Math.floor(metadata.max_context_length / 1000000)}M`
+          : metadata.max_context_length >= 1000
+          ? `${Math.floor(metadata.max_context_length / 1000)}K`
+          : metadata.max_context_length
+        : null,
+    costRange:
+      typeof metadata.min_input_cost === "number" &&
+      isFinite(metadata.min_input_cost) &&
+      metadata.min_input_cost > 0
+        ? {
+            min:
+              metadata.min_input_cost < 1
+                ? metadata.min_input_cost.toFixed(3)
+                : metadata.min_input_cost.toFixed(2),
+            max:
+              typeof metadata.max_input_cost === "number" &&
+              isFinite(metadata.max_input_cost) &&
+              metadata.max_input_cost !== metadata.min_input_cost
+                ? metadata.max_input_cost < 1
+                  ? metadata.max_input_cost.toFixed(3)
+                  : metadata.max_input_cost.toFixed(2)
+                : null,
+          }
+        : null,
     features: {
-      hasFreeTier: metadata.has_free_models,
-      supportsVision: metadata.supports_vision,
-      supportsTools: metadata.supports_tools,
-    }
+      hasFreeTier: !!metadata.has_free_models,
+      supportsVision: !!metadata.supports_vision,
+      supportsTools: !!metadata.supports_tools,
+    },
   };
 };
