@@ -13,6 +13,16 @@ import type {
 import { agentKeys, modelKeys, providerKeys } from "../utils/queryKeys";
 
 /**
+ * Providers that do not require an API key (e.g., local models like Ollama)
+ * Add new providers here if they operate via baseUrl only
+ */
+const providersWithoutApiKey = ["ollama"];
+
+const requiresApiKey = (provider: string): boolean => {
+  return !providersWithoutApiKey.includes(provider);
+};
+
+/**
  * Hook for updating agent model configuration with optimistic updates
  */
 export const useUpdateAgentConfig = () => {
@@ -100,7 +110,8 @@ export const useAddProvider = () => {
 
   return useMutation({
     mutationFn: async ({ provider, apiKey, baseUrl }: ProviderOperation) => {
-      if (provider !== "ollama" && !apiKey) throw new Error("API key is required");
+      if (requiresApiKey(provider) && !apiKey)
+        throw new Error("API key is required");
       return agentApi.setApiKey(provider, apiKey || "", baseUrl);
     },
     retry: (failureCount, error) => {
