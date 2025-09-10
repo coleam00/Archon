@@ -1,11 +1,11 @@
 /**
  * Service Registry API Service
- * 
+ *
  * Handles all interactions with the service registry database API
  * for managing services and agents using LLMs.
  */
 
-import { apiRequest } from './api';
+import { apiRequest } from "./api";
 
 // Types matching the backend ServiceInfo model
 export interface ServiceInfo {
@@ -14,14 +14,14 @@ export interface ServiceInfo {
   display_name: string;
   description?: string;
   icon?: string;
-  category: 'agent' | 'service';
-  service_type: 'pydantic_ai' | 'backend_service' | 'embedding_service';
-  model_type: 'llm' | 'embedding';
+  category: "agent" | "service";
+  service_type: "pydantic_ai" | "backend_service" | "embedding_service";
+  model_type: "llm" | "embedding";
   location?: string;
   supports_temperature: boolean;
   supports_max_tokens: boolean;
   default_model?: string;
-  cost_profile?: 'low' | 'medium' | 'high';
+  cost_profile?: "low" | "medium" | "high";
   is_active: boolean;
   is_deprecated: boolean;
   deprecation_reason?: string;
@@ -40,14 +40,14 @@ export interface ServiceRegistration {
   display_name: string;
   description?: string;
   icon?: string;
-  category: 'agent' | 'service';
-  service_type: 'pydantic_ai' | 'backend_service' | 'embedding_service';
-  model_type: 'llm' | 'embedding';
+  category: "agent" | "service";
+  service_type: "pydantic_ai" | "backend_service" | "embedding_service";
+  model_type: "llm" | "embedding";
   location?: string;
   supports_temperature?: boolean;
   supports_max_tokens?: boolean;
   default_model?: string;
-  cost_profile?: 'low' | 'medium' | 'high';
+  cost_profile?: "low" | "medium" | "high";
   owner_team?: string;
   contact_email?: string;
   documentation_url?: string;
@@ -65,32 +65,47 @@ export interface ServiceRegistryStatistics {
   services_by_team: Record<string, number>;
   services_by_cost_profile: Record<string, number>;
   validation_issues: {
-    unregistered: Array<{service_name: string; model_string: string; issue: string}>;
-    orphaned: Array<{service_name: string; display_name: string; issue: string}>;
-    deprecated: Array<{service_name: string; display_name: string; deprecation_reason?: string}>;
+    unregistered: Array<{
+      service_name: string;
+      model_string: string;
+      issue: string;
+    }>;
+    orphaned: Array<{
+      service_name: string;
+      display_name: string;
+      issue: string;
+    }>;
+    deprecated: Array<{
+      service_name: string;
+      display_name: string;
+      deprecation_reason?: string;
+    }>;
   };
   last_check: string;
 }
 
-// API base path 
-const API_BASE = '/providers/services';
+// API base path
+const API_BASE = "/providers/services";
 
 class ServiceRegistryService {
-
   // ==================== Registry Management ====================
 
   /**
    * Get all services from the registry
    */
-  async getAllServices(activeOnly: boolean = true, category?: 'agent' | 'service'): Promise<ServiceInfo[]> {
+  async getAllServices(
+    activeOnly: boolean = true,
+    category?: "agent" | "service"
+  ): Promise<ServiceInfo[]> {
     const params = new URLSearchParams();
-    if (activeOnly !== undefined) params.append('active_only', activeOnly.toString());
-    if (category) params.append('category', category);
-    
-    const url = params.toString() 
+    if (activeOnly !== undefined)
+      params.append("active_only", activeOnly.toString());
+    if (category) params.append("category", category);
+
+    const url = params.toString()
       ? `${API_BASE}/registry?${params}`
       : `${API_BASE}/registry`;
-      
+
     return apiRequest<ServiceInfo[]>(url);
   }
 
@@ -99,12 +114,13 @@ class ServiceRegistryService {
    */
   async getAgents(activeOnly: boolean = true): Promise<ServiceInfo[]> {
     const params = new URLSearchParams();
-    if (activeOnly !== undefined) params.append('active_only', activeOnly.toString());
-    
+    if (activeOnly !== undefined)
+      params.append("active_only", activeOnly.toString());
+
     const url = params.toString()
       ? `${API_BASE}/agents?${params}`
       : `${API_BASE}/agents`;
-      
+
     return apiRequest<ServiceInfo[]>(url);
   }
 
@@ -113,12 +129,13 @@ class ServiceRegistryService {
    */
   async getBackendServices(activeOnly: boolean = true): Promise<ServiceInfo[]> {
     const params = new URLSearchParams();
-    if (activeOnly !== undefined) params.append('active_only', activeOnly.toString());
-    
+    if (activeOnly !== undefined)
+      params.append("active_only", activeOnly.toString());
+
     const url = params.toString()
       ? `${API_BASE}/backend?${params}`
       : `${API_BASE}/backend`;
-      
+
     return apiRequest<ServiceInfo[]>(url);
   }
 
@@ -126,17 +143,24 @@ class ServiceRegistryService {
    * Get specific service information
    */
   async getService(serviceName: string): Promise<ServiceInfo> {
-    return apiRequest<ServiceInfo>(`${API_BASE}/${serviceName}`);
+    if (!serviceName || serviceName.trim() === "") {
+      throw new Error("Invalid service name");
+    }
+    return apiRequest<ServiceInfo>(
+      `${API_BASE}/${encodeURIComponent(serviceName)}`
+    );
   }
 
   /**
    * Register a new service
    */
-  async registerService(registration: ServiceRegistration): Promise<ServiceInfo> {
+  async registerService(
+    registration: ServiceRegistration
+  ): Promise<ServiceInfo> {
     return apiRequest<ServiceInfo>(`${API_BASE}/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(registration)
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(registration),
     });
   }
 
@@ -144,16 +168,17 @@ class ServiceRegistryService {
    * Deprecate a service
    */
   async deprecateService(
-    serviceName: string, 
-    reason: string, 
+    serviceName: string,
+    reason: string,
     replacementService?: string
-  ): Promise<{status: string; service: string; reason: string}> {
+  ): Promise<{ status: string; service: string; reason: string }> {
     const params = new URLSearchParams();
-    params.append('reason', reason);
-    if (replacementService) params.append('replacement_service', replacementService);
+    params.append("reason", reason);
+    if (replacementService)
+      params.append("replacement_service", replacementService);
 
     return apiRequest(`${API_BASE}/${serviceName}/deprecate?${params}`, {
-      method: 'POST'
+      method: "POST",
     });
   }
 
@@ -163,7 +188,9 @@ class ServiceRegistryService {
    * Get comprehensive registry statistics
    */
   async getRegistryStatistics(): Promise<ServiceRegistryStatistics> {
-    return apiRequest<ServiceRegistryStatistics>(`${API_BASE}/registry/statistics`);
+    return apiRequest<ServiceRegistryStatistics>(
+      `${API_BASE}/registry/statistics`
+    );
   }
 
   /**
@@ -177,7 +204,7 @@ class ServiceRegistryService {
     message: string;
   }> {
     return apiRequest(`${API_BASE}/registry/initialize`, {
-      method: 'POST'
+      method: "POST",
     });
   }
 
@@ -191,7 +218,7 @@ class ServiceRegistryService {
     sync_time: string;
   }> {
     return apiRequest(`${API_BASE}/registry/sync`, {
-      method: 'POST'
+      method: "POST",
     });
   }
 
@@ -202,9 +229,16 @@ class ServiceRegistryService {
     status: string;
     issues: string[];
     warnings: string[];
-    unregistered_services: Array<{service_name: string; model_string: string}>;
-    orphaned_entries: Array<{service_name: string; display_name: string}>;
-    deprecated_still_used: Array<{service_name: string; display_name: string; last_used?: string}>;
+    unregistered_services: Array<{
+      service_name: string;
+      model_string: string;
+    }>;
+    orphaned_entries: Array<{ service_name: string; display_name: string }>;
+    deprecated_still_used: Array<{
+      service_name: string;
+      display_name: string;
+      last_used?: string;
+    }>;
     validation_time: string;
   }> {
     return apiRequest(`${API_BASE}/registry/validate`);
@@ -219,14 +253,14 @@ class ServiceRegistryService {
     return {
       id: service.service_name,
       name: service.display_name,
-      icon: service.icon || '🔧',
-      description: service.description || '',
+      icon: service.icon || "🔧",
+      description: service.description || "",
       category: service.category,
       supportsTemperature: service.supports_temperature,
       supportsMaxTokens: service.supports_max_tokens,
-      defaultModel: service.default_model || 'openai:gpt-4o-mini',
+      defaultModel: service.default_model || "openai:gpt-4o-mini",
       modelType: service.model_type,
-      costProfile: service.cost_profile || 'medium'
+      costProfile: service.cost_profile || "medium",
     };
   }
 
@@ -237,14 +271,18 @@ class ServiceRegistryService {
     try {
       const services = await this.getAllServices(true);
       const agentConfigs: Record<string, any> = {};
-      
+
       for (const service of services) {
-        agentConfigs[service.service_name] = this.serviceInfoToAgentConfig(service);
+        agentConfigs[service.service_name] =
+          this.serviceInfoToAgentConfig(service);
       }
-      
+
       return agentConfigs;
     } catch (error) {
-      console.error('[ServiceRegistryService] Failed to get services as agent configs:', error);
+      console.error(
+        "[ServiceRegistryService] Failed to get services as agent configs:",
+        error
+      );
       throw error;
     }
   }
@@ -255,22 +293,28 @@ class ServiceRegistryService {
   async getAgentsAsConfigs(): Promise<any[]> {
     try {
       const agents = await this.getAgents(true);
-      return agents.map(agent => this.serviceInfoToAgentConfig(agent));
+      return agents.map((agent) => this.serviceInfoToAgentConfig(agent));
     } catch (error) {
-      console.error('[ServiceRegistryService] Failed to get agents as configs:', error);
+      console.error(
+        "[ServiceRegistryService] Failed to get agents as configs:",
+        error
+      );
       throw error;
     }
   }
 
   /**
-   * Get only services in legacy format  
+   * Get only services in legacy format
    */
   async getServicesAsConfigs(): Promise<any[]> {
     try {
       const services = await this.getBackendServices(true);
-      return services.map(service => this.serviceInfoToAgentConfig(service));
+      return services.map((service) => this.serviceInfoToAgentConfig(service));
     } catch (error) {
-      console.error('[ServiceRegistryService] Failed to get services as configs:', error);
+      console.error(
+        "[ServiceRegistryService] Failed to get services as configs:",
+        error
+      );
       throw error;
     }
   }
@@ -280,8 +324,4 @@ class ServiceRegistryService {
 export const serviceRegistryService = new ServiceRegistryService();
 
 // Export types for convenience
-export type {
-  ServiceInfo,
-  ServiceRegistration,
-  ServiceRegistryStatistics
-};
+export type { ServiceInfo, ServiceRegistration, ServiceRegistryStatistics };
