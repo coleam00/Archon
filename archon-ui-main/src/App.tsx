@@ -1,30 +1,25 @@
-import { useState, useEffect, JSX } from "react";
-import {
-  BrowserRouter as Router,
-  Routes,
-  Route,
-  Navigate,
-} from "react-router-dom";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
-import { KnowledgeBasePage } from "./pages/KnowledgeBasePage";
-import { SettingsPage } from "./pages/SettingsPage";
-import { MCPPage } from "./pages/MCPPage";
-import { OnboardingPage } from "./pages/OnboardingPage";
-import { AgentsPage } from "./features/agents/components";
-import { MainLayout } from "./components/layouts/MainLayout";
-import { ThemeProvider } from "./contexts/ThemeContext";
-import { ToastProvider } from "./contexts/ToastContext";
-import { ToastProvider as FeaturesToastProvider } from "./features/ui/components/ToastProvider";
-import { SettingsProvider, useSettings } from "./contexts/SettingsContext";
-import { ServiceRegistryProvider } from "./contexts/ServiceRegistryContext";
-import { TooltipProvider } from "./features/ui/primitives/tooltip";
-import { ProjectPage } from "./pages/ProjectPage";
-import { DisconnectScreenOverlay } from "./components/DisconnectScreenOverlay";
-import { ErrorBoundaryWithBugReport } from "./components/bug-report/ErrorBoundaryWithBugReport";
-import { MigrationBanner } from "./components/ui/MigrationBanner";
-import { serverHealthService } from "./services/serverHealthService";
-import { useMigrationStatus } from "./hooks/useMigrationStatus";
+import { useState, useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
+import { KnowledgeBasePage } from './pages/KnowledgeBasePage';
+import { SettingsPage } from './pages/SettingsPage';
+import { MCPPage } from './pages/MCPPage';
+import { OnboardingPage } from './pages/OnboardingPage';
+import { AgentsPage } from './features/agents/components';
+import { MainLayout } from './components/layout/MainLayout';
+import { ThemeProvider } from './contexts/ThemeContext';
+import { ToastProvider } from './contexts/ToastContext';
+import { ToastProvider as FeaturesToastProvider } from './features/ui/components/ToastProvider';
+import { SettingsProvider, useSettings } from './contexts/SettingsContext';
+import { ServiceRegistryProvider } from './contexts/ServiceRegistryContext';
+import { TooltipProvider } from './features/ui/primitives/tooltip';
+import { ProjectPage } from './pages/ProjectPage';
+import { DisconnectScreenOverlay } from './components/DisconnectScreenOverlay';
+import { ErrorBoundaryWithBugReport } from './components/bug-report/ErrorBoundaryWithBugReport';
+import { MigrationBanner } from './components/ui/MigrationBanner';
+import { serverHealthService } from './services/serverHealthService';
+import { useMigrationStatus } from './hooks/useMigrationStatus';
 
 // Create a client with optimized settings for our polling use case
 const queryClient = new QueryClient({

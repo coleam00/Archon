@@ -8,10 +8,12 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
-    setupFiles: './test/setup.ts',
+    setupFiles: './tests/setup.ts',
     include: [
-      'test/**/*.test.{ts,tsx}',
-      'test/**/*.spec.{ts,tsx}'
+      'src/**/*.test.{ts,tsx}',     // Colocated tests in features
+      'src/**/*.spec.{ts,tsx}',
+      'tests/**/*.test.{ts,tsx}',   // Tests in tests directory  
+      'tests/**/*.spec.{ts,tsx}'
     ],
     exclude: ['node_modules', 'dist', '.git', '.cache', 'test.backup', '*.backup/**', 'test-backups'],
     reporters: ['dot', 'json'],
@@ -35,7 +37,7 @@ export default defineConfig({
       reportOnFailure: true, // Generate coverage reports even when tests fail
       exclude: [
         'node_modules/',
-        'test/',
+        'tests/',
         '**/*.d.ts',
         '**/*.config.*',
         '**/mockData.ts',

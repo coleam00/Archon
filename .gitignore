@@ -6,3 +6,5 @@ PRPs/local
 PRPs/completed/
 /logs/
 .zed
+tmp/
+temp/

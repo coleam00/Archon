@@ -129,7 +129,7 @@ def test_config_handles_invalid_jwt():
 
 
 def test_config_fails_on_unknown_role():
-    """Test that configuration loading fails fast for unknown roles per alpha principles."""
+    """Test that configuration loading fails fast for unknown roles."""
     # Create a mock key with unknown role
     unknown_payload = {"role": "custom_role", "iss": "supabase"}
     mock_unknown_key = jwt.encode(unknown_payload, "secret", algorithm="HS256")

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-## Alpha Development Guidelines
+## Beta Development Guidelines
 
 **Local-only deployment** - each user runs their own instance.
 
@@ -8,11 +8,11 @@
 
 - **No backwards compatibility** - remove deprecated code immediately
 - **Detailed errors over graceful failures** - we want to identify and fix issues fast
-- **Break things to improve them** - alpha is for rapid iteration
+- **Break things to improve them** - beta is for rapid iteration
 
 ### Error Handling
 
-**Core Principle**: In alpha, we need to intelligently decide when to fail hard and fast to quickly address issues, and when to allow processes to complete in critical services despite failures. Read below carefully and make intelligent decisions on a case-by-case basis.
+**Core Principle**: In beta, we need to intelligently decide when to fail hard and fast to quickly address issues, and when to allow processes to complete in critical services despite failures. Read below carefully and make intelligent decisions on a case-by-case basis.
 
 #### When to Fail Fast and Loud (Let it Crash!)
 
@@ -102,7 +102,7 @@ def process_batch(items):
 
 ## Architecture Overview
 
-Archon V2 Alpha is a microservices-based knowledge management system with MCP (Model Context Protocol) integration:
+Archon V2 Beta is a microservices-based knowledge management system with MCP (Model Context Protocol) integration:
 
 - **Frontend (port 3737)**: React + TypeScript + Vite + TailwindCSS
   - **UI Strategy**: Radix UI primitives in `/features`, custom components in legacy `/components`

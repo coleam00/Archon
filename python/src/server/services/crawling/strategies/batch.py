@@ -72,7 +72,7 @@ class BatchCrawlStrategy:
             memory_threshold = float(settings.get("MEMORY_THRESHOLD_PERCENT", "80"))
             check_interval = float(settings.get("DISPATCHER_CHECK_INTERVAL", "0.5"))
         except (ValueError, KeyError, TypeError) as e:
-            # Critical configuration errors should fail fast in alpha
+            # Critical configuration errors should fail fast
             logger.error(f"Invalid crawl settings format: {e}", exc_info=True)
             raise ValueError(f"Failed to load crawler configuration: {e}") from e
         except Exception as e:

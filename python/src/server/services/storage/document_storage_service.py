@@ -351,6 +351,11 @@ async def add_documents_to_supabase(
 
                     # Simple batch completion info
                     batch_info = {
+                        # Stage-specific batch fields to prevent contamination with code examples
+                        "document_completed_batches": completed_batches,
+                        "document_total_batches": total_batches,
+                        "document_current_batch": batch_num,
+                        # Keep generic fields for backward compatibility
                         "completed_batches": completed_batches,
                         "total_batches": total_batches,
                         "current_batch": batch_num,

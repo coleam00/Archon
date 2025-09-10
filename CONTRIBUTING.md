@@ -101,8 +101,9 @@ very important specifics to call out here.
 
 **4. Even within individual features, aim for simplicity** - concise implementations are always the best!
 
-**5. If your code changes touch the crawling functionality in any way**, please test crawling an llms.txt, a sitemap.xml, and a normal URL with recursive crawling. Here are smaller examples you can use for testing:
-   - llms.txt: https://docs.mem0.ai/llms-full.txt
+**5. If your code changes touch the crawling functionality in any way**, please test crawling an llms-full.txt, llms.txt, a sitemap.xml, and a normal URL with recursive crawling. Here are smaller examples you can use for testing:
+   - llms.txt: https://docs.mem0.ai/llms.txt
+   - llms-full.txt: https://docs.mem0.ai/llms-full.txt
    - sitemap.xml: https://mem0.ai/sitemap.xml
    - Normal URL: https://docs.anthropic.com/en/docs/claude-code/overview
 

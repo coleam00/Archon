@@ -43,6 +43,16 @@ docker-compose.yml
 # Tests
 coverage
 test-results
+tests/
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
+**/__tests__
+**/*.e2e.test.ts
+**/*.integration.test.ts
+vitest.config.ts
+tsconfig.prod.json
 
 # Documentation
 README.md

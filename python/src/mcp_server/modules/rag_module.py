@@ -78,7 +78,7 @@ def register_rag_tools(mcp: FastMCP):
 
     @mcp.tool()
     async def perform_rag_query(
-        ctx: Context, query: str, source_domain: str = None, match_count: int = 5
+        ctx: Context, query: str, source_domain: str | None = None, match_count: int = 5
     ) -> str:
         """
         Search knowledge base for relevant content using RAG.
@@ -135,7 +135,7 @@ def register_rag_tools(mcp: FastMCP):
 
     @mcp.tool()
     async def search_code_examples(
-        ctx: Context, query: str, source_domain: str = None, match_count: int = 5
+        ctx: Context, query: str, source_domain: str | None = None, match_count: int = 5
     ) -> str:
         """
         Search for relevant code examples in the knowledge base.
