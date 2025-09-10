@@ -844,17 +844,33 @@ export function ProjectPage({
                       
                       {/* Copy Project ID Button */}
                       <button 
-                        onClick={(e) => {
+                        onClick={async (e) => {
                           e.stopPropagation();
-                          navigator.clipboard.writeText(project.id);
-                          showToast('Project ID copied to clipboard', 'success');
-                          // Visual feedback
-                          const button = e.currentTarget;
-                          const originalHTML = button.innerHTML;
-                          button.innerHTML = '<svg class="w-3 h-3 mr-1 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>Copied!';
-                          setTimeout(() => {
-                            button.innerHTML = originalHTML;
-                          }, 2000);
+                          try {
+                            await navigator.clipboard.writeText(project.id);
+                            showToast(`Project ID copied: ${project.id}`, 'success');
+                            // Visual feedback
+                            const button = e.currentTarget;
+                            const originalHTML = button.innerHTML;
+                            button.innerHTML = '<svg class="w-3 h-3 mr-1 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>Copied!';
+                            setTimeout(() => {
+                              button.innerHTML = originalHTML;
+                            }, 2000);
+                          } catch (error) {
+                            console.error('Failed to copy project ID:', error);
+                            // Fallback: try older method
+                            try {
+                              const textArea = document.createElement('textarea');
+                              textArea.value = project.id;
+                              document.body.appendChild(textArea);
+                              textArea.select();
+                              document.execCommand('copy');
+                              document.body.removeChild(textArea);
+                              showToast(`Project ID copied: ${project.id}`, 'success');
+                            } catch (fallbackError) {
+                              showToast(`Copy failed. Project ID: ${project.id}`, 'error');
+                            }
+                          }
                         }}
                         className="flex-1 flex items-center justify-center gap-1 text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors py-1"
                         title="Copy Project ID to clipboard"
