@@ -90,7 +90,12 @@ export function needsRefresh(item: KnowledgeItem): boolean {
   if (!lastScraped) return true;
 
   const lastScrapedDate = new Date(lastScraped);
-  const daysSinceLastScrape = (Date.now() - lastScrapedDate.getTime()) / (1000 * 60 * 60 * 24);
+  const time = lastScrapedDate.getTime();
+  
+  // If date is invalid, force a refresh
+  if (Number.isNaN(time)) return true;
+  
+  const daysSinceLastScrape = (Date.now() - time) / (1000 * 60 * 60 * 24);
 
   return daysSinceLastScrape >= updateFrequency;
 }
