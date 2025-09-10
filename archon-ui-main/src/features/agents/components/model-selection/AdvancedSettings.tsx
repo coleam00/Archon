@@ -91,7 +91,12 @@ export const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 max="4000"
                 step="100"
                 value={maxTokens}
-                onChange={(e) => onMaxTokensChange(parseInt(e.target.value))}
+                onChange={(e) => {
+                  const value = parseInt(e.target.value, 10);
+                  if (!isNaN(value) && value >= 100 && value <= 4000) {
+                    onMaxTokensChange(value);
+                  }
+                }}
                 className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer"
                 style={getRangeSliderStyle(maxTokens, 4000)}
               />
