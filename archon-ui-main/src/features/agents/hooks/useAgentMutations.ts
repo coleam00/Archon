@@ -42,7 +42,7 @@ export const useUpdateAgentConfig = () => {
       queryClient.setQueryData(
         agentKeys.configs(),
         (old: Record<string, ModelConfig> | undefined) => ({
-          ...old,
+          ...(old ?? {}),
           [serviceId]: config,
         })
       );
