@@ -74,6 +74,25 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
 
 3. **Database Setup**: In your [Supabase project](https://supabase.com/dashboard) SQL Editor, copy, paste, and execute the contents of `migration/complete_setup.sql`
 
+
+> Note: Task Indexes (Performance)
+>
+> - New installations: `migration/complete_setup.sql` already creates the task indexes for `archon_tasks` (composite on `(project_id, status, task_order)`). Nothing else to do.
+> - Step-based setup: If you prefer running scripts individually, run `migration/07_add_archon_tasks_indexes.sql` after your projects/tasks tables are created.
+> - Upgrading existing installations: run `migration/07_add_archon_tasks_indexes.sql` in the Supabase SQL Editor. Execute statements one-by-one because `CREATE INDEX CONCURRENTLY` cannot run inside a transaction.
+> - Optional validation:
+>
+>   ```sql
+>   -- List indexes
+>   \di+ idx_archon_tasks_*
+>
+>   -- Check typical list query plan
+>   EXPLAIN ANALYZE
+>   SELECT id FROM archon_tasks
+>   WHERE project_id = '<your-project-uuid>' AND status = 'todo'
+>   ORDER BY task_order LIMIT 50;
+>   ```
+
 4. **Start Services** (choose one):
 
    **Full Docker Mode (Recommended for Normal Archon Usage)**
@@ -100,7 +119,7 @@ Once everything is running:
 1. **Test Web Crawling**: Go to http://localhost:3737 → Knowledge Base → "Crawl Website" → Enter a doc URL (such as https://ai.pydantic.dev/llms-full.txt)
 2. **Test Document Upload**: Knowledge Base → Upload a PDF
 3. **Test Projects**: Projects → Create a new project and add tasks
-4. **Integrate with your AI coding assistant**: MCP Dashboard → Copy connection config for your AI coding assistant 
+4. **Integrate with your AI coding assistant**: MCP Dashboard → Copy connection config for your AI coding assistant
 
 ## Installing Make
 
@@ -193,7 +212,7 @@ The reset script safely removes all tables, functions, triggers, and policies wi
 | **Web Interface**  | archon-ui      | http://localhost:3737 | Main dashboard and controls       |
 | **API Service**    | archon-server  | http://localhost:8181 | Web crawling, document processing |
 | **MCP Server**     | archon-mcp     | http://localhost:8051 | Model Context Protocol interface  |
-| **Agents Service** | archon-agents  | http://localhost:8052 | AI/ML operations, reranking       |  
+| **Agents Service** | archon-agents  | http://localhost:8052 | AI/ML operations, reranking       |
 
 ## Upgrading
 

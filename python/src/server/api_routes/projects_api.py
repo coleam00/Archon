@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 from fastapi import status as http_status
 from pydantic import BaseModel
+from ..schemas.tasks import TaskCreate as CreateTaskRequest, TaskUpdate as UpdateTaskRequest
 
 # Removed direct logging import - using unified config
 # Set up standard logger for background tasks
@@ -63,14 +64,6 @@ class UpdateProjectRequest(BaseModel):
     pinned: bool | None = None  # Whether this project is pinned to top
 
 
-class CreateTaskRequest(BaseModel):
-    project_id: str
-    title: str
-    description: str | None = None
-    status: str | None = "todo"
-    assignee: str | None = "User"
-    task_order: int | None = 0
-    feature: str | None = None
 
 
 @router.get("/projects")
@@ -552,9 +545,16 @@ async def list_project_tasks(
     request: Request,
     response: Response,
     include_archived: bool = False,
-    exclude_large_fields: bool = False
+    exclude_large_fields: bool = False  # Keep backward compatibility - clients must opt-in to reduced payloads
 ):
-    """List all tasks for a specific project with ETag support for efficient polling."""
+    """List all tasks for a specific project with ETag support for efficient polling.
+    
+    Args:
+        exclude_large_fields: When True, excludes description and other large fields to reduce payload size.
+                            Default is False for backward compatibility.
+                            NOTE: In future versions, this will default to True for performance.
+                            Clients should explicitly set this parameter based on their needs.
+    """
     try:
         # Get If-None-Match header for ETag comparison
         if_none_match = request.headers.get("If-None-Match")
@@ -763,13 +763,6 @@ async def get_task(task_id: str):
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
-class UpdateTaskRequest(BaseModel):
-    title: str | None = None
-    description: str | None = None
-    status: str | None = None
-    assignee: str | None = None
-    task_order: int | None = None
-    feature: str | None = None
 
 
 class CreateDocumentRequest(BaseModel):

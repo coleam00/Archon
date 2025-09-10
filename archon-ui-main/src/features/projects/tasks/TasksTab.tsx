@@ -5,7 +5,7 @@ import { HTML5Backend } from "react-dnd-html5-backend";
 import { DeleteConfirmModal } from "../../ui/components/DeleteConfirmModal";
 import { Button } from "../../ui/primitives";
 import { cn, glassmorphism } from "../../ui/primitives/styles";
-import { TaskEditModal } from "./components/TaskEditModal";
+import { TaskEditModalLazy } from "./components";
 import { useDeleteTask, useProjectTasks, useUpdateTask } from "./hooks";
 import type { Task } from "./types";
 import { getReorderTaskOrder, ORDER_INCREMENT, validateTaskOrder } from "./utils";
@@ -203,8 +203,8 @@ export const TasksTab = ({ projectId }: TasksTabProps) => {
         {/* Fixed View Controls using Radix primitives */}
         <ViewControls viewMode={viewMode} onViewChange={setViewMode} onAddTask={openCreateModal} />
 
-        {/* Edit/Create Task Modal */}
-        <TaskEditModal isModalOpen={isModalOpen} editingTask={editingTask} projectId={projectId} onClose={closeModal} />
+        {/* Edit/Create Task Modal - Lazy loaded */}
+        <TaskEditModalLazy isModalOpen={isModalOpen} editingTask={editingTask} projectId={projectId} onClose={closeModal} />
 
         {/* Delete Task Modal */}
         <DeleteConfirmModal
@@ -235,6 +235,7 @@ const ViewControls = ({ viewMode, onViewChange, onAddTask }: ViewControlsProps) 
         <Button
           onClick={onAddTask}
           variant="outline"
+          data-preload-task-modal="true"
           className={cn(
             "pointer-events-auto relative",
             glassmorphism.background.subtle,

@@ -15,6 +15,9 @@ from ...config.logfire_config import get_logger
 
 logger = get_logger(__name__)
 
+# Enforce 50k description length limit per Beta Guidelines
+MAX_DESCRIPTION_LENGTH = 50_000
+
 # Task updates are handled via polling - no broadcasting needed
 
 
@@ -71,6 +74,13 @@ class TaskService:
             is_valid, error_msg = self.validate_assignee(assignee)
             if not is_valid:
                 return False, {"error": error_msg}
+
+            # Validate description length (fail fast, do not truncate)
+            if description is not None and isinstance(description, str) and len(description) > MAX_DESCRIPTION_LENGTH:
+                logger.error(
+                    f"Description too long | length={len(description)} > max={MAX_DESCRIPTION_LENGTH}"
+                )
+                return False, {"error": f"description exceeds {MAX_DESCRIPTION_LENGTH} characters"}
 
             task_status = "todo"
 
@@ -162,12 +172,10 @@ class TaskService:
         try:
             # Start with base query
             if exclude_large_fields:
-                # Select all fields except large JSONB ones
+                # Select only lightweight fields (exclude description, sources, code_examples)
                 query = self.supabase_client.table("archon_tasks").select(
-                    "id, project_id, parent_task_id, title, description, "
-                    "status, assignee, task_order, feature, archived, "
-                    "archived_at, archived_by, created_at, updated_at, "
-                    "sources, code_examples"  # Still fetch for counting, but will process differently
+                    "id, project_id, parent_task_id, title, status, assignee, task_order, "
+                    "feature, archived, archived_at, archived_by, created_at, updated_at"
                 )
             else:
                 query = self.supabase_client.table("archon_tasks").select("*")
@@ -246,7 +254,6 @@ class TaskService:
                     "id": task["id"],
                     "project_id": task["project_id"],
                     "title": task["title"],
-                    "description": task["description"],
                     "status": task["status"],
                     "assignee": task.get("assignee", "User"),
                     "task_order": task.get("task_order", 0),
@@ -257,15 +264,21 @@ class TaskService:
                 }
 
                 if not exclude_large_fields:
-                    # Include full JSONB fields
+                    # Include description and full JSONB fields
+                    task_data["description"] = task.get("description", "")
                     task_data["sources"] = task.get("sources", [])
                     task_data["code_examples"] = task.get("code_examples", [])
                 else:
-                    # Add counts instead of full content
-                    task_data["stats"] = {
-                        "sources_count": len(task.get("sources", [])),
-                        "code_examples_count": len(task.get("code_examples", []))
-                    }
+                    # Lightweight mode: exclude large fields but include counts if available
+                    stats = {}
+                    src = task.get("sources")
+                    if isinstance(src, list):
+                        stats["sources_count"] = len(src)
+                    code = task.get("code_examples")
+                    if isinstance(code, list):
+                        stats["code_examples_count"] = len(code)
+                    if stats:
+                        task_data["stats"] = stats
 
                 tasks.append(task_data)
 
@@ -300,8 +313,9 @@ class TaskService:
                 self.supabase_client.table("archon_tasks").select("*").eq("id", task_id).execute()
             )
 
-            if response.data:
-                task = response.data[0]
+            data = getattr(response, "data", None)
+            if isinstance(data, list) and len(data) > 0:
+                task = data[0]
                 return True, {"task": task}
             else:
                 return False, {"error": f"Task with ID {task_id} not found"}
@@ -309,6 +323,20 @@ class TaskService:
         except Exception as e:
             logger.error(f"Error getting task: {e}")
             return False, {"error": f"Error getting task: {str(e)}"}
+
+    def get_task_details(self, task_id: str) -> tuple[bool, dict[str, Any]]:
+        """
+        Get full task details by ID. This returns the complete task object.
+
+        Returns:
+            Tuple of (success, result_dict)
+        """
+        try:
+            # Reuse existing get_task logic for now; kept as a separate method for clarity/extension
+            return self.get_task(task_id)
+        except Exception as e:
+            logger.error(f"Error getting task details: {e}")
+            return False, {"error": f"Error getting task details: {str(e)}"}
 
     async def update_task(
         self, task_id: str, update_fields: dict[str, Any]
@@ -328,7 +356,13 @@ class TaskService:
                 update_data["title"] = update_fields["title"]
 
             if "description" in update_fields:
-                update_data["description"] = update_fields["description"]
+                desc_val = update_fields["description"]
+                if desc_val is not None and isinstance(desc_val, str) and len(desc_val) > MAX_DESCRIPTION_LENGTH:
+                    logger.error(
+                        f"Update rejected: description too long | length={len(desc_val)} > max={MAX_DESCRIPTION_LENGTH}"
+                    )
+                    return False, {"error": f"description exceeds {MAX_DESCRIPTION_LENGTH} characters"}
+                update_data["description"] = desc_val
 
             if "status" in update_fields:
                 is_valid, error_msg = self.validate_status(update_fields["status"])
@@ -418,9 +452,9 @@ class TaskService:
     def get_all_project_task_counts(self) -> tuple[bool, dict[str, dict[str, int]]]:
         """
         Get task counts for all projects in a single optimized query.
-        
+
         Returns task counts grouped by project_id and status.
-        
+
         Returns:
             Tuple of (success, counts_dict) where counts_dict is:
             {"project-id": {"todo": 5, "doing": 2, "review": 3, "done": 10}}

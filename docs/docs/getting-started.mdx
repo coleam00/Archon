@@ -40,7 +40,7 @@ By the end of this guide, you'll have a **fully operational Archon system** with
 Archon is a **Model Context Protocol (MCP) server** that creates a centralized knowledge base for your AI coding assistants. Connect Cursor, Windsurf, or Claude Desktop to give your AI agents access to:
 
 - **Your documentation** (crawled websites, uploaded PDFs/docs)
-- **Smart search capabilities** with advanced RAG strategies  
+- **Smart search capabilities** with advanced RAG strategies
 - **Task management** integrated with your knowledge base
 - **Real-time updates** as you add new content
 
@@ -92,6 +92,29 @@ Create a new [Supabase project](https://supabase.com/dashboard), then follow the
 #### Step 3: Enable MCP Client Management (Optional)
 **Run `migration/3_mcp_client_management.sql`** - Adds MCP client connection management features
 
+
+#### ⚙️ Task Indexes (Performance)
+<Admonition type="tip" icon="⚡" title="Task indexes for faster task lists">
+- New installations: `migration/complete_setup.sql` already creates the task indexes for `archon_tasks` (composite on `(project_id, status, task_order)`). No extra action is required.
+- Step-based setup: If you follow steps 1–3 above, run `migration/07_add_archon_tasks_indexes.sql` after Step 2 to add the same indexes.
+- Upgrading existing installations: run `migration/07_add_archon_tasks_indexes.sql` in the Supabase SQL Editor. Execute statements individually because `CREATE INDEX CONCURRENTLY` cannot run inside a transaction.
+
+Optional validation:
+```sql
+-- List indexes
+\di+ idx_archon_tasks_*
+
+-- Check query plan for typical list pattern
+EXPLAIN ANALYZE
+SELECT id
+FROM archon_tasks
+WHERE project_id = '<your-project-uuid>'
+  AND status = 'todo'
+ORDER BY task_order
+LIMIT 50;
+```
+</Admonition>
+
 #### 🔄 Database Reset (Optional)
 **Run `migration/RESET_DB.sql`** - ⚠️ **Completely resets database (deletes ALL data!)**
 
@@ -126,7 +149,7 @@ docker compose logs -f
 Archon includes Hot Module Reload (HMR) for both Python and React code. Changes to source files automatically reload without container rebuilds.
 
 **No rebuild needed for:**
-- Python code changes (`.py` files) 
+- Python code changes (`.py` files)
 - React components (`.tsx`, `.jsx`)
 - CSS/Tailwind styles
 - Most configuration changes
@@ -166,7 +189,7 @@ When you run `docker compose up -d`, you get:
 - **Agents Service** (Port 8052): AI processing service for document analysis
 - **Documentation** (Port 3838): Complete Docusaurus documentation site
 
-### Key Features  
+### Key Features
 - **Smart Web Crawling**: Automatically detects sitemaps, text files, or webpages
 - **Document Processing**: Upload PDFs, Word docs, markdown, and text files
 - **AI Integration**: Connect any MCP-compatible client (Cursor, Windsurf, etc.)
@@ -226,7 +249,7 @@ graph TB
 Once everything is running:
 
 1. **Test Document Upload**: Go to http://localhost:3737 → Documents → Upload a PDF
-2. **Test Web Crawling**: Knowledge Base → "Crawl Website" → Enter a docs URL  
+2. **Test Web Crawling**: Knowledge Base → "Crawl Website" → Enter a docs URL
 3. **Test AI Integration**: MCP Dashboard → Copy connection config for your AI client
 
 ## 🔌 Connecting to Cursor IDE
@@ -244,10 +267,10 @@ To connect Cursor to your Archon MCP server, add this configuration:
     "archon": {
       "command": "docker",
       "args": [
-        "exec", 
+        "exec",
         "-i",
         "-e", "TRANSPORT=stdio",
-        "-e", "HOST=localhost", 
+        "-e", "HOST=localhost",
         "-e", "PORT=8051",
         "archon-mcp",
         "python", "src/mcp_server.py"
@@ -271,7 +294,7 @@ Check the **[MCP Overview](./mcp-overview)** for specific connection instruction
 
 ### Immediate Actions
 1. **📚 [Build Your Knowledge Base](#building-your-knowledge-base)** - Start crawling and uploading content
-2. **🔌 [Connect Your AI Client](./mcp-overview)** - Set up Cursor, Windsurf, or Claude Desktop  
+2. **🔌 [Connect Your AI Client](./mcp-overview)** - Set up Cursor, Windsurf, or Claude Desktop
 3. **📊 [Monitor Performance](./configuration.mdx)** - Set up Logfire for real-time debugging
 
 ### Building Your Knowledge Base
@@ -324,7 +347,7 @@ This documentation is organized for different use cases:
 ### 🚀 Getting Started (You Are Here)
 **QuickStart guide** to get Archon running in minutes
 
-### 🔌 MCP Integration  
+### 🔌 MCP Integration
 **[MCP Overview](./mcp-overview)** - Connect Cursor, Windsurf, Claude Desktop, and other MCP clients
 
 ### 🧠 RAG & Search
@@ -407,4 +430,4 @@ curl -X POST http://localhost:8080/api/rag/query \
 <p align="center">
   <strong>Supercharging AI IDE's with knowledge and tasks</strong><br/>
   <em>Transform your AI coding experience with Archon</em>
-</p> 
+</p>

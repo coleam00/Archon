@@ -12,10 +12,12 @@ import type { CreateTaskRequest, DatabaseTaskStatus, Task, TaskCounts, UpdateTas
 export const taskService = {
   /**
    * Get all tasks for a project
+   * Defaults to excluding large fields to reduce payload size.
    */
-  async getTasksByProject(projectId: string): Promise<Task[]> {
+  async getTasksByProject(projectId: string, excludeLargeFields = true): Promise<Task[]> {
     try {
-      const tasks = await callAPIWithETag<Task[]>(`/api/projects/${projectId}/tasks`);
+      const params = excludeLargeFields ? "?exclude_large_fields=true" : "";
+      const tasks = await callAPIWithETag<Task[]>(`/api/projects/${projectId}/tasks${params}`);
 
       // Return tasks as-is; UI uses DB status values (todo/doing/review/done)
       return tasks;
@@ -34,6 +36,18 @@ export const taskService = {
       return task;
     } catch (error) {
       console.error(`Failed to get task ${taskId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get full task details (includes large fields)
+   */
+  async getTaskDetails(taskId: string): Promise<Task> {
+    try {
+      return await callAPIWithETag<Task>(`/api/tasks/${taskId}/details`);
+    } catch (error) {
+      console.error(`Failed to get task details ${taskId}:`, error);
       throw error;
     }
   },

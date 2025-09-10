@@ -8,6 +8,7 @@ import type { CreateTaskRequest, Task, UpdateTaskRequest } from "../types";
 // Query keys factory for tasks
 export const taskKeys = {
   all: (projectId: string) => ["projects", projectId, "tasks"] as const,
+  details: (taskId: string) => ["tasks", taskId, "details"] as const,
 };
 
 // Fetch tasks for a specific project
@@ -26,6 +27,18 @@ export function useProjectTasks(projectId: string | undefined, enabled = true) {
     staleTime: 10000, // Consider data stale after 10 seconds
   });
 }
+
+
+// Fetch full task details lazily (includes large fields)
+export function useTaskDetails(taskId?: string, opts?: { enabled?: boolean }) {
+  return useQuery<Task>({
+    queryKey: taskId ? taskKeys.details(taskId) : ["task-details-undefined"],
+    queryFn: () => taskService.getTaskDetails(taskId!),
+    enabled: !!taskId && (opts?.enabled ?? true),
+    staleTime: 30_000,
+  });
+}
+
 
 // Create task mutation with optimistic updates
 export function useCreateTask() {
