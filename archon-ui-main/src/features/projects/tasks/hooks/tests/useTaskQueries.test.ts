@@ -15,10 +15,13 @@ vi.mock("../../services", () => ({
   },
 }));
 
+// Create stable toast mock
+const showToastMock = vi.fn();
+
 // Mock the toast hook
 vi.mock("../../../../ui/hooks/useToast", () => ({
   useToast: () => ({
-    showToast: vi.fn(),
+    showToast: showToastMock,
   }),
 }));
 
@@ -46,6 +49,7 @@ const createWrapper = () => {
 describe("useTaskQueries", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    showToastMock.mockClear();
   });
 
   describe("taskKeys", () => {
@@ -174,6 +178,14 @@ describe("useTaskQueries", () => {
       await waitFor(() => {
         expect(result.current.isSuccess).toBe(true);
       });
+
+      // Verify the service was called with the minimal payload
+      // The service/backend handles providing defaults, not the hook
+      expect(taskService.createTask).toHaveBeenCalledWith({
+        project_id: "project-123",
+        title: "Minimal Task",
+        description: "",
+      });
     });
 
     it("should rollback on error", async () => {
@@ -190,6 +202,14 @@ describe("useTaskQueries", () => {
           description: "This will fail",
         }),
       ).rejects.toThrow("Network error");
+
+      // Verify error feedback was shown to user
+      await waitFor(() => {
+        expect(showToastMock).toHaveBeenCalledWith(
+          expect.stringContaining("Failed to create task"),
+          "error",
+        );
+      });
     });
   });
 });
