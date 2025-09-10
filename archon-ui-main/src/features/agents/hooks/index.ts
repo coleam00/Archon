@@ -33,35 +33,41 @@ export const useAgents = () => {
   const testProvider = useTestProvider();
 
   // Transform services data to AgentConfig format for compatibility
-  const transformedAgents: AgentConfig[] = services.agents.map((agent) => ({
-    id: agent.service_name,
-    name: agent.display_name,
-    icon: agent.icon || "🤖",
-    description: agent.description || "",
-    category: "agent" as const,
-    supportsTemperature: agent.supports_temperature,
-    supportsMaxTokens: agent.supports_max_tokens,
-    defaultModel: agent.default_model || "openai:gpt-4o-mini",
-    modelType: agent.model_type as "llm" | "embedding",
-    costProfile: (agent.cost_profile || "medium") as "high" | "medium" | "low",
-  }));
-
-  const transformedBackendServices: AgentConfig[] =
-    services.backendServices.map((service) => ({
-      id: service.service_name,
-      name: service.display_name,
-      icon: service.icon || "⚙️",
-      description: service.description || "",
-      category: "service" as const,
-      supportsTemperature: service.supports_temperature,
-      supportsMaxTokens: service.supports_max_tokens,
-      defaultModel: service.default_model || "openai:gpt-4o-mini",
-      modelType: service.model_type as "llm" | "embedding",
-      costProfile: (service.cost_profile || "medium") as
+  const transformedAgents: AgentConfig[] = (services.agents ?? []).map(
+    (agent) => ({
+      id: agent.service_name,
+      name: agent.display_name,
+      icon: agent.icon || "🤖",
+      description: agent.description || "",
+      category: "agent" as const,
+      supportsTemperature: agent.supports_temperature,
+      supportsMaxTokens: agent.supports_max_tokens,
+      defaultModel: agent.default_model || "",
+      modelType: (agent.model_type ?? "llm") as "llm" | "embedding",
+      costProfile: (agent.cost_profile || "medium") as
         | "high"
         | "medium"
         | "low",
-    }));
+    })
+  );
+
+  const transformedBackendServices: AgentConfig[] = (
+    services.backendServices ?? []
+  ).map((service) => ({
+    id: service.service_name,
+    name: service.display_name,
+    icon: service.icon || "⚙️",
+    description: service.description || "",
+    category: "service" as const,
+    supportsTemperature: service.supports_temperature,
+    supportsMaxTokens: service.supports_max_tokens,
+    defaultModel: service.default_model || "",
+    modelType: (service.model_type ?? "llm") as "llm" | "embedding",
+    costProfile: (service.cost_profile || "medium") as
+      | "high"
+      | "medium"
+      | "low",
+  }));
 
   // Computed states
   const isLoading =
