@@ -3,7 +3,7 @@
  * Implements progressive loading for documents and code examples
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useKnowledgeChunks, useKnowledgeCodeExamples } from "../../hooks/useKnowledgeQueries";
 import type { CodeExample, DocumentChunk } from "../../types";
 
@@ -65,28 +65,36 @@ export function usePaginatedInspectorData({
   });
 
   // Update accumulated documents when new data arrives
-  useMemo(() => {
-    if (docsResponse?.chunks) {
-      if (docsOffset === 0) {
-        // First page - replace all
-        setAllDocs(docsResponse.chunks);
-      } else {
-        // Append new chunks
-        setAllDocs((prev) => [...prev, ...docsResponse.chunks]);
-      }
+  useEffect(() => {
+    if (!docsResponse?.chunks) return;
+    
+    if (docsOffset === 0) {
+      // First page - replace all
+      setAllDocs(docsResponse.chunks);
+    } else {
+      // Append new chunks, deduplicating by id
+      setAllDocs((prev) => {
+        const existingIds = new Set(prev.map(d => d.id));
+        const newChunks = docsResponse.chunks.filter(chunk => !existingIds.has(chunk.id));
+        return [...prev, ...newChunks];
+      });
     }
   }, [docsResponse, docsOffset]);
 
   // Update accumulated code examples when new data arrives
-  useMemo(() => {
-    if (codeResponse?.code_examples) {
-      if (codeOffset === 0) {
-        // First page - replace all
-        setAllCode(codeResponse.code_examples);
-      } else {
-        // Append new examples
-        setAllCode((prev) => [...prev, ...codeResponse.code_examples]);
-      }
+  useEffect(() => {
+    if (!codeResponse?.code_examples) return;
+    
+    if (codeOffset === 0) {
+      // First page - replace all
+      setAllCode(codeResponse.code_examples);
+    } else {
+      // Append new examples, deduplicating by id
+      setAllCode((prev) => {
+        const existingIds = new Set(prev.map(c => c.id));
+        const newExamples = codeResponse.code_examples.filter(example => !existingIds.has(example.id));
+        return [...prev, ...newExamples];
+      });
     }
   }, [codeResponse, codeOffset]);
 
@@ -142,6 +150,12 @@ export function usePaginatedInspectorData({
     setCodeOffset(0);
     setAllCode([]);
   }, []);
+
+  // Reset when source changes or becomes enabled
+  useEffect(() => {
+    resetDocs();
+    resetCode();
+  }, [sourceId, enabled, resetDocs, resetCode]);
 
   return {
     documents: {

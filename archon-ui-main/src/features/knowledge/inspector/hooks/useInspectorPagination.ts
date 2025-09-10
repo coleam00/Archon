@@ -38,14 +38,14 @@ export function useInspectorPagination({
       ...knowledgeKeys.detail(sourceId),
       viewMode === "documents" ? "chunks-infinite" : "code-examples-infinite",
     ],
-    // @ts-expect-error - TanStack Query v5 type inference issues with complex generics
-    queryFn: ({ pageParam }: { pageParam: number }) => {
+    queryFn: ({ pageParam }) => {
+      const page = Number(pageParam) || 0;
       const service =
         viewMode === "documents" ? knowledgeService.getKnowledgeItemChunks : knowledgeService.getCodeExamples;
 
       return service(sourceId, {
         limit: PAGE_SIZE,
-        offset: pageParam * PAGE_SIZE,
+        offset: page * PAGE_SIZE,
       });
     },
     getNextPageParam: (lastPage, allPages) => {
