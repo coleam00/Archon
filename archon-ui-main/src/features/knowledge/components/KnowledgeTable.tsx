@@ -121,7 +121,15 @@ export const KnowledgeTable: React.FC<KnowledgeTableProps> = ({ items, onViewDoc
                     className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-cyan-400 transition-colors"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />
-                    <span className="truncate max-w-xs">{new URL(item.url).hostname}</span>
+                    <span className="truncate max-w-xs">
+                      {(() => {
+                        try {
+                          return new URL(item.url).hostname;
+                        } catch {
+                          return item.url;
+                        }
+                      })()}
+                    </span>
                   </a>
                 </td>
 
