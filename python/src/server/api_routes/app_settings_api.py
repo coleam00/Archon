@@ -153,12 +153,19 @@ async def update_app_setting(key: str, value: str):
         
         client = get_supabase_client()
         
-        # Update or insert the setting
-        result = client.table("archon_settings").upsert({
-            "key": key,
+        # First try to update existing record
+        update_result = client.table("archon_settings").update({
             "value": value,
             "is_encrypted": False
-        }).execute()
+        }).eq("key", key).execute()
+        
+        # If no rows were updated, insert new record
+        if not update_result.data:
+            insert_result = client.table("archon_settings").insert({
+                "key": key,
+                "value": value,
+                "is_encrypted": False
+            }).execute()
         
         return {"success": True, "key": key, "value": value}
         

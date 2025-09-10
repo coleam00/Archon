@@ -5,7 +5,6 @@ import {
   ChevronDown,
   ChevronUp,
   Palette,
-  Key,
   Brain,
   Code,
   FileCode,
@@ -16,7 +15,6 @@ import { useToast } from "../contexts/ToastContext";
 import { useSettings } from "../contexts/SettingsContext";
 import { useStaggeredEntrance } from "../hooks/useStaggeredEntrance";
 import { FeaturesSection } from "../components/settings/FeaturesSection";
-import { APIKeysSection } from "../components/settings/APIKeysSection";
 import { RAGSettings } from "../components/settings/RAGSettings";
 import { CodeExtractionSettings } from "../components/settings/CodeExtractionSettings";
 import { IDEGlobalRules } from "../components/settings/IDEGlobalRules";
@@ -120,7 +118,6 @@ export const SettingsPage = () => {
         </motion.h1>
       </motion.div>
 
-
       {/* Main content with two-column layout */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Left Column */}
@@ -153,17 +150,6 @@ export const SettingsPage = () => {
 
         {/* Right Column */}
         <div className="space-y-6">
-          <motion.div variants={itemVariants}>
-            <CollapsibleSettingsCard
-              title="API Keys"
-              icon={Key}
-              accentColor="pink"
-              storageKey="api-keys"
-              defaultExpanded={true}
-            >
-              <APIKeysSection />
-            </CollapsibleSettingsCard>
-          </motion.div>
           <motion.div variants={itemVariants}>
             <CollapsibleSettingsCard
               title="RAG Settings"
