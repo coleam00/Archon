@@ -118,7 +118,9 @@ export const ServiceRegistryProvider: React.FC<
     const configs: Record<string, ServiceInfo> = {};
 
     for (const service of services) {
-      configs[service.service_name] = service;
+      if (service.category === 'agent') {
+        configs[service.service_name] = service;
+      }
     }
 
     return configs;
