@@ -32,8 +32,37 @@ class TestNoZeroEmbeddings:
     async def test_async_quota_exhausted_returns_failure(self) -> None:
         """Test that quota exhaustion returns failure result instead of zeros."""
         with patch(
-            "src.server.services.embeddings.embedding_service.get_llm_client"
-        ) as mock_client:
+            "src.server.services.llm_provider_service._get_provider_config"
+        ) as mock_get_provider_config, \
+             patch(
+                 "src.server.services.provider_optimization_service.ProviderOptimizationService.get_provider_optimization"
+             ) as mock_get_optimization, \
+             patch(
+                 "src.server.services.embeddings.embedding_service.get_llm_client"
+             ) as mock_client:
+            
+            # Mock provider config
+            mock_get_provider_config.return_value = {
+                "provider": "openai",
+                "model": "text-embedding-3-small",
+                "api_key": "test-key",
+                "base_url": None,
+                "service_config": {"default_model": "openai:text-embedding-3-small"}
+            }
+            
+            # Mock optimization service
+            mock_get_optimization.return_value = {
+                "provider": "openai",
+                "model_id": "text-embedding-3-small",
+                "model_string": "openai:text-embedding-3-small",
+                "embedding_dimensions": 1536,
+                "batch_size": 100,
+                "supports_dimensions": True,
+                "base_url": None,
+                "cost_per_million": "medium",
+                "max_input_tokens": 8000
+            }
+            
             # Mock the client to raise quota error
             mock_ctx = AsyncMock()
             mock_ctx.__aenter__.return_value.embeddings.create.side_effect = openai.RateLimitError(
@@ -51,8 +80,37 @@ class TestNoZeroEmbeddings:
     async def test_async_rate_limit_raises_exception(self) -> None:
         """Test that rate limit errors raise exception after retries."""
         with patch(
-            "src.server.services.embeddings.embedding_service.get_llm_client"
-        ) as mock_client:
+            "src.server.services.llm_provider_service._get_provider_config"
+        ) as mock_get_provider_config, \
+             patch(
+                 "src.server.services.provider_optimization_service.ProviderOptimizationService.get_provider_optimization"
+             ) as mock_get_optimization, \
+             patch(
+                 "src.server.services.embeddings.embedding_service.get_llm_client"
+             ) as mock_client:
+            
+            # Mock provider config
+            mock_get_provider_config.return_value = {
+                "provider": "openai",
+                "model": "text-embedding-3-small",
+                "api_key": "test-key",
+                "base_url": None,
+                "service_config": {"default_model": "openai:text-embedding-3-small"}
+            }
+            
+            # Mock optimization service
+            mock_get_optimization.return_value = {
+                "provider": "openai",
+                "model_id": "text-embedding-3-small",
+                "model_string": "openai:text-embedding-3-small",
+                "embedding_dimensions": 1536,
+                "batch_size": 100,
+                "supports_dimensions": True,
+                "base_url": None,
+                "cost_per_million": "medium",
+                "max_input_tokens": 8000
+            }
+            
             # Mock the client to raise rate limit error
             mock_ctx = AsyncMock()
             mock_ctx.__aenter__.return_value.embeddings.create.side_effect = openai.RateLimitError(
@@ -69,8 +127,37 @@ class TestNoZeroEmbeddings:
     async def test_async_api_error_raises_exception(self) -> None:
         """Test that API errors raise exception instead of returning zeros."""
         with patch(
-            "src.server.services.embeddings.embedding_service.get_llm_client"
-        ) as mock_client:
+            "src.server.services.llm_provider_service._get_provider_config"
+        ) as mock_get_provider_config, \
+             patch(
+                 "src.server.services.provider_optimization_service.ProviderOptimizationService.get_provider_optimization"
+             ) as mock_get_optimization, \
+             patch(
+                 "src.server.services.embeddings.embedding_service.get_llm_client"
+             ) as mock_client:
+            
+            # Mock provider config
+            mock_get_provider_config.return_value = {
+                "provider": "openai",
+                "model": "text-embedding-3-small",
+                "api_key": "test-key",
+                "base_url": None,
+                "service_config": {"default_model": "openai:text-embedding-3-small"}
+            }
+            
+            # Mock optimization service
+            mock_get_optimization.return_value = {
+                "provider": "openai",
+                "model_id": "text-embedding-3-small",
+                "model_string": "openai:text-embedding-3-small",
+                "embedding_dimensions": 1536,
+                "batch_size": 100,
+                "supports_dimensions": True,
+                "base_url": None,
+                "cost_per_million": "medium",
+                "max_input_tokens": 8000
+            }
+            
             # Mock the client to raise generic error
             mock_ctx = AsyncMock()
             mock_ctx.__aenter__.return_value.embeddings.create.side_effect = Exception(
@@ -87,8 +174,37 @@ class TestNoZeroEmbeddings:
     async def test_batch_handles_partial_failures(self) -> None:
         """Test that batch processing can handle partial failures gracefully."""
         with patch(
-            "src.server.services.embeddings.embedding_service.get_llm_client"
-        ) as mock_client:
+            "src.server.services.llm_provider_service._get_provider_config"
+        ) as mock_get_provider_config, \
+             patch(
+                 "src.server.services.provider_optimization_service.ProviderOptimizationService.get_provider_optimization"
+             ) as mock_get_optimization, \
+             patch(
+                 "src.server.services.embeddings.embedding_service.get_llm_client"
+             ) as mock_client:
+            
+            # Mock provider config
+            mock_get_provider_config.return_value = {
+                "provider": "openai",
+                "model": "text-embedding-3-small",
+                "api_key": "test-key",
+                "base_url": None,
+                "service_config": {"default_model": "openai:text-embedding-3-small"}
+            }
+            
+            # Mock optimization service
+            mock_get_optimization.return_value = {
+                "provider": "openai",
+                "model_id": "text-embedding-3-small",
+                "model_string": "openai:text-embedding-3-small",
+                "embedding_dimensions": 1536,
+                "batch_size": 2,  # Small batch size for testing
+                "supports_dimensions": True,
+                "base_url": None,
+                "cost_per_million": "medium",
+                "max_input_tokens": 8000
+            }
+            
             # Mock successful response for first batch, failure for second
             mock_ctx = AsyncMock()
             mock_response = Mock()
@@ -106,33 +222,56 @@ class TestNoZeroEmbeddings:
                 new_callable=AsyncMock,
                 return_value="text-embedding-ada-002",
             ):
-                # Mock credential service to return batch size of 2
-                with patch(
-                    "src.server.services.embeddings.embedding_service.credential_service.get_credentials_by_category",
-                    new_callable=AsyncMock,
-                    return_value={"EMBEDDING_BATCH_SIZE": "2"},
-                ):
-                    # Process 4 texts (batch size will be 2)
-                    texts = ["text1", "text2", "text3", "text4"]
-                    result = await create_embeddings_batch(texts)
+                # Process 4 texts (batch size will be 2)
+                texts = ["text1", "text2", "text3", "text4"]
+                result = await create_embeddings_batch(texts)
 
-                    # Check result structure
-                    assert isinstance(result, EmbeddingBatchResult)
-                    assert result.success_count == 2  # First batch succeeded
-                    assert result.failure_count == 2  # Second batch failed
-                    assert len(result.embeddings) == 2
-                    assert len(result.failed_items) == 2
+                # Check result structure
+                assert isinstance(result, EmbeddingBatchResult)
+                assert result.success_count == 2  # First batch succeeded
+                assert result.failure_count == 2  # Second batch failed
+                assert len(result.embeddings) == 2
+                assert len(result.failed_items) == 2
 
-                    # Verify no zero embeddings were created
-                    for embedding in result.embeddings:
-                        assert not all(v == 0.0 for v in embedding)
+                # Verify no zero embeddings were created
+                for embedding in result.embeddings:
+                    assert not all(v == 0.0 for v in embedding)
 
     @pytest.mark.asyncio
     async def test_configurable_embedding_dimensions(self) -> None:
         """Test that embedding dimensions can be configured via settings."""
         with patch(
-            "src.server.services.embeddings.embedding_service.get_llm_client"
-        ) as mock_client:
+            "src.server.services.llm_provider_service._get_provider_config"
+        ) as mock_get_provider_config, \
+             patch(
+                 "src.server.services.provider_optimization_service.ProviderOptimizationService.get_provider_optimization"
+             ) as mock_get_optimization, \
+             patch(
+                 "src.server.services.embeddings.embedding_service.get_llm_client"
+             ) as mock_client:
+            
+            # Mock provider config
+            mock_get_provider_config.return_value = {
+                "provider": "openai",
+                "model": "text-embedding-3-large",
+                "api_key": "test-key",
+                "base_url": None,
+                "service_config": {"default_model": "openai:text-embedding-3-large"}
+            }
+            
+            # Mock optimization service
+            mock_get_optimization.return_value = {
+                "provider": "openai",
+                "model_id": "text-embedding-3-large",
+                "model_string": "openai:text-embedding-3-large",
+                "embedding_dimensions": 3072,  # Different dimensions
+                "batch_size": 100,
+                "supports_dimensions": True,
+                "base_url": None,
+                "cost_per_million": "medium",
+                "max_input_tokens": 8000
+            }
+            
             # Mock successful response
             mock_ctx = AsyncMock()
             mock_create = AsyncMock()
@@ -149,29 +288,52 @@ class TestNoZeroEmbeddings:
                 new_callable=AsyncMock,
                 return_value="text-embedding-3-large",
             ):
-                # Mock credential service to return custom dimensions
-                with patch(
-                    "src.server.services.embeddings.embedding_service.credential_service.get_credentials_by_category",
-                    new_callable=AsyncMock,
-                    return_value={"EMBEDDING_DIMENSIONS": "3072"},
-                ):
-                    result = await create_embeddings_batch(["test text"])
+                result = await create_embeddings_batch(["test text"])
 
-                    # Verify the dimensions parameter was passed correctly
-                    mock_create.assert_called_once()
-                    call_args = mock_create.call_args
-                    assert call_args.kwargs["dimensions"] == 3072
+                # Verify the dimensions parameter was passed correctly
+                mock_create.assert_called_once()
+                call_args = mock_create.call_args
+                assert call_args.kwargs["dimensions"] == 3072
 
-                    # Verify result
-                    assert result.success_count == 1
-                    assert len(result.embeddings[0]) == 3072
+                # Verify result
+                assert result.success_count == 1
+                assert len(result.embeddings[0]) == 3072
 
     @pytest.mark.asyncio
     async def test_default_embedding_dimensions(self) -> None:
         """Test that default dimensions (1536) are used when not configured."""
         with patch(
-            "src.server.services.embeddings.embedding_service.get_llm_client"
-        ) as mock_client:
+            "src.server.services.llm_provider_service._get_provider_config"
+        ) as mock_get_provider_config, \
+             patch(
+                 "src.server.services.provider_optimization_service.ProviderOptimizationService.get_provider_optimization"
+             ) as mock_get_optimization, \
+             patch(
+                 "src.server.services.embeddings.embedding_service.get_llm_client"
+             ) as mock_client:
+            
+            # Mock provider config
+            mock_get_provider_config.return_value = {
+                "provider": "openai",
+                "model": "text-embedding-3-small",
+                "api_key": "test-key",
+                "base_url": None,
+                "service_config": {"default_model": "openai:text-embedding-3-small"}
+            }
+            
+            # Mock optimization service
+            mock_get_optimization.return_value = {
+                "provider": "openai",
+                "model_id": "text-embedding-3-small",
+                "model_string": "openai:text-embedding-3-small",
+                "embedding_dimensions": 1536,  # Default dimensions
+                "batch_size": 100,
+                "supports_dimensions": True,
+                "base_url": None,
+                "cost_per_million": "medium",
+                "max_input_tokens": 8000
+            }
+            
             # Mock successful response
             mock_ctx = AsyncMock()
             mock_create = AsyncMock()
@@ -188,29 +350,52 @@ class TestNoZeroEmbeddings:
                 new_callable=AsyncMock,
                 return_value="text-embedding-3-small",
             ):
-                # Mock credential service to return empty settings (no dimensions specified)
-                with patch(
-                    "src.server.services.embeddings.embedding_service.credential_service.get_credentials_by_category",
-                    new_callable=AsyncMock,
-                    return_value={},
-                ):
-                    result = await create_embeddings_batch(["test text"])
+                result = await create_embeddings_batch(["test text"])
 
-                    # Verify the default dimensions parameter was used
-                    mock_create.assert_called_once()
-                    call_args = mock_create.call_args
-                    assert call_args.kwargs["dimensions"] == 1536
+                # Verify the default dimensions parameter was used
+                mock_create.assert_called_once()
+                call_args = mock_create.call_args
+                assert call_args.kwargs["dimensions"] == 1536
 
-                    # Verify result
-                    assert result.success_count == 1
-                    assert len(result.embeddings[0]) == 1536
+                # Verify result
+                assert result.success_count == 1
+                assert len(result.embeddings[0]) == 1536
 
     @pytest.mark.asyncio
     async def test_batch_quota_exhausted_stops_process(self) -> None:
         """Test that quota exhaustion stops processing remaining batches."""
         with patch(
-            "src.server.services.embeddings.embedding_service.get_llm_client"
-        ) as mock_client:
+            "src.server.services.llm_provider_service._get_provider_config"
+        ) as mock_get_provider_config, \
+             patch(
+                 "src.server.services.provider_optimization_service.ProviderOptimizationService.get_provider_optimization"
+             ) as mock_get_optimization, \
+             patch(
+                 "src.server.services.embeddings.embedding_service.get_llm_client"
+             ) as mock_client:
+            
+            # Mock provider config
+            mock_get_provider_config.return_value = {
+                "provider": "openai",
+                "model": "text-embedding-ada-002",
+                "api_key": "test-key",
+                "base_url": None,
+                "service_config": {"default_model": "openai:text-embedding-ada-002"}
+            }
+            
+            # Mock optimization service
+            mock_get_optimization.return_value = {
+                "provider": "openai",
+                "model_id": "text-embedding-ada-002",
+                "model_string": "openai:text-embedding-ada-002",
+                "embedding_dimensions": 1536,
+                "batch_size": 100,
+                "supports_dimensions": True,
+                "base_url": None,
+                "cost_per_million": "medium",
+                "max_input_tokens": 8000
+            }
+            
             # Mock quota exhaustion
             mock_ctx = AsyncMock()
             mock_ctx.__aenter__.return_value.embeddings.create.side_effect = openai.RateLimitError(
@@ -250,8 +435,37 @@ class TestNoZeroEmbeddings:
 
         # Test: Batch function with error should return failure result, not zeros
         with patch(
-            "src.server.services.embeddings.embedding_service.get_llm_client"
-        ) as mock_client:
+            "src.server.services.llm_provider_service._get_provider_config"
+        ) as mock_get_provider_config, \
+             patch(
+                 "src.server.services.provider_optimization_service.ProviderOptimizationService.get_provider_optimization"
+             ) as mock_get_optimization, \
+             patch(
+                 "src.server.services.embeddings.embedding_service.get_llm_client"
+             ) as mock_client:
+            
+            # Mock provider config
+            mock_get_provider_config.return_value = {
+                "provider": "openai",
+                "model": "text-embedding-3-small",
+                "api_key": "test-key",
+                "base_url": None,
+                "service_config": {"default_model": "openai:text-embedding-3-small"}
+            }
+            
+            # Mock optimization service
+            mock_get_optimization.return_value = {
+                "provider": "openai",
+                "model_id": "text-embedding-3-small",
+                "model_string": "openai:text-embedding-3-small",
+                "embedding_dimensions": 1536,
+                "batch_size": 100,
+                "supports_dimensions": True,
+                "base_url": None,
+                "cost_per_million": "medium",
+                "max_input_tokens": 8000
+            }
+            
             # Mock the client to raise an error
             mock_ctx = AsyncMock()
             mock_ctx.__aenter__.return_value.embeddings.create.side_effect = Exception("Test error")

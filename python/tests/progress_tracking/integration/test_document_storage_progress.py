@@ -81,17 +81,27 @@ class TestDocumentStorageProgressIntegration:
 
     @pytest.mark.asyncio
     @patch('src.server.services.storage.document_storage_service.create_embeddings_batch')
-    @patch('src.server.services.credential_service.credential_service')
-    async def test_batch_progress_reporting(self, mock_credentials, mock_create_embeddings, 
+    @patch('httpx.AsyncClient.get')
+    @patch('src.server.services.llm_provider_service._get_provider_config')
+    async def test_batch_progress_reporting(self, mock_get_provider_config, mock_httpx_get, mock_create_embeddings, 
                                           mock_supabase_client, sample_document_data, 
                                           mock_progress_callback):
         """Test that batch progress is reported correctly during document storage."""
         
-        # Setup mock credentials
-        mock_credentials.get_credentials_by_category.return_value = {
-            "DOCUMENT_STORAGE_BATCH_SIZE": "3",  # Small batch size for testing
-            "USE_CONTEXTUAL_EMBEDDINGS": "false"
+        # Setup mock provider config to avoid HTTP calls
+        mock_get_provider_config.return_value = {
+            "provider": "openai",
+            "model": "text-embedding-3-small", 
+            "api_key": "test-key",
+            "base_url": None,
+            "service_config": {"default_model": "openai:text-embedding-3-small"}
         }
+        
+        # Mock the embedding model config HTTP call
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"embedding_dimensions": 1536}
+        mock_httpx_get.return_value = mock_response
         
         # Mock embedding creation
         mock_create_embeddings.return_value = create_mock_embedding_result(3)
@@ -128,16 +138,26 @@ class TestDocumentStorageProgressIntegration:
 
     @pytest.mark.asyncio
     @patch('src.server.services.storage.document_storage_service.create_embeddings_batch')
-    @patch('src.server.services.credential_service.credential_service')
-    async def test_progress_callback_signature(self, mock_credentials, mock_create_embeddings,
+    @patch('httpx.AsyncClient.get')
+    @patch('src.server.services.llm_provider_service._get_provider_config')
+    async def test_progress_callback_signature(self, mock_get_provider_config, mock_httpx_get, mock_create_embeddings,
                                              mock_supabase_client, sample_document_data):
         """Test that progress callback is called with correct signature."""
         
-        # Setup
-        mock_credentials.get_credentials_by_category.return_value = {
-            "DOCUMENT_STORAGE_BATCH_SIZE": "6",  # Process all in one batch
-            "USE_CONTEXTUAL_EMBEDDINGS": "false"
+        # Setup mock provider config
+        mock_get_provider_config.return_value = {
+            "provider": "openai",
+            "model": "text-embedding-3-small", 
+            "api_key": "test-key",
+            "base_url": None,
+            "service_config": {"default_model": "openai:text-embedding-3-small"}
         }
+        
+        # Mock the embedding model config HTTP call
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"embedding_dimensions": 1536}
+        mock_httpx_get.return_value = mock_response
         
         mock_create_embeddings.return_value = create_mock_embedding_result(6)
         
@@ -181,15 +201,27 @@ class TestDocumentStorageProgressIntegration:
 
     @pytest.mark.asyncio
     @patch('src.server.services.storage.document_storage_service.create_embeddings_batch')
-    @patch('src.server.services.credential_service.credential_service')
-    async def test_cancellation_support(self, mock_credentials, mock_create_embeddings,
+    @patch('httpx.AsyncClient.get')
+    @patch('src.server.services.llm_provider_service._get_provider_config')
+    async def test_cancellation_support(self, mock_get_provider_config, mock_httpx_get, mock_create_embeddings,
                                        mock_supabase_client, sample_document_data):
         """Test that cancellation is handled correctly during document storage."""
         
-        mock_credentials.get_credentials_by_category.return_value = {
-            "DOCUMENT_STORAGE_BATCH_SIZE": "2",
-            "USE_CONTEXTUAL_EMBEDDINGS": "false"
+        # Setup mock provider config
+        # Setup mock provider config
+        mock_get_provider_config.return_value = {
+            "provider": "openai",
+            "model": "text-embedding-3-small", 
+            "api_key": "test-key",
+            "base_url": None,
+            "service_config": {"default_model": "openai:text-embedding-3-small"}
         }
+        
+        # Mock the embedding model config HTTP call
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"embedding_dimensions": 1536}
+        mock_httpx_get.return_value = mock_response
         
         mock_create_embeddings.return_value = create_mock_embedding_result(2)
         
@@ -215,15 +247,27 @@ class TestDocumentStorageProgressIntegration:
 
     @pytest.mark.asyncio
     @patch('src.server.services.storage.document_storage_service.create_embeddings_batch')
-    @patch('src.server.services.credential_service.credential_service')
-    async def test_error_handling_in_progress_reporting(self, mock_credentials, mock_create_embeddings,
+    @patch('httpx.AsyncClient.get')
+    @patch('src.server.services.llm_provider_service._get_provider_config')
+    async def test_error_handling_in_progress_reporting(self, mock_get_provider_config, mock_httpx_get, mock_create_embeddings,
                                                       mock_supabase_client, sample_document_data):
         """Test that errors in progress reporting don't crash the storage process."""
         
-        mock_credentials.get_credentials_by_category.return_value = {
-            "DOCUMENT_STORAGE_BATCH_SIZE": "3",
-            "USE_CONTEXTUAL_EMBEDDINGS": "false"
+        # Setup mock provider config
+        # Setup mock provider config
+        mock_get_provider_config.return_value = {
+            "provider": "openai",
+            "model": "text-embedding-3-small", 
+            "api_key": "test-key",
+            "base_url": None,
+            "service_config": {"default_model": "openai:text-embedding-3-small"}
         }
+        
+        # Mock the embedding model config HTTP call
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"embedding_dimensions": 1536}
+        mock_httpx_get.return_value = mock_response
         
         mock_create_embeddings.return_value = create_mock_embedding_result(3)
         

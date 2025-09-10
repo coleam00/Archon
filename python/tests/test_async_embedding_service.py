@@ -359,22 +359,43 @@ class TestAsyncEmbeddingService:
                     "src.server.services.embeddings.embedding_service.get_embedding_model"
                 ) as mock_get_model:
                     with patch(
-                        "src.server.services.embeddings.embedding_service.credential_service"
-                    ) as mock_cred:
-                        mock_cred.get_credentials_by_category = AsyncMock(
-                            return_value={"EMBEDDING_BATCH_SIZE": "10"}
-                        )
-                        mock_get_model.return_value = "custom-model"
+                        "src.server.services.llm_provider_service._get_provider_config"
+                    ) as mock_get_provider_config:
+                        with patch(
+                            "src.server.services.provider_optimization_service.ProviderOptimizationService.get_provider_optimization"
+                        ) as mock_get_optimization:
+                            # Mock provider config
+                            mock_get_provider_config.return_value = {
+                                "provider": "custom-provider",
+                                "model": "custom-model",
+                                "api_key": "test-key",
+                                "base_url": None,
+                                "service_config": {"default_model": "custom-provider:custom-model"}
+                            }
+                            
+                            # Mock optimization service
+                            mock_get_optimization.return_value = {
+                                "provider": "custom-provider",
+                                "model_id": "custom-model",
+                                "model_string": "custom-provider:custom-model",
+                                "embedding_dimensions": 1536,
+                                "batch_size": 10,
+                                "supports_dimensions": True,
+                                "base_url": None,
+                                "cost_per_million": "medium",
+                                "max_input_tokens": 8000
+                            }
 
-                        mock_get_client.return_value = AsyncContextManager(mock_llm_client)
+                            mock_get_model.return_value = "custom-model"
+                            mock_get_client.return_value = AsyncContextManager(mock_llm_client)
 
-                        await create_embedding("test text", provider="custom-provider")
+                            await create_embedding("test text", provider="custom-provider")
 
-                        # Verify provider was passed to get_llm_client
-                        mock_get_client.assert_called_with(
-                            provider="custom-provider", use_embedding_provider=True
-                        )
-                        mock_get_model.assert_called_with(provider="custom-provider")
+                            # Verify provider was passed to get_llm_client
+                            mock_get_client.assert_called_with(
+                                provider="custom-provider", use_embedding_provider=True
+                            )
+                            mock_get_model.assert_called_with(provider="custom-provider")
 
     @pytest.mark.asyncio
     async def test_create_embeddings_batch_large_batch_splitting(
@@ -399,26 +420,46 @@ class TestAsyncEmbeddingService:
                     return_value="text-embedding-3-small",
                 ):
                     with patch(
-                        "src.server.services.embeddings.embedding_service.credential_service"
-                    ) as mock_cred:
-                        # Set batch size to 2
-                        mock_cred.get_credentials_by_category = AsyncMock(
-                            return_value={"EMBEDDING_BATCH_SIZE": "2"}
-                        )
+                        "src.server.services.llm_provider_service._get_provider_config"
+                    ) as mock_get_provider_config:
+                        with patch(
+                            "src.server.services.provider_optimization_service.ProviderOptimizationService.get_provider_optimization"
+                        ) as mock_get_optimization:
+                            # Mock provider config
+                            mock_get_provider_config.return_value = {
+                                "provider": "openai",
+                                "model": "text-embedding-3-small",
+                                "api_key": "test-key",
+                                "base_url": None,
+                                "service_config": {"default_model": "openai:text-embedding-3-small"}
+                            }
+                            
+                            # Set batch size to 2
+                            mock_get_optimization.return_value = {
+                                "provider": "openai",
+                                "model_id": "text-embedding-3-small",
+                                "model_string": "openai:text-embedding-3-small",
+                                "embedding_dimensions": 1536,
+                                "batch_size": 2,  # Small batch size for testing
+                                "supports_dimensions": True,
+                                "base_url": None,
+                                "cost_per_million": "medium",
+                                "max_input_tokens": 8000
+                            }
 
-                        mock_get_client.return_value = AsyncContextManager(mock_llm_client)
+                            mock_get_client.return_value = AsyncContextManager(mock_llm_client)
 
-                        # Test with 5 texts (should require 3 API calls: 2+2+1)
-                        texts = ["text1", "text2", "text3", "text4", "text5"]
-                        result = await create_embeddings_batch(texts)
+                            # Test with 5 texts (should require 3 API calls: 2+2+1)
+                            texts = ["text1", "text2", "text3", "text4", "text5"]
+                            result = await create_embeddings_batch(texts)
 
-                        # Should have made 3 API calls due to batching
-                        assert mock_llm_client.embeddings.create.call_count == 3
+                            # Should have made 3 API calls due to batching
+                            assert mock_llm_client.embeddings.create.call_count == 3
 
-                        # Result should be EmbeddingBatchResult
-                        assert isinstance(result, EmbeddingBatchResult)
-                        # Should have 5 embeddings total (for 5 input texts)
-                        # Even though mock returns 2 per call, we only process as many as we requested
-                        assert result.success_count == 5
-                        assert len(result.embeddings) == 5
-                        assert result.texts_processed == texts
+                            # Result should be EmbeddingBatchResult
+                            assert isinstance(result, EmbeddingBatchResult)
+                            # Should have 5 embeddings total (for 5 input texts)
+                            # Even though mock returns 2 per call, we only process as many as we requested
+                            assert result.success_count == 5
+                            assert len(result.embeddings) == 5
+                            assert result.texts_processed == texts

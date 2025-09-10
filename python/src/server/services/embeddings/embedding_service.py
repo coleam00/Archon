@@ -182,15 +182,17 @@ async def create_embeddings_batch(
     ) as span:
         try:
             # Use updated LLM provider service that now uses provider_clean
-            async with get_llm_client(use_embedding_provider=True) as client:
+            async with get_llm_client(provider=provider, use_embedding_provider=True) as client:
                 # Get embedding model from provider_clean system  
-                model = await get_embedding_model()
+                model = await get_embedding_model(provider=provider)
                 # Get provider-specific optimization settings from database
                 from ..provider_optimization_service import ProviderOptimizationService
                 
                 optimization = await ProviderOptimizationService.get_provider_optimization("embedding")
                 
-                provider = optimization["provider"]
+                # Use provided provider override, or fall back to configured provider
+                if provider is None:
+                    provider = optimization["provider"]
                 embedding_dimensions = optimization["embedding_dimensions"]
                 batch_size = optimization["batch_size"]
                 supports_dimensions = optimization["supports_dimensions"]
