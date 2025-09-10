@@ -21,7 +21,8 @@ async def initialize_models_database(
         result: Any = await sync_service.full_sync(force_refresh=force_refresh)
         status: Dict[str, Any] = await sync_service.get_sync_status() or {}
         providers_raw = status.get('providers')
-        providers: Dict[str, Any] = cast(Dict[str, Any], providers_raw) if isinstance(providers_raw, dict) else {}
+        providers: Dict[str, Any] = cast(
+            Dict[str, Any], providers_raw) if isinstance(providers_raw, dict) else {}
         return {
             "status": "initialized",
             "sync_result": result,
