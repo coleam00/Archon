@@ -40,7 +40,7 @@ export function useOperationProgress(
     hasCalledComplete.current = false;
     hasCalledError.current = false;
     consecutiveNotFound.current = 0;
-  }, []);
+  }, [progressId]);
 
   const query = useQuery<ProgressResponse | null>({
     queryKey: progressId ? progressKeys.detail(progressId) : ["progress-undefined"],
