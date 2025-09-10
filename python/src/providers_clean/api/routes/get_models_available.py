@@ -72,6 +72,8 @@ async def get_available_models(
             f"Returned {len(available_models)} models from database for {len(active_providers)} providers")
         return available_models
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to get available models: {e}")
         raise HTTPException(
