@@ -36,7 +36,7 @@ Access at: `https://archon.yourdomain.com`
 
 | Setting | Local Development | LAN/Production |
 |---------|------------------|----------------|
-| **Compose File** | `docker-compose.yml` | `docker-compose.unified.yml` |
+| **Compose File** | `docker-compose.unified.yml` | `docker-compose.unified.yml` |
 | **BIND_IP** | `127.0.0.1` (localhost only) | `0.0.0.0` (LAN access) |
 | **HOST** | `localhost` | `archon.yourdomain.com` |
 | **CORS_ORIGINS** | `http://localhost:3737` | `https://archon.yourdomain.com` |
