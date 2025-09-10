@@ -168,6 +168,9 @@ export function clearETagCache(): void {
  * Useful after mutations that affect specific resources
  */
 export function invalidateETagCache(endpoint: string, method = "GET"): void {
+  // TODO: In test environments, this builds a relative URL while callAPIWithETag builds
+  // an absolute URL (http://localhost:8181/...), causing cache key mismatch.
+  // This prevents cache invalidation from working in tests. Fix when tests need ETag functionality.
   const cleanEndpoint = endpoint.startsWith("/api") ? endpoint.substring(4) : endpoint;
   const fullUrl = `${API_BASE_URL}${cleanEndpoint}`;
   const normalizedMethod = method.toUpperCase();
