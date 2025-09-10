@@ -105,7 +105,7 @@ export const ContentViewer: React.FC<ContentViewerProps> = ({ selectedItem, onCo
       </div>
 
       {/* Content Footer */}
-      {selectedItem.metadata?.relevance_score && (
+      {selectedItem.metadata?.relevance_score != null && (
         <div className="p-3 border-t border-white/10 text-xs text-gray-500 flex-shrink-0">
           Relevance Score: {(selectedItem.metadata.relevance_score * 100).toFixed(0)}%
         </div>
