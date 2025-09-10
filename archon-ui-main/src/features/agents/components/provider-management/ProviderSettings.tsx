@@ -59,6 +59,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = React.memo(
         try {
           allProviderList = await cleanProviderService.getAllProviders();
         } catch (e) {
+          console.warn("Failed to fetch all providers, using empty list:", e);
           allProviderList = [];
         }
 
@@ -69,6 +70,10 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = React.memo(
         try {
           metadata = await cleanProviderService.getProvidersMetadata();
         } catch (e) {
+          console.warn(
+            "Failed to fetch provider metadata, using empty object:",
+            e
+          );
           metadata = {} as any;
         }
 
@@ -87,7 +92,16 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = React.memo(
         setAllProviders(unconfiguredProviders);
       } catch (error) {
         console.error("Failed to load providers:", error);
-        showToast("Failed to load provider information", "error");
+        showToast(
+          error instanceof Error
+            ? `Failed to load provider information: ${error.message}`
+            : "Failed to load provider information",
+          "error"
+        );
+        // Set empty states on error to prevent UI crashes
+        setActiveProviders([]);
+        setProvidersMetadata({});
+        setAllProviders([]);
       } finally {
         setLoading(false);
       }
@@ -98,18 +112,51 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = React.memo(
       apiKey: string,
       baseUrl?: string
     ) => {
-      // Use optimistic add provider mutation
-      await addProvider({ provider, apiKey, baseUrl });
+      try {
+        // Use optimistic add provider mutation
+        await addProvider({ provider, apiKey, baseUrl });
+        showToast("Provider added successfully", "success");
+      } catch (error) {
+        console.error("Failed to add provider:", error);
+        showToast(
+          error instanceof Error
+            ? `Failed to add provider: ${error.message}`
+            : "Failed to add provider",
+          "error"
+        );
+      }
     };
 
     const handleTestConnection = async (provider: ProviderType) => {
-      // Use optimistic test provider mutation
-      await testProvider({ provider });
+      try {
+        // Use optimistic test provider mutation
+        await testProvider({ provider });
+        showToast("Provider connection tested successfully", "success");
+      } catch (error) {
+        console.error("Failed to test provider connection:", error);
+        showToast(
+          error instanceof Error
+            ? `Failed to test connection: ${error.message}`
+            : "Failed to test provider connection",
+          "error"
+        );
+      }
     };
 
     const handleRemoveApiKey = async (provider: ProviderType) => {
-      // Use optimistic remove provider mutation
-      await removeProvider({ provider });
+      try {
+        // Use optimistic remove provider mutation
+        await removeProvider({ provider });
+        showToast("Provider removed successfully", "success");
+      } catch (error) {
+        console.error("Failed to remove provider:", error);
+        showToast(
+          error instanceof Error
+            ? `Failed to remove provider: ${error.message}`
+            : "Failed to remove provider",
+          "error"
+        );
+      }
     };
 
     if (loading) {
@@ -223,10 +270,20 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = React.memo(
           isOpen={isAddModalOpen}
           onClose={() => setIsAddModalOpen(false)}
           onProviderAdded={async () => {
-            await loadProviders();
-            // Also notify parent component if callback provided
-            if (onProviderAdded) {
-              onProviderAdded();
+            try {
+              await loadProviders();
+              // Also notify parent component if callback provided
+              if (onProviderAdded) {
+                onProviderAdded();
+              }
+            } catch (error) {
+              console.error("Failed to refresh providers after adding:", error);
+              showToast(
+                error instanceof Error
+                  ? `Failed to refresh providers: ${error.message}`
+                  : "Failed to refresh provider list",
+                "error"
+              );
             }
           }}
           existingProviders={activeProviders.map((p) => p.provider)}
