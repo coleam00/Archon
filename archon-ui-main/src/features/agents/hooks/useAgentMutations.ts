@@ -290,9 +290,13 @@ export const useTestProvider = () => {
       // Cancel any outgoing refetches for provider metadata
       await queryClient.cancelQueries({ queryKey: providerKeys.metadata() });
 
-      // Snapshot the previous metadata
+      // Snapshot the previous values
       const previousMetadata = queryClient.getQueryData(
         providerKeys.metadata()
+      );
+      const previousModels = queryClient.getQueryData(modelKeys.available());
+      const previousProviders = queryClient.getQueryData(
+        providerKeys.apiKeys()
       );
 
       // Optimistically update provider metadata to show testing status
@@ -315,17 +319,25 @@ export const useTestProvider = () => {
       // Show immediate feedback
       showToast(`Testing ${provider} connection...`, "info");
 
-      return { previousMetadata };
+      return { previousMetadata, previousModels, previousProviders };
     },
     onError: (_err, variables, context) => {
-      // Rollback to previous metadata
+      // Rollback to previous values
       if (context?.previousMetadata) {
         queryClient.setQueryData(
           providerKeys.metadata(),
           context.previousMetadata
         );
       }
-
+      if (context?.previousModels) {
+        queryClient.setQueryData(modelKeys.available(), context.previousModels);
+      }
+      if (context?.previousProviders) {
+        queryClient.setQueryData(
+          providerKeys.apiKeys(),
+          context.previousProviders
+        );
+      }
       showToast(`Failed to test ${variables.provider}`, "error");
     },
     onSuccess: (data, variables) => {
