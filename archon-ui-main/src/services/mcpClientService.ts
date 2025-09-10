@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { getApiUrl } from '../config/api';
+import { getMCPConfig } from '@/config/mcp';
+import { getApiUrl } from '@/config/api';
 
 // ========================================
 // TYPES & INTERFACES
@@ -89,14 +90,13 @@ const MCPToolSchema = z.object({
 export type MCPTool = z.infer<typeof MCPToolSchema>;
 export type MCPParameter = z.infer<typeof MCPParameterSchema>;
 
-import { getApiUrl } from '../config/api';
-
 /**
  * MCP Client Service - Universal MCP client that connects to any MCP servers
  * This service communicates with the standalone Python MCP client service
  */
 class MCPClientService {
-  private baseUrl = getApiUrl();
+  // Use relative URLs to work with proxy in all environments
+  private baseUrl = '';
 
   // ========================================
   // CLIENT MANAGEMENT
@@ -398,26 +398,14 @@ class MCPClientService {
    * Create Archon MCP client using Streamable HTTP transport
    */
   async createArchonClient(): Promise<MCPClient> {
-    // Require ARCHON_MCP_PORT to be set
-    const mcpPort = import.meta.env.ARCHON_MCP_PORT;
-    if (!mcpPort) {
-      throw new Error(
-        'ARCHON_MCP_PORT environment variable is required. ' +
-        'Please set it in your environment variables. ' +
-        'Default value: 8051'
-      );
-    }
-    
-    // Get the host from the API URL
-    const apiUrl = getApiUrl();
-    const url = new URL(apiUrl || `http://${window.location.hostname}:${mcpPort}`);
-    const mcpUrl = `${url.protocol}//${url.hostname}:${mcpPort}/mcp`;
+    // Get MCP configuration from environment
+    const config = getMCPConfig();
     
     const archonConfig: MCPClientConfig = {
       name: 'Archon',
       transport_type: 'http',
       connection_config: {
-        url: mcpUrl
+        url: config.url
       },
       auto_connect: true,
       health_check_interval: 30,

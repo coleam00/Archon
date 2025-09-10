@@ -5,3 +5,5 @@ __pycache__
 PRPs/local
 PRPs/completed/
 /logs/
+.bmad-core
+lan-migration-docs/

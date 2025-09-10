@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { getMCPConfig } from '@/config/mcp';
 
 export interface ServerStatus {
   status: 'running' | 'starting' | 'stopped' | 'stopping';
@@ -156,11 +157,12 @@ class MCPService {
     const response = await fetch(`${this.baseUrl}/api/mcp/config`);
 
     if (!response.ok) {
-      // Return default config if endpoint doesn't exist yet
+      // Return config from environment variables
+      const config = getMCPConfig();
       return {
-        transport: 'sse',
-        host: 'localhost',
-        port: 8051
+        transport: config.transport,
+        host: config.host,
+        port: config.port
       };
     }
 
@@ -414,8 +416,8 @@ class MCPService {
       throw new Error('MCP server is not running');
     }
 
-    const config = await this.getConfiguration();
-    const mcpUrl = `http://${config.host}:${config.port}/mcp`;
+    const config = getMCPConfig();
+    const mcpUrl = config.url;
     
     // Generate unique request ID
     const id = Math.random().toString(36).substring(2);

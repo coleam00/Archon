@@ -39,7 +39,7 @@ export const FeaturesSection = () => {
       const [logfireResponse, projectsResponse, projectsHealthResponse, disconnectScreenRes] = await Promise.all([
         credentialsService.getCredential('LOGFIRE_ENABLED').catch(() => ({ value: undefined })),
         credentialsService.getCredential('PROJECTS_ENABLED').catch(() => ({ value: undefined })),
-        fetch(`${credentialsService['baseUrl']}/api/projects/health`).catch(() => null),
+        fetch('/api/projects/health').catch(() => null),
         credentialsService.getCredential('DISCONNECT_SCREEN_ENABLED').catch(() => ({ value: 'true' }))
       ]);
       
@@ -58,7 +58,7 @@ export const FeaturesSection = () => {
         response: projectsHealthResponse,
         ok: projectsHealthResponse?.ok,
         status: projectsHealthResponse?.status,
-        url: `${credentialsService['baseUrl']}/api/projects/health`
+        url: '/api/projects/health'
       });
       
       if (projectsHealthResponse && projectsHealthResponse.ok) {
