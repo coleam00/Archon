@@ -7,6 +7,7 @@
 import React from "react";
 import { Settings2, ChevronRight } from "lucide-react";
 import type { AgentConfig } from "../../../../types/agent";
+import { getRangeSliderStyle } from "@/features/agents/components/common/styles/gradientStyles";
 
 interface AdvancedSettingsProps {
   agent: AgentConfig;
@@ -69,11 +70,7 @@ export const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                   onTemperatureChange(clampedValue);
                 }}
                 className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer"
-                style={{
-                  background: `linear-gradient(to right, #7c3aed 0%, #7c3aed ${
-                    temperature * 50
-                  }%, #27272a ${temperature * 50}%, #27272a 100%)`,
-                }}
+                style={getRangeSliderStyle(temperature, 2)}
               />
               <div className="flex justify-between text-xs text-gray-600 mt-1">
                 <span>Precise</span>
@@ -96,11 +93,7 @@ export const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 value={maxTokens}
                 onChange={(e) => onMaxTokensChange(parseInt(e.target.value))}
                 className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer"
-                style={{
-                  background: `linear-gradient(to right, #7c3aed 0%, #7c3aed ${
-                    (maxTokens / 4000) * 100
-                  }%, #27272a ${(maxTokens / 4000) * 100}%, #27272a 100%)`,
-                }}
+                style={getRangeSliderStyle(maxTokens, 4000)}
               />
               <div className="flex justify-between text-xs text-gray-600 mt-1">
                 <span>Short</span>
