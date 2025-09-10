@@ -13,6 +13,7 @@ import { useDeleteKnowledgeItem, useRefreshKnowledgeItem } from "../hooks";
 import { KnowledgeCardProgress } from "../progress/components/KnowledgeCardProgress";
 import type { ActiveOperation } from "../progress/types";
 import type { KnowledgeItem } from "../types";
+import { extractDomain } from "../utils/knowledge-utils";
 import { KnowledgeCardActions } from "./KnowledgeCardActions";
 
 interface KnowledgeCardProps {
@@ -188,7 +189,7 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
             >
               <ExternalLink className="w-3 h-3" />
               <span className="truncate">
-                {item.url.startsWith("file://") ? item.url.replace("file://", "") : new URL(item.url).hostname}
+                {item.url.startsWith("file://") ? item.url.replace("file://", "") : extractDomain(item.url)}
               </span>
             </a>
           )}
