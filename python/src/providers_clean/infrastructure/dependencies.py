@@ -146,7 +146,6 @@ class DependencyContainer:
         """Initialize dependency container."""
         self._supabase_client: Optional[Client] = None
         self._cipher: Optional[Fernet] = None
-        self._uow: Optional[IUnitOfWork] = None
 
     @classmethod
     def get_instance(cls) -> 'DependencyContainer':
@@ -176,15 +175,12 @@ class DependencyContainer:
     @property
     def unit_of_work(self) -> IUnitOfWork:
         """Get Unit of Work instance."""
-        if self._uow is None:
-            self._uow = SupabaseUnitOfWork(self.supabase, self.cipher)
-        return self._uow
+        return SupabaseUnitOfWork(self.supabase, self.cipher)
 
     def reset(self):
         """Reset all cached dependencies."""
         self._supabase_client = None
         self._cipher = None
-        self._uow = None
 
 
 def get_model_sync_service(uow: IUnitOfWork = Depends(get_unit_of_work)):
