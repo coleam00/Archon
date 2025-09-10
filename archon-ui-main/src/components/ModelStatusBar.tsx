@@ -330,7 +330,7 @@ export const ModelStatusBar: React.FC = () => {
                             )
                           : service.name}
                       </span>
-                      {window.innerWidth >= 640 &&
+                      {!responsiveValues.isMobile &&
                         getCostIndicator(service.costProfile)}
                     </div>
                   ))}
