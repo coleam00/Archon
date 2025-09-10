@@ -1,9 +1,13 @@
 from typing import List, Optional
 from enum import Enum
 from fastapi import APIRouter, Depends, HTTPException, Query
+import logging
 
 from ...services import ServiceRegistryService, ServiceInfo
 from ...infrastructure.dependencies import get_service_registry_service
+
+
+logger = logging.getLogger(__name__)
 
 
 class ServiceCategory(str, Enum):
@@ -27,8 +31,11 @@ async def get_service_registry(
     try:
         services = await registry_service.get_all_services(active_only=active_only, category=category.value if category else None)
         return services
-    except Exception as e:
+    except ValueError:
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to get service registry: {str(e)}"
-        )
+            status_code=400, detail="Invalid request parameters")
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Services not found")
+    except Exception:
+        logger.exception("Internal error in get_service_registry")
+        raise HTTPException(status_code=500, detail="Internal server error")
