@@ -41,14 +41,14 @@ async def get_progress(
             )
         
 
-        # Ensure we have the progress_id in the data
-        operation["progress_id"] = operation_id
+        # Ensure we have the progress_id in the response without mutating shared state
+        operation_with_id = {**operation, "progress_id": operation_id}
         
         # Get operation type for proper model selection
         operation_type = operation.get("type", "crawl")
         
         # Create standardized response using Pydantic model
-        progress_response = create_progress_response(operation_type, operation)
+        progress_response = create_progress_response(operation_type, operation_with_id)
         
         
         # Convert to dict with camelCase fields for API response
@@ -64,10 +64,10 @@ async def get_progress(
 
         # Check if client's ETag matches
         if check_etag(if_none_match, current_etag):
-            response.status_code = http_status.HTTP_304_NOT_MODIFIED
-            response.headers["ETag"] = current_etag
-            response.headers["Cache-Control"] = "no-cache, must-revalidate"
-            return None
+            return Response(
+                status_code=http_status.HTTP_304_NOT_MODIFIED,
+                headers={"ETag": current_etag, "Cache-Control": "no-cache, must-revalidate"},
+            )
 
         # Set headers for caching
         response.headers["ETag"] = current_etag
@@ -75,8 +75,8 @@ async def get_progress(
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
 
         # Add polling hint headers
-        if operation.get("status") == "running":
-            # Suggest polling every second for running operations
+        if operation.get("status") not in {"completed", "failed", "error"}:
+            # Suggest polling every second for active operations
             response.headers["X-Poll-Interval"] = "1000"
         else:
             # No need to poll completed/failed operations
