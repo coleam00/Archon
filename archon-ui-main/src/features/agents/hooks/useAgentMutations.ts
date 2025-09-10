@@ -165,6 +165,7 @@ export const useAddProvider = () => {
       queryClient.invalidateQueries({ queryKey: providerKeys.apiKeys() });
       queryClient.invalidateQueries({ queryKey: modelKeys.available() });
       queryClient.invalidateQueries({ queryKey: providerKeys.metadata() });
+      queryClient.invalidateQueries({ queryKey: providerKeys.list() });
 
       // Dispatch event to notify ModelStatusBar of provider changes
       const event = new CustomEvent("agentConfigUpdated", {
@@ -261,6 +262,8 @@ export const useRemoveProvider = () => {
       // Invalidate related queries
       queryClient.invalidateQueries({ queryKey: modelKeys.available() });
       queryClient.invalidateQueries({ queryKey: providerKeys.metadata() });
+      queryClient.invalidateQueries({ queryKey: providerKeys.apiKeys() });
+      queryClient.invalidateQueries({ queryKey: providerKeys.list() });
 
       // Dispatch event to notify ModelStatusBar of provider changes
       const event = new CustomEvent("agentConfigUpdated", {

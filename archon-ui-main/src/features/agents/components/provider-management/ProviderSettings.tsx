@@ -5,19 +5,17 @@
  * Shows only active providers with option to add more
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { Key, Loader2, Plus, Shield } from "lucide-react";
 import { useToast } from "../../../../contexts/ToastContext";
-import { cleanProviderService } from "../../../../services/cleanProviderService";
 import type {
   ProviderType,
-  ProviderStatus,
-  ProviderMetadata,
 } from "../../../../types/cleanProvider";
 import { Button } from "../../../../components/ui/Button";
 import { AddProviderModal } from "./AddProviderModal";
 import { useAgents } from "../../hooks";
 import { ProviderCard } from "./ProviderCard";
+import { useActiveProviders, useAllProviders, useProvidersMetadata } from "../../hooks/useAgentQueries";
 
 interface ProviderSettingsProps {
   onProviderAdded?: () => void;
@@ -25,16 +23,13 @@ interface ProviderSettingsProps {
 
 export const ProviderSettings: React.FC<ProviderSettingsProps> = React.memo(
   ({ onProviderAdded }) => {
-    const [allProviders, setAllProviders] = useState<string[]>([]);
-    const [activeProviders, setActiveProviders] = useState<ProviderStatus[]>(
-      []
-    );
-    const [providersMetadata, setProvidersMetadata] = useState<
-      Record<string, ProviderMetadata>
-    >({});
-    const [loading, setLoading] = useState(true);
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
     const { showToast } = useToast();
+
+    // Use TanStack Query hooks for data fetching
+    const activeProvidersQuery = useActiveProviders();
+    const allProvidersQuery = useAllProviders();
+    const providersMetadataQuery = useProvidersMetadata();
 
     // Use optimistic update hooks
     const {
@@ -46,66 +41,28 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = React.memo(
       isTestingProvider,
     } = useAgents();
 
-    // Load provider status on mount
-    useEffect(() => {
-      loadProviders();
-    }, []);
+    // Combine data from queries to create provider statuses
+    const activeProviders = React.useMemo(() => {
+      const active = activeProvidersQuery.data || [];
 
-    const loadProviders = async () => {
-      try {
-        setLoading(true);
-        // Get all available providers and statuses
-        let allProviderList: string[] = [];
-        try {
-          allProviderList = await cleanProviderService.getAllProviders();
-        } catch (e) {
-          console.warn("Failed to fetch all providers, using empty list:", e);
-          allProviderList = [];
-        }
+      // Create provider status objects for active providers
+      return active.map(providerName => ({
+        provider: providerName as ProviderType,
+        configured: true,
+        health: "healthy" as const,
+        lastChecked: new Date().toISOString(),
+      }));
+    }, [activeProvidersQuery.data]);
 
-        const providerStatuses =
-          await cleanProviderService.getAllProviderStatuses();
-        // Provider metadata is optional; handle 404 as empty object
-        let metadata: Record<string, ProviderMetadata> = {};
-        try {
-          metadata = await cleanProviderService.getProvidersMetadata();
-        } catch (e) {
-          console.warn(
-            "Failed to fetch provider metadata, using empty object:",
-            e
-          );
-          metadata = {};
-        }
+    // Get unconfigured providers
+    const unconfiguredProviders = React.useMemo(() => {
+      const active = activeProvidersQuery.data || [];
+      const all = allProvidersQuery.data || [];
+      return all.filter(p => !active.includes(p));
+    }, [activeProvidersQuery.data, allProvidersQuery.data]);
 
-        // Filter to only show configured providers
-        const configuredProviders = providerStatuses.filter(
-          (p) => p.configured
-        );
-        setActiveProviders(configuredProviders);
-        setProvidersMetadata(metadata);
-
-        // Get list of unconfigured providers
-        const configuredNames = configuredProviders.map((p) => p.provider);
-        const unconfiguredProviders = allProviderList.filter(
-          (p) => !configuredNames.includes(p)
-        );
-        setAllProviders(unconfiguredProviders);
-      } catch (error) {
-        console.error("Failed to load providers:", error);
-        showToast(
-          error instanceof Error
-            ? `Failed to load provider information: ${error.message}`
-            : "Failed to load provider information",
-          "error"
-        );
-        // Set empty states on error to prevent UI crashes
-        setActiveProviders([]);
-        setProvidersMetadata({});
-        setAllProviders([]);
-      } finally {
-        setLoading(false);
-      }
-    };
+    // Calculate loading and error states
+    const isLoading = activeProvidersQuery.isLoading || allProvidersQuery.isLoading;
 
     const handleSaveApiKey = async (
       provider: ProviderType,
@@ -159,7 +116,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = React.memo(
       }
     };
 
-    if (loading) {
+    if (isLoading) {
       return (
         <div className="flex items-center justify-center py-8">
           <Loader2 className="w-6 h-6 animate-spin text-purple-500" />
@@ -202,7 +159,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = React.memo(
               <ProviderCard
                 key={provider.provider}
                 provider={provider}
-                metadata={providersMetadata[provider.provider]}
+                metadata={providersMetadataQuery.data?.[provider.provider]}
                 onSave={handleSaveApiKey}
                 onTest={handleTestConnection}
                 onRemove={handleRemoveApiKey}
@@ -271,7 +228,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = React.memo(
           onClose={() => setIsAddModalOpen(false)}
           onProviderAdded={async () => {
             try {
-              await loadProviders();
+              // TanStack Query will automatically refetch the data
               // Also notify parent component if callback provided
               if (onProviderAdded) {
                 onProviderAdded();
@@ -287,8 +244,8 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = React.memo(
             }
           }}
           existingProviders={activeProviders.map((p) => p.provider)}
-          providersMetadata={providersMetadata}
-          availableProviders={allProviders}
+          providersMetadata={providersMetadataQuery.data || {}}
+          availableProviders={unconfiguredProviders}
         />
       </div>
     );
