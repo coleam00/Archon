@@ -179,6 +179,7 @@ services:
       - VITE_MCP_PROTOCOL=${VITE_MCP_PROTOCOL:-http}
       - VITE_MCP_USE_PROXY=${VITE_MCP_USE_PROXY:-false}
       - VITE_MCP_PORT=${VITE_MCP_PORT:-8051}
+      - VITE_SHOW_DEVTOOLS=${VITE_SHOW_DEVTOOLS:-false}
     networks:
       - app-network
     healthcheck:

@@ -26,7 +26,7 @@ import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { CrawlProgressData } from '../../types/crawl';
-import { useCrawlProgressPolling } from '../../hooks/usePolling';
+import { useCrawlProgressPolling } from '../../hooks/useCrawlQueries';
 import { useTerminalScroll } from '../../hooks/useTerminalScroll';
 
 interface CrawlingProgressCardProps {

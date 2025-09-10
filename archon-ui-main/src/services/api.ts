@@ -1,19 +1,8 @@
 /**
- * API service layer for communicating with the MCP server backend.
+ * API service layer for backend communication.
  */
 
 // Types for API responses
-export interface MCPServerResponse {
-  success: boolean;
-  status: 'starting' | 'running' | 'stopped' | 'error';
-  message?: string;
-}
-
-export interface MCPServerStatus {
-  status: 'starting' | 'running' | 'stopped' | 'error';
-  uptime?: number;
-  logs: string[];
-}
 
 export interface CrawlResponse {
   success: boolean;
@@ -110,6 +99,12 @@ export async function apiRequest<T>(
       }
       throw new Error(errorMessage);
     }
+    
+    // Handle 204 No Content responses (common for DELETE operations)
+    if (response.status === 204) {
+      return undefined as T;
+    }
+    
     return await response.json();
   } catch (error) {
     if (error instanceof Error) {
@@ -117,19 +112,6 @@ export async function apiRequest<T>(
     }
     throw new Error('Unknown error occurred');
   }
-}
-
-// MCP Server Management
-export async function startMCPServer(): Promise<MCPServerResponse> {
-  return retry(() => apiRequest<MCPServerResponse>('/mcp/start', { method: 'POST' }));
-}
-
-export async function stopMCPServer(): Promise<MCPServerResponse> {
-  return retry(() => apiRequest<MCPServerResponse>('/mcp/stop', { method: 'POST' }));
-}
-
-export async function getMCPServerStatus(): Promise<MCPServerStatus> {
-  return retry(() => apiRequest<MCPServerStatus>('/mcp/status'));
 }
 
 // Crawling Operations

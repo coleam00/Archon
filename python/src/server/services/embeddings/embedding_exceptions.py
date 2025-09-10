@@ -1,7 +1,7 @@
 """
 Custom exceptions for embedding service failures.
 
-These exceptions follow the alpha principle: "fail fast and loud" for data integrity issues,
+These exceptions follow the principle: "fail fast and loud" for data integrity issues,
 while allowing batch processes to continue by skipping failed items.
 """
 

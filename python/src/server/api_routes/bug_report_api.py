@@ -1,5 +1,5 @@
 """
-Bug Report API for Archon V2 Alpha
+Bug Report API for Archon Beta
 
 Handles bug report submission to GitHub Issues with automatic context formatting.
 """
@@ -131,7 +131,7 @@ class GitHubService:
 
         return f"""## {severity_emoji} Bug Report
 
-**Reported by:** User (Archon V2 Alpha)
+**Reported by:** User (Archon Beta)
 **Severity:** {severity_emoji} {bug_report.severity.title()}
 **Component:** {component_emoji} {bug_report.component.replace("-", " ").title()}
 **Version:** {bug_report.context.app.get("version", "unknown")}

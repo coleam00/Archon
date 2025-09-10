@@ -16,6 +16,7 @@ interface CustomCredential {
   is_encrypted?: boolean;
   showValue?: boolean; // Track per-credential visibility
   isNew?: boolean; // Track if this is a new unsaved credential
+  isFromBackend?: boolean; // Track if credential came from backend (write-only once encrypted)
 }
 
 export const APIKeysSection = () => {
@@ -51,17 +52,22 @@ export const APIKeysSection = () => {
       });
       
       // Convert to UI format
-      const uiCredentials = apiKeys.map(cred => ({
-        key: cred.key,
-        value: cred.value || '',
-        description: cred.description || '',
-        originalValue: cred.value || '',
-        originalKey: cred.key, // Track original key for updates
-        hasChanges: false,
-        is_encrypted: cred.is_encrypted || false,
-        showValue: false,
-        isNew: false
-      }));
+      const uiCredentials = apiKeys.map(cred => {
+        const isEncryptedFromBackend = cred.is_encrypted && cred.value === '[ENCRYPTED]';
+        
+        return {
+          key: cred.key,
+          value: cred.value || '',
+          description: cred.description || '',
+          originalValue: cred.value || '',
+          originalKey: cred.key, // Track original key for updates
+          hasChanges: false,
+          is_encrypted: cred.is_encrypted || false,
+          showValue: false,
+          isNew: false,
+          isFromBackend: !cred.isNew, // Mark as from backend unless it's a new credential
+        };
+      });
       
       setCustomCredentials(uiCredentials);
     } catch (err) {
@@ -81,7 +87,8 @@ export const APIKeysSection = () => {
       hasChanges: true,
       is_encrypted: true, // Default to encrypted
       showValue: true, // Show value for new entries
-      isNew: true
+      isNew: true,
+      isFromBackend: false // New credentials are not from backend
     };
     
     setCustomCredentials([...customCredentials, newCred]);
@@ -95,6 +102,12 @@ export const APIKeysSection = () => {
         if (field === 'key' || field === 'value' || field === 'is_encrypted') {
           updated.hasChanges = true;
         }
+        // If user is editing the value of an encrypted credential from backend, make it editable
+        if (field === 'value' && cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]') {
+          updated.isFromBackend = false; // Now it's being edited, treat like new credential
+          updated.showValue = false; // Keep it hidden by default since it was encrypted
+          updated.value = ''; // Clear the [ENCRYPTED] placeholder so they can enter new value
+        }
         return updated;
       }
       return cred;
@@ -102,11 +115,21 @@ export const APIKeysSection = () => {
   };
 
   const toggleValueVisibility = (index: number) => {
-    updateCredential(index, 'showValue', !customCredentials[index].showValue);
+    const cred = customCredentials[index];
+    if (cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]') {
+      showToast('Encrypted credentials cannot be viewed. Edit to make changes.', 'warning');
+      return;
+    }
+    updateCredential(index, 'showValue', !cred.showValue);
   };
 
   const toggleEncryption = (index: number) => {
-    updateCredential(index, 'is_encrypted', !customCredentials[index].is_encrypted);
+    const cred = customCredentials[index];
+    if (cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]') {
+      showToast('Edit the credential value to make changes.', 'warning');
+      return;
+    }
+    updateCredential(index, 'is_encrypted', !cred.is_encrypted);
   };
 
   const deleteCredential = async (index: number) => {
@@ -242,15 +265,31 @@ export const APIKeysSection = () => {
                       value={cred.value}
                       onChange={(e) => updateCredential(index, 'value', e.target.value)}
                       placeholder={cred.is_encrypted && !cred.value ? 'Enter new value (encrypted)' : 'Enter value'}
-                      className="w-full px-3 py-2 pr-20 rounded-md bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 text-sm"
+                      className={`w-full px-3 py-2 pr-20 rounded-md border text-sm ${
+                        cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]'
+                          ? 'bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-600 text-gray-500 dark:text-gray-400'
+                          : 'bg-white dark:bg-gray-900 border-gray-300 dark:border-gray-700'
+                      }`}
+                      title={cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]' 
+                        ? 'Click to edit this encrypted credential' 
+                        : undefined}
                     />
                     
                     {/* Show/Hide value button */}
                     <button
                       type="button"
                       onClick={() => toggleValueVisibility(index)}
-                      className="absolute right-10 top-1/2 -translate-y-1/2 p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                      title={cred.showValue ? 'Hide value' : 'Show value'}
+                      disabled={cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]'}
+                      className={`absolute right-10 top-1/2 -translate-y-1/2 p-1.5 rounded transition-colors ${
+                        cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]'
+                          ? 'cursor-not-allowed opacity-50'
+                          : 'hover:bg-gray-200 dark:hover:bg-gray-700'
+                      }`}
+                      title={
+                        cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]'
+                          ? 'Edit credential to view and modify'
+                          : cred.showValue ? 'Hide value' : 'Show value'
+                      }
                     >
                       {cred.showValue ? (
                         <EyeOff className="w-4 h-4 text-gray-500" />
@@ -263,14 +302,21 @@ export const APIKeysSection = () => {
                     <button
                       type="button"
                       onClick={() => toggleEncryption(index)}
+                      disabled={cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]'}
                       className={`
                         absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded transition-colors
-                        ${cred.is_encrypted 
-                          ? 'text-pink-600 dark:text-pink-400 hover:bg-pink-100 dark:hover:bg-pink-900/20' 
-                          : 'text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
+                        ${cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]'
+                          ? 'cursor-not-allowed opacity-50 text-pink-400'
+                          : cred.is_encrypted 
+                            ? 'text-pink-600 dark:text-pink-400 hover:bg-pink-100 dark:hover:bg-pink-900/20' 
+                            : 'text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
                         }
                       `}
-                      title={cred.is_encrypted ? 'Encrypted' : 'Not encrypted'}
+                      title={
+                        cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]'
+                          ? 'Edit credential to modify encryption'
+                          : cred.is_encrypted ? 'Encrypted - click to decrypt' : 'Not encrypted - click to encrypt'
+                      }
                     >
                       {cred.is_encrypted ? (
                         <Lock className="w-4 h-4" />
@@ -347,7 +393,7 @@ export const APIKeysSection = () => {
             </div>
             <div className="text-sm text-gray-600 dark:text-gray-400">
               <p>
-                Click the lock icon to toggle encryption for each credential. Encrypted values are stored securely and only decrypted when needed.
+                Encrypted credentials are masked after saving. Click on a masked credential to edit it - this allows you to change the value and encryption settings.
               </p>
             </div>
           </div>

@@ -27,7 +27,8 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const showToast = useCallback((message: string, type: Toast['type'] = 'info', duration = 4000) => {
-    const id = Date.now().toString();
+    // Use timestamp + random number to prevent duplicate keys
+    const id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const newToast: Toast = { id, message, type, duration };
     
     setToasts(prev => [...prev, newToast]);

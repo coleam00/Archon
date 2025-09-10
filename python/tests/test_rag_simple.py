@@ -162,38 +162,6 @@ class TestHybridSearchCore:
         """Test hybrid strategy initializes"""
         assert hybrid_strategy is not None
         assert hasattr(hybrid_strategy, "search_documents_hybrid")
-        assert hasattr(hybrid_strategy, "_merge_search_results")
-
-    def test_merge_results_functionality(self, hybrid_strategy):
-        """Test result merging logic"""
-        vector_results = [
-            {
-                "id": "1",
-                "content": "Vector result",
-                "similarity": 0.9,
-                "url": "test1.com",
-                "chunk_number": 1,
-                "metadata": {},
-                "source_id": "src1",
-            }
-        ]
-        keyword_results = [
-            {
-                "id": "2",
-                "content": "Keyword result",
-                "url": "test2.com",
-                "chunk_number": 1,
-                "metadata": {},
-                "source_id": "src2",
-            }
-        ]
-
-        merged = hybrid_strategy._merge_search_results(
-            vector_results, keyword_results, match_count=5
-        )
-
-        assert isinstance(merged, list)
-        assert len(merged) <= 5
 
 
 class TestRerankingCore:

@@ -206,6 +206,35 @@ class KnowledgeBaseService {
   }
 
   /**
+   * Get document chunks for a knowledge item with optional domain filtering
+   */
+  async getKnowledgeItemChunks(sourceId: string, domainFilter?: string) {
+    console.log('📄 [KnowledgeBase] Getting chunks for:', sourceId, 'domainFilter:', domainFilter);
+    
+    const params = new URLSearchParams();
+    if (domainFilter) {
+      params.append('domain_filter', domainFilter);
+    }
+    
+    const queryString = params.toString();
+    const endpoint = `/knowledge-items/${sourceId}/chunks${queryString ? `?${queryString}` : ''}`;
+    
+    return apiRequest<{
+      success: boolean;
+      source_id: string;
+      domain_filter?: string;
+      chunks: Array<{
+        id: string;
+        source_id: string;
+        content: string;
+        metadata?: any;
+        url?: string;
+      }>;
+      count: number;
+    }>(endpoint);
+  }
+
+  /**
    * Upload a document to the knowledge base with progress tracking
    */
   async uploadDocument(file: File, metadata: UploadMetadata = {}) {
@@ -295,6 +324,7 @@ class KnowledgeBaseService {
       count: number
     }>(`/knowledge-items/${sourceId}/code-examples`);
   }
+
 }
 
 // Export singleton instance

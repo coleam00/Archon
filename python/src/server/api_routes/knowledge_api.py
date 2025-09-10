@@ -237,6 +237,55 @@ async def delete_knowledge_item(source_id: str):
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
+@router.get("/knowledge-items/{source_id}/chunks")
+async def get_knowledge_item_chunks(source_id: str, domain_filter: str | None = None):
+    """Get all document chunks for a specific knowledge item with optional domain filtering."""
+    try:
+        safe_logfire_info(f"Fetching chunks for source_id: {source_id}, domain_filter: {domain_filter}")
+
+        # Query document chunks with content for this specific source
+        supabase = get_supabase_client()
+        
+        # Build the query
+        query = supabase.from_("archon_crawled_pages").select(
+            "id, source_id, content, metadata, url"
+        )
+        query = query.eq("source_id", source_id)
+
+        # Apply domain filtering if provided
+        if domain_filter:
+            # Case-insensitive URL match
+            query = query.ilike("url", f"%{domain_filter}%")
+
+        # Deterministic ordering (URL then id)
+        query = query.order("url", desc=False).order("id", desc=False)
+
+        result = query.execute()
+        if getattr(result, "error", None):
+            safe_logfire_error(
+                f"Supabase query error | source_id={source_id} | error={result.error}"
+            )
+            raise HTTPException(status_code=500, detail={"error": str(result.error)})
+
+        chunks = result.data if result.data else []
+
+        safe_logfire_info(f"Found {len(chunks)} chunks for {source_id}")
+
+        return {
+            "success": True,
+            "source_id": source_id,
+            "domain_filter": domain_filter,
+            "chunks": chunks,
+            "count": len(chunks),
+        }
+
+    except Exception as e:
+        safe_logfire_error(
+            f"Failed to fetch chunks | error={str(e)} | source_id={source_id}"
+        )
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
 @router.get("/knowledge-items/{source_id}/code-examples")
 async def get_knowledge_item_code_examples(source_id: str):
     """Get all code examples for a specific knowledge item."""

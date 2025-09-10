@@ -6,7 +6,7 @@ argument-hint: none
 
 ## Prime Context for Archon Development
 
-You need to quickly understand the Archon V2 Alpha codebase. Follow these steps:
+You need to quickly understand the Archon V2 Beta codebase. Follow these steps:
 
 ### 1. Read Project Documentation
 
@@ -51,4 +51,4 @@ After reading these files, explain to the user:
 3. **Key Patterns**: One sentence about key patterns
 4. **Tech Stack**: One sentence about tech stack
 
-Remember: This is alpha software focused on rapid iteration. Prioritize understanding the core functionality
+Remember: This is beta software focused on rapid iteration. Prioritize understanding the core functionality

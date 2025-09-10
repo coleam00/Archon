@@ -7,3 +7,6 @@ PRPs/completed/
 /logs/
 .bmad-core
 lan-migration-docs/
+.zed
+tmp/
+temp/
