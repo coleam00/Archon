@@ -90,6 +90,9 @@ export const KnowledgeHeader: React.FC<KnowledgeHeaderProps> = ({
             variant="ghost"
             size="sm"
             onClick={() => onViewModeChange("grid")}
+            aria-label="Grid view"
+            aria-pressed={viewMode === "grid"}
+            title="Grid view"
             className={cn(
               "px-3",
               viewMode === "grid" ? "bg-cyan-500/20 text-cyan-400" : "text-gray-400 hover:text-white",
@@ -101,6 +104,9 @@ export const KnowledgeHeader: React.FC<KnowledgeHeaderProps> = ({
             variant="ghost"
             size="sm"
             onClick={() => onViewModeChange("table")}
+            aria-label="Table view"
+            aria-pressed={viewMode === "table"}
+            title="Table view"
             className={cn(
               "px-3",
               viewMode === "table" ? "bg-cyan-500/20 text-cyan-400" : "text-gray-400 hover:text-white",
