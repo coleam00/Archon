@@ -32,6 +32,7 @@ services:
       - API_BASE_URL=${API_BASE_URL:-http://localhost:8181}
       # MCP Configuration for backend
       - VITE_MCP_PROTOCOL=${VITE_MCP_PROTOCOL:-http}
+      - VITE_MCP_USE_PROXY=${VITE_MCP_USE_PROXY:-false}
     networks:
       - app-network
       - proxy
