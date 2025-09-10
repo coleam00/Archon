@@ -47,9 +47,8 @@ export const KnowledgeCardActions: React.FC<KnowledgeCardActionsProps> = ({
     setIsRefreshing(true);
     try {
       await onRefresh();
-      // Reset after 60 seconds as a fallback
-      setTimeout(() => setIsRefreshing(false), 60000);
-    } catch (_error) {
+    } finally {
+      // Always reset the refreshing state
       setIsRefreshing(false);
     }
   };
@@ -65,7 +64,8 @@ export const KnowledgeCardActions: React.FC<KnowledgeCardActionsProps> = ({
     setIsDeleting(true);
     try {
       await onDelete();
-    } catch (_error) {
+    } finally {
+      // Ensures state is reset even if parent removes the card
       setIsDeleting(false);
     }
   };
