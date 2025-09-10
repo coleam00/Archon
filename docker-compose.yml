@@ -29,7 +29,6 @@ services:
       - ARCHON_MCP_PORT=${ARCHON_MCP_PORT:-8051}
       - ARCHON_AGENTS_PORT=${ARCHON_AGENTS_PORT:-8052}
       - ENCRYPTION_KEY=${ARCHON_ENCRYPTION_KEY}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - AGENTS_ENABLED=${AGENTS_ENABLED:-false}
     networks:
       - app-network
@@ -95,7 +94,7 @@ services:
     depends_on:
       archon-server:
         condition: service_healthy
-      
+
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -114,7 +113,7 @@ services:
   # AI Agents Service (ML/Reranking)
   archon-agents:
     profiles:
-      - agents  # Only starts when explicitly using --profile agents
+      - agents # Only starts when explicitly using --profile agents
       - backend
       - full
     build:

@@ -91,10 +91,10 @@ class TestAPIKeyService:
         """Test active providers includes environment variables."""
         service = APIKeyService(mock_uow)
 
-        with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}):
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
             providers = await service.get_active_providers()
 
-        assert "google" in providers
+        assert "openai" in providers
 
     @pytest.mark.asyncio
     async def test_deactivate_api_key(self, mock_uow: MockUnitOfWork, sample_api_key: str):
@@ -240,7 +240,6 @@ class TestAPIKeyService:
         test_cases = [
             ("openai", "OPENAI_API_KEY"),
             ("anthropic", "ANTHROPIC_API_KEY"),
-            ("google", "GOOGLE_API_KEY"),
             ("groq", "GROQ_API_KEY"),
             ("mistral", "MISTRAL_API_KEY"),
         ]

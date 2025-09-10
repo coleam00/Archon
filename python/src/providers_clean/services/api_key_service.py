@@ -14,7 +14,6 @@ class APIKeyService:
     ENV_MAPPINGS = {
         "openai": "OPENAI_API_KEY",
         "anthropic": "ANTHROPIC_API_KEY",
-        "google": "GOOGLE_API_KEY",
         "groq": "GROQ_API_KEY",
         "mistral": "MISTRAL_API_KEY",
         "cohere": "COHERE_API_KEY",

@@ -99,9 +99,7 @@ INSERT INTO archon_settings (key, value, is_encrypted, category, description) VA
 ON CONFLICT (key) DO NOTHING;
 
 -- Add provider API key placeholders
-INSERT INTO archon_settings (key, encrypted_value, is_encrypted, category, description) VALUES
-('GOOGLE_API_KEY', NULL, true, 'api_keys', 'Google API Key for Gemini models. Get from: https://aistudio.google.com/apikey')
-ON CONFLICT (key) DO NOTHING;
+-- Note: GOOGLE_API_KEY removed as API keys are now managed by providers feature
 
 -- Code Extraction Settings Migration
 -- Adds configurable settings for the code extraction service

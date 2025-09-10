@@ -10,7 +10,9 @@ export const APIKeysSection = () => {
   const [providers, setProviders] = useState<ProviderType[] | null>(null);
   const [isLoadingProviders, setIsLoadingProviders] = useState(true);
   const [providerKey, setProviderKey] = useState("");
-  const [selectedProvider, setSelectedProvider] = useState<ProviderType | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState<ProviderType | null>(
+    null
+  );
   const [isBootstrapping, setIsBootstrapping] = useState(false);
 
   const { showToast } = useToast();
@@ -56,10 +58,7 @@ export const APIKeysSection = () => {
       return;
     }
     try {
-      await cleanProviderService.setApiKey(
-        selectedProvider,
-        providerKey
-      );
+      await cleanProviderService.setApiKey(selectedProvider, providerKey);
       showToast(
         `API key saved for ${selectedProvider}. Syncing models...`,
         "success"
@@ -110,7 +109,9 @@ export const APIKeysSection = () => {
             <div className="flex gap-2 items-center">
               <select
                 value={selectedProvider || ""}
-                onChange={(e) => setSelectedProvider(e.target.value as ProviderType)}
+                onChange={(e) =>
+                  setSelectedProvider(e.target.value as ProviderType)
+                }
                 className="px-3 py-2 rounded-md bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 text-sm"
                 aria-label="Select AI provider"
               >
