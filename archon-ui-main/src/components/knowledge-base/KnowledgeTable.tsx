@@ -72,10 +72,10 @@ const groupItemsByDomain = (items: KnowledgeItem[]): GroupedKnowledgeItem[] => {
     const isFileGroup = domain.startsWith("file_");
 
     // Find the latest update timestamp and convert it properly to ISO string
-    const latestTimestamp = Math.max(
-      ...groupItems.map((item) => new Date(item.updated_at).getTime())
-    );
-    const latestDate = new Date(latestTimestamp);
+    const timestamps = groupItems
+      .map((i) => Date.parse(i.updated_at))
+      .filter((t) => Number.isFinite(t));
+    const latestTimestamp = timestamps.length ? Math.max(...timestamps) : undefined;
 
     return {
       id: isFileGroup ? firstItem.id : `group_${domain}`,
@@ -95,7 +95,9 @@ const groupItemsByDomain = (items: KnowledgeItem[]): GroupedKnowledgeItem[] => {
         ),
       },
       created_at: firstItem.created_at,
-      updated_at: latestDate.toISOString(),
+      updated_at: latestTimestamp
+        ? new Date(latestTimestamp).toISOString()
+        : firstItem.updated_at,
     };
   });
 };
