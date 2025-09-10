@@ -189,8 +189,8 @@ export const AgentCard: React.FC<AgentCardProps> = React.memo(
       return compatibleModels.some((m) => m.model_string === selectedModel);
     }, [compatibleModels, selectedModel]);
 
-    const isActive = useMemo(() => {
-      return currentConfig && isModelAvailable;
+    const isActive = useMemo<boolean>(() => {
+      return Boolean(currentConfig && isModelAvailable);
     }, [currentConfig, isModelAvailable]);
 
     // Memoize cost indicator to prevent unnecessary re-renders
