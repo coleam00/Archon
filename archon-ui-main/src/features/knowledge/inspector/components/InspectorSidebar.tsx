@@ -52,7 +52,8 @@ export const InspectorSidebar: React.FC<InspectorSidebarProps> = ({
     if (viewMode === "documents") {
       const doc = item as DocumentChunk;
       // Use formatted section, fallback to metadata section, then content preview
-      return doc.section || doc.metadata?.section || `${doc.content?.substring(0, 100)}...`;
+      const preview = doc.content ? `${doc.content.substring(0, 100)}...` : "No preview available";
+      return doc.section || doc.metadata?.section || preview;
     }
     const code = item as CodeExample;
     // Summary is most descriptive, then language
@@ -111,7 +112,7 @@ export const InspectorSidebar: React.FC<InspectorSidebarProps> = ({
                       )}
                     </div>
                     <p className="text-xs text-gray-500 line-clamp-2">{getItemDescription(item)}</p>
-                    {item.metadata?.relevance_score && (
+                    {item.metadata?.relevance_score != null && (
                       <div className="flex items-center gap-1 mt-1">
                         <Hash className="w-3 h-3 text-gray-600" />
                         <span className="text-xs text-gray-600">
