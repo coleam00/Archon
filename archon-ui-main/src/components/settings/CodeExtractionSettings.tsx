@@ -31,6 +31,16 @@ export const CodeExtractionSettings = ({
   const [saving, setSaving] = useState(false);
   const { showToast } = useToast();
 
+  const parseFloatOrDefault = (value: string, defaultValue: number) => {
+    const parsed = parseFloat(value);
+    return Number.isNaN(parsed) ? defaultValue : parsed;
+  };
+
+  const parseIntOrDefault = (value: string, defaultValue: number) => {
+    const parsed = parseInt(value, 10);
+    return Number.isNaN(parsed) ? defaultValue : parsed;
+  };
+
   const handleSave = async () => {
     try {
       setSaving(true);
@@ -87,7 +97,7 @@ export const CodeExtractionSettings = ({
             onChange={(e) =>
               setCodeExtractionSettings({
                 ...codeExtractionSettings,
-                MIN_CODE_BLOCK_LENGTH: parseInt(e.target.value, 10) || 250,
+                MIN_CODE_BLOCK_LENGTH: parseIntOrDefault(e.target.value, 250),
               })
             }
             placeholder="250"
@@ -102,7 +112,7 @@ export const CodeExtractionSettings = ({
             onChange={(e) =>
               setCodeExtractionSettings({
                 ...codeExtractionSettings,
-                MAX_CODE_BLOCK_LENGTH: parseInt(e.target.value, 10) || 5000,
+                MAX_CODE_BLOCK_LENGTH: parseIntOrDefault(e.target.value, 5000),
               })
             }
             placeholder="5000"
@@ -216,7 +226,7 @@ export const CodeExtractionSettings = ({
             onChange={(e) =>
               setCodeExtractionSettings({
                 ...codeExtractionSettings,
-                MAX_PROSE_RATIO: parseFloat(e.target.value) || 0.15,
+                MAX_PROSE_RATIO: parseFloatOrDefault(e.target.value, 0.15),
               })
             }
             placeholder="0.15"
@@ -232,7 +242,7 @@ export const CodeExtractionSettings = ({
             onChange={(e) =>
               setCodeExtractionSettings({
                 ...codeExtractionSettings,
-                MIN_CODE_INDICATORS: parseInt(e.target.value, 10) || 3,
+                MIN_CODE_INDICATORS: parseIntOrDefault(e.target.value, 3),
               })
             }
             placeholder="3"
@@ -247,7 +257,7 @@ export const CodeExtractionSettings = ({
             onChange={(e) =>
               setCodeExtractionSettings({
                 ...codeExtractionSettings,
-                CONTEXT_WINDOW_SIZE: parseInt(e.target.value, 10) || 1000,
+                CONTEXT_WINDOW_SIZE: parseIntOrDefault(e.target.value, 1000),
               })
             }
             placeholder="1000"
@@ -262,7 +272,10 @@ export const CodeExtractionSettings = ({
             onChange={(e) =>
               setCodeExtractionSettings({
                 ...codeExtractionSettings,
-                CODE_EXTRACTION_MAX_WORKERS: parseInt(e.target.value, 10) || 3,
+                CODE_EXTRACTION_MAX_WORKERS: parseIntOrDefault(
+                  e.target.value,
+                  3
+                ),
               })
             }
             placeholder="3"
