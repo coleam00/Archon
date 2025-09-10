@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { getMCPConfig, getExternalMCPUrl } from '@/config/mcp';
 
 export interface ServerStatus {
   status: 'running' | 'starting' | 'stopped' | 'stopping';
@@ -17,6 +18,7 @@ export interface ServerConfig {
   host: string;
   port: number;
   model?: string;
+  protocol?: string;
 }
 
 // Zod schemas for MCP protocol
@@ -108,11 +110,13 @@ class MCPServerService {
     const response = await fetch(`${this.baseUrl}/api/mcp/config`);
 
     if (!response.ok) {
-      // Return default config if endpoint doesn't exist yet
+      // Return config from environment variables
+      const config = getMCPConfig();
       return {
-        transport: 'sse',
-        host: 'localhost',
-        port: 8051
+        transport: config.transport,
+        host: config.host,
+        port: config.port,
+        protocol: config.protocol
       };
     }
 
@@ -149,7 +153,10 @@ class MCPServerService {
     }
 
     const config = await this.getConfiguration();
-    const mcpUrl = `http://${config.host}:${config.port}/${config.transport}`;
+    const mcpConfig = getMCPConfig();
+    const mcpUrl = mcpConfig.useProxy
+      ? getExternalMCPUrl()
+      : `${config.protocol || 'http'}://${config.host}:${config.port}/${config.transport}`;
     
     // Generate unique request ID
     const id = Math.random().toString(36).substring(2);

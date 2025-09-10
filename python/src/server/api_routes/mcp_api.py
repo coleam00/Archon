@@ -14,12 +14,14 @@ from datetime import datetime
 from typing import Any
 
 import docker
+import httpx
 from docker.errors import APIError, NotFound
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 # Import unified logging
 from ..config.logfire_config import api_logger, mcp_logger, safe_set_attribute, safe_span
+from ..config.service_discovery import get_mcp_url
 from ..utils import get_supabase_client
 
 router = APIRouter(prefix="/api/mcp", tags=["mcp"])
@@ -27,8 +29,9 @@ router = APIRouter(prefix="/api/mcp", tags=["mcp"])
 
 class ServerConfig(BaseModel):
     transport: str = "sse"
-    host: str = "localhost"
+    host: str = "localhost"  # Default, can be overridden by environment
     port: int = 8051
+    protocol: str = "http"  # Default, can be overridden by environment
 
 
 class ServerResponse(BaseModel):
@@ -574,10 +577,13 @@ async def get_mcp_config():
             mcp_port = int(os.getenv("ARCHON_MCP_PORT", "8051"))
 
             # Configuration for SSE-only mode with actual port
+            host = os.getenv("HOST", "localhost")
+            protocol = os.getenv("VITE_MCP_PROTOCOL", "http")
             config = {
-                "host": "localhost",
+                "host": host,
                 "port": mcp_port,
                 "transport": "sse",
+                "protocol": protocol,
             }
 
             # Get only model choice from database
@@ -748,13 +754,65 @@ async def get_mcp_tools():
 
 @router.get("/health")
 async def mcp_health():
-    """Health check for MCP API."""
+    """Health check for MCP API - tests actual MCP server connectivity."""
     with safe_span("api_mcp_health") as span:
         safe_set_attribute(span, "endpoint", "/api/mcp/health")
         safe_set_attribute(span, "method", "GET")
 
-        # Removed health check logging to reduce console noise
-        result = {"status": "healthy", "service": "mcp"}
-        safe_set_attribute(span, "status", "healthy")
-
-        return result
+        try:
+            # Get the MCP service URL from service discovery
+            mcp_url = get_mcp_url()
+            
+            # Test the actual MCP endpoint with a simple JSON-RPC ping
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{mcp_url}/mcp",
+                    json={"jsonrpc": "2.0", "method": "ping", "id": 1},
+                    timeout=2.0,
+                    headers={"Content-Type": "application/json"}
+                )
+                
+                # If we get a response (even an error), the server is up
+                if response.status_code in [200, 202, 400, 404, 405, 406]:
+                    # Server is responding (406 = Not Acceptable is still "server up")
+                    result = {"status": "healthy", "service": "mcp", "url": mcp_url}
+                    safe_set_attribute(span, "status", "healthy")
+                    safe_set_attribute(span, "mcp_url", mcp_url)
+                    return result
+                else:
+                    # Unexpected status code
+                    result = {
+                        "status": "unhealthy", 
+                        "service": "mcp", 
+                        "error": f"Unexpected status code: {response.status_code}",
+                        "url": mcp_url
+                    }
+                    safe_set_attribute(span, "status", "unhealthy")
+                    safe_set_attribute(span, "error", f"status_code_{response.status_code}")
+                    return result
+                    
+        except httpx.TimeoutException:
+            # Timeout - server not responding
+            result = {
+                "status": "unhealthy", 
+                "service": "mcp", 
+                "error": "Connection timeout",
+                "url": get_mcp_url()
+            }
+            safe_set_attribute(span, "status", "unhealthy")
+            safe_set_attribute(span, "error", "timeout")
+            api_logger.warning(f"MCP health check timeout: {get_mcp_url()}")
+            return result
+            
+        except Exception as e:
+            # Other errors
+            result = {
+                "status": "unhealthy", 
+                "service": "mcp", 
+                "error": str(e),
+                "url": get_mcp_url()
+            }
+            safe_set_attribute(span, "status", "unhealthy") 
+            safe_set_attribute(span, "error", str(e))
+            api_logger.error(f"MCP health check error: {e}")
+            return result

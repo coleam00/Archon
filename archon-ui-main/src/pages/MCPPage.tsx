@@ -7,6 +7,7 @@ import { useStaggeredEntrance } from '../hooks/useStaggeredEntrance';
 import { useToast } from '../contexts/ToastContext';
 import { mcpServerService, ServerStatus, ServerConfig } from '../services/mcpServerService';
 import { IDEGlobalRules } from '../components/settings/IDEGlobalRules';
+import { getMCPConfig, getExternalMCPUrl } from '@/config/mcp';
 // import { MCPClients } from '../components/mcp/MCPClients'; // Commented out - feature not implemented
 
 // Supported IDE/Agent types
@@ -108,12 +109,12 @@ export const MCPPage = () => {
     } catch (error) {
       console.error('Failed to load configuration:', error);
       // Set a default config if loading fails
-      // Try to detect port from environment or use default
-      const defaultPort = import.meta.env.ARCHON_MCP_PORT || 8051;
+      const config = getMCPConfig();
       setConfig({
         transport: 'http',
-        host: 'localhost',
-        port: typeof defaultPort === 'string' ? parseInt(defaultPort) : defaultPort
+        host: config.host,
+        port: config.port,
+        protocol: config.protocol
       });
     }
   };
@@ -162,8 +163,13 @@ export const MCPPage = () => {
   const generateCursorDeeplink = () => {
     if (!config) return '';
     
+    const mcpConfig = getMCPConfig();
+    const mcpUrl = mcpConfig.useProxy
+      ? getExternalMCPUrl()
+      : `${config.protocol || 'http'}://${config.host}:${config.port}/mcp`;
+    
     const httpConfig = {
-      url: `http://${config.host}:${config.port}/mcp`
+      url: mcpUrl
     };
     
     const configString = JSON.stringify(httpConfig);
@@ -184,7 +190,10 @@ export const MCPPage = () => {
       return '// Configuration not available. Please ensure the server is running.';
     }
     
-    const mcpUrl = `http://${config.host}:${config.port}/mcp`;
+    const mcpConfig = getMCPConfig();
+    const mcpUrl = mcpConfig.useProxy
+      ? getExternalMCPUrl()
+      : `${config.protocol || 'http'}://${config.host}:${config.port}/mcp`;
     
     switch(ide) {
       case 'claudecode':
