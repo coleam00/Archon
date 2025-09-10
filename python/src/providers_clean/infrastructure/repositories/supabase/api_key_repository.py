@@ -5,7 +5,16 @@ from datetime import datetime, timezone
 from supabase import Client
 from cryptography.fernet import Fernet
 import json
+import logging
 from ....core.interfaces.repositories import IApiKeyRepository
+
+
+logger = logging.getLogger(__name__)
+
+
+class ApiKeyRepositoryError(Exception):
+    """Base exception for API key repository operations."""
+    pass
 
 
 class SupabaseApiKeyRepository(IApiKeyRepository):
@@ -54,8 +63,8 @@ class SupabaseApiKeyRepository(IApiKeyRepository):
             return bool(response.data)
             
         except Exception as e:
-            print(f"Error storing API key for {provider}: {e}")
-            return False
+            logger.error(f"Error storing API key for provider {provider}", exc_info=True)
+            raise ApiKeyRepositoryError(f"Failed to store API key for {provider}") from e
     
     async def get_key(self, provider: str) -> Optional[Dict[str, Any]]:
         """Get encrypted API key and metadata for a provider.
@@ -91,8 +100,8 @@ class SupabaseApiKeyRepository(IApiKeyRepository):
             return None
             
         except Exception as e:
-            print(f"Error getting key for {provider}: {e}")
-            return None
+            logger.error(f"Error getting API key for provider {provider}", exc_info=True)
+            raise ApiKeyRepositoryError(f"Failed to get API key for {provider}") from e
     
     async def get_active_providers(self) -> List[str]:
         """Get list of providers with active API keys.
@@ -110,6 +119,7 @@ class SupabaseApiKeyRepository(IApiKeyRepository):
             return []
             
         except Exception:
+            logger.error("Error getting active providers list", exc_info=True)
             return []
     
     async def deactivate_key(self, provider: str) -> bool:
@@ -130,8 +140,8 @@ class SupabaseApiKeyRepository(IApiKeyRepository):
             return len(response.data) > 0 if response.data else False
             
         except Exception as e:
-            print(f"Error deactivating key for {provider}: {e}")
-            return False
+            logger.error(f"Error deactivating API key for provider {provider}", exc_info=True)
+            raise ApiKeyRepositoryError(f"Failed to deactivate API key for {provider}") from e
     
     async def delete_key(self, provider: str) -> bool:
         """Permanently delete an API key for a provider.
@@ -148,8 +158,8 @@ class SupabaseApiKeyRepository(IApiKeyRepository):
             return len(response.data) > 0 if response.data else False
             
         except Exception as e:
-            print(f"Error deleting key for {provider}: {e}")
-            return False
+            logger.error(f"Error deleting API key for provider {provider}", exc_info=True)
+            raise ApiKeyRepositoryError(f"Failed to delete API key for {provider}") from e
     
     async def rotate_key(self, provider: str, new_encrypted_key: str) -> bool:
         """Rotate an API key for a provider.
@@ -178,5 +188,5 @@ class SupabaseApiKeyRepository(IApiKeyRepository):
             return bool(response.data)
             
         except Exception as e:
-            print(f"Error rotating key for {provider}: {e}")
-            return False
+            logger.error(f"Error rotating API key for provider {provider}", exc_info=True)
+            raise ApiKeyRepositoryError(f"Failed to rotate API key for {provider}") from e
