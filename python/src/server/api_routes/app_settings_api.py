@@ -126,6 +126,25 @@ async def get_rag_strategy_settings():
         raise HTTPException(status_code=500, detail="Failed to get RAG strategy settings")
 
 
+@router.get("/app-settings/code-extraction")
+async def get_code_extraction_settings():
+    """Get code extraction specific settings."""
+    try:
+        all_settings = await get_app_settings()
+        
+        # Extract code extraction related settings
+        code_settings = {
+            "CODE_EXTRACTION_BATCH_SIZE": all_settings.get("CODE_EXTRACTION_BATCH_SIZE", "10"),
+            "CODE_SUMMARY_MAX_WORKERS": all_settings.get("CODE_SUMMARY_MAX_WORKERS", "3")
+        }
+        
+        return code_settings
+        
+    except Exception as e:
+        logger.error(f"Error getting code extraction settings: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get code extraction settings")
+
+
 @router.post("/app-settings/{key}")
 async def update_app_setting(key: str, value: str):
     """Update an application setting."""

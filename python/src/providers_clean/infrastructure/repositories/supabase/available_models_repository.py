@@ -296,8 +296,8 @@ class SupabaseAvailableModelsRepository(IAvailableModelsRepository):
             Dictionary mapping provider names to their statistics
         """
         try:
-            # Use the model_statistics view
-            response = self.db.from_('model_statistics').select('*').execute()
+            # Use the model_usage view
+            response = self.db.from_('model_usage').select('*').execute()
             
             if not response.data:
                 return {}

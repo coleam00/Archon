@@ -15,6 +15,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -55,6 +56,19 @@ except ImportError:
 
 # Logger will be initialized after credentials are loaded
 logger = logging.getLogger(__name__)
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    project_root = Path(__file__).parent.parent.parent.parent
+    env_path = project_root / ".env"
+    if env_path.exists():
+        load_dotenv(env_path, override=True)
+        logger.info(f"Loaded environment variables from {env_path}")
+    else:
+        logger.warning(f".env file not found at {env_path}")
+except ImportError:
+    logger.warning("python-dotenv not installed, environment variables must be set manually")
 
 # Set up logging configuration to reduce noise
 

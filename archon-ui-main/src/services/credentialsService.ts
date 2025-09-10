@@ -214,6 +214,40 @@ class CredentialsService {
       return false;
     }
   }
+
+  async getCodeExtractionSettings(): Promise<{
+    CODE_EXTRACTION_BATCH_SIZE: number;
+    CODE_SUMMARY_MAX_WORKERS: number;
+  }> {
+    try {
+      const response = await fetch(
+        `${this.baseUrl}/api/app-settings/code-extraction`
+      );
+      if (!response.ok) {
+        throw new Error(
+          `Failed to fetch code extraction settings: ${response.status}`
+        );
+      }
+
+      const settings = await response.json();
+
+      // Convert string values to appropriate types
+      return {
+        CODE_EXTRACTION_BATCH_SIZE: toInt(
+          settings.CODE_EXTRACTION_BATCH_SIZE,
+          10
+        ),
+        CODE_SUMMARY_MAX_WORKERS: toInt(settings.CODE_SUMMARY_MAX_WORKERS, 3),
+      };
+    } catch (error) {
+      console.error("Failed to fetch code extraction settings:", error);
+      // Return sensible defaults on error
+      return {
+        CODE_EXTRACTION_BATCH_SIZE: 10,
+        CODE_SUMMARY_MAX_WORKERS: 3,
+      };
+    }
+  }
 }
 
 export const credentialsService = new CredentialsService();
