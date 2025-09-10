@@ -66,7 +66,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = React.memo(
         const providerStatuses =
           await cleanProviderService.getAllProviderStatuses();
         // Provider metadata is optional; handle 404 as empty object
-        let metadata: Record<string, ProviderMetadata> = {} as any;
+        let metadata: Record<string, ProviderMetadata> = {};
         try {
           metadata = await cleanProviderService.getProvidersMetadata();
         } catch (e) {
@@ -74,7 +74,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = React.memo(
             "Failed to fetch provider metadata, using empty object:",
             e
           );
-          metadata = {} as any;
+          metadata = {};
         }
 
         // Filter to only show configured providers

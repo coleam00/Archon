@@ -1,14 +1,13 @@
 /**
  * Clean Provider Service
- * 
+ *
  * Service for managing AI provider configuration, API keys, and usage tracking
  * using the simplified provider system.
  */
 
-import { apiRequest } from './api';
+import { apiRequest } from "./api";
 import type {
   ModelConfig,
-  APIKeyConfig,
   AvailableModel,
   ServiceStatus,
   UsageSummary,
@@ -20,11 +19,12 @@ import type {
   ProviderType,
   ServiceType,
   ProviderStatus,
-  ProviderHealth
-} from '../types/cleanProvider';
+  ProviderHealth,
+  ProviderMetadata,
+} from "../types/cleanProvider";
 
 // API base path - provider routes now include the /api prefix
-const API_BASE = '/providers';
+const API_BASE = "/providers";
 
 class CleanProviderService {
   // ==================== Providers ====================
@@ -39,12 +39,14 @@ class CleanProviderService {
   /**
    * Bootstrap: sync models and register services
    */
-  async bootstrap(force_refresh: boolean = false): Promise<any> {
-    const suffix = force_refresh ? '?force_refresh=true' : '';
-    return apiRequest<any>(`${API_BASE}/bootstrap${suffix}`, { method: 'POST' });
+  async bootstrap(force_refresh: boolean = false): Promise<InitializeResponse> {
+    const suffix = force_refresh ? "?force_refresh=true" : "";
+    return apiRequest<InitializeResponse>(`${API_BASE}/bootstrap${suffix}`, {
+      method: "POST",
+    });
   }
   // ==================== Model Configuration ====================
-  
+
   /**
    * Get model configuration for a specific service
    */
@@ -66,13 +68,13 @@ class CleanProviderService {
     const request: UpdateModelConfigRequest = {
       service_name: serviceName,
       model_string: modelString,
-      ...options
+      ...options,
     };
 
     return apiRequest<ModelConfig>(`${API_BASE}/models/config`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request)
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
     });
   }
 
@@ -95,11 +97,15 @@ class CleanProviderService {
    */
   async getAvailableModels(): Promise<AvailableModel[]> {
     try {
-      const response = await apiRequest<AvailableModel[]>(`${API_BASE}/models/available`);
-      console.log('[CleanProviderService] getAvailableModels response:', response);
+      const response = await apiRequest<AvailableModel[]>(
+        `${API_BASE}/models/available`
+      );
       return response;
     } catch (error) {
-      console.error('[CleanProviderService] Failed to get available models:', error);
+      console.error(
+        "[CleanProviderService] Failed to get available models:",
+        error
+      );
       throw error;
     }
   }
@@ -117,13 +123,13 @@ class CleanProviderService {
     const request: SetApiKeyRequest = {
       provider,
       api_key: apiKey,
-      base_url: baseUrl
+      base_url: baseUrl,
     };
 
     return apiRequest(`${API_BASE}/api-keys`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request)
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
     });
   }
 
@@ -137,9 +143,11 @@ class CleanProviderService {
   /**
    * Deactivate an API key for a provider
    */
-  async deactivateApiKey(provider: ProviderType): Promise<{ status: string; provider: string }> {
+  async deactivateApiKey(
+    provider: ProviderType
+  ): Promise<{ status: string; provider: string }> {
     return apiRequest(`${API_BASE}/api-keys/${provider}`, {
-      method: 'DELETE'
+      method: "DELETE",
     });
   }
 
@@ -152,7 +160,7 @@ class CleanProviderService {
     status: string;
   }> {
     return apiRequest(`${API_BASE}/api-keys/test/${provider}`, {
-      method: 'POST'
+      method: "POST",
     });
   }
 
@@ -166,10 +174,10 @@ class CleanProviderService {
     endDate?: Date
   ): Promise<UsageSummary> {
     const params = new URLSearchParams();
-    if (startDate) params.append('start_date', startDate.toISOString());
-    if (endDate) params.append('end_date', endDate.toISOString());
+    if (startDate) params.append("start_date", startDate.toISOString());
+    if (endDate) params.append("end_date", endDate.toISOString());
 
-    const url = params.toString() 
+    const url = params.toString()
       ? `${API_BASE}/usage/summary?${params}`
       : `${API_BASE}/usage/summary`;
 
@@ -197,7 +205,7 @@ class CleanProviderService {
    */
   async initialize(): Promise<InitializeResponse> {
     return apiRequest<InitializeResponse>(`${API_BASE}/initialize`, {
-      method: 'POST'
+      method: "POST",
     });
   }
 
@@ -230,26 +238,31 @@ class CleanProviderService {
   async getAllAgentConfigs(): Promise<Record<string, ModelConfig>> {
     const configs = await this.getAllConfigs();
     const agentConfigs: Record<string, ModelConfig> = {};
-    
+
     // Filter to only agent/service configs we care about
     const agentIds = [
-      'document_agent', 'rag_agent', 'task_agent',
-      'embeddings', 'contextual_embedding',
-      'source_summary', 'code_summary',
-      'code_analysis', 'validation'
+      "document_agent",
+      "rag_agent",
+      "task_agent",
+      "embeddings",
+      "contextual_embedding",
+      "source_summary",
+      "code_summary",
+      "code_analysis",
+      "validation",
     ];
-    
+
     for (const id of agentIds) {
       if (configs[id]) {
         agentConfigs[id] = {
           service_name: id as ServiceType,
           model_string: configs[id],
           temperature: 0.7, // Will be fetched from DB in real implementation
-          max_tokens: 2000
+          max_tokens: 2000,
         };
       }
     }
-    
+
     return agentConfigs;
   }
 
@@ -258,13 +271,16 @@ class CleanProviderService {
    * This shows exactly what models are being used by each service
    */
   async getActiveModels(): Promise<{
-    active_models: Record<string, {
-      model_string: string;
-      provider: string;
-      model: string;
-      api_key_configured: boolean;
-      is_default?: boolean;
-    }>;
+    active_models: Record<
+      string,
+      {
+        model_string: string;
+        provider: string;
+        model: string;
+        api_key_configured: boolean;
+        is_default?: boolean;
+      }
+    >;
     api_key_status: Record<string, boolean>;
     usage?: {
       total_tokens_today: number;
@@ -277,17 +293,20 @@ class CleanProviderService {
       // Get service status and active providers
       const [statusResponse, activeProviders] = await Promise.all([
         apiRequest<ServiceStatus[]>(`${API_BASE}/status`),
-        this.getActiveProviders()
+        this.getActiveProviders(),
       ]);
 
       // Transform the status response to match expected format
-      const active_models: Record<string, {
-        model_string: string;
-        provider: string;
-        model: string;
-        api_key_configured: boolean;
-        is_default?: boolean;
-      }> = {};
+      const active_models: Record<
+        string,
+        {
+          model_string: string;
+          provider: string;
+          model: string;
+          api_key_configured: boolean;
+          is_default?: boolean;
+        }
+      > = {};
 
       const api_key_status: Record<string, boolean> = {};
 
@@ -296,9 +315,9 @@ class CleanProviderService {
         active_models[status.service_name] = {
           model_string: status.model_string,
           provider: status.provider,
-          model: status.model,
-          api_key_configured: status.api_key_configured,
-          is_default: false
+          model: status.model_string,
+          api_key_configured: status.is_configured,
+          is_default: false,
         };
       }
 
@@ -313,12 +332,15 @@ class CleanProviderService {
         usage: {
           total_tokens_today: 0,
           total_cost_today: 0,
-          estimated_monthly_cost: 0
+          estimated_monthly_cost: 0,
         },
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       };
     } catch (error) {
-      console.error('[CleanProviderService] Failed to get active models:', error);
+      console.error(
+        "[CleanProviderService] Failed to get active models:",
+        error
+      );
       throw error;
     }
   }
@@ -327,16 +349,16 @@ class CleanProviderService {
    * Get usage statistics grouped by agent
    */
   async getAgentUsageStats(
-    startDate?: Date,
-    endDate?: Date
-  ): Promise<Array<{
-    agent_id: string;
-    total_requests: number;
-    total_cost: number;
-    avg_response_time_ms: number;
-  }>> {
-    const summary = await this.getUsageSummary(startDate, endDate);
-    
+    _startDate?: Date,
+    _endDate?: Date
+  ): Promise<
+    Array<{
+      agent_id: string;
+      total_requests: number;
+      total_cost: number;
+      avg_response_time_ms: number;
+    }>
+  > {
     // Transform usage data to be agent-centric
     // This would be properly implemented with backend support
     return [];
@@ -350,15 +372,15 @@ class CleanProviderService {
   async getProviderHealth(provider: ProviderType): Promise<ProviderHealth> {
     try {
       const result = await this.testApiKey(provider);
-      if (result.configured && result.status === 'active') {
-        return 'healthy';
+      if (result.configured && result.status === "active") {
+        return "healthy";
       } else if (result.configured) {
-        return 'degraded';
+        return "degraded";
       } else {
-        return 'not_configured';
+        return "not_configured";
       }
     } catch {
-      return 'error';
+      return "error";
     }
   }
 
@@ -383,17 +405,19 @@ class CleanProviderService {
     const activeProviders = await this.getActiveProviders();
 
     const statuses: ProviderStatus[] = [];
-    
+
     // Show all providers (the search/filter will help manage large lists)
     for (const provider of allProviders) {
       const isActive = activeProviders.includes(provider);
-      const health = isActive ? await this.getProviderHealth(provider) : 'not_configured';
-      
+      const health = isActive
+        ? await this.getProviderHealth(provider)
+        : "not_configured";
+
       statuses.push({
         provider: provider as ProviderType,
         health,
         configured: isActive,
-        lastChecked: new Date().toISOString()
+        lastChecked: new Date().toISOString(),
       });
     }
 
@@ -403,9 +427,11 @@ class CleanProviderService {
   /**
    * Get metadata for all providers
    */
-  async getProvidersMetadata(): Promise<Record<string, any>> {
+  async getProvidersMetadata(): Promise<Record<string, ProviderMetadata>> {
     try {
-      return await apiRequest<Record<string, any>>(`${API_BASE}/providers/metadata`);
+      return await apiRequest<Record<string, ProviderMetadata>>(
+        `${API_BASE}/providers/metadata`
+      );
     } catch {
       return {};
     }
@@ -414,25 +440,28 @@ class CleanProviderService {
   /**
    * Get metadata for a specific provider
    */
-  async getProviderMetadata(provider: string): Promise<any> {
+  async getProviderMetadata(
+    provider: string
+  ): Promise<ProviderMetadata | null> {
     try {
-      return await apiRequest<any>(`${API_BASE}/providers/${provider}/metadata`);
+      return await apiRequest<ProviderMetadata>(
+        `${API_BASE}/providers/${provider}/metadata`
+      );
     } catch {
       return null;
     }
   }
-
 }
 
 // Export singleton instance
 export const cleanProviderService = new CleanProviderService();
 
 // Export types for convenience
-export type { 
+export type {
   ModelConfig,
   ServiceStatus,
   AvailableModel,
   UsageSummary,
   ProviderType,
-  ServiceType
+  ServiceType,
 };
