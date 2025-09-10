@@ -1,10 +1,14 @@
-import { BookOpen, Settings } from "lucide-react";
+import { BookOpen, Settings, Bot } from "lucide-react";
 import type React from "react";
 import { Link, useLocation } from "react-router-dom";
 // TEMPORARY: Use old SettingsContext until settings are migrated
 import { useSettings } from "../../contexts/SettingsContext";
 import { glassmorphism } from "../../features/ui/primitives/styles";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../../features/ui/primitives/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "../../features/ui/primitives/tooltip";
 import { cn } from "../../lib/utils";
 
 interface NavigationItem {
@@ -32,6 +36,12 @@ export function Navigation({ className }: NavigationProps) {
       path: "/",
       icon: <BookOpen className="h-5 w-5" />,
       label: "Knowledge Base",
+      enabled: true,
+    },
+    {
+      path: "/agents",
+      icon: <Bot className="h-5 w-5" />,
+      label: "Agents",
       enabled: true,
     },
     {
@@ -73,7 +83,7 @@ export function Navigation({ className }: NavigationProps) {
         glassmorphism.background.subtle,
         "border border-gray-200 dark:border-zinc-800/50",
         "shadow-[0_10px_30px_-15px_rgba(0,0,0,0.1)] dark:shadow-[0_10px_30px_-15px_rgba(0,0,0,0.7)]",
-        className,
+        className
       )}
     >
       {/* Logo - Always visible, conditionally clickable for Projects */}
@@ -90,7 +100,7 @@ export function Navigation({ className }: NavigationProps) {
                   "bg-gradient-to-b from-white/20 to-white/5 dark:from-white/10 dark:to-black/20",
                   "shadow-[0_5px_15px_-5px_rgba(59,130,246,0.3)] dark:shadow-[0_5px_15px_-5px_rgba(59,130,246,0.5)]",
                   "transform scale-110",
-                ],
+                ]
               )}
             >
               <img
@@ -98,7 +108,8 @@ export function Navigation({ className }: NavigationProps) {
                 alt="Archon"
                 className={cn(
                   "w-8 h-8 transition-all duration-300",
-                  isProjectsActive && "filter drop-shadow-[0_0_8px_rgba(59,130,246,0.7)]",
+                  isProjectsActive &&
+                    "filter drop-shadow-[0_0_8px_rgba(59,130,246,0.7)]"
                 )}
               />
               {/* Active state decorations */}
@@ -111,7 +122,11 @@ export function Navigation({ className }: NavigationProps) {
             </Link>
           ) : (
             <div className="p-2 rounded-lg opacity-50 cursor-not-allowed">
-              <img src="/logo-neon.png" alt="Archon" className="w-8 h-8 grayscale" />
+              <img
+                src="/logo-neon.png"
+                alt="Archon"
+                className="w-8 h-8 grayscale"
+              />
             </div>
           )}
         </TooltipTrigger>
@@ -148,7 +163,8 @@ export function Navigation({ className }: NavigationProps) {
                           "hover:text-blue-600 dark:hover:text-blue-400",
                           "hover:bg-white/10 dark:hover:bg-white/5",
                         ],
-                    !isEnabled && "opacity-50 cursor-not-allowed pointer-events-none",
+                    !isEnabled &&
+                      "opacity-50 cursor-not-allowed pointer-events-none"
                   )}
                   onClick={(e) => {
                     if (!isEnabled) {

@@ -49,7 +49,7 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
           ? "shadow-[0_0_15px_rgba(168,85,247,0.4),0_0_10px_rgba(147,51,234,0.3)] dark:shadow-[0_0_20px_rgba(168,85,247,0.5),0_0_15px_rgba(147,51,234,0.4)]"
           : "shadow-[0_10px_30px_-15px_rgba(0,0,0,0.1)] dark:shadow-[0_10px_30px_-15px_rgba(0,0,0,0.7)]",
         "hover:shadow-[0_15px_40px_-15px_rgba(0,0,0,0.2)] dark:hover:shadow-[0_15px_40px_-15px_rgba(0,0,0,0.9)]",
-        isSelected ? "scale-[1.02]" : "hover:scale-[1.01]", // Use scale instead of translate to avoid clipping
+        isSelected ? "ring-1 ring-purple-500/50 shadow-lg shadow-purple-500/20" : "hover:ring-1 hover:ring-purple-500/30 hover:shadow-lg hover:shadow-purple-500/10", // Use glow effects instead of scale to avoid clipping
       )}
     >
       {/* Subtle aurora glow effect for selected card */}

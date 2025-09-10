@@ -5,13 +5,7 @@
  * Styled to match the existing EnhancedProviderCard UI patterns
  */
 
-import React, {
-  useState,
-  useEffect,
-  useCallback,
-  useRef,
-  useMemo,
-} from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { Clock, CheckCircle, XCircle } from "lucide-react";
 import { useToast } from "../../../../contexts/ToastContext";
 import type { AgentConfig } from "../../../../types/agent";
@@ -25,6 +19,8 @@ import { ModelSelectionModal } from "../model-selection/ModelSelectionModal";
 import { useAgents } from "../../hooks";
 import { AgentModelPanel } from "./AgentModelPanel";
 import { AgentSettingsDropdown } from "./AgentSettingsDropdown";
+import { GradientCard } from "../common/ui-primitives/GradientCard";
+import { getThemeForState } from "../common/styles/gradientStyles";
 
 interface AgentCardProps {
   agent: AgentConfig;
@@ -60,36 +56,29 @@ const validateServiceType = (id: string): ServiceType => {
 
 export const AgentCard: React.FC<AgentCardProps> = React.memo(
   ({ agent, availableModels, currentConfig }) => {
-    const [isModalOpen, setIsModalOpen] = useState(false);
-    const [selectedModel, setSelectedModel] = useState(
-      currentConfig?.model_string || agent.defaultModel
-    );
-    const [temperature, setTemperature] = useState(
-      currentConfig?.temperature || 0.7
-    );
-    const [maxTokens, setMaxTokens] = useState(
-      currentConfig?.max_tokens || 2000
-    );
+    // Consolidated state management
+    const [state, setState] = useState({
+      isModalOpen: false,
+      selectedModel: currentConfig?.model_string || agent.defaultModel,
+      temperature: currentConfig?.temperature || 0.7,
+      maxTokens: currentConfig?.max_tokens || 2000,
+      isSaving: false,
+      healthStatus: null as "healthy" | "unhealthy" | "checking" | null,
+    });
 
     const { showToast } = useToast();
-    const [isSaving, setIsSaving] = useState(false);
-    const [healthStatus, setHealthStatus] = useState<
-      "healthy" | "unhealthy" | "checking" | null
-    >(null);
-
     const { handleConfigUpdate } = useAgents();
     const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Sync local state with props when they change
     useEffect(() => {
       if (currentConfig) {
-        setSelectedModel(currentConfig.model_string);
-        if (currentConfig.temperature !== undefined) {
-          setTemperature(currentConfig.temperature);
-        }
-        if (currentConfig.max_tokens !== undefined) {
-          setMaxTokens(currentConfig.max_tokens);
-        }
+        setState((prev) => ({
+          ...prev,
+          selectedModel: currentConfig.model_string,
+          temperature: currentConfig.temperature ?? prev.temperature,
+          maxTokens: currentConfig.max_tokens ?? prev.maxTokens,
+        }));
       }
     }, [currentConfig]);
 
@@ -119,37 +108,37 @@ export const AgentCard: React.FC<AgentCardProps> = React.memo(
       config?: { temperature?: number; maxTokens?: number }
     ) => {
       // Close modal immediately for better UX
-      setIsModalOpen(false);
+      setState((prev) => ({ ...prev, isModalOpen: false }));
 
       // Store current state for potential rollback
       const previousState = {
-        selectedModel,
-        temperature,
-        maxTokens,
+        selectedModel: state.selectedModel,
+        temperature: state.temperature,
+        maxTokens: state.maxTokens,
       };
 
       // Optimistically update the UI
       const newConfig: ModelConfig = {
         service_name: validateServiceType(agent.id),
         model_string: model.model_string,
-        temperature: config?.temperature ?? temperature,
-        max_tokens: config?.maxTokens ?? maxTokens,
+        temperature: config?.temperature ?? state.temperature,
+        max_tokens: config?.maxTokens ?? state.maxTokens,
       };
 
       // Update local state immediately
-      setSelectedModel(model.model_string);
-      if (config?.temperature !== undefined) setTemperature(config.temperature);
-      if (config?.maxTokens !== undefined) setMaxTokens(config.maxTokens);
-
-      // Show saving status
-      setIsSaving(true);
-      setHealthStatus("checking");
+      setState((prev) => ({
+        ...prev,
+        selectedModel: model.model_string,
+        temperature: config?.temperature ?? prev.temperature,
+        maxTokens: config?.maxTokens ?? prev.maxTokens,
+        isSaving: true,
+        healthStatus: "checking",
+      }));
 
       try {
-        // Use the optimistic update hook
         await handleConfigUpdate(validateServiceType(agent.id), newConfig);
 
-        setHealthStatus("healthy");
+        setState((prev) => ({ ...prev, healthStatus: "healthy" }));
         showToast(
           `${agent.name} configuration updated successfully`,
           "success"
@@ -157,17 +146,20 @@ export const AgentCard: React.FC<AgentCardProps> = React.memo(
 
         // Clear status after success
         timeoutRef.current = setTimeout(() => {
-          setHealthStatus(null);
+          setState((prev) => ({ ...prev, healthStatus: null }));
           timeoutRef.current = null;
         }, 1500);
       } catch (error) {
         console.error("Failed to save agent config:", error);
-        setHealthStatus("unhealthy");
+        setState((prev) => ({ ...prev, healthStatus: "unhealthy" }));
 
         // Rollback to previous state
-        setSelectedModel(previousState.selectedModel);
-        setTemperature(previousState.temperature);
-        setMaxTokens(previousState.maxTokens);
+        setState((prev) => ({
+          ...prev,
+          selectedModel: previousState.selectedModel,
+          temperature: previousState.temperature,
+          maxTokens: previousState.maxTokens,
+        }));
 
         showToast(
           `Failed to update ${agent.name} configuration. Please try again.`,
@@ -176,18 +168,20 @@ export const AgentCard: React.FC<AgentCardProps> = React.memo(
 
         // Clear error status after delay
         timeoutRef.current = setTimeout(() => {
-          setHealthStatus(null);
+          setState((prev) => ({ ...prev, healthStatus: null }));
           timeoutRef.current = null;
         }, 3000);
       } finally {
-        setIsSaving(false);
+        setState((prev) => ({ ...prev, isSaving: false }));
       }
     };
 
     // Memoize computed values for performance
     const isModelAvailable = useMemo(() => {
-      return compatibleModels.some((m) => m.model_string === selectedModel);
-    }, [compatibleModels, selectedModel]);
+      return compatibleModels.some(
+        (m) => m.model_string === state.selectedModel
+      );
+    }, [compatibleModels, state.selectedModel]);
 
     const isActive = useMemo<boolean>(() => {
       return Boolean(currentConfig && isModelAvailable);
@@ -200,11 +194,7 @@ export const AgentCard: React.FC<AgentCardProps> = React.memo(
         medium: "text-yellow-400",
         low: "text-emerald-400",
       };
-      const labels = {
-        high: "$$$",
-        medium: "$$",
-        low: "$",
-      };
+      const labels = { high: "$$$", medium: "$$", low: "$" };
       return (
         <span
           className={`text-xs font-mono ${
@@ -218,7 +208,7 @@ export const AgentCard: React.FC<AgentCardProps> = React.memo(
 
     // Memoize status icon for better performance and accessibility
     const statusIcon = useMemo(() => {
-      if (healthStatus === "checking") {
+      if (state.healthStatus === "checking") {
         return (
           <Clock
             className="w-3.5 h-3.5 text-yellow-400 animate-spin"
@@ -226,7 +216,7 @@ export const AgentCard: React.FC<AgentCardProps> = React.memo(
           />
         );
       }
-      if (healthStatus === "healthy") {
+      if (state.healthStatus === "healthy") {
         return (
           <CheckCircle
             className="w-3.5 h-3.5 text-emerald-400"
@@ -234,7 +224,7 @@ export const AgentCard: React.FC<AgentCardProps> = React.memo(
           />
         );
       }
-      if (healthStatus === "unhealthy") {
+      if (state.healthStatus === "unhealthy") {
         return (
           <XCircle
             className="w-3.5 h-3.5 text-red-400"
@@ -256,60 +246,26 @@ export const AgentCard: React.FC<AgentCardProps> = React.memo(
           aria-label="Model unavailable"
         />
       );
-    }, [healthStatus, isModelAvailable]);
+    }, [state.healthStatus, isModelAvailable]);
 
     return (
-      <div
-        className={`relative rounded-xl overflow-hidden transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl ${
-          isActive
-            ? "ring-1 ring-purple-500/30 shadow-lg shadow-purple-500/10"
-            : ""
-        }`}
-        style={{
-          background: isActive
-            ? "linear-gradient(135deg, rgba(30, 25, 40, 0.9) 0%, rgba(20, 20, 30, 0.95) 100%)"
-            : "linear-gradient(135deg, rgba(20, 20, 30, 0.8) 0%, rgba(15, 15, 25, 0.9) 100%)",
-          backdropFilter: "blur(10px)",
-          animation: "fadeInUp 0.5s ease-out",
-        }}
+      <GradientCard
+        theme={getThemeForState(
+          isActive,
+          state.healthStatus === "unhealthy",
+          false
+        )}
+        isActive={isActive}
+        isHoverable={true}
+        onClick={undefined}
+        size="md"
         role="article"
         aria-labelledby={`agent-${agent.id}-title`}
         aria-describedby={`agent-${agent.id}-description`}
+        className="animate-fadeInUp"
       >
-        {/* Gradient border */}
-        <div
-          className="absolute inset-0 rounded-xl p-[1px] transition-all duration-300 pointer-events-none"
-          style={{
-            background: isActive
-              ? "linear-gradient(180deg, rgba(168, 85, 247, 0.5) 0%, rgba(7, 180, 130, 0.3) 100%)"
-              : "linear-gradient(180deg, rgba(168, 85, 247, 0.3) 0%, rgba(7, 180, 130, 0.1) 100%)",
-          }}
-        >
-          <div
-            className="w-full h-full rounded-xl"
-            style={{
-              background: isActive
-                ? "linear-gradient(135deg, rgba(30, 25, 40, 0.9) 0%, rgba(20, 20, 30, 0.95) 100%)"
-                : "linear-gradient(135deg, rgba(20, 20, 30, 0.8) 0%, rgba(15, 15, 25, 0.9) 100%)",
-            }}
-          />
-        </div>
-
-        {/* Status Bar for Active Agents or Saving */}
-        {(isActive || isSaving) && (
-          <div
-            className="absolute top-0 left-0 right-0 h-[3px] animate-shimmer transition-all duration-500 z-10"
-            style={{
-              backgroundImage: isSaving
-                ? "linear-gradient(90deg, transparent 0%, rgba(251, 191, 36, 1) 25%, rgba(251, 146, 60, 1) 75%, transparent 100%)"
-                : "linear-gradient(90deg, transparent 0%, rgba(168, 85, 247, 1) 25%, rgba(7, 180, 130, 1) 75%, transparent 100%)",
-              backgroundSize: "200% 100%",
-            }}
-          />
-        )}
-
         {/* Content */}
-        <div className="relative p-4">
+        <div className="relative">
           {/* Header */}
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-3">
@@ -350,30 +306,34 @@ export const AgentCard: React.FC<AgentCardProps> = React.memo(
 
           <AgentModelPanel
             agent={agent}
-            selectedModel={selectedModel}
+            selectedModel={state.selectedModel}
             currentConfig={currentConfig}
             isModelAvailable={isModelAvailable}
           />
           <div className="flex items-center justify-end mt-3">
             <AgentSettingsDropdown
               agent={agent}
-              isSaving={isSaving}
-              onConfigure={() => setIsModalOpen(true)}
+              isSaving={state.isSaving}
+              onConfigure={() =>
+                setState((prev) => ({ ...prev, isModalOpen: true }))
+              }
             />
           </div>
 
           {/* Model Selection Modal */}
           <ModelSelectionModal
-            isOpen={isModalOpen}
-            onClose={() => setIsModalOpen(false)}
+            isOpen={state.isModalOpen}
+            onClose={() =>
+              setState((prev) => ({ ...prev, isModalOpen: false }))
+            }
             models={compatibleModels}
-            currentModel={selectedModel}
+            currentModel={state.selectedModel}
             onSelectModel={handleModelSelect}
             agent={agent}
             showAdvancedSettings={true}
           />
         </div>
-      </div>
+      </GradientCard>
     );
   }
 );

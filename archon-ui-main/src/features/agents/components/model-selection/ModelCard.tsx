@@ -8,6 +8,8 @@ import React from "react";
 import { Check, AlertCircle } from "lucide-react";
 import type { AvailableModel } from "../../../../types/cleanProvider";
 import { getCostTierInfo, formatSingleCost } from "./modelSelectionUtils";
+import { GradientCard } from "../common/ui-primitives/GradientCard";
+import { Badge } from "../../../../components/ui/Badge";
 
 interface ModelCardProps {
   model: AvailableModel;
@@ -21,16 +23,13 @@ export const ModelCard: React.FC<ModelCardProps> = ({
   onSelect,
 }) => {
   return (
-    <div
+    <GradientCard
+      theme={isSelected ? "active" : "inactive"}
+      isActive={isSelected}
+      isHoverable={true}
       onClick={() => onSelect(model)}
-      className={`
-        relative p-4 rounded-lg border cursor-pointer transition-all
-        ${
-          isSelected
-            ? "border-purple-500 bg-purple-500/10"
-            : "border-zinc-700 hover:border-zinc-600 bg-zinc-800/50 hover:bg-zinc-800"
-        }
-      `}
+      size="md"
+      className="cursor-pointer"
     >
       {/* Selected Check */}
       {isSelected && (
@@ -49,13 +48,22 @@ export const ModelCard: React.FC<ModelCardProps> = ({
         {/* Badges and Pricing on same line */}
         <div className="flex items-center gap-3 flex-wrap">
           {model.cost_tier && (
-            <span
-              className={`px-2 py-0.5 text-xs rounded ${
-                getCostTierInfo(model.cost_tier).bgColor
-              } ${getCostTierInfo(model.cost_tier).color}`}
+            <Badge
+              variant={
+                model.cost_tier === "free"
+                  ? "success"
+                  : model.cost_tier === "low"
+                  ? "primary"
+                  : model.cost_tier === "medium"
+                  ? "warning"
+                  : model.cost_tier === "high"
+                  ? "error"
+                  : "secondary"
+              }
+              size="sm"
             >
               {getCostTierInfo(model.cost_tier).label}
-            </span>
+            </Badge>
           )}
 
           {/* Detailed Pricing - Input/Output inline */}
@@ -72,13 +80,17 @@ export const ModelCard: React.FC<ModelCardProps> = ({
           )}
 
           {!model.has_api_key && (
-            <span className="px-2 py-0.5 text-xs bg-yellow-500/10 text-yellow-400 rounded flex items-center gap-1">
+            <Badge
+              variant="warning"
+              size="sm"
+              className="flex items-center gap-1"
+            >
               <AlertCircle className="w-3 h-3" />
               No API Key
-            </span>
+            </Badge>
           )}
         </div>
       </div>
-    </div>
+    </GradientCard>
   );
 };

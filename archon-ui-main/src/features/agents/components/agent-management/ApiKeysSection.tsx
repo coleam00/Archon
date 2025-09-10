@@ -1,12 +1,13 @@
 /**
  * API Keys Section Component
- * 
+ *
  * Extracted from AgentsPage to reduce complexity
  * Handles the collapsible API key configuration section
  */
 
 import React from "react";
 import { Key } from "lucide-react";
+import { Badge } from "../../../../components/ui/Badge";
 import { CollapsibleSection } from "../common";
 import { ProviderSettings } from "../provider-management/ProviderSettings";
 import type { AvailableModel } from "../../../../types/cleanProvider";
@@ -34,7 +35,8 @@ export const ApiKeysSection: React.FC<ApiKeysSectionProps> = ({
   // Generate subtitle based on current state
   const getSubtitle = () => {
     if (hasModels) {
-      const providerCount = new Set(availableModels.map((m) => m.provider)).size;
+      const providerCount = new Set(availableModels.map((m) => m.provider))
+        .size;
       return (
         <>
           <span className="text-emerald-400">{providerCount}</span>
@@ -44,7 +46,7 @@ export const ApiKeysSection: React.FC<ApiKeysSectionProps> = ({
         </>
       );
     }
-    
+
     return (
       <span className="text-yellow-400">
         ⚠️ No providers configured - add API keys to get started
@@ -53,16 +55,19 @@ export const ApiKeysSection: React.FC<ApiKeysSectionProps> = ({
   };
 
   // Setup Required badge for when no models are configured
-  const badge = !showApiKeys && !hasModels ? (
-    <span className="px-2 py-0.5 text-xs rounded bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 animate-pulse">
-      Setup Required
-    </span>
-  ) : null;
+  const badge =
+    !showApiKeys && !hasModels ? (
+      <Badge variant="warning" size="sm" className="animate-pulse">
+        Setup Required
+      </Badge>
+    ) : null;
 
   return (
     <CollapsibleSection
       title="API Key Configuration"
-      subtitle={<span className="text-xs text-gray-500 mt-0.5">{getSubtitle()}</span>}
+      subtitle={
+        <span className="text-xs text-gray-500 mt-0.5">{getSubtitle()}</span>
+      }
       icon={<Key className="w-5 h-5" />}
       isExpanded={showApiKeys || shouldAutoExpand}
       onToggle={() => onToggleApiKeys(!showApiKeys)}

@@ -75,6 +75,7 @@ export const ProviderList: React.FC<ProviderListProps> = ({
           <button
             onClick={() => onSearchChange("")}
             className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white"
+            title="Clear search"
           >
             <X className="w-4 h-4" />
           </button>
@@ -141,25 +142,25 @@ export const ProviderList: React.FC<ProviderListProps> = ({
                           {/* Feature badges */}
                           <div className="flex flex-wrap gap-1">
                             {metadata.has_free_models && (
-                              <span className="px-2 py-0.5 text-xs bg-emerald-900/30 text-emerald-400 rounded">
+                              <Badge variant="success" size="sm">
                                 Free Models
-                              </span>
+                              </Badge>
                             )}
                             {metadata.supports_vision && (
-                              <span className="px-2 py-0.5 text-xs bg-blue-900/30 text-blue-400 rounded">
+                              <Badge variant="primary" size="sm">
                                 Vision
-                              </span>
+                              </Badge>
                             )}
                             {metadata.supports_tools && (
-                              <span className="px-2 py-0.5 text-xs bg-purple-900/30 text-purple-400 rounded">
+                              <Badge variant="secondary" size="sm">
                                 Tools/Functions
-                              </span>
+                              </Badge>
                             )}
                             {metadata.max_context_length > 100000 && (
-                              <span className="px-2 py-0.5 text-xs bg-yellow-900/30 text-yellow-400 rounded">
+                              <Badge variant="warning" size="sm">
                                 {Math.floor(metadata.max_context_length / 1000)}
                                 K Context
-                              </span>
+                              </Badge>
                             )}
                           </div>
 

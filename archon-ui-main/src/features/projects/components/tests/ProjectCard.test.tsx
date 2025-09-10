@@ -92,7 +92,8 @@ describe('ProjectCard', () => {
 
     const card = container.querySelector('[role="listitem"]');
     // Check for selected-specific classes
-    expect(card?.className).toContain('scale-[1.02]');
+    expect(card?.className).toContain('ring-1');
+    expect(card?.className).toContain('ring-purple-500/50');
     expect(card?.className).toContain('border-purple');
   });
 
