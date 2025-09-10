@@ -9,7 +9,7 @@ import { agentKeys, modelKeys, providerKeys, serviceKeys } from "../utils/queryK
 
 // Custom hook for smart polling intervals
 const useSmartPolling = (defaultInterval: number) => {
-  const refetchInterval =
+  const refetchInterval = () =>
     typeof document !== "undefined" && document.visibilityState === "visible" ? defaultInterval : false;
   return { refetchInterval };
 };
