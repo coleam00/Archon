@@ -146,7 +146,7 @@ def client(mock_supabase_client):
             return_value=mock_supabase_client,
         ):
             with patch(
-                "src.server.services.credential_service.create_client",
+                "src.server.services.client_manager.get_supabase_client",
                 return_value=mock_supabase_client,
             ):
                 with patch("supabase.create_client", return_value=mock_supabase_client):

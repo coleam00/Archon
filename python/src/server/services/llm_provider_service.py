@@ -18,6 +18,9 @@ from ..config.logfire_config import get_logger
 
 logger = get_logger(__name__)
 
+# Import credential service for tests
+from .credential_service import credential_service
+
 # Settings cache with TTL
 _settings_cache: dict[str, tuple[Any, float]] = {}
 _CACHE_TTL_SECONDS = 300  # 5 minutes

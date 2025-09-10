@@ -164,7 +164,7 @@ class TestAsyncCredentialService:
         # Mock successful insert
         mock_response = MagicMock()
         mock_response.data = [{"id": 1, "key": "NEW_KEY", "value": "new_value"}]
-        mock_table.insert().execute.return_value = mock_response
+        mock_table.insert.return_value.execute.return_value = mock_response
 
         with patch.object(credential_service, "_get_supabase_client", return_value=mock_client):
             result = await set_credential("NEW_KEY", "new_value", is_encrypted=False)
@@ -181,7 +181,7 @@ class TestAsyncCredentialService:
         # Mock successful insert
         mock_response = MagicMock()
         mock_response.data = [{"id": 1, "key": "SECRET_KEY"}]
-        mock_table.insert().execute.return_value = mock_response
+        mock_table.insert.return_value.execute.return_value = mock_response
 
         with patch.object(credential_service, "_get_supabase_client", return_value=mock_client):
             with patch.object(credential_service, "_encrypt_value", return_value="encrypted_value"):

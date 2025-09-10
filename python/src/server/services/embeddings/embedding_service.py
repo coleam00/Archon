@@ -16,6 +16,7 @@ from ...config.logfire_config import safe_span, search_logger
 
 from ..llm_provider_service import get_embedding_model, get_llm_client
 from ..threading_service import get_threading_service
+from ..credential_service import credential_service
 from .embedding_exceptions import (
     EmbeddingAPIError,
     EmbeddingError,
