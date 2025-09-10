@@ -173,7 +173,7 @@ If you need to completely reset your database and start fresh:
 3. **Restart Services**:
 
    ```bash
-   docker compose --profile full up -d
+   docker compose -f docker-compose.unified.yml up -d
    ```
 
 4. **Reconfigure**:
@@ -238,54 +238,63 @@ This is the same command used for initial setup - it rebuilds containers with th
 - **Document Management**: Version-controlled documents with collaborative editing capabilities
 - **Progress Tracking**: Real-time updates and status management across all project activities
 
-### 🔄 Real-time Collaboration
+### 🔄 Real-time Updates
 
-- **WebSocket Updates**: Live progress tracking for crawling, processing, and AI operations
-- **Multi-user Support**: Collaborative knowledge building and project management
+- **HTTP Polling**: Live progress tracking for crawling, processing, and AI operations with ETag caching
+- **Smart Polling**: Automatically pauses when browser tab is inactive to save resources
 - **Background Processing**: Asynchronous operations that don't block the user interface
-- **Health Monitoring**: Built-in service health checks and automatic reconnection
+- **Health Monitoring**: Built-in service health checks and status reporting
 
 ## Architecture
 
-### Microservices Structure
+### Unified Architecture
 
-Archon uses true microservices architecture with clear separation of concerns:
+Archon uses a unified microservices architecture with configurable deployment modes:
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   Frontend UI   │    │  Server (API)   │    │   MCP Server    │    │ Agents Service  │
-│                 │    │                 │    │                 │    │                 │
-│  React + Vite   │◄──►│    FastAPI +    │◄──►│    Lightweight  │◄──►│   PydanticAI    │
-│  Port 3737      │    │    SocketIO     │    │    HTTP Wrapper │    │   Port 8052     │
+│                 │    │                 │    │                 │    │    (Optional)   │
+│  React + Vite   │◄──►│    FastAPI +    │◄──►│   HTTP-based    │◄──►│   PydanticAI    │
+│  Port 3737      │    │   HTTP Polling  │    │   MCP Protocol  │    │   Port 8052     │
 │                 │    │    Port 8181    │    │    Port 8051    │    │                 │
 └─────────────────┘    └─────────────────┘    └─────────────────┘    └─────────────────┘
          │                        │                        │                        │
-         └────────────────────────┼────────────────────────┼────────────────────────┘
-                                  │                        │
-                         ┌─────────────────┐               │
-                         │    Database     │               │
-                         │                 │               │
-                         │    Supabase     │◄──────────────┘
-                         │    PostgreSQL   │
-                         │    PGVector     │
-                         └─────────────────┘
+         │                        │             ┌──────────┼────────────────────────┘
+         │                        │             │          │                         
+  ┌──────┼────────────────────────┼─────────────┘          │                         
+  │      │                        │                        │                         
+  │ ┌─────────────────┐          │              ┌─────────────────┐                 
+  │ │   Development   │          │              │   Production    │                 
+  │ │   localhost     │          │              │   LAN/Remote    │                 
+  │ │   127.0.0.1     │          │              │   0.0.0.0       │                 
+  │ └─────────────────┘          │              └─────────────────┘                 
+  │                              │                                                  
+  └──────────────────────────────┼──────────────────────────────────────────────────
+                                 │                                                  
+                        ┌─────────────────┐                                        
+                        │    Database     │                                        
+                        │    Supabase     │                                        
+                        │   PostgreSQL    │                                        
+                        │    PGVector     │                                        
+                        └─────────────────┘                                        
 ```
 
 ### Service Responsibilities
 
 | Service        | Location             | Purpose                      | Key Features                                                       |
 | -------------- | -------------------- | ---------------------------- | ------------------------------------------------------------------ |
-| **Frontend**   | `archon-ui-main/`    | Web interface and dashboard  | React, TypeScript, TailwindCSS, Socket.IO client                   |
-| **Server**     | `python/src/server/` | Core business logic and APIs | FastAPI, service layer, Socket.IO broadcasts, all ML/AI operations |
-| **MCP Server** | `python/src/mcp/`    | MCP protocol interface       | Lightweight HTTP wrapper, MCP tools, session management         |
-| **Agents**     | `python/src/agents/` | PydanticAI agent hosting     | Document and RAG agents, streaming responses                       |
+| **Frontend**   | `archon-ui-main/`    | Web interface and dashboard  | React, TypeScript, TailwindCSS, HTTP polling client               |
+| **Server**     | `python/src/server/` | Core business logic and APIs | FastAPI, service layer, ETag caching, all ML/AI operations        |
+| **MCP Server** | `python/src/mcp/`    | MCP protocol interface       | HTTP-based MCP tools, AI IDE connections, session management      |
+| **Agents**     | `python/src/agents/` | PydanticAI agent hosting     | Document and RAG agents, streaming responses (optional)           |
 
 ### Communication Patterns
 
 - **HTTP-based**: All inter-service communication uses HTTP APIs
-- **Socket.IO**: Real-time updates from Server to Frontend
-- **MCP Protocol**: AI clients connect to MCP Server via SSE or stdio
-- **No Direct Imports**: Services are truly independent with no shared code dependencies
+- **HTTP Polling**: Real-time updates from Server to Frontend with ETag caching
+- **MCP Protocol**: AI clients connect to MCP Server via HTTP (SSE mode)
+- **Configurable Exposure**: Services can bind to localhost-only or LAN-wide access
 
 ### Key Architectural Benefits
 

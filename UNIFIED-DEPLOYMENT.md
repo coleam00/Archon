@@ -1,6 +1,6 @@
 # Unified Docker Deployment
 
-This repository now uses a **single unified docker-compose.yml** file that works for both local development and LAN/production deployments through environment variables.
+This repository uses a **unified docker-compose.yml** approach where both the original `docker-compose.yml` (for development) and `docker-compose.unified.yml` (for production/LAN) share the same environment variable configuration, allowing for flexible deployment modes.
 
 ## Quick Start
 
@@ -36,33 +36,34 @@ Access at: `https://archon.yourdomain.com`
 
 | Setting | Local Development | LAN/Production |
 |---------|------------------|----------------|
-| **BUILD_TARGET** | `development` | `production` |
-| **BIND_IP** | `127.0.0.1` | `0.0.0.0` |
+| **Compose File** | `docker-compose.yml` | `docker-compose.unified.yml` |
+| **BIND_IP** | `127.0.0.1` (localhost only) | `0.0.0.0` (LAN access) |
 | **HOST** | `localhost` | `archon.yourdomain.com` |
 | **CORS_ORIGINS** | `http://localhost:3737` | `https://archon.yourdomain.com` |
-| **VITE_MCP_USE_PROXY** | `false` | `true` |
-| **Volume Mounts** | Enabled | Disabled |
-| **Docker Socket** | Mounted | Not mounted |
-| **External Proxy** | Not used | Traefik proxy network |
+| **MCP Access** | Direct `localhost:8051` | Direct `domain:8051` |
+| **Volume Mounts** | Enabled (development) | Minimal (production) |
+| **External Proxy** | Not required | Traefik proxy network |
+| **Service Profiles** | Standard services | All services + proxy |
 
 ## Environment Variables
 
 ### Core Settings
-- `DEPLOYMENT_MODE`: `local` or `lan`
-- `BUILD_TARGET`: `development` or `production`
-- `NODE_ENV`: `development` or `production`
+- `HOST`: Domain name or localhost (used for service discovery)
+- `BIND_IP`: IP to bind ports to (`127.0.0.1` for local, `0.0.0.0` for LAN, empty for all interfaces)
+- `CORS_ORIGINS`: Comma-separated list of allowed CORS origins
+- `API_BASE_URL`: Base URL for API service
 
-### Network Configuration
-- `HOST`: Domain or localhost
-- `BIND_IP`: IP to bind ports to (127.0.0.1 for local, 0.0.0.0 for LAN)
-- `CORS_ORIGINS`: Allowed CORS origins
-- `API_BASE_URL`: Base URL for API
+### Port Configuration
+- `ARCHON_SERVER_PORT`: Main API server port (default: 8181)
+- `ARCHON_MCP_PORT`: MCP server port (default: 8051)
+- `ARCHON_AGENTS_PORT`: Agents service port (default: 8052)
+- `ARCHON_UI_PORT`: Frontend port (default: 3737)
 
 ### MCP Configuration
-- `VITE_MCP_HOST`: MCP server hostname
+- `VITE_MCP_HOST`: MCP server hostname (for frontend)
 - `VITE_MCP_PROTOCOL`: `http` or `https`
-- `VITE_MCP_USE_PROXY`: `true` for LAN (routes through /mcp)
-- `VITE_MCP_PORT`: MCP server port
+- `VITE_MCP_USE_PROXY`: Whether to proxy MCP through frontend (usually `false`)
+- `VITE_MCP_PORT`: MCP server port (for frontend)
 
 ## Migration from Separate Files
 
@@ -72,7 +73,7 @@ If you're currently using separate docker-compose files:
    ```bash
    cp .env .env.backup
    cp docker-compose.yml docker-compose.yml.backup
-   cp docker-compose-lan.yml docker-compose-lan.yml.backup
+   # Note: docker-compose-lan.yml is now replaced by docker-compose.unified.yml
    ```
 
 2. **Choose your deployment mode**:
@@ -112,11 +113,19 @@ For LAN deployment with Traefik:
 
 ## Benefits of Unified Approach
 
-1. **Single source of truth**: One docker-compose file to maintain
-2. **Environment-based configuration**: Everything controlled via .env
-3. **Easier testing**: Switch between modes by changing .env
-4. **Reduced complexity**: No need to remember different compose files
-5. **Version control friendly**: Same file structure for all deployments
+1. **Shared environment variables**: Both dev and production use the same .env variable names
+2. **Consistent configuration**: Same parameterization across deployment modes
+3. **Flexible deployment**: Choose localhost-only or LAN-wide access via `BIND_IP`
+4. **Direct MCP access**: External AI IDEs can connect directly to MCP server
+5. **Simplified maintenance**: Fewer configuration files to manage
+
+## Important Architectural Changes
+
+⚠️ **This is NOT a zero-impact change**:
+- Development environment now uses the same parameterization as production
+- Setting `BIND_IP=0.0.0.0` in development will expose services on your LAN
+- MCP server is now exposed by default for AI IDE connections
+- Both `docker-compose.yml` and `docker-compose.unified.yml` read the same `.env` variables
 
 ## Troubleshooting
 
@@ -134,8 +143,12 @@ For LAN deployment with Traefik:
 
 ## Third-Party MCP Clients
 
-External MCP clients can connect to:
+External MCP clients can connect directly to the MCP server:
 - **Local**: `http://localhost:8051/mcp`
-- **LAN**: `https://archon.yourdomain.com/mcp`
+- **LAN**: `http://your-server-ip:8051/mcp` or `https://archon.yourdomain.com:8051/mcp`
 
-The configuration automatically handles routing based on `VITE_MCP_USE_PROXY` setting.
+**Important Notes:**
+- MCP server is **directly exposed** on port 8051 for AI IDE connections
+- No proxy routing needed - clients connect directly to the MCP service
+- Configure your AI IDE (Claude, Cursor, Windsurf) to point to these URLs
+- The `VITE_MCP_USE_PROXY` setting affects frontend behavior, not external client access
