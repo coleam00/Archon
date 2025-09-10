@@ -53,8 +53,8 @@ export const ProviderList: React.FC<ProviderListProps> = ({
       return (
         key.toLowerCase().includes(query) ||
         info.name.toLowerCase().includes(query) ||
-        info.description.toLowerCase().includes(query) ||
-        (metadata && metadata.provider.toLowerCase().includes(query))
+        (info.description || "").toLowerCase().includes(query) ||
+        (metadata?.provider || "").toLowerCase().includes(query)
       );
     });
   }, [searchQuery, providersMetadata, availableProviders]);
