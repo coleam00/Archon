@@ -6,6 +6,10 @@ from ...services import APIKeyService
 
 router = APIRouter(prefix="/api/providers", tags=["providers"])
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 @router.delete("/api-keys/{provider}")
 async def deactivate_api_key(
@@ -24,6 +28,9 @@ async def deactivate_api_key(
             )
     except HTTPException:
         raise
+    except Exception as e:
+        logger.exception(f"Error deactivating API key for provider {provider}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 @router.delete("/api-keys/{provider}/permanent")
 async def delete_api_key_permanent(
     provider: str,
