@@ -100,8 +100,8 @@ export const useAddProvider = () => {
 
   return useMutation({
     mutationFn: async ({ provider, apiKey, baseUrl }: ProviderOperation) => {
-      if (!apiKey) throw new Error("API key is required");
-      return agentApi.setApiKey(provider, apiKey, baseUrl);
+      if (provider !== "ollama" && !apiKey) throw new Error("API key is required");
+      return agentApi.setApiKey(provider, apiKey || "", baseUrl);
     },
     retry: (failureCount, error) => {
       // Don't retry validation errors
