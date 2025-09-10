@@ -6,6 +6,7 @@
 import { formatDistanceToNow } from "date-fns";
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertCircle, CheckCircle, Globe, Loader2, StopCircle, XCircle } from "lucide-react";
+import { useState } from "react";
 import { useToast } from "../../../ui/hooks/useToast";
 import { Button } from "../../../ui/primitives";
 import { cn } from "../../../ui/primitives/styles";
@@ -35,13 +36,18 @@ export const CrawlingProgress: React.FC<CrawlingProgressProps> = ({ onSwitchToBr
   const { activeOperations, isLoading } = useCrawlProgressPolling();
   const stopMutation = useStopCrawl();
   const { showToast } = useToast();
+  const [stoppingId, setStoppingId] = useState<string | null>(null);
 
   const handleStop = async (progressId: string) => {
     try {
+      setStoppingId(progressId);
       await stopMutation.mutateAsync(progressId);
-      showToast("Crawl stopped successfully", "success");
-    } catch (_error) {
-      showToast("Failed to stop crawl", "error");
+      showToast(`Crawl stopped successfully`, "success");
+    } catch (error) {
+      showToast(`Failed to stop crawl`, "error");
+      console.error("Stop crawl failed:", { progressId, error });
+    } finally {
+      setStoppingId(null);
     }
   };
 
@@ -65,8 +71,10 @@ export const CrawlingProgress: React.FC<CrawlingProgressProps> = ({ onSwitchToBr
       case "completed":
         return "text-green-400 bg-green-500/10 border-green-500/20";
       case "failed":
+      case "error":
         return "text-red-400 bg-red-500/10 border-red-500/20";
       case "stopped":
+      case "cancelled":
         return "text-yellow-400 bg-yellow-500/10 border-yellow-500/20";
       default:
         return "text-cyan-400 bg-cyan-500/10 border-cyan-500/20";
@@ -174,10 +182,10 @@ export const CrawlingProgress: React.FC<CrawlingProgressProps> = ({ onSwitchToBr
                         variant="ghost"
                         size="sm"
                         onClick={() => handleStop(operation.operation_id)}
-                        disabled={stopMutation.isPending}
+                        disabled={stoppingId === operation.operation_id}
                         className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
                       >
-                        {stopMutation.isPending ? (
+                        {stoppingId === operation.operation_id ? (
                           <Loader2 className="w-4 h-4 animate-spin" />
                         ) : (
                           <StopCircle className="w-4 h-4" />
