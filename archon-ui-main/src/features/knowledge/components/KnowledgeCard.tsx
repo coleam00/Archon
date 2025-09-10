@@ -57,6 +57,9 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
   };
 
   const handleRefresh = async () => {
+    // Prevent double-clicking refresh while a refresh is already in progress
+    if (refreshMutation.isPending) return;
+    
     const response = await refreshMutation.mutateAsync(item.source_id);
 
     // Notify parent about the new refresh operation
