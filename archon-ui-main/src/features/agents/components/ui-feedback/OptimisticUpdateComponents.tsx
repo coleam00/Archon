@@ -219,6 +219,8 @@ export const OptimisticToast: React.FC<OptimisticToastProps> = ({
               ? "optimistic"
               : type === "success"
               ? "success"
+              : type === "info"
+              ? "idle"
               : "error"
           }
         />
