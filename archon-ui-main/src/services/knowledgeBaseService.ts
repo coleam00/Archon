@@ -195,6 +195,28 @@ class KnowledgeBaseService {
   }
 
   /**
+   * Update tags for a knowledge item (optimized method for tag updates)
+   */
+  async updateKnowledgeItemTags(sourceId: string, tags: string[]): Promise<void> {
+    try {
+      console.log(`🏷️ [KnowledgeBase] Updating tags for ${sourceId}:`, tags);
+      
+      await this.updateKnowledgeItem(sourceId, { tags });
+      
+      console.log(`✅ [KnowledgeBase] Tags updated successfully for ${sourceId}`);
+    } catch (error) {
+      console.error(`❌ [KnowledgeBase] Failed to update tags for ${sourceId}:`, error);
+      
+      // Provide more descriptive error message
+      const errorMessage = error instanceof Error 
+        ? `Failed to update tags: ${error.message}`
+        : 'Failed to update tags due to an unknown error';
+      
+      throw new Error(errorMessage);
+    }
+  }
+
+  /**
    * Refresh a knowledge item by re-crawling its URL
    */
   async refreshKnowledgeItem(sourceId: string) {

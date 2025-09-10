@@ -8,6 +8,7 @@ import { Card } from '../ui/Card';
 import { KnowledgeItem } from '../../services/knowledgeBaseService';
 import { knowledgeBaseService } from '../../services/knowledgeBaseService';
 import { useToast } from '../../contexts/ToastContext';
+import { EditableTags } from './EditableTags';
 
 interface EditKnowledgeItemModalProps {
   item: KnowledgeItem;
@@ -26,7 +27,9 @@ export const EditKnowledgeItemModal: React.FC<EditKnowledgeItemModalProps> = ({
   const [formData, setFormData] = useState({
     title: item.title,
     description: item.metadata?.description || '',
+    tags: item.metadata?.tags || [],
   });
+  const [isUpdatingTags, setIsUpdatingTags] = useState(false);
 
   const isInGroup = Boolean(item.metadata?.group_name);
 
@@ -62,6 +65,15 @@ export const EditKnowledgeItemModal: React.FC<EditKnowledgeItemModalProps> = ({
       if (formData.description !== (item.metadata?.description || '')) {
         updates.description = formData.description;
       }
+
+      // Only include tags if they have changed (using immutable comparison)
+      const originalTags = item.metadata?.tags || [];
+      const sortedFormTags = [...formData.tags].sort();
+      const sortedOriginalTags = [...originalTags].sort();
+      const tagsChanged = JSON.stringify(sortedFormTags) !== JSON.stringify(sortedOriginalTags);
+      if (tagsChanged) {
+        updates.tags = formData.tags;
+      }
       
       await knowledgeBaseService.updateKnowledgeItem(item.source_id, updates);
       
@@ -74,6 +86,27 @@ export const EditKnowledgeItemModal: React.FC<EditKnowledgeItemModalProps> = ({
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleTagsUpdate = async (tags: string[]) => {
+    setIsUpdatingTags(true);
+    try {
+      setFormData(prev => ({ ...prev, tags }));
+    } catch (error) {
+      const errorMessage = error instanceof Error 
+        ? `Failed to update tags: ${error.message}` 
+        : 'Failed to update tags: Unknown error occurred';
+      
+      console.error('Tag update error:', error);
+      showToast(errorMessage, 'error');
+      throw error;
+    } finally {
+      setIsUpdatingTags(false);
+    }
+  };
+
+  const handleTagError = (error: string) => {
+    showToast(error, 'error');
   };
 
   const handleRemoveFromGroup = async () => {
@@ -183,6 +216,22 @@ export const EditKnowledgeItemModal: React.FC<EditKnowledgeItemModalProps> = ({
                   disabled={isLoading}
                   rows={3}
                   className="w-full bg-transparent text-gray-800 dark:text-white placeholder:text-gray-400 dark:placeholder:text-zinc-600 focus:outline-none resize-none"
+                />
+              </div>
+            </div>
+
+            {/* Tags field */}
+            <div className="w-full">
+              <label className="block text-gray-600 dark:text-zinc-400 text-sm mb-1.5">
+                Tags
+              </label>
+              <div className="backdrop-blur-md bg-gradient-to-b dark:from-white/10 dark:to-black/30 from-white/80 to-white/60 border dark:border-zinc-800/80 border-gray-200 rounded-md px-3 py-2 transition-all duration-200 focus-within:border-pink-500 focus-within:shadow-[0_0_15px_rgba(236,72,153,0.5)]">
+                <EditableTags
+                  tags={formData.tags}
+                  onTagsUpdate={handleTagsUpdate}
+                  maxVisibleTags={10}
+                  isUpdating={isUpdatingTags}
+                  onError={handleTagError}
                 />
               </div>
             </div>

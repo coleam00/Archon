@@ -1,10 +1,8 @@
-import { useEffect, useState, useRef, useMemo } from 'react';
-import { Search, Grid, Plus, Filter, BoxIcon, List, BookOpen, CheckSquare, Brain } from 'lucide-react';
+import { useEffect, useState, useMemo } from 'react';
+import { Search, Grid, Plus, Filter, BoxIcon, List, BookOpen, Brain } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
-import { Badge } from '../components/ui/Badge';
 import { useStaggeredEntrance } from '../hooks/useStaggeredEntrance';
 import { useToast } from '../contexts/ToastContext';
 import { knowledgeBaseService, KnowledgeItem, KnowledgeItemMetadata } from '../services/knowledgeBaseService';
@@ -36,7 +34,6 @@ export const KnowledgeBasePage = () => {
   const [typeFilter, setTypeFilter] = useState<'all' | 'technical' | 'business'>('all');
   const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [totalItems, setTotalItems] = useState(0);
   const [progressItems, setProgressItemsRaw] = useState<CrawlProgressData[]>([]);
   const [showCrawlingTab, setShowCrawlingTab] = useState(false);
   
@@ -49,10 +46,6 @@ export const KnowledgeBasePage = () => {
     });
   };
   
-  // Selection state
-  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
-  const [isSelectionMode, setIsSelectionMode] = useState(false);
-  const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
   
   // Document browser state
   const [documentBrowserSourceId, setDocumentBrowserSourceId] = useState<string | null>(null);
@@ -69,7 +62,6 @@ export const KnowledgeBasePage = () => {
         per_page: 100
       });
       setKnowledgeItems(response.items);
-      setTotalItems(response.total);
     } catch (error) {
       console.error('Failed to load knowledge items:', error);
       showToast('Failed to load knowledge items', 'error');
@@ -278,96 +270,7 @@ export const KnowledgeBasePage = () => {
     setIsDocumentBrowserOpen(true);
   };
   
-  const toggleSelectionMode = () => {
-    setIsSelectionMode(!isSelectionMode);
-    if (isSelectionMode) {
-      setSelectedItems(new Set());
-      setLastSelectedIndex(null);
-    }
-  };
   
-  const toggleItemSelection = (itemId: string, index: number, event: React.MouseEvent) => {
-    const newSelected = new Set(selectedItems);
-    
-    if (event.shiftKey && lastSelectedIndex !== null) {
-      const start = Math.min(lastSelectedIndex, index);
-      const end = Math.max(lastSelectedIndex, index);
-      
-      for (let i = start; i <= end; i++) {
-        if (filteredItems[i]) {
-          newSelected.add(filteredItems[i].id);
-        }
-      }
-    } else if (event.ctrlKey || event.metaKey) {
-      if (newSelected.has(itemId)) {
-        newSelected.delete(itemId);
-      } else {
-        newSelected.add(itemId);
-      }
-    } else {
-      if (newSelected.has(itemId)) {
-        newSelected.delete(itemId);
-      } else {
-        newSelected.add(itemId);
-      }
-    }
-    
-    setSelectedItems(newSelected);
-    setLastSelectedIndex(index);
-  };
-  
-  const selectAll = () => {
-    const allIds = new Set(filteredItems.map(item => item.id));
-    setSelectedItems(allIds);
-  };
-  
-  const deselectAll = () => {
-    setSelectedItems(new Set());
-    setLastSelectedIndex(null);
-  };
-  
-  const deleteSelectedItems = async () => {
-    if (selectedItems.size === 0) return;
-    
-    const count = selectedItems.size;
-    const confirmed = window.confirm(`Are you sure you want to delete ${count} selected item${count > 1 ? 's' : ''}?`);
-    
-    if (!confirmed) return;
-    
-    try {
-      const deletePromises = Array.from(selectedItems).map(itemId => 
-        knowledgeBaseService.deleteKnowledgeItem(itemId)
-      );
-      
-      await Promise.all(deletePromises);
-      
-      setKnowledgeItems(prev => prev.filter(item => !selectedItems.has(item.id)));
-      setSelectedItems(new Set());
-      setIsSelectionMode(false);
-      
-      showToast(`Successfully deleted ${count} item${count > 1 ? 's' : ''}`, 'success');
-    } catch (error) {
-      console.error('Failed to delete selected items:', error);
-      showToast('Failed to delete some items', 'error');
-    }
-  };
-  
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'a' && isSelectionMode) {
-        e.preventDefault();
-        selectAll();
-      }
-      
-      if (e.key === 'Escape' && isSelectionMode) {
-        toggleSelectionMode();
-      }
-    };
-    
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isSelectionMode, filteredItems]);
 
   const handleRefreshItem = async (sourceId: string) => {
     try {
@@ -655,16 +558,6 @@ export const KnowledgeBasePage = () => {
           </div>
           
           <Button 
-            onClick={toggleSelectionMode} 
-            variant={isSelectionMode ? "secondary" : "ghost"} 
-            accentColor="blue"
-            className={isSelectionMode ? "bg-blue-500/10 border-blue-500/40" : ""}
-          >
-            <CheckSquare className="w-4 h-4 mr-2 inline" />
-            <span>{isSelectionMode ? 'Cancel' : 'Select'}</span>
-          </Button>
-          
-          <Button 
             onClick={handleAddKnowledge} 
             variant="primary" 
             accentColor="purple" 
@@ -676,41 +569,6 @@ export const KnowledgeBasePage = () => {
         </motion.div>
       </motion.div>
 
-      {/* Selection Toolbar */}
-      <AnimatePresence>
-        {isSelectionMode && selectedItems.size > 0 && (
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            className="mb-6"
-          >
-            <Card className="p-4 bg-gradient-to-r from-blue-500/10 to-purple-500/10 border-blue-500/20">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {selectedItems.size} item{selectedItems.size > 1 ? 's' : ''} selected
-                  </span>
-                  <Button onClick={selectAll} variant="ghost" size="sm" accentColor="blue">
-                    Select All
-                  </Button>
-                  <Button onClick={deselectAll} variant="ghost" size="sm" accentColor="gray">
-                    Clear Selection
-                  </Button>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button onClick={() => setIsGroupModalOpen(true)} variant="secondary" size="sm" accentColor="blue">
-                    Create Group
-                  </Button>
-                  <Button onClick={deleteSelectedItems} variant="secondary" size="sm" accentColor="pink">
-                    Delete Selected
-                  </Button>
-                </div>
-              </div>
-            </Card>
-          </motion.div>
-        )}
-      </AnimatePresence>
       
       {/* Active Crawls Tab */}
       {showCrawlingTab && progressItems.length > 0 && (
@@ -752,7 +610,7 @@ export const KnowledgeBasePage = () => {
                   </motion.div>
                 ))}
                 
-                {ungroupedItems.map((item, index) => (
+                {ungroupedItems.map((item, _index) => (
                   <motion.div key={item.id} variants={contentItemVariants}>
                     <KnowledgeItemCard 
                       item={item} 
@@ -760,9 +618,6 @@ export const KnowledgeBasePage = () => {
                       onUpdate={loadKnowledgeItems} 
                       onRefresh={handleRefreshItem}
                       onBrowseDocuments={handleBrowseDocuments}
-                      isSelectionMode={isSelectionMode}
-                      isSelected={selectedItems.has(item.id)}
-                      onToggleSelection={(e) => toggleItemSelection(item.id, index, e)}
                     />
                   </motion.div>
                 ))}
@@ -792,11 +647,10 @@ export const KnowledgeBasePage = () => {
       
       {isGroupModalOpen && (
         <GroupCreationModal
-          selectedItems={knowledgeItems.filter(item => selectedItems.has(item.id))}
+          selectedItems={[]}
           onClose={() => setIsGroupModalOpen(false)}
           onSuccess={() => {
             setIsGroupModalOpen(false);
-            toggleSelectionMode();
             loadKnowledgeItems();
           }}
         />
@@ -813,6 +667,7 @@ export const KnowledgeBasePage = () => {
           }}
         />
       )}
+
     </div>
   );
 };

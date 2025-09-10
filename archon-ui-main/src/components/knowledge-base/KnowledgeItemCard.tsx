@@ -2,11 +2,12 @@ import { useState } from 'react';
 import { Link as LinkIcon, Upload, Trash2, RefreshCw, Code, FileText, Brain, BoxIcon, Pencil } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Badge } from '../ui/Badge';
-import { Checkbox } from '../ui/Checkbox';
 import { KnowledgeItem, knowledgeBaseService } from '../../services/knowledgeBaseService';
 import { useCardTilt } from '../../hooks/useCardTilt';
 import { CodeViewerModal, CodeExample } from '../code/CodeViewerModal';
 import { EditKnowledgeItemModal } from './EditKnowledgeItemModal';
+import { EditableTags } from './EditableTags';
+import { useToast } from '../../contexts/ToastContext';
 import '../../styles/card-animations.css';
 
 // Helper function to guess language from title
@@ -22,65 +23,6 @@ const guessLanguageFromTitle = (title: string = ''): string => {
   return 'javascript'; // Default
 };
 
-// Tags display component
-interface TagsDisplayProps {
-  tags: string[];
-}
-
-const TagsDisplay = ({ tags }: TagsDisplayProps) => {
-  const [showTooltip, setShowTooltip] = useState(false);
-  
-  if (!tags || tags.length === 0) return null;
-  
-  const visibleTags = tags.slice(0, 4);
-  const remainingTags = tags.slice(4);
-  const hasMoreTags = remainingTags.length > 0;
-  
-  return (
-    <div className="w-full">
-      <div className="flex flex-wrap gap-2 h-full">
-        {visibleTags.map((tag, index) => (
-          <Badge
-            key={index}
-            color="purple"
-            variant="outline"
-            className="text-xs"
-          >
-            {tag}
-          </Badge>
-        ))}
-        {hasMoreTags && (
-          <div
-            className="cursor-pointer relative"
-            onMouseEnter={() => setShowTooltip(true)}
-            onMouseLeave={() => setShowTooltip(false)}
-          >
-            <Badge
-              color="purple"
-              variant="outline"
-              className="bg-purple-100/50 dark:bg-purple-900/30 border-dashed text-xs"
-            >
-              +{remainingTags.length} more...
-            </Badge>
-            {showTooltip && (
-              <div className="absolute top-full mt-2 left-1/2 transform -translate-x-1/2 bg-black dark:bg-zinc-800 text-white text-xs rounded-lg py-2 px-3 shadow-lg z-50 whitespace-nowrap max-w-xs">
-                <div className="font-semibold text-purple-300 mb-1">
-                  Additional Tags:
-                </div>
-                {remainingTags.map((tag, index) => (
-                  <div key={index} className="text-gray-300">
-                    • {tag}
-                  </div>
-                ))}
-                <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-b-black dark:border-b-zinc-800"></div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
 
 // Delete confirmation modal component
 interface DeleteConfirmModalProps {
@@ -130,9 +72,6 @@ interface KnowledgeItemCardProps {
   onUpdate?: () => void;
   onRefresh?: (sourceId: string) => void;
   onBrowseDocuments?: (sourceId: string) => void;
-  isSelectionMode?: boolean;
-  isSelected?: boolean;
-  onToggleSelection?: (event: React.MouseEvent) => void;
 }
 
 export const KnowledgeItemCard = ({
@@ -141,9 +80,6 @@ export const KnowledgeItemCard = ({
   onUpdate,
   onRefresh,
   onBrowseDocuments,
-  isSelectionMode = false,
-  isSelected = false,
-  onToggleSelection
 }: KnowledgeItemCardProps) => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showCodeModal, setShowCodeModal] = useState(false);
@@ -154,6 +90,9 @@ export const KnowledgeItemCard = ({
   const [loadedCodeExamples, setLoadedCodeExamples] = useState<any[] | null>(null);
   const [isLoadingCodeExamples, setIsLoadingCodeExamples] = useState(false);
   const [isRecrawling, setIsRecrawling] = useState(false);
+  const [isUpdatingTags, setIsUpdatingTags] = useState(false);
+  
+  const { showToast } = useToast();
 
   const statusColorMap = {
     active: 'green',
@@ -196,10 +135,10 @@ export const KnowledgeItemCard = ({
   const sourceIconColor = getSourceIconColor();
   const typeIconColor = getTypeIconColor();
 
-  // Use the tilt effect hook - disable in selection mode
+  // Use the tilt effect hook
   const { cardRef, tiltStyles, handlers } = useCardTilt({
-    max: isSelectionMode ? 0 : 10,
-    scale: isSelectionMode ? 1 : 1.02,
+    max: 10,
+    scale: 1.02,
     perspective: 1200,
   });
 
@@ -222,6 +161,31 @@ export const KnowledgeItemCard = ({
         setIsRecrawling(false);
       }, 60000); // Reset after 60 seconds as a fallback
     }
+  };
+
+  const handleTagsUpdate = async (tags: string[]) => {
+    setIsUpdatingTags(true);
+    try {
+      await knowledgeBaseService.updateKnowledgeItem(item.source_id, { tags });
+      if (onUpdate) {
+        onUpdate();
+      }
+      showToast('Tags updated successfully', 'success');
+    } catch (error) {
+      const errorMessage = error instanceof Error 
+        ? `Failed to update tags: ${error.message}` 
+        : 'Failed to update tags: Unknown error occurred';
+      
+      console.error('Tag update error for card:', error);
+      showToast(errorMessage, 'error');
+      throw error; // Re-throw to let EditableTags handle the error display
+    } finally {
+      setIsUpdatingTags(false);
+    }
+  };
+
+  const handleTagError = (error: string) => {
+    showToast(error, 'error');
   };
 
   // Get code examples count from metadata
@@ -270,26 +234,8 @@ export const KnowledgeItemCard = ({
     >
       <Card
         accentColor={accentColor}
-        className={`relative h-full flex flex-col overflow-hidden ${
-          isSelected ? 'ring-2 ring-blue-500 dark:ring-blue-400' : ''
-        } ${isSelectionMode ? 'cursor-pointer' : ''}`}
-        onClick={(e) => {
-          if (isSelectionMode && onToggleSelection) {
-            e.stopPropagation();
-            onToggleSelection(e);
-          }
-        }}
+        className="relative h-full flex flex-col overflow-hidden"
       >
-        {/* Checkbox for selection mode */}
-        {isSelectionMode && (
-          <div className="absolute top-3 right-3 z-20">
-            <Checkbox
-              checked={isSelected}
-              onChange={() => {}}
-              className="pointer-events-none"
-            />
-          </div>
-        )}
         
         {/* Reflection overlay */}
         <div
@@ -335,8 +281,7 @@ export const KnowledgeItemCard = ({
             <h3 className="text-gray-800 dark:text-white font-medium flex-1 line-clamp-1 truncate min-w-0">
               {item.title}
             </h3>
-            {!isSelectionMode && (
-              <div className="flex items-center gap-1 flex-shrink-0">
+            <div className="flex items-center gap-1 flex-shrink-0">
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -358,7 +303,6 @@ export const KnowledgeItemCard = ({
                 <Trash2 className="w-3 h-3" />
                 </button>
               </div>
-            )}
           </div>
           
           {/* Description section - fixed height */}
@@ -368,7 +312,13 @@ export const KnowledgeItemCard = ({
           
           {/* Tags section - flexible height with flex-1 */}
           <div className="flex-1 flex flex-col card-3d-layer-2 min-h-[4rem]">
-            <TagsDisplay tags={item.metadata.tags || []} />
+            <EditableTags 
+              tags={item.metadata.tags || []} 
+              onTagsUpdate={handleTagsUpdate}
+              maxVisibleTags={4}
+              isUpdating={isUpdatingTags}
+              onError={handleTagError}
+            />
           </div>
           
           {/* Footer section - anchored to bottom */}
