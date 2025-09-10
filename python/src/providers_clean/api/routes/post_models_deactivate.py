@@ -8,7 +8,7 @@ from ...infrastructure.dependencies import get_model_sync_service
 router = APIRouter(prefix="/api/providers", tags=["providers"])
 
 
-@router.post("/models/{model_string}/deactivate")
+@router.post("/models/{model_string:path}/deactivate")
 async def deactivate_model(
     model_string: str,
     sync_service: ModelSyncService = Depends(get_model_sync_service)
