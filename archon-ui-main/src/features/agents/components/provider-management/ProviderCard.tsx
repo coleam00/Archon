@@ -77,7 +77,11 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
     }
 
     try {
-      await onSave(provider.provider, apiKey, baseUrl || undefined);
+      if (provider.provider === "ollama") {
+        await onSave(provider.provider, "", baseUrl || undefined);
+      } else {
+        await onSave(provider.provider, apiKey, baseUrl || undefined);
+      }
       setShowInput(false);
     } catch (error) {
       // Error is handled by parent
@@ -279,7 +283,11 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
               <div className="relative">
                 <Key className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                 <input
-                  type={provider.provider === "ollama" || showKey ? "text" : "password"}
+                  type={
+                    provider.provider === "ollama" || showKey
+                      ? "text"
+                      : "password"
+                  }
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                   placeholder={
