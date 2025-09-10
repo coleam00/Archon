@@ -4,9 +4,8 @@
  */
 
 import type { ModelConfig } from "../types";
-
-// For now, re-export from legacy service - will migrate gradually
-export { cleanProviderService as agentService } from "../../../services/cleanProviderService";
+import type { ProviderType, ServiceType } from "../../../types/cleanProvider";
+import { cleanProviderService } from "../../../services/cleanProviderService";
 
 // Specific API functions that will be used by TanStack Query
 export const agentApi = {
@@ -15,16 +14,13 @@ export const agentApi = {
 
   // Agent configs
   getAllAgentConfigs: () => cleanProviderService.getAllAgentConfigs(),
-  getAgentConfig: (serviceId: string) => cleanProviderService.getModelConfig(serviceId),
-  updateAgentConfig: (serviceId: string, config: ModelConfig) => 
-    cleanProviderService.updateAgentConfig(
-      serviceId, 
-      config.model_string, 
-      { 
-        temperature: config.temperature, 
-        max_tokens: config.max_tokens 
-      }
-    ),
+  getAgentConfig: (serviceId: ServiceType) =>
+    cleanProviderService.getModelConfig(serviceId),
+  updateAgentConfig: (serviceId: ServiceType, config: ModelConfig) =>
+    cleanProviderService.updateAgentConfig(serviceId, config.model_string, {
+      temperature: config.temperature,
+      max_tokens: config.max_tokens,
+    }),
 
   // Providers
   getActiveProviders: () => cleanProviderService.getActiveProviders(),
@@ -32,11 +28,10 @@ export const agentApi = {
   getAllProviders: () => cleanProviderService.getAllProviders(),
 
   // API Keys
-  setApiKey: (provider: string, apiKey: string, baseUrl?: string) =>
+  setApiKey: (provider: ProviderType, apiKey: string, baseUrl?: string) =>
     cleanProviderService.setApiKey(provider, apiKey, baseUrl),
-  removeApiKey: (provider: string) => cleanProviderService.deactivateApiKey(provider),
-  testApiKey: (provider: string) => cleanProviderService.testApiKey(provider),
+  removeApiKey: (provider: ProviderType) =>
+    cleanProviderService.deactivateApiKey(provider),
+  testApiKey: (provider: ProviderType) =>
+    cleanProviderService.testApiKey(provider),
 };
-
-// Import the service for backward compatibility
-import { cleanProviderService } from "../../../services/cleanProviderService";
