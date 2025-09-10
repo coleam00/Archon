@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { createPortal } from 'react-dom';
-import { Search, Filter, FileText, Globe, X } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Badge } from '../ui/Badge';
-import { Button } from '../ui/Button';
-import { knowledgeBaseService } from '../../services/knowledgeBaseService';
+import React, { useState, useEffect, useMemo } from "react";
+import { createPortal } from "react-dom";
+import { Search, FileText, Globe, X } from "lucide-react";
+import { motion } from "framer-motion";
+import { Badge } from "../ui/Badge";
+import { knowledgeBaseService } from "../../services/knowledgeBaseService";
 
 interface DocumentChunk {
   id: string;
@@ -24,10 +23,12 @@ const extractDomain = (url: string): string => {
   try {
     const urlObj = new URL(url);
     const hostname = urlObj.hostname;
-    
+
     // Remove 'www.' prefix if present
-    const withoutWww = hostname.startsWith('www.') ? hostname.slice(4) : hostname;
-    
+    const withoutWww = hostname.startsWith("www.")
+      ? hostname.slice(4)
+      : hostname;
+
     // Keep full hostname (minus 'www.') to preserve subdomain-level filtering
     return withoutWww;
   } catch {
@@ -42,15 +43,15 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({
 }) => {
   const [chunks, setChunks] = useState<DocumentChunk[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedDomain, setSelectedDomain] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedDomain, setSelectedDomain] = useState<string>("all");
   const [selectedChunkId, setSelectedChunkId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Extract unique domains from chunks
   const domains = useMemo(() => {
     const domainSet = new Set<string>();
-    chunks.forEach(chunk => {
+    chunks.forEach((chunk) => {
       if (chunk.url) {
         domainSet.add(extractDomain(chunk.url));
       }
@@ -60,24 +61,29 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({
 
   // Filter chunks based on search and domain
   const filteredChunks = useMemo(() => {
-    return chunks.filter(chunk => {
+    return chunks.filter((chunk) => {
       // Search filter
       const searchLower = searchQuery.toLowerCase();
-      const searchMatch = !searchQuery || 
+      const searchMatch =
+        !searchQuery ||
         chunk.content.toLowerCase().includes(searchLower) ||
         chunk.url?.toLowerCase().includes(searchLower);
-      
+
       // Domain filter
-      const domainMatch = selectedDomain === 'all' || 
+      const domainMatch =
+        selectedDomain === "all" ||
         (chunk.url && extractDomain(chunk.url) === selectedDomain);
-      
+
       return searchMatch && domainMatch;
     });
   }, [chunks, searchQuery, selectedDomain]);
 
   // Get selected chunk
   const selectedChunk = useMemo(() => {
-    return filteredChunks.find(chunk => chunk.id === selectedChunkId) || filteredChunks[0];
+    return (
+      filteredChunks.find((chunk) => chunk.id === selectedChunkId) ||
+      filteredChunks[0]
+    );
   }, [filteredChunks, selectedChunkId]);
 
   // Load chunks when component opens
@@ -91,9 +97,11 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({
     try {
       setLoading(true);
       setError(null);
-      
-      const response = await knowledgeBaseService.getKnowledgeItemChunks(sourceId);
-      
+
+      const response = await knowledgeBaseService.getKnowledgeItemChunks(
+        sourceId
+      );
+
       if (response.success) {
         setChunks(response.chunks);
         // Auto-select first chunk if none selected
@@ -101,11 +109,15 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({
           setSelectedChunkId(response.chunks[0].id);
         }
       } else {
-        setError('Failed to load document chunks');
+        setError("Failed to load document chunks");
       }
     } catch (error) {
-      console.error('Failed to load chunks:', error);
-      setError(error instanceof Error ? error.message : 'Failed to load document chunks');
+      console.error("Failed to load chunks:", error);
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Failed to load document chunks"
+      );
     } finally {
       setLoading(false);
     }
@@ -115,18 +127,25 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({
     try {
       setLoading(true);
       setError(null);
-      
-      const domainFilter = domain === 'all' ? undefined : domain;
-      const response = await knowledgeBaseService.getKnowledgeItemChunks(sourceId, domainFilter);
-      
+
+      const domainFilter = domain === "all" ? undefined : domain;
+      const response = await knowledgeBaseService.getKnowledgeItemChunks(
+        sourceId,
+        domainFilter
+      );
+
       if (response.success) {
         setChunks(response.chunks);
       } else {
-        setError('Failed to load document chunks');
+        setError("Failed to load document chunks");
       }
     } catch (error) {
-      console.error('Failed to load chunks with domain filter:', error);
-      setError(error instanceof Error ? error.message : 'Failed to load document chunks');
+      console.error("Failed to load chunks with domain filter:", error);
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Failed to load document chunks"
+      );
     } finally {
       setLoading(false);
     }
@@ -167,7 +186,7 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({
                 Document Chunks ({(filteredChunks || []).length})
               </h3>
             </div>
-            
+
             {/* Search */}
             <div className="relative mb-3">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
@@ -189,8 +208,10 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({
                 className="flex-1 bg-gray-900/70 border border-gray-800 rounded-lg text-sm text-gray-300 px-3 py-2 focus:outline-none focus:border-blue-500/50"
               >
                 <option value="all">All Domains</option>
-                {domains?.map(domain => (
-                  <option key={domain} value={domain}>{domain}</option>
+                {domains?.map((domain) => (
+                  <option key={domain} value={domain}>
+                    {domain}
+                  </option>
                 )) || []}
               </select>
             </div>
@@ -209,22 +230,30 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({
                   onClick={() => setSelectedChunkId(chunk.id)}
                   className={`w-full text-left p-3 mb-1 rounded-lg transition-all duration-200 ${
                     selectedChunk?.id === chunk.id
-                      ? 'bg-blue-500/20 border border-blue-500/40 shadow-[0_0_15px_rgba(59,130,246,0.2)]'
-                      : 'hover:bg-gray-800/50 border border-transparent'
+                      ? "bg-blue-500/20 border border-blue-500/40 shadow-[0_0_15px_rgba(59,130,246,0.2)]"
+                      : "hover:bg-gray-800/50 border border-transparent"
                   }`}
                 >
                   <div className="flex items-start gap-2">
-                    <FileText className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
-                      selectedChunk?.id === chunk.id ? 'text-blue-400' : 'text-gray-500'
-                    }`} />
+                    <FileText
+                      className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
+                        selectedChunk?.id === chunk.id
+                          ? "text-blue-400"
+                          : "text-gray-500"
+                      }`}
+                    />
                     <div className="flex-1 min-w-0">
-                      <div className={`text-sm font-medium ${
-                        selectedChunk?.id === chunk.id ? 'text-blue-300' : 'text-gray-300'
-                      } line-clamp-1`}>
+                      <div
+                        className={`text-sm font-medium ${
+                          selectedChunk?.id === chunk.id
+                            ? "text-blue-300"
+                            : "text-gray-300"
+                        } line-clamp-1`}
+                      >
                         Chunk {index + 1}
                       </div>
                       <div className="text-xs text-gray-500 line-clamp-2 mt-0.5">
-                        {chunk.content?.substring(0, 100) || 'No content'}...
+                        {chunk.content?.substring(0, 100) || "No content"}...
                       </div>
                       {chunk.url && (
                         <div className="text-xs text-blue-400 mt-1 truncate">
@@ -245,7 +274,7 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({
           <div className="p-4 border-b border-gray-800 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <h2 className="text-xl font-semibold text-blue-400">
-                {selectedChunk ? `Document Chunk` : 'Document Browser'}
+                {selectedChunk ? `Document Chunk` : "Document Browser"}
               </h2>
               {selectedChunk?.url && (
                 <Badge color="blue" className="flex items-center gap-1">
@@ -261,7 +290,7 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({
               <X className="w-5 h-5" />
             </button>
           </div>
-          
+
           {/* Content */}
           <div className="flex-1 overflow-auto">
             {loading ? (
@@ -275,7 +304,9 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({
               <div className="h-full flex items-center justify-center">
                 <div className="text-center">
                   <FileText className="w-12 h-12 text-gray-600 mx-auto mb-4" />
-                  <p className="text-gray-400">Select a document chunk to view content</p>
+                  <p className="text-gray-400">
+                    Select a document chunk to view content
+                  </p>
                 </div>
               </div>
             ) : (
@@ -287,13 +318,13 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({
                         {selectedChunk.url}
                       </div>
                     )}
-                    
+
                     <div className="prose prose-sm prose-invert max-w-none">
                       <div className="text-gray-300 whitespace-pre-wrap leading-relaxed">
-                        {selectedChunk.content || 'No content available'}
+                        {selectedChunk.content || "No content available"}
                       </div>
                     </div>
-                    
+
                     {selectedChunk.metadata && (
                       <div className="mt-6 pt-4 border-t border-gray-700">
                         <details className="text-sm text-gray-400">

@@ -8,14 +8,16 @@
 import React, { useState } from "react";
 import { Key, Loader2, Plus, Shield } from "lucide-react";
 import { useToast } from "../../../../contexts/ToastContext";
-import type {
-  ProviderType,
-} from "../../../../types/cleanProvider";
+import type { ProviderType } from "../../../../types/cleanProvider";
 import { Button } from "../../../../components/ui/Button";
 import { AddProviderModal } from "./AddProviderModal";
 import { useAgents } from "../../hooks";
 import { ProviderCard } from "./ProviderCard";
-import { useActiveProviders, useAllProviders, useProvidersMetadata } from "../../hooks/useAgentQueries";
+import {
+  useActiveProviders,
+  useAllProviders,
+  useProvidersMetadata,
+} from "../../hooks/useAgentQueries";
 
 interface ProviderSettingsProps {
   onProviderAdded?: () => void;
@@ -46,7 +48,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = React.memo(
       const active = activeProvidersQuery.data || [];
 
       // Create provider status objects for active providers
-      return active.map(providerName => ({
+      return active.map((providerName) => ({
         provider: providerName as ProviderType,
         configured: true,
         health: "healthy" as const,
@@ -58,11 +60,12 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = React.memo(
     const unconfiguredProviders = React.useMemo(() => {
       const active = activeProvidersQuery.data || [];
       const all = allProvidersQuery.data || [];
-      return all.filter(p => !active.includes(p));
+      return all.filter((p) => !active.includes(p));
     }, [activeProvidersQuery.data, allProvidersQuery.data]);
 
     // Calculate loading and error states
-    const isLoading = activeProvidersQuery.isLoading || allProvidersQuery.isLoading;
+    const isLoading =
+      activeProvidersQuery.isLoading || allProvidersQuery.isLoading;
 
     const handleSaveApiKey = async (
       provider: ProviderType,

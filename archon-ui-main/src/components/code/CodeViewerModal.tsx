@@ -1,49 +1,48 @@
-import React, { useEffect, useState, useMemo } from 'react'
-import { createPortal } from 'react-dom'
-import { motion } from 'framer-motion'
+import React, { useEffect, useState, useMemo } from "react";
+import { createPortal } from "react-dom";
+import { motion } from "framer-motion";
 import {
   X,
   Copy,
   Check,
   Code as CodeIcon,
-  FileText,
   TagIcon,
   Info,
   Search,
   ChevronRight,
   FileCode,
-} from 'lucide-react'
-import Prism from 'prismjs'
-import 'prismjs/components/prism-javascript'
-import 'prismjs/components/prism-jsx'
-import 'prismjs/components/prism-typescript'
-import 'prismjs/components/prism-tsx'
-import 'prismjs/components/prism-css'
-import 'prismjs/components/prism-python'
-import 'prismjs/components/prism-java'
-import 'prismjs/components/prism-json'
-import 'prismjs/components/prism-markdown'
-import 'prismjs/components/prism-yaml'
-import 'prismjs/components/prism-bash'
-import 'prismjs/components/prism-sql'
-import 'prismjs/components/prism-graphql'
-import 'prismjs/themes/prism-tomorrow.css'
-import { Button } from '../ui/Button'
-import { Badge } from '../ui/Badge'
+} from "lucide-react";
+import Prism from "prismjs";
+import "prismjs/components/prism-javascript";
+import "prismjs/components/prism-jsx";
+import "prismjs/components/prism-typescript";
+import "prismjs/components/prism-tsx";
+import "prismjs/components/prism-css";
+import "prismjs/components/prism-python";
+import "prismjs/components/prism-java";
+import "prismjs/components/prism-json";
+import "prismjs/components/prism-markdown";
+import "prismjs/components/prism-yaml";
+import "prismjs/components/prism-bash";
+import "prismjs/components/prism-sql";
+import "prismjs/components/prism-graphql";
+import "prismjs/themes/prism-tomorrow.css";
+import { Button } from "../ui/Button";
+import { Badge } from "../ui/Badge";
 
 export interface CodeExample {
-  id: string
-  title: string
-  description: string
-  language: string
-  code: string
-  tags?: string[]
+  id: string;
+  title: string;
+  description: string;
+  language: string;
+  code: string;
+  tags?: string[];
 }
 
 interface CodeViewerModalProps {
-  examples: CodeExample[]
-  onClose: () => void
-  isLoading?: boolean
+  examples: CodeExample[];
+  onClose: () => void;
+  isLoading?: boolean;
 }
 
 export const CodeViewerModal: React.FC<CodeViewerModalProps> = ({
@@ -51,64 +50,67 @@ export const CodeViewerModal: React.FC<CodeViewerModalProps> = ({
   onClose,
   isLoading = false,
 }) => {
-  const [activeTab, setActiveTab] = useState<'code' | 'metadata'>('code')
-  const [activeExampleIndex, setActiveExampleIndex] = useState(0)
-  const [copied, setCopied] = useState(false)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [activeTab, setActiveTab] = useState<"code" | "metadata">("code");
+  const [activeExampleIndex, setActiveExampleIndex] = useState(0);
+  const [copied, setCopied] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   // Filter examples based on search query
   const filteredExamples = useMemo(() => {
-    if (!searchQuery.trim()) return examples
+    if (!searchQuery.trim()) return examples;
 
-    const query = searchQuery.toLowerCase()
+    const query = searchQuery.toLowerCase();
     return examples.filter((example) => {
       return (
         example.title.toLowerCase().includes(query) ||
         example.description.toLowerCase().includes(query) ||
         example.code.toLowerCase().includes(query) ||
         example.tags?.some((tag) => tag.toLowerCase().includes(query))
-      )
-    })
-  }, [examples, searchQuery])
+      );
+    });
+  }, [examples, searchQuery]);
 
-  const activeExample = filteredExamples[activeExampleIndex] || examples[0]
+  const activeExample = filteredExamples[activeExampleIndex] || examples[0];
 
   // Handle escape key to close modal
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === "Escape") onClose();
       // Arrow key navigation
-      if (e.key === 'ArrowDown' && activeExampleIndex < filteredExamples.length - 1) {
-        setActiveExampleIndex(activeExampleIndex + 1)
+      if (
+        e.key === "ArrowDown" &&
+        activeExampleIndex < filteredExamples.length - 1
+      ) {
+        setActiveExampleIndex(activeExampleIndex + 1);
       }
-      if (e.key === 'ArrowUp' && activeExampleIndex > 0) {
-        setActiveExampleIndex(activeExampleIndex - 1)
+      if (e.key === "ArrowUp" && activeExampleIndex > 0) {
+        setActiveExampleIndex(activeExampleIndex - 1);
       }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onClose, activeExampleIndex, filteredExamples.length])
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose, activeExampleIndex, filteredExamples.length]);
 
   // Apply syntax highlighting
   useEffect(() => {
     if (activeExample) {
-      Prism.highlightAll()
+      Prism.highlightAll();
     }
-  }, [activeExample, activeExampleIndex])
+  }, [activeExample, activeExampleIndex]);
 
   // Reset active index when search changes
   useEffect(() => {
-    setActiveExampleIndex(0)
-  }, [searchQuery])
+    setActiveExampleIndex(0);
+  }, [searchQuery]);
 
   const handleCopyCode = () => {
     if (activeExample) {
-      navigator.clipboard.writeText(activeExample.code)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      navigator.clipboard.writeText(activeExample.code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     }
-  }
+  };
 
   // Using React Portal to render the modal at the root level
   return createPortal(
@@ -128,9 +130,13 @@ export const CodeViewerModal: React.FC<CodeViewerModalProps> = ({
       >
         {/* Pink accent line at the top */}
         <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-pink-500 to-purple-500 shadow-[0_0_20px_5px_rgba(236,72,153,0.5)]"></div>
-        
+
         {/* Sidebar */}
-        <div className={`${sidebarCollapsed ? 'w-0' : 'w-80'} transition-all duration-300 bg-gray-950/50 border-r border-gray-800 flex flex-col overflow-hidden`}>
+        <div
+          className={`${
+            sidebarCollapsed ? "w-0" : "w-80"
+          } transition-all duration-300 bg-gray-950/50 border-r border-gray-800 flex flex-col overflow-hidden`}
+        >
           {/* Sidebar Header */}
           <div className="p-4 border-b border-gray-800">
             <div className="flex items-center justify-between mb-3">
@@ -144,7 +150,7 @@ export const CodeViewerModal: React.FC<CodeViewerModalProps> = ({
                 <X className="w-4 h-4" />
               </button>
             </div>
-            
+
             {/* Search */}
             <div className="relative">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500" />
@@ -157,7 +163,7 @@ export const CodeViewerModal: React.FC<CodeViewerModalProps> = ({
               />
             </div>
           </div>
-          
+
           {/* Example List */}
           <div className="flex-1 overflow-y-auto p-2">
             {filteredExamples.length === 0 ? (
@@ -171,25 +177,37 @@ export const CodeViewerModal: React.FC<CodeViewerModalProps> = ({
                   onClick={() => setActiveExampleIndex(index)}
                   className={`w-full text-left p-3 mb-1 rounded-lg transition-all duration-200 ${
                     index === activeExampleIndex
-                      ? 'bg-pink-500/20 border border-pink-500/40 shadow-[0_0_15px_rgba(236,72,153,0.2)]'
-                      : 'hover:bg-gray-800/50 border border-transparent'
+                      ? "bg-pink-500/20 border border-pink-500/40 shadow-[0_0_15px_rgba(236,72,153,0.2)]"
+                      : "hover:bg-gray-800/50 border border-transparent"
                   }`}
                 >
                   <div className="flex items-start gap-2">
-                    <FileCode className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
-                      index === activeExampleIndex ? 'text-pink-400' : 'text-gray-500'
-                    }`} />
+                    <FileCode
+                      className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
+                        index === activeExampleIndex
+                          ? "text-pink-400"
+                          : "text-gray-500"
+                      }`}
+                    />
                     <div className="flex-1 min-w-0">
-                      <div className={`text-sm font-medium ${
-                        index === activeExampleIndex ? 'text-pink-300' : 'text-gray-300'
-                      } line-clamp-1`}>
+                      <div
+                        className={`text-sm font-medium ${
+                          index === activeExampleIndex
+                            ? "text-pink-300"
+                            : "text-gray-300"
+                        } line-clamp-1`}
+                      >
                         {example.title}
                       </div>
                       <div className="text-xs text-gray-500 line-clamp-2 mt-0.5">
                         {example.description}
                       </div>
                       <div className="flex items-center gap-2 mt-1">
-                        <Badge color="gray" variant="outline" className="text-xs">
+                        <Badge
+                          color="gray"
+                          variant="outline"
+                          className="text-xs"
+                        >
                           {example.language}
                         </Badge>
                         {example.tags && example.tags.length > 0 && (
@@ -208,7 +226,7 @@ export const CodeViewerModal: React.FC<CodeViewerModalProps> = ({
             )}
           </div>
         </div>
-        
+
         {/* Sidebar Toggle Button */}
         {sidebarCollapsed && (
           <button
@@ -218,17 +236,17 @@ export const CodeViewerModal: React.FC<CodeViewerModalProps> = ({
             <ChevronRight className="w-4 h-4" />
           </button>
         )}
-        
+
         {/* Main Content */}
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Header */}
           <div className="flex justify-between items-center p-6 border-b border-gray-800">
             <div className="flex-1">
               <h2 className="text-2xl font-bold text-pink-400">
-                {activeExample?.title || 'Code Example'}
+                {activeExample?.title || "Code Example"}
               </h2>
               <p className="text-gray-400 mt-1 max-w-2xl line-clamp-2">
-                {activeExample?.description || 'No description available'}
+                {activeExample?.description || "No description available"}
               </p>
             </div>
             <button
@@ -238,12 +256,12 @@ export const CodeViewerModal: React.FC<CodeViewerModalProps> = ({
               <X className="w-5 h-5" />
             </button>
           </div>
-          
+
           {/* Toolbar */}
           <div className="flex justify-between items-center p-4 border-b border-gray-800">
             <div className="flex items-center gap-2">
               <Badge color="pink" variant="outline" className="text-xs">
-                {activeExample?.language || 'unknown'}
+                {activeExample?.language || "unknown"}
               </Badge>
               {activeExample?.tags?.map((tag) => (
                 <Badge
@@ -281,25 +299,25 @@ export const CodeViewerModal: React.FC<CodeViewerModalProps> = ({
               </Button>
             </div>
           </div>
-          
+
           {/* Tabs */}
           <div className="flex border-b border-gray-800">
             <TabButton
-              active={activeTab === 'code'}
-              onClick={() => setActiveTab('code')}
+              active={activeTab === "code"}
+              onClick={() => setActiveTab("code")}
               icon={<CodeIcon className="w-4 h-4" />}
               label="Code"
               color="pink"
             />
             <TabButton
-              active={activeTab === 'metadata'}
-              onClick={() => setActiveTab('metadata')}
+              active={activeTab === "metadata"}
+              onClick={() => setActiveTab("metadata")}
               icon={<Info className="w-4 h-4" />}
               label="Metadata"
               color="pink"
             />
           </div>
-          
+
           {/* Content */}
           <div className="flex-1 overflow-auto">
             {isLoading ? (
@@ -316,20 +334,25 @@ export const CodeViewerModal: React.FC<CodeViewerModalProps> = ({
                   <p className="text-gray-400">No code examples available</p>
                 </div>
               </div>
-            ) : activeTab === 'code' && activeExample && (
-              <div className="h-full p-4">
-                <div className="bg-[#2d2d2d] rounded-lg border border-gray-800 h-full overflow-auto">
-                  <pre className="p-4 text-sm">
-                    <code
-                      className={`language-${activeExample.language || 'javascript'}`}
-                    >
-                      {activeExample.code}
-                    </code>
-                  </pre>
+            ) : (
+              activeTab === "code" &&
+              activeExample && (
+                <div className="h-full p-4">
+                  <div className="bg-[#2d2d2d] rounded-lg border border-gray-800 h-full overflow-auto">
+                    <pre className="p-4 text-sm">
+                      <code
+                        className={`language-${
+                          activeExample.language || "javascript"
+                        }`}
+                      >
+                        {activeExample.code}
+                      </code>
+                    </pre>
+                  </div>
                 </div>
-              </div>
+              )
             )}
-            {activeTab === 'metadata' && activeExample && (
+            {activeTab === "metadata" && activeExample && (
               <div className="h-full p-4">
                 <div className="bg-gray-900/70 rounded-lg border border-gray-800 p-6 h-full overflow-auto">
                   <h3 className="text-lg font-medium text-pink-400 mb-4">
@@ -338,7 +361,7 @@ export const CodeViewerModal: React.FC<CodeViewerModalProps> = ({
                   <p className="text-gray-300 mb-6">
                     {activeExample.description}
                   </p>
-                  
+
                   <div className="space-y-6">
                     <div>
                       <h4 className="text-sm font-medium text-gray-400 mb-2">
@@ -353,7 +376,7 @@ export const CodeViewerModal: React.FC<CodeViewerModalProps> = ({
                         </span>
                       </div>
                     </div>
-                    
+
                     <div>
                       <h4 className="text-sm font-medium text-gray-400 mb-2">
                         Code Statistics
@@ -361,19 +384,23 @@ export const CodeViewerModal: React.FC<CodeViewerModalProps> = ({
                       <div className="grid grid-cols-2 gap-4">
                         <div className="bg-gray-800/50 rounded-lg p-3">
                           <div className="text-2xl font-bold text-pink-400">
-                            {activeExample.code.split('\n').length}
+                            {activeExample.code.split("\n").length}
                           </div>
-                          <div className="text-xs text-gray-500">Lines of code</div>
+                          <div className="text-xs text-gray-500">
+                            Lines of code
+                          </div>
                         </div>
                         <div className="bg-gray-800/50 rounded-lg p-3">
                           <div className="text-2xl font-bold text-pink-400">
                             {activeExample.code.length}
                           </div>
-                          <div className="text-xs text-gray-500">Characters</div>
+                          <div className="text-xs text-gray-500">
+                            Characters
+                          </div>
                         </div>
                       </div>
                     </div>
-                    
+
                     {activeExample.tags && activeExample.tags.length > 0 && (
                       <div>
                         <h4 className="text-sm font-medium text-gray-400 mb-2">
@@ -396,16 +423,16 @@ export const CodeViewerModal: React.FC<CodeViewerModalProps> = ({
         </div>
       </motion.div>
     </motion.div>,
-    document.body,
-  )
-}
+    document.body
+  );
+};
 
 interface TabButtonProps {
-  active: boolean
-  onClick: () => void
-  icon: React.ReactNode
-  label: string
-  color: string
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+  color: string;
 }
 
 const TabButton: React.FC<TabButtonProps> = ({
@@ -416,27 +443,35 @@ const TabButton: React.FC<TabButtonProps> = ({
   color,
 }) => {
   const colorMap: Record<string, string> = {
-    green: 'text-green-400 border-green-500',
-    blue: 'text-blue-400 border-blue-500',
-    pink: 'text-pink-400 border-pink-500',
-    purple: 'text-purple-400 border-purple-500',
-  }
-  
-  const activeColor = colorMap[color] || 'text-pink-400 border-pink-500'
-  
+    green: "text-green-400 border-green-500",
+    blue: "text-blue-400 border-blue-500",
+    pink: "text-pink-400 border-pink-500",
+    purple: "text-purple-400 border-purple-500",
+  };
+
+  const activeColor = colorMap[color] || "text-pink-400 border-pink-500";
+
   return (
     <button
       onClick={onClick}
       className={`
         px-6 py-3 flex items-center gap-2 transition-all duration-300 relative
-        ${active ? activeColor : 'text-gray-400 hover:text-gray-200 border-transparent'}
+        ${
+          active
+            ? activeColor
+            : "text-gray-400 hover:text-gray-200 border-transparent"
+        }
       `}
     >
       {icon}
       {label}
       {active && (
-        <div className={`absolute bottom-0 left-0 right-0 h-0.5 ${color === 'pink' ? 'bg-pink-500' : 'bg-green-500'}`}></div>
+        <div
+          className={`absolute bottom-0 left-0 right-0 h-0.5 ${
+            color === "pink" ? "bg-pink-500" : "bg-green-500"
+          }`}
+        ></div>
       )}
     </button>
-  )
-}
+  );
+};

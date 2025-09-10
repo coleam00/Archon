@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Bug, X, Send, Copy, ExternalLink, Loader } from "lucide-react";
+import { Bug, X, Send, Copy, Loader } from "lucide-react";
 import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 import { Card } from "../ui/Card";
@@ -43,7 +43,7 @@ export const BugReportModal: React.FC<BugReportModalProps> = ({
     if (!report.description.trim()) {
       showToast(
         "Please provide a description of what you were trying to do",
-        "error",
+        "error"
       );
       return;
     }
@@ -66,7 +66,7 @@ export const BugReportModal: React.FC<BugReportModalProps> = ({
           showToast(
             `Bug report created! Issue #${result.issueNumber} - maintainers will review it soon.`,
             "success",
-            8000,
+            8000
           );
           if (result.issueUrl) {
             window.open(result.issueUrl, "_blank");
@@ -76,21 +76,21 @@ export const BugReportModal: React.FC<BugReportModalProps> = ({
           showToast(
             "Opening GitHub to submit your bug report...",
             "success",
-            5000,
+            5000
           );
           if (result.issueUrl) {
             // Force new tab/window opening
             const newWindow = window.open(
               result.issueUrl,
               "_blank",
-              "noopener,noreferrer",
+              "noopener,noreferrer"
             );
             if (!newWindow) {
               // Popup blocked - show manual link
               showToast(
                 "Popup blocked! Please allow popups or click the link in the modal.",
                 "warning",
-                8000,
+                8000
               );
             }
           }
@@ -104,14 +104,14 @@ export const BugReportModal: React.FC<BugReportModalProps> = ({
         showToast(
           "Failed to create GitHub issue, but bug report was copied to clipboard. Please paste it in a new GitHub issue.",
           "warning",
-          10000,
+          10000
         );
       }
     } catch (error) {
       console.error("Bug report submission failed:", error);
       showToast(
         "Failed to submit bug report. Please try again or report manually.",
-        "error",
+        "error"
       );
     } finally {
       setSubmitting(false);
