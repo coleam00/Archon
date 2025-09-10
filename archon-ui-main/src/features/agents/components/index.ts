@@ -40,10 +40,6 @@ export { AgentsPageError } from "./ui-feedback/AgentsPageError";
 
 // ===== COMMON COMPONENTS =====
 // Reusable UI components used across agent features
-export { ModalHeader } from "./common/ModalHeader";
-export { ModalFooter } from "./common/ModalFooter";
-export { SearchInput } from "./common/SearchInput";
-export { AgentsPageHeader } from "./common/AgentsPageHeader";
 
 // ===== COMMON COMPONENTS & UTILITIES =====
 // Shared components, utilities, hooks, and styles
