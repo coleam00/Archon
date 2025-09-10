@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Lock } from "lucide-react";
+import { Lock, Loader2 } from "lucide-react";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
 import { cleanProviderService } from "../../services/cleanProviderService";
@@ -11,6 +11,7 @@ export const APIKeysSection = () => {
   const [isLoadingProviders, setIsLoadingProviders] = useState(true);
   const [providerKey, setProviderKey] = useState("");
   const [selectedProvider, setSelectedProvider] = useState<ProviderType | null>(null);
+  const [isBootstrapping, setIsBootstrapping] = useState(false);
 
   const { showToast } = useToast();
 
@@ -31,6 +32,21 @@ export const APIKeysSection = () => {
       setProviders([]);
     } finally {
       setIsLoadingProviders(false);
+    }
+  };
+
+  const handleBootstrapProviders = async () => {
+    try {
+      setIsBootstrapping(true);
+      await cleanProviderService.bootstrap(true);
+      showToast("Providers bootstrapped successfully", "success");
+      // Refresh providers list
+      await loadProviders();
+    } catch (err: unknown) {
+      console.error("Failed to bootstrap providers", err);
+      showToast("Failed to bootstrap providers", "error");
+    } finally {
+      setIsBootstrapping(false);
     }
   };
 
@@ -75,9 +91,17 @@ export const APIKeysSection = () => {
                 </span>
                 <Button
                   size="sm"
-                  onClick={() => cleanProviderService.bootstrap(true)}
+                  onClick={handleBootstrapProviders}
+                  disabled={isBootstrapping}
                 >
-                  Bootstrap Providers
+                  {isBootstrapping ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Bootstrapping...
+                    </>
+                  ) : (
+                    "Bootstrap Providers"
+                  )}
                 </Button>
               </div>
             ) : null}
