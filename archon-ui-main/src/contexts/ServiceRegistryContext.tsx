@@ -72,32 +72,38 @@ export const ServiceRegistryProvider: React.FC<
   const showToastRef = useRef(showToast);
   showToastRef.current = showToast;
 
+  const cancelRef = useRef<(() => void) | null>(null);
+
   const refreshServices = useCallback(async () => {
+    let canceled = false;
+    cancelRef.current = () => {
+      canceled = true;
+    };
     try {
       setLoading(true);
       setError(null);
 
       // Load all active services from database
       const allServices = await serviceRegistryService.getAllServices(true);
-      setServices(allServices);
+      if (!canceled) setServices(allServices);
     } catch (err) {
       const errorMessage =
         err instanceof Error ? err.message : "Failed to load services";
-      setError(errorMessage);
+      if (!canceled) setError(errorMessage);
 
       // Show toast error, but don't fail completely
-      showToastRef.current(
-        "Failed to load service registry - using fallback",
-        "warning"
-      );
+      showToastRef.current("Failed to load service registry.", "warning");
     } finally {
-      setLoading(false);
+      if (!canceled) setLoading(false);
     }
-  }, []); // Now stable since we use ref for showToast
+  }, []); // stable via ref
 
   // Load services on mount
   useEffect(() => {
     refreshServices();
+    return () => {
+      if (cancelRef.current) cancelRef.current();
+    };
   }, [refreshServices]);
 
   const getServiceByName = useCallback(
