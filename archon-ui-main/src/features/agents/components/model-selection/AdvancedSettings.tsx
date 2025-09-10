@@ -59,9 +59,15 @@ export const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 max="2"
                 step="0.1"
                 value={temperature}
-                onChange={(e) =>
-                  onTemperatureChange(parseFloat(e.target.value))
-                }
+                onChange={(e) => {
+                  const parsedValue = parseFloat(e.target.value);
+                  const min = 0;
+                  const max = 2;
+                  const clampedValue = isFinite(parsedValue)
+                    ? Math.min(Math.max(parsedValue, min), max)
+                    : min;
+                  onTemperatureChange(clampedValue);
+                }}
                 className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer"
                 style={{
                   background: `linear-gradient(to right, #7c3aed 0%, #7c3aed ${
