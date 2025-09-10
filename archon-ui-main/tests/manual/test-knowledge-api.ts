@@ -3,11 +3,20 @@
  * Run with: npx tsx tests/manual/test-knowledge-api.ts
  */
 
+// Set up test environment
+process.env.NODE_ENV = 'test';
+process.env.ARCHON_SERVER_PORT = '8181';
+
 import { knowledgeService } from '../../src/features/knowledge/services/knowledgeService';
 import { progressService } from '../../src/features/knowledge/progress/services/progressService';
 
-// Mock fetch for Node environment
-global.fetch = require('node-fetch');
+// Ensure fetch in Node environments lacking global fetch
+if (typeof fetch === "undefined") {
+  // Use dynamic import for ESM compatibility
+  const { fetch: nodeFetch } = await import('node-fetch');
+  // @ts-expect-error: assign global
+  globalThis.fetch = nodeFetch as any;
+}
 
 async function testKnowledgeAPI() {
   console.log('🧪 Testing Knowledge API Integration...\n');
@@ -15,20 +24,21 @@ async function testKnowledgeAPI() {
   try {
     // Test 1: Get knowledge items
     console.log('📋 Test 1: Fetching knowledge items...');
-    const items = await knowledgeService.getKnowledgeItems({
+    const items = await knowledgeService.getKnowledgeSummaries({
       page: 1,
       per_page: 5,
     });
     console.log(`✅ Success! Found ${items.total} total items`);
     console.log(`   Returned ${items.items.length} items on page ${items.page}`);
     if (items.items.length > 0) {
-      console.log(`   First item: ${items.items[0].title}`);
+      const first = items.items[0];
+      console.log(`   First item: ${first.title || first.source_id}`);
     }
     console.log('');
 
     // Test 2: Filter by type
     console.log('🔍 Test 2: Filtering by knowledge type...');
-    const technicalItems = await knowledgeService.getKnowledgeItems({
+    const technicalItems = await knowledgeService.getKnowledgeSummaries({
       knowledge_type: 'technical',
       page: 1,
       per_page: 3,
@@ -41,13 +51,13 @@ async function testKnowledgeAPI() {
       const sourceId = items.items[0].source_id;
       console.log(`📄 Test 3: Getting chunks for ${sourceId}...`);
       const chunks = await knowledgeService.getKnowledgeItemChunks(sourceId);
-      console.log(`✅ Found ${chunks.count} chunks`);
+      console.log(`✅ Found ${chunks.total} chunks`);
       console.log('');
 
       // Test 4: Get code examples
       console.log(`💻 Test 4: Getting code examples for ${sourceId}...`);
       const examples = await knowledgeService.getCodeExamples(sourceId);
-      console.log(`✅ Found ${examples.count} code examples`);
+      console.log(`✅ Found ${examples.total} code examples`);
       console.log('');
     }
 
@@ -96,7 +106,5 @@ async function testKnowledgeAPI() {
   }
 }
 
-// Run if executed directly
-if (require.main === module) {
-  testKnowledgeAPI();
-}
+// Run the test
+testKnowledgeAPI();

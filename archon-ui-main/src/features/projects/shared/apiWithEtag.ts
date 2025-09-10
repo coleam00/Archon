@@ -15,6 +15,28 @@ const dataCache = typeof Map !== "undefined" ? new Map<string, unknown>() : null
 // Debug flag for console logging (only in dev or when VITE_SHOW_DEVTOOLS is enabled)
 const ETAG_DEBUG = typeof import.meta !== "undefined" && import.meta.env?.DEV === true;
 
+/**
+ * Build full URL with test environment handling
+ * Ensures consistent URL construction for cache keys
+ */
+function buildFullUrl(cleanEndpoint: string): string {
+  let fullUrl = `${API_BASE_URL}${cleanEndpoint}`;
+
+  // Only convert to absolute URL in test environment
+  const isTestEnv = typeof process !== "undefined" && process.env?.NODE_ENV === "test";
+
+  if (isTestEnv && !fullUrl.startsWith("http")) {
+    const testHost = "localhost";
+    const testPort = process.env?.ARCHON_SERVER_PORT || "8181";
+    fullUrl = `http://${testHost}:${testPort}${fullUrl}`;
+    if (ETAG_DEBUG) {
+      console.log(`[Test] Converted URL: ${fullUrl}`);
+    }
+  }
+
+  return fullUrl;
+}
+
 // Generate cache key from endpoint and options
 function getCacheKey(endpoint: string, options: RequestInit = {}): string {
   // Include method in cache key (GET vs POST, etc), normalized to uppercase
@@ -32,19 +54,7 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
     const cleanEndpoint = endpoint.startsWith("/api") ? endpoint.substring(4) : endpoint;
 
     // Construct the full URL
-    let fullUrl = `${API_BASE_URL}${cleanEndpoint}`;
-
-    // Only convert to absolute URL in test environment
-    const isTestEnv = typeof process !== "undefined" && process.env?.NODE_ENV === "test";
-
-    if (isTestEnv && !fullUrl.startsWith("http")) {
-      const testHost = "localhost";
-      const testPort = process.env?.ARCHON_SERVER_PORT || "8181";
-      fullUrl = `http://${testHost}:${testPort}${fullUrl}`;
-      if (ETAG_DEBUG) {
-        console.log(`[Test] Converted URL: ${fullUrl}`);
-      }
-    }
+    const fullUrl = buildFullUrl(cleanEndpoint);
 
     const cacheKey = getCacheKey(fullUrl, options);
     const method = (options.method || "GET").toUpperCase();
@@ -168,11 +178,8 @@ export function clearETagCache(): void {
  * Useful after mutations that affect specific resources
  */
 export function invalidateETagCache(endpoint: string, method = "GET"): void {
-  // TODO: In test environments, this builds a relative URL while callAPIWithETag builds
-  // an absolute URL (http://localhost:8181/...), causing cache key mismatch.
-  // This prevents cache invalidation from working in tests. Fix when tests need ETag functionality.
   const cleanEndpoint = endpoint.startsWith("/api") ? endpoint.substring(4) : endpoint;
-  const fullUrl = `${API_BASE_URL}${cleanEndpoint}`;
+  const fullUrl = buildFullUrl(cleanEndpoint);
   const normalizedMethod = method.toUpperCase();
   const cacheKey = `${normalizedMethod}:${fullUrl}`;
 
