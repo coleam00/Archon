@@ -7,12 +7,12 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from providers_clean.core.interfaces.repositories import (
+from ..core.interfaces.repositories import (
     IModelConfigRepository,
     IApiKeyRepository,
     IUsageRepository
 )
-from providers_clean.core.interfaces.unit_of_work import IUnitOfWork
+from ..core.interfaces.unit_of_work import IUnitOfWork
 from cryptography.fernet import Fernet
 
 

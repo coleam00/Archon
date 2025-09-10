@@ -13,7 +13,6 @@ from .routes.post_api_keys import router as post_api_keys_router
 from .routes.get_api_keys_providers import router as get_api_keys_providers_router
 from .routes.delete_api_key import router as delete_api_key_router
 from .routes.post_api_keys_test import router as post_api_keys_test_router
-from .routes.post_migrate_model_config import router as post_migrate_model_config_router
 
 from .routes.get_usage_summary import router as get_usage_summary_router
 from .routes.get_usage_daily import router as get_usage_daily_router
@@ -61,7 +60,6 @@ router.include_router(post_api_keys_router)
 router.include_router(get_api_keys_providers_router)
 router.include_router(delete_api_key_router)
 router.include_router(post_api_keys_test_router)
-router.include_router(post_migrate_model_config_router)
 
 router.include_router(get_usage_summary_router)
 router.include_router(get_usage_daily_router)
