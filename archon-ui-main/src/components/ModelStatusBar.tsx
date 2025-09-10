@@ -211,7 +211,7 @@ export const ModelStatusBar: React.FC = () => {
     const interval = setInterval(fetchModelStatus, 30000);
 
     // Listen for agent configuration changes to trigger optimistic updates
-    let refreshTimeout: NodeJS.Timeout | null = null;
+    let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
     const handleAgentUpdate = () => {
       // Debounce refreshes to prevent excessive API calls
       if (refreshTimeout) {
