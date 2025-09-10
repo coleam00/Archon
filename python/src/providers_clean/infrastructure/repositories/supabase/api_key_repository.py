@@ -1,7 +1,7 @@
 """Supabase implementation of the API key repository."""
 
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from supabase import Client
 from cryptography.fernet import Fernet
 import json
@@ -38,27 +38,18 @@ class SupabaseApiKeyRepository(IApiKeyRepository):
                 "provider": provider,
                 "encrypted_key": encrypted_key,
                 "is_active": True,
-                "updated_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
                 "base_url": metadata.get("base_url") if metadata else None,
                 # Preserve any additional metadata besides base_url in headers column
                 "headers": ({k: v for k, v in metadata.items() if k != "base_url"} if metadata else None),
             }
             
-            # Check if ANY record exists for provider (active or inactive)
-            existing_check = self.db.table(self.table_name).select("provider").eq("provider", provider).execute()
-            
-            if existing_check.data:
-                # Update existing key (reactivate if needed)
-                response = self.db.table(self.table_name).update({
-                    "encrypted_key": encrypted_key,
-                    "is_active": True,
-                    "updated_at": datetime.utcnow().isoformat(),
-                    "base_url": metadata.get("base_url") if metadata else None,
-                    "headers": ({k: v for k, v in metadata.items() if k != "base_url"} if metadata else None),
-                }).eq("provider", provider).execute()
-            else:
-                # Insert new key
-                response = self.db.table(self.table_name).insert(data).execute()
+            # Upsert by provider to avoid races and ensure idempotency
+            response = (
+                self.db.table(self.table_name)
+                .upsert(data, on_conflict="provider")
+                .execute()
+            )
             
             return bool(response.data)
             
@@ -133,7 +124,7 @@ class SupabaseApiKeyRepository(IApiKeyRepository):
         try:
             response = self.db.table(self.table_name).update({
                 "is_active": False,
-                "updated_at": datetime.utcnow().isoformat()
+                "updated_at": datetime.now(timezone.utc).isoformat()
             }).eq("provider", provider).eq("is_active", True).execute()
             
             return len(response.data) > 0 if response.data else False
@@ -181,7 +172,7 @@ class SupabaseApiKeyRepository(IApiKeyRepository):
             
             response = self.db.table(self.table_name).update({
                 "encrypted_key": new_encrypted_key,
-                "updated_at": datetime.utcnow().isoformat()
+                "updated_at": datetime.now(timezone.utc).isoformat()
             }).eq("provider", provider).eq("is_active", True).execute()
             
             return bool(response.data)
