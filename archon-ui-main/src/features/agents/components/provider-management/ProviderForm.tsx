@@ -108,30 +108,47 @@ export const ProviderForm: React.FC<ProviderFormProps> = ({
 
       {/* API Key Input */}
       <div>
-        <label className="block text-sm font-medium text-gray-300 mb-2">
-          API Key
+        <label
+          htmlFor="provider-secret"
+          className="block text-sm font-medium text-gray-300 mb-2"
+        >
+          {selectedProvider === "ollama" ? "Base URL" : "API Key"}
         </label>
         <div className="relative">
-          <Key className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Key
+            className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"
+            aria-hidden="true"
+          />
           <input
-            type={showApiKey ? "text" : "password"}
+            id="provider-secret"
+            type={
+              selectedProvider === "ollama"
+                ? "text"
+                : showApiKey
+                ? "text"
+                : "password"
+            }
             value={apiKey}
             onChange={(e) => onApiKeyChange(e.target.value)}
             placeholder={info.apiKeyPlaceholder}
+            autoComplete="off"
             className="w-full pl-10 pr-10 py-2 text-sm bg-zinc-800 text-white rounded-lg focus:outline-none focus:ring-1 focus:ring-purple-500"
           />
-          <button
-            onClick={onToggleShowApiKey}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white"
-            aria-label={showApiKey ? "Hide API key" : "Show API key"}
-            title={showApiKey ? "Hide API key" : "Show API key"}
-          >
-            {showApiKey ? (
-              <EyeOff className="w-4 h-4" />
-            ) : (
-              <Eye className="w-4 h-4" />
-            )}
-          </button>
+          {selectedProvider !== "ollama" && (
+            <button
+              type="button"
+              onClick={onToggleShowApiKey}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white"
+              aria-label={showApiKey ? "Hide API key" : "Show API key"}
+              title={showApiKey ? "Hide API key" : "Show API key"}
+            >
+              {showApiKey ? (
+                <EyeOff className="w-4 h-4" />
+              ) : (
+                <Eye className="w-4 h-4" />
+              )}
+            </button>
+          )}
         </div>
       </div>
 
