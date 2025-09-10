@@ -196,10 +196,16 @@ export const useRemoveProvider = () => {
     onMutate: async ({ provider }) => {
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: providerKeys.apiKeys() });
+      await queryClient.cancelQueries({ queryKey: modelKeys.available() });
+      await queryClient.cancelQueries({ queryKey: providerKeys.metadata() });
 
-      // Snapshot the previous value
+      // Snapshot previous caches
       const previousProviders = queryClient.getQueryData(
         providerKeys.apiKeys()
+      );
+      const previousModels = queryClient.getQueryData(modelKeys.available());
+      const previousMetadata = queryClient.getQueryData(
+        providerKeys.metadata()
       );
 
       // Optimistically remove models for this provider
@@ -228,7 +234,7 @@ export const useRemoveProvider = () => {
         }
       );
 
-      return { previousProviders };
+      return { previousProviders, previousModels, previousMetadata };
     },
     onError: (_err, variables, context) => {
       // Rollback on error
@@ -236,6 +242,15 @@ export const useRemoveProvider = () => {
         queryClient.setQueryData(
           providerKeys.apiKeys(),
           context.previousProviders
+        );
+      }
+      if (context?.previousModels) {
+        queryClient.setQueryData(modelKeys.available(), context.previousModels);
+      }
+      if (context?.previousMetadata) {
+        queryClient.setQueryData(
+          providerKeys.metadata(),
+          context.previousMetadata
         );
       }
       showToast(`Failed to remove ${variables.provider}`, "error");
