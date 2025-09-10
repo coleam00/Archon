@@ -4,6 +4,38 @@
 
 This document provides a comprehensive checklist for reviewing and updating the Archon codebase to ensure all components properly use environment variables for deployment mode switching.
 
+## ⚠️ Critical Fixes Applied
+
+### 1. Service Discovery Hard-Coded Localhost (FIXED)
+**File**: `python/src/server/config/service_discovery.py`
+- **Issue**: Service discovery was hard-coding `localhost` in Docker Compose environment
+- **Fix**: Check `VITE_MCP_USE_PROXY` and use external HOST when true
+- **Impact**: MCP URLs now correctly return external domains in LAN mode
+
+### 2. Credential Service Override (FIXED)
+**File**: `python/src/server/services/credential_service.py`
+- **Issue**: Database settings were overriding HOST and PORT environment variables
+- **Fix**: Removed HOST and PORT from `infrastructure_credentials` list
+- **Impact**: Deployment-specific settings now come from environment only
+
+### 3. MCP Config Endpoint (FIXED)
+**File**: `python/src/server/api_routes/mcp_api.py`
+- **Issue**: `/api/mcp/config` was directly reading environment instead of using service discovery
+- **Fix**: Updated to use `get_mcp_url()` and parse the result
+- **Impact**: Config endpoint now returns correct URLs based on deployment mode
+
+### 4. Frontend Multi-Stage Build (FIXED)
+**File**: `archon-ui-main/Dockerfile`
+- **Issue**: Missing production stage for optimized builds
+- **Fix**: Added multi-stage Dockerfile with development and production targets
+- **Impact**: Production builds now work with `--profile prod`
+
+### 5. Docker Compose Environment Variables (FIXED)
+**File**: `docker-compose.unified.yml`
+- **Issue**: Missing `VITE_MCP_USE_PROXY` in archon-server environment
+- **Fix**: Added missing environment variable
+- **Impact**: Service discovery can now detect proxy mode correctly
+
 ## Critical Files to Review
 
 ### Frontend (archon-ui-main/)
