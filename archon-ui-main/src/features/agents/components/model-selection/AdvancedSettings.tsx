@@ -6,7 +6,7 @@
 
 import React from "react";
 import { Settings2, ChevronRight } from "lucide-react";
-import type { AgentConfig } from "../../../../types/agent";
+import type { AgentConfig } from "@/types/agent";
 import { getRangeSliderStyle } from "@/features/agents/components/common/styles/gradientStyles";
 
 interface AdvancedSettingsProps {
