@@ -37,19 +37,21 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
         project.pinned
           ? "bg-gradient-to-b from-purple-100/80 via-purple-50/30 to-purple-100/50 dark:from-purple-900/30 dark:via-purple-900/20 dark:to-purple-900/10"
           : isSelected
-            ? "bg-gradient-to-b from-white/70 via-purple-50/20 to-white/50 dark:from-white/5 dark:via-purple-900/5 dark:to-black/20"
-            : "bg-gradient-to-b from-white/80 to-white/60 dark:from-white/10 dark:to-black/30",
+          ? "bg-gradient-to-b from-white/70 via-purple-50/20 to-white/50 dark:from-white/5 dark:via-purple-900/5 dark:to-black/20"
+          : "bg-gradient-to-b from-white/80 to-white/60 dark:from-white/10 dark:to-black/30",
         "border",
         project.pinned
           ? "border-purple-500/80 dark:border-purple-500/80 shadow-[0_0_15px_rgba(168,85,247,0.3)]"
           : isSelected
-            ? "border-purple-400/60 dark:border-purple-500/60"
-            : "border-gray-200 dark:border-zinc-800/50",
+          ? "border-purple-400/60 dark:border-purple-500/60"
+          : "border-gray-200 dark:border-zinc-800/50",
         isSelected
           ? "shadow-[0_0_15px_rgba(168,85,247,0.4),0_0_10px_rgba(147,51,234,0.3)] dark:shadow-[0_0_20px_rgba(168,85,247,0.5),0_0_15px_rgba(147,51,234,0.4)]"
           : "shadow-[0_10px_30px_-15px_rgba(0,0,0,0.1)] dark:shadow-[0_10px_30px_-15px_rgba(0,0,0,0.7)]",
         "hover:shadow-[0_15px_40px_-15px_rgba(0,0,0,0.2)] dark:hover:shadow-[0_15px_40px_-15px_rgba(0,0,0,0.9)]",
-        isSelected ? "ring-1 ring-purple-500/50 shadow-lg shadow-purple-500/20" : "hover:ring-1 hover:ring-purple-500/30 hover:shadow-lg hover:shadow-purple-500/10", // Use glow effects instead of scale to avoid clipping
+        isSelected
+          ? "ring-1 ring-purple-500/50 shadow-lg shadow-purple-500/20"
+          : "hover:ring-1 hover:ring-purple-500/30 hover:shadow-lg hover:shadow-purple-500/10" // Use glow effects instead of scale to avoid clipping
       )}
     >
       {/* Subtle aurora glow effect for selected card */}
@@ -69,8 +71,8 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
               isSelected
                 ? "text-gray-900 dark:text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]"
                 : project.pinned
-                  ? "text-purple-700 dark:text-purple-300"
-                  : "text-gray-500 dark:text-gray-400",
+                ? "text-purple-700 dark:text-purple-300"
+                : "text-gray-500 dark:text-gray-400"
             )}
           >
             {project.title}
@@ -84,7 +86,7 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
             <div
               className={cn(
                 "absolute inset-0 bg-pink-600 rounded-full blur-md",
-                isSelected ? "opacity-30 dark:opacity-75" : "opacity-0",
+                isSelected ? "opacity-30 dark:opacity-75" : "opacity-0"
               )}
             ></div>
             <div
@@ -92,20 +94,24 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
                 "relative flex items-center h-12 backdrop-blur-sm rounded-full border shadow-sm transition-all duration-300",
                 isSelected
                   ? "bg-white/70 dark:bg-zinc-900/90 border-pink-300 dark:border-pink-500/50 dark:shadow-[0_0_10px_rgba(236,72,153,0.5)] hover:shadow-md dark:hover:shadow-[0_0_15px_rgba(236,72,153,0.7)]"
-                  : "bg-white/30 dark:bg-zinc-900/30 border-gray-300/50 dark:border-gray-700/50",
+                  : "bg-white/30 dark:bg-zinc-900/30 border-gray-300/50 dark:border-gray-700/50"
               )}
             >
               <div className="flex flex-col items-center justify-center px-2 min-w-[40px]">
                 <ListTodo
                   className={cn(
                     "w-4 h-4",
-                    isSelected ? "text-pink-600 dark:text-pink-400" : "text-gray-500 dark:text-gray-600",
+                    isSelected
+                      ? "text-pink-600 dark:text-pink-400"
+                      : "text-gray-500 dark:text-gray-600"
                   )}
                 />
                 <span
                   className={cn(
                     "text-[8px] font-medium",
-                    isSelected ? "text-pink-600 dark:text-pink-400" : "text-gray-500 dark:text-gray-600",
+                    isSelected
+                      ? "text-pink-600 dark:text-pink-400"
+                      : "text-gray-500 dark:text-gray-600"
                   )}
                 >
                   ToDo
@@ -114,13 +120,17 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
               <div
                 className={cn(
                   "flex-1 flex items-center justify-center border-l",
-                  isSelected ? "border-pink-300 dark:border-pink-500/30" : "border-gray-300/50 dark:border-gray-700/50",
+                  isSelected
+                    ? "border-pink-300 dark:border-pink-500/30"
+                    : "border-gray-300/50 dark:border-gray-700/50"
                 )}
               >
                 <span
                   className={cn(
                     "text-lg font-bold",
-                    isSelected ? "text-pink-600 dark:text-pink-400" : "text-gray-500 dark:text-gray-600",
+                    isSelected
+                      ? "text-pink-600 dark:text-pink-400"
+                      : "text-gray-500 dark:text-gray-600"
                   )}
                 >
                   {taskCounts.todo || 0}
@@ -134,7 +144,7 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
             <div
               className={cn(
                 "absolute inset-0 bg-blue-600 rounded-full blur-md",
-                isSelected ? "opacity-30 dark:opacity-75" : "opacity-0",
+                isSelected ? "opacity-30 dark:opacity-75" : "opacity-0"
               )}
             ></div>
             <div
@@ -142,20 +152,24 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
                 "relative flex items-center h-12 backdrop-blur-sm rounded-full border shadow-sm transition-all duration-300",
                 isSelected
                   ? "bg-white/70 dark:bg-zinc-900/90 border-blue-300 dark:border-blue-500/50 dark:shadow-[0_0_10px_rgba(59,130,246,0.5)] hover:shadow-md dark:hover:shadow-[0_0_15px_rgba(59,130,246,0.7)]"
-                  : "bg-white/30 dark:bg-zinc-900/30 border-gray-300/50 dark:border-gray-700/50",
+                  : "bg-white/30 dark:bg-zinc-900/30 border-gray-300/50 dark:border-gray-700/50"
               )}
             >
               <div className="flex flex-col items-center justify-center px-2 min-w-[40px]">
                 <Activity
                   className={cn(
                     "w-4 h-4",
-                    isSelected ? "text-blue-600 dark:text-blue-400" : "text-gray-500 dark:text-gray-600",
+                    isSelected
+                      ? "text-blue-600 dark:text-blue-400"
+                      : "text-gray-500 dark:text-gray-600"
                   )}
                 />
                 <span
                   className={cn(
                     "text-[8px] font-medium",
-                    isSelected ? "text-blue-600 dark:text-blue-400" : "text-gray-500 dark:text-gray-600",
+                    isSelected
+                      ? "text-blue-600 dark:text-blue-400"
+                      : "text-gray-500 dark:text-gray-600"
                   )}
                 >
                   Doing
@@ -164,13 +178,17 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
               <div
                 className={cn(
                   "flex-1 flex items-center justify-center border-l",
-                  isSelected ? "border-blue-300 dark:border-blue-500/30" : "border-gray-300/50 dark:border-gray-700/50",
+                  isSelected
+                    ? "border-blue-300 dark:border-blue-500/30"
+                    : "border-gray-300/50 dark:border-gray-700/50"
                 )}
               >
                 <span
                   className={cn(
                     "text-lg font-bold",
-                    isSelected ? "text-blue-600 dark:text-blue-400" : "text-gray-500 dark:text-gray-600",
+                    isSelected
+                      ? "text-blue-600 dark:text-blue-400"
+                      : "text-gray-500 dark:text-gray-600"
                   )}
                 >
                   {(taskCounts.doing || 0) + (taskCounts.review || 0)}
@@ -184,7 +202,7 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
             <div
               className={cn(
                 "absolute inset-0 bg-green-600 rounded-full blur-md",
-                isSelected ? "opacity-30 dark:opacity-75" : "opacity-0",
+                isSelected ? "opacity-30 dark:opacity-75" : "opacity-0"
               )}
             ></div>
             <div
@@ -192,20 +210,24 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
                 "relative flex items-center h-12 backdrop-blur-sm rounded-full border shadow-sm transition-all duration-300",
                 isSelected
                   ? "bg-white/70 dark:bg-zinc-900/90 border-green-300 dark:border-green-500/50 dark:shadow-[0_0_10px_rgba(34,197,94,0.5)] hover:shadow-md dark:hover:shadow-[0_0_15px_rgba(34,197,94,0.7)]"
-                  : "bg-white/30 dark:bg-zinc-900/30 border-gray-300/50 dark:border-gray-700/50",
+                  : "bg-white/30 dark:bg-zinc-900/30 border-gray-300/50 dark:border-gray-700/50"
               )}
             >
               <div className="flex flex-col items-center justify-center px-2 min-w-[40px]">
                 <CheckCircle2
                   className={cn(
                     "w-4 h-4",
-                    isSelected ? "text-green-600 dark:text-green-400" : "text-gray-500 dark:text-gray-600",
+                    isSelected
+                      ? "text-green-600 dark:text-green-400"
+                      : "text-gray-500 dark:text-gray-600"
                   )}
                 />
                 <span
                   className={cn(
                     "text-[8px] font-medium",
-                    isSelected ? "text-green-600 dark:text-green-400" : "text-gray-500 dark:text-gray-600",
+                    isSelected
+                      ? "text-green-600 dark:text-green-400"
+                      : "text-gray-500 dark:text-gray-600"
                   )}
                 >
                   Done
@@ -216,13 +238,15 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
                   "flex-1 flex items-center justify-center border-l",
                   isSelected
                     ? "border-green-300 dark:border-green-500/30"
-                    : "border-gray-300/50 dark:border-gray-700/50",
+                    : "border-gray-300/50 dark:border-gray-700/50"
                 )}
               >
                 <span
                   className={cn(
                     "text-lg font-bold",
-                    isSelected ? "text-green-600 dark:text-green-400" : "text-gray-500 dark:text-gray-600",
+                    isSelected
+                      ? "text-green-600 dark:text-green-400"
+                      : "text-gray-500 dark:text-gray-600"
                   )}
                 >
                   {taskCounts.done || 0}

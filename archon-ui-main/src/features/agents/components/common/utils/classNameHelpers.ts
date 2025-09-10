@@ -114,7 +114,8 @@ export const getCardClasses = (
   };
 
   const stateClasses = cn(
-    isHoverable && "hover:shadow-2xl hover:shadow-purple-500/20 hover:ring-1 hover:ring-purple-500/30",
+    isHoverable &&
+      "hover:shadow-2xl hover:shadow-purple-500/20 hover:ring-1 hover:ring-purple-500/30",
     isActive && "ring-1 ring-purple-500/30 shadow-lg shadow-purple-500/10"
   );
 
