@@ -15,7 +15,8 @@ class ProgressMapper:
         "starting": (0, 1),
         "initializing": (0, 1),
         "analyzing": (1, 2),       # URL analysis is very quick
-        "crawling": (2, 5),        # Crawling pages is relatively fast
+        "discovery": (2, 3),       # File discovery is quick
+        "crawling": (3, 5),        # Crawling pages is relatively fast
         "processing": (5, 8),      # Content processing/chunking is quick
         "source_creation": (8, 10), # DB operations are fast
         "document_storage": (10, 30), # Embeddings + batch processing - significant but not longest

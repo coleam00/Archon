@@ -6,8 +6,7 @@ Handles URL transformations and validations.
 
 import hashlib
 import re
-from urllib.parse import urlparse, urljoin
-from typing import List, Optional
+from urllib.parse import urljoin, urlparse
 
 from ....config.logfire_config import get_logger
 
@@ -33,8 +32,8 @@ class URLHandler:
         except Exception as e:
             logger.warning(f"Error checking if URL is sitemap: {e}")
             return False
-    
-    @staticmethod  
+
+    @staticmethod
     def is_markdown(url: str) -> bool:
         """
         Check if a URL points to a markdown file (.md, .mdx, .markdown).
@@ -274,9 +273,9 @@ class URLHandler:
             # Fallback: use a hash of the error message + url to still get something unique
             fallback = f"error_{redacted}_{str(e)}"
             return hashlib.sha256(fallback.encode("utf-8")).hexdigest()[:16]
-    
+
     @staticmethod
-    def extract_markdown_links(content: str, base_url: Optional[str] = None) -> List[str]:
+    def extract_markdown_links(content: str, base_url: str | None = None) -> list[str]:
         """
         Extract markdown-style links from text content.
         
@@ -290,10 +289,10 @@ class URLHandler:
         try:
             if not content:
                 return []
-            
+
             # Ultimate URL pattern with comprehensive format support:
             #  1) [text](url) - markdown links
-            #  2) <https://...> - autolinks  
+            #  2) <https://...> - autolinks
             #  3) https://... - bare URLs with protocol
             #  4) //example.com - protocol-relative URLs
             #  5) www.example.com - scheme-less www URLs
@@ -348,7 +347,7 @@ class URLHandler:
                 # Only include HTTP/HTTPS URLs
                 if url.startswith(('http://', 'https://')):
                     urls.append(url)
-            
+
             # Remove duplicates while preserving order
             seen = set()
             unique_urls = []
@@ -356,16 +355,16 @@ class URLHandler:
                 if url not in seen:
                     seen.add(url)
                     unique_urls.append(url)
-            
+
             logger.info(f"Extracted {len(unique_urls)} unique links from content")
             return unique_urls
-            
+
         except Exception as e:
             logger.error(f"Error extracting markdown links: {e}", exc_info=True)
             return []
-    
+
     @staticmethod
-    def is_link_collection_file(url: str, content: Optional[str] = None) -> bool:
+    def is_link_collection_file(url: str, content: str | None = None) -> bool:
         """
         Check if a URL/file appears to be a link collection file like llms.txt.
         
@@ -380,7 +379,7 @@ class URLHandler:
             # Extract filename from URL
             parsed = urlparse(url)
             filename = parsed.path.split('/')[-1].lower()
-            
+
             # Check for specific link collection filenames
             # Note: "full-*" or "*-full" patterns are NOT link collections - they contain complete content, not just links
             link_collection_patterns = [
@@ -391,45 +390,47 @@ class URLHandler:
                 'llms.mdx', 'links.mdx', 'resources.mdx', 'references.mdx',
                 'llms.markdown', 'links.markdown', 'resources.markdown', 'references.markdown',
             ]
-            
+
             # Direct filename match
             if filename in link_collection_patterns:
                 logger.info(f"Detected link collection file by filename: {filename}")
                 return True
-            
+
             # Pattern-based detection for variations, but exclude "full" variants
             # Only match files that are likely link collections, not complete content files
             if filename.endswith(('.txt', '.md', '.mdx', '.markdown')):
-                # Exclude files with "full" in the name - these typically contain complete content, not just links
-                if 'full' not in filename:
+                # Exclude files with "full" as standalone token (avoid false positives like "helpful.md")
+                import re
+                if not re.search(r'(^|[._-])full([._-]|$)', filename):
                     # Match files that start with common link collection prefixes
                     base_patterns = ['llms', 'links', 'resources', 'references']
                     if any(filename.startswith(pattern + '.') or filename.startswith(pattern + '-') for pattern in base_patterns):
                         logger.info(f"Detected potential link collection file: {filename}")
                         return True
-            
+
             # Content-based detection if content is provided
             if content:
                 # Never treat "full" variants as link collections to preserve single-page behavior
-                if 'full' in filename:
+                import re
+                if re.search(r'(^|[._-])full([._-]|$)', filename):
                     logger.info(f"Skipping content-based link-collection detection for full-content file: {filename}")
                     return False
                 # Reuse extractor to avoid regex divergence and maintain consistency
                 extracted_links = URLHandler.extract_markdown_links(content, url)
                 total_links = len(extracted_links)
-                
+
                 # Calculate link density (links per 100 characters)
                 content_length = len(content.strip())
                 if content_length > 0:
                     link_density = (total_links * 100) / content_length
-                    
+
                     # If more than 2% of content is links, likely a link collection
                     if link_density > 2.0 and total_links > 3:
                         logger.info(f"Detected link collection by content analysis: {total_links} links, density {link_density:.2f}%")
                         return True
-            
+
             return False
-            
+
         except Exception as e:
             logger.warning(f"Error checking if file is link collection: {e}", exc_info=True)
             return False
@@ -583,3 +584,92 @@ class URLHandler:
             logger.warning(f"Error extracting display name for {url}: {e}, using URL")
             # Fallback: return truncated URL
             return url[:50] + "..." if len(url) > 50 else url
+
+    @staticmethod
+    def is_robots_txt(url: str) -> bool:
+        """
+        Check if a URL is a robots.txt file with error handling.
+
+        Args:
+            url: URL to check
+
+        Returns:
+            True if URL is a robots.txt file, False otherwise
+        """
+        try:
+            parsed = urlparse(url)
+            # Normalize to lowercase and ignore query/fragment
+            path = parsed.path.lower()
+            # Only detect robots.txt at root level
+            return path == '/robots.txt'
+        except Exception as e:
+            logger.warning(f"Error checking if URL is robots.txt: {e}", exc_info=True)
+            return False
+
+    @staticmethod
+    def is_llms_variant(url: str) -> bool:
+        """
+        Check if a URL is a llms.txt/llms.md variant with error handling.
+
+        Args:
+            url: URL to check
+
+        Returns:
+            True if URL is a llms file variant, False otherwise
+        """
+        try:
+            parsed = urlparse(url)
+            # Normalize to lowercase and ignore query/fragment
+            path = parsed.path.lower()
+            filename = path.split('/')[-1] if '/' in path else path
+
+            # Check for llms file variants
+            llms_variants = ['llms-full.txt', 'llms.txt', 'llms.md', 'llms.mdx', 'llms.markdown']
+            return filename in llms_variants
+        except Exception as e:
+            logger.warning(f"Error checking if URL is llms variant: {e}", exc_info=True)
+            return False
+
+    @staticmethod
+    def is_well_known_file(url: str) -> bool:
+        """
+        Check if a URL is a .well-known/* file with error handling.
+
+        Args:
+            url: URL to check
+
+        Returns:
+            True if URL is a .well-known file, False otherwise
+        """
+        try:
+            parsed = urlparse(url)
+            # Normalize to lowercase and ignore query/fragment
+            path = parsed.path.lower()
+            # Only detect .well-known files at root level
+            return path.startswith('/.well-known/') and path.count('/.well-known/') == 1
+        except Exception as e:
+            logger.warning(f"Error checking if URL is well-known file: {e}", exc_info=True)
+            return False
+
+    @staticmethod
+    def get_base_url(url: str) -> str:
+        """
+        Extract base domain URL for discovery with error handling.
+
+        Args:
+            url: URL to extract base from
+
+        Returns:
+            Base URL (scheme + netloc) or original URL if extraction fails
+        """
+        try:
+            parsed = urlparse(url)
+            # Ensure we have scheme and netloc
+            if parsed.scheme and parsed.netloc:
+                return f"{parsed.scheme}://{parsed.netloc}"
+            else:
+                logger.warning(f"URL missing scheme or netloc: {url}")
+                return url
+        except Exception as e:
+            logger.warning(f"Error extracting base URL from {url}: {e}", exc_info=True)
+            return url
