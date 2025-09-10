@@ -84,6 +84,19 @@ export interface ServiceRegistryStatistics {
   last_check: string;
 }
 
+export interface LegacyAgentConfig {
+  id: string;
+  name: string;
+  icon: string;
+  description: string;
+  category: "agent" | "service";
+  supportsTemperature: boolean;
+  supportsMaxTokens: boolean;
+  defaultModel: string;
+  modelType: "llm" | "embedding";
+  costProfile: "low" | "medium" | "high";
+}
+
 // API base path
 const API_BASE = "/providers/services";
 
@@ -177,9 +190,12 @@ class ServiceRegistryService {
     if (replacementService)
       params.append("replacement_service", replacementService);
 
-    return apiRequest(`${API_BASE}/${serviceName}/deprecate?${params}`, {
-      method: "POST",
-    });
+    return apiRequest<{ status: string; service: string; reason: string }>(
+      `${API_BASE}/${encodeURIComponent(serviceName)}/deprecate?${params}`,
+      {
+        method: "POST",
+      }
+    );
   }
 
   // ==================== Registry Management ====================
@@ -203,7 +219,13 @@ class ServiceRegistryService {
     total_services: number;
     message: string;
   }> {
-    return apiRequest(`${API_BASE}/registry/initialize`, {
+    return apiRequest<{
+      status: string;
+      frontend_configs_registered: number;
+      auto_discovered_registered: number;
+      total_services: number;
+      message: string;
+    }>(`${API_BASE}/registry/initialize`, {
       method: "POST",
     });
   }
@@ -217,7 +239,12 @@ class ServiceRegistryService {
     services_registered: number;
     sync_time: string;
   }> {
-    return apiRequest(`${API_BASE}/registry/sync`, {
+    return apiRequest<{
+      status: string;
+      services_discovered: number;
+      services_registered: number;
+      sync_time: string;
+    }>(`${API_BASE}/registry/sync`, {
       method: "POST",
     });
   }
@@ -241,7 +268,22 @@ class ServiceRegistryService {
     }>;
     validation_time: string;
   }> {
-    return apiRequest(`${API_BASE}/registry/validate`);
+    return apiRequest<{
+      status: string;
+      issues: string[];
+      warnings: string[];
+      unregistered_services: Array<{
+        service_name: string;
+        model_string: string;
+      }>;
+      orphaned_entries: Array<{ service_name: string; display_name: string }>;
+      deprecated_still_used: Array<{
+        service_name: string;
+        display_name: string;
+        last_used?: string;
+      }>;
+      validation_time: string;
+    }>(`${API_BASE}/registry/validate`);
   }
 
   // ==================== Helper Methods ====================
@@ -249,7 +291,7 @@ class ServiceRegistryService {
   /**
    * Convert ServiceInfo to legacy AgentConfig format for backward compatibility
    */
-  serviceInfoToAgentConfig(service: ServiceInfo): any {
+  serviceInfoToAgentConfig(service: ServiceInfo): LegacyAgentConfig {
     return {
       id: service.service_name,
       name: service.display_name,
@@ -267,10 +309,12 @@ class ServiceRegistryService {
   /**
    * Get services in legacy AGENT_CONFIGS format for compatibility
    */
-  async getServicesAsAgentConfigs(): Promise<Record<string, any>> {
+  async getServicesAsAgentConfigs(): Promise<
+    Record<string, LegacyAgentConfig>
+  > {
     try {
       const services = await this.getAllServices(true);
-      const agentConfigs: Record<string, any> = {};
+      const agentConfigs: Record<string, LegacyAgentConfig> = {};
 
       for (const service of services) {
         agentConfigs[service.service_name] =
@@ -290,7 +334,7 @@ class ServiceRegistryService {
   /**
    * Get only agents in legacy format
    */
-  async getAgentsAsConfigs(): Promise<any[]> {
+  async getAgentsAsConfigs(): Promise<LegacyAgentConfig[]> {
     try {
       const agents = await this.getAgents(true);
       return agents.map((agent) => this.serviceInfoToAgentConfig(agent));
@@ -306,7 +350,7 @@ class ServiceRegistryService {
   /**
    * Get only services in legacy format
    */
-  async getServicesAsConfigs(): Promise<any[]> {
+  async getServicesAsConfigs(): Promise<LegacyAgentConfig[]> {
     try {
       const services = await this.getBackendServices(true);
       return services.map((service) => this.serviceInfoToAgentConfig(service));
@@ -322,6 +366,3 @@ class ServiceRegistryService {
 
 // Export singleton instance
 export const serviceRegistryService = new ServiceRegistryService();
-
-// Export types for convenience
-export type { ServiceInfo, ServiceRegistration, ServiceRegistryStatistics };
