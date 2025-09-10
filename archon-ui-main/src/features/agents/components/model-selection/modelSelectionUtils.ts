@@ -61,16 +61,16 @@ export const getCostTierInfo = (tier?: string | null) => {
 };
 
 // Format single cost value per 1M tokens
-export const formatSingleCost = (costPer1K: number) => {
-  // Convert from per 1K to per 1M tokens (multiply by 1000)
-  const costPer1M = costPer1K * 1000;
+export const formatSingleCost = (costPer1M: number) => {
+  // Cost is already per 1M tokens, no conversion needed
+  const costPer1MFormatted = costPer1M;
 
   // Format based on the cost magnitude with dollar sign after
-  if (costPer1M === 0) return "0$";
-  if (costPer1M < 0.01) return `${costPer1M.toFixed(4)}$`;
-  if (costPer1M < 1) return `${costPer1M.toFixed(2)}$`;
-  if (costPer1M < 10) return `${costPer1M.toFixed(1)}$`;
-  return `${Math.round(costPer1M)}$`;
+  if (costPer1MFormatted === 0) return "0$";
+  if (costPer1MFormatted < 0.01) return `${costPer1MFormatted.toFixed(4)}$`;
+  if (costPer1MFormatted < 1) return `${costPer1MFormatted.toFixed(2)}$`;
+  if (costPer1MFormatted < 10) return `${costPer1MFormatted.toFixed(1)}$`;
+  return `${Math.round(costPer1MFormatted)}$`;
 };
 
 // Filter and sort models based on criteria

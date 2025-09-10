@@ -59,14 +59,14 @@ export const ModelCard: React.FC<ModelCardProps> = ({
           )}
 
           {/* Detailed Pricing - Input/Output inline */}
-          {model.estimated_cost_per_1k && (
+          {model.estimated_cost_per_1m && (
             <>
               <span className="text-xs text-gray-500">per 1M:</span>
               <span className="text-xs font-mono text-emerald-400">
-                in {formatSingleCost(model.estimated_cost_per_1k.input)}
+                in {formatSingleCost(model.estimated_cost_per_1m.input)}
               </span>
               <span className="text-xs font-mono text-yellow-400">
-                out {formatSingleCost(model.estimated_cost_per_1k.output)}
+                out {formatSingleCost(model.estimated_cost_per_1m.output)}
               </span>
             </>
           )}

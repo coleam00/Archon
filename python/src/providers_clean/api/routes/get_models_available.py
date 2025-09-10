@@ -21,23 +21,26 @@ async def get_available_models(
     try:
         active_providers = await key_service.get_active_providers()
         if not active_providers:
-            raise HTTPException(status_code=404, detail="No providers with active API keys")
+            raise HTTPException(
+                status_code=404, detail="No providers with active API keys")
 
         async with sync_service.uow as uow:
             repo = uow.available_models
             if repo is None:
-                raise HTTPException(status_code=500, detail="Available models repository not initialized")
+                raise HTTPException(
+                    status_code=500, detail="Available models repository not initialized")
             db_models = await repo.get_providers_with_api_keys(active_providers)
 
         available_models: List[AvailableModel] = []
         for db_model in db_models:
             has_api_key = db_model['provider'] in active_providers or db_model['provider'] == 'ollama'
 
-            estimated_cost_per_1k = None
+            estimated_cost_per_1m = None
             if db_model['input_cost'] and db_model['input_cost'] > 0:
-                estimated_cost_per_1k = {
-                    'input': float(db_model['input_cost']) * 1000,
-                    'output': float(db_model['output_cost'] or 0) * 1000
+                estimated_cost_per_1m = {
+                    # Convert to per 1M tokens
+                    'input': float(db_model['input_cost']) * 1000000,
+                    'output': float(db_model['output_cost'] or 0) * 1000000
                 }
 
             available_models.append(AvailableModel(
@@ -47,7 +50,7 @@ async def get_available_models(
                 display_name=db_model['display_name'],
                 has_api_key=has_api_key,
                 cost_tier=db_model['cost_tier'],
-                estimated_cost_per_1k=estimated_cost_per_1k,
+                estimated_cost_per_1m=estimated_cost_per_1m,
                 is_embedding=db_model['is_embedding'],
                 model_id=db_model['model_id'],
                 description=db_model['description'],
@@ -62,7 +65,8 @@ async def get_available_models(
             ))
 
         if not available_models:
-            raise HTTPException(status_code=404, detail="No available models found in database for configured providers")
+            raise HTTPException(
+                status_code=404, detail="No available models found in database for configured providers")
 
         logger.info(
             f"Returned {len(available_models)} models from database for {len(active_providers)} providers")

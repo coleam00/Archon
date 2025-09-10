@@ -1,37 +1,37 @@
 /**
  * Clean Provider System Types
- * 
+ *
  * TypeScript types for the simplified provider system
  */
 
 // Provider types - now supports dynamic providers from OpenRouter
-export type ProviderType = string;  // Allow any string for dynamic providers
+export type ProviderType = string; // Allow any string for dynamic providers
 
-export type ServiceType = 
-  | 'document_agent'
-  | 'rag_agent'
-  | 'task_agent'
-  | 'embeddings'
-  | 'contextual_embedding'
-  | 'source_summary'
-  | 'code_summary'
-  | 'code_analysis' 
-  | 'validation';
+export type ServiceType =
+  | "document_agent"
+  | "rag_agent"
+  | "task_agent"
+  | "embeddings"
+  | "contextual_embedding"
+  | "source_summary"
+  | "code_summary"
+  | "code_analysis"
+  | "validation";
 
-export type ModelFamily = 
-  | 'gpt-4'
-  | 'gpt-3.5'
-  | 'claude-3'
-  | 'gemini'
-  | 'llama'
-  | 'mixtral'
-  | 'mistral';
+export type ModelFamily =
+  | "gpt-4"
+  | "gpt-3.5"
+  | "claude-3"
+  | "gemini"
+  | "llama"
+  | "mixtral"
+  | "mistral";
 
-export type ProviderHealth = 
-  | 'healthy' 
-  | 'degraded' 
-  | 'error' 
-  | 'not_configured';
+export type ProviderHealth =
+  | "healthy"
+  | "degraded"
+  | "error"
+  | "not_configured";
 
 // Model configuration
 export interface ModelConfig {
@@ -55,17 +55,17 @@ export interface APIKeyConfig {
 
 // Available model info
 export interface AvailableModel {
-  provider: string;  // Changed from ProviderType to string to be more flexible
+  provider: string; // Changed from ProviderType to string to be more flexible
   model: string;
   model_string: string;
   display_name: string;
   has_api_key: boolean;
-  cost_tier?: 'low' | 'medium' | 'high' | 'free' | null;
-  estimated_cost_per_1k?: {
+  cost_tier?: "low" | "medium" | "high" | "free" | null;
+  estimated_cost_per_1m?: {
     input: number;
     output: number;
   } | null;
-  is_embedding?: boolean;  // Flag to identify embedding models
+  is_embedding?: boolean; // Flag to identify embedding models
   model_id?: string;
   description?: string;
   context_length?: number;
@@ -178,6 +178,6 @@ export interface ModelFamilyInfo {
   models: Array<{
     id: string;
     name: string;
-    costTier: 'low' | 'medium' | 'high' | 'free';
+    costTier: "low" | "medium" | "high" | "free";
   }>;
 }

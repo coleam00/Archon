@@ -7,8 +7,10 @@ from pydantic import BaseModel, Field, SecretStr
 
 class ModelSelectionRequest(BaseModel):
     """Request to update model selection"""
-    service_name: str = Field(..., description="Service name (e.g., 'rag_agent')")
-    model_string: str = Field(..., description="Model string (e.g., 'openai:gpt-4o')")
+    service_name: str = Field(...,
+                              description="Service name (e.g., 'rag_agent')")
+    model_string: str = Field(...,
+                              description="Model string (e.g., 'openai:gpt-4o')")
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(None, gt=0)
 
@@ -28,7 +30,7 @@ class AvailableModel(BaseModel):
     display_name: str
     has_api_key: bool
     cost_tier: Optional[str] = None
-    estimated_cost_per_1k: Optional[Dict[str, float]] = None
+    estimated_cost_per_1m: Optional[Dict[str, float]] = None
     is_embedding: bool = False
     model_id: Optional[str] = None
     description: Optional[str] = None
@@ -86,8 +88,12 @@ class MonthlyCostEstimate(BaseModel):
 
 class UsageTrackRequest(BaseModel):
     """Request to track usage for a service"""
-    service_name: str = Field(..., description="Service name (e.g., 'rag_agent')")
-    model_string: str = Field(..., description="Model string (e.g., 'openai:gpt-4o')")
+    service_name: str = Field(...,
+                              description="Service name (e.g., 'rag_agent')")
+    model_string: str = Field(...,
+                              description="Model string (e.g., 'openai:gpt-4o')")
     input_tokens: int = Field(..., description="Number of input tokens", gt=0)
-    output_tokens: int = Field(..., description="Number of output tokens", gt=0)
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Optional metadata dictionary")
+    output_tokens: int = Field(...,
+                               description="Number of output tokens", gt=0)
+    metadata: Optional[Dict[str, Any]] = Field(
+        None, description="Optional metadata dictionary")
