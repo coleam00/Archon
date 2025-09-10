@@ -5,7 +5,7 @@
  * Extracted from AgentsPage to reduce complexity
  */
 
-import type React from "react";
+import React from "react";
 import { ChevronDown } from "lucide-react";
 import { GradientCard } from "./GradientCard";
 import { cn } from "../utils/classNameHelpers";
@@ -37,8 +37,9 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
   maxContentHeight = "600px",
   theme = "inactive",
 }) => {
-  // Auto-expand behavior
-  const shouldExpand = isExpanded || autoExpandOnEmpty;
+  // Auto-expand behavior: only expand when children are actually empty
+  const isEmptyChildren = React.Children.toArray(children).filter(Boolean).length === 0;
+  const shouldExpand = isExpanded || (autoExpandOnEmpty && isEmptyChildren);
 
   return (
     <div className={cn("mb-8", className)}>
