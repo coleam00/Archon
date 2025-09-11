@@ -71,6 +71,7 @@ export async function callAPI<T = unknown>(endpoint: string, options: RequestIni
         ...options.headers,
       },
       ...options,
+      signal: options.signal ?? AbortSignal.timeout(10000), // 10 second timeout
     });
 
     if (!response.ok) {

@@ -73,10 +73,11 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
       headers["If-None-Match"] = storedEtag;
     }
 
-    // Make the request
+    // Make the request with timeout
     const response = await fetch(fullUrl, {
       ...options,
       headers,
+      signal: options.signal ?? AbortSignal.timeout(10000), // 10 second timeout
     });
 
     // Handle 304 Not Modified - return cached data

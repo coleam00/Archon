@@ -1,5 +1,5 @@
 import { AlertCircle, CheckCircle, Info, XCircle } from "lucide-react";
-import { createContext, useCallback, useContext, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 // Toast types
 interface Toast {
@@ -38,6 +38,7 @@ let toastIdCounter = 0;
 
 export function createToastContext() {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const timeoutsRef = useRef<Map<string, number>>(new Map());
 
   const showToast = useCallback((message: string, type: Toast["type"] = "info", duration = 4000) => {
     const id = `${Date.now()}-${toastIdCounter++}`;
@@ -47,14 +48,28 @@ export function createToastContext() {
 
     // Auto-dismiss after duration
     if (duration > 0) {
-      setTimeout(() => {
+      const timeoutId = window.setTimeout(() => {
         setToasts((prev) => prev.filter((toast) => toast.id !== id));
+        timeoutsRef.current.delete(id);
       }, duration);
+      timeoutsRef.current.set(id, timeoutId);
     }
   }, []);
 
   const removeToast = useCallback((id: string) => {
+    const timeoutId = timeoutsRef.current.get(id);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutsRef.current.delete(id);
+    }
     setToasts((prev) => prev.filter((toast) => toast.id !== id));
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      for (const timeoutId of timeoutsRef.current.values()) clearTimeout(timeoutId);
+      timeoutsRef.current.clear();
+    };
   }, []);
 
   return {
