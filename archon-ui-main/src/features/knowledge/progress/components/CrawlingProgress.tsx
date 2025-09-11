@@ -3,7 +3,7 @@
  * Shows active crawling operations with progress tracking
  */
 
-import { formatDistanceToNow } from "date-fns";
+// Removed relative started time display to avoid misleading UX
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertCircle, CheckCircle, Globe, Loader2, StopCircle, XCircle } from "lucide-react";
 import { useState } from "react";
@@ -167,11 +167,7 @@ export const CrawlingProgress: React.FC<CrawlingProgressProps> = ({ onSwitchToBr
                             {operation.operation_type === "crawl" ? "Web Crawl" : operation.operation_type}
                           </span>
                         )}
-                        {operation.started_at && (
-                          <span className="text-xs text-gray-500">
-                            Started {formatDistanceToNow(new Date(operation.started_at), { addSuffix: true })}
-                          </span>
-                        )}
+                        {/* Removed relative start time; it can be misleading for recrawls or resumed ops */}
                       </div>
                     </div>
 
