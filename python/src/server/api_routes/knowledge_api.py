@@ -713,7 +713,7 @@ async def _perform_upload_with_progress(
             mapped_percentage = progress_mapper.map_progress("document_storage", percentage)
 
             await tracker.update(
-                status="document_storage",
+                status="storing",
                 progress=mapped_percentage,
                 log=message,
                 currentUrl=f"file://{filename}",
@@ -968,7 +968,7 @@ async def _perform_upload_batch_with_progress(
             async def per_file_callback(message: str, percentage: int, batch_info: dict | None = None):
                 mapped = base + int((percentage / 100) * step)
                 await tracker.update(
-                    status="document_storage",
+                    status="storing",
                     progress=mapped,
                     log=f"[{idx + 1}/{total}] {filename}: {message}",
                 )

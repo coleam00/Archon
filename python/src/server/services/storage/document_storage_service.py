@@ -52,9 +52,9 @@ async def add_documents_to_supabase(
             if progress_callback and asyncio.iscoroutinefunction(progress_callback):
                 try:
                     if batch_info:
-                        await progress_callback("document_storage", progress, message, **batch_info)
+                        await progress_callback("storing", progress, message, **batch_info)
                     else:
-                        await progress_callback("document_storage", progress, message)
+                        await progress_callback("storing", progress, message)
                 except Exception as e:
                     search_logger.warning(f"Progress callback failed: {e}. Storage continuing...")
 
@@ -167,7 +167,7 @@ async def add_documents_to_supabase(
             if progress_callback and asyncio.iscoroutinefunction(progress_callback):
                 try:
                     await progress_callback(
-                        "document_storage",  # status (will be overridden by base_status anyway)
+                        "storing",  # status (will be overridden by base_status anyway)
                         current_progress,    # progress
                         f"Processing batch {batch_num}/{total_batches} ({len(batch_contents)} chunks)",  # message
                     **{  # **kwargs - these will be stored at top level
@@ -251,7 +251,7 @@ async def add_documents_to_supabase(
                 if progress_callback and "rate limit" in message.lower():
                     try:
                         await progress_callback(
-                            "document_storage",
+                            "storing",
                             current_progress,  # Use current batch progress
                             message,
                         batch=batch_num,

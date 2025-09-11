@@ -164,11 +164,11 @@ class CodeExtractionService:
         summary_end = start_progress + int(progress_range * 0.8)
 
         # Extract code blocks from all documents
-        logger.info(f"Starting code extraction for {len(crawl_results)} documents with source_id: {source_id}")
+        safe_logfire_info(f"Starting code extraction for {len(crawl_results)} documents with source_id: {source_id}")
         all_code_blocks = await self._extract_code_blocks_from_documents(
             crawl_results, source_id, progress_callback, start_progress, extract_end, cancellation_check
         )
-        logger.info(f"Extracted {len(all_code_blocks)} total code blocks from {len(crawl_results)} documents")
+        safe_logfire_info(f"Extracted {len(all_code_blocks)} total code blocks from {len(crawl_results)} documents")
 
         if not all_code_blocks:
             safe_logfire_info("No code examples found in any crawled documents")
