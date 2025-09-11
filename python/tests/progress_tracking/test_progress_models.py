@@ -305,8 +305,8 @@ class TestUploadProgressResponse:
     def test_upload_status_validation(self):
         """Test upload status validation."""
         valid_statuses = [
-            "starting", "reading", "extracting", "chunking",
-            "creating_source", "summarizing", "storing",
+            "starting", "reading", "text_extraction", "chunking",
+            "source_creation", "summarizing", "storing",
             "completed", "failed", "cancelled"
         ]
         

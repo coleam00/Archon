@@ -124,8 +124,8 @@ class UploadProgressResponse(BaseProgressResponse):
     """Progress response for document upload operations."""
 
     status: Literal[
-        "starting", "reading", "extracting", "chunking",
-        "creating_source", "summarizing", "storing",
+        "starting", "reading", "text_extraction", "chunking",
+        "source_creation", "summarizing", "storing",
         "completed", "failed", "cancelled"
     ]
 

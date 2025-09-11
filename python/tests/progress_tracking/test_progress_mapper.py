@@ -108,9 +108,9 @@ class TestProgressMapper:
         assert mapper.STAGE_RANGES["reading"] == (0, 5)
         assert mapper.STAGE_RANGES["text_extraction"] == (5, 10)
         assert mapper.STAGE_RANGES["chunking"] == (10, 15)
-        assert mapper.STAGE_RANGES["creating_source"] == (15, 20)
-        assert mapper.STAGE_RANGES["summarizing"] == (20, 30)
-        assert mapper.STAGE_RANGES["storing"] == (30, 100)
+        # Note: source_creation is shared between crawl and upload operations at (20, 25)
+        assert mapper.STAGE_RANGES["summarizing"] == (25, 35)
+        assert mapper.STAGE_RANGES["storing"] == (35, 100)
         
     def test_calculate_stage_progress(self):
         """Test calculating percentage within a stage"""

@@ -32,9 +32,9 @@ class ProgressMapper:
         "reading": (0, 5),
         "text_extraction": (5, 10),   # Clear name for text extraction from files
         "chunking": (10, 15),
-        "creating_source": (15, 20),
-        "summarizing": (20, 30),
-        "storing": (30, 100),
+        # Note: source_creation is defined above at (20, 25) for all operations
+        "summarizing": (25, 35),
+        "storing": (35, 100),
     }
 
     def __init__(self):
