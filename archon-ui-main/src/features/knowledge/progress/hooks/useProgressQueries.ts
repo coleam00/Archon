@@ -104,6 +104,19 @@ export function useOperationProgress(
       }, 2000);
     }
 
+    // Handle cancellation
+    if (status === "cancelled" && !hasCalledError.current) {
+      hasCalledError.current = true;
+      options?.onError?.(query.data.error || "Operation was cancelled");
+
+      // Clean up the query after cancellation
+      setTimeout(() => {
+        if (progressId) {
+          queryClient.removeQueries({ queryKey: progressKeys.detail(progressId) });
+        }
+      }, 2000);
+    }
+
     // Handle errors
     if ((status === "error" || status === "failed") && !hasCalledError.current) {
       hasCalledError.current = true;
