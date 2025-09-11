@@ -428,9 +428,12 @@ class CrawlingService:
             actual_chunks_stored = storage_results.get("chunks_stored", 0)
             if storage_results["chunk_count"] > 0 and actual_chunks_stored == 0:
                 # We processed chunks but none were stored - this is a failure
-                error_msg = f"Failed to store documents: {storage_results['chunk_count']} chunks processed but 0 stored"
+                error_msg = (
+                    f"Failed to store documents: {storage_results['chunk_count']} chunks processed but 0 stored "
+                    f"| url={url} | progress_id={self.progress_id}"
+                )
                 safe_logfire_error(error_msg)
-                raise Exception(error_msg)
+                raise ValueError(error_msg)
 
             # Extract code examples if requested
             code_examples_count = 0
