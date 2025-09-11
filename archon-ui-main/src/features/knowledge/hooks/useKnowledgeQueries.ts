@@ -8,10 +8,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useSmartPolling } from "../../ui/hooks";
 import { useToast } from "../../ui/hooks/useToast";
 import { useActiveOperations } from "../progress/hooks";
-import type { ActiveOperation } from "../progress/types";
+import { progressKeys } from "../progress/hooks/useProgressQueries";
+import type { ActiveOperation, ActiveOperationsResponse } from "../progress/types";
 import { knowledgeService } from "../services";
 import type {
   CrawlRequest,
+  CrawlStartResponse,
   KnowledgeItem,
   KnowledgeItemsFilter,
   KnowledgeItemsResponse,
@@ -72,30 +74,160 @@ export function useCodeExamples(sourceId: string | null) {
 }
 
 /**
- * Crawl URL mutation
+ * Crawl URL mutation with optimistic updates
  * Returns the progressId that can be used to track crawl progress
  */
 export function useCrawlUrl() {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
 
-  return useMutation({
+  return useMutation<
+    CrawlStartResponse,
+    Error,
+    CrawlRequest,
+    { 
+      previousKnowledge?: KnowledgeItem[];
+      previousOperations?: ActiveOperationsResponse;
+      tempProgressId: string;
+      tempItemId: string;
+    }
+  >({
     mutationFn: (request: CrawlRequest) => knowledgeService.crawlUrl(request),
-    onSuccess: (response) => {
-      // Store the progressId for tracking
-      // The response contains progressId which should be used with useOperationProgress
+    onMutate: async (request) => {
+      // Cancel any outgoing refetches to prevent race conditions
+      await queryClient.cancelQueries({ queryKey: knowledgeKeys.lists() });
+      await queryClient.cancelQueries({ queryKey: progressKeys.list() });
 
-      // Invalidate the list to show new items when ready
+      // Snapshot the previous values for rollback
+      const previousKnowledge = queryClient.getQueryData<KnowledgeItem[]>(knowledgeKeys.lists());
+      const previousOperations = queryClient.getQueryData<ActiveOperationsResponse>(progressKeys.list());
+
+      // Generate temporary IDs
+      const tempProgressId = `temp-progress-${Date.now()}`;
+      const tempItemId = `temp-item-${Date.now()}`;
+
+      // Create optimistic knowledge item
+      const optimisticItem: KnowledgeItem = {
+        id: tempItemId,
+        title: new URL(request.url).hostname || "New crawl",
+        url: request.url,
+        source_id: tempProgressId,
+        source_type: "url",
+        knowledge_type: request.knowledge_type || "technical",
+        status: "processing",
+        document_count: 0,
+        code_examples_count: 0,
+        metadata: {
+          knowledge_type: request.knowledge_type || "technical",
+          tags: request.tags || [],
+          source_type: "url",
+          status: "processing",
+          description: `Crawling ${request.url}`,
+        },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      // Add optimistic knowledge item to the list
+      queryClient.setQueryData<KnowledgeItem[]>(knowledgeKeys.lists(), (old) => {
+        if (!old) return [optimisticItem];
+        // Add at the beginning for visibility
+        return [optimisticItem, ...old];
+      });
+
+      // Create optimistic progress operation
+      const optimisticOperation: ActiveOperation = {
+        operation_id: tempProgressId,
+        operation_type: "crawl",
+        status: "starting",
+        progress: 0,
+        message: `Initializing crawl for ${request.url}`,
+        started_at: new Date().toISOString(),
+        progressId: tempProgressId,
+        type: "crawl",
+        url: request.url,
+        source_id: tempProgressId,
+      };
+
+      // Add optimistic operation to active operations
+      queryClient.setQueryData<ActiveOperationsResponse>(progressKeys.list(), (old) => {
+        if (!old) {
+          return {
+            operations: [optimisticOperation],
+            count: 1,
+            timestamp: new Date().toISOString(),
+          };
+        }
+        return {
+          ...old,
+          operations: [optimisticOperation, ...old.operations],
+          count: old.count + 1,
+        };
+      });
+
+      // Return context for rollback and replacement
+      return { previousKnowledge, previousOperations, tempProgressId, tempItemId };
+    },
+    onSuccess: (response, _variables, context) => {
+      // Replace temporary IDs with real ones from the server
+      if (context) {
+        // Update knowledge item with real source_id if we get it
+        queryClient.setQueryData<KnowledgeItem[]>(knowledgeKeys.lists(), (old) => {
+          if (!old) return old;
+          return old.map((item) => {
+            if (item.id === context.tempItemId) {
+              // Update with real progress ID, but keep the optimistic item
+              // The real item will come through polling/invalidation
+              return {
+                ...item,
+                source_id: response.progressId,
+              };
+            }
+            return item;
+          });
+        });
+
+        // Update progress operation with real progress ID
+        queryClient.setQueryData<ActiveOperationsResponse>(progressKeys.list(), (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            operations: old.operations.map((op) => {
+              if (op.operation_id === context.tempProgressId) {
+                return {
+                  ...op,
+                  operation_id: response.progressId,
+                  progressId: response.progressId,
+                  source_id: response.progressId,
+                  message: response.message || op.message,
+                };
+              }
+              return op;
+            }),
+          };
+        });
+      }
+
+      // Invalidate to get fresh data
       queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
+      queryClient.invalidateQueries({ queryKey: progressKeys.list() });
 
       showToast(`Crawl started: ${response.message}`, "success");
 
       // Return the response so caller can access progressId
       return response;
     },
-    onError: () => {
-      showToast("Failed to start crawl", "error");
+    onError: (error, _variables, context) => {
+      // Rollback optimistic updates on error
+      if (context?.previousKnowledge) {
+        queryClient.setQueryData(knowledgeKeys.lists(), context.previousKnowledge);
+      }
+      if (context?.previousOperations) {
+        queryClient.setQueryData(progressKeys.list(), context.previousOperations);
+      }
+
+      const errorMessage = error instanceof Error ? error.message : "Failed to start crawl";
+      showToast(errorMessage, "error");
     },
   });
 }
@@ -110,7 +242,7 @@ export function useUploadDocument() {
   return useMutation({
     mutationFn: ({ file, metadata }: { file: File; metadata: UploadMetadata }) =>
       knowledgeService.uploadDocument(file, metadata),
-    onSuccess: (response) => {
+    onSuccess: () => {
       // Invalidate the list to show new items when ready
       queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
       // Don't show success here - upload is just starting in background
