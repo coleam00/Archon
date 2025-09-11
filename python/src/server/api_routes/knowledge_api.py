@@ -136,6 +136,9 @@ async def get_knowledge_items_summary(
     Use this endpoint for card displays and frequent polling.
     """
     try:
+        # Input guards
+        page = max(1, page)
+        per_page = min(100, max(1, per_page))
         service = KnowledgeSummaryService(get_supabase_client())
         result = await service.get_summaries(
             page=page, per_page=per_page, knowledge_type=knowledge_type, search=search
