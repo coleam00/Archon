@@ -36,10 +36,23 @@ export const KnowledgeHeader: React.FC<KnowledgeHeaderProps> = ({
       {/* Title and Actions */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <BookOpen className="w-6 h-6 text-cyan-400" />
-          <h1 className="text-2xl font-bold bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">
-            Knowledge Base
-          </h1>
+          {/* Icon chip styled like the knowledge button */}
+          <span
+            className="relative inline-flex h-8 w-8 items-center justify-center rounded-md pointer-events-none
+            bg-gradient-to-b from-purple-100/80 to-white/60 dark:from-purple-500/20 dark:to-purple-500/10
+            border border-purple-300/50 dark:border-purple-500/50
+            shadow-[0_0_10px_rgba(168,85,247,0.35)] hover:shadow-none"
+            aria-hidden
+          >
+            <BookOpen className="h-4 w-4 text-purple-700 dark:text-purple-100" />
+            {/* subtle bottom glow bar */}
+            <span
+              className="pointer-events-none absolute bottom-0 left-1 right-1 h-[2px]
+              bg-gradient-to-r from-transparent via-purple-500 to-transparent
+              shadow-[0_0_10px_2px_rgba(168,85,247,0.45)]"
+            />
+          </span>
+          <h1 className="text-2xl font-bold text-white">Knowledge Base</h1>
           <span className="px-3 py-1 text-sm bg-black/30 border border-white/10 rounded glass-morphism">
             {isLoading ? "Loading..." : `${totalItems} items`}
           </span>
