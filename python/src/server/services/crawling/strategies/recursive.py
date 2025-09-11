@@ -286,10 +286,10 @@ class RecursiveCrawlStrategy:
                     # Report progress every few URLs
                     current_idx = batch_idx + i + 1
                     if current_idx % 5 == 0 or current_idx == len(urls_to_crawl):
-                        current_progress = int((total_processed / len(urls_to_crawl)) * 100)
+                        current_progress = int((total_processed / max(total_discovered, 1)) * 100)
                         await report_progress(
                             current_progress,
-                            f"Depth {depth + 1}: processed {total_processed}/{len(urls_to_crawl)} URLs ({depth_successful} successful)",
+                            f"Depth {depth + 1}: processed {total_processed}/{total_discovered} URLs ({depth_successful} successful)",
                             total_pages=total_discovered,
                             processed_pages=total_processed,
                         )
