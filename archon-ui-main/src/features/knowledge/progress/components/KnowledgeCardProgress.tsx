@@ -1,31 +1,42 @@
 /**
  * Knowledge Card Progress Component
  * Displays inline crawl progress for knowledge items
+ * Simplified to directly use ActiveOperation data like CrawlingProgress does
  */
 
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertCircle, CheckCircle2, Code, FileText, Link, Loader2 } from "lucide-react";
 import { cn } from "../../../ui/primitives/styles";
-import { useOperationProgress } from "../hooks";
-import type { ProgressResponse } from "../types/progress";
+import type { ActiveOperation } from "../types/progress";
 
 interface KnowledgeCardProgressProps {
-  progressId: string | null;
-  isActive: boolean;
+  operation: ActiveOperation;
 }
 
-export const KnowledgeCardProgress: React.FC<KnowledgeCardProgressProps> = ({ progressId, isActive }) => {
-  const { data: progress, isLoading } = useOperationProgress(progressId, {
-    pollingInterval: 1000,
-  });
+export const KnowledgeCardProgress: React.FC<KnowledgeCardProgressProps> = ({ operation }) => {
+  // Direct progress field from backend (0-100) - same as CrawlingProgress
+  const progressPercentage = typeof operation.progress === "number" ? Math.round(operation.progress) : 0;
 
-  // Hide if no progress or completed/failed
-  if (!isActive || !progress || isLoading) {
+  // Check if operation is active - same logic as CrawlingProgress
+  const isActive = [
+    "crawling",
+    "processing",
+    "in_progress",
+    "starting",
+    "initializing",
+    "analyzing",
+    "source_creation",
+    "document_storage",
+    "code_extraction",
+  ].includes(operation.status);
+
+  // Don't show if not active
+  if (!isActive) {
     return null;
   }
 
   const getStatusIcon = () => {
-    switch (progress.status) {
+    switch (operation.status) {
       case "completed":
         return <CheckCircle2 className="w-3 h-3" />;
       case "failed":
@@ -37,7 +48,7 @@ export const KnowledgeCardProgress: React.FC<KnowledgeCardProgressProps> = ({ pr
   };
 
   const getStatusColor = () => {
-    switch (progress.status) {
+    switch (operation.status) {
       case "completed":
         return "text-green-500 bg-green-500/10 border-green-500/20";
       case "failed":
@@ -51,14 +62,9 @@ export const KnowledgeCardProgress: React.FC<KnowledgeCardProgressProps> = ({ pr
     }
   };
 
-  // Use the main progress field from backend (0-100)
-  const progressPercentage = progress.progress || 0;
-  // Use current_step if available, otherwise format the status
-  const currentStep =
-    progress.current_step ||
-    progress.message ||
-    progress.status.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
-  const stats = progress.stats || progress.progress_data;
+  // Format the status text
+  const currentStep = operation.message || operation.status.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+  const stats = operation.stats || operation.progress_data;
 
   return (
     <AnimatePresence>
@@ -91,41 +97,35 @@ export const KnowledgeCardProgress: React.FC<KnowledgeCardProgressProps> = ({ pr
             />
           </div>
 
-          {/* Stats */}
-          {stats && (
-            <div className="flex items-center gap-4 text-xs text-gray-500">
-              {"pages_crawled" in stats && stats.pages_crawled !== undefined && (
-                <div className="flex items-center gap-1">
-                  <Link className="w-3 h-3" />
-                  <span>{stats.pages_crawled} pages</span>
-                </div>
-              )}
-              {"documents_processed" in stats && stats.documents_processed !== undefined && (
-                <div className="flex items-center gap-1">
-                  <FileText className="w-3 h-3" />
-                  <span>{stats.documents_processed} docs</span>
-                </div>
-              )}
-              {"documents_created" in stats && stats.documents_created !== undefined && (
-                <div className="flex items-center gap-1">
-                  <FileText className="w-3 h-3" />
-                  <span>{stats.documents_created} docs</span>
-                </div>
-              )}
-              {"code_examples_found" in stats &&
-                stats.code_examples_found !== undefined &&
-                stats.code_examples_found > 0 && (
-                  <div className="flex items-center gap-1">
-                    <Code className="w-3 h-3 text-green-500" />
-                    <span>{stats.code_examples_found} examples</span>
-                  </div>
-                )}
-            </div>
-          )}
+          {/* Stats - simplified to match CrawlingProgress */}
+          <div className="flex items-center gap-4 text-xs text-gray-500">
+            {(operation.pages_crawled !== undefined || stats?.pages_crawled !== undefined) && (
+              <div className="flex items-center gap-1">
+                <Link className="w-3 h-3" />
+                <span>{operation.pages_crawled || stats?.pages_crawled || 0} pages</span>
+              </div>
+            )}
+            {(operation.documents_created !== undefined ||
+              (stats && "documents_created" in stats && stats.documents_created !== undefined)) && (
+              <div className="flex items-center gap-1">
+                <FileText className="w-3 h-3" />
+                <span>
+                  {operation.documents_created || (stats && "documents_created" in stats ? stats.documents_created : 0)}{" "}
+                  docs
+                </span>
+              </div>
+            )}
+            {operation.code_blocks_found !== undefined && (
+              <div className="flex items-center gap-1">
+                <Code className="w-3 h-3 text-green-500" />
+                <span>{operation.code_blocks_found} examples</span>
+              </div>
+            )}
+          </div>
 
           {/* Error message */}
-          {typedProgress.status === "failed" && typedProgress.error_message && (
-            <div className="text-xs text-red-400 mt-2">{typedProgress.error_message}</div>
+          {operation.status === "error" && operation.message && (
+            <div className="text-xs text-red-400 mt-2">{operation.message}</div>
           )}
         </div>
       </motion.div>

@@ -30,6 +30,8 @@ export const knowledgeKeys = {
   codeExamples: (sourceId: string) => [...knowledgeKeys.detail(sourceId), "code-examples"] as const,
   search: (query: string) => [...knowledgeKeys.all, "search", query] as const,
   sources: () => [...knowledgeKeys.all, "sources"] as const,
+  summary: () => [...knowledgeKeys.all, "summary"] as const,
+  summaries: (filter?: KnowledgeItemsFilter) => [...knowledgeKeys.summary(), filter] as const,
 };
 
 /**
@@ -152,27 +154,31 @@ export function useDeleteKnowledgeItem() {
   return useMutation({
     mutationFn: (sourceId: string) => knowledgeService.deleteKnowledgeItem(sourceId),
     onMutate: async (sourceId) => {
-      // Cancel any outgoing refetches
-      await queryClient.cancelQueries({ queryKey: knowledgeKeys.lists() });
+      // Cancel summary queries (all filters)
+      await queryClient.cancelQueries({ queryKey: knowledgeKeys.summary() });
 
-      // Snapshot the previous value
-      const previousItems = queryClient.getQueryData<KnowledgeItemsResponse>(knowledgeKeys.list());
+      // Snapshot all summary caches (for all filters)
+      const summariesPrefix = knowledgeKeys.summary();
+      const previousEntries = queryClient.getQueriesData<KnowledgeItemsResponse>({
+        queryKey: summariesPrefix,
+      });
 
-      // Optimistically remove the item
-      if (previousItems) {
-        queryClient.setQueryData<KnowledgeItemsResponse>(knowledgeKeys.list(), {
-          ...previousItems,
-          items: previousItems.items.filter((item) => item.source_id !== sourceId),
-          total: previousItems.total - 1,
+      // Optimistically remove the item from each cached summary
+      for (const [queryKey, data] of previousEntries) {
+        if (!data) continue;
+        queryClient.setQueryData<KnowledgeItemsResponse>(queryKey, {
+          ...data,
+          items: data.items.filter((item) => item.source_id !== sourceId),
+          total: Math.max(0, (data.total ?? data.items.length) - 1),
         });
       }
 
-      return { previousItems };
+      return { previousEntries };
     },
     onError: (error, _sourceId, context) => {
-      // Rollback on error
-      if (context?.previousItems) {
-        queryClient.setQueryData(knowledgeKeys.list(), context.previousItems);
+      // Roll back all summaries
+      for (const [queryKey, data] of context?.previousEntries ?? []) {
+        queryClient.setQueryData(queryKey, data);
       }
 
       const errorMessage = error instanceof Error ? error.message : "Failed to delete item";
@@ -181,8 +187,10 @@ export function useDeleteKnowledgeItem() {
     onSuccess: (data) => {
       showToast(data.message || "Item deleted successfully", "success");
 
-      // Invalidate and refetch
-      queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
+      // Invalidate summaries to reconcile with server
+      queryClient.invalidateQueries({ queryKey: knowledgeKeys.summary() });
+      // Also invalidate detail view if it exists
+      queryClient.invalidateQueries({ queryKey: knowledgeKeys.details() });
     },
   });
 }
@@ -273,35 +281,33 @@ export function useKnowledgeSummaries(filter?: KnowledgeItemsFilter) {
   // Track active crawl IDs locally - only set when we start a crawl/refresh
   const [activeCrawlIds, setActiveCrawlIds] = useState<string[]>([]);
 
-  // Only enable polling when we have active crawl IDs
-  const hasActiveCrawls = activeCrawlIds.length > 0;
+  // ALWAYS poll for active operations to catch pre-existing ones
+  // This ensures we discover operations that were started before page load
+  const { data: activeOperationsData } = useActiveOperations(true);
 
-  // Get active operations from the progress tracking system - only when we have active crawls
-  const { data: activeOperationsData } = useActiveOperations(hasActiveCrawls);
+  // Check if we have any active operations (either tracked or discovered)
+  const hasActiveOperations = (activeOperationsData?.operations?.length || 0) > 0;
 
   // Convert to the format expected by components
   const activeOperations: ActiveOperation[] = useMemo(() => {
-    if (!activeOperationsData?.operations || !hasActiveCrawls) return [];
+    if (!activeOperationsData?.operations) return [];
 
-    // Only include operations that we're tracking and add component-friendly aliases
-    return activeOperationsData.operations
-      .filter((op) => activeCrawlIds.includes(op.operation_id))
-      .map((op) => ({
-        ...op,
-        progressId: op.operation_id,
-        type: op.operation_type,
-        url: op.current_url,
-        sourceId: undefined,
-      }));
-  }, [activeOperationsData, activeCrawlIds, hasActiveCrawls]);
+    // Include ALL active operations (not just tracked ones) to catch pre-existing operations
+    // This ensures operations started before page load are still shown
+    return activeOperationsData.operations.map((op) => ({
+      ...op,
+      progressId: op.operation_id,
+      type: op.operation_type,
+    }));
+  }, [activeOperationsData]);
 
-  // Fetch summaries with smart polling only when there are active operations
-  const { refetchInterval } = useSmartPolling(hasActiveCrawls ? 5000 : 30000);
+  // Fetch summaries with smart polling when there are active operations
+  const { refetchInterval } = useSmartPolling(hasActiveOperations ? 5000 : 30000);
 
   const summaryQuery = useQuery<KnowledgeItemsResponse>({
-    queryKey: [...knowledgeKeys.all, "summary", filter],
+    queryKey: knowledgeKeys.summaries(filter),
     queryFn: () => knowledgeService.getKnowledgeSummaries(filter),
-    refetchInterval: hasActiveCrawls ? refetchInterval : false, // No polling unless we have active crawls
+    refetchInterval: hasActiveOperations ? refetchInterval : false, // Poll when ANY operations are active
     refetchOnWindowFocus: true,
     staleTime: 30000, // Consider data stale after 30 seconds
   });
@@ -318,7 +324,8 @@ export function useKnowledgeSummaries(filter?: KnowledgeItemsFilter) {
 
       // Invalidate after a short delay to allow backend to update
       const timer = setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: [...knowledgeKeys.all, "summary"] });
+        // Invalidate all summaries regardless of filter
+        queryClient.invalidateQueries({ queryKey: knowledgeKeys.summary() });
       }, 2000);
 
       return () => clearTimeout(timer);

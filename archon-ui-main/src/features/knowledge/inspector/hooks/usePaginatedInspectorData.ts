@@ -67,15 +67,15 @@ export function usePaginatedInspectorData({
   // Update accumulated documents when new data arrives
   useEffect(() => {
     if (!docsResponse?.chunks) return;
-    
+
     if (docsOffset === 0) {
       // First page - replace all
       setAllDocs(docsResponse.chunks);
     } else {
       // Append new chunks, deduplicating by id
       setAllDocs((prev) => {
-        const existingIds = new Set(prev.map(d => d.id));
-        const newChunks = docsResponse.chunks.filter(chunk => !existingIds.has(chunk.id));
+        const existingIds = new Set(prev.map((d) => d.id));
+        const newChunks = docsResponse.chunks.filter((chunk) => !existingIds.has(chunk.id));
         return [...prev, ...newChunks];
       });
     }
@@ -84,15 +84,15 @@ export function usePaginatedInspectorData({
   // Update accumulated code examples when new data arrives
   useEffect(() => {
     if (!codeResponse?.code_examples) return;
-    
+
     if (codeOffset === 0) {
       // First page - replace all
       setAllCode(codeResponse.code_examples);
     } else {
       // Append new examples, deduplicating by id
       setAllCode((prev) => {
-        const existingIds = new Set(prev.map(c => c.id));
-        const newExamples = codeResponse.code_examples.filter(example => !existingIds.has(example.id));
+        const existingIds = new Set(prev.map((c) => c.id));
+        const newExamples = codeResponse.code_examples.filter((example) => !existingIds.has(example.id));
         return [...prev, ...newExamples];
       });
     }

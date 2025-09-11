@@ -6,7 +6,7 @@
 
 import { formatDistanceToNowStrict } from "date-fns";
 import { motion } from "framer-motion";
-import { Briefcase, Clock, Code, ExternalLink, File, FileText, Globe, Loader2, Terminal } from "lucide-react";
+import { Briefcase, Clock, Code, ExternalLink, File, FileText, Globe, Terminal } from "lucide-react";
 import { useState } from "react";
 import { cn } from "../../ui/primitives/styles";
 import { useDeleteKnowledgeItem, useRefreshKnowledgeItem } from "../hooks";
@@ -59,7 +59,7 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
   const handleRefresh = async () => {
     // Prevent double-clicking refresh while a refresh is already in progress
     if (refreshMutation.isPending) return;
-    
+
     const response = await refreshMutation.mutateAsync(item.source_id);
 
     // Notify parent about the new refresh operation
@@ -201,28 +201,8 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
         {/* Spacer to push footer to bottom */}
         <div className="flex-1" />
 
-        {/* Inline Progress - Show active operation if exists */}
-        {activeOperation && (
-          <div className="px-4 pb-3 space-y-2">
-            <div className="flex items-center justify-between text-xs">
-              <div className="flex items-center gap-2 text-cyan-400">
-                <Loader2 className="w-3 h-3 animate-spin" />
-                <span className="capitalize">{activeOperation.status.replace(/_/g, " ")}</span>
-              </div>
-              <span className="text-cyan-400 font-medium">{Math.round(activeOperation.progress)}%</span>
-            </div>
-            <div className="h-1 bg-black/30 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-cyan-500 transition-all duration-300"
-                style={{ width: `${activeOperation.progress}%` }}
-              />
-            </div>
-            {activeOperation.message && <p className="text-xs text-gray-400 truncate">{activeOperation.message}</p>}
-          </div>
-        )}
-
-        {/* Progress tracking for active operations */}
-        {activeOperation && <KnowledgeCardProgress progressId={activeOperation.progressId} isActive={true} />}
+        {/* Progress tracking for active operations - using simplified component */}
+        {activeOperation && <KnowledgeCardProgress operation={activeOperation} />}
 
         {/* Fixed Footer with Stats */}
         <div className="px-4 py-3 bg-black/30 border-t border-white/10">

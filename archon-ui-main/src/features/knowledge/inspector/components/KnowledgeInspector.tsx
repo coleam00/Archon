@@ -46,7 +46,7 @@ export const KnowledgeInspector: React.FC<KnowledgeInspectorProps> = ({ item, op
   // Auto-select first item when data loads
   useEffect(() => {
     if (selectedItem || currentItems.length === 0) return;
-    
+
     const firstItem = currentItems[0];
     if (viewMode === "documents") {
       const firstDoc = firstItem as DocumentChunk;

@@ -60,11 +60,18 @@ export const KnowledgeList: React.FC<KnowledgeListProps> = ({
 }) => {
   // Helper to check if an item is being recrawled
   const getActiveOperationForItem = (item: KnowledgeItem): ActiveOperation | undefined => {
-    // Check if any active operation is for this item's URL
+    // First try to match by source_id (most reliable for refresh operations)
+    const matchBySourceId = activeOperations.find((op) => op.source_id === item.source_id);
+    if (matchBySourceId) {
+      return matchBySourceId;
+    }
+
+    // Fallback: Check if any active operation is for this item's URL
     const itemUrl = item.metadata?.original_url || item.url;
     return activeOperations.find((op) => {
       // Check various URL fields in the operation
       return (
+        op.url === itemUrl ||
         op.current_url === itemUrl ||
         op.message?.includes(itemUrl) ||
         (op.operation_type === "crawl" && op.message?.includes(item.title))

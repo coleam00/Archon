@@ -205,10 +205,7 @@ describe("useTaskQueries", () => {
 
       // Verify error feedback was shown to user
       await waitFor(() => {
-        expect(showToastMock).toHaveBeenCalledWith(
-          expect.stringContaining("Failed to create task"),
-          "error",
-        );
+        expect(showToastMock).toHaveBeenCalledWith(expect.stringContaining("Failed to create task"), "error");
       });
     });
   });

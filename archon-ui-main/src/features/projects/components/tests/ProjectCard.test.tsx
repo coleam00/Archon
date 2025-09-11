@@ -50,7 +50,9 @@ describe("ProjectCard", () => {
   });
 
   it("should call onSelect when clicked", () => {
-    const { container } = render(<ProjectCard project={mockProject} isSelected={false} taskCounts={mockTaskCounts} {...mockHandlers} />);
+    const { container } = render(
+      <ProjectCard project={mockProject} isSelected={false} taskCounts={mockTaskCounts} {...mockHandlers} />,
+    );
 
     const card = container.firstChild as HTMLElement;
     fireEvent.click(card);

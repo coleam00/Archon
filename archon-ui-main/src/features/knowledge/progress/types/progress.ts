@@ -80,14 +80,15 @@ export interface ActiveOperation {
   // Component-friendly aliases
   progressId: string; // Same as operation_id, for component compatibility
   type?: string; // Same as operation_type
-  url?: string; // From current_url
-  sourceId?: string;
+  url?: string; // Original URL being crawled
+  source_id?: string; // Source ID for matching to knowledge items
   // Additional fields that might come from backend
   current_url?: string;
   pages_crawled?: number;
   total_pages?: number;
   code_blocks_found?: number;
   documents_created?: number;
+  crawl_type?: string; // Type of crawl (normal, sitemap, refresh, etc.)
   stats?: {
     pages_crawled?: number;
     documents_created?: number;

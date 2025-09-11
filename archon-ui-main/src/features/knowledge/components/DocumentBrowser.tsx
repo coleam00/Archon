@@ -28,12 +28,7 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({ sourceId, open
     isError: chunksError,
     error: chunksErrorObj,
   } = useKnowledgeItemChunks(sourceId);
-  const {
-    data: codeData,
-    isLoading: codeLoading,
-    isError: codeError,
-    error: codeErrorObj,
-  } = useCodeExamples(sourceId);
+  const { data: codeData, isLoading: codeLoading, isError: codeError, error: codeErrorObj } = useCodeExamples(sourceId);
 
   const chunks = chunksData?.chunks || [];
   const codeExamples = codeData?.code_examples || [];
