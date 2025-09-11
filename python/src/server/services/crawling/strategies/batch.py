@@ -227,7 +227,7 @@ class BatchCrawlStrategy:
                 ):  # Report every 5 URLs or at the end
                     await report_progress(
                         progress_percentage,
-                        f"Crawled {processed}/{total_urls} pages ({len(successful_results)} successful)",
+                        f"Crawled {processed}/{total_urls} pages",
                         total_pages=total_urls,
                         processed_pages=processed,
                         successful_count=len(successful_results)

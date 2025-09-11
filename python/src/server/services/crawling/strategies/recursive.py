@@ -289,7 +289,7 @@ class RecursiveCrawlStrategy:
                         current_progress = int((total_processed / max(total_discovered, 1)) * 100)
                         await report_progress(
                             current_progress,
-                            f"Depth {depth + 1}: processed {total_processed}/{total_discovered} URLs ({depth_successful} successful)",
+                            f"Depth {depth + 1}: processed {total_processed}/{total_discovered} URLs",
                             total_pages=total_discovered,
                             processed_pages=total_processed,
                         )
