@@ -3,7 +3,7 @@
  * Contains search, filters, and view controls
  */
 
-import { BookOpen, Grid, List, Plus, Search, Briefcase, Terminal } from "lucide-react";
+import { BookOpen, Grid, List, Plus, Search, Briefcase, Terminal, Asterisk } from "lucide-react";
 import { Button, Input, ToggleGroup, ToggleGroupItem } from "../../ui/primitives";
 import { cn } from "../../ui/primitives/styles";
 
@@ -71,12 +71,14 @@ export const KnowledgeHeader: React.FC<KnowledgeHeaderProps> = ({
             onValueChange={(v) => v && onTypeFilterChange(v as "all" | "technical" | "business")}
             aria-label="Filter knowledge type"
           >
-            <ToggleGroupItem value="all" className="flex items-center gap-2">All</ToggleGroupItem>
-            <ToggleGroupItem value="technical" className="flex items-center gap-2">
-              <Terminal className="w-4 h-4" /> Technical
+            <ToggleGroupItem value="all" aria-label="All" title="All" className="flex items-center justify-center">
+              <Asterisk className="w-4 h-4" />
             </ToggleGroupItem>
-            <ToggleGroupItem value="business" className="flex items-center gap-2">
-              <Briefcase className="w-4 h-4" /> Business
+            <ToggleGroupItem value="technical" aria-label="Technical" title="Technical" className="flex items-center justify-center">
+              <Terminal className="w-4 h-4" />
+            </ToggleGroupItem>
+            <ToggleGroupItem value="business" aria-label="Business" title="Business" className="flex items-center justify-center">
+              <Briefcase className="w-4 h-4" />
             </ToggleGroupItem>
           </ToggleGroup>
 
