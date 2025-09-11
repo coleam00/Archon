@@ -53,6 +53,11 @@ class ProgressTracker:
             del cls._progress_states[progress_id]
 
     @classmethod
+    def list_active(cls) -> dict[str, dict[str, Any]]:
+        """Get all active progress states."""
+        return cls._progress_states.copy()
+
+    @classmethod
     async def _delayed_cleanup(cls, progress_id: str, delay_seconds: int = 30):
         """
         Remove progress state from memory after a delay.

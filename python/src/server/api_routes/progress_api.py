@@ -1,6 +1,7 @@
 """Progress API endpoints for polling operation status."""
 
 from datetime import datetime
+from email.utils import formatdate
 
 from fastapi import APIRouter, Header, HTTPException, Response
 from fastapi import status as http_status
@@ -26,7 +27,7 @@ async def get_progress(
 ):
     """
     Get progress for an operation with ETag support.
-    
+
     Returns progress state with percentage, status, and message.
     Clients should poll this endpoint to track long-running operations.
     """
@@ -42,21 +43,21 @@ async def get_progress(
                 status_code=404,
                 detail={"error": f"Operation {operation_id} not found"}
             )
-        
+
 
         # Ensure we have the progress_id in the response without mutating shared state
         operation_with_id = {**operation, "progress_id": operation_id}
-        
+
         # Get operation type for proper model selection
         operation_type = operation.get("type", "crawl")
-        
+
         # Create standardized response using Pydantic model
         progress_response = create_progress_response(operation_type, operation_with_id)
-        
-        
+
+
         # Convert to dict with camelCase fields for API response
         response_data = progress_response.model_dump(by_alias=True, exclude_none=True)
-        
+
         # Debug logging for code extraction fields
         if operation_type == "crawl" and operation.get("status") == "code_extraction":
             logger.info(f"Code extraction response fields: completedSummaries={response_data.get('completedSummaries')}, totalSummaries={response_data.get('totalSummaries')}, codeBlocksFound={response_data.get('codeBlocksFound')}")
@@ -74,7 +75,7 @@ async def get_progress(
 
         # Set headers for caching
         response.headers["ETag"] = current_etag
-        response.headers["Last-Modified"] = datetime.utcnow().isoformat()
+        response.headers["Last-Modified"] = formatdate(timeval=None, localtime=False, usegmt=True)
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
 
         # Add polling hint headers
@@ -92,15 +93,15 @@ async def get_progress(
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(f"Failed to get progress | error={str(e)} | operation_id={operation_id}")
-        raise HTTPException(status_code=500, detail={"error": str(e)})
+        logfire.error(f"Failed to get progress | error={e!s} | operation_id={operation_id}", exc_info=True)
+        raise HTTPException(status_code=500, detail={"error": str(e)}) from e
 
 
 @router.get("/")
 async def list_active_operations():
     """
     List all active operations.
-    
+
     This endpoint is useful for debugging and monitoring active operations.
     """
     try:
@@ -111,7 +112,7 @@ async def list_active_operations():
 
         # Get active operations from ProgressTracker
         # Include all non-completed statuses
-        for op_id, operation in ProgressTracker._progress_states.items():
+        for op_id, operation in ProgressTracker.list_active().items():
             status = operation.get("status", "unknown")
             # Include all operations that aren't in terminal states
             if status not in TERMINAL_STATES:
@@ -147,5 +148,5 @@ async def list_active_operations():
         }
 
     except Exception as e:
-        logfire.error(f"Failed to list active operations | error={str(e)}")
-        raise HTTPException(status_code=500, detail={"error": str(e)})
+        logfire.error(f"Failed to list active operations | error={e!s}", exc_info=True)
+        raise HTTPException(status_code=500, detail={"error": str(e)}) from e
