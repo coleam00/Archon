@@ -149,7 +149,7 @@ class RecursiveCrawlStrategy:
         current_urls = {normalize_url(u) for u in start_urls}
         results_all = []
         total_processed = 0
-        total_discovered = len(start_urls)  # Track total URLs discovered
+        total_discovered = len(current_urls)  # Track total URLs discovered (normalized & de-duped)
         cancelled = False
 
         for depth in range(max_depth):
