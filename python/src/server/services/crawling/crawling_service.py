@@ -420,8 +420,14 @@ class CrawlingService:
 
             # Update progress tracker with source_id now that it's created
             if self.progress_tracker and storage_results.get("source_id"):
-                # Update the tracker's state to include source_id for frontend matching
-                self.progress_tracker.state["source_id"] = storage_results["source_id"]
+                # Update the tracker to include source_id for frontend matching
+                # Use update method to maintain timestamps and invariants
+                await self.progress_tracker.update(
+                    status=self.progress_tracker.state.get("status", "document_storage"),
+                    progress=self.progress_tracker.state.get("progress", 0),
+                    log=self.progress_tracker.state.get("log", "Processing documents"),
+                    source_id=storage_results["source_id"]
+                )
                 safe_logfire_info(
                     f"Updated progress tracker with source_id | progress_id={self.progress_id} | source_id={storage_results['source_id']}"
                 )
