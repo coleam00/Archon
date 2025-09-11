@@ -4,11 +4,12 @@
  * Following the pattern from ProjectCard
  */
 
-import { formatDistanceToNowStrict } from "date-fns";
+import { format } from "date-fns";
 import { motion } from "framer-motion";
 import { Briefcase, Clock, Code, ExternalLink, File, FileText, Globe, Terminal } from "lucide-react";
 import { useState } from "react";
 import { cn } from "../../ui/primitives/styles";
+import { StatPill } from "../../ui/primitives";
 import { useDeleteKnowledgeItem, useRefreshKnowledgeItem } from "../hooks";
 import { KnowledgeCardProgress } from "../progress/components/KnowledgeCardProgress";
 import type { ActiveOperation } from "../progress/types";
@@ -96,6 +97,35 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
     return isUrl ? "border-blue-500/30" : "border-pink-500/30";
   };
 
+  // Accent color used for the top glow bar
+  const getAccentColorName = () => {
+    if (activeOperation) return "cyan" as const;
+    if (hasError) return "red" as const;
+    if (isProcessing) return "yellow" as const;
+    if (isTechnical) return (isUrl ? "cyan" : "purple") as const;
+    return (isUrl ? "blue" : "pink") as const;
+  };
+
+  const accent = (() => {
+    const name = getAccentColorName();
+    switch (name) {
+      case "cyan":
+        return { bar: "bg-cyan-500", smear: "from-cyan-500/25" };
+      case "purple":
+        return { bar: "bg-purple-500", smear: "from-purple-500/25" };
+      case "blue":
+        return { bar: "bg-blue-500", smear: "from-blue-500/25" };
+      case "pink":
+        return { bar: "bg-pink-500", smear: "from-pink-500/25" };
+      case "red":
+        return { bar: "bg-red-500", smear: "from-red-500/25" };
+      case "yellow":
+        return { bar: "bg-yellow-400", smear: "from-yellow-400/25" };
+      default:
+        return { bar: "bg-cyan-500", smear: "from-cyan-500/25" };
+    }
+  })();
+
   const getSourceIcon = () => {
     if (isUrl) return <Globe className="w-5 h-5" />;
     return <File className="w-5 h-5" />;
@@ -125,6 +155,16 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
           "min-h-[240px] flex flex-col",
         )}
       >
+        {/* Top accent glow tied to type (does not change size) */}
+        <div className="pointer-events-none absolute inset-x-0 top-0">
+          {/* Hairline highlight */}
+          <div className={cn("mx-1 mt-0.5 h-[2px] rounded-full", accent.bar)} />
+          {/* Soft glow smear fading downward */}
+          <div className={cn(
+            "-mt-1 h-8 w-full bg-gradient-to-b to-transparent blur-md",
+            accent.smear,
+          )} />
+        </div>
         {/* Glow effect on hover */}
         {isHovered && (
           <div className="absolute inset-0 opacity-20 pointer-events-none">
@@ -207,23 +247,36 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
         {/* Fixed Footer with Stats */}
         <div className="px-4 py-3 bg-black/30 border-t border-white/10">
           <div className="flex items-center justify-between text-xs">
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-1 text-gray-400">
-                <FileText className="w-3.5 h-3.5" />
-                <span className="font-medium text-white/80">{documentCount}</span>
-                <span className="text-gray-500">docs</span>
-              </div>
-              <div className="flex items-center gap-1 text-gray-400">
-                <Code className="w-3.5 h-3.5 text-green-400" />
-                <span className="font-medium text-white/80">{codeExamplesCount}</span>
-                <span className="text-gray-500">examples</span>
-              </div>
-            </div>
-            <div className="flex items-center gap-1 text-gray-500">
+            {/* Left: date */}
+            <div className="flex items-center gap-1 text-gray-400">
               <Clock className="w-3 h-3" />
               <span className="text-xs">
-                {formatDistanceToNowStrict(new Date(item.created_at), { addSuffix: true })}
+                {(() => {
+                  const updated = item.updated_at || item.created_at;
+                  try {
+                    return `Updated: ${format(new Date(updated), "M/d/yyyy")}`;
+                  } catch {
+                    return `Updated: ${new Date(updated).toLocaleDateString()}`;
+                  }
+                })()}
               </span>
+            </div>
+            {/* Right: pills */}
+            <div className="flex items-center gap-2">
+              <StatPill
+                color="orange"
+                value={documentCount}
+                size="sm"
+                ariaLabel="Documents count"
+                icon={<FileText className="w-3.5 h-3.5" />}
+              />
+              <StatPill
+                color="blue"
+                value={codeExamplesCount}
+                size="sm"
+                ariaLabel="Code examples count"
+                icon={<Code className="w-3.5 h-3.5" />}
+              />
             </div>
           </div>
         </div>
