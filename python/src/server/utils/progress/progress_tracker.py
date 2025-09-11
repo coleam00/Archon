@@ -79,6 +79,13 @@ class ProgressTracker:
             log: Log message describing current operation
             **kwargs: Additional data to include in update
         """
+        # Debug logging for document_storage issue
+        if status == "document_storage" and progress >= 90:
+            safe_logfire_info(
+                f"DEBUG: ProgressTracker.update called | status={status} | progress={progress} | "
+                f"current_state_progress={self.state.get('progress', 0)} | kwargs_keys={list(kwargs.keys())}"
+            )
+        
         # CRITICAL: Never allow progress to go backwards
         current_progress = self.state.get("progress", 0)
         new_progress = min(100, max(0, progress))  # Ensure 0-100
@@ -101,6 +108,13 @@ class ProgressTracker:
             "log": log,
             "timestamp": datetime.now().isoformat(),
         })
+        
+        # DEBUG: Log final state for document_storage
+        if status == "document_storage" and actual_progress >= 35:
+            safe_logfire_info(
+                f"DEBUG ProgressTracker state updated | status={status} | actual_progress={actual_progress} | "
+                f"state_progress={self.state.get('progress')} | received_progress={progress}"
+            )
 
         # Add log entry
         if "logs" not in self.state:
@@ -109,12 +123,14 @@ class ProgressTracker:
             "timestamp": datetime.now().isoformat(),
             "message": log,
             "status": status,
-            "progress": progress,
+            "progress": actual_progress,  # Use the actual progress after "never go backwards" check
         })
 
-        # Add any additional data
+        # Add any additional data (but don't allow overriding core fields)
+        protected_fields = {"progress", "status", "log", "progress_id", "type", "start_time"}
         for key, value in kwargs.items():
-            self.state[key] = value
+            if key not in protected_fields:
+                self.state[key] = value
         
 
         self._update_state()

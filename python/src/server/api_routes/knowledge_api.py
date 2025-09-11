@@ -857,10 +857,11 @@ async def _perform_upload_with_progress(
         ):
             """Progress callback for tracking document processing"""
             # Map the document storage progress to overall progress range
-            mapped_percentage = progress_mapper.map_progress("document_storage", percentage)
+            # Use "storing" stage for uploads (30-100%), not "document_storage" (25-40%)
+            mapped_percentage = progress_mapper.map_progress("storing", percentage)
 
             await tracker.update(
-                status="document_storage",
+                status="storing",
                 progress=mapped_percentage,
                 log=message,
                 currentUrl=f"file://{filename}",

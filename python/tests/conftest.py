@@ -152,8 +152,17 @@ def client(mock_supabase_client):
                 with patch("supabase.create_client", return_value=mock_supabase_client):
                     # Import app after patching to ensure mocks are used
                     from src.server.main import app
-
-                    return TestClient(app)
+                    import src.server.main
+                    
+                    # Mark initialization as complete for testing
+                    src.server.main._initialization_complete = True
+                    
+                    # Mock the schema check to always return valid
+                    async def mock_schema_check():
+                        return {"valid": True, "message": "Schema is up to date"}
+                    
+                    with patch("src.server.main._check_database_schema", side_effect=mock_schema_check):
+                        return TestClient(app)
 
 
 @pytest.fixture

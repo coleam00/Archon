@@ -74,6 +74,16 @@ class ProgressMapper:
         stage_range = end - start
         mapped_progress = start + (stage_progress / 100.0) * stage_range
 
+        # Debug logging for document_storage
+        if stage == "document_storage" and stage_progress >= 90:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(
+                f"DEBUG: ProgressMapper.map_progress | stage={stage} | stage_progress={stage_progress}% | "
+                f"range=({start}, {end}) | mapped_before_check={mapped_progress:.1f}% | "
+                f"last_overall={self.last_overall_progress}%"
+            )
+
         # Ensure progress never goes backwards
         mapped_progress = max(self.last_overall_progress, mapped_progress)
 

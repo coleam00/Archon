@@ -136,7 +136,7 @@ class BatchCrawlStrategy:
 
         total_urls = len(urls)
         await report_progress(
-            start_progress, 
+            0,  # Start at 0% progress
             f"Starting to crawl {total_urls} URLs...",
             total_pages=total_urls,
             processed_pages=0
@@ -164,9 +164,8 @@ class BatchCrawlStrategy:
             batch_end = min(i + batch_size, total_urls)
 
             # Report batch start with smooth progress
-            progress_percentage = start_progress + int(
-                (i / total_urls) * (end_progress - start_progress)
-            )
+            # Calculate progress as percentage of total URLs processed
+            progress_percentage = int((i / total_urls) * 100)
             await report_progress(
                 progress_percentage,
                 f"Processing batch {batch_start + 1}-{batch_end} of {total_urls} URLs...",
@@ -208,9 +207,8 @@ class BatchCrawlStrategy:
                     )
 
                 # Report individual URL progress with smooth increments
-                progress_percentage = start_progress + int(
-                    (processed / total_urls) * (end_progress - start_progress)
-                )
+                # Calculate progress as percentage of total URLs processed
+                progress_percentage = int((processed / total_urls) * 100)
                 # Report more frequently for smoother progress
                 if (
                     processed % 5 == 0 or processed == total_urls

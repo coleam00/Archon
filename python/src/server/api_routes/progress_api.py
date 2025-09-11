@@ -112,14 +112,28 @@ async def list_active_operations():
             status = operation.get("status", "unknown")
             # Include all operations that aren't completed or failed
             if status not in ["completed", "failed", "error"]:
-                active_operations.append({
+                operation_data = {
                     "operation_id": op_id,
                     "operation_type": operation.get("type", "unknown"),
                     "status": operation.get("status"),
                     "progress": operation.get("progress", 0),
                     "message": operation.get("log", "Processing..."),
-                    "started_at": operation.get("start_time") or datetime.utcnow().isoformat()
-                })
+                    "started_at": operation.get("start_time") or datetime.utcnow().isoformat(),
+                    # Include source_id if available (for refresh operations)
+                    "source_id": operation.get("source_id"),
+                    # Include URL information for matching
+                    "url": operation.get("url"),
+                    "current_url": operation.get("current_url"),
+                    # Include crawl type
+                    "crawl_type": operation.get("crawl_type"),
+                    # Include stats if available
+                    "pages_crawled": operation.get("pages_crawled") or operation.get("processed_pages"),
+                    "total_pages": operation.get("total_pages"),
+                    "documents_created": operation.get("documents_created") or operation.get("chunks_stored"),
+                    "code_blocks_found": operation.get("code_blocks_found") or operation.get("code_examples_found"),
+                }
+                # Only include non-None values to keep response clean
+                active_operations.append({k: v for k, v in operation_data.items() if v is not None})
 
         logfire.info(f"Active operations listed | count={len(active_operations)}")
 

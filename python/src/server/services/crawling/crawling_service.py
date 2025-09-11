@@ -133,15 +133,19 @@ class CrawlingService:
                     f"kwargs_keys={list(kwargs.keys())}"
                 )
                 
+                # Map the progress to the overall progress range
+                mapped_progress = self.progress_mapper.map_progress(base_status, progress)
+                
                 # Update progress via tracker (stores in memory for HTTP polling)
                 await self.progress_tracker.update(
                     status=base_status,
-                    progress=progress,
+                    progress=mapped_progress,
                     log=message,
                     **kwargs
                 )
                 safe_logfire_info(
-                    f"Updated crawl progress | progress_id={self.progress_id} | status={base_status} | progress={progress} | "
+                    f"Updated crawl progress | progress_id={self.progress_id} | status={base_status} | "
+                    f"raw_progress={progress} | mapped_progress={mapped_progress} | "
                     f"total_pages={kwargs.get('total_pages', 'N/A')} | processed_pages={kwargs.get('processed_pages', 'N/A')}"
                 )
 
@@ -175,15 +179,13 @@ class CrawlingService:
         )
 
     async def crawl_markdown_file(
-        self, url: str, progress_callback: Callable[[str, int, str], Awaitable[None]] | None = None, start_progress: int = 10, end_progress: int = 20
+        self, url: str, progress_callback: Callable[[str, int, str], Awaitable[None]] | None = None
     ) -> list[dict[str, Any]]:
         """Crawl a .txt or markdown file."""
         return await self.single_page_strategy.crawl_markdown_file(
             url,
             self.url_handler.transform_github_url,
             progress_callback,
-            start_progress,
-            end_progress,
         )
 
     def parse_sitemap(self, sitemap_url: str) -> list[str]:
@@ -195,8 +197,6 @@ class CrawlingService:
         urls: list[str],
         max_concurrent: int | None = None,
         progress_callback: Callable[[str, int, str], Awaitable[None]] | None = None,
-        start_progress: int = 15,
-        end_progress: int = 60,
     ) -> list[dict[str, Any]]:
         """Batch crawl multiple URLs in parallel."""
         return await self.batch_strategy.crawl_batch_with_progress(
@@ -205,8 +205,6 @@ class CrawlingService:
             self.site_config.is_documentation_site,
             max_concurrent,
             progress_callback,
-            start_progress,
-            end_progress,
             self._check_cancellation,  # Pass cancellation check
         )
 
@@ -216,8 +214,6 @@ class CrawlingService:
         max_depth: int = 3,
         max_concurrent: int | None = None,
         progress_callback: Callable[[str, int, str], Awaitable[None]] | None = None,
-        start_progress: int = 10,
-        end_progress: int = 60,
     ) -> list[dict[str, Any]]:
         """Recursively crawl internal links from start URLs."""
         return await self.recursive_strategy.crawl_recursive_with_progress(
@@ -227,8 +223,6 @@ class CrawlingService:
             max_depth,
             max_concurrent,
             progress_callback,
-            start_progress,
-            end_progress,
             self._check_cancellation,  # Pass cancellation check
         )
 
@@ -344,9 +338,11 @@ class CrawlingService:
             
             # Update progress tracker with crawl type
             if self.progress_tracker and crawl_type:
+                # Use mapper to get correct progress value
+                mapped_progress = self.progress_mapper.map_progress("crawling", 100)  # 100% of crawling stage
                 await self.progress_tracker.update(
                     status="crawling",
-                    progress=15,
+                    progress=mapped_progress,
                     log=f"Processing {crawl_type} content",
                     crawl_type=crawl_type
                 )
@@ -366,15 +362,26 @@ class CrawlingService:
             # Check for cancellation before document processing
             self._check_cancellation()
 
+            # Calculate total work units for accurate progress tracking
+            total_pages = len(crawl_results)
+            
             # Process and store documents using document storage operations
             async def doc_storage_callback(
                 status: str, progress: int, message: str, **kwargs
             ):
+                # DEBUG: Log exactly what we receive
+                safe_logfire_info(
+                    f"DEBUG doc_storage_callback received | status={status} | progress={progress} | "
+                    f"message={message[:50]}... | kwargs_keys={list(kwargs.keys())}"
+                )
+                
                 if self.progress_tracker:
                     # Use ProgressMapper to ensure progress never goes backwards
                     mapped_progress = self.progress_mapper.map_progress("document_storage", progress)
                     safe_logfire_info(
-                        f"Document storage progress mapping: {progress}% -> {mapped_progress}% | kwargs: {list(kwargs.keys())}"
+                        f"DEBUG Document storage progress mapping: {progress}% -> {mapped_progress}% | "
+                        f"mapper_last_progress={self.progress_mapper.last_overall_progress}% | "
+                        f"total_pages={total_pages} | kwargs: {list(kwargs.keys())}"
                     )
 
                     # Update progress state via tracker
@@ -382,7 +389,14 @@ class CrawlingService:
                         status="document_storage",
                         progress=mapped_progress,
                         log=message,
+                        total_pages=total_pages,
                         **kwargs
+                    )
+                    
+                    # DEBUG: Log what's actually in the tracker state after update
+                    safe_logfire_info(
+                        f"DEBUG After tracker update | tracker_progress={self.progress_tracker.state.get('progress')} | "
+                        f"tracker_status={self.progress_tracker.state.get('status')}"
                     )
 
             storage_results = await self.doc_storage_ops.process_and_store_documents(
@@ -395,6 +409,14 @@ class CrawlingService:
                 source_url=url,
                 source_display_name=source_display_name,
             )
+
+            # Update progress tracker with source_id now that it's created
+            if self.progress_tracker and storage_results.get("source_id"):
+                # Update the tracker's state to include source_id for frontend matching
+                self.progress_tracker.state["source_id"] = storage_results["source_id"]
+                safe_logfire_info(
+                    f"Updated progress tracker with source_id | progress_id={self.progress_id} | source_id={storage_results['source_id']}"
+                )
 
             # Check for cancellation after document storage
             self._check_cancellation()
@@ -430,6 +452,7 @@ class CrawlingService:
                             status=data.get("status", "code_extraction"),
                             progress=mapped_progress,
                             log=data.get("log", "Extracting code examples..."),
+                            total_pages=total_pages,  # Include total context
                             **{k: v for k, v in data.items() if k not in ["status", "progress", "percentage", "log"]}
                         )
 
@@ -438,8 +461,6 @@ class CrawlingService:
                     storage_results["url_to_full_document"],
                     storage_results["source_id"],
                     code_progress_callback,
-                    85,
-                    95,
                     self._check_cancellation,
                 )
 
@@ -574,9 +595,11 @@ class CrawlingService:
             # Handle text files  
             crawl_type = "llms-txt" if "llms" in url.lower() else "text_file"
             if self.progress_tracker:
+                # Use mapper for progress
+                mapped_progress = self.progress_mapper.map_progress("crawling", 50)  # 50% of crawling stage
                 await self.progress_tracker.update(
                     status="crawling",
-                    progress=10,
+                    progress=mapped_progress,
                     log="Detected text file, fetching content...",
                     crawl_type=crawl_type,
                     current_url=url
@@ -584,8 +607,6 @@ class CrawlingService:
             crawl_results = await self.crawl_markdown_file(
                 url,
                 progress_callback=await self._create_crawl_progress_callback("crawling"),
-                start_progress=5,
-                end_progress=10,
             )
             # Check if this is a link collection file and extract links
             if crawl_results and len(crawl_results) > 0:
@@ -620,8 +641,6 @@ class CrawlingService:
                             extracted_links,
                             max_concurrent=request.get('max_concurrent'),  # None -> use DB settings
                             progress_callback=await self._create_crawl_progress_callback("crawling"),
-                            start_progress=10,
-                            end_progress=20,
                         )
                         
                         # Combine original text file results with batch results
@@ -637,9 +656,11 @@ class CrawlingService:
             # Handle sitemaps
             crawl_type = "sitemap"
             if self.progress_tracker:
+                # Use mapper for progress
+                mapped_progress = self.progress_mapper.map_progress("crawling", 50)  # 50% of crawling stage
                 await self.progress_tracker.update(
                     status="crawling",
-                    progress=10,
+                    progress=mapped_progress,
                     log="Detected sitemap, parsing URLs...",
                     crawl_type=crawl_type,
                     current_url=url
@@ -649,9 +670,11 @@ class CrawlingService:
             if sitemap_urls:
                 # Update progress before starting batch crawl
                 if self.progress_tracker:
+                    # Use mapper for progress
+                    mapped_progress = self.progress_mapper.map_progress("crawling", 75)  # 75% of crawling stage
                     await self.progress_tracker.update(
                         status="crawling",
-                        progress=15,
+                        progress=mapped_progress,
                         log=f"Starting batch crawl of {len(sitemap_urls)} URLs...",
                         crawl_type=crawl_type,
                         current_url=url
@@ -660,17 +683,17 @@ class CrawlingService:
                 crawl_results = await self.crawl_batch_with_progress(
                     sitemap_urls,
                     progress_callback=await self._create_crawl_progress_callback("crawling"),
-                    start_progress=15,
-                    end_progress=20,
                 )
 
         else:
             # Handle regular webpages with recursive crawling
             crawl_type = "normal"
             if self.progress_tracker:
+                # Use mapper for progress
+                mapped_progress = self.progress_mapper.map_progress("crawling", 50)  # 50% of crawling stage
                 await self.progress_tracker.update(
                     status="crawling",
-                    progress=10,
+                    progress=mapped_progress,
                     log=f"Starting recursive crawl with max depth {request.get('max_depth', 1)}...",
                     crawl_type=crawl_type,
                     current_url=url
@@ -685,8 +708,6 @@ class CrawlingService:
                 max_depth=max_depth,
                 max_concurrent=None,  # Let strategy use settings
                 progress_callback=await self._create_crawl_progress_callback("crawling"),
-                start_progress=3,  # Match ProgressMapper range for crawling
-                end_progress=8,    # Match ProgressMapper range for crawling
             )
 
         return crawl_results, crawl_type

@@ -337,11 +337,8 @@ async def add_documents_to_supabase(
 
                     # Increment completed batches and report simple progress
                     completed_batches += 1
-                    # Ensure last batch reaches 100%
-                    if completed_batches == total_batches:
-                        new_progress = 100
-                    else:
-                        new_progress = int((completed_batches / total_batches) * 100)
+                    # Calculate progress within document storage stage (0-100% of this stage only)
+                    new_progress = int((completed_batches / total_batches) * 100)
 
                     complete_msg = (
                         f"Completed batch {batch_num}/{total_batches} ({len(batch_data)} chunks)"
@@ -399,12 +396,16 @@ async def add_documents_to_supabase(
                 # Only yield control briefly to keep system responsive
                 await asyncio.sleep(0.1)  # Reduced from 1.5s/0.5s to 0.1s
 
-        # Send final 100% progress report to ensure UI shows completion
+        # Send final progress report for this stage (100% of document_storage stage, not overall)
         if progress_callback and asyncio.iscoroutinefunction(progress_callback):
             try:
+                search_logger.info(
+                    f"DEBUG document_storage sending final 100% | total_batches={total_batches} | "
+                    f"chunks_stored={total_chunks_stored} | contents_len={len(contents)}"
+                )
                 await progress_callback(
                     "document_storage",
-                    100,  # Ensure we report 100%
+                    100,  # 100% of document_storage stage (will be mapped to 40% overall)
                     f"Document storage completed: {len(contents)} chunks stored in {total_batches} batches",
                     completed_batches=total_batches,
                     total_batches=total_batches,
@@ -412,6 +413,7 @@ async def add_documents_to_supabase(
                     chunks_processed=len(contents),
                     # DON'T send 'status': 'completed' - that's for the orchestration service only!
                 )
+                search_logger.info("DEBUG document_storage final 100% sent successfully")
             except Exception as e:
                 search_logger.warning(f"Progress callback failed during completion: {e}. Storage still successful.")
 
