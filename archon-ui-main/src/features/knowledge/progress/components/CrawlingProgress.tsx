@@ -7,7 +7,6 @@ import { formatDistanceToNow } from "date-fns";
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertCircle, CheckCircle, Globe, Loader2, StopCircle, XCircle } from "lucide-react";
 import { useState } from "react";
-import { useToast } from "../../../ui/hooks/useToast";
 import { Button } from "../../../ui/primitives";
 import { cn } from "../../../ui/primitives/styles";
 import { useStopCrawl } from "../../hooks";
@@ -35,16 +34,15 @@ const itemVariants = {
 export const CrawlingProgress: React.FC<CrawlingProgressProps> = ({ onSwitchToBrowse }) => {
   const { activeOperations, isLoading } = useCrawlProgressPolling();
   const stopMutation = useStopCrawl();
-  const { showToast } = useToast();
   const [stoppingId, setStoppingId] = useState<string | null>(null);
 
   const handleStop = async (progressId: string) => {
     try {
       setStoppingId(progressId);
       await stopMutation.mutateAsync(progressId);
-      showToast(`Crawl stopped successfully`, "success");
+      // Toast is now handled by the useStopCrawl hook
     } catch (error) {
-      showToast(`Failed to stop crawl`, "error");
+      // Error toast is now handled by the useStopCrawl hook
       console.error("Stop crawl failed:", { progressId, error });
     } finally {
       setStoppingId(null);

@@ -129,17 +129,22 @@ export function useStopCrawl() {
 
   return useMutation({
     mutationFn: (progressId: string) => knowledgeService.stopCrawl(progressId),
-    onSuccess: () => {
-      showToast("Stopping crawl operation...", "info");
+    onSuccess: (_data, progressId) => {
+      showToast(`Stop requested (${progressId}). Operation will end shortly.`, "info");
     },
-    onError: (error) => {
+    onError: (error, progressId) => {
       // If it's a 404, the operation might have already completed or been cancelled
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
-      if (errorMessage.includes("404") || errorMessage.includes("not found")) {
+      const is404Error = 
+        (error as any)?.statusCode === 404 || 
+        (error instanceof Error && (error.message.includes("404") || error.message.includes("not found")));
+      
+      if (is404Error) {
         // Don't show error for 404s - the operation is likely already gone
         return;
       }
-      showToast("Failed to stop crawl", "error");
+      
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      showToast(`Failed to stop crawl (${progressId}): ${errorMessage}`, "error");
     },
   });
 }
