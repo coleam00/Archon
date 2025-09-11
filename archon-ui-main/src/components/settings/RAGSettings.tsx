@@ -281,7 +281,8 @@ export const RAGSettings = ({
                     step={1}
                     value={Math.round((ragSettings.SIMILARITY_THRESHOLD ?? 0.15) * 100)}
                     onChange={e => {
-                      const v = parseInt(e.target.value || '15', 10);
+                      const currentValue = ragSettings.SIMILARITY_THRESHOLD ?? 0.15;
+                      const v = parseInt(e.target.value || String(Math.round(currentValue * 100)), 10);
                       const clamped = Math.min(50, Math.max(5, v));
                       setRagSettings({
                         ...ragSettings,
