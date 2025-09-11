@@ -4,6 +4,7 @@ Batch Crawling Strategy
 Handles batch crawling of multiple URLs in parallel.
 """
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -121,16 +122,16 @@ class BatchCrawlStrategy:
             max_session_permit=max_concurrent,
         )
 
-        async def report_progress(progress_val: int, message: str, **kwargs):
+        async def report_progress(progress_val: int, message: str, status: str = "crawling", **kwargs):
             """Helper to report progress if callback is available"""
             if progress_callback:
                 # Pass step information as flattened kwargs for consistency
                 await progress_callback(
-                    "crawling",
+                    status,
                     progress_val,
                     message,
-                    currentStep=message,
-                    stepMessage=message,
+                    current_step=message,
+                    step_message=message,
                     **kwargs
                 )
 
@@ -145,6 +146,7 @@ class BatchCrawlStrategy:
         # Use configured batch size
         successful_results = []
         processed = 0
+        cancelled = False
 
         # Transform all URLs at the beginning
         url_mapping = {}  # Map transformed URLs back to original
@@ -187,10 +189,20 @@ class BatchCrawlStrategy:
                 if cancellation_check:
                     try:
                         cancellation_check()
-                    except Exception:
-                        # If cancelled, break out of the loop
-                        logger.info("Batch crawl cancelled during processing")
+                    except asyncio.CancelledError:
+                        cancelled = True
+                        await report_progress(
+                            min(int((processed / max(total_urls, 1)) * 100), 99),
+                            "Crawl cancelled",
+                            status="cancelled",
+                            total_pages=total_urls,
+                            processed_pages=processed,
+                            successful_count=len(successful_results),
+                        )
                         break
+                    except Exception:
+                        logger.exception("Unexpected error from cancellation_check()")
+                        raise
 
                 processed += 1
                 if result.success and result.markdown:
@@ -220,7 +232,11 @@ class BatchCrawlStrategy:
                         processed_pages=processed,
                         successful_count=len(successful_results)
                     )
+            if cancelled:
+                break
 
+        if cancelled:
+            return successful_results
         await report_progress(
             100,
             f"Batch crawling completed: {len(successful_results)}/{total_urls} pages successful",

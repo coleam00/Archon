@@ -110,8 +110,8 @@ async def list_active_operations():
         # Include all non-completed statuses
         for op_id, operation in ProgressTracker._progress_states.items():
             status = operation.get("status", "unknown")
-            # Include all operations that aren't completed or failed
-            if status not in ["completed", "failed", "error"]:
+            # Include all operations that aren't completed, failed, cancelled, or errored
+            if status not in ["completed", "failed", "error", "cancelled"]:
                 operation_data = {
                     "operation_id": op_id,
                     "operation_type": operation.get("type", "unknown"),

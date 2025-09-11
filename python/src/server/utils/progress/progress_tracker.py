@@ -4,6 +4,7 @@ Progress Tracker Utility
 Tracks operation progress in memory for HTTP polling access.
 """
 
+import asyncio
 from datetime import datetime
 from typing import Any
 
@@ -50,6 +51,21 @@ class ProgressTracker:
         """Remove progress state from memory."""
         if progress_id in cls._progress_states:
             del cls._progress_states[progress_id]
+
+    @classmethod
+    async def _delayed_cleanup(cls, progress_id: str, delay_seconds: int = 30):
+        """
+        Remove progress state from memory after a delay.
+        
+        This gives clients time to see the final state before cleanup.
+        """
+        await asyncio.sleep(delay_seconds)
+        if progress_id in cls._progress_states:
+            status = cls._progress_states[progress_id].get("status", "unknown")
+            # Only clean up if still in terminal state (prevent cleanup of reused IDs)
+            if status in ["completed", "failed", "error", "cancelled"]:
+                del cls._progress_states[progress_id]
+                safe_logfire_info(f"Progress state cleaned up after delay | progress_id={progress_id} | status={status}")
 
     async def start(self, initial_data: dict[str, Any] | None = None):
         """
@@ -134,6 +150,10 @@ class ProgressTracker:
         
 
         self._update_state()
+        
+        # Schedule cleanup for terminal states
+        if status in ["cancelled", "failed"]:
+            asyncio.create_task(self._delayed_cleanup(self.progress_id))
 
     async def complete(self, completion_data: dict[str, Any] | None = None):
         """
@@ -161,6 +181,9 @@ class ProgressTracker:
         safe_logfire_info(
             f"Progress completed | progress_id={self.progress_id} | type={self.operation_type} | duration={self.state.get('duration_formatted', 'unknown')}"
         )
+        
+        # Schedule cleanup after delay to allow clients to see final state
+        asyncio.create_task(self._delayed_cleanup(self.progress_id))
 
     async def error(self, error_message: str, error_details: dict[str, Any] | None = None):
         """
@@ -183,6 +206,9 @@ class ProgressTracker:
         safe_logfire_error(
             f"Progress error | progress_id={self.progress_id} | type={self.operation_type} | error={error_message}"
         )
+        
+        # Schedule cleanup after delay to allow clients to see final state
+        asyncio.create_task(self._delayed_cleanup(self.progress_id))
 
     async def update_batch_progress(
         self, current_batch: int, total_batches: int, batch_size: int, message: str

@@ -4,6 +4,7 @@ Recursive Crawling Strategy
 Handles recursive crawling of websites by following internal links.
 """
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import urldefrag
@@ -127,12 +128,12 @@ class RecursiveCrawlStrategy:
             max_session_permit=max_concurrent,
         )
 
-        async def report_progress(progress_val: int, message: str, **kwargs):
+        async def report_progress(progress_val: int, message: str, status: str = "crawling", **kwargs):
             """Helper to report progress if callback is available"""
             if progress_callback:
                 # Pass step information as flattened kwargs for consistency
                 await progress_callback(
-                    "crawling",
+                    status,
                     progress_val,
                     message,
                     current_step=message,
@@ -149,11 +150,26 @@ class RecursiveCrawlStrategy:
         results_all = []
         total_processed = 0
         total_discovered = len(start_urls)  # Track total URLs discovered
+        cancelled = False
 
         for depth in range(max_depth):
             # Check for cancellation at the start of each depth level
             if cancellation_check:
-                cancellation_check()
+                try:
+                    cancellation_check()
+                except asyncio.CancelledError:
+                    cancelled = True
+                    await report_progress(
+                        int(((depth) / max_depth) * 99),  # Cap at 99% for cancellation
+                        f"Crawl cancelled at depth {depth + 1}",
+                        status="cancelled",
+                        total_pages=total_discovered,
+                        processed_pages=total_processed,
+                    )
+                    break
+                except Exception:
+                    logger.exception("Unexpected error from cancellation_check()")
+                    raise
 
             urls_to_crawl = [
                 normalize_url(url) for url in current_urls if normalize_url(url) not in visited
@@ -178,7 +194,14 @@ class RecursiveCrawlStrategy:
             for batch_idx in range(0, len(urls_to_crawl), batch_size):
                 # Check for cancellation before processing each batch
                 if cancellation_check:
-                    cancellation_check()
+                    try:
+                        cancellation_check()
+                    except asyncio.CancelledError:
+                        cancelled = True
+                        break
+                    except Exception:
+                        logger.exception("Unexpected error from cancellation_check()")
+                        raise
 
                 batch_urls = urls_to_crawl[batch_idx : batch_idx + batch_size]
                 batch_end_idx = min(batch_idx + batch_size, len(urls_to_crawl))
@@ -213,10 +236,19 @@ class RecursiveCrawlStrategy:
                     if cancellation_check:
                         try:
                             cancellation_check()
-                        except Exception:
-                            # If cancelled, break out of the loop
-                            logger.info("Crawl cancelled during batch processing")
+                        except asyncio.CancelledError:
+                            cancelled = True
+                            await report_progress(
+                                min(int((total_processed / max(len(urls_to_crawl), 1)) * 100), 99),
+                                "Crawl cancelled during batch processing",
+                                status="cancelled",
+                                total_pages=total_discovered,
+                                processed_pages=total_processed,
+                            )
                             break
+                        except Exception:
+                            logger.exception("Unexpected error from cancellation_check()")
+                            raise
 
                     # Map back to original URL using the mapping dict
                     original_url = url_mapping.get(result.url, result.url)
@@ -261,6 +293,11 @@ class RecursiveCrawlStrategy:
                             processed_pages=total_processed,
                         )
                     i += 1
+                if cancelled:
+                    break
+
+            if cancelled:
+                break
 
             current_urls = next_level_urls
 
@@ -272,6 +309,8 @@ class RecursiveCrawlStrategy:
                 processed_pages=total_processed,
             )
 
+        if cancelled:
+            return results_all
         await report_progress(
             100,
             f"Recursive crawling completed: {len(results_all)} total pages crawled across {max_depth} depth levels",
