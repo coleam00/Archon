@@ -60,6 +60,8 @@ export const knowledgeService = {
 
     // Invalidate cache after deletion
     invalidateETagCache("/api/knowledge-items");
+    invalidateETagCache("/api/knowledge-items/summary");
+    invalidateETagCache(`/api/knowledge-items/${sourceId}`);
 
     return response;
   },
@@ -75,6 +77,7 @@ export const knowledgeService = {
 
     // Invalidate both list and specific item cache
     invalidateETagCache("/api/knowledge-items");
+    invalidateETagCache("/api/knowledge-items/summary");
     invalidateETagCache(`/api/knowledge-items/${sourceId}`);
 
     return response;
@@ -91,6 +94,7 @@ export const knowledgeService = {
 
     // Invalidate list cache as new item will be added
     invalidateETagCache("/api/knowledge-items");
+    invalidateETagCache("/api/knowledge-items/summary");
 
     return response;
   },
@@ -105,6 +109,7 @@ export const knowledgeService = {
 
     // Invalidate caches
     invalidateETagCache("/api/knowledge-items");
+    invalidateETagCache("/api/knowledge-items/summary");
     invalidateETagCache(`/api/knowledge-items/${sourceId}`);
 
     return response;
@@ -149,6 +154,7 @@ export const knowledgeService = {
 
     // Invalidate list cache
     invalidateETagCache("/api/knowledge-items");
+    invalidateETagCache("/api/knowledge-items/summary");
 
     return response.json();
   },
