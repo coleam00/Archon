@@ -869,19 +869,22 @@ async def add_code_examples_to_supabase(
             continue
 
         # Prepare batch data - only for successful embeddings
+        from collections import defaultdict, deque
         batch_data = []
-        for j, (embedding, text) in enumerate(
-            zip(valid_embeddings, successful_texts, strict=False)
-        ):
-            # Find the original index
-            orig_idx = None
-            for k, orig_text in enumerate(batch_texts):
-                if orig_text == text:
-                    orig_idx = k
-                    break
 
-            if orig_idx is None:
-                search_logger.warning("Could not map embedding back to original code example")
+        # Build positions map to handle duplicate texts correctly
+        # Each text maps to a queue of indices where it appears
+        positions_by_text = defaultdict(deque)
+        for k, text in enumerate(batch_texts):
+            positions_by_text[text].append(k)
+
+        # Map successful texts back to their original indices
+        for embedding, text in zip(valid_embeddings, successful_texts, strict=False):
+            # Get the next available index for this text (handles duplicates)
+            if positions_by_text[text]:
+                orig_idx = positions_by_text[text].popleft()  # Original index for this occurrence
+            else:
+                search_logger.warning(f"Could not map embedding back to original code example (no remaining index for text: {text[:50]}...)")
                 continue
 
             idx = i + orig_idx  # Get the global index

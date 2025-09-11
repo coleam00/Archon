@@ -259,7 +259,7 @@ async def add_documents_to_supabase(
                     )
                     except Exception as e:
                         search_logger.warning(f"Progress callback failed during rate limiting: {e}")
-            
+
             # Pass progress callback for rate limiting updates
             result = await create_embeddings_batch(
                 contextual_contents,
@@ -286,23 +286,23 @@ async def add_documents_to_supabase(
                 continue
 
             # Prepare batch data - only for successful embeddings
+            from collections import defaultdict, deque
             batch_data = []
+
+            # Build positions map to handle duplicate texts correctly
+            # Each text maps to a queue of indices where it appears
+            positions_by_text = defaultdict(deque)
+            for idx, text in enumerate(contextual_contents):
+                positions_by_text[text].append(idx)
+
             # Map successful texts back to their original indices
-            for j, (embedding, text) in enumerate(
-                zip(batch_embeddings, successful_texts, strict=False)
-            ):
-                # Find the original index of this text
-                orig_idx = None
-                for idx, orig_text in enumerate(contextual_contents):
-                    if orig_text == text:
-                        orig_idx = idx
-                        break
-
-                if orig_idx is None:
-                    search_logger.warning("Could not map embedding back to original text")
+            for embedding, text in zip(batch_embeddings, successful_texts, strict=False):
+                # Get the next available index for this text (handles duplicates)
+                if positions_by_text[text]:
+                    j = positions_by_text[text].popleft()  # Original index for this occurrence
+                else:
+                    search_logger.warning(f"Could not map embedding back to original text (no remaining index for text: {text[:50]}...)")
                     continue
-
-                j = orig_idx  # Use original index for metadata lookup
                 # Use source_id from metadata if available, otherwise extract from URL
                 if batch_metadatas[j].get("source_id"):
                     source_id = batch_metadatas[j]["source_id"]
