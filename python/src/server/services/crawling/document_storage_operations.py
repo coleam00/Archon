@@ -77,7 +77,16 @@ class DocumentStorageOperations:
         for doc_index, doc in enumerate(crawl_results):
             # Check for cancellation during document processing
             if cancellation_check:
-                cancellation_check()
+                try:
+                    cancellation_check()
+                except asyncio.CancelledError:
+                    if progress_callback:
+                        await progress_callback(
+                            "cancelled",
+                            99,
+                            f"Document processing cancelled at document {doc_index + 1}/{len(crawl_results)}"
+                        )
+                    raise
 
             doc_url = (doc.get('url') or '').strip()
             markdown_content = (doc.get('markdown') or '').strip()
@@ -104,7 +113,16 @@ class DocumentStorageOperations:
             for i, chunk in enumerate(chunks):
                 # Check for cancellation during chunk processing
                 if cancellation_check and i % 10 == 0:  # Check every 10 chunks
-                    cancellation_check()
+                    try:
+                        cancellation_check()
+                    except asyncio.CancelledError:
+                        if progress_callback:
+                            await progress_callback(
+                                "cancelled",
+                                99,
+                                f"Chunk processing cancelled at chunk {i + 1}/{len(chunks)} of document {doc_index + 1}"
+                            )
+                        raise
 
                 all_urls.append(doc_url)
                 all_chunk_numbers.append(i)

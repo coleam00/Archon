@@ -159,7 +159,19 @@ class BatchCrawlStrategy:
         for i in range(0, total_urls, batch_size):
             # Check for cancellation before processing each batch
             if cancellation_check:
-                cancellation_check()
+                try:
+                    cancellation_check()
+                except asyncio.CancelledError:
+                    cancelled = True
+                    await report_progress(
+                        min(int((processed / max(total_urls, 1)) * 100), 99),
+                        "Crawl cancelled",
+                        status="cancelled",
+                        total_pages=total_urls,
+                        processed_pages=processed,
+                        successful_count=len(successful_results),
+                    )
+                    break
 
             batch_urls = transformed_urls[i : i + batch_size]
             batch_start = i

@@ -163,7 +163,7 @@ class CodeExtractionService:
                 data["progress"] = scaled_progress
                 await progress_callback(data)
             extraction_callback = extraction_progress
-            
+
         # Extract code blocks from all documents
         all_code_blocks = await self._extract_code_blocks_from_documents(
             crawl_results, source_id, extraction_callback, cancellation_check
@@ -196,12 +196,12 @@ class CodeExtractionService:
         if progress_callback:
             async def summary_progress(data: dict):
                 # Scale progress to 20-90% range
-                raw_progress = data.get("progress", 0) 
+                raw_progress = data.get("progress", 0)
                 scaled_progress = 20 + int(raw_progress * 0.7)  # 20-90%
                 data["progress"] = scaled_progress
                 await progress_callback(data)
             summary_callback = summary_progress
-            
+
         # Generate summaries for code blocks
         summary_results = await self._generate_code_summaries(
             all_code_blocks, summary_callback, cancellation_check
@@ -220,7 +220,7 @@ class CodeExtractionService:
                 data["progress"] = scaled_progress
                 await progress_callback(data)
             storage_callback = storage_progress
-            
+
         # Store code examples in database
         return await self._store_code_examples(
             storage_data, url_to_full_document, storage_callback
@@ -252,8 +252,17 @@ class CodeExtractionService:
         for doc in crawl_results:
             # Check for cancellation before processing each document
             if cancellation_check:
-                cancellation_check()
-            
+                try:
+                    cancellation_check()
+                except asyncio.CancelledError:
+                    if progress_callback:
+                        await progress_callback({
+                            "status": "cancelled",
+                            "progress": 99,
+                            "message": f"Code extraction cancelled at document {completed_docs + 1}/{total_docs}"
+                        })
+                    raise
+
             try:
                 source_url = doc["url"]
                 html_content = doc.get("html", "")
@@ -1414,8 +1423,16 @@ class CodeExtractionService:
             async def wrapped_callback(data: dict):
                 # Check for cancellation during summary generation
                 if cancellation_check:
-                    cancellation_check()
-                
+                    try:
+                        cancellation_check()
+                    except asyncio.CancelledError:
+                        # Update data to show cancellation and re-raise
+                        data["status"] = "cancelled"
+                        data["progress"] = 99
+                        data["message"] = "Code summary generation cancelled"
+                        await progress_callback(data)
+                        raise
+
                 # Ensure status is code_extraction
                 data["status"] = "code_extraction"
                 # Pass through the raw progress (0-100)
@@ -1427,7 +1444,7 @@ class CodeExtractionService:
             results = await generate_code_summaries_batch(
                 code_blocks_for_summaries, max_workers, progress_callback=summary_progress_callback
             )
-            
+
             # Ensure all results are valid dicts
             validated_results = []
             for result in results:
@@ -1439,7 +1456,7 @@ class CodeExtractionService:
                         "example_name": "Code Example",
                         "summary": "Code example for demonstration purposes."
                     })
-            
+
             return validated_results
         except asyncio.CancelledError:
             # If cancelled, return default summaries for all blocks
