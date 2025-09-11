@@ -12,6 +12,7 @@ interface Toast {
 // Toast context type
 interface ToastContextType {
   showToast: (message: string, type?: Toast["type"], duration?: number) => void;
+  removeToast: (id: string) => void;
 }
 
 // Create context
@@ -38,7 +39,7 @@ let toastIdCounter = 0;
 
 export function createToastContext() {
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const timeoutsRef = useRef<Map<string, number>>(new Map());
+  const timeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const showToast = useCallback((message: string, type: Toast["type"] = "info", duration = 4000) => {
     const id = `${Date.now()}-${toastIdCounter++}`;
@@ -48,7 +49,7 @@ export function createToastContext() {
 
     // Auto-dismiss after duration
     if (duration > 0) {
-      const timeoutId = window.setTimeout(() => {
+      const timeoutId = setTimeout(() => {
         setToasts((prev) => prev.filter((toast) => toast.id !== id));
         timeoutsRef.current.delete(id);
       }, duration);
@@ -58,7 +59,7 @@ export function createToastContext() {
 
   const removeToast = useCallback((id: string) => {
     const timeoutId = timeoutsRef.current.get(id);
-    if (timeoutId) {
+    if (timeoutId != null) {
       clearTimeout(timeoutId);
       timeoutsRef.current.delete(id);
     }
