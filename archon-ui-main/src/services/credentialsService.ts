@@ -20,6 +20,7 @@ export interface RagSettings {
   LLM_PROVIDER?: string;
   LLM_BASE_URL?: string;
   EMBEDDING_MODEL?: string;
+  SIMILARITY_THRESHOLD?: number;
   // Crawling Performance Settings
   CRAWL_BATCH_SIZE?: number;
   CRAWL_MAX_CONCURRENT?: number;
@@ -153,6 +154,7 @@ class CredentialsService {
       LLM_PROVIDER: "openai",
       LLM_BASE_URL: "",
       EMBEDDING_MODEL: "",
+      SIMILARITY_THRESHOLD: 0.15,
       // Crawling Performance Settings defaults
       CRAWL_BATCH_SIZE: 50,
       CRAWL_MAX_CONCURRENT: 10,
@@ -206,8 +208,12 @@ class CredentialsService {
             parseInt(cred.value || "0", 10) || (settings as any)[cred.key];
         }
         // Float fields
-        else if (cred.key === "CRAWL_DELAY_BEFORE_HTML") {
-          settings[cred.key] = parseFloat(cred.value || "0.5") || 0.5;
+        else if (cred.key === "CRAWL_DELAY_BEFORE_HTML" || cred.key === "SIMILARITY_THRESHOLD") {
+          if (cred.key === "SIMILARITY_THRESHOLD") {
+            (settings as any)[cred.key] = parseFloat(cred.value || "0.15") || 0.15;
+          } else {
+            settings[cred.key] = parseFloat(cred.value || "0.5") || 0.5;
+          }
         }
         // Boolean fields
         else {
