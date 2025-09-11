@@ -26,3 +26,4 @@ export * from "./tabs";
 export * from "./toast";
 export * from "./tooltip";
 export * from "./pill";
+export * from "./toggle-group";
