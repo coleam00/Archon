@@ -93,7 +93,8 @@ export const KnowledgeCardActions: React.FC<KnowledgeCardActionsProps> = ({
           size="sm"
           className={cn(
             "h-8 w-8 p-0 text-gray-400 hover:text-white hover:bg-white/10",
-            "opacity-0 group-hover:opacity-100 transition-opacity",
+            // Always visible for clearer affordance
+            "opacity-100",
             (isRefreshing || isDeleting) && "opacity-100",
           )}
           disabled={isDeleting}
