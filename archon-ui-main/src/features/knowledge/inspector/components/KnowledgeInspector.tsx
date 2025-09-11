@@ -66,7 +66,7 @@ export const KnowledgeInspector: React.FC<KnowledgeInspectorProps> = ({ item, op
       const firstCode = firstItem as CodeExample;
       setSelectedItem({
         type: "code",
-        id: firstCode.id || "",
+        id: String(firstCode.id || ""),
         content: firstCode.content || firstCode.code || "",
         metadata: {
           language: firstCode.language,
@@ -104,7 +104,7 @@ export const KnowledgeInspector: React.FC<KnowledgeInspectorProps> = ({ item, op
       const code = item as CodeExample;
       setSelectedItem({
         type: "code",
-        id: code.id,
+        id: String(code.id),
         content: code.content || code.code || "",
         metadata: {
           language: code.language,
@@ -148,7 +148,7 @@ export const KnowledgeInspector: React.FC<KnowledgeInspectorProps> = ({ item, op
             viewMode={viewMode}
             searchQuery={searchQuery}
             onSearchChange={setSearchQuery}
-            items={currentItems}
+            items={currentItems as DocumentChunk[] | CodeExample[]}
             selectedItemId={selectedItem?.id || null}
             onItemSelect={handleItemSelect}
             isLoading={isLoading}

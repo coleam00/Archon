@@ -2,7 +2,7 @@ import React from "react";
 import { cn } from "./styles";
 
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: "default" | "destructive" | "outline" | "ghost" | "link" | "cyan";
+  variant?: "default" | "destructive" | "outline" | "ghost" | "link" | "cyan" | "knowledge"; // Tron-style purple button used on Knowledge Base
   size?: "default" | "sm" | "lg" | "icon" | "xs";
   loading?: boolean;
   children: React.ReactNode;
@@ -73,6 +73,19 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         "dark:hover:from-cyan-400/30 dark:hover:to-cyan-500/20",
         "hover:shadow-[0_0_20px_rgba(34,211,238,0.5)]",
         "dark:hover:shadow-[0_0_25px_rgba(34,211,238,0.7)]",
+      ),
+      knowledge: cn(
+        // Mirror the New Project button style, but purple
+        "backdrop-blur-md",
+        "bg-gradient-to-b from-purple-100/80 to-white/60",
+        "dark:from-purple-500/20 dark:to-purple-500/10",
+        "text-purple-700 dark:text-purple-100",
+        "border border-purple-300/50 dark:border-purple-500/50",
+        "hover:from-purple-200/90 hover:to-purple-100/70",
+        "dark:hover:from-purple-400/30 dark:hover:to-purple-500/20",
+        "hover:shadow-[0_0_20px_rgba(168,85,247,0.5)]",
+        "dark:hover:shadow-[0_0_25px_rgba(168,85,247,0.7)]",
+        "focus-visible:ring-purple-500",
       ),
     };
 

@@ -33,12 +33,12 @@ export function useInspectorPagination({
   const PAGE_SIZE = 100;
 
   // Use infinite query for the current view mode
-  const { data, isLoading, hasNextPage, fetchNextPage, isFetchingNextPage } = useInfiniteQuery({
+  const { data, isLoading, hasNextPage, fetchNextPage, isFetchingNextPage } = useInfiniteQuery<ChunksResponse | CodeExamplesResponse, Error>({
     queryKey: [
       ...knowledgeKeys.detail(sourceId),
       viewMode === "documents" ? "chunks-infinite" : "code-examples-infinite",
     ],
-    queryFn: ({ pageParam }) => {
+    queryFn: ({ pageParam }: { pageParam: unknown }) => {
       const page = Number(pageParam) || 0;
       const service =
         viewMode === "documents" ? knowledgeService.getKnowledgeItemChunks : knowledgeService.getCodeExamples;
@@ -66,14 +66,13 @@ export function useInspectorPagination({
 
     // Flatten all pages - data has 'pages' property from useInfiniteQuery
     const pages = data.pages as Page[];
-    const allItems = pages.flatMap((page) =>
-      "chunks" in page ? page.chunks ?? [] : "code_examples" in page ? page.code_examples ?? [] : [],
+    const allItems = pages.flatMap((page): (DocumentChunk | CodeExample)[] =>
+      "chunks" in page ? (page.chunks ?? []) : "code_examples" in page ? (page.code_examples ?? []) : [],
     );
 
     // Get total from first page (fallback to loadedCount)
     const first = pages[0];
-    const totalCount =
-      first && "total" in first && typeof first.total === "number" ? first.total : allItems.length;
+    const totalCount = first && "total" in first && typeof first.total === "number" ? first.total : allItems.length;
     const loadedCount = allItems.length;
 
     // Apply search filtering

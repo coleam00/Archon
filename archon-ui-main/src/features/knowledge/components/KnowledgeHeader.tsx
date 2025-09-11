@@ -45,10 +45,7 @@ export const KnowledgeHeader: React.FC<KnowledgeHeaderProps> = ({
           </span>
         </div>
 
-        <Button
-          onClick={onAddKnowledge}
-          className="bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700"
-        >
+        <Button variant="knowledge" onClick={onAddKnowledge} className="shadow-lg shadow-purple-500/30">
           <Plus className="w-4 h-4 mr-2" />
           Add Knowledge
         </Button>

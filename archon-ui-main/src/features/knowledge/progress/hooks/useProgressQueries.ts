@@ -217,10 +217,10 @@ export function useMultipleOperations(
     notFoundCounts.current.clear();
   }, [progressIds.join(",")]); // Use join to create stable dependency
 
-  const queries = useQueries({
+  const queries = (useQueries as any)({
     queries: progressIds.map((progressId) => ({
-      queryKey: progressKeys.detail(progressId),
-      queryFn: async () => {
+      queryKey: progressKeys.detail(progressId) as readonly unknown[],
+      queryFn: async (): Promise<ProgressResponse | null> => {
         try {
           const data = await progressService.getProgress(progressId);
           notFoundCounts.current.set(progressId, 0); // Reset counter on success
@@ -262,16 +262,19 @@ export function useMultipleOperations(
 
   // Handle callbacks for each operation
   useEffect(() => {
-    queries.forEach((query, index) => {
+    queries.forEach((query: any, index: number) => {
       const progressId = progressIds[index];
       if (!query.data || !progressId) return;
 
-      const status = query.data.status;
+      const data = query.data as ProgressResponse | null;
+      if (!data) return;
+      
+      const status = data.status;
 
       // Handle completion
       if (status === "completed" && !completedIds.current.has(progressId)) {
         completedIds.current.add(progressId);
-        options?.onComplete?.(progressId, query.data);
+        options?.onComplete?.(progressId, data);
 
         // Clean up after completion
         setTimeout(() => {
@@ -282,7 +285,7 @@ export function useMultipleOperations(
       // Handle errors
       if ((status === "error" || status === "failed") && !errorIds.current.has(progressId)) {
         errorIds.current.add(progressId);
-        options?.onError?.(progressId, query.data.error || "Operation failed");
+        options?.onError?.(progressId, data.error || "Operation failed");
 
         // Clean up after error
         setTimeout(() => {
@@ -294,7 +297,7 @@ export function useMultipleOperations(
 
   // Forward query errors (e.g., 404s after threshold) to onError callback
   useEffect(() => {
-    queries.forEach((query, index) => {
+    queries.forEach((query: any, index: number) => {
       const progressId = progressIds[index];
       if (!query.error || !progressId || errorIds.current.has(progressId)) return;
 
@@ -309,13 +312,16 @@ export function useMultipleOperations(
     });
   }, [queries, progressIds, queryClient, options]);
 
-  return queries.map((query, index) => ({
-    progressId: progressIds[index],
-    data: query.data,
-    isLoading: query.isLoading,
-    error: query.error,
-    isComplete: query.data?.status === "completed",
-    isFailed: query.data?.status === "error" || query.data?.status === "failed",
-    isActive: query.data ? !TERMINAL_STATES.includes(query.data.status) : false,
-  }));
+  return queries.map((query: any, index: number) => {
+    const data = query.data as ProgressResponse | null;
+    return {
+      progressId: progressIds[index],
+      data,
+      isLoading: query.isLoading,
+      error: query.error,
+      isComplete: data?.status === "completed",
+      isFailed: data?.status === "error" || data?.status === "failed",
+      isActive: data ? !TERMINAL_STATES.includes(data.status) : false,
+    };
+  });
 }
