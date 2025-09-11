@@ -141,6 +141,9 @@ class ProgressTracker:
             "status": status,
             "progress": actual_progress,  # Use the actual progress after "never go backwards" check
         })
+        # Keep only the last 200 log entries
+        if len(self.state["logs"]) > 200:
+            self.state["logs"] = self.state["logs"][-200:]
 
         # Add any additional data (but don't allow overriding core fields)
         protected_fields = {"progress", "status", "log", "progress_id", "type", "start_time"}
@@ -222,7 +225,7 @@ class ProgressTracker:
             batch_size: Size of each batch
             message: Progress message
         """
-        progress_val = int((current_batch / total_batches) * 100)
+        progress_val = int((current_batch / max(total_batches, 1)) * 100)
         await self.update(
             status="processing_batch",
             progress=progress_val,
