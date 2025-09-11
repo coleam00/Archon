@@ -178,7 +178,8 @@ class RecursiveCrawlStrategy:
                 break
 
             # Calculate progress for this depth level
-            depth_progress = int((depth / max_depth) * 80)
+            # Report 0-100 to properly integrate with ProgressMapper architecture
+            depth_progress = int((depth / max(max_depth, 1)) * 100)
 
             await report_progress(
                 depth_progress,
