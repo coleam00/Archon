@@ -13,6 +13,7 @@ import asyncio
 import json
 import uuid
 from datetime import datetime
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -350,7 +351,6 @@ async def get_knowledge_item_chunks(
                             title = url.split("/")[-1].replace(".txt", "").replace("-", " ").title()
                         else:
                             # Get domain and path info
-                            from urllib.parse import urlparse
                             parsed = urlparse(url)
                             if parsed.path and parsed.path != "/":
                                 title = parsed.path.strip("/").replace("-", " ").replace("_", " ").title()
@@ -433,6 +433,13 @@ async def get_knowledge_item_code_examples(
             .range(offset, offset + limit - 1)
             .execute()
         )
+
+        # Check for error to match chunks endpoint pattern
+        if hasattr(result, "error") and result.error is not None:
+            safe_logfire_error(
+                f"Supabase query error (code examples) | source_id={source_id} | error={result.error}"
+            )
+            raise HTTPException(status_code=500, detail={"error": str(result.error)})
 
         code_examples = result.data if result.data else []
 
