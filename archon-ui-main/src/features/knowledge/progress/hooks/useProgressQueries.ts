@@ -268,7 +268,7 @@ export function useMultipleOperations(
 
       const data = query.data as ProgressResponse | null;
       if (!data) return;
-      
+
       const status = data.status;
 
       // Handle completion

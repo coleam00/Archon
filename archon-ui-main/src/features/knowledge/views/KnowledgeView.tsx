@@ -59,7 +59,12 @@ export const KnowledgeView = () => {
     const finishedOps = previousOperations.current.filter((prevOp) => {
       const currentOp = activeOperations.find((op) => op.operation_id === prevOp.operation_id);
       // Operation disappeared from active list - check its final status
-      return !currentOp && ["crawling", "processing", "storing", "document_storage", "completed", "error", "failed"].includes(prevOp.status);
+      return (
+        !currentOp &&
+        ["crawling", "processing", "storing", "document_storage", "completed", "error", "failed"].includes(
+          prevOp.status,
+        )
+      );
     });
 
     // Show toast for each finished operation

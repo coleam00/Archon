@@ -160,10 +160,7 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
           {/* Hairline highlight */}
           <div className={cn("mx-1 mt-0.5 h-[2px] rounded-full", accent.bar)} />
           {/* Soft glow smear fading downward */}
-          <div className={cn(
-            "-mt-1 h-8 w-full bg-gradient-to-b to-transparent blur-md",
-            accent.smear,
-          )} />
+          <div className={cn("-mt-1 h-8 w-full bg-gradient-to-b to-transparent blur-md", accent.smear)} />
         </div>
         {/* Glow effect on hover */}
         {isHovered && (

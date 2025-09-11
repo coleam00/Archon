@@ -1,14 +1,7 @@
 import React from "react";
 import { cn } from "./styles";
 
-export type PillColor =
-  | "blue"
-  | "orange"
-  | "cyan"
-  | "purple"
-  | "pink"
-  | "emerald"
-  | "gray";
+export type PillColor = "blue" | "orange" | "cyan" | "purple" | "pink" | "emerald" | "gray";
 
 export interface StatPillProps extends React.HTMLAttributes<HTMLDivElement> {
   color?: PillColor;
@@ -99,9 +92,12 @@ export const StatPill: React.FC<StatPillProps> = ({
       aria-label={ariaLabel}
       {...props}
     >
-      {icon && <span className="inline-flex items-center" aria-hidden>{icon}</span>}
+      {icon && (
+        <span className="inline-flex items-center" aria-hidden>
+          {icon}
+        </span>
+      )}
       <span className="font-semibold tabular-nums">{value}</span>
     </div>
   );
 };
-

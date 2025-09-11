@@ -107,7 +107,9 @@ export const CrawlingProgress: React.FC<CrawlingProgressProps> = ({ onSwitchToBr
             <Globe className="w-6 h-6 text-cyan-400" />
           </div>
           <h3 className="text-lg font-semibold mb-2">No Active Operations</h3>
-          <p className="text-gray-400 mb-4">Start crawling websites or uploading documents to expand your knowledge base.</p>
+          <p className="text-gray-400 mb-4">
+            Start crawling websites or uploading documents to expand your knowledge base.
+          </p>
           <Button onClick={onSwitchToBrowse} variant="outline">
             Browse Knowledge Base
           </Button>
@@ -168,8 +170,8 @@ export const CrawlingProgress: React.FC<CrawlingProgressProps> = ({ onSwitchToBr
                             {operation.operation_type === "crawl"
                               ? "Web Crawl"
                               : operation.operation_type === "upload"
-                              ? "Document Upload"
-                              : operation.operation_type}
+                                ? "Document Upload"
+                                : operation.operation_type}
                           </span>
                         )}
                         {/* Removed relative start time; it can be misleading for recrawls or resumed ops */}

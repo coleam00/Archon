@@ -74,10 +74,20 @@ export const KnowledgeHeader: React.FC<KnowledgeHeaderProps> = ({
             <ToggleGroupItem value="all" aria-label="All" title="All" className="flex items-center justify-center">
               <Asterisk className="w-4 h-4" />
             </ToggleGroupItem>
-            <ToggleGroupItem value="technical" aria-label="Technical" title="Technical" className="flex items-center justify-center">
+            <ToggleGroupItem
+              value="technical"
+              aria-label="Technical"
+              title="Technical"
+              className="flex items-center justify-center"
+            >
               <Terminal className="w-4 h-4" />
             </ToggleGroupItem>
-            <ToggleGroupItem value="business" aria-label="Business" title="Business" className="flex items-center justify-center">
+            <ToggleGroupItem
+              value="business"
+              aria-label="Business"
+              title="Business"
+              className="flex items-center justify-center"
+            >
               <Briefcase className="w-4 h-4" />
             </ToggleGroupItem>
           </ToggleGroup>

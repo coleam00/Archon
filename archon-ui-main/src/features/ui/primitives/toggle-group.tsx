@@ -7,27 +7,26 @@ export interface ToggleGroupProps extends React.ComponentPropsWithoutRef<typeof 
   size?: "sm" | "md";
 }
 
-export const ToggleGroup = React.forwardRef<
-  React.ElementRef<typeof ToggleGroupPrimitive.Root>,
-  ToggleGroupProps
->(({ className, variant = "subtle", size = "sm", ...props }, ref) => {
-  return (
-    <ToggleGroupPrimitive.Root
-      ref={ref}
-      className={cn(
-        "inline-flex items-center rounded-lg overflow-hidden",
-        variant === "subtle" && cn(glassmorphism.background.subtle, glassmorphism.border.default, glassmorphism.shadow.elevated),
-        variant === "solid" && cn(glassmorphism.background.cyan, glassmorphism.border.cyan, glassmorphism.shadow.lg),
-        className,
-      )}
-      {...props}
-    />
-  );
-});
+export const ToggleGroup = React.forwardRef<React.ElementRef<typeof ToggleGroupPrimitive.Root>, ToggleGroupProps>(
+  ({ className, variant = "subtle", size = "sm", ...props }, ref) => {
+    return (
+      <ToggleGroupPrimitive.Root
+        ref={ref}
+        className={cn(
+          "inline-flex items-center rounded-lg overflow-hidden",
+          variant === "subtle" &&
+            cn(glassmorphism.background.subtle, glassmorphism.border.default, glassmorphism.shadow.elevated),
+          variant === "solid" && cn(glassmorphism.background.cyan, glassmorphism.border.cyan, glassmorphism.shadow.lg),
+          className,
+        )}
+        {...props}
+      />
+    );
+  },
+);
 ToggleGroup.displayName = "ToggleGroup";
 
-export interface ToggleGroupItemProps
-  extends React.ComponentPropsWithoutRef<typeof ToggleGroupPrimitive.Item> {
+export interface ToggleGroupItemProps extends React.ComponentPropsWithoutRef<typeof ToggleGroupPrimitive.Item> {
   size?: "sm" | "md";
 }
 
@@ -57,4 +56,3 @@ export const ToggleGroupItem = React.forwardRef<
   );
 });
 ToggleGroupItem.displayName = "ToggleGroupItem";
-

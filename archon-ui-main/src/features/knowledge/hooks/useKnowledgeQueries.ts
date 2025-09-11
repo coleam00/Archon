@@ -85,7 +85,7 @@ export function useCrawlUrl() {
     CrawlStartResponse,
     Error,
     CrawlRequest,
-    { 
+    {
       previousKnowledge?: KnowledgeItem[];
       previousOperations?: ActiveOperationsResponse;
       tempProgressId: string;

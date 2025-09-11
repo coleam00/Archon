@@ -33,7 +33,10 @@ export function useInspectorPagination({
   const PAGE_SIZE = 100;
 
   // Use infinite query for the current view mode
-  const { data, isLoading, hasNextPage, fetchNextPage, isFetchingNextPage } = useInfiniteQuery<ChunksResponse | CodeExamplesResponse, Error>({
+  const { data, isLoading, hasNextPage, fetchNextPage, isFetchingNextPage } = useInfiniteQuery<
+    ChunksResponse | CodeExamplesResponse,
+    Error
+  >({
     queryKey: [
       ...knowledgeKeys.detail(sourceId),
       viewMode === "documents" ? "chunks-infinite" : "code-examples-infinite",
