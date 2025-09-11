@@ -311,7 +311,7 @@ class CodeExtractionService:
                 # If still no code blocks, try markdown extraction as fallback
                 if len(code_blocks) == 0 and md:
                     has_backticks = "```" in md
-                    logger.info(f"Checking markdown for {source_url}: has_backticks={has_backticks}, md_length={len(md)}")
+                    safe_logfire_info(f"Checking markdown for {source_url}: has_backticks={has_backticks}, md_length={len(md)}")
                     
                     if has_backticks:
                         safe_logfire_info(
