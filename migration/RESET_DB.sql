@@ -133,6 +133,10 @@ BEGIN
     DROP FUNCTION IF EXISTS match_archon_crawled_pages(vector, int, jsonb, text) CASCADE;
     DROP FUNCTION IF EXISTS match_archon_code_examples(vector, int, jsonb, text) CASCADE;
     
+    -- Hybrid search functions (with ts_vector support)
+    DROP FUNCTION IF EXISTS hybrid_search_archon_crawled_pages(vector, text, int, jsonb, text) CASCADE;
+    DROP FUNCTION IF EXISTS hybrid_search_archon_code_examples(vector, text, int, jsonb, text) CASCADE;
+    
     -- Search functions (old without prefix)
     DROP FUNCTION IF EXISTS match_crawled_pages(vector, int, jsonb, text) CASCADE;
     DROP FUNCTION IF EXISTS match_code_examples(vector, int, jsonb, text) CASCADE;
