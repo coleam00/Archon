@@ -62,20 +62,32 @@ class TestProgressMapper:
         assert progress == 100
         
     def test_error_handling(self):
-        """Test error status handling"""
+        """Test error status handling - preserves last known progress"""
         mapper = ProgressMapper()
         
+        # Error with no prior progress should return 0 (initial state)
         progress = mapper.map_progress("error", 50)
-        assert progress == -1
+        assert progress == 0
+        
+        # Set some progress first, then error should preserve it
+        mapper.map_progress("crawling", 50)  # Should map to somewhere in the crawling range
+        current_progress = mapper.last_overall_progress
+        error_progress = mapper.map_progress("error", 50)
+        assert error_progress == current_progress  # Should preserve the progress
         
     def test_cancelled_handling(self):
-        """Test cancelled status handling"""
+        """Test cancelled status handling - preserves last known progress"""
         mapper = ProgressMapper()
         
-        # Cancelled is in STAGE_RANGES as (-1, -1), but the logic checks for "error" specifically
-        # So cancelled will follow the normal calculation path
+        # Cancelled with no prior progress should return 0 (initial state)
         progress = mapper.map_progress("cancelled", 50)
-        assert progress == 0  # Starts at 0, range is (-1, -1), calculation results in 0
+        assert progress == 0
+        
+        # Set some progress first, then cancelled should preserve it
+        mapper.map_progress("crawling", 75)  # Should map to somewhere in the crawling range
+        current_progress = mapper.last_overall_progress
+        cancelled_progress = mapper.map_progress("cancelled", 50)
+        assert cancelled_progress == current_progress  # Should preserve the progress
         
     def test_unknown_stage(self):
         """Test handling of unknown stages"""

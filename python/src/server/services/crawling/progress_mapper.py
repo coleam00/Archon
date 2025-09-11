@@ -18,7 +18,7 @@ class ProgressMapper:
         "error": (-1, -1),            # Special case for errors
         "cancelled": (-1, -1),        # Special case for cancellation
         "completed": (100, 100),
-        
+
         # Crawl-specific stages - rebalanced based on actual time taken
         "analyzing": (1, 3),          # URL analysis is quick
         "crawling": (3, 15),          # Crawling can take time for deep/many URLs
@@ -27,7 +27,7 @@ class ProgressMapper:
         "document_storage": (25, 40), # Embeddings generation takes significant time
         "code_extraction": (40, 90),  # Code extraction + summaries - still longest but more balanced
         "finalization": (90, 100),    # Final steps and cleanup
-        
+
         # Upload-specific stages
         "reading": (0, 5),
         "text_extraction": (5, 10),   # Clear name for text extraction from files
@@ -53,9 +53,9 @@ class ProgressMapper:
         Returns:
             Overall progress percentage (0-100)
         """
-        # Handle error state
-        if stage == "error":
-            return -1
+        # Handle error and cancelled states - preserve last known progress
+        if stage in ("error", "cancelled"):
+            return self.last_overall_progress
 
         # Get stage range
         if stage not in self.STAGE_RANGES:

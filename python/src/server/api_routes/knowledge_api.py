@@ -228,7 +228,7 @@ async def delete_knowledge_item(source_id: str):
 
 @router.get("/knowledge-items/{source_id}/chunks")
 async def get_knowledge_item_chunks(
-    source_id: str, 
+    source_id: str,
     domain_filter: str | None = None,
     limit: int = 20,
     offset: int = 0
@@ -250,26 +250,26 @@ async def get_knowledge_item_chunks(
         limit = min(limit, 100)  # Cap at 100 to prevent excessive data transfer
         limit = max(limit, 1)    # At least 1
         offset = max(offset, 0)   # Can't be negative
-        
+
         safe_logfire_info(
             f"Fetching chunks | source_id={source_id} | domain_filter={domain_filter} | "
             f"limit={limit} | offset={offset}"
         )
 
         supabase = get_supabase_client()
-        
+
         # First get total count
         count_query = supabase.from_("archon_crawled_pages").select(
             "id", count="exact", head=True
         )
         count_query = count_query.eq("source_id", source_id)
-        
+
         if domain_filter:
             count_query = count_query.ilike("url", f"%{domain_filter}%")
-        
+
         count_result = count_query.execute()
         total = count_result.count if hasattr(count_result, "count") else 0
-        
+
         # Build the main query with pagination
         query = supabase.from_("archon_crawled_pages").select(
             "id, source_id, content, metadata, url"
@@ -282,7 +282,7 @@ async def get_knowledge_item_chunks(
 
         # Deterministic ordering (URL then id)
         query = query.order("url", desc=False).order("id", desc=False)
-        
+
         # Apply pagination
         query = query.range(offset, offset + limit - 1)
 
@@ -295,15 +295,15 @@ async def get_knowledge_item_chunks(
             raise HTTPException(status_code=500, detail={"error": str(result.error)})
 
         chunks = result.data if result.data else []
-        
+
         # Extract useful fields from metadata to top level for frontend
         # This ensures the API response matches the TypeScript DocumentChunk interface
         for chunk in chunks:
             metadata = chunk.get("metadata", {}) or {}
-            
+
             # Generate meaningful titles from available data
             title = None
-            
+
             # Try to get title from various metadata fields
             if metadata.get("filename"):
                 title = metadata.get("filename")
@@ -328,19 +328,19 @@ async def get_knowledge_item_chunks(
                         elif line.startswith("### "):
                             title = line[4:].strip()
                             break
-                    
+
                     # Fallback: use first meaningful line that looks like a title
                     if not title:
                         for line in lines:
                             line = line.strip()
                             # Skip code blocks, empty lines, and very short lines
-                            if (line and not line.startswith("```") and not line.startswith("Source:") 
+                            if (line and not line.startswith("```") and not line.startswith("Source:")
                                 and len(line) > 15 and len(line) < 80
                                 and not line.startswith("from ") and not line.startswith("import ")
                                 and "=" not in line and "{" not in line):
                                 title = line
                                 break
-                
+
                 # If no content-based title found, generate from URL
                 if not title:
                     url = chunk.get("url", "")
@@ -356,12 +356,12 @@ async def get_knowledge_item_chunks(
                                 title = parsed.path.strip("/").replace("-", " ").replace("_", " ").title()
                             else:
                                 title = parsed.netloc.replace("www.", "").title()
-            
+
             chunk["title"] = title or ""
             chunk["section"] = metadata.get("headers", "").replace(";", " > ") if metadata.get("headers") else None
             chunk["source_type"] = metadata.get("source_type")
             chunk["knowledge_type"] = metadata.get("knowledge_type")
-        
+
         safe_logfire_info(
             f"Fetched {len(chunks)} chunks for {source_id} | total={total}"
         )
@@ -408,13 +408,13 @@ async def get_knowledge_item_code_examples(
         limit = min(limit, 100)  # Cap at 100 to prevent excessive data transfer
         limit = max(limit, 1)    # At least 1
         offset = max(offset, 0)   # Can't be negative
-        
+
         safe_logfire_info(
             f"Fetching code examples | source_id={source_id} | limit={limit} | offset={offset}"
         )
 
         supabase = get_supabase_client()
-        
+
         # First get total count
         count_result = (
             supabase.from_("archon_code_examples")
@@ -423,7 +423,7 @@ async def get_knowledge_item_code_examples(
             .execute()
         )
         total = count_result.count if hasattr(count_result, "count") else 0
-        
+
         # Get paginated code examples
         result = (
             supabase.from_("archon_code_examples")
@@ -549,7 +549,7 @@ async def refresh_knowledge_item(source_id: str):
                         f"Acquired crawl semaphore for refresh | source_id={source_id}"
                     )
                     result = await crawl_service.orchestrate_crawl(request_dict)
-                    
+
                     # Store the ACTUAL crawl task for proper cancellation
                     crawl_task = result.get("task")
                     if crawl_task:
@@ -600,7 +600,7 @@ async def crawl_knowledge_item(request: KnowledgeItemRequest):
         # Initialize progress tracker IMMEDIATELY so it's available for polling
         from ..utils.progress.progress_tracker import ProgressTracker
         tracker = ProgressTracker(progress_id, operation_type="crawl")
-        
+
         # Detect crawl type from URL
         url_str = str(request.url)
         crawl_type = "normal"
@@ -608,7 +608,7 @@ async def crawl_knowledge_item(request: KnowledgeItemRequest):
             crawl_type = "sitemap"
         elif url_str.endswith(".txt"):
             crawl_type = "llms-txt" if "llms" in url_str.lower() else "text_file"
-        
+
         await tracker.start({
             "url": url_str,
             "current_url": url_str,
@@ -626,23 +626,23 @@ async def crawl_knowledge_item(request: KnowledgeItemRequest):
         )
         # Create a proper response that will be converted to camelCase
         from pydantic import BaseModel, Field
-        
+
         class CrawlStartResponse(BaseModel):
             success: bool
             progress_id: str = Field(alias="progressId")
             message: str
             estimated_duration: str = Field(alias="estimatedDuration")
-            
+
             class Config:
                 populate_by_name = True
-        
+
         response = CrawlStartResponse(
             success=True,
             progress_id=progress_id,
             message="Crawling started",
             estimated_duration="3-5 minutes"
         )
-        
+
         return response.model_dump(by_alias=True)
     except Exception as e:
         safe_logfire_error(f"Failed to start crawl | error={str(e)} | url={str(request.url)}")
@@ -1134,7 +1134,7 @@ async def stop_crawl_task(progress_id: str):
                 task.cancel()
                 try:
                     await asyncio.wait_for(task, timeout=2.0)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
+                except (TimeoutError, asyncio.CancelledError):
                     pass
             del active_crawl_tasks[progress_id]
             found = True
@@ -1146,10 +1146,14 @@ async def stop_crawl_task(progress_id: str):
         if found:
             try:
                 from ..utils.progress.progress_tracker import ProgressTracker
+                # Get current progress from existing tracker, default to 0 if not found
+                current_state = ProgressTracker.get_progress(progress_id)
+                current_progress = current_state.get("progress", 0) if current_state else 0
+
                 tracker = ProgressTracker(progress_id, operation_type="crawl")
                 await tracker.update(
                     status="cancelled",
-                    progress=-1,
+                    progress=current_progress,
                     log="Crawl cancelled by user"
                 )
             except Exception:

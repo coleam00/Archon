@@ -393,7 +393,7 @@ class TestProgressResponseFactory:
         }
         
         response = create_progress_response("crawl", progress_data)
-        assert response.status == "running"  # Default
+        assert response.status == "starting"  # Default
         
         # Missing progress
         progress_data = {
