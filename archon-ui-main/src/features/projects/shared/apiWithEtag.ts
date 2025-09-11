@@ -130,6 +130,13 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
       // Clear caches for this endpoint on successful deletion
       etagCache?.delete(cacheKey);
       dataCache?.delete(cacheKey);
+
+      // Also clear any cached GET for this resource
+      // since the resource no longer exists
+      const getKey = `GET:${fullUrl}`;
+      etagCache?.delete(getKey);
+      dataCache?.delete(getKey);
+
       return undefined as T;
     }
 
