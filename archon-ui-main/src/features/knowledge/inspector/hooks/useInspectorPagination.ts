@@ -59,21 +59,21 @@ export function useInspectorPagination({
 
   // Flatten the paginated data and apply search filtering
   const { items, totalCount, loadedCount } = useMemo(() => {
-    if (!data || !(data as any).pages) {
+    type Page = ChunksResponse | CodeExamplesResponse;
+    if (!data || !data.pages) {
       return { items: [], totalCount: 0, loadedCount: 0 };
     }
 
     // Flatten all pages - data has 'pages' property from useInfiniteQuery
-    const allItems = (data as any).pages.flatMap((page: ChunksResponse | CodeExamplesResponse) => {
-      if (viewMode === "documents") {
-        return (page as ChunksResponse).chunks || [];
-      } else {
-        return (page as CodeExamplesResponse).code_examples || [];
-      }
-    });
+    const pages = data.pages as Page[];
+    const allItems = pages.flatMap((page) =>
+      "chunks" in page ? page.chunks ?? [] : "code_examples" in page ? page.code_examples ?? [] : [],
+    );
 
-    // Get total from first page
-    const totalCount = (data as any).pages[0]?.total || 0;
+    // Get total from first page (fallback to loadedCount)
+    const first = pages[0];
+    const totalCount =
+      first && "total" in first && typeof first.total === "number" ? first.total : allItems.length;
     const loadedCount = allItems.length;
 
     // Apply search filtering

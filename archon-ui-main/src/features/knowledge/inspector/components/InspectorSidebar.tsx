@@ -85,6 +85,7 @@ export const InspectorSidebar: React.FC<InspectorSidebarProps> = ({
           <div className="p-2">
             {items.map((item) => (
               <motion.button
+                type="button"
                 key={item.id}
                 whileHover={{ x: 2 }}
                 onClick={() => onItemSelect(item)}
