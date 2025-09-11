@@ -164,9 +164,11 @@ class CodeExtractionService:
         summary_end = start_progress + int(progress_range * 0.8)
 
         # Extract code blocks from all documents
+        logger.info(f"Starting code extraction for {len(crawl_results)} documents with source_id: {source_id}")
         all_code_blocks = await self._extract_code_blocks_from_documents(
             crawl_results, source_id, progress_callback, start_progress, extract_end, cancellation_check
         )
+        logger.info(f"Extracted {len(all_code_blocks)} total code blocks from {len(crawl_results)} documents")
 
         if not all_code_blocks:
             safe_logfire_info("No code examples found in any crawled documents")
@@ -307,18 +309,22 @@ class CodeExtractionService:
                         )
 
                 # If still no code blocks, try markdown extraction as fallback
-                if len(code_blocks) == 0 and md and "```" in md:
-                    safe_logfire_info(
-                        f"No code blocks from HTML, trying markdown extraction | url={source_url}"
-                    )
-                    from ..storage.code_storage_service import extract_code_blocks
+                if len(code_blocks) == 0 and md:
+                    has_backticks = "```" in md
+                    logger.info(f"Checking markdown for {source_url}: has_backticks={has_backticks}, md_length={len(md)}")
+                    
+                    if has_backticks:
+                        safe_logfire_info(
+                            f"No code blocks from HTML, trying markdown extraction | url={source_url}"
+                        )
+                        from ..storage.code_storage_service import extract_code_blocks
 
-                    # Use dynamic minimum for markdown extraction (from settings)
-                    dynamic_min_length = await self._get_min_code_length()
-                    code_blocks = extract_code_blocks(md, min_length=dynamic_min_length)
-                    safe_logfire_info(
-                        f"Found {len(code_blocks)} code blocks from markdown | url={source_url}"
-                    )
+                        # Use dynamic minimum for markdown extraction (from settings)
+                        dynamic_min_length = await self._get_min_code_length()
+                        code_blocks = extract_code_blocks(md, min_length=dynamic_min_length)
+                        safe_logfire_info(
+                            f"Found {len(code_blocks)} code blocks from markdown | url={source_url}"
+                        )
 
                 if code_blocks:
                     # Use the provided source_id for all code blocks
