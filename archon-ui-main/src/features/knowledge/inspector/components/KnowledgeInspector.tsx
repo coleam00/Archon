@@ -104,7 +104,7 @@ export const KnowledgeInspector: React.FC<KnowledgeInspectorProps> = ({ item, op
       const code = item as CodeExample;
       setSelectedItem({
         type: "code",
-        id: code.id || "",
+        id: code.id,
         content: code.content || code.code || "",
         metadata: {
           language: code.language,

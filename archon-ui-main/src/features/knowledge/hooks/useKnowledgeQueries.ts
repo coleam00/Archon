@@ -134,15 +134,15 @@ export function useStopCrawl() {
     },
     onError: (error, progressId) => {
       // If it's a 404, the operation might have already completed or been cancelled
-      const is404Error = 
-        (error as any)?.statusCode === 404 || 
+      const is404Error =
+        (error as any)?.statusCode === 404 ||
         (error instanceof Error && (error.message.includes("404") || error.message.includes("not found")));
-      
+
       if (is404Error) {
         // Don't show error for 404s - the operation is likely already gone
         return;
       }
-      
+
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
       showToast(`Failed to stop crawl (${progressId}): ${errorMessage}`, "error");
     },

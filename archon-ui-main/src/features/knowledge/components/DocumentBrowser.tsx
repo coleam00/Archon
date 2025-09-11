@@ -192,9 +192,9 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({ sourceId, open
                 </div>
               ) : (
                 <div className="space-y-3 p-4">
-                  {filteredCode.map((example, index) => (
+                  {filteredCode.map((example) => (
                     <div
-                      key={example.id || index}
+                      key={example.id}
                       className="bg-black/30 rounded-lg border border-white/10 overflow-hidden hover:border-cyan-500/30 transition-colors"
                     >
                       <div className="flex items-center justify-between p-3 border-b border-white/10 bg-black/20">

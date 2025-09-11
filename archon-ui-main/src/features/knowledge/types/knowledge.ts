@@ -47,8 +47,8 @@ export interface CodeExampleMetadata {
 }
 
 export interface CodeExample {
-  id?: string;
-  source_id?: string;
+  id: number;
+  source_id: string;
   content: string; // The actual code content (primary field from backend)
   code?: string; // Alternative field name for backward compatibility
   summary?: string;
