@@ -45,7 +45,8 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
     task: (_n) => `Are you sure you want to delete this task?`,
     client: (_n) => `Are you sure you want to delete this client?`,
     document: (_n) => `Are you sure you want to delete this document?`,
-    knowledge: (n) => `Are you sure you want to delete "${n}"? All associated documents and code examples will be permanently removed.`,
+    knowledge: (n) =>
+      `Are you sure you want to delete "${n}"? All associated documents and code examples will be permanently removed.`,
   };
 
   // Size-specific styling for icon

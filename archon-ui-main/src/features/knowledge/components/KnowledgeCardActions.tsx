@@ -6,6 +6,7 @@
 
 import { Code, Download, Eye, MoreHorizontal, RefreshCw, Trash2 } from "lucide-react";
 import { useState } from "react";
+import { DeleteConfirmModal } from "../../ui/components/DeleteConfirmModal";
 import { Button } from "../../ui/primitives/button";
 import {
   DropdownMenu,
@@ -15,7 +16,6 @@ import {
   DropdownMenuTrigger,
 } from "../../ui/primitives/dropdown-menu";
 import { cn } from "../../ui/primitives/styles";
-import { DeleteConfirmModal } from "../../ui/components/DeleteConfirmModal";
 
 interface KnowledgeCardActionsProps {
   sourceId: string; // Source ID for API calls
@@ -65,7 +65,7 @@ export const KnowledgeCardActions: React.FC<KnowledgeCardActionsProps> = ({
 
   const handleConfirmDelete = async () => {
     if (!onDelete) return;
-    
+
     setIsDeleting(true);
     setShowDeleteModal(false);
     try {
@@ -94,75 +94,79 @@ export const KnowledgeCardActions: React.FC<KnowledgeCardActionsProps> = ({
   return (
     <>
       <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          className={cn(
-            "h-8 w-8 p-0 text-gray-400 hover:text-white hover:bg-white/10",
-            // Always visible for clearer affordance
-            "opacity-100",
-            (isRefreshing || isDeleting) && "opacity-100",
-          )}
-          disabled={isDeleting}
-          title={isRefreshing ? "Recrawling..." : "More actions"}
-        >
-          {isRefreshing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <MoreHorizontal className="w-4 h-4" />}
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="glass-morphism w-48">
-        <DropdownMenuItem onClick={handleViewDocuments}>
-          <Eye className="w-4 h-4 mr-2" />
-          View Documents
-        </DropdownMenuItem>
-
-        {hasCodeExamples && onViewCodeExamples && (
-          <DropdownMenuItem onClick={handleViewCodeExamples}>
-            <Code className="w-4 h-4 mr-2" />
-            View Code Examples
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            className={cn(
+              "h-8 w-8 p-0 text-gray-400 hover:text-white hover:bg-white/10",
+              // Always visible for clearer affordance
+              "opacity-100",
+              (isRefreshing || isDeleting) && "opacity-100",
+            )}
+            disabled={isDeleting}
+            title={isRefreshing ? "Recrawling..." : "More actions"}
+          >
+            {isRefreshing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <MoreHorizontal className="w-4 h-4" />}
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="glass-morphism w-48">
+          <DropdownMenuItem onClick={handleViewDocuments}>
+            <Eye className="w-4 h-4 mr-2" />
+            View Documents
           </DropdownMenuItem>
-        )}
 
-        {isUrl && onRefresh && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={handleRefresh} disabled={isRefreshing}>
-              <RefreshCw className={cn("w-4 h-4 mr-2", isRefreshing && "animate-spin")} />
-              {isRefreshing ? "Recrawling..." : "Recrawl"}
+          {hasCodeExamples && onViewCodeExamples && (
+            <DropdownMenuItem onClick={handleViewCodeExamples}>
+              <Code className="w-4 h-4 mr-2" />
+              View Code Examples
             </DropdownMenuItem>
-          </>
-        )}
+          )}
 
-        {onExport && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={handleExport}>
-              <Download className="w-4 h-4 mr-2" />
-              Export
-            </DropdownMenuItem>
-          </>
-        )}
+          {isUrl && onRefresh && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={handleRefresh} disabled={isRefreshing}>
+                <RefreshCw className={cn("w-4 h-4 mr-2", isRefreshing && "animate-spin")} />
+                {isRefreshing ? "Recrawling..." : "Recrawl"}
+              </DropdownMenuItem>
+            </>
+          )}
 
-        {onDelete && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={handleDelete} disabled={isDeleting} className="text-red-400 focus:text-red-400">
-              <Trash2 className="w-4 h-4 mr-2" />
-              {isDeleting ? "Deleting..." : "Delete"}
-            </DropdownMenuItem>
-          </>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+          {onExport && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={handleExport}>
+                <Download className="w-4 h-4 mr-2" />
+                Export
+              </DropdownMenuItem>
+            </>
+          )}
 
-    <DeleteConfirmModal
-      itemName={itemTitle}
-      type="knowledge"
-      open={showDeleteModal}
-      onOpenChange={setShowDeleteModal}
-      onConfirm={handleConfirmDelete}
-      onCancel={() => setShowDeleteModal(false)}
-    />
+          {onDelete && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={handleDelete}
+                disabled={isDeleting}
+                className="text-red-400 focus:text-red-400"
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                {isDeleting ? "Deleting..." : "Delete"}
+              </DropdownMenuItem>
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <DeleteConfirmModal
+        itemName={itemTitle}
+        type="knowledge"
+        open={showDeleteModal}
+        onOpenChange={setShowDeleteModal}
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setShowDeleteModal(false)}
+      />
     </>
   );
 };

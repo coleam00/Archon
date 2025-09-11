@@ -3,7 +3,7 @@
  * Contains search, filters, and view controls
  */
 
-import { BookOpen, Grid, List, Plus, Search, Briefcase, Terminal, Asterisk } from "lucide-react";
+import { Asterisk, BookOpen, Briefcase, Grid, List, Plus, Search, Terminal } from "lucide-react";
 import { Button, Input, ToggleGroup, ToggleGroupItem } from "../../ui/primitives";
 import { cn } from "../../ui/primitives/styles";
 

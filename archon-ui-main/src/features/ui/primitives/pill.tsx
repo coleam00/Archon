@@ -1,4 +1,4 @@
-import React from "react";
+import type React from "react";
 import { cn } from "./styles";
 
 export type PillColor = "blue" | "orange" | "cyan" | "purple" | "pink" | "emerald" | "gray";

@@ -8,8 +8,8 @@ import { format } from "date-fns";
 import { motion } from "framer-motion";
 import { Briefcase, Clock, Code, ExternalLink, File, FileText, Globe, Terminal } from "lucide-react";
 import { useState } from "react";
-import { cn } from "../../ui/primitives/styles";
 import { StatPill } from "../../ui/primitives";
+import { cn } from "../../ui/primitives/styles";
 import { SimpleTooltip } from "../../ui/primitives/tooltip";
 import { useDeleteKnowledgeItem, useRefreshKnowledgeItem } from "../hooks";
 import { KnowledgeCardProgress } from "../progress/components/KnowledgeCardProgress";
@@ -266,7 +266,7 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
             </div>
             {/* Right: pills */}
             <div className="flex items-center gap-2">
-              <SimpleTooltip content={`${documentCount} document${documentCount !== 1 ? 's' : ''} indexed`}>
+              <SimpleTooltip content={`${documentCount} document${documentCount !== 1 ? "s" : ""} indexed`}>
                 <div>
                   <StatPill
                     color="orange"
@@ -277,7 +277,9 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
                   />
                 </div>
               </SimpleTooltip>
-              <SimpleTooltip content={`${codeExamplesCount} code example${codeExamplesCount !== 1 ? 's' : ''} extracted`}>
+              <SimpleTooltip
+                content={`${codeExamplesCount} code example${codeExamplesCount !== 1 ? "s" : ""} extracted`}
+              >
                 <div>
                   <StatPill
                     color="blue"
