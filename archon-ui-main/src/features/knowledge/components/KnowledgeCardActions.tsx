@@ -15,9 +15,11 @@ import {
   DropdownMenuTrigger,
 } from "../../ui/primitives/dropdown-menu";
 import { cn } from "../../ui/primitives/styles";
+import { DeleteConfirmModal } from "../../ui/components/DeleteConfirmModal";
 
 interface KnowledgeCardActionsProps {
   sourceId: string; // Source ID for API calls
+  itemTitle?: string; // Title for delete confirmation
   isUrl: boolean;
   hasCodeExamples: boolean;
   onViewDocuments: () => void;
@@ -29,6 +31,7 @@ interface KnowledgeCardActionsProps {
 
 export const KnowledgeCardActions: React.FC<KnowledgeCardActionsProps> = ({
   sourceId: _sourceId, // Currently unused, may be needed for future features
+  itemTitle = "this knowledge item",
   isUrl,
   hasCodeExamples,
   onViewDocuments,
@@ -39,6 +42,7 @@ export const KnowledgeCardActions: React.FC<KnowledgeCardActionsProps> = ({
 }) => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
 
   const handleRefresh = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -56,12 +60,14 @@ export const KnowledgeCardActions: React.FC<KnowledgeCardActionsProps> = ({
   const handleDelete = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!onDelete) return;
+    setShowDeleteModal(true);
+  };
 
-    if (!confirm("Are you sure you want to delete this knowledge item? This action cannot be undone.")) {
-      return;
-    }
-
+  const handleConfirmDelete = async () => {
+    if (!onDelete) return;
+    
     setIsDeleting(true);
+    setShowDeleteModal(false);
     try {
       await onDelete();
     } finally {
@@ -86,7 +92,8 @@ export const KnowledgeCardActions: React.FC<KnowledgeCardActionsProps> = ({
   };
 
   return (
-    <DropdownMenu>
+    <>
+      <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
@@ -98,6 +105,7 @@ export const KnowledgeCardActions: React.FC<KnowledgeCardActionsProps> = ({
             (isRefreshing || isDeleting) && "opacity-100",
           )}
           disabled={isDeleting}
+          title={isRefreshing ? "Recrawling..." : "More actions"}
         >
           {isRefreshing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <MoreHorizontal className="w-4 h-4" />}
         </Button>
@@ -146,5 +154,15 @@ export const KnowledgeCardActions: React.FC<KnowledgeCardActionsProps> = ({
         )}
       </DropdownMenuContent>
     </DropdownMenu>
+
+    <DeleteConfirmModal
+      itemName={itemTitle}
+      type="knowledge"
+      open={showDeleteModal}
+      onOpenChange={setShowDeleteModal}
+      onConfirm={handleConfirmDelete}
+      onCancel={() => setShowDeleteModal(false)}
+    />
+    </>
   );
 };

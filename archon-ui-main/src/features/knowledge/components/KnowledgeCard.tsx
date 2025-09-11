@@ -10,6 +10,7 @@ import { Briefcase, Clock, Code, ExternalLink, File, FileText, Globe, Terminal }
 import { useState } from "react";
 import { cn } from "../../ui/primitives/styles";
 import { StatPill } from "../../ui/primitives";
+import { SimpleTooltip } from "../../ui/primitives/tooltip";
 import { useDeleteKnowledgeItem, useRefreshKnowledgeItem } from "../hooks";
 import { KnowledgeCardProgress } from "../progress/components/KnowledgeCardProgress";
 import type { ActiveOperation } from "../progress/types";
@@ -174,24 +175,28 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
           <div className="flex items-start justify-between gap-2 mb-2">
             {/* Type and Source Badge */}
             <div className="flex items-center gap-2">
-              <div
-                className={cn(
-                  "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium",
-                  isUrl ? "bg-cyan-500/10 text-cyan-400" : "bg-purple-500/10 text-purple-400",
-                )}
-              >
-                {getSourceIcon()}
-                <span>{isUrl ? "Web Page" : "Document"}</span>
-              </div>
-              <div
-                className={cn(
-                  "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium",
-                  isTechnical ? "bg-blue-500/10 text-blue-400" : "bg-pink-500/10 text-pink-400",
-                )}
-              >
-                {isTechnical ? <Terminal className="w-3.5 h-3.5" /> : <Briefcase className="w-3.5 h-3.5" />}
-                <span>{getTypeLabel()}</span>
-              </div>
+              <SimpleTooltip content={isUrl ? "Content from a web page" : "Uploaded document"}>
+                <div
+                  className={cn(
+                    "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium",
+                    isUrl ? "bg-cyan-500/10 text-cyan-400" : "bg-purple-500/10 text-purple-400",
+                  )}
+                >
+                  {getSourceIcon()}
+                  <span>{isUrl ? "Web Page" : "Document"}</span>
+                </div>
+              </SimpleTooltip>
+              <SimpleTooltip content={isTechnical ? "Technical documentation" : "Business/general content"}>
+                <div
+                  className={cn(
+                    "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium",
+                    isTechnical ? "bg-blue-500/10 text-blue-400" : "bg-pink-500/10 text-pink-400",
+                  )}
+                >
+                  {isTechnical ? <Terminal className="w-3.5 h-3.5" /> : <Briefcase className="w-3.5 h-3.5" />}
+                  <span>{getTypeLabel()}</span>
+                </div>
+              </SimpleTooltip>
             </div>
 
             {/* Actions */}
@@ -204,6 +209,7 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
             >
               <KnowledgeCardActions
                 sourceId={item.source_id}
+                itemTitle={item.title}
                 isUrl={isUrl}
                 hasCodeExamples={codeExamplesCount > 0}
                 onViewDocuments={onViewDocument}
@@ -260,20 +266,28 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
             </div>
             {/* Right: pills */}
             <div className="flex items-center gap-2">
-              <StatPill
-                color="orange"
-                value={documentCount}
-                size="sm"
-                ariaLabel="Documents count"
-                icon={<FileText className="w-3.5 h-3.5" />}
-              />
-              <StatPill
-                color="blue"
-                value={codeExamplesCount}
-                size="sm"
-                ariaLabel="Code examples count"
-                icon={<Code className="w-3.5 h-3.5" />}
-              />
+              <SimpleTooltip content={`${documentCount} document${documentCount !== 1 ? 's' : ''} indexed`}>
+                <div>
+                  <StatPill
+                    color="orange"
+                    value={documentCount}
+                    size="sm"
+                    ariaLabel="Documents count"
+                    icon={<FileText className="w-3.5 h-3.5" />}
+                  />
+                </div>
+              </SimpleTooltip>
+              <SimpleTooltip content={`${codeExamplesCount} code example${codeExamplesCount !== 1 ? 's' : ''} extracted`}>
+                <div>
+                  <StatPill
+                    color="blue"
+                    value={codeExamplesCount}
+                    size="sm"
+                    ariaLabel="Code examples count"
+                    icon={<Code className="w-3.5 h-3.5" />}
+                  />
+                </div>
+              </SimpleTooltip>
             </div>
           </div>
         </div>
