@@ -110,7 +110,14 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
         const errorBody = await response.text();
         if (errorBody) {
           const errorJson = JSON.parse(errorBody);
-          errorMessage = errorJson.detail || errorJson.error || errorMessage;
+          // Handle nested error structure from backend {"detail": {"error": "message"}}
+          if (typeof errorJson.detail === 'object' && errorJson.detail !== null && 'error' in errorJson.detail) {
+            errorMessage = errorJson.detail.error;
+          } else if (errorJson.detail) {
+            errorMessage = errorJson.detail;
+          } else if (errorJson.error) {
+            errorMessage = errorJson.error;
+          }
         }
       } catch (_e) {
         // Ignore parse errors

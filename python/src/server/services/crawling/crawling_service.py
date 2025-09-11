@@ -235,7 +235,7 @@ class CrawlingService:
             request: The crawl request containing url, knowledge_type, tags, max_depth, etc.
 
         Returns:
-            Dict containing task_id and status
+            Dict containing task_id, status, and the asyncio task reference
         """
         url = str(request.get("url", ""))
         safe_logfire_info(f"Starting background crawl orchestration | url={url}")
@@ -248,14 +248,20 @@ class CrawlingService:
             register_orchestration(self.progress_id, self)
 
         # Start the crawl as an async task in the main event loop
-        asyncio.create_task(self._async_orchestrate_crawl(request, task_id))
+        # Store the task reference for proper cancellation
+        crawl_task = asyncio.create_task(self._async_orchestrate_crawl(request, task_id))
+        
+        # Set a name for the task to help with debugging
+        if self.progress_id:
+            crawl_task.set_name(f"crawl_{self.progress_id}")
 
-        # Return immediately
+        # Return immediately with task reference
         return {
             "task_id": task_id,
             "status": "started",
             "message": f"Crawl operation started for {url}",
             "progress_id": self.progress_id,
+            "task": crawl_task,  # Return the actual task for proper cancellation
         }
 
     async def _async_orchestrate_crawl(self, request: dict[str, Any], task_id: str):

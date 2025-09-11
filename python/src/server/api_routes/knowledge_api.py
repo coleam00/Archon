@@ -548,7 +548,15 @@ async def refresh_knowledge_item(source_id: str):
                     safe_logfire_info(
                         f"Acquired crawl semaphore for refresh | source_id={source_id}"
                     )
-                    await crawl_service.orchestrate_crawl(request_dict)
+                    result = await crawl_service.orchestrate_crawl(request_dict)
+                    
+                    # Store the ACTUAL crawl task for proper cancellation
+                    crawl_task = result.get("task")
+                    if crawl_task:
+                        active_crawl_tasks[progress_id] = crawl_task
+                        safe_logfire_info(
+                            f"Stored actual refresh crawl task | progress_id={progress_id} | task_name={crawl_task.get_name()}"
+                        )
             finally:
                 # Clean up task from registry when done (success or failure)
                 if progress_id in active_crawl_tasks:
@@ -557,9 +565,8 @@ async def refresh_knowledge_item(source_id: str):
                         f"Cleaned up refresh task from registry | progress_id={progress_id}"
                     )
 
-        task = asyncio.create_task(_perform_refresh_with_semaphore())
-        # Track the task for cancellation support
-        active_crawl_tasks[progress_id] = task
+        # Start the wrapper task - we don't need to track it since we'll track the actual crawl task
+        asyncio.create_task(_perform_refresh_with_semaphore())
 
         return {"progressId": progress_id, "message": f"Started refresh for {url}"}
 
@@ -611,10 +618,9 @@ async def crawl_knowledge_item(request: KnowledgeItemRequest):
             "log": f"Starting crawl for {request.url}"
         })
 
-        # Start background task
-        task = asyncio.create_task(_perform_crawl_with_progress(progress_id, request, tracker))
-        # Track the task for cancellation support
-        active_crawl_tasks[progress_id] = task
+        # Start background task - no need to track this wrapper task
+        # The actual crawl task will be stored inside _perform_crawl_with_progress
+        asyncio.create_task(_perform_crawl_with_progress(progress_id, request, tracker))
         safe_logfire_info(
             f"Crawl started successfully | progress_id={progress_id} | url={str(request.url)}"
         )
@@ -671,14 +677,6 @@ async def _perform_crawl_with_progress(
             orchestration_service = CrawlingService(crawler, supabase_client)
             orchestration_service.set_progress_id(progress_id)
 
-            # Store the current task in active_crawl_tasks for cancellation support
-            current_task = asyncio.current_task()
-            if current_task:
-                active_crawl_tasks[progress_id] = current_task
-                safe_logfire_info(
-                    f"Stored current task in active_crawl_tasks | progress_id={progress_id}"
-                )
-
             # Convert request to dict for service
             request_dict = {
                 "url": str(request.url),
@@ -689,11 +687,20 @@ async def _perform_crawl_with_progress(
                 "generate_summary": True,
             }
 
-            # Orchestrate the crawl (now returns immediately with task info)
+            # Orchestrate the crawl - this returns immediately with task info including the actual task
             result = await orchestration_service.orchestrate_crawl(request_dict)
 
+            # Store the ACTUAL crawl task for proper cancellation
+            crawl_task = result.get("task")
+            if crawl_task:
+                active_crawl_tasks[progress_id] = crawl_task
+                safe_logfire_info(
+                    f"Stored actual crawl task in active_crawl_tasks | progress_id={progress_id} | task_name={crawl_task.get_name()}"
+                )
+            else:
+                safe_logfire_error(f"No task returned from orchestrate_crawl | progress_id={progress_id}")
+
             # The orchestration service now runs in background and handles all progress updates
-            # Just log that the task was started
             safe_logfire_info(
                 f"Crawl task started | progress_id={progress_id} | task_id={result.get('task_id')}"
             )
@@ -776,13 +783,14 @@ async def upload_document(
             "log": f"Starting upload for {file.filename}"
         })
         # Start background task for processing with file content and metadata
-        task = asyncio.create_task(
+        # Upload tasks can be tracked directly since they don't spawn sub-tasks
+        upload_task = asyncio.create_task(
             _perform_upload_with_progress(
                 progress_id, file_content, file_metadata, tag_list, knowledge_type, tracker
             )
         )
         # Track the task for cancellation support
-        active_crawl_tasks[progress_id] = task
+        active_crawl_tasks[progress_id] = upload_task
         safe_logfire_info(
             f"Document upload started successfully | progress_id={progress_id} | filename={file.filename}"
         )
