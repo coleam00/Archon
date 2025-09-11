@@ -14,6 +14,9 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/progress", tags=["progress"])
 
+# Terminal states that don't require further polling
+TERMINAL_STATES = {"completed", "failed", "error", "cancelled"}
+
 
 @router.get("/{operation_id}")
 async def get_progress(
@@ -75,11 +78,11 @@ async def get_progress(
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
 
         # Add polling hint headers
-        if operation.get("status") not in {"completed", "failed", "error"}:
+        if operation.get("status") not in TERMINAL_STATES:
             # Suggest polling every second for active operations
             response.headers["X-Poll-Interval"] = "1000"
         else:
-            # No need to poll completed/failed operations
+            # No need to poll terminal operations
             response.headers["X-Poll-Interval"] = "0"
 
         logfire.info(f"Progress retrieved | operation_id={operation_id} | status={response_data.get('status')} | progress={response_data.get('progress')}")
@@ -110,8 +113,8 @@ async def list_active_operations():
         # Include all non-completed statuses
         for op_id, operation in ProgressTracker._progress_states.items():
             status = operation.get("status", "unknown")
-            # Include all operations that aren't completed, failed, cancelled, or errored
-            if status not in ["completed", "failed", "error", "cancelled"]:
+            # Include all operations that aren't in terminal states
+            if status not in TERMINAL_STATES:
                 operation_data = {
                     "operation_id": op_id,
                     "operation_type": operation.get("type", "unknown"),

@@ -201,7 +201,6 @@ def create_progress_response(
         "total_chunks": "totalChunks",
         "current_batch": "currentBatch",
         "total_batches": "totalBatches",
-        "completed_batches": "currentBatch",  # Alternative name
         "current_operation": "currentOperation",
         "chunks_per_second": "chunksPerSecond",
         "estimated_time_remaining": "estimatedTimeRemaining",
