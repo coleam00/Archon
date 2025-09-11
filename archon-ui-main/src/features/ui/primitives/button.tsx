@@ -18,7 +18,8 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       loading && "cursor-wait",
     );
 
-    const variants = {
+    type ButtonVariant = NonNullable<ButtonProps["variant"]>;
+    const variants: Record<ButtonVariant, string> = {
       default: cn(
         "backdrop-blur-md",
         "bg-gradient-to-b from-cyan-500/90 to-cyan-600/90",
@@ -89,7 +90,8 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       ),
     };
 
-    const sizes = {
+    type ButtonSize = NonNullable<ButtonProps["size"]>;
+    const sizes: Record<ButtonSize, string> = {
       default: "h-10 px-4 py-2",
       sm: "h-9 rounded-md px-3",
       lg: "h-11 rounded-md px-8",
