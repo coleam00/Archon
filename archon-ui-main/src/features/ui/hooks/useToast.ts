@@ -33,11 +33,14 @@ export function useToast() {
  * Create toast context value with state management
  * Used internally by ToastProvider component
  */
+// Counter for ensuring unique IDs even when created in same millisecond
+let toastIdCounter = 0;
+
 export function createToastContext() {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const showToast = useCallback((message: string, type: Toast["type"] = "info", duration = 4000) => {
-    const id = Date.now().toString();
+    const id = `${Date.now()}-${toastIdCounter++}`;
     const newToast: Toast = { id, message, type, duration };
 
     setToasts((prev) => [...prev, newToast]);
