@@ -225,20 +225,24 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
           <h3 className="text-base font-semibold text-white/90 line-clamp-2 mb-2">{item.title}</h3>
 
           {/* URL/Source */}
-          {item.url && (
-            <a
-              href={item.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
-              className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-cyan-400 transition-colors mt-2"
-            >
-              <ExternalLink className="w-3 h-3" />
-              <span className="truncate">
-                {item.url.startsWith("file://") ? item.url.replace("file://", "") : extractDomain(item.url)}
-              </span>
-            </a>
-          )}
+          {item.url &&
+            (isUrl ? (
+              <a
+                href={item.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-cyan-400 transition-colors mt-2"
+              >
+                <ExternalLink className="w-3 h-3" />
+                <span className="truncate">{extractDomain(item.url)}</span>
+              </a>
+            ) : (
+              <div className="inline-flex items-center gap-1 text-xs text-gray-400 mt-2">
+                <FileText className="w-3 h-3" />
+                <span className="truncate">{item.url.replace("file://", "")}</span>
+              </div>
+            ))}
         </div>
 
         {/* Spacer to push footer to bottom */}
