@@ -102,7 +102,7 @@ async def add_documents_to_supabase(
                 if cancellation_check:
                     cancellation_check()
 
-                batch_urls = unique_urls[i : i + 10]
+                batch_urls = unique_urls[i : i + fallback_batch_size]
                 try:
                     client.table("archon_crawled_pages").delete().in_("url", batch_urls).execute()
                     await asyncio.sleep(0.05)  # Rate limit to prevent overwhelming

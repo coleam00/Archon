@@ -239,7 +239,7 @@ class RecursiveCrawlStrategy:
                         except asyncio.CancelledError:
                             cancelled = True
                             await report_progress(
-                                min(int((total_processed / max(len(urls_to_crawl), 1)) * 100), 99),
+                                min(int((total_processed / max(total_discovered, 1)) * 100), 99),
                                 "Crawl cancelled during batch processing",
                                 status="cancelled",
                                 total_pages=total_discovered,
