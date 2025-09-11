@@ -139,11 +139,12 @@ OPTIONAL_SETTINGS_WITH_DEFAULTS = {
 
 
 @router.get("/credentials/{key}")
-async def get_credential(key: str, decrypt: bool = True):
+async def get_credential(key: str):
     """Get a specific credential by key."""
     try:
-        logfire.info(f"Getting credential | key={key} | decrypt={decrypt}")
-        value = await credential_service.get_credential(key, decrypt=decrypt)
+        logfire.info(f"Getting credential | key={key}")
+        # Never decrypt - always get metadata only for encrypted credentials
+        value = await credential_service.get_credential(key, decrypt=False)
 
         if value is None:
             # Check if this is an optional setting with a default value
@@ -162,16 +163,17 @@ async def get_credential(key: str, decrypt: bool = True):
 
         logfire.info(f"Credential retrieved successfully | key={key}")
 
-        # For encrypted credentials, return metadata instead of the actual value for security
-        if isinstance(value, dict) and value.get("is_encrypted") and not decrypt:
+        if isinstance(value, dict) and value.get("is_encrypted"):
             return {
                 "key": key,
+                "value": "[ENCRYPTED]",
                 "is_encrypted": True,
                 "category": value.get("category"),
                 "description": value.get("description"),
                 "has_value": bool(value.get("encrypted_value")),
             }
 
+        # For non-encrypted credentials, return the actual value
         return {"key": key, "value": value, "is_encrypted": False}
 
     except HTTPException:
