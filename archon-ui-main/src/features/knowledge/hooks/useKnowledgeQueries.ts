@@ -113,10 +113,13 @@ export function useUploadDocument() {
     onSuccess: (response) => {
       // Invalidate the list to show new items when ready
       queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
-      showToast(`Document uploaded: ${response.filename}`, "success");
+      // Don't show success here - upload is just starting in background
+      // Success/failure will be shown via progress polling
     },
-    onError: () => {
-      showToast("Failed to upload document", "error");
+    onError: (error) => {
+      // Display the actual error message from backend
+      const message = error instanceof Error ? error.message : "Failed to upload document";
+      showToast(message, "error");
     },
   });
 }

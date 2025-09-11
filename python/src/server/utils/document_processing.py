@@ -71,11 +71,18 @@ def extract_text_from_document(file_content: bytes, filename: str, content_type:
             ".markdown",
             ".rst",
         )):
-            return file_content.decode("utf-8", errors="ignore")
+            # Decode text and check if it has content
+            text = file_content.decode("utf-8", errors="ignore").strip()
+            if not text:
+                raise ValueError(f"The file {filename} appears to be empty.")
+            return text
 
         else:
             raise ValueError(f"Unsupported file format: {content_type} ({filename})")
 
+    except ValueError:
+        # Re-raise ValueError with original message for unsupported formats
+        raise
     except Exception as e:
         logfire.error(
             "Document text extraction failed",
@@ -83,7 +90,11 @@ def extract_text_from_document(file_content: bytes, filename: str, content_type:
             content_type=content_type,
             error=str(e),
         )
-        raise Exception(f"Failed to extract text from {filename}: {str(e)}")
+        # Provide more specific error message based on the failure
+        if "No text could be extracted" in str(e):
+            raise Exception(f"Failed to extract text from {filename}: The file appears to be empty or contains only images/non-text content.")
+        else:
+            raise Exception(f"Failed to extract text from {filename}: {str(e)}")
 
 
 def extract_text_from_pdf(file_content: bytes) -> str:
@@ -141,7 +152,7 @@ def extract_text_from_pdf(file_content: bytes) -> str:
             if text_content:
                 return "\n\n".join(text_content)
             else:
-                raise Exception("No text could be extracted from PDF")
+                raise Exception("No text could be extracted from PDF. The file may be empty, contain only images, or be a scanned document without OCR.")
 
         except Exception as e:
             raise Exception(f"PyPDF2 failed to extract text: {str(e)}")

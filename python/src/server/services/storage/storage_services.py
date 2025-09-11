@@ -67,7 +67,7 @@ class DocumentStorageService(BaseStorageService):
                 )
 
                 if not chunks:
-                    raise ValueError("No content could be extracted from the document")
+                    raise ValueError(f"No content could be extracted from {filename}. The file may be empty, corrupted, or in an unsupported format.")
 
                 await report_progress("Preparing document chunks...", 30)
 

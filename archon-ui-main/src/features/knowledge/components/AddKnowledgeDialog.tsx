@@ -86,8 +86,10 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
       resetForm();
       onSuccess();
       onOpenChange(false);
-    } catch (_error) {
-      showToast("Failed to start crawl", "error");
+    } catch (error) {
+      // Display the actual error message from backend
+      const message = error instanceof Error ? error.message : "Failed to start crawl";
+      showToast(message, "error");
     }
   };
 
@@ -110,12 +112,16 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
         onCrawlStarted(response.progressId);
       }
 
-      showToast("Document uploaded successfully", "success");
+      // Upload happens in background - show appropriate message
+      showToast(`Upload started for ${selectedFile.name}. Processing in background...`, "info");
       resetForm();
-      onSuccess();
+      // Don't call onSuccess here - the upload hasn't actually succeeded yet
+      // onSuccess should be called when polling shows completion
       onOpenChange(false);
-    } catch (_error) {
-      showToast("Failed to upload document", "error");
+    } catch (error) {
+      // Display the actual error message from backend
+      const message = error instanceof Error ? error.message : "Failed to upload document";
+      showToast(message, "error");
     }
   };
 

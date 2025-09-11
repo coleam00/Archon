@@ -851,7 +851,13 @@ async def _perform_upload_with_progress(
             safe_logfire_info(
                 f"Document text extracted | filename={filename} | extracted_length={len(extracted_text)} | content_type={content_type}"
             )
+        except ValueError as ex:
+            # ValueError indicates unsupported format or empty file - user error
+            logger.warning(f"Document validation failed: {filename} - {str(ex)}")
+            await tracker.error(str(ex))
+            return
         except Exception as ex:
+            # Other exceptions are system errors - log with full traceback
             logger.error(f"Failed to extract text from document: {filename}", exc_info=True)
             await tracker.error(f"Failed to extract text from document: {str(ex)}")
             return

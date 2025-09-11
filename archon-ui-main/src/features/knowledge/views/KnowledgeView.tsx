@@ -53,23 +53,32 @@ export const KnowledgeView = () => {
   const { showToast } = useToast();
   const previousOperations = useRef<ActiveOperation[]>([]);
 
-  // Track crawl completions for toast notifications
+  // Track crawl completions and errors for toast notifications
   useEffect(() => {
-    // Find operations that just completed
-    const completedOps = previousOperations.current.filter((prevOp) => {
+    // Find operations that just completed or failed
+    const finishedOps = previousOperations.current.filter((prevOp) => {
       const currentOp = activeOperations.find((op) => op.operation_id === prevOp.operation_id);
-      return !currentOp && ["crawling", "processing", "document_storage", "completed"].includes(prevOp.status);
+      // Operation disappeared from active list - check its final status
+      return !currentOp && ["crawling", "processing", "storing", "document_storage", "completed", "error", "failed"].includes(prevOp.status);
     });
 
-    // Show toast for each completed operation
-    completedOps.forEach((op) => {
-      const message = op.message || "Operation completed";
-      showToast(`✅ ${message}`, "success", 5000);
+    // Show toast for each finished operation
+    finishedOps.forEach((op) => {
+      // Check if it was an error or success
+      if (op.status === "error" || op.status === "failed") {
+        // Show error message with details
+        const errorMessage = op.message || op.error || "Operation failed";
+        showToast(`❌ ${errorMessage}`, "error", 7000);
+      } else if (op.status === "completed") {
+        // Show success message
+        const message = op.message || "Operation completed";
+        showToast(`✅ ${message}`, "success", 5000);
+      }
 
       // Remove from active crawl IDs
       setActiveCrawlIds((prev) => prev.filter((id) => id !== op.operation_id));
 
-      // Refetch summaries after completion
+      // Refetch summaries after any completion
       refetch();
     });
 
