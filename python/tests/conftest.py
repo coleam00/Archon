@@ -150,18 +150,16 @@ def client(mock_supabase_client):
                 return_value=mock_supabase_client,
             ):
                 with patch("supabase.create_client", return_value=mock_supabase_client):
-                    # Import app after patching to ensure mocks are used
-                    from src.server.main import app
-                    import src.server.main
-                    
-                    # Mark initialization as complete for testing
-                    src.server.main._initialization_complete = True
-                    
+                    from unittest.mock import AsyncMock
+                    import src.server.main as server_main
+
+                    # Mark initialization as complete for testing (before accessing app)
+                    server_main._initialization_complete = True
+                    app = server_main.app
+
                     # Mock the schema check to always return valid
-                    async def mock_schema_check():
-                        return {"valid": True, "message": "Schema is up to date"}
-                    
-                    with patch("src.server.main._check_database_schema", side_effect=mock_schema_check):
+                    mock_schema_check = AsyncMock(return_value={"valid": True, "message": "Schema is up to date"})
+                    with patch("src.server.main._check_database_schema", new=mock_schema_check):
                         return TestClient(app)
 
 
