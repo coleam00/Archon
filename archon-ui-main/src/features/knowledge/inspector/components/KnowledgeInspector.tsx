@@ -98,10 +98,10 @@ export const KnowledgeInspector: React.FC<KnowledgeInspectorProps> = ({ item, op
           id: doc.id || "",
           content: doc.content || "",
           metadata: {
-            title: doc.metadata?.title,
-            section: doc.metadata?.section,
+            title: doc.title || doc.metadata?.title,
+            section: doc.section || doc.metadata?.section,
             relevance_score: doc.metadata?.relevance_score,
-            url: doc.metadata?.url,
+            url: doc.url || doc.metadata?.url,
             tags: doc.metadata?.tags,
           },
         });
