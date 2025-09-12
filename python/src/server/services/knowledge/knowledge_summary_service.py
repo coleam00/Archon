@@ -52,9 +52,9 @@ class KnowledgeSummaryService:
         try:
             safe_logfire_info(f"Fetching knowledge summaries | page={page} | per_page={per_page}")
             
-            # Build base query - select only needed fields
+            # Build base query - select only needed fields, including source_url
             query = self.supabase.from_("archon_sources").select(
-                "source_id, title, summary, metadata, created_at, updated_at"
+                "source_id, title, summary, metadata, source_url, created_at, updated_at"
             )
             
             # Apply filters
@@ -114,8 +114,14 @@ class KnowledgeSummaryService:
                     source_id = source["source_id"]
                     metadata = source.get("metadata", {})
                     
-                    # Determine source type from metadata or URL
-                    first_url = first_urls.get(source_id, f"source://{source_id}")
+                    # Use the original source_url from the source record (the URL the user entered)
+                    # Fall back to first crawled page URL, then to source:// format as last resort
+                    source_url = source.get("source_url")
+                    if source_url:
+                        first_url = source_url
+                    else:
+                        first_url = first_urls.get(source_id, f"source://{source_id}")
+                    
                     source_type = metadata.get("source_type", "file" if first_url.startswith("file://") else "url")
                     
                     # Extract knowledge_type - check metadata first, otherwise default based on source content

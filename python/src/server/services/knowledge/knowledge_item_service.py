@@ -136,18 +136,24 @@ class KnowledgeItemService:
                 source_id = source["source_id"]
                 source_metadata = source.get("metadata", {})
 
-                # Use batched data instead of individual queries
-                first_page_url = first_urls.get(source_id, f"source://{source_id}")
+                # Use the original source_url from the source record (the URL the user entered)
+                # Fall back to first crawled page URL, then to source:// format as last resort
+                source_url = source.get("source_url")
+                if source_url:
+                    display_url = source_url
+                else:
+                    display_url = first_urls.get(source_id, f"source://{source_id}")
+                
                 code_examples_count = code_example_counts.get(source_id, 0)
                 chunks_count = chunk_counts.get(source_id, 0)
 
-                # Determine source type
-                source_type = self._determine_source_type(source_metadata, first_page_url)
+                # Determine source type - use display_url for type detection
+                source_type = self._determine_source_type(source_metadata, display_url)
 
                 item = {
                     "id": source_id,
                     "title": source.get("title", source.get("summary", "Untitled")),
-                    "url": first_page_url,
+                    "url": display_url,
                     "source_id": source_id,
                     "code_examples": [{"count": code_examples_count}]
                     if code_examples_count > 0
