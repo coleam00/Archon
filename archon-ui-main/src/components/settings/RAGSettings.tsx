@@ -1054,20 +1054,38 @@ export const RAGSettings = ({
             >
               {saving ? 'Saving...' : 'Save Settings'}
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                console.log('🔄 Manual credential reload triggered');
-                reloadApiCredentials();
-              }}
-              className="ml-2"
-            >
-              Debug: Reload Credentials
-            </Button>
           </div>
         </div>
 
+        {/* Model Settings Row - Only show for non-Ollama providers */}
+        {ragSettings.LLM_PROVIDER !== 'ollama' && (
+          <div className="grid grid-cols-2 gap-4 mb-6">
+            <div>
+              <Input 
+                label="Chat Model" 
+                value={getDisplayedChatModel(ragSettings)} 
+                onChange={e => setRagSettings({
+                  ...ragSettings,
+                  MODEL_CHOICE: e.target.value
+                })} 
+                placeholder={getModelPlaceholder(ragSettings.LLM_PROVIDER || 'openai')}
+                accentColor="green" 
+              />
+            </div>
+            <div>
+              <Input
+                label="Embedding Model"
+                value={getDisplayedEmbeddingModel(ragSettings)}
+                onChange={e => setRagSettings({
+                  ...ragSettings,
+                  EMBEDDING_MODEL: e.target.value
+                })}
+                placeholder={getEmbeddingPlaceholder(ragSettings.LLM_PROVIDER || 'openai')}
+                accentColor="green"
+              />
+            </div>
+          </div>
+        )}
         
         {/* Second row: Contextual Embeddings, Max Workers, and description */}
         <div className="grid grid-cols-8 gap-4 mb-4 p-4 rounded-lg border border-green-500/20 shadow-[0_2px_8px_rgba(34,197,94,0.1)]">
