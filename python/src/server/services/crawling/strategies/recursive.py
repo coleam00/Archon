@@ -215,11 +215,15 @@ class RecursiveCrawlStrategy:
                     transformed_batch_urls.append(transformed)
                     url_mapping[transformed] = url
 
-                # Calculate progress for this batch within the depth
-                batch_progress = int((batch_idx / len(urls_to_crawl)) * 100)
+                # Calculate overall progress based on URLs actually being crawled at this depth
+                # Use a more accurate progress calculation that accounts for depth
+                urls_at_this_depth = len(urls_to_crawl)
+                progress_within_depth = (batch_idx / urls_at_this_depth) if urls_at_this_depth > 0 else 0
+                # Weight by depth to show overall progress (later depths contribute less)
+                overall_progress = int(((depth + progress_within_depth) / max_depth) * 100)
                 await report_progress(
-                    batch_progress,
-                    f"Depth {depth + 1}: crawling URLs {batch_idx + 1}-{batch_end_idx} of {len(urls_to_crawl)}",
+                    min(overall_progress, 99),  # Never show 100% until actually complete
+                    f"Crawling URLs {batch_idx + 1}-{batch_end_idx} of {len(urls_to_crawl)} at depth {depth + 1}",
                     total_pages=total_discovered,
                     processed_pages=total_processed,
                 )
@@ -283,16 +287,8 @@ class RecursiveCrawlStrategy:
                             f"Failed to crawl {original_url}: {getattr(result, 'error_message', 'Unknown error')}"
                         )
 
-                    # Report progress every few URLs
-                    current_idx = batch_idx + i + 1
-                    if current_idx % 5 == 0 or current_idx == len(urls_to_crawl):
-                        current_progress = int((total_processed / max(total_discovered, 1)) * 100)
-                        await report_progress(
-                            current_progress,
-                            f"Depth {depth + 1}: processed {total_processed}/{total_discovered} URLs",
-                            total_pages=total_discovered,
-                            processed_pages=total_processed,
-                        )
+                    # Skip the confusing "processed X/Y URLs" updates
+                    # The "crawling URLs" message at the start of each batch is more accurate
                     i += 1
                 if cancelled:
                     break
