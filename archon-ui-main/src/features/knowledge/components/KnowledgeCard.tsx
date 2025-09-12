@@ -291,7 +291,7 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
                     color="orange"
                     value={documentCount}
                     size="sm"
-                    ariaLabel="Documents count"
+                    aria-label="Documents count"
                     icon={<FileText className="w-3.5 h-3.5" />}
                   />
                 </div>
@@ -304,7 +304,7 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
                     color="blue"
                     value={codeExamplesCount}
                     size="sm"
-                    ariaLabel="Code examples count"
+                    aria-label="Code examples count"
                     icon={<Code className="w-3.5 h-3.5" />}
                   />
                 </div>

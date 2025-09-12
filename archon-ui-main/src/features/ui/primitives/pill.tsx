@@ -7,7 +7,6 @@ export interface StatPillProps extends React.HTMLAttributes<HTMLDivElement> {
   color?: PillColor;
   value: number | string;
   icon?: React.ReactNode;
-  ariaLabel?: string;
   size?: "sm" | "md";
 }
 
@@ -70,7 +69,6 @@ export const StatPill: React.FC<StatPillProps> = ({
   color = "blue",
   value,
   icon,
-  ariaLabel,
   size = "sm",
   className,
   ...props
@@ -89,8 +87,6 @@ export const StatPill: React.FC<StatPillProps> = ({
         SIZE_MAP[size],
         className,
       )}
-      role="status"
-      aria-label={ariaLabel}
       {...props}
     >
       {icon && (
