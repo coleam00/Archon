@@ -120,9 +120,12 @@ class DocumentStorageService(BaseStorageService):
                     source_id,
                     source_summary,
                     total_word_count,
-                    file_content[:1000],  # content for title generation
-                    knowledge_type,      # Pass knowledge_type parameter!
-                    tags,               # FIX: Pass tags parameter!
+                    content=file_content[:1000],  # content for title generation
+                    knowledge_type=knowledge_type,
+                    tags=tags,
+                    source_url=f"file://{filename}",
+                    source_display_name=filename,
+                    source_type="file",  # Mark as file upload
                 )
 
                 await report_progress("Storing document chunks...", 70)

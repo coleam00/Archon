@@ -110,7 +110,7 @@ export const KnowledgeCardActions: React.FC<KnowledgeCardActionsProps> = ({
             {isRefreshing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <MoreHorizontal className="w-4 h-4" />}
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="glass-morphism w-48">
+        <DropdownMenuContent align="end" className="w-48">
           <DropdownMenuItem onClick={handleViewDocuments}>
             <Eye className="w-4 h-4 mr-2" />
             View Documents

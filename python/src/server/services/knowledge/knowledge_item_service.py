@@ -155,6 +155,7 @@ class KnowledgeItemService:
                     "title": source.get("title", source.get("summary", "Untitled")),
                     "url": display_url,
                     "source_id": source_id,
+                    "source_type": source_type,  # Add top-level source_type field
                     "code_examples": [{"count": code_examples_count}]
                     if code_examples_count > 0
                     else [],  # Minimal array just for count display

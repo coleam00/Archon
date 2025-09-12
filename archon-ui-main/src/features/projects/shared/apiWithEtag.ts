@@ -4,16 +4,16 @@
  */
 
 import { ProjectServiceError } from "./api";
-
-// API configuration
-const API_BASE_URL = "/api";
+import { API_BASE_URL } from "../../../config/api";
 
 // ETag and data cache stores - ensure they're initialized
 const etagCache = typeof Map !== "undefined" ? new Map<string, string>() : null;
 const dataCache = typeof Map !== "undefined" ? new Map<string, unknown>() : null;
 
 // Debug flag for console logging (only in dev or when VITE_SHOW_DEVTOOLS is enabled)
-const ETAG_DEBUG = typeof import.meta !== "undefined" && import.meta.env?.DEV === true;
+const ETAG_DEBUG =
+  typeof import.meta !== "undefined" &&
+  (import.meta.env?.DEV === true || import.meta.env?.VITE_SHOW_DEVTOOLS === "true");
 
 /**
  * Build full URL with test environment handling

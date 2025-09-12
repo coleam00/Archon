@@ -64,7 +64,7 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({ sourceId, open
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl h-[80vh] flex flex-col glass-morphism">
+      <DialogContent className="max-w-4xl h-[80vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>Document Browser</DialogTitle>
           <div className="flex items-center gap-2 mt-4">
@@ -86,7 +86,7 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({ sourceId, open
           onValueChange={(v) => setActiveTab(v as "documents" | "code")}
           className="flex-1 flex flex-col"
         >
-          <TabsList className="glass-morphism">
+          <TabsList className="">
             <TabsTrigger value="documents" className="data-[state=active]:bg-cyan-500/20">
               <FileText className="w-4 h-4 mr-2" />
               Documents ({filteredChunks.length})

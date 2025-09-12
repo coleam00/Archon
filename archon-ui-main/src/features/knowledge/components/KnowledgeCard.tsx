@@ -43,8 +43,9 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
 
   // Determine card styling based on type and status
   // Check if it's a real URL (not a file:// URL)
-  const isUrl =
-    (item.source_type === "url" || item.metadata?.source_type === "url") && !item.url?.startsWith("file://");
+  // Prioritize top-level source_type over metadata source_type
+  const sourceType = item.source_type || item.metadata?.source_type;
+  const isUrl = sourceType === "url" && !item.url?.startsWith("file://");
   // const isFile = item.metadata?.source_type === "file" || item.url?.startsWith('file://'); // Currently unused
   // Check both top-level and metadata for knowledge_type (for compatibility)
   const isTechnical = item.knowledge_type === "technical" || item.metadata?.knowledge_type === "technical";

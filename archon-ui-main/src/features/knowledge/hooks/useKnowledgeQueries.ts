@@ -280,22 +280,175 @@ export function useCrawlUrl() {
 }
 
 /**
- * Upload document mutation
+ * Upload document mutation with optimistic updates
  */
 export function useUploadDocument() {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
 
-  return useMutation({
+  return useMutation<
+    { progressId: string; message: string },
+    Error,
+    { file: File; metadata: UploadMetadata },
+    {
+      previousSummaries?: Array<[readonly unknown[], KnowledgeItemsResponse | undefined]>;
+      previousOperations?: ActiveOperationsResponse;
+      tempProgressId: string;
+      tempItemId: string;
+    }
+  >({
     mutationFn: ({ file, metadata }: { file: File; metadata: UploadMetadata }) =>
       knowledgeService.uploadDocument(file, metadata),
-    onSuccess: () => {
-      // Invalidate the list to show new items when ready
-      queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
+    onMutate: async ({ file, metadata }) => {
+      // Cancel any outgoing refetches to prevent race conditions
+      await queryClient.cancelQueries({ queryKey: knowledgeKeys.summary() });
+      await queryClient.cancelQueries({ queryKey: progressKeys.list() });
+
+      // Snapshot the previous values for rollback
+      const previousSummaries = queryClient.getQueriesData<KnowledgeItemsResponse>({
+        queryKey: knowledgeKeys.summary(),
+      });
+      const previousOperations = queryClient.getQueryData<ActiveOperationsResponse>(progressKeys.list());
+
+      // Generate temporary IDs
+      const tempProgressId = `temp-upload-${Date.now()}`;
+      const tempItemId = `temp-item-${Date.now()}`;
+
+      // Create optimistic knowledge item for the upload
+      const optimisticItem: KnowledgeItem = {
+        id: tempItemId,
+        title: file.name,
+        url: `file://${file.name}`,
+        source_id: tempProgressId,
+        source_type: "file",
+        knowledge_type: metadata.knowledge_type || "technical",
+        status: "processing",
+        document_count: 0,
+        code_examples_count: 0,
+        metadata: {
+          knowledge_type: metadata.knowledge_type || "technical",
+          tags: metadata.tags || [],
+          source_type: "file",
+          status: "processing",
+          description: `Uploading ${file.name}`,
+          filename: file.name,
+        },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      // Add optimistic item to SUMMARIES cache (what the UI uses!)
+      queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summary() }, (old) => {
+        if (!old) {
+          return {
+            items: [optimisticItem],
+            total: 1,
+            page: 1,
+            per_page: 100,
+            pages: 1,
+          };
+        }
+        return {
+          ...old,
+          items: [optimisticItem, ...old.items],
+          total: old.total + 1,
+        };
+      });
+
+      // Create optimistic progress operation for upload
+      const optimisticOperation: ActiveOperation = {
+        operation_id: tempProgressId,
+        operation_type: "upload",
+        status: "starting",
+        progress: 0,
+        message: `Uploading ${file.name}`,
+        started_at: new Date().toISOString(),
+        progressId: tempProgressId,
+        type: "upload",
+        url: `file://${file.name}`,
+        source_id: tempProgressId,
+      };
+
+      // Add optimistic operation to active operations
+      queryClient.setQueryData<ActiveOperationsResponse>(progressKeys.list(), (old) => {
+        if (!old) {
+          return {
+            operations: [optimisticOperation],
+            count: 1,
+            timestamp: new Date().toISOString(),
+          };
+        }
+        return {
+          ...old,
+          operations: [optimisticOperation, ...old.operations],
+          count: old.count + 1,
+        };
+      });
+
+      return { previousSummaries, previousOperations, tempProgressId, tempItemId };
+    },
+    onSuccess: (response, _variables, context) => {
+      // Replace temporary IDs with real ones from the server
+      if (context && response?.progressId) {
+        // Update summaries cache with real progress ID
+        queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summary() }, (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            items: old.items.map((item) => {
+              if (item.id === context.tempItemId) {
+                return {
+                  ...item,
+                  source_id: response.progressId,
+                };
+              }
+              return item;
+            }),
+          };
+        });
+
+        // Update progress operation with real progress ID
+        queryClient.setQueryData<ActiveOperationsResponse>(progressKeys.list(), (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            operations: old.operations.map((op) => {
+              if (op.operation_id === context.tempProgressId) {
+                return {
+                  ...op,
+                  operation_id: response.progressId,
+                  progressId: response.progressId,
+                  source_id: response.progressId,
+                  message: response.message || op.message,
+                };
+              }
+              return op;
+            }),
+          };
+        });
+      }
+
+      // Invalidate queries to get fresh data - with a short delay for fast uploads
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
+        queryClient.invalidateQueries({ queryKey: knowledgeKeys.summary() });
+        queryClient.invalidateQueries({ queryKey: progressKeys.list() });
+      }, 1000);
+
       // Don't show success here - upload is just starting in background
       // Success/failure will be shown via progress polling
     },
-    onError: (error) => {
+    onError: (error, _variables, context) => {
+      // Rollback optimistic updates on error
+      if (context?.previousSummaries) {
+        for (const [queryKey, data] of context.previousSummaries) {
+          queryClient.setQueryData(queryKey, data);
+        }
+      }
+      if (context?.previousOperations) {
+        queryClient.setQueryData(progressKeys.list(), context.previousOperations);
+      }
+
       // Display the actual error message from backend
       const message = error instanceof Error ? error.message : "Failed to upload document";
       showToast(message, "error");
@@ -509,14 +662,24 @@ export function useKnowledgeSummaries(filter?: KnowledgeItemsFilter) {
       // Remove completed operations from tracking
       setActiveCrawlIds((prev) => prev.filter((id) => !completedOps.some((op) => op.progressId === id)));
 
+      // Check if any completed operations are uploads (they complete faster)
+      const hasCompletedUpload = completedOps.some((op) => op.operation_type === "upload" || op.type === "upload");
+
+      // Use shorter delay for uploads (1s) vs crawls (5s) to handle fast operations
+      const delay = hasCompletedUpload ? 1000 : 5000;
+
       // Invalidate after a delay to allow backend database to become consistent
-      // Increased from 2s to 5s to handle database eventual consistency
       const timer = setTimeout(() => {
         // Invalidate all summaries regardless of filter
         queryClient.invalidateQueries({ queryKey: knowledgeKeys.summary() });
         // Also invalidate lists for consistency
         queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
-      }, 5000);
+
+        // For uploads, also refetch immediately to ensure UI shows the item
+        if (hasCompletedUpload) {
+          queryClient.refetchQueries({ queryKey: knowledgeKeys.summary() });
+        }
+      }, delay);
 
       return () => clearTimeout(timer);
     }

@@ -129,7 +129,7 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[600px] glass-morphism">
+      <DialogContent className="sm:max-w-[600px]">
         <DialogHeader>
           <DialogTitle>Add Knowledge</DialogTitle>
           <DialogDescription>Crawl websites or upload documents to expand your knowledge base.</DialogDescription>

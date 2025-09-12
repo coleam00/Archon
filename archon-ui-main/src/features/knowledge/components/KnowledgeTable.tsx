@@ -182,7 +182,7 @@ export const KnowledgeTable: React.FC<KnowledgeTableProps> = ({ items, onViewDoc
                           <MoreHorizontal className="w-4 h-4" />
                         </Button>
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="glass-morphism">
+                      <DropdownMenuContent align="end">
                         <DropdownMenuItem onClick={() => onViewDocument(item.source_id)}>
                           <Eye className="w-4 h-4 mr-2" />
                           View Documents
