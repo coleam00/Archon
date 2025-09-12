@@ -45,8 +45,11 @@ function getCacheKey(endpoint: string, options: RequestInit = {}): string {
 }
 
 /**
- * ETag-aware API call function
+ * ETag-aware API call function for JSON APIs
  * Handles 304 Not Modified responses by returning cached data
+ * 
+ * NOTE: This wrapper is designed for JSON-only API calls.
+ * For file uploads or FormData requests, use fetch() directly.
  */
 export async function callAPIWithETag<T = unknown>(endpoint: string, options: RequestInit = {}): Promise<T> {
   try {
