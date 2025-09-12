@@ -3,7 +3,7 @@
  * Orchestrates split-view design with sidebar navigation and content viewer
  */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { InspectorDialog, InspectorDialogContent, InspectorDialogTitle } from "../../../ui/primitives";
 import type { CodeExample, DocumentChunk, InspectorSelectedItem, KnowledgeItem } from "../../types";
 import { useInspectorPagination } from "../hooks/useInspectorPagination";
@@ -79,49 +79,56 @@ export const KnowledgeInspector: React.FC<KnowledgeInspectorProps> = ({ item, op
     }
   }, [viewMode, currentItems, selectedItem]);
 
-  const handleCopy = async (text: string, id: string) => {
-    await navigator.clipboard.writeText(text);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 2000);
-  };
-
-  const handleItemSelect = (item: DocumentChunk | CodeExample) => {
-    if (viewMode === "documents") {
-      const doc = item as DocumentChunk;
-      setSelectedItem({
-        type: "document",
-        id: doc.id || "",
-        content: doc.content || "",
-        metadata: {
-          title: doc.metadata?.title,
-          section: doc.metadata?.section,
-          relevance_score: doc.metadata?.relevance_score,
-          url: doc.metadata?.url,
-          tags: doc.metadata?.tags,
-        },
-      });
-    } else {
-      const code = item as CodeExample;
-      setSelectedItem({
-        type: "code",
-        id: String(code.id),
-        content: code.content || code.code || "",
-        metadata: {
-          language: code.language,
-          file_path: code.file_path,
-          summary: code.summary,
-          relevance_score: code.metadata?.relevance_score,
-          title: code.title || code.example_name,
-        },
-      });
+  const handleCopy = useCallback(async (text: string, id: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
+    } catch (error) {
+      console.error("Failed to copy to clipboard:", error);
     }
-  };
+  }, []);
 
-  const handleViewModeChange = (mode: ViewMode) => {
+  const handleItemSelect = useCallback(
+    (item: DocumentChunk | CodeExample) => {
+      if (viewMode === "documents") {
+        const doc = item as DocumentChunk;
+        setSelectedItem({
+          type: "document",
+          id: doc.id || "",
+          content: doc.content || "",
+          metadata: {
+            title: doc.metadata?.title,
+            section: doc.metadata?.section,
+            relevance_score: doc.metadata?.relevance_score,
+            url: doc.metadata?.url,
+            tags: doc.metadata?.tags,
+          },
+        });
+      } else {
+        const code = item as CodeExample;
+        setSelectedItem({
+          type: "code",
+          id: String(code.id),
+          content: code.content || code.code || "",
+          metadata: {
+            language: code.language,
+            file_path: code.file_path,
+            summary: code.summary,
+            relevance_score: code.metadata?.relevance_score,
+            title: code.title || code.example_name,
+          },
+        });
+      }
+    },
+    [viewMode],
+  );
+
+  const handleViewModeChange = useCallback((mode: ViewMode) => {
     setViewMode(mode);
     setSelectedItem(null);
     setSearchQuery("");
-  };
+  }, []);
 
   return (
     <InspectorDialog open={open} onOpenChange={onOpenChange}>
