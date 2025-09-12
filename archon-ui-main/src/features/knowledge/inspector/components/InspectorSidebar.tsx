@@ -107,6 +107,7 @@ export const InspectorSidebar: React.FC<InspectorSidebarProps> = ({
                     ? "bg-cyan-500/10 border border-cyan-500/30 ring-1 ring-cyan-500/20"
                     : "border border-transparent",
                 )}
+                role="option"
                 aria-selected={selectedItemId === item.id}
                 aria-label={`${getItemTitle(item)}. ${getItemDescription(item)}`}
               >

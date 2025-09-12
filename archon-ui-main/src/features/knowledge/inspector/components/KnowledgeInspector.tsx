@@ -83,7 +83,7 @@ export const KnowledgeInspector: React.FC<KnowledgeInspectorProps> = ({ item, op
     try {
       await navigator.clipboard.writeText(text);
       setCopiedId(id);
-      setTimeout(() => setCopiedId(null), 2000);
+      setTimeout(() => setCopiedId((v) => (v === id ? null : v)), 2000);
     } catch (error) {
       console.error("Failed to copy to clipboard:", error);
     }
