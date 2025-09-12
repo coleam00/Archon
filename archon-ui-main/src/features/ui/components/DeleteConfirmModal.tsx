@@ -64,7 +64,7 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
   const iconStyles = getIconStyles();
 
   return (
-    <AlertDialog open={open} onOpenChange={onOpenChange || ((o) => !o && onCancel())}>
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent
         variant="destructive"
         className={cn(
@@ -106,10 +106,10 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
           </div>
           <p
             className={cn(
-              "text-gray-700 dark:text-gray-300 mt-2",
-              size === "compact" && "text-sm",
-              size === "large" && "text-base",
-              !size || (size === "default" && "text-base"),
+              "text-gray-700 dark:text-gray-300 mt-2 mb-4",
+              size === "compact" && "text-sm mb-3",
+              size === "large" && "text-base mb-5",
+              !size || (size === "default" && "text-base mb-4"),
             )}
           >
             {MESSAGES[type](itemName)}
