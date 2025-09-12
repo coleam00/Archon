@@ -1459,16 +1459,8 @@ class CodeExtractionService:
 
             return validated_results
         except asyncio.CancelledError:
-            # If cancelled, return default summaries for all blocks
-            default_summaries = []
-            for item in all_code_blocks:
-                block = item["block"]
-                language = block.get("language", "")
-                default_summaries.append({
-                    "example_name": f"Code Example{f' ({language})' if language else ''}",
-                    "summary": "Code example for demonstration purposes.",
-                })
-            return default_summaries
+            # Let the caller handle cancellation (upstream emits the cancel progress)
+            raise
 
     def _prepare_code_examples_for_storage(
         self, all_code_blocks: list[dict[str, Any]], summary_results: list[dict[str, str]]
