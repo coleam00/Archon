@@ -1589,5 +1589,5 @@ class CodeExtractionService:
             return len(storage_data["examples"])
 
         except Exception as e:
-            safe_logfire_error(f"Error storing code examples | error={str(e)}")
-            return 0
+            safe_logfire_error(f"Error storing code examples | error={e}")
+            raise RuntimeError("Failed to store code examples") from e

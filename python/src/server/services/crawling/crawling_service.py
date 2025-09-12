@@ -473,13 +473,28 @@ class CrawlingService:
                             **{k: v for k, v in data.items() if k not in ["status", "progress", "percentage", "log"]}
                         )
 
-                code_examples_count = await self.doc_storage_ops.extract_and_store_code_examples(
-                    crawl_results,
-                    storage_results["url_to_full_document"],
-                    storage_results["source_id"],
-                    code_progress_callback,
-                    self._check_cancellation,
-                )
+                try:
+                    code_examples_count = await self.doc_storage_ops.extract_and_store_code_examples(
+                        crawl_results,
+                        storage_results["url_to_full_document"],
+                        storage_results["source_id"],
+                        code_progress_callback,
+                        self._check_cancellation,
+                    )
+                except RuntimeError as e:
+                    # Code extraction failed, continue crawl with warning
+                    logger.error("Code extraction failed, continuing crawl without code examples", exc_info=True)
+                    safe_logfire_error(f"Code extraction failed | error={e}")
+                    code_examples_count = 0
+                    
+                    # Report code extraction failure to progress tracker
+                    if self.progress_tracker:
+                        await self.progress_tracker.update(
+                            status="code_extraction",
+                            progress=self.progress_mapper.map_progress("code_extraction", 100),
+                            log=f"Code extraction failed: {str(e)}. Continuing crawl without code examples.",
+                            total_pages=total_pages,
+                        )
 
                 # Check for cancellation after code extraction
                 self._check_cancellation()
