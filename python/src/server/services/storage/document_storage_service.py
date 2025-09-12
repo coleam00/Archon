@@ -7,7 +7,6 @@ Handles storage of documents in Supabase with parallel processing support.
 import asyncio
 import os
 from typing import Any
-from urllib.parse import urlparse
 
 from ...config.logfire_config import safe_span, search_logger
 from ..credential_service import credential_service
@@ -63,13 +62,17 @@ async def add_documents_to_supabase(
             rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
             if batch_size is None:
                 batch_size = int(rag_settings.get("DOCUMENT_STORAGE_BATCH_SIZE", "50"))
-            delete_batch_size = int(rag_settings.get("DELETE_BATCH_SIZE", "50"))
+            # Clamp batch sizes to sane minimums to prevent crashes
+            batch_size = max(1, int(batch_size))
+            delete_batch_size = max(1, int(rag_settings.get("DELETE_BATCH_SIZE", "50")))
             # enable_parallel = rag_settings.get("ENABLE_PARALLEL_BATCHES", "true").lower() == "true"
         except Exception as e:
             search_logger.warning(f"Failed to load storage settings: {e}, using defaults")
             if batch_size is None:
                 batch_size = 50
-            delete_batch_size = 50
+            # Ensure defaults are also clamped
+            batch_size = max(1, int(batch_size))
+            delete_batch_size = max(1, 50)
             # enable_parallel = True
 
         # Get unique URLs to delete existing records
@@ -107,7 +110,7 @@ async def add_documents_to_supabase(
             search_logger.warning(f"Batch delete failed: {e}. Trying smaller batches as fallback.")
             # Fallback: delete in smaller batches with rate limiting
             failed_urls = []
-            fallback_batch_size = max(10, delete_batch_size // 5)
+            fallback_batch_size = max(1, min(10, delete_batch_size // 5))
             for i in range(0, len(unique_urls), fallback_batch_size):
                 # Check for cancellation before each fallback delete batch
                 if cancellation_check:
@@ -188,7 +191,7 @@ async def add_documents_to_supabase(
                     max_workers = await credential_service.get_credential(
                         "CONTEXTUAL_EMBEDDINGS_MAX_WORKERS", "4", decrypt=True
                     )
-                    max_workers = int(max_workers)
+                    max_workers = max(1, int(max_workers))
                 except Exception:
                     max_workers = 4
             else:
@@ -226,8 +229,8 @@ async def add_documents_to_supabase(
 
                 # Get contextual embedding batch size from settings
                 try:
-                    contextual_batch_size = int(
-                        rag_settings.get("CONTEXTUAL_EMBEDDING_BATCH_SIZE", "50")
+                    contextual_batch_size = max(
+                        1, int(rag_settings.get("CONTEXTUAL_EMBEDDING_BATCH_SIZE", "50"))
                     )
                 except Exception:
                     contextual_batch_size = 50
@@ -349,13 +352,14 @@ async def add_documents_to_supabase(
                 else:
                     search_logger.warning(f"Could not map embedding back to original text (no remaining index for text: {text[:50]}...)")
                     continue
-                # Use source_id from metadata if available, otherwise extract from URL
-                if batch_metadatas[j].get("source_id"):
-                    source_id = batch_metadatas[j]["source_id"]
-                else:
-                    # Fallback: Extract source_id from URL
-                    parsed_url = urlparse(batch_urls[j])
-                    source_id = parsed_url.netloc or parsed_url.path
+                # Require a valid source_id to maintain referential integrity
+                source_id = batch_metadatas[j].get("source_id")
+                if not source_id:
+                    search_logger.error(
+                        f"Missing source_id, skipping chunk to prevent orphan records | "
+                        f"url={batch_urls[j]} | chunk={batch_chunk_numbers[j]}"
+                    )
+                    continue
 
                 data = {
                     "url": batch_urls[j],
