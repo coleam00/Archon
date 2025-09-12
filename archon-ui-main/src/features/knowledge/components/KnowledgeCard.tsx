@@ -72,30 +72,30 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
 
   const getCardGradient = () => {
     if (activeOperation) {
-      return "from-cyan-900/30 via-cyan-900/15 to-black/40";
+      return "from-cyan-100/60 via-cyan-50/30 to-white/70 dark:from-cyan-900/30 dark:via-cyan-900/15 dark:to-black/40";
     }
     if (hasError) {
-      return "from-red-900/20 via-red-900/10 to-black/30";
+      return "from-red-100/50 via-red-50/25 to-white/60 dark:from-red-900/20 dark:via-red-900/10 dark:to-black/30";
     }
     if (isProcessing) {
-      return "from-yellow-900/20 via-yellow-900/10 to-black/30";
+      return "from-yellow-100/50 via-yellow-50/25 to-white/60 dark:from-yellow-900/20 dark:via-yellow-900/10 dark:to-black/30";
     }
     if (isTechnical) {
       return isUrl
-        ? "from-cyan-900/20 via-cyan-900/10 to-black/30"
-        : "from-purple-900/20 via-purple-900/10 to-black/30";
+        ? "from-cyan-100/50 via-cyan-50/25 to-white/60 dark:from-cyan-900/20 dark:via-cyan-900/10 dark:to-black/30"
+        : "from-purple-100/50 via-purple-50/25 to-white/60 dark:from-purple-900/20 dark:via-purple-900/10 dark:to-black/30";
     }
-    return isUrl ? "from-blue-900/20 via-blue-900/10 to-black/30" : "from-pink-900/20 via-pink-900/10 to-black/30";
+    return isUrl ? "from-blue-100/50 via-blue-50/25 to-white/60 dark:from-blue-900/20 dark:via-blue-900/10 dark:to-black/30" : "from-pink-100/50 via-pink-50/25 to-white/60 dark:from-pink-900/20 dark:via-pink-900/10 dark:to-black/30";
   };
 
   const getBorderColor = () => {
-    if (activeOperation) return "border-cyan-500/50";
-    if (hasError) return "border-red-500/30";
-    if (isProcessing) return "border-yellow-500/30";
+    if (activeOperation) return "border-cyan-600/40 dark:border-cyan-500/50";
+    if (hasError) return "border-red-600/30 dark:border-red-500/30";
+    if (isProcessing) return "border-yellow-600/30 dark:border-yellow-500/30";
     if (isTechnical) {
-      return isUrl ? "border-cyan-500/30" : "border-purple-500/30";
+      return isUrl ? "border-cyan-600/30 dark:border-cyan-500/30" : "border-purple-600/30 dark:border-purple-500/30";
     }
-    return isUrl ? "border-blue-500/30" : "border-pink-500/30";
+    return isUrl ? "border-blue-600/30 dark:border-blue-500/30" : "border-pink-600/30 dark:border-pink-500/30";
   };
 
   // Accent color used for the top glow bar
@@ -103,8 +103,8 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
     if (activeOperation) return "cyan" as const;
     if (hasError) return "red" as const;
     if (isProcessing) return "yellow" as const;
-    if (isTechnical) return (isUrl ? "cyan" : "purple") as const;
-    return (isUrl ? "blue" : "pink") as const;
+    if (isTechnical) return isUrl ? ("cyan" as const) : ("purple" as const);
+    return isUrl ? ("blue" as const) : ("pink" as const);
   };
 
   const accent = (() => {
@@ -179,7 +179,7 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
                 <div
                   className={cn(
                     "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium",
-                    isUrl ? "bg-cyan-500/10 text-cyan-400" : "bg-purple-500/10 text-purple-400",
+                    isUrl ? "bg-cyan-100 text-cyan-700 dark:bg-cyan-500/10 dark:text-cyan-400" : "bg-purple-100 text-purple-700 dark:bg-purple-500/10 dark:text-purple-400",
                   )}
                 >
                   {getSourceIcon()}
@@ -190,7 +190,7 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
                 <div
                   className={cn(
                     "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium",
-                    isTechnical ? "bg-blue-500/10 text-blue-400" : "bg-pink-500/10 text-pink-400",
+                    isTechnical ? "bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400" : "bg-pink-100 text-pink-700 dark:bg-pink-500/10 dark:text-pink-400",
                   )}
                 >
                   {isTechnical ? <Terminal className="w-3.5 h-3.5" /> : <Briefcase className="w-3.5 h-3.5" />}
@@ -222,7 +222,7 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
           </div>
 
           {/* Title */}
-          <h3 className="text-base font-semibold text-white/90 line-clamp-2 mb-2">{item.title}</h3>
+          <h3 className="text-base font-semibold text-gray-900 dark:text-white/90 line-clamp-2 mb-2">{item.title}</h3>
 
           {/* URL/Source */}
           {item.url &&
@@ -232,13 +232,13 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={(e) => e.stopPropagation()}
-                className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-cyan-400 transition-colors mt-2"
+                className="inline-flex items-center gap-1 text-xs text-gray-600 dark:text-gray-400 hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors mt-2"
               >
                 <ExternalLink className="w-3 h-3" />
                 <span className="truncate">{extractDomain(item.url)}</span>
               </a>
             ) : (
-              <div className="inline-flex items-center gap-1 text-xs text-gray-400 mt-2">
+              <div className="inline-flex items-center gap-1 text-xs text-gray-600 dark:text-gray-400 mt-2">
                 <FileText className="w-3 h-3" />
                 <span className="truncate">{item.url.replace("file://", "")}</span>
               </div>
@@ -252,10 +252,10 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
         {activeOperation && <KnowledgeCardProgress operation={activeOperation} />}
 
         {/* Fixed Footer with Stats */}
-        <div className="px-4 py-3 bg-black/30 border-t border-white/10">
+        <div className="px-4 py-3 bg-gray-100/50 dark:bg-black/30 border-t border-gray-200/50 dark:border-white/10">
           <div className="flex items-center justify-between text-xs">
             {/* Left: date */}
-            <div className="flex items-center gap-1 text-gray-400">
+            <div className="flex items-center gap-1 text-gray-600 dark:text-gray-400">
               <Clock className="w-3 h-3" />
               <span className="text-xs">
                 {(() => {
