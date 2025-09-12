@@ -260,7 +260,7 @@ class SinglePageCrawlStrategy:
 
                 # Report completion progress
                 await report_progress(
-                    100,
+                    end_progress,
                     f"Text file crawled successfully: {original_url}",
                     total_pages=1,
                     processed_pages=1
