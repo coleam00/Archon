@@ -112,7 +112,10 @@ export function useUpdateTask(projectId: string) {
       // Optimistically update
       queryClient.setQueryData<Task[]>(taskKeys.all(projectId), (old) => {
         if (!old) return old;
-        return old.map((task) => (task.id === taskId ? { ...task, ...updates } : task));
+        const nowIso = new Date().toISOString();
+        return old.map((task) =>
+          task.id === taskId ? { ...task, ...updates, updated_at: nowIso } : task,
+        );
       });
 
       return { previousTasks };
@@ -129,11 +132,42 @@ export function useUpdateTask(projectId: string) {
       queryClient.invalidateQueries({ queryKey: taskKeys.all(projectId) });
       queryClient.invalidateQueries({ queryKey: projectKeys.taskCounts() });
     },
-    onSuccess: (data, { updates }) => {
-      // Merge server response to keep timestamps and computed fields in sync
-      queryClient.setQueryData<Task[]>(taskKeys.all(projectId), (old) =>
-        old ? old.map((t) => (t.id === data.id ? data : t)) : old,
-      );
+    onSuccess: (data, { updates, taskId }) => {
+      // Smart merge: preserve optimistic updates if server data appears stale
+      queryClient.setQueryData<Task[]>(taskKeys.all(projectId), (old) => {
+        if (!old) return old;
+        
+        return old.map((task) => {
+          if (task.id !== taskId) return task;
+          
+          try {
+            // Compare timestamps to detect stale server responses
+            const serverUpdatedAt = new Date(data.updated_at);
+            const optimisticUpdatedAt = new Date(task.updated_at);
+            
+            // If server data is newer or equal, use it completely
+            if (serverUpdatedAt >= optimisticUpdatedAt) {
+              return data;
+            }
+            
+            // Server data appears stale - merge carefully
+            // Keep server data for computed fields but preserve optimistic updates
+            const mergedTask = {
+              ...data, // Start with server data for computed fields
+              ...updates, // Apply the original updates that were made
+              updated_at: task.updated_at, // Keep the more recent optimistic timestamp
+            };
+            
+            return mergedTask;
+          } catch (timestampError) {
+            // If timestamp parsing fails, fall back to server data
+            // This maintains existing behavior for edge cases
+            console.warn('Failed to parse timestamps for smart merge, using server data:', timestampError);
+            return data;
+          }
+        });
+      });
+      
       // Only invalidate counts if status changed (which affects counts)
       if (updates.status) {
         queryClient.invalidateQueries({ queryKey: projectKeys.taskCounts() });
