@@ -62,12 +62,26 @@ class BatchCrawlStrategy:
         # Load settings from database - fail fast on configuration errors
         try:
             settings = await credential_service.get_credentials_by_category("rag_strategy")
-            batch_size = int(settings.get("CRAWL_BATCH_SIZE", "50"))
+
+            # Clamp batch_size to prevent zero step in range()
+            raw_batch_size = int(settings.get("CRAWL_BATCH_SIZE", "50"))
+            batch_size = max(1, raw_batch_size)
+            if batch_size != raw_batch_size:
+                logger.warning(f"Invalid CRAWL_BATCH_SIZE={raw_batch_size}, clamped to {batch_size}")
+
             if max_concurrent is None:
                 # CRAWL_MAX_CONCURRENT: Pages to crawl in parallel within this single crawl operation
                 # (Different from server-level CONCURRENT_CRAWL_LIMIT which limits total crawl operations)
-                max_concurrent = int(settings.get("CRAWL_MAX_CONCURRENT", "10"))
-            memory_threshold = float(settings.get("MEMORY_THRESHOLD_PERCENT", "80"))
+                raw_max_concurrent = int(settings.get("CRAWL_MAX_CONCURRENT", "10"))
+                max_concurrent = max(1, raw_max_concurrent)
+                if max_concurrent != raw_max_concurrent:
+                    logger.warning(f"Invalid CRAWL_MAX_CONCURRENT={raw_max_concurrent}, clamped to {max_concurrent}")
+
+            # Clamp memory threshold to sane bounds for dispatcher
+            raw_memory_threshold = float(settings.get("MEMORY_THRESHOLD_PERCENT", "80"))
+            memory_threshold = min(99.0, max(10.0, raw_memory_threshold))
+            if memory_threshold != raw_memory_threshold:
+                logger.warning(f"Invalid MEMORY_THRESHOLD_PERCENT={raw_memory_threshold}, clamped to {memory_threshold}")
             check_interval = float(settings.get("DISPATCHER_CHECK_INTERVAL", "0.5"))
         except (ValueError, KeyError, TypeError) as e:
             # Critical configuration errors should fail fast
