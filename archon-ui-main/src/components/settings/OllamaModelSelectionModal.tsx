@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom';
 import { X, Search, RotateCcw, Zap, Server, Eye, Settings, Download, Box } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
-import { useToast } from '../../contexts/ToastContext';
+import { useToast } from '../../features/ui/hooks/useToast';
 
 interface ContextInfo {
   current?: number;
@@ -992,7 +992,7 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
             {/* Sort Options */}
             <div className="flex gap-2">
               <Button
-                variant={sortBy === 'name' ? 'solid' : 'outline'}
+                variant={sortBy === 'name' ? 'primary' : 'outline'}
                 size="sm"
                 onClick={() => setSortBy('name')}
                 className="text-white"
@@ -1000,7 +1000,7 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
                 Name
               </Button>
               <Button
-                variant={sortBy === 'context' ? 'solid' : 'outline'}
+                variant={sortBy === 'context' ? 'primary' : 'outline'}
                 size="sm"
                 onClick={() => setSortBy('context')}
                 className="text-white"
@@ -1008,7 +1008,7 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
                 Context ↓
               </Button>
               <Button
-                variant={sortBy === 'performance' ? 'solid' : 'outline'}
+                variant={sortBy === 'performance' ? 'primary' : 'outline'}
                 size="sm"
                 onClick={() => setSortBy('performance')}
                 className="text-white"
@@ -1023,7 +1023,7 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
             <span className="text-sm text-gray-300">Archon Compatibility:</span>
             <div className="flex gap-2">
               <Button
-                variant={compatibilityFilter === 'all' ? 'solid' : 'outline'}
+                variant={compatibilityFilter === 'all' ? 'primary' : 'outline'}
                 size="sm"
                 onClick={() => setCompatibilityFilter('all')}
                 className="text-white"
@@ -1031,7 +1031,7 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
                 All
               </Button>
               <Button
-                variant={compatibilityFilter === 'full' ? 'solid' : 'outline'}
+                variant={compatibilityFilter === 'full' ? 'primary' : 'outline'}
                 size="sm"
                 onClick={() => setCompatibilityFilter('full')}
                 className="text-green-500 border-green-500"
@@ -1039,7 +1039,7 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
                 ● Full Support
               </Button>
               <Button
-                variant={compatibilityFilter === 'partial' ? 'solid' : 'outline'}
+                variant={compatibilityFilter === 'partial' ? 'primary' : 'outline'}
                 size="sm"
                 onClick={() => setCompatibilityFilter('partial')}
                 className="text-orange-500 border-orange-500"
@@ -1047,7 +1047,7 @@ export const OllamaModelSelectionModal: React.FC<OllamaModelSelectionModalProps>
                 ◐ Partial
               </Button>
               <Button
-                variant={compatibilityFilter === 'limited' ? 'solid' : 'outline'}
+                variant={compatibilityFilter === 'limited' ? 'primary' : 'outline'}
                 size="sm"
                 onClick={() => setCompatibilityFilter('limited')}
                 className="text-red-500 border-red-500"
