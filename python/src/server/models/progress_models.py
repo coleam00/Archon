@@ -123,7 +123,7 @@ class UploadProgressResponse(BaseProgressResponse):
     status: Literal[
         "starting", "reading", "text_extraction", "chunking",
         "source_creation", "summarizing", "storing",
-        "completed", "failed", "cancelled"
+        "completed", "failed", "cancelled", "error"
     ]
 
     # Upload-specific fields
@@ -144,7 +144,7 @@ class ProjectCreationProgressResponse(BaseProgressResponse):
 
     status: Literal[
         "starting", "analyzing", "generating_prp", "creating_tasks",
-        "organizing", "completed", "failed"
+        "organizing", "completed", "failed", "error"
     ]
 
     # Project creation specific
