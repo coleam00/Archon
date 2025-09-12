@@ -118,6 +118,33 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
             )
             logger.info("Google Gemini client created successfully")
 
+        elif provider_name == "azure-openai":
+            if not api_key:
+                raise ValueError("Azure OpenAI API key not found")
+            
+            if not base_url:
+                raise ValueError("Azure OpenAI endpoint URL not found")
+
+            # Get Azure API version from settings, default to stable version
+            if provider:
+                # Explicit provider requested - get from rag_settings
+                api_version = credential_service._get_azure_api_version(rag_settings)
+            else:
+                # Get from cached provider config
+                cache_key = "rag_strategy_settings"
+                rag_settings_for_version = _get_cached_settings(cache_key)
+                if rag_settings_for_version is None:
+                    rag_settings_for_version = await credential_service.get_credentials_by_category("rag_strategy")
+                    _set_cached_settings(cache_key, rag_settings_for_version)
+                api_version = credential_service._get_azure_api_version(rag_settings_for_version)
+
+            client = openai.AsyncOpenAI(
+                api_key=api_key,
+                azure_endpoint=base_url,
+                api_version=api_version
+            )
+            logger.info(f"Azure OpenAI client created successfully with endpoint: {base_url}, API version: {api_version}")
+
         else:
             raise ValueError(f"Unsupported LLM provider: {provider_name}")
 
@@ -178,6 +205,9 @@ async def get_embedding_model(provider: str | None = None) -> str:
         elif provider_name == "google":
             # Google's embedding model
             return "text-embedding-004"
+        elif provider_name == "azure-openai":
+            # Azure OpenAI uses same embedding models as OpenAI
+            return "text-embedding-3-small"
         else:
             # Fallback to OpenAI's model
             return "text-embedding-3-small"
