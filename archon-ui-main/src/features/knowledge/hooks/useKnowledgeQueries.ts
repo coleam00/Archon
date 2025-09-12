@@ -87,6 +87,7 @@ export function useCrawlUrl() {
     CrawlRequest,
     {
       previousKnowledge?: KnowledgeItem[];
+      previousSummaries?: Array<[readonly unknown[], KnowledgeItemsResponse | undefined]>;
       previousOperations?: ActiveOperationsResponse;
       tempProgressId: string;
       tempItemId: string;
@@ -96,10 +97,14 @@ export function useCrawlUrl() {
     onMutate: async (request) => {
       // Cancel any outgoing refetches to prevent race conditions
       await queryClient.cancelQueries({ queryKey: knowledgeKeys.lists() });
+      await queryClient.cancelQueries({ queryKey: knowledgeKeys.summary() });
       await queryClient.cancelQueries({ queryKey: progressKeys.list() });
 
       // Snapshot the previous values for rollback
       const previousKnowledge = queryClient.getQueryData<KnowledgeItem[]>(knowledgeKeys.lists());
+      const previousSummaries = queryClient.getQueriesData<KnowledgeItemsResponse>({
+        queryKey: knowledgeKeys.summary(),
+      });
       const previousOperations = queryClient.getQueryData<ActiveOperationsResponse>(progressKeys.list());
 
       // Generate temporary IDs
@@ -135,6 +140,25 @@ export function useCrawlUrl() {
         return [optimisticItem, ...old];
       });
 
+      // CRITICAL: Also add optimistic item to SUMMARIES cache (what the UI actually uses!)
+      // This ensures the card shows up immediately in the knowledge base view
+      queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summary() }, (old) => {
+        if (!old) {
+          return {
+            items: [optimisticItem],
+            total: 1,
+            page: 1,
+            per_page: 100,
+            pages: 1,
+          };
+        }
+        return {
+          ...old,
+          items: [optimisticItem, ...old.items],
+          total: old.total + 1,
+        };
+      });
+
       // Create optimistic progress operation
       const optimisticOperation: ActiveOperation = {
         operation_id: tempProgressId,
@@ -166,7 +190,7 @@ export function useCrawlUrl() {
       });
 
       // Return context for rollback and replacement
-      return { previousKnowledge, previousOperations, tempProgressId, tempItemId };
+      return { previousKnowledge, previousSummaries, previousOperations, tempProgressId, tempItemId };
     },
     onSuccess: (response, _variables, context) => {
       // Replace temporary IDs with real ones from the server
@@ -185,6 +209,23 @@ export function useCrawlUrl() {
             }
             return item;
           });
+        });
+
+        // Also update summaries cache with real progress ID
+        queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summary() }, (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            items: old.items.map((item) => {
+              if (item.source_id === context.tempProgressId) {
+                return {
+                  ...item,
+                  source_id: response.progressId,
+                };
+              }
+              return item;
+            }),
+          };
         });
 
         // Update progress operation with real progress ID
@@ -221,6 +262,12 @@ export function useCrawlUrl() {
       // Rollback optimistic updates on error
       if (context?.previousKnowledge) {
         queryClient.setQueryData(knowledgeKeys.lists(), context.previousKnowledge);
+      }
+      if (context?.previousSummaries) {
+        // Rollback all summary queries
+        for (const [queryKey, data] of context.previousSummaries) {
+          queryClient.setQueryData(queryKey, data);
+        }
       }
       if (context?.previousOperations) {
         queryClient.setQueryData(progressKeys.list(), context.previousOperations);
@@ -462,11 +509,14 @@ export function useKnowledgeSummaries(filter?: KnowledgeItemsFilter) {
       // Remove completed operations from tracking
       setActiveCrawlIds((prev) => prev.filter((id) => !completedOps.some((op) => op.progressId === id)));
 
-      // Invalidate after a short delay to allow backend to update
+      // Invalidate after a delay to allow backend database to become consistent
+      // Increased from 2s to 5s to handle database eventual consistency
       const timer = setTimeout(() => {
         // Invalidate all summaries regardless of filter
         queryClient.invalidateQueries({ queryKey: knowledgeKeys.summary() });
-      }, 2000);
+        // Also invalidate lists for consistency
+        queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
+      }, 5000);
 
       return () => clearTimeout(timer);
     }
