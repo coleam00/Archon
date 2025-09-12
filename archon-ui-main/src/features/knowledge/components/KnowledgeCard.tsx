@@ -85,7 +85,9 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
         ? "from-cyan-100/50 via-cyan-50/25 to-white/60 dark:from-cyan-900/20 dark:via-cyan-900/10 dark:to-black/30"
         : "from-purple-100/50 via-purple-50/25 to-white/60 dark:from-purple-900/20 dark:via-purple-900/10 dark:to-black/30";
     }
-    return isUrl ? "from-blue-100/50 via-blue-50/25 to-white/60 dark:from-blue-900/20 dark:via-blue-900/10 dark:to-black/30" : "from-pink-100/50 via-pink-50/25 to-white/60 dark:from-pink-900/20 dark:via-pink-900/10 dark:to-black/30";
+    return isUrl
+      ? "from-blue-100/50 via-blue-50/25 to-white/60 dark:from-blue-900/20 dark:via-blue-900/10 dark:to-black/30"
+      : "from-pink-100/50 via-pink-50/25 to-white/60 dark:from-pink-900/20 dark:via-pink-900/10 dark:to-black/30";
   };
 
   const getBorderColor = () => {
@@ -140,9 +142,17 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
   return (
     <motion.div
       className="relative group cursor-pointer"
+      role="button"
+      tabIndex={0}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       onClick={onViewDocument}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onViewDocument();
+        }
+      }}
       whileHover={{ scale: 1.02 }}
       transition={{ duration: 0.2 }}
     >
@@ -179,7 +189,9 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
                 <div
                   className={cn(
                     "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium",
-                    isUrl ? "bg-cyan-100 text-cyan-700 dark:bg-cyan-500/10 dark:text-cyan-400" : "bg-purple-100 text-purple-700 dark:bg-purple-500/10 dark:text-purple-400",
+                    isUrl
+                      ? "bg-cyan-100 text-cyan-700 dark:bg-cyan-500/10 dark:text-cyan-400"
+                      : "bg-purple-100 text-purple-700 dark:bg-purple-500/10 dark:text-purple-400",
                   )}
                 >
                   {getSourceIcon()}
@@ -190,7 +202,9 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
                 <div
                   className={cn(
                     "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium",
-                    isTechnical ? "bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400" : "bg-pink-100 text-pink-700 dark:bg-pink-500/10 dark:text-pink-400",
+                    isTechnical
+                      ? "bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400"
+                      : "bg-pink-100 text-pink-700 dark:bg-pink-500/10 dark:text-pink-400",
                   )}
                 >
                   {isTechnical ? <Terminal className="w-3.5 h-3.5" /> : <Briefcase className="w-3.5 h-3.5" />}
