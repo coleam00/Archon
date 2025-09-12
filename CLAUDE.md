@@ -294,7 +294,20 @@ async def handle_not_found(request, exc):
     )
 ```
 
+<<<<<<< HEAD
+### Important: Environment vs Database Settings
+
+**Critical**: The following settings MUST come from environment variables, NOT the database:
+- `HOST` - Server hostname/domain
+- `PORT` - Server port bindings
+- `BIND_IP` - Network binding interface
+
+These are deployment-specific and should never be loaded from the database settings table. The credential service has been updated to exclude these from database loading to prevent override issues in different deployment environments.
+
+## File Organization
+=======
 ## Polling Architecture
+>>>>>>> 192c45df1197600ef746a77903877a4172f393f2
 
 ### HTTP Polling (replaced Socket.IO)
 
