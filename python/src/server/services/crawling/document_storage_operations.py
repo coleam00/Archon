@@ -316,9 +316,9 @@ class DocumentStorageOperations:
                     safe_logfire_error(
                         f"Both source creation attempts failed for '{source_id}': {str(fallback_error)}"
                     )
-                    raise Exception(
-                        f"Unable to create source record for '{source_id}'. This will cause foreign key violations. Error: {str(fallback_error)}"
-                    )
+                    raise RuntimeError(
+                        f"Unable to create source record for '{source_id}'. This will cause foreign key violations."
+                    ) from fallback_error
 
         # Verify ALL source records exist before proceeding with document storage
         if unique_source_ids:
