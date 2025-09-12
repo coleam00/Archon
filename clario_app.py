@@ -144,6 +144,86 @@ def create_clario_app() -> FastAPI:
     n8n_router = create_n8n_router()
     app.include_router(n8n_router, prefix="/api/n8n", tags=["n8n Integration"])
     
+    # Simple ingestion endpoints for n8n nodes
+    @app.post("/api/ingest/batch")
+    async def ingest_batch_from_n8n(items: List[Dict[str, Any]]):
+        """
+        Receive clean data from n8n nodes (Jira, Notion, Slack, etc.)
+        and process through Archon's proven pipeline.
+        
+        n8n handles: API calls, authentication, data extraction
+        Clario handles: Processing, chunking, embedding, search
+        """
+        try:
+            if not items:
+                return {"success": True, "processed": 0, "message": "No items to process"}
+            
+            # Transform n8n extracted data for Archon processing
+            archon_items = []
+            
+            for item in items:
+                # n8n already extracted everything, we just format for Archon
+                formatted_content = _format_n8n_data_for_search(item)
+                
+                archon_item = {
+                    "url": item.get("url", f"https://unknown/{item.get('id', 'unknown')}"),
+                    "chunk_number": 0,
+                    "content": formatted_content,
+                    "metadata": {
+                        "integration_type": item.get("platform", "unknown"),
+                        "content_type": item.get("type", "document"),
+                        "extracted_by": "n8n_node",
+                        "extracted_at": datetime.utcnow().isoformat(),
+                        "business_metadata": item.get("metadata", {}),
+                        **item.get("metadata", {})  # Include all n8n extracted metadata
+                    }
+                }
+                archon_items.append(archon_item)
+            
+            # Process through Archon's proven document pipeline
+            from python.src.server.services.storage.document_storage_service import add_documents_to_supabase
+            
+            urls = [item["url"] for item in archon_items]
+            chunk_numbers = [item["chunk_number"] for item in archon_items]
+            contents = [item["content"] for item in archon_items]
+            metadatas = [item["metadata"] for item in archon_items]
+            url_to_full_document = {item["url"]: item["content"] for item in archon_items}
+            
+            result = await add_documents_to_supabase(
+                client=search_engine.supabase_client,
+                urls=urls,
+                chunk_numbers=chunk_numbers,
+                contents=contents,
+                metadatas=metadatas,
+                url_to_full_document=url_to_full_document,
+                enable_parallel_batches=True
+            )
+            
+            logger.info(f"Processed {len(items)} items from n8n through Archon pipeline")
+            
+            return {
+                "success": True,
+                "processed": len(items),
+                "archon_result": result,
+                "platforms": list(set(item.get("platform") for item in items)),
+                "message": f"Processed {len(items)} items through Archon pipeline"
+            }
+            
+        except Exception as e:
+            logger.error(f"Batch ingestion failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+    
+    @app.post("/api/ingest/{platform}")
+    async def ingest_platform_data(platform: str, items: List[Dict[str, Any]]):
+        """Platform-specific ingestion endpoint"""
+        
+        # Add platform info to each item
+        for item in items:
+            item["platform"] = platform
+            
+        # Use the batch endpoint
+        return await ingest_batch_from_n8n(items)
+    
     # Founder-friendly search endpoints
     @app.post("/api/search/universal")
     async def universal_search(query: UniversalSearchQuery):
@@ -207,6 +287,81 @@ def create_clario_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=f"Stats failed: {str(e)}")
     
     return app
+
+
+def _format_n8n_data_for_search(item: Dict[str, Any]) -> str:
+    """Format data extracted by n8n nodes for optimal search"""
+    
+    platform = item.get("platform", "unknown")
+    metadata = item.get("metadata", {})
+    
+    if platform == "jira":
+        # Format Jira data extracted by n8n Jira node
+        parts = [
+            f"# {item.get('key', '')}: {item.get('title', '')}",
+            f"**Project:** {metadata.get('project', {}).get('name', '')}",
+            f"**Type:** {metadata.get('issue_type', {}).get('name', '')}",
+            f"**Status:** {metadata.get('status', {}).get('name', '')}",
+        ]
+        
+        if metadata.get('assignee'):
+            parts.append(f"**Assignee:** {metadata['assignee'].get('displayName', '')}")
+        
+        if metadata.get('labels'):
+            parts.append(f"**Labels:** {', '.join(metadata['labels'])}")
+        
+        if item.get("content"):
+            parts.extend(["", "## Description", item["content"]])
+        
+        # Add comments if n8n extracted them
+        if metadata.get("comments"):
+            parts.append("\n## Comments")
+            for comment in metadata["comments"][:3]:  # Latest 3 comments
+                author = comment.get("author", {}).get("displayName", "Unknown")
+                body = comment.get("body", "")[:200]
+                parts.append(f"**{author}:** {body}...")
+                
+    elif platform == "notion":
+        # Format Notion data extracted by n8n Notion node
+        parts = [
+            f"# {item.get('title', 'Notion Page')}",
+            f"**Platform:** Notion",
+            f"**Workspace:** {metadata.get('workspace', '')}",
+        ]
+        
+        if item.get("content"):
+            parts.extend(["", "## Content", item["content"]])
+            
+    elif platform == "slack":
+        # Format Slack data extracted by n8n Slack node
+        channel = metadata.get("channel", {}).get("name", "unknown")
+        user = metadata.get("user", {}).get("name", "Unknown")
+        
+        parts = [
+            f"# Message in #{channel}",
+            f"**Author:** {user}",
+            f"**Channel:** #{channel}",
+            f"**Date:** {metadata.get('ts', '')}",
+        ]
+        
+        if item.get("content"):
+            parts.extend(["", "## Message", item["content"]])
+    
+    else:
+        # Generic formatting for other platforms
+        parts = [
+            f"# {item.get('title', 'Content')}",
+            f"**Platform:** {platform.title()}",
+        ]
+        
+        if item.get("content"):
+            parts.extend(["", "## Content", item["content"]])
+    
+    # Add source link
+    if item.get("url"):
+        parts.append(f"\n**Source:** [View in {platform.title()}]({item['url']})")
+    
+    return "\n".join(parts)
 
 
 # Create the application

@@ -1,0 +1,146 @@
+{
+  "name": "Jira Issues to Clario (Clean Integration)",
+  "description": "Uses n8n's pre-built Jira node to extract issues and send to Clario for Archon processing",
+  "meta": {
+    "templateId": "jira-clario-integration"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "resource": "issue",
+        "operation": "getAll",
+        "jql": "project = AUTH AND updated >= -7d ORDER BY updated DESC",
+        "additionalFields": {
+          "fields": [
+            "summary",
+            "description", 
+            "issuetype",
+            "status",
+            "priority",
+            "assignee",
+            "reporter",
+            "project",
+            "created",
+            "updated",
+            "labels",
+            "components",
+            "comment"
+          ]
+        }
+      },
+      "id": "jira-extract",
+      "name": "Extract Jira Issues",
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [400, 200],
+      "credentials": {
+        "jiraApi": {
+          "id": "jira-credentials",
+          "name": "Jira API (company.atlassian.net)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// n8n Jira node extracted everything, now format for Clario\nconst issues = $input.all();\n\nreturn issues.map(item => {\n  const issue = item.json;\n  const fields = issue.fields;\n  \n  return {\n    platform: \"jira\",\n    type: \"issue\",\n    id: issue.id,\n    key: issue.key,\n    title: fields.summary,\n    content: fields.description || '',\n    url: `https://company.atlassian.net/browse/${issue.key}`,\n    \n    // All the rich metadata n8n extracted for us\n    metadata: {\n      project: {\n        key: fields.project.key,\n        name: fields.project.name\n      },\n      issue_type: {\n        name: fields.issuetype.name,\n        id: fields.issuetype.id\n      },\n      status: {\n        name: fields.status.name,\n        id: fields.status.id\n      },\n      priority: fields.priority ? {\n        name: fields.priority.name,\n        id: fields.priority.id\n      } : null,\n      assignee: fields.assignee ? {\n        displayName: fields.assignee.displayName,\n        emailAddress: fields.assignee.emailAddress\n      } : null,\n      reporter: {\n        displayName: fields.reporter.displayName,\n        emailAddress: fields.reporter.emailAddress\n      },\n      labels: fields.labels || [],\n      components: fields.components?.map(c => c.name) || [],\n      created: fields.created,\n      updated: fields.updated,\n      \n      // Comments if present\n      comments: fields.comment?.comments?.map(comment => ({\n        id: comment.id,\n        body: comment.body,\n        author: comment.author.displayName,\n        created: comment.created\n      })) || []\n    }\n  };\n});"
+      },
+      "id": "format-for-clario",
+      "name": "Format for Clario",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [600, 200]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:8080/api/ingest/batch",
+        "authentication": "genericCredential",
+        "genericAuthType": "httpHeaderAuth",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 30000,
+          "retry": {
+            "enabled": true,
+            "maxTries": 3
+          }
+        }
+      },
+      "id": "send-to-clario",
+      "name": "Send to Clario",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [800, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log success for monitoring\nconst response = $input.item.json;\nconsole.log(`Successfully sent ${response.processed} Jira issues to Clario`);\nconsole.log(`Archon processing result:`, response.archon_result);\n\nreturn {\n  success: true,\n  workflow: \"jira-clario-integration\",\n  processed_items: response.processed,\n  timestamp: new Date().toISOString(),\n  message: `${response.processed} Jira issues now searchable in Founder`\n};"
+      },
+      "id": "log-success",
+      "name": "Log Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 200]
+    }
+  ],
+  "connections": {
+    "Extract Jira Issues": {
+      "main": [
+        [
+          {
+            "node": "Format for Clario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format for Clario": {
+      "main": [
+        [
+          {
+            "node": "Send to Clario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send to Clario": {
+      "main": [
+        [
+          {
+            "node": "Log Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "createdAt": "2024-09-12T00:00:00.000Z",
+      "updatedAt": "2024-09-12T00:00:00.000Z",
+      "id": "clario-integration",
+      "name": "Clario Integration"
+    }
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2024-09-12T00:00:00.000Z",
+  "versionId": "1"
+}
