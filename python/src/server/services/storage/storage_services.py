@@ -160,10 +160,12 @@ class DocumentStorageService(BaseStorageService):
                         code_service = CodeExtractionService(self.supabase_client)
                         
                         # Create crawl_results format expected by code extraction service
+                        # For markdown files, put content in both html and markdown fields
+                        # because the text file extraction path uses html_content preferentially
                         crawl_results = [{
                             "url": doc_url,
                             "markdown": file_content,  # Use full document content as markdown
-                            "html": "",  # No HTML for file uploads
+                            "html": file_content,  # Also provide as HTML for text file extraction
                         }]
                         
                         # Create progress callback for code extraction
