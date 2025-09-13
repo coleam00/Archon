@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import type { Assignee, Task, UseTaskActionsReturn } from "../types";
+import type { Assignee, Task, TaskPriority, UseTaskActionsReturn } from "../types";
 import { useDeleteTask, useUpdateTask } from "./useTaskQueries";
 
 export const useTaskActions = (projectId: string): UseTaskActionsReturn => {
@@ -16,6 +16,17 @@ export const useTaskActions = (projectId: string): UseTaskActionsReturn => {
       updateTaskMutation.mutate({
         taskId,
         updates: { assignee: newAssignee as Assignee },
+      });
+    },
+    [updateTaskMutation],
+  );
+
+  // Priority change handler
+  const changePriority = useCallback(
+    (taskId: string, newPriority: TaskPriority) => {
+      updateTaskMutation.mutate({
+        taskId,
+        updates: { priority: newPriority },
       });
     },
     [updateTaskMutation],
@@ -54,6 +65,7 @@ export const useTaskActions = (projectId: string): UseTaskActionsReturn => {
   return {
     // Actions
     changeAssignee,
+    changePriority,
     initiateDelete,
     confirmDelete,
     cancelDelete,
