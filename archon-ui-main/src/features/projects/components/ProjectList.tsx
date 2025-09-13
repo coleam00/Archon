@@ -99,7 +99,6 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   return (
     <motion.div initial="hidden" animate="visible" className="relative mb-10" variants={itemVariants}>
       <div className="overflow-x-auto overflow-y-visible pb-4 pt-2 pr-3 scrollbar-thin">
-        {/* Padding to prevent glow effect clipping */}
         <ul className="flex gap-4 min-w-max pl-3" aria-label="Projects">
           {sortedProjects.map((project) => (
             <ProjectCard
