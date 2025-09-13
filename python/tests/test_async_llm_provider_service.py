@@ -251,9 +251,12 @@ class TestAsyncLLMProviderService:
         # Mock get_credentials_by_category to raise an exception, simulating Ollama fallback failure
         mock_credential_service.get_credentials_by_category = AsyncMock(side_effect=Exception("Database error"))
 
+        # Mock openai.AsyncOpenAI to fail when creating Ollama client with fallback URL
         with patch(
             "src.server.services.llm_provider_service.credential_service", mock_credential_service
-        ):
+        ), patch("src.server.services.llm_provider_service.openai.AsyncOpenAI") as mock_openai:
+            mock_openai.side_effect = Exception("Connection failed")
+
             with pytest.raises(ValueError, match="OpenAI API key not found and Ollama fallback failed"):
                 async with get_llm_client():
                     pass
