@@ -75,6 +75,86 @@ def _preserve_code_blocks_across_pages(text: str) -> str:
     return text
 
 
+def _clean_html_to_text(html_content: str) -> str:
+    """
+    Clean HTML tags and convert to plain text suitable for RAG.
+    Preserves code blocks and important structure while removing markup.
+    """
+    import re
+    
+    # First preserve code blocks with their content before general cleaning
+    # This ensures code blocks remain intact for extraction
+    code_blocks = []
+    
+    # Find and temporarily replace code blocks to preserve them
+    code_patterns = [
+        r'<pre><code[^>]*>(.*?)</code></pre>',
+        r'<code[^>]*>(.*?)</code>',
+        r'<pre[^>]*>(.*?)</pre>',
+    ]
+    
+    processed_html = html_content
+    placeholder_map = {}
+    
+    for pattern in code_patterns:
+        matches = list(re.finditer(pattern, processed_html, re.DOTALL | re.IGNORECASE))
+        for i, match in enumerate(reversed(matches)):  # Reverse to maintain positions
+            # Extract code content and clean HTML entities
+            code_content = match.group(1)
+            # Clean HTML entities and span tags from code
+            code_content = re.sub(r'<span[^>]*>', '', code_content)
+            code_content = re.sub(r'</span>', '', code_content)
+            code_content = re.sub(r'&lt;', '<', code_content)
+            code_content = re.sub(r'&gt;', '>', code_content)
+            code_content = re.sub(r'&amp;', '&', code_content)
+            code_content = re.sub(r'&quot;', '"', code_content)
+            code_content = re.sub(r'&#39;', "'", code_content)
+            
+            # Create placeholder
+            placeholder = f"__CODE_BLOCK_{len(placeholder_map)}__"
+            placeholder_map[placeholder] = code_content.strip()
+            
+            # Replace in HTML
+            processed_html = processed_html[:match.start()] + placeholder + processed_html[match.end():]
+    
+    # Now clean all remaining HTML tags
+    # Remove script and style content entirely
+    processed_html = re.sub(r'<script[^>]*>.*?</script>', '', processed_html, flags=re.DOTALL | re.IGNORECASE)
+    processed_html = re.sub(r'<style[^>]*>.*?</style>', '', processed_html, flags=re.DOTALL | re.IGNORECASE)
+    
+    # Convert common HTML elements to readable text
+    # Headers
+    processed_html = re.sub(r'<h[1-6][^>]*>(.*?)</h[1-6]>', r'\n\n\1\n\n', processed_html, flags=re.DOTALL | re.IGNORECASE)
+    # Paragraphs
+    processed_html = re.sub(r'<p[^>]*>(.*?)</p>', r'\1\n\n', processed_html, flags=re.DOTALL | re.IGNORECASE)
+    # Line breaks
+    processed_html = re.sub(r'<br\s*/?>', '\n', processed_html, flags=re.IGNORECASE)
+    # List items
+    processed_html = re.sub(r'<li[^>]*>(.*?)</li>', r'• \1\n', processed_html, flags=re.DOTALL | re.IGNORECASE)
+    
+    # Remove all remaining HTML tags
+    processed_html = re.sub(r'<[^>]+>', '', processed_html)
+    
+    # Clean up HTML entities
+    processed_html = re.sub(r'&nbsp;', ' ', processed_html)
+    processed_html = re.sub(r'&lt;', '<', processed_html)
+    processed_html = re.sub(r'&gt;', '>', processed_html)
+    processed_html = re.sub(r'&amp;', '&', processed_html)
+    processed_html = re.sub(r'&quot;', '"', processed_html)
+    processed_html = re.sub(r'&#39;', "'", processed_html)
+    processed_html = re.sub(r'&#x27;', "'", processed_html)
+    
+    # Restore code blocks
+    for placeholder, code_content in placeholder_map.items():
+        processed_html = processed_html.replace(placeholder, f"\n\n```\n{code_content}\n```\n\n")
+    
+    # Clean up excessive whitespace
+    processed_html = re.sub(r'\n\s*\n\s*\n', '\n\n', processed_html)  # Max 2 consecutive newlines
+    processed_html = re.sub(r'[ \t]+', ' ', processed_html)  # Multiple spaces to single space
+    
+    return processed_html.strip()
+
+
 def extract_text_from_document(file_content: bytes, filename: str, content_type: str) -> str:
     """
     Extract text from various document formats.
@@ -102,6 +182,14 @@ def extract_text_from_document(file_content: bytes, filename: str, content_type:
             "application/msword",
         ] or filename.lower().endswith((".docx", ".doc")):
             return extract_text_from_docx(file_content)
+
+        # HTML files - clean tags and extract text
+        elif content_type == "text/html" or filename.lower().endswith((".html", ".htm")):
+            # Decode HTML and clean tags for RAG
+            html_text = file_content.decode("utf-8", errors="ignore").strip()
+            if not html_text:
+                raise ValueError(f"The file {filename} appears to be empty.")
+            return _clean_html_to_text(html_text)
 
         # Text files (markdown, txt, etc.)
         elif content_type.startswith("text/") or filename.lower().endswith((

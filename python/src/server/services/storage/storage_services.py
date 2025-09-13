@@ -162,16 +162,14 @@ class DocumentStorageService(BaseStorageService):
                         code_service = CodeExtractionService(self.supabase_client)
                         
                         # Create crawl_results format expected by code extraction service
-                        # For markdown files, put content in both html and markdown fields
-                        # because the text file extraction path uses html_content preferentially
+                        # file_content is now cleaned text (HTML tags removed, code blocks as markdown)
+                        # For HTML files, the content_type should be text/markdown since it now has markdown format
                         crawl_results = [{
                             "url": doc_url,
-                            "markdown": file_content,  # Use full document content as markdown
-                            "html": file_content,  # Also provide as HTML for text file extraction
+                            "markdown": file_content,  # Use cleaned content (HTML->markdown for HTML files)
+                            "html": file_content,  # Also provide as HTML field for text file extraction
                             "content_type": "application/pdf" if filename.lower().endswith('.pdf') else (
-                                "text/html" if filename.lower().endswith(('.html', '.htm')) else (
-                                    "text/markdown" if filename.lower().endswith('.md') else "text/plain"
-                                )
+                                "text/markdown" if filename.lower().endswith(('.html', '.htm', '.md')) else "text/plain"
                             )
                         }]
                         

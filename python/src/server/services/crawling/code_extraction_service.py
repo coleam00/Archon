@@ -291,15 +291,16 @@ class CodeExtractionService:
                 # Improved extraction logic - check for text files first, then HTML, then markdown
                 code_blocks = []
 
-                # Check if this is a text file (e.g., .txt, .md) or PDF
+                # Check if this is a text file (e.g., .txt, .md, .html after cleaning) or PDF
                 is_text_file = source_url.endswith((
                     ".txt",
                     ".text",
                     ".md",
-                )) or "text/plain" in doc.get("content_type", "")
+                    ".html",
+                    ".htm",
+                )) or "text/plain" in doc.get("content_type", "") or "text/markdown" in doc.get("content_type", "")
                 
                 is_pdf_file = source_url.endswith(".pdf") or "application/pdf" in doc.get("content_type", "")
-                is_html_file = source_url.endswith((".html", ".htm")) or "text/html" in doc.get("content_type", "")
 
                 if is_text_file:
                     # For text files, use specialized text extraction
@@ -337,19 +338,7 @@ class CodeExtractionService:
                     else:
                         safe_logfire_info(f"⚠️ NO CONTENT for PDF file | url={source_url}")
 
-                # If this is an HTML file, use HTML extraction
-                elif is_html_file:
-                    safe_logfire_info(f"🌐 HTML FILE DETECTED | url={source_url}")
-                    # For HTML files, use the HTML content directly
-                    html_text = html_content if html_content else md
-                    if html_text:
-                        safe_logfire_info(f"📝 Using {'HTML' if html_content else 'MARKDOWN'} content for HTML extraction | length={len(html_text)}")
-                        code_blocks = await self._extract_html_code_blocks(html_text)
-                        safe_logfire_info(f"📦 HTML extraction complete | found={len(code_blocks)} blocks | url={source_url}")
-                    else:
-                        safe_logfire_info(f"⚠️ NO CONTENT for HTML file | url={source_url}")
-
-                # If not a text file, PDF, or HTML, or no code blocks found, try HTML extraction as fallback
+                # If not a text file or PDF, or no code blocks found, try HTML extraction as fallback
                 if len(code_blocks) == 0 and html_content and not is_text_file:
                     safe_logfire_info(
                         f"Trying HTML extraction first | url={source_url} | html_length={len(html_content)}"
