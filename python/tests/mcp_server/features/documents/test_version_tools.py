@@ -38,10 +38,10 @@ async def test_create_version_success(mock_mcp, mock_context):
     """Test successful version creation."""
     register_version_tools(mock_mcp)
 
-    # Get the create_version function
-    create_version = mock_mcp._tools.get("create_version")
+    # Get the manage_version function
+    manage_version = mock_mcp._tools.get("manage_version")
 
-    assert create_version is not None, "create_version tool not registered"
+    assert manage_version is not None, "manage_version tool not registered"
 
     # Mock HTTP response
     mock_response = MagicMock()
@@ -56,8 +56,9 @@ async def test_create_version_success(mock_mcp, mock_context):
         mock_async_client.post.return_value = mock_response
         mock_client.return_value.__aenter__.return_value = mock_async_client
 
-        result = await create_version(
+        result = await manage_version(
             mock_context,
+            action="create",
             project_id="project-123",
             field_name="docs",
             content=[{"id": "doc-1", "title": "Test Doc"}],
@@ -66,8 +67,8 @@ async def test_create_version_success(mock_mcp, mock_context):
 
         result_data = json.loads(result)
         assert result_data["success"] is True
-        assert result_data["version_number"] == 3
-        assert "Version 3 created successfully" in result_data["message"]
+        assert result_data["version"]["version_number"] == 3
+        assert "Version created successfully" in result_data["message"]
 
 
 @pytest.mark.asyncio
@@ -75,7 +76,7 @@ async def test_create_version_invalid_field(mock_mcp, mock_context):
     """Test version creation with invalid field name."""
     register_version_tools(mock_mcp)
 
-    create_version = mock_mcp._tools.get("create_version")
+    manage_version = mock_mcp._tools.get("manage_version")
 
     # Mock 400 response for invalid field
     mock_response = MagicMock()
@@ -87,8 +88,8 @@ async def test_create_version_invalid_field(mock_mcp, mock_context):
         mock_async_client.post.return_value = mock_response
         mock_client.return_value.__aenter__.return_value = mock_async_client
 
-        result = await create_version(
-            mock_context, project_id="project-123", field_name="invalid", content={"test": "data"}
+        result = await manage_version(
+            mock_context, action="create", project_id="project-123", field_name="invalid", content={"test": "data"}
         )
 
         result_data = json.loads(result)
@@ -98,7 +99,7 @@ async def test_create_version_invalid_field(mock_mcp, mock_context):
         assert isinstance(result_data["error"], dict), (
             "Error should be structured format, not string"
         )
-        assert result_data["error"]["type"] == "validation_error"
+        assert result_data["error"]["type"] == "http_error"
 
 
 @pytest.mark.asyncio
@@ -106,10 +107,10 @@ async def test_restore_version_success(mock_mcp, mock_context):
     """Test successful version restoration."""
     register_version_tools(mock_mcp)
 
-    # Get the restore_version function
-    restore_version = mock_mcp._tools.get("restore_version")
+    # Get the manage_version function
+    manage_version = mock_mcp._tools.get("manage_version")
 
-    assert restore_version is not None, "restore_version tool not registered"
+    assert manage_version is not None, "manage_version tool not registered"
 
     # Mock HTTP response
     mock_response = MagicMock()
@@ -121,28 +122,28 @@ async def test_restore_version_success(mock_mcp, mock_context):
         mock_async_client.post.return_value = mock_response
         mock_client.return_value.__aenter__.return_value = mock_async_client
 
-        result = await restore_version(
+        result = await manage_version(
             mock_context,
+            action="restore",
             project_id="project-123",
             field_name="docs",
             version_number=2,
-            restored_by="test-user",
         )
 
         result_data = json.loads(result)
         assert result_data["success"] is True
-        assert "Version 2 restored successfully" in result_data["message"]
+        assert "restored successfully" in result_data["message"]
 
 
 @pytest.mark.asyncio
-async def test_list_versions_with_filter(mock_mcp, mock_context):
+async def test_find_versions_with_filter(mock_mcp, mock_context):
     """Test listing versions with field name filter."""
     register_version_tools(mock_mcp)
 
-    # Get the list_versions function
-    list_versions = mock_mcp._tools.get("list_versions")
+    # Get the find_versions function
+    find_versions = mock_mcp._tools.get("find_versions")
 
-    assert list_versions is not None, "list_versions tool not registered"
+    assert find_versions is not None, "find_versions tool not registered"
 
     # Mock HTTP response
     mock_response = MagicMock()
@@ -159,7 +160,7 @@ async def test_list_versions_with_filter(mock_mcp, mock_context):
         mock_async_client.get.return_value = mock_response
         mock_client.return_value.__aenter__.return_value = mock_async_client
 
-        result = await list_versions(mock_context, project_id="project-123", field_name="docs")
+        result = await find_versions(mock_context, project_id="project-123", field_name="docs")
 
         result_data = json.loads(result)
         assert result_data["success"] is True

@@ -52,7 +52,7 @@ def register_task_tools(mcp: FastMCP):
     """Register consolidated task management tools with the MCP server."""
 
     @mcp.tool()
-    async def list_tasks(
+    async def find_tasks(
         ctx: Context,
         query: str | None = None,  # Add search capability
         task_id: str | None = None,  # For getting single task
@@ -64,7 +64,7 @@ def register_task_tools(mcp: FastMCP):
         per_page: int = DEFAULT_PAGE_SIZE,  # Use optimized default
     ) -> str:
         """
-        List and search tasks (consolidated: list + search + get).
+        Find and search tasks (consolidated: list + search + get).
         
         Args:
             query: Keyword search in title, description, feature (optional)
@@ -80,10 +80,10 @@ def register_task_tools(mcp: FastMCP):
             JSON array of tasks or single task (optimized payloads for lists)
         
         Examples:
-            list_tasks() # All tasks
-            list_tasks(query="auth") # Search for "auth"
-            list_tasks(task_id="task-123") # Get specific task (full details)
-            list_tasks(filter_by="status", filter_value="todo") # Only todo tasks
+            find_tasks() # All tasks
+            find_tasks(query="auth") # Search for "auth"
+            find_tasks(task_id="task-123") # Get specific task (full details)
+            find_tasks(filter_by="status", filter_value="todo") # Only todo tasks
         """
         try:
             api_url = get_api_url()

@@ -36,7 +36,7 @@ def register_version_tools(mcp: FastMCP):
     """Register consolidated version management tools with the MCP server."""
 
     @mcp.tool()
-    async def list_versions(
+    async def find_versions(
         ctx: Context,
         project_id: str,
         field_name: str | None = None,
@@ -45,7 +45,7 @@ def register_version_tools(mcp: FastMCP):
         per_page: int = DEFAULT_PAGE_SIZE,
     ) -> str:
         """
-        List version history (consolidated: list + get).
+        Find version history (consolidated: list + get).
         
         Args:
             project_id: Project UUID (required)
@@ -58,9 +58,9 @@ def register_version_tools(mcp: FastMCP):
             JSON array of versions or single version
         
         Examples:
-            list_versions(project_id="p-1")  # All versions
-            list_versions(project_id="p-1", field_name="docs")  # Doc versions
-            list_versions(project_id="p-1", field_name="docs", version_number=3)  # Get v3
+            find_versions(project_id="p-1")  # All versions
+            find_versions(project_id="p-1", field_name="docs")  # Doc versions
+            find_versions(project_id="p-1", field_name="docs", version_number=3)  # Get v3
         """
         try:
             api_url = get_api_url()

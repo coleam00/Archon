@@ -54,7 +54,7 @@ def register_project_tools(mcp: FastMCP):
     """Register consolidated project management tools with the MCP server."""
 
     @mcp.tool()
-    async def list_projects(
+    async def find_projects(
         ctx: Context,
         project_id: str | None = None,  # For getting single project
         query: str | None = None,  # Search capability

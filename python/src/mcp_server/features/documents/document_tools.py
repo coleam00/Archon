@@ -36,7 +36,7 @@ def register_document_tools(mcp: FastMCP):
     """Register consolidated document management tools with the MCP server."""
 
     @mcp.tool()
-    async def list_documents(
+    async def find_documents(
         ctx: Context,
         project_id: str,
         document_id: str | None = None,  # For getting single document
@@ -46,7 +46,7 @@ def register_document_tools(mcp: FastMCP):
         per_page: int = DEFAULT_PAGE_SIZE,
     ) -> str:
         """
-        List and search documents (consolidated: list + search + get).
+        Find and search documents (consolidated: list + search + get).
         
         Args:
             project_id: Project UUID (required)
@@ -60,10 +60,10 @@ def register_document_tools(mcp: FastMCP):
             JSON array of documents or single document
         
         Examples:
-            list_documents(project_id="p-1")  # All project docs
-            list_documents(project_id="p-1", query="api")  # Search
-            list_documents(project_id="p-1", document_id="d-1")  # Get one
-            list_documents(project_id="p-1", document_type="spec")  # Filter
+            find_documents(project_id="p-1")  # All project docs
+            find_documents(project_id="p-1", query="api")  # Search
+            find_documents(project_id="p-1", document_id="d-1")  # Get one
+            find_documents(project_id="p-1", document_type="spec")  # Filter
         """
         try:
             api_url = get_api_url()

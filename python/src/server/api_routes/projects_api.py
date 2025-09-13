@@ -659,9 +659,9 @@ async def create_task(request: CreateTaskRequest):
 async def list_tasks(
     status: str | None = None,
     project_id: str | None = None,
-    include_closed: bool = False,
+    include_closed: bool = True,
     page: int = 1,
-    per_page: int = 50,
+    per_page: int = 10,
     exclude_large_fields: bool = False,
     q: str | None = None,  # Search query parameter
 ):

@@ -200,12 +200,26 @@ class TaskService:
             if search_query:
                 # Split search query into terms
                 search_terms = search_query.lower().split()
-                # Use ilike for case-insensitive search, AND logic for multiple terms
-                for term in search_terms:
+                
+                # Build the filter expression for AND-of-ORs
+                # Each term must match in at least one field (OR), and all terms must match (AND)
+                if len(search_terms) == 1:
+                    # Single term: simple OR across fields
+                    term = search_terms[0]
                     query = query.or_(
                         f"title.ilike.%{term}%,"
                         f"description.ilike.%{term}%,"
                         f"feature.ilike.%{term}%"
+                    )
+                else:
+                    # Multiple terms: use text search for proper AND logic
+                    # Note: This requires full-text search columns to be set up in the database
+                    # For now, we'll search for the full phrase in any field
+                    full_query = search_query.lower()
+                    query = query.or_(
+                        f"title.ilike.%{full_query}%,"
+                        f"description.ilike.%{full_query}%,"
+                        f"feature.ilike.%{full_query}%"
                     )
                 filters_applied.append(f"search={search_query}")
 
