@@ -154,6 +154,8 @@ class DocumentStorageService(BaseStorageService):
                     try:
                         await report_progress("Extracting code examples...", 85)
                         
+                        logger.info(f"🔍 DEBUG: Starting code extraction for {filename} | extract_code_examples={extract_code_examples}")
+                        
                         # Import code extraction service
                         from ..crawling.code_extraction_service import CodeExtractionService
                         
@@ -168,8 +170,11 @@ class DocumentStorageService(BaseStorageService):
                             "html": file_content,  # Also provide as HTML for text file extraction
                         }]
                         
+                        logger.info(f"🔍 DEBUG: Created crawl_results with url={doc_url}, content_length={len(file_content)}")
+                        
                         # Create progress callback for code extraction
                         async def code_progress_callback(data: dict):
+                            logger.info(f"🔍 DEBUG: Code extraction progress: {data}")
                             if progress_callback:
                                 # Map code extraction progress (0-100) to our remaining range (85-95)
                                 raw_progress = data.get("progress", data.get("percentage", 0))
@@ -177,6 +182,7 @@ class DocumentStorageService(BaseStorageService):
                                 message = data.get("log", "Extracting code examples...")
                                 await progress_callback(message, int(mapped_progress))
                         
+                        logger.info(f"🔍 DEBUG: About to call extract_and_store_code_examples...")
                         code_examples_count = await code_service.extract_and_store_code_examples(
                             crawl_results=crawl_results,
                             url_to_full_document=url_to_full_document,
@@ -187,11 +193,11 @@ class DocumentStorageService(BaseStorageService):
                             cancellation_check=cancellation_check,
                         )
                         
-                        logger.info(f"Code extraction completed: {code_examples_count} code examples found for {filename}")
+                        logger.info(f"🔍 DEBUG: Code extraction completed: {code_examples_count} code examples found for {filename}")
                         
                     except Exception as e:
-                        # Log error but don't fail the entire upload
-                        logger.error(f"Code extraction failed for {filename}: {e}")
+                        # Log error with full traceback but don't fail the entire upload
+                        logger.error(f"Code extraction failed for {filename}: {e}", exc_info=True)
                         code_examples_count = 0
                 
                 await report_progress("Document upload completed!", 100)
