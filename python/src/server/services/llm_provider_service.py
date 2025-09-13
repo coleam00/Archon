@@ -5,6 +5,7 @@ Provides a unified interface for creating OpenAI-compatible clients for differen
 Supports OpenAI, Ollama, and Google Gemini.
 """
 
+import os
 import time
 from contextlib import asynccontextmanager
 from typing import Any
@@ -94,17 +95,45 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
         logger.info(f"Creating LLM client for provider: {provider_name}")
 
         if provider_name == "openai":
-            if not api_key:
+            # Use centralized OpenAI configuration that honors OPENAI_BASE_URL
+            from ...agents.agent_provider_config import get_openai_client_config
+
+            try:
+                openai_config = await get_openai_client_config()
+                config_api_key = openai_config["api_key"]
+                config_base_url = openai_config["base_url"]
+            except Exception as e:
+                logger.error("Failed to get centralized OpenAI configuration", exc_info=True)
+                raise ValueError("OpenAI configuration error") from e
+            # Use centralized API key if available, fall back to provider-specific key
+            final_api_key = config_api_key or api_key
+            if not final_api_key:
                 raise ValueError("OpenAI API key not found")
 
-            client = openai.AsyncOpenAI(api_key=api_key)
-            logger.info("OpenAI client created successfully")
+            # Use centralized base URL if configured, otherwise use provider-specific base URL
+            final_base_url = config_base_url or base_url
+
+            # Create client with centralized configuration
+            client_kwargs = {
+                "api_key": final_api_key,
+                "timeout": float(os.getenv("OPENAI_TIMEOUT_SECONDS", "60")),
+                "max_retries": int(os.getenv("OPENAI_MAX_RETRIES", "5")),
+            }
+            if final_base_url:
+                client_kwargs["base_url"] = final_base_url
+                logger.info(f"OpenAI client created with custom base URL: {final_base_url}")
+            else:
+                logger.info("OpenAI client created with default URL")
+
+            client = openai.AsyncOpenAI(**client_kwargs)
 
         elif provider_name == "ollama":
             # Ollama requires an API key in the client but doesn't actually use it
             client = openai.AsyncOpenAI(
                 api_key="ollama",  # Required but unused by Ollama
                 base_url=base_url or "http://localhost:11434/v1",
+                timeout=float(os.getenv("OPENAI_TIMEOUT_SECONDS", "60")),
+                max_retries=int(os.getenv("OPENAI_MAX_RETRIES", "5")),
             )
             logger.info(f"Ollama client created successfully with base URL: {base_url}")
 
@@ -115,6 +144,8 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
             client = openai.AsyncOpenAI(
                 api_key=api_key,
                 base_url=base_url or "https://generativelanguage.googleapis.com/v1beta/openai/",
+                timeout=float(os.getenv("OPENAI_TIMEOUT_SECONDS", "60")),
+                max_retries=int(os.getenv("OPENAI_MAX_RETRIES", "5")),
             )
             logger.info("Google Gemini client created successfully")
 
@@ -123,9 +154,11 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
 
         yield client
 
-    except Exception as e:
+    except Exception:
         logger.error(
-            f"Error creating LLM client for provider {provider_name if 'provider_name' in locals() else 'unknown'}: {e}"
+            "Error creating LLM client for provider %s",
+            provider_name if 'provider_name' in locals() else 'unknown',
+            exc_info=True,
         )
         raise
     finally:
