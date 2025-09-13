@@ -73,13 +73,8 @@ EXCEPTION
         RAISE NOTICE 'priority column does not exist yet, skipping comment';
 END $$;
 
--- Backfill existing data based on current task_order values (safe, conditional)
--- Only update tasks that still have the default 'medium' priority to avoid overwriting user changes
--- Map task_order ranges to priority levels:
--- 1-25: critical (highest priority)
--- 26-50: high 
--- 51-75: medium
--- 76+: low (lowest priority)
+-- Set all existing tasks to default priority (clean slate approach)
+-- This truly decouples priority from task_order - no relationship at all
 DO $$ 
 DECLARE 
     updated_count INTEGER;
@@ -88,29 +83,25 @@ BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.columns 
                WHERE table_name = 'archon_tasks' AND column_name = 'priority') THEN
         
-        -- Update only tasks with default priority that haven't been modified by users
+        -- Set all existing tasks to medium priority (clean slate)
+        -- Users can explicitly set priorities as needed after migration
         UPDATE archon_tasks 
-        SET priority = 
-          CASE 
-            WHEN task_order <= 25 THEN 'critical'::task_priority
-            WHEN task_order <= 50 THEN 'high'::task_priority  
-            WHEN task_order <= 75 THEN 'medium'::task_priority
-            ELSE 'low'::task_priority
-          END
-        WHERE priority = 'medium'  -- Only update defaults
-          AND task_order IS NOT NULL  -- Ensure task_order exists
-          AND updated_at = created_at;  -- Only update tasks never modified (fresh records)
+        SET priority = 'medium'::task_priority
+        WHERE priority IS NULL;  -- Only update NULL values, preserve any existing priorities
         
         GET DIAGNOSTICS updated_count = ROW_COUNT;
-        RAISE NOTICE 'Backfilled % tasks with priority based on task_order', updated_count;
+        RAISE NOTICE 'Set % existing tasks to medium priority (clean slate)', updated_count;
     ELSE
-        RAISE NOTICE 'priority column does not exist, skipping backfill';
+        RAISE NOTICE 'priority column does not exist, skipping initialization';
     END IF;
 END $$;
 
--- Note: After this migration, task_order will be used solely for
--- visual positioning in drag-and-drop operations, while priority
--- will be used for semantic importance and filtering
+-- Note: After this migration, task_order and priority are completely independent:
+-- - task_order: Visual positioning in drag-and-drop operations only
+-- - priority: Semantic importance (critical, high, medium, low) only
+-- 
+-- Clean slate approach: All existing tasks start with 'medium' priority
+-- Users can explicitly set priorities as needed - no backward compatibility
 --
 -- This migration is safe to run multiple times and will not conflict
 -- with complete_setup.sql for fresh installations.
