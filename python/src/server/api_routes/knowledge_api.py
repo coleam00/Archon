@@ -55,23 +55,47 @@ active_crawl_tasks: dict[str, asyncio.Task] = {}
 
 def _sanitize_provider_error(error_message: str, provider: str = None) -> str:
     """Sanitize provider-specific error messages to prevent information disclosure."""
-    from ..services.embeddings.provider_error_adapters import ProviderErrorFactory
+    # Simple provider detection and sanitization without complex imports
+    if not isinstance(error_message, str) or not error_message.strip():
+        return "API encountered an error. Please verify your API key."
     
-    if not provider:
-        provider = ProviderErrorFactory.detect_provider_from_error(error_message)
+    if len(error_message) > 2000:
+        return "API encountered an error. Please verify your API key."
     
-    return ProviderErrorFactory.sanitize_provider_error(error_message, provider)
+    sanitized = error_message
+    
+    # Detect and sanitize based on content
+    if 'sk-' in sanitized:
+        words = sanitized.split()
+        for i, word in enumerate(words):
+            if word.startswith('sk-') and len(word) >= 10:  # Any OpenAI-style key
+                words[i] = '[REDACTED_KEY]'
+        sanitized = ' '.join(words)
+    elif 'AIza' in sanitized:
+        words = sanitized.split()
+        for i, word in enumerate(words):
+            if word.startswith('AIza') and len(word) >= 10:  # Google AI key
+                words[i] = '[REDACTED_KEY]'
+        sanitized = ' '.join(words)
+    
+    # Remove URLs
+    import re
+    sanitized = re.sub(r'https?://[^\s]+', '[REDACTED_URL]', sanitized, flags=re.IGNORECASE)
+    
+    return sanitized
 
 
 async def _validate_provider_api_key(provider: str = None) -> None:
     """Validate LLM provider API key before starting operations."""
+    logger.info("🔑 Starting API key validation...")
+    
     try:
         if not provider:
-            provider = "openai"  # Default
+            provider = "openai"
 
         logger.info(f"🔑 Testing {provider.title()} API key with minimal embedding request...")
         
-        # Test API key with minimal embedding request
+        # Test API key with minimal embedding request - this will fail if key is invalid
         from ..services.embeddings.embedding_service import create_embedding
         test_result = await create_embedding(text="test")
         
@@ -90,36 +114,25 @@ async def _validate_provider_api_key(provider: str = None) -> None:
         logger.info(f"✅ {provider.title()} API key validation successful")
 
     except HTTPException:
-        # Re-raise HTTP exceptions (these are our intended errors)
+        # Re-raise our intended HTTP exceptions
+        logger.error("🚨 Re-raising HTTPException from validation")
         raise
     except Exception as e:
+        # This should catch the OpenAI authentication errors
         error_str = str(e)
-        logger.error(f"❌ API key validation exception: {error_str}")
+        logger.error(f"❌ Caught exception during API key validation: {error_str}")
         
-        # Detect authentication errors for any provider
-        if ("401" in error_str and ("invalid" in error_str.lower() or "incorrect" in error_str.lower())):
-            logger.error("🚨 Detected authentication error - blocking operation")
-            raise HTTPException(
-                status_code=401,
-                detail={
-                    "error": f"Invalid {provider.title()} API key",
-                    "message": f"Please verify your {provider.title()} API key in Settings.",
-                    "error_type": "authentication_failed",
-                    "provider": provider
-                }
-            ) from None
-        else:
-            # For other errors, also fail to be safe
-            logger.error("🚨 API key validation failed with other error - blocking operation")
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "error": f"{provider.title()} API validation failed",
-                    "message": f"Unable to validate {provider.title()} API key. Please check your configuration.",
-                    "error_type": "configuration_error",
-                    "provider": provider
-                }
-            ) from None
+        # Always fail for any exception during validation - better safe than sorry
+        logger.error("🚨 API key validation failed - blocking crawl operation")
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "Invalid API key",
+                "message": "Please verify your API key in Settings before starting a crawl.",
+                "error_type": "authentication_failed",
+                "provider": provider or "openai"
+            }
+        ) from None
 
 
 # Request Models
