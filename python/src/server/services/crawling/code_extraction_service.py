@@ -939,56 +939,146 @@ class CodeExtractionService:
         
         code_blocks = []
         
-        # Method 1: Look for import statements and function definitions (high confidence code)
-        # These patterns indicate code blocks even without markdown delimiters
-        code_patterns = [
-            # Python patterns
-            (r'((?:from \w+(?:\.\w+)* import [^\n]+\n)+(?:[^\n]*\n)*?)(?=\n[A-Z][a-z]+|\n#[^#]|\n\n[A-Z]|\Z)', 'python', 'import_block'),
-            (r'((?:^|\n)(def|class|async def) \w+[^\n]*:(?:\n(?:    [^\n]*|[^\n]*#[^\n]*|\s*))*)', 'python', 'function_def'),
-            
-            # Multi-line Python code blocks (indented content)
-            (r'((?:^|\n)(?:from|import) [^\n]+\n(?:(?:^|\n)(?:[a-z_]\w* = [^\n]+|# [^\n]*|\s*))*(?:(?:^|\n)[a-z_]\w*\([^\n]*\)(?:\n(?:    [^\n]*|\s*))*)*)', 'python', 'python_script'),
-            
-            # Configuration files (YAML-like patterns)  
-            (r'((?:^|\n)[\w_]+:\s*\n(?:  [\w_]+: [^\n]+\n)*(?:  [\w_]+:\s*\n(?:    [\w_]+: [^\n]+\n)*)*)', 'yaml', 'config_block'),
-            
-            # Shell/bash commands (multiple commands)
-            (r'((?:^|\n)(?:pip|python|git|cd|source|pytest|npm|yarn) [^\n]+(?:\n(?:pip|python|git|cd|source|pytest|npm|yarn|#) [^\n]+)*)', 'bash', 'shell_commands'),
+        # Get minimum length for validation
+        min_length = await self._get_min_code_length()
+        safe_logfire_info(f"📏 Using min_length: {min_length}")
+        
+        # Method 1: Multi-line code blocks (most comprehensive approach)
+        # Look for blocks of lines that contain code indicators
+        lines = content.split('\n')
+        current_block = []
+        block_start_line = 0
+        
+        # Track what we consider "code-like" lines
+        code_line_patterns = [
+            r'^[a-z_]\w*\s*=\s*.+',  # Variable assignments
+            r'^(from|import)\s+\w+',  # Import statements  
+            r'^(def|class|if|for|while|try|with)\s+',  # Python keywords
+            r'^\s*[a-z_]\w*\([^)]*\)',  # Function calls
+            r'^\s*[a-z_]\w*\.[a-z_]\w*',  # Method calls
+            r'^\s*#\s+\w+',  # Comments
+            r'^\s*(return|break|continue|pass|raise)\b',  # Control flow
+            r'^\s*\w+:\s*$',  # YAML keys
+            r'^\s+\w+:\s+\w+',  # Indented YAML
+            r'^(pip|python|git|cd|npm|yarn|pytest)\s+',  # Shell commands
         ]
         
-        min_length = await self._get_min_code_length()
+        def is_code_like_line(line):
+            line = line.strip()
+            if not line or line.startswith('##') or line.startswith('###'):
+                return False
+            return any(re.search(pattern, line, re.IGNORECASE) for pattern in code_line_patterns)
         
-        for pattern_regex, language, pattern_type in code_patterns:
-            matches = re.finditer(pattern_regex, content, re.MULTILINE | re.DOTALL)
+        def is_likely_prose(line):
+            line = line.strip()
+            # Headers, paragraphs, markdown-style content
+            return (line.startswith('#') or 
+                   line.startswith('*') or
+                   (len(line.split()) > 8 and any(word in line.lower() for word in ['the', 'this', 'that', 'which', 'where', 'when'])))
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i]
             
+            if is_code_like_line(line) and not is_likely_prose(line):
+                # Start of potential code block
+                if not current_block:
+                    block_start_line = i
+                current_block.append(line)
+                
+                # Look ahead to collect consecutive code-like lines
+                j = i + 1
+                while j < len(lines):
+                    next_line = lines[j]
+                    next_stripped = next_line.strip()
+                    
+                    # Allow empty lines within code blocks
+                    if not next_stripped:
+                        current_block.append(next_line)
+                        j += 1
+                        continue
+                    
+                    # Continue if still code-like
+                    if is_code_like_line(next_line) and not is_likely_prose(next_line):
+                        current_block.append(next_line)
+                        j += 1
+                    # Also include lines that look like continuation (indented)
+                    elif next_line.startswith('    ') or next_line.startswith('\t'):
+                        current_block.append(next_line)
+                        j += 1
+                    else:
+                        # End of code block
+                        break
+                
+                # Process the collected block
+                if current_block:
+                    block_text = '\n'.join(current_block).strip()
+                    
+                    if len(block_text) >= min_length:
+                        # Detect language from content
+                        language = self._detect_language_from_content(block_text)
+                        
+                        # Get context
+                        context_start = max(0, block_start_line - 5)
+                        context_end = min(len(lines), j + 5)
+                        context_before = '\n'.join(lines[context_start:block_start_line]).strip()
+                        context_after = '\n'.join(lines[j:context_end]).strip()
+                        
+                        # Clean and validate
+                        cleaned_code = self._clean_code_content(block_text, language)
+                        
+                        if await self._validate_code_quality(cleaned_code, language):
+                            safe_logfire_info(f"✅ PDF multi-line code block | language={language} | length={len(cleaned_code)} | lines={len(current_block)}")
+                            code_blocks.append({
+                                "code": cleaned_code,
+                                "language": language,
+                                "context_before": context_before,
+                                "context_after": context_after,
+                                "full_context": f"{context_before}\n\n{cleaned_code}\n\n{context_after}",
+                                "source_type": "pdf_multiline",
+                            })
+                        else:
+                            safe_logfire_info(f"❌ PDF code block failed validation | language={language} | length={len(cleaned_code)}")
+                    
+                    # Reset for next block
+                    current_block = []
+                
+                # Skip to end of processed block
+                i = j
+            else:
+                # Not a code line, reset block and continue
+                if current_block:
+                    current_block = []
+                i += 1
+        
+        # Method 2: Look for isolated function definitions that might be missed
+        function_patterns = [
+            (r'((?:^|\n)(def|class|async def) \w+[^\n]*:(?:\n(?:    [^\n]*|[^\n]*#[^\n]*|\s*))*)', 'python'),
+            (r'((?:^|\n)function \w+[^\n]*\{(?:[^}]|\}[^}])*\})', 'javascript'),
+        ]
+        
+        for pattern, lang in function_patterns:
+            matches = re.finditer(pattern, content, re.MULTILINE | re.DOTALL)
             for match in matches:
                 code_content = match.group(1).strip()
-                
-                # Skip if too short
-                if len(code_content) < min_length:
-                    continue
+                if len(code_content) >= min_length:
+                    # Get context
+                    start_pos = match.start()
+                    end_pos = match.end()
+                    context_before = content[max(0, start_pos - 500):start_pos].strip()
+                    context_after = content[end_pos:min(len(content), end_pos + 500)].strip()
                     
-                # Get context
-                start_pos = match.start()
-                end_pos = match.end()
-                context_before = content[max(0, start_pos - 500):start_pos].strip()
-                context_after = content[end_pos:min(len(content), end_pos + 500)].strip()
-                
-                # Clean and validate
-                cleaned_code = self._clean_code_content(code_content, language)
-                
-                if await self._validate_code_quality(cleaned_code, language):
-                    safe_logfire_info(f"✅ PDF code block found | type={pattern_type} | language={language} | length={len(cleaned_code)}")
-                    code_blocks.append({
-                        "code": cleaned_code,
-                        "language": language,
-                        "context_before": context_before,
-                        "context_after": context_after,
-                        "full_context": f"{context_before}\n\n{cleaned_code}\n\n{context_after}",
-                        "source_type": f"pdf_{pattern_type}",
-                    })
-                else:
-                    safe_logfire_info(f"❌ PDF code block failed validation | type={pattern_type} | language={language}")
+                    cleaned_code = self._clean_code_content(code_content, lang)
+                    if await self._validate_code_quality(cleaned_code, lang):
+                        safe_logfire_info(f"✅ PDF function definition | language={lang} | length={len(cleaned_code)}")
+                        code_blocks.append({
+                            "code": cleaned_code,
+                            "language": lang,
+                            "context_before": context_before,
+                            "context_after": context_after,
+                            "full_context": f"{context_before}\n\n{cleaned_code}\n\n{context_after}",
+                            "source_type": f"pdf_{lang}_function",
+                        })
         
         safe_logfire_info(f"🔍 PDF CODE EXTRACTION COMPLETE | total_blocks={len(code_blocks)} | url={url}")
         return code_blocks
