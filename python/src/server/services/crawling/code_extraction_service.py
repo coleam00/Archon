@@ -932,156 +932,128 @@ class CodeExtractionService:
         """
         Extract code blocks from PDF-extracted text that lacks markdown formatting.
         PDFs lose markdown delimiters, so we need to detect code patterns in plain text.
+        
+        This uses a much simpler approach - look for distinct code segments separated by prose.
         """
         import re
         
         safe_logfire_info(f"🔍 PDF CODE EXTRACTION START | url={url} | content_length={len(content)}")
         
         code_blocks = []
-        
-        # Get minimum length for validation
         min_length = await self._get_min_code_length()
-        safe_logfire_info(f"📏 Using min_length: {min_length}")
         
-        # Method 1: Multi-line code blocks (most comprehensive approach)
-        # Look for blocks of lines that contain code indicators
-        lines = content.split('\n')
-        current_block = []
-        block_start_line = 0
+        # Split content into paragraphs/sections
+        # Use double newlines and page breaks as natural boundaries
+        sections = re.split(r'\n\n+|--- Page \d+ ---', content)
         
-        # Track what we consider "code-like" lines
-        code_line_patterns = [
-            r'^[a-z_]\w*\s*=\s*.+',  # Variable assignments
-            r'^(from|import)\s+\w+',  # Import statements  
-            r'^(def|class|if|for|while|try|with)\s+',  # Python keywords
-            r'^\s*[a-z_]\w*\([^)]*\)',  # Function calls
-            r'^\s*[a-z_]\w*\.[a-z_]\w*',  # Method calls
-            r'^\s*#\s+\w+',  # Comments
-            r'^\s*(return|break|continue|pass|raise)\b',  # Control flow
-            r'^\s*\w+:\s*$',  # YAML keys
-            r'^\s+\w+:\s+\w+',  # Indented YAML
-            r'^(pip|python|git|cd|npm|yarn|pytest)\s+',  # Shell commands
-        ]
+        safe_logfire_info(f"📄 Split PDF into {len(sections)} sections")
         
-        def is_code_like_line(line):
-            line = line.strip()
-            if not line or line.startswith('##') or line.startswith('###'):
-                return False
-            return any(re.search(pattern, line, re.IGNORECASE) for pattern in code_line_patterns)
-        
-        def is_likely_prose(line):
-            line = line.strip()
-            # Headers, paragraphs, markdown-style content
-            return (line.startswith('#') or 
-                   line.startswith('*') or
-                   (len(line.split()) > 8 and any(word in line.lower() for word in ['the', 'this', 'that', 'which', 'where', 'when'])))
-        
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            
-            if is_code_like_line(line) and not is_likely_prose(line):
-                # Start of potential code block
-                if not current_block:
-                    block_start_line = i
-                current_block.append(line)
+        for i, section in enumerate(sections):
+            section = section.strip()
+            if not section or len(section) < 50:  # Skip very short sections
+                continue
                 
-                # Look ahead to collect consecutive code-like lines
-                j = i + 1
-                while j < len(lines):
-                    next_line = lines[j]
-                    next_stripped = next_line.strip()
-                    
-                    # Allow empty lines within code blocks
-                    if not next_stripped:
-                        current_block.append(next_line)
-                        j += 1
-                        continue
-                    
-                    # Continue if still code-like
-                    if is_code_like_line(next_line) and not is_likely_prose(next_line):
-                        current_block.append(next_line)
-                        j += 1
-                    # Also include lines that look like continuation (indented)
-                    elif next_line.startswith('    ') or next_line.startswith('\t'):
-                        current_block.append(next_line)
-                        j += 1
-                    else:
-                        # End of code block
-                        break
+            # Check if this section looks like code
+            if self._is_pdf_section_code_like(section):
+                safe_logfire_info(f"🔍 Analyzing section {i} as potential code (length: {len(section)})")
                 
-                # Process the collected block
-                if current_block:
-                    block_text = '\n'.join(current_block).strip()
-                    
-                    if len(block_text) >= min_length:
-                        # Detect language from content
-                        language = self._detect_language_from_content(block_text)
-                        
-                        # Get context
-                        context_start = max(0, block_start_line - 5)
-                        context_end = min(len(lines), j + 5)
-                        context_before = '\n'.join(lines[context_start:block_start_line]).strip()
-                        context_after = '\n'.join(lines[j:context_end]).strip()
-                        
-                        # Clean and validate
-                        cleaned_code = self._clean_code_content(block_text, language)
-                        
-                        if await self._validate_code_quality(cleaned_code, language):
-                            safe_logfire_info(f"✅ PDF multi-line code block | language={language} | length={len(cleaned_code)} | lines={len(current_block)}")
-                            code_blocks.append({
-                                "code": cleaned_code,
-                                "language": language,
-                                "context_before": context_before,
-                                "context_after": context_after,
-                                "full_context": f"{context_before}\n\n{cleaned_code}\n\n{context_after}",
-                                "source_type": "pdf_multiline",
-                            })
-                        else:
-                            safe_logfire_info(f"❌ PDF code block failed validation | language={language} | length={len(cleaned_code)}")
-                    
-                    # Reset for next block
-                    current_block = []
+                # Try to detect language
+                language = self._detect_language_from_content(section)
                 
-                # Skip to end of processed block
-                i = j
-            else:
-                # Not a code line, reset block and continue
-                if current_block:
-                    current_block = []
-                i += 1
-        
-        # Method 2: Look for isolated function definitions that might be missed
-        function_patterns = [
-            (r'((?:^|\n)(def|class|async def) \w+[^\n]*:(?:\n(?:    [^\n]*|[^\n]*#[^\n]*|\s*))*)', 'python'),
-            (r'((?:^|\n)function \w+[^\n]*\{(?:[^}]|\}[^}])*\})', 'javascript'),
-        ]
-        
-        for pattern, lang in function_patterns:
-            matches = re.finditer(pattern, content, re.MULTILINE | re.DOTALL)
-            for match in matches:
-                code_content = match.group(1).strip()
-                if len(code_content) >= min_length:
-                    # Get context
-                    start_pos = match.start()
-                    end_pos = match.end()
-                    context_before = content[max(0, start_pos - 500):start_pos].strip()
-                    context_after = content[end_pos:min(len(content), end_pos + 500)].strip()
-                    
-                    cleaned_code = self._clean_code_content(code_content, lang)
-                    if await self._validate_code_quality(cleaned_code, lang):
-                        safe_logfire_info(f"✅ PDF function definition | language={lang} | length={len(cleaned_code)}")
+                # Clean the content
+                cleaned_code = self._clean_code_content(section, language)
+                
+                # Check length after cleaning
+                if len(cleaned_code) >= min_length:
+                    # Validate quality
+                    if await self._validate_code_quality(cleaned_code, language):
+                        # Get context from adjacent sections
+                        context_before = sections[i-1].strip() if i > 0 else ""
+                        context_after = sections[i+1].strip() if i < len(sections)-1 else ""
+                        
+                        safe_logfire_info(f"✅ PDF code section | language={language} | length={len(cleaned_code)}")
                         code_blocks.append({
                             "code": cleaned_code,
-                            "language": lang,
+                            "language": language,
                             "context_before": context_before,
                             "context_after": context_after,
                             "full_context": f"{context_before}\n\n{cleaned_code}\n\n{context_after}",
-                            "source_type": f"pdf_{lang}_function",
+                            "source_type": "pdf_section",
                         })
+                    else:
+                        safe_logfire_info(f"❌ PDF section failed validation | language={language}")
+                else:
+                    safe_logfire_info(f"❌ PDF section too short after cleaning: {len(cleaned_code)} < {min_length}")
+            else:
+                safe_logfire_info(f"📝 Section {i} identified as prose/documentation")
         
         safe_logfire_info(f"🔍 PDF CODE EXTRACTION COMPLETE | total_blocks={len(code_blocks)} | url={url}")
         return code_blocks
+    
+    def _is_pdf_section_code_like(self, section: str) -> bool:
+        """
+        Determine if a PDF section contains code rather than prose.
+        """
+        import re
+        
+        # Count code indicators vs prose indicators
+        code_score = 0
+        prose_score = 0
+        
+        # Code indicators (higher weight for stronger indicators)
+        code_patterns = [
+            (r'\bfrom \w+(?:\.\w+)* import\b', 3),  # Python imports (strong)
+            (r'\bdef \w+\s*\(', 3),  # Function definitions (strong)
+            (r'\bclass \w+\s*[\(:]', 3),  # Class definitions (strong)
+            (r'\w+\s*=\s*\w+\(', 2),  # Function calls assigned (medium)
+            (r'\w+\s*=\s*\[.*\]', 2),  # List assignments (medium)
+            (r'\w+\.\w+\(', 2),  # Method calls (medium)
+            (r'^\s*#[^#]', 1),  # Single-line comments (weak)
+            (r'\bpip install\b', 2),  # Package management (medium)
+            (r'\bpytest\b', 2),  # Testing commands (medium)
+            (r'\bgit clone\b', 2),  # Git commands (medium)
+            (r':\s*\n\s+\w+:', 2),  # YAML structure (medium)
+            (r'\blambda\s+\w+:', 2),  # Lambda functions (medium)
+        ]
+        
+        # Prose indicators  
+        prose_patterns = [
+            (r'\b(the|this|that|these|those|are|is|was|were|will|would|should|could|have|has|had)\b', 1),
+            (r'[.!?]\s+[A-Z]', 2),  # Sentence endings
+            (r'\b(however|therefore|furthermore|moreover|additionally|specifically)\b', 2),
+            (r'\bTable of Contents\b', 3),
+            (r'\bAPI Reference\b', 2),
+        ]
+        
+        # Count patterns
+        for pattern, weight in code_patterns:
+            matches = len(re.findall(pattern, section, re.IGNORECASE | re.MULTILINE))
+            code_score += matches * weight
+            
+        for pattern, weight in prose_patterns:
+            matches = len(re.findall(pattern, section, re.IGNORECASE | re.MULTILINE))
+            prose_score += matches * weight
+        
+        # Additional checks
+        lines = section.split('\n')
+        non_empty_lines = [line.strip() for line in lines if line.strip()]
+        
+        if not non_empty_lines:
+            return False
+            
+        # If section is mostly single words or very short lines, probably not code
+        short_lines = sum(1 for line in non_empty_lines if len(line.split()) < 3)
+        if len(non_empty_lines) > 0 and short_lines / len(non_empty_lines) > 0.7:
+            prose_score += 3
+            
+        # If section has common code structure indicators
+        if any('(' in line and ')' in line for line in non_empty_lines[:5]):
+            code_score += 2
+            
+        safe_logfire_info(f"📊 Section scoring: code_score={code_score}, prose_score={prose_score}")
+        
+        # Code-like if code score significantly higher than prose score
+        return code_score > prose_score and code_score > 2
 
     def _detect_language_from_content(self, code: str) -> str:
         """
