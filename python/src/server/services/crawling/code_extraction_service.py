@@ -291,12 +291,14 @@ class CodeExtractionService:
                 # Improved extraction logic - check for text files first, then HTML, then markdown
                 code_blocks = []
 
-                # Check if this is a text file (e.g., .txt, .md)
+                # Check if this is a text file (e.g., .txt, .md) or PDF
                 is_text_file = source_url.endswith((
                     ".txt",
                     ".text",
                     ".md",
                 )) or "text/plain" in doc.get("content_type", "")
+                
+                is_pdf_file = source_url.endswith(".pdf") or "application/pdf" in doc.get("content_type", "")
 
                 if is_text_file:
                     # For text files, use specialized text extraction
@@ -322,7 +324,19 @@ class CodeExtractionService:
                     else:
                         safe_logfire_info(f"⚠️ NO CONTENT for text file | url={source_url}")
 
-                # If not a text file or no code blocks found, try HTML extraction first
+                # If this is a PDF file, use specialized PDF extraction
+                elif is_pdf_file:
+                    safe_logfire_info(f"📄 PDF FILE DETECTED | url={source_url}")
+                    # For PDFs, use the content that should be PDF-extracted text
+                    pdf_content = html_content if html_content else md
+                    if pdf_content:
+                        safe_logfire_info(f"📝 Using {'HTML' if html_content else 'MARKDOWN'} content for PDF extraction")
+                        code_blocks = await self._extract_pdf_code_blocks(pdf_content, source_url)
+                        safe_logfire_info(f"📦 PDF extraction complete | found={len(code_blocks)} blocks | url={source_url}")
+                    else:
+                        safe_logfire_info(f"⚠️ NO CONTENT for PDF file | url={source_url}")
+
+                # If not a text file or PDF, or no code blocks found, try HTML extraction first
                 if len(code_blocks) == 0 and html_content and not is_text_file:
                     safe_logfire_info(
                         f"Trying HTML extraction first | url={source_url} | html_length={len(html_content)}"
@@ -910,6 +924,73 @@ class CodeExtractionService:
             safe_logfire_info(
                 f"📦 Block {i + 1} summary: language='{block.get('language', '')}', source_type='{block.get('source_type', '')}', length={len(block.get('code', ''))}"
             )
+        return code_blocks
+
+    async def _extract_pdf_code_blocks(
+        self, content: str, url: str
+    ) -> list[dict[str, Any]]:
+        """
+        Extract code blocks from PDF-extracted text that lacks markdown formatting.
+        PDFs lose markdown delimiters, so we need to detect code patterns in plain text.
+        """
+        import re
+        
+        safe_logfire_info(f"🔍 PDF CODE EXTRACTION START | url={url} | content_length={len(content)}")
+        
+        code_blocks = []
+        
+        # Method 1: Look for import statements and function definitions (high confidence code)
+        # These patterns indicate code blocks even without markdown delimiters
+        code_patterns = [
+            # Python patterns
+            (r'((?:from \w+(?:\.\w+)* import [^\n]+\n)+(?:[^\n]*\n)*?)(?=\n[A-Z][a-z]+|\n#[^#]|\n\n[A-Z]|\Z)', 'python', 'import_block'),
+            (r'((?:^|\n)(def|class|async def) \w+[^\n]*:(?:\n(?:    [^\n]*|[^\n]*#[^\n]*|\s*))*)', 'python', 'function_def'),
+            
+            # Multi-line Python code blocks (indented content)
+            (r'((?:^|\n)(?:from|import) [^\n]+\n(?:(?:^|\n)(?:[a-z_]\w* = [^\n]+|# [^\n]*|\s*))*(?:(?:^|\n)[a-z_]\w*\([^\n]*\)(?:\n(?:    [^\n]*|\s*))*)*)', 'python', 'python_script'),
+            
+            # Configuration files (YAML-like patterns)  
+            (r'((?:^|\n)[\w_]+:\s*\n(?:  [\w_]+: [^\n]+\n)*(?:  [\w_]+:\s*\n(?:    [\w_]+: [^\n]+\n)*)*)', 'yaml', 'config_block'),
+            
+            # Shell/bash commands (multiple commands)
+            (r'((?:^|\n)(?:pip|python|git|cd|source|pytest|npm|yarn) [^\n]+(?:\n(?:pip|python|git|cd|source|pytest|npm|yarn|#) [^\n]+)*)', 'bash', 'shell_commands'),
+        ]
+        
+        min_length = await self._get_min_code_length()
+        
+        for pattern_regex, language, pattern_type in code_patterns:
+            matches = re.finditer(pattern_regex, content, re.MULTILINE | re.DOTALL)
+            
+            for match in matches:
+                code_content = match.group(1).strip()
+                
+                # Skip if too short
+                if len(code_content) < min_length:
+                    continue
+                    
+                # Get context
+                start_pos = match.start()
+                end_pos = match.end()
+                context_before = content[max(0, start_pos - 500):start_pos].strip()
+                context_after = content[end_pos:min(len(content), end_pos + 500)].strip()
+                
+                # Clean and validate
+                cleaned_code = self._clean_code_content(code_content, language)
+                
+                if await self._validate_code_quality(cleaned_code, language):
+                    safe_logfire_info(f"✅ PDF code block found | type={pattern_type} | language={language} | length={len(cleaned_code)}")
+                    code_blocks.append({
+                        "code": cleaned_code,
+                        "language": language,
+                        "context_before": context_before,
+                        "context_after": context_after,
+                        "full_context": f"{context_before}\n\n{cleaned_code}\n\n{context_after}",
+                        "source_type": f"pdf_{pattern_type}",
+                    })
+                else:
+                    safe_logfire_info(f"❌ PDF code block failed validation | type={pattern_type} | language={language}")
+        
+        safe_logfire_info(f"🔍 PDF CODE EXTRACTION COMPLETE | total_blocks={len(code_blocks)} | url={url}")
         return code_blocks
 
     def _detect_language_from_content(self, code: str) -> str:

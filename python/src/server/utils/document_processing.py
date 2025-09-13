@@ -166,7 +166,21 @@ def extract_text_from_pdf(file_content: bytes) -> str:
             # If pdfplumber got good results, use them
             if text_content and len("\n".join(text_content).strip()) > 100:
                 combined_text = "\n\n".join(text_content)
-                return _preserve_code_blocks_across_pages(combined_text)
+                logger.info(f"🔍 PDF DEBUG: Extracted {len(text_content)} pages, total length: {len(combined_text)}")
+                logger.info(f"🔍 PDF DEBUG: First 500 chars: {repr(combined_text[:500])}")
+                
+                # Check for backticks before and after processing
+                backtick_count_before = combined_text.count("```")
+                logger.info(f"🔍 PDF DEBUG: Backticks found before processing: {backtick_count_before}")
+                
+                processed_text = _preserve_code_blocks_across_pages(combined_text)
+                backtick_count_after = processed_text.count("```")
+                logger.info(f"🔍 PDF DEBUG: Backticks found after processing: {backtick_count_after}")
+                
+                if backtick_count_after > 0:
+                    logger.info(f"🔍 PDF DEBUG: Sample after processing: {repr(processed_text[:1000])}")
+                
+                return processed_text
 
         except Exception as e:
             logfire.warning(f"pdfplumber extraction failed: {e}, trying PyPDF2")
