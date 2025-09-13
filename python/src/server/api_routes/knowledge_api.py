@@ -53,6 +53,57 @@ crawl_semaphore = asyncio.Semaphore(CONCURRENT_CRAWL_LIMIT)
 active_crawl_tasks: dict[str, asyncio.Task] = {}
 
 
+def _sanitize_provider_error(error_message: str, provider: str = None) -> str:
+    """Sanitize provider-specific error messages to prevent information disclosure."""
+    from ..services.embeddings.provider_error_adapters import ProviderErrorFactory
+    
+    if not provider:
+        provider = ProviderErrorFactory.detect_provider_from_error(error_message)
+    
+    return ProviderErrorFactory.sanitize_provider_error(error_message, provider)
+
+
+async def _validate_provider_api_key(provider: str = None) -> None:
+    """Validate LLM provider API key before starting operations."""
+    from ..services.embeddings.provider_error_adapters import ProviderErrorFactory
+    
+    try:
+        if not provider:
+            provider = "openai"  # Default
+
+        provider_name = ProviderErrorFactory.get_adapter(provider).get_provider_name()
+        
+        # Test API key with minimal embedding request
+        from ..services.embeddings.embedding_service import create_embedding
+        test_result = await create_embedding(text="test")
+        
+        if not test_result:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": f"Invalid {provider_name.title()} API key",
+                    "message": f"Please verify your {provider_name.title()} API key in Settings.",
+                    "error_type": "authentication_failed",
+                    "provider": provider_name
+                }
+            )
+
+    except Exception as e:
+        error_str = str(e)
+        
+        # Detect authentication errors for any provider
+        if ("401" in error_str and ("invalid" in error_str.lower() or "incorrect" in error_str.lower())):
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": f"Invalid {provider.title()} API key",
+                    "message": f"Please verify your {provider.title()} API key in Settings.",
+                    "error_type": "authentication_failed",
+                    "provider": provider
+                }
+            ) from None
+
+
 # Request Models
 class KnowledgeItemRequest(BaseModel):
     url: str
@@ -596,6 +647,9 @@ async def crawl_knowledge_item(request: KnowledgeItemRequest):
     # Basic URL validation
     if not request.url.startswith(("http://", "https://")):
         raise HTTPException(status_code=422, detail="URL must start with http:// or https://")
+
+    # Validate API key before starting expensive operation
+    await _validate_provider_api_key()
 
     try:
         safe_logfire_info(
