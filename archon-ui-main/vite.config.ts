@@ -307,6 +307,18 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
               console.log('🔄 [VITE PROXY] Forwarding:', req.method, req.url, 'to', `http://${proxyHost}:${port}${req.url}`);
             });
           }
+        },
+        // Health check endpoint proxy
+        '/health': {
+          target: `http://${host}:${port}`,
+          changeOrigin: true,
+          secure: false
+        },
+        // Socket.IO specific proxy configuration
+        '/socket.io': {
+          target: `http://${host}:${port}`,
+          changeOrigin: true,
+          ws: true
         }
       },
     },

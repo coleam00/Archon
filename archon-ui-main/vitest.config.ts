@@ -13,7 +13,17 @@ export default defineConfig({
       'src/**/*.test.{ts,tsx}',     // Colocated tests in features
       'src/**/*.spec.{ts,tsx}',
       'tests/**/*.test.{ts,tsx}',   // Tests in tests directory  
-      'tests/**/*.spec.{ts,tsx}'
+      'tests/**/*.spec.{ts,tsx}',
+      'test/components.test.tsx',
+      'test/pages.test.tsx', 
+      'test/user_flows.test.tsx',
+      'test/errors.test.tsx',
+      'test/services/projectService.test.ts',
+      'test/components/project-tasks/DocsTab.integration.test.tsx',
+      'test/config/api.test.ts',
+      'test/components/settings/OllamaConfigurationPanel.test.tsx',
+      'test/components/settings/OllamaInstanceHealthIndicator.test.tsx',
+      'test/components/settings/OllamaModelDiscoveryModal.test.tsx'
     ],
     exclude: ['node_modules', 'dist', '.git', '.cache', 'test.backup', '*.backup/**', 'test-backups'],
     reporters: ['dot', 'json'],

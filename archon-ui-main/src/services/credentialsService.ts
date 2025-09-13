@@ -19,6 +19,9 @@ export interface RagSettings {
   MODEL_CHOICE: string;
   LLM_PROVIDER?: string;
   LLM_BASE_URL?: string;
+  LLM_INSTANCE_NAME?: string;
+  OLLAMA_EMBEDDING_URL?: string;
+  OLLAMA_EMBEDDING_INSTANCE_NAME?: string;
   EMBEDDING_MODEL?: string;
   // Crawling Performance Settings
   CRAWL_BATCH_SIZE?: number;
@@ -51,6 +54,20 @@ export interface CodeExtractionSettings {
   CODE_EXTRACTION_MAX_WORKERS: number;
   CONTEXT_WINDOW_SIZE: number;
   ENABLE_CODE_SUMMARIES: boolean;
+}
+
+export interface OllamaInstance {
+  id: string;
+  name: string;
+  baseUrl: string;
+  isEnabled: boolean;
+  isPrimary: boolean;
+  instanceType?: 'chat' | 'embedding' | 'both';
+  loadBalancingWeight?: number;
+  isHealthy?: boolean;
+  responseTimeMs?: number;
+  modelsAvailable?: number;
+  lastHealthCheck?: string;
 }
 
 import { getApiUrl } from "../config/api";
@@ -152,6 +169,9 @@ class CredentialsService {
       MODEL_CHOICE: "gpt-4.1-nano",
       LLM_PROVIDER: "openai",
       LLM_BASE_URL: "",
+      LLM_INSTANCE_NAME: "",
+      OLLAMA_EMBEDDING_URL: "",
+      OLLAMA_EMBEDDING_INSTANCE_NAME: "",
       EMBEDDING_MODEL: "",
       // Crawling Performance Settings defaults
       CRAWL_BATCH_SIZE: 50,
@@ -180,6 +200,9 @@ class CredentialsService {
             "MODEL_CHOICE",
             "LLM_PROVIDER",
             "LLM_BASE_URL",
+            "LLM_INSTANCE_NAME",
+            "OLLAMA_EMBEDDING_URL",
+            "OLLAMA_EMBEDDING_INSTANCE_NAME",
             "EMBEDDING_MODEL",
             "CRAWL_WAIT_STRATEGY",
           ].includes(cred.key)
@@ -365,6 +388,179 @@ class CredentialsService {
     }
 
     await Promise.all(promises);
+  }
+
+  // Ollama Instance Management
+  async getOllamaInstances(): Promise<OllamaInstance[]> {
+    try {
+      const ollamaCredentials = await this.getCredentialsByCategory('ollama_instances');
+      
+      // Convert credentials to OllamaInstance objects
+      const instances: OllamaInstance[] = [];
+      const instanceMap: Record<string, Partial<OllamaInstance>> = {};
+      
+      // Group credentials by instance ID
+      ollamaCredentials.forEach(cred => {
+        const parts = cred.key.split('_');
+        if (parts.length >= 3 && parts[0] === 'ollama' && parts[1] === 'instance') {
+          const instanceId = parts[2];
+          const field = parts.slice(3).join('_');
+          
+          if (!instanceMap[instanceId]) {
+            instanceMap[instanceId] = { id: instanceId };
+          }
+          
+          // Parse the field value
+          let value: any = cred.value;
+          if (field === 'isEnabled' || field === 'isPrimary' || field === 'isHealthy') {
+            value = cred.value === 'true';
+          } else if (field === 'responseTimeMs' || field === 'modelsAvailable' || field === 'loadBalancingWeight') {
+            value = parseInt(cred.value || '0', 10);
+          }
+          
+          (instanceMap[instanceId] as any)[field] = value;
+        }
+      });
+      
+      // Convert to array and ensure required fields
+      Object.values(instanceMap).forEach(instance => {
+        if (instance.id && instance.name && instance.baseUrl) {
+          instances.push({
+            id: instance.id,
+            name: instance.name,
+            baseUrl: instance.baseUrl,
+            isEnabled: instance.isEnabled ?? true,
+            isPrimary: instance.isPrimary ?? false,
+            instanceType: instance.instanceType ?? 'both',
+            loadBalancingWeight: instance.loadBalancingWeight ?? 100,
+            isHealthy: instance.isHealthy,
+            responseTimeMs: instance.responseTimeMs,
+            modelsAvailable: instance.modelsAvailable,
+            lastHealthCheck: instance.lastHealthCheck
+          });
+        }
+      });
+      
+      return instances;
+    } catch (error) {
+      console.error('Failed to load Ollama instances from database:', error);
+      return [];
+    }
+  }
+
+  async setOllamaInstances(instances: OllamaInstance[]): Promise<void> {
+    try {
+      // First, delete existing ollama instance credentials
+      const existingCredentials = await this.getCredentialsByCategory('ollama_instances');
+      for (const cred of existingCredentials) {
+        await this.deleteCredential(cred.key);
+      }
+      
+      // Add new instance credentials
+      const promises: Promise<any>[] = [];
+      
+      instances.forEach(instance => {
+        const fields: Record<string, any> = {
+          name: instance.name,
+          baseUrl: instance.baseUrl,
+          isEnabled: instance.isEnabled,
+          isPrimary: instance.isPrimary,
+          instanceType: instance.instanceType || 'both',
+          loadBalancingWeight: instance.loadBalancingWeight || 100
+        };
+        
+        // Add optional health-related fields
+        if (instance.isHealthy !== undefined) {
+          fields.isHealthy = instance.isHealthy;
+        }
+        if (instance.responseTimeMs !== undefined) {
+          fields.responseTimeMs = instance.responseTimeMs;
+        }
+        if (instance.modelsAvailable !== undefined) {
+          fields.modelsAvailable = instance.modelsAvailable;
+        }
+        if (instance.lastHealthCheck) {
+          fields.lastHealthCheck = instance.lastHealthCheck;
+        }
+        
+        // Create a credential for each field
+        Object.entries(fields).forEach(([field, value]) => {
+          promises.push(
+            this.createCredential({
+              key: `ollama_instance_${instance.id}_${field}`,
+              value: value.toString(),
+              is_encrypted: false,
+              category: 'ollama_instances'
+            })
+          );
+        });
+      });
+      
+      await Promise.all(promises);
+    } catch (error) {
+      throw this.handleCredentialError(error, 'Saving Ollama instances');
+    }
+  }
+
+  async addOllamaInstance(instance: OllamaInstance): Promise<void> {
+    const instances = await this.getOllamaInstances();
+    instances.push(instance);
+    await this.setOllamaInstances(instances);
+  }
+
+  async updateOllamaInstance(instanceId: string, updates: Partial<OllamaInstance>): Promise<void> {
+    const instances = await this.getOllamaInstances();
+    const instanceIndex = instances.findIndex(inst => inst.id === instanceId);
+    
+    if (instanceIndex === -1) {
+      throw new Error(`Ollama instance with ID ${instanceId} not found`);
+    }
+    
+    instances[instanceIndex] = { ...instances[instanceIndex], ...updates };
+    await this.setOllamaInstances(instances);
+  }
+
+  async removeOllamaInstance(instanceId: string): Promise<void> {
+    const instances = await this.getOllamaInstances();
+    const filteredInstances = instances.filter(inst => inst.id !== instanceId);
+    
+    if (filteredInstances.length === instances.length) {
+      throw new Error(`Ollama instance with ID ${instanceId} not found`);
+    }
+    
+    await this.setOllamaInstances(filteredInstances);
+  }
+
+  async migrateOllamaFromLocalStorage(): Promise<{ migrated: boolean; instanceCount: number }> {
+    try {
+      // Check if there are existing instances in the database
+      const existingInstances = await this.getOllamaInstances();
+      if (existingInstances.length > 0) {
+        return { migrated: false, instanceCount: 0 };
+      }
+      
+      // Try to load from localStorage
+      const localStorageData = localStorage.getItem('ollama-instances');
+      if (!localStorageData) {
+        return { migrated: false, instanceCount: 0 };
+      }
+      
+      const localInstances = JSON.parse(localStorageData);
+      if (!Array.isArray(localInstances) || localInstances.length === 0) {
+        return { migrated: false, instanceCount: 0 };
+      }
+      
+      // Migrate to database
+      await this.setOllamaInstances(localInstances);
+      
+      // Clean up localStorage
+      localStorage.removeItem('ollama-instances');
+      
+      return { migrated: true, instanceCount: localInstances.length };
+    } catch (error) {
+      console.error('Failed to migrate Ollama instances from localStorage:', error);
+      return { migrated: false, instanceCount: 0 };
+    }
   }
 }
 

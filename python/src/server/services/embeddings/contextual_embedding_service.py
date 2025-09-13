@@ -116,8 +116,34 @@ async def _get_model_choice(provider: str | None = None) -> str:
 
     # Get the active provider configuration
     provider_config = await credential_service.get_active_provider("llm")
-    model = provider_config.get("chat_model", "gpt-4.1-nano")
+    model = provider_config.get("chat_model", "").strip()  # Strip whitespace
+    provider_name = provider_config.get("provider", "openai")
 
+    # Handle empty model case - fallback to provider-specific defaults or explicit config
+    if not model:
+        search_logger.warning(f"chat_model is empty for provider {provider_name}, using fallback logic")
+        
+        if provider_name == "ollama":
+            # Try to get OLLAMA_CHAT_MODEL specifically
+            try:
+                ollama_model = await credential_service.get_credential("OLLAMA_CHAT_MODEL")
+                if ollama_model and ollama_model.strip():
+                    model = ollama_model.strip()
+                    search_logger.info(f"Using OLLAMA_CHAT_MODEL fallback: {model}")
+                else:
+                    # Use a sensible Ollama default
+                    model = "llama3.2:latest"
+                    search_logger.info(f"Using Ollama default model: {model}")
+            except Exception as e:
+                search_logger.error(f"Error getting OLLAMA_CHAT_MODEL: {e}")
+                model = "llama3.2:latest"
+                search_logger.info(f"Using Ollama fallback model: {model}")
+        elif provider_name == "google":
+            model = "gemini-1.5-flash"
+        else:
+            # OpenAI or other providers
+            model = "gpt-4o-mini"
+    
     search_logger.debug(f"Using model from credential service: {model}")
 
     return model
