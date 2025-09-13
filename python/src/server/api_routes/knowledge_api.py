@@ -65,40 +65,58 @@ def _sanitize_provider_error(error_message: str, provider: str = None) -> str:
 
 async def _validate_provider_api_key(provider: str = None) -> None:
     """Validate LLM provider API key before starting operations."""
-    from ..services.embeddings.provider_error_adapters import ProviderErrorFactory
-    
     try:
         if not provider:
             provider = "openai"  # Default
 
-        provider_name = ProviderErrorFactory.get_adapter(provider).get_provider_name()
+        logger.info(f"🔑 Testing {provider.title()} API key with minimal embedding request...")
         
         # Test API key with minimal embedding request
         from ..services.embeddings.embedding_service import create_embedding
         test_result = await create_embedding(text="test")
         
         if not test_result:
-            raise HTTPException(
-                status_code=401,
-                detail={
-                    "error": f"Invalid {provider_name.title()} API key",
-                    "message": f"Please verify your {provider_name.title()} API key in Settings.",
-                    "error_type": "authentication_failed",
-                    "provider": provider_name
-                }
-            )
-
-    except Exception as e:
-        error_str = str(e)
-        
-        # Detect authentication errors for any provider
-        if ("401" in error_str and ("invalid" in error_str.lower() or "incorrect" in error_str.lower())):
+            logger.error(f"❌ {provider.title()} API key validation failed - no embedding returned")
             raise HTTPException(
                 status_code=401,
                 detail={
                     "error": f"Invalid {provider.title()} API key",
                     "message": f"Please verify your {provider.title()} API key in Settings.",
                     "error_type": "authentication_failed",
+                    "provider": provider
+                }
+            )
+            
+        logger.info(f"✅ {provider.title()} API key validation successful")
+
+    except HTTPException:
+        # Re-raise HTTP exceptions (these are our intended errors)
+        raise
+    except Exception as e:
+        error_str = str(e)
+        logger.error(f"❌ API key validation exception: {error_str}")
+        
+        # Detect authentication errors for any provider
+        if ("401" in error_str and ("invalid" in error_str.lower() or "incorrect" in error_str.lower())):
+            logger.error("🚨 Detected authentication error - blocking operation")
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": f"Invalid {provider.title()} API key",
+                    "message": f"Please verify your {provider.title()} API key in Settings.",
+                    "error_type": "authentication_failed",
+                    "provider": provider
+                }
+            ) from None
+        else:
+            # For other errors, also fail to be safe
+            logger.error("🚨 API key validation failed with other error - blocking operation")
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": f"{provider.title()} API validation failed",
+                    "message": f"Unable to validate {provider.title()} API key. Please check your configuration.",
+                    "error_type": "configuration_error",
                     "provider": provider
                 }
             ) from None
@@ -649,7 +667,9 @@ async def crawl_knowledge_item(request: KnowledgeItemRequest):
         raise HTTPException(status_code=422, detail="URL must start with http:// or https://")
 
     # Validate API key before starting expensive operation
+    logger.info("🔍 About to validate API key...")
     await _validate_provider_api_key()
+    logger.info("✅ API key validation completed successfully")
 
     try:
         safe_logfire_info(
