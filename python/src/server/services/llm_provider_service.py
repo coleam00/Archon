@@ -114,13 +114,19 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
                         provider_name = "ollama"
                         api_key = "ollama"  # Ollama doesn't need a real API key
                         base_url = ollama_base_url
+                        # Create Ollama client after fallback
+                        client = openai.AsyncOpenAI(
+                            api_key="ollama",
+                            base_url=ollama_base_url,
+                        )
+                        logger.info(f"Ollama fallback client created successfully with base URL: {ollama_base_url}")
                     else:
                         raise ValueError("OpenAI API key not found and no Ollama instances available")
                 except Exception as ollama_error:
                     logger.error(f"Ollama fallback failed: {ollama_error}")
                     raise ValueError("OpenAI API key not found and Ollama fallback failed") from ollama_error
-            # Only create OpenAI client if we're still using OpenAI (not fallen back to Ollama)
-            if provider_name == "openai":
+            else:
+                # Only create OpenAI client if we have an API key (didn't fallback to Ollama)
                 client = openai.AsyncOpenAI(api_key=api_key)
                 logger.info("OpenAI client created successfully")
 
