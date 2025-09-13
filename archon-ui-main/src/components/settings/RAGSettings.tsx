@@ -569,10 +569,43 @@ export const RAGSettings = ({
               <button
                 key={provider.key}
                 type="button"
-                onClick={() => setRagSettings({
-                  ...ragSettings,
-                  LLM_PROVIDER: provider.key
-                })}
+                onClick={() => {
+                  const updatedSettings = {
+                    ...ragSettings,
+                    LLM_PROVIDER: provider.key
+                  };
+                  
+                  // Set models to provider-appropriate defaults when switching providers
+                  // This ensures both LLM and embedding models switch when provider changes
+                  const getDefaultChatModel = (provider: string): string => {
+                    switch (provider) {
+                      case 'openai': return 'gpt-4o-mini';
+                      case 'anthropic': return 'claude-3-5-sonnet-20241022';
+                      case 'google': return 'gemini-1.5-flash';
+                      case 'grok': return 'grok-2-latest';
+                      case 'ollama': return '';
+                      case 'openrouter': return 'anthropic/claude-3.5-sonnet';
+                      default: return 'gpt-4o-mini';
+                    }
+                  };
+                  
+                  const getDefaultEmbeddingModel = (provider: string): string => {
+                    switch (provider) {
+                      case 'openai': return 'text-embedding-3-small';
+                      case 'google': return 'text-embedding-004';
+                      case 'ollama': return '';
+                      case 'openrouter': return 'text-embedding-3-small';
+                      case 'anthropic': 
+                      case 'grok': 
+                      default: return 'text-embedding-3-small';
+                    }
+                  };
+                  
+                  updatedSettings.MODEL_CHOICE = getDefaultChatModel(provider.key);
+                  updatedSettings.EMBEDDING_MODEL = getDefaultEmbeddingModel(provider.key);
+                  
+                  setRagSettings(updatedSettings);
+                }}
                 className={`
                   relative p-3 rounded-lg border-2 transition-all duration-200 text-center
                   ${ragSettings.LLM_PROVIDER === provider.key

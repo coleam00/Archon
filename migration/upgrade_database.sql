@@ -79,7 +79,7 @@ BEGIN
         RAISE NOTICE 'Found existing embedding column in archon_crawled_pages - migrating data...';
         
         -- Detect dimension from first non-null embedding
-        SELECT array_length(embedding::float[], 1) INTO dimension_detected
+        SELECT vector_dims(embedding) INTO dimension_detected
         FROM archon_crawled_pages 
         WHERE embedding IS NOT NULL 
         LIMIT 1;
@@ -137,7 +137,7 @@ BEGIN
         RAISE NOTICE 'Found existing embedding column in archon_code_examples - migrating data...';
         
         -- Detect dimension from first non-null embedding
-        SELECT array_length(embedding::float[], 1) INTO dimension_detected
+        SELECT vector_dims(embedding) INTO dimension_detected
         FROM archon_code_examples 
         WHERE embedding IS NOT NULL 
         LIMIT 1;
@@ -192,7 +192,50 @@ BEGIN
 END $$;
 
 -- ======================================================================
--- SECTION 4: CREATE OPTIMIZED INDEXES
+-- SECTION 4: CLEANUP LEGACY EMBEDDING COLUMNS
+-- ======================================================================
+
+-- Remove old embedding columns after successful migration
+DO $$
+DECLARE
+    crawled_pages_count INTEGER;
+    code_examples_count INTEGER;
+BEGIN
+    -- Check if old embedding column exists in crawled pages
+    SELECT COUNT(*) INTO crawled_pages_count 
+    FROM information_schema.columns 
+    WHERE table_name = 'archon_crawled_pages' 
+    AND column_name = 'embedding';
+    
+    -- Check if old embedding column exists in code examples
+    SELECT COUNT(*) INTO code_examples_count 
+    FROM information_schema.columns 
+    WHERE table_name = 'archon_code_examples' 
+    AND column_name = 'embedding';
+    
+    -- Drop old embedding column from crawled pages if it exists
+    IF crawled_pages_count > 0 THEN
+        RAISE NOTICE 'Dropping legacy embedding column from archon_crawled_pages...';
+        ALTER TABLE archon_crawled_pages DROP COLUMN embedding;
+        RAISE NOTICE 'Successfully removed legacy embedding column from archon_crawled_pages';
+    END IF;
+    
+    -- Drop old embedding column from code examples if it exists
+    IF code_examples_count > 0 THEN
+        RAISE NOTICE 'Dropping legacy embedding column from archon_code_examples...';
+        ALTER TABLE archon_code_examples DROP COLUMN embedding;
+        RAISE NOTICE 'Successfully removed legacy embedding column from archon_code_examples';
+    END IF;
+    
+    -- Drop any indexes on the old embedding column if they exist
+    DROP INDEX IF EXISTS idx_archon_crawled_pages_embedding;
+    DROP INDEX IF EXISTS idx_archon_code_examples_embedding;
+    
+    RAISE NOTICE 'Legacy column cleanup completed';
+END $$;
+
+-- ======================================================================
+-- SECTION 5: CREATE OPTIMIZED INDEXES
 -- ======================================================================
 
 -- Create indexes for archon_crawled_pages (multi-dimensional support)
@@ -261,14 +304,14 @@ CREATE INDEX IF NOT EXISTS idx_archon_code_examples_llm_chat_model
 ON archon_code_examples (llm_chat_model);
 
 -- ======================================================================
--- SECTION 5: HELPER FUNCTIONS FOR MULTI-DIMENSIONAL SUPPORT
+-- SECTION 6: HELPER FUNCTIONS FOR MULTI-DIMENSIONAL SUPPORT
 -- ======================================================================
 
 -- Function to detect embedding dimension from vector
 CREATE OR REPLACE FUNCTION detect_embedding_dimension(embedding_vector vector)
 RETURNS INTEGER AS $$
 BEGIN
-    RETURN array_length(embedding_vector::float[], 1);
+    RETURN vector_dims(embedding_vector);
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 
@@ -288,7 +331,7 @@ END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 
 -- ======================================================================
--- SECTION 6: ENHANCED SEARCH FUNCTIONS
+-- SECTION 7: ENHANCED SEARCH FUNCTIONS
 -- ======================================================================
 
 -- Create multi-dimensional function to search for documentation chunks
@@ -393,7 +436,7 @@ END;
 $$;
 
 -- ======================================================================
--- SECTION 7: LEGACY COMPATIBILITY FUNCTIONS
+-- SECTION 8: LEGACY COMPATIBILITY FUNCTIONS
 -- ======================================================================
 
 -- Legacy compatibility function for crawled pages (defaults to 1536D)

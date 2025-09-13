@@ -301,7 +301,7 @@ CREATE INDEX idx_archon_code_examples_llm_chat_model ON archon_code_examples (ll
 CREATE OR REPLACE FUNCTION detect_embedding_dimension(embedding_vector vector)
 RETURNS INTEGER AS $$
 BEGIN
-    RETURN array_length(embedding_vector::float[], 1);
+    RETURN vector_dims(embedding_vector);
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 
