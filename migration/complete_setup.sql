@@ -591,7 +591,7 @@ CREATE TABLE IF NOT EXISTS archon_tasks (
   status task_status DEFAULT 'todo',
   assignee TEXT DEFAULT 'User' CHECK (assignee IS NOT NULL AND assignee != ''),
   task_order INTEGER DEFAULT 0,
-  priority task_priority DEFAULT 'medium',
+  priority task_priority DEFAULT 'medium' NOT NULL,
   feature TEXT,
   sources JSONB DEFAULT '[]'::jsonb,
   code_examples JSONB DEFAULT '[]'::jsonb,

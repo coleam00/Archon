@@ -23,12 +23,43 @@ EXCEPTION
         RAISE NOTICE 'task_priority enum already exists, skipping creation';
 END $$;
 
--- Add priority column to archon_tasks table (safe, idempotent)
+-- Add priority column to archon_tasks table (safe, idempotent with NOT NULL constraint)
 DO $$ BEGIN
+    -- Add column as nullable first with default
     ALTER TABLE archon_tasks ADD COLUMN priority task_priority DEFAULT 'medium';
+    
+    -- Ensure all existing rows have the default value (handles any NULLs)
+    UPDATE archon_tasks SET priority = 'medium' WHERE priority IS NULL;
+    
+    -- Make column NOT NULL to enforce application invariants
+    ALTER TABLE archon_tasks ALTER COLUMN priority SET NOT NULL;
+    
+    RAISE NOTICE 'Added priority column with NOT NULL constraint and default value';
 EXCEPTION
     WHEN duplicate_column THEN 
-        RAISE NOTICE 'priority column already exists, skipping addition';
+        -- Column exists, ensure it's NOT NULL and has proper default
+        BEGIN
+            -- Ensure no NULL values exist
+            UPDATE archon_tasks SET priority = 'medium' WHERE priority IS NULL;
+            
+            -- Ensure NOT NULL constraint (safe if already NOT NULL)
+            BEGIN
+                ALTER TABLE archon_tasks ALTER COLUMN priority SET NOT NULL;
+            EXCEPTION
+                WHEN OTHERS THEN
+                    RAISE NOTICE 'priority column already has NOT NULL constraint';
+            END;
+            
+            -- Ensure default value is set (safe if already set)
+            BEGIN
+                ALTER TABLE archon_tasks ALTER COLUMN priority SET DEFAULT 'medium';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    RAISE NOTICE 'priority column already has default value';
+            END;
+            
+        END;
+        RAISE NOTICE 'priority column already exists, ensured NOT NULL constraint and default';
 END $$;
 
 -- Add index for the priority column for better query performance (safe, idempotent)
