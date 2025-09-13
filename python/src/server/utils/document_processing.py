@@ -36,6 +36,45 @@ from ..config.logfire_config import get_logger, logfire
 logger = get_logger(__name__)
 
 
+def _preserve_code_blocks_across_pages(text: str) -> str:
+    """
+    Fix code blocks that were split across PDF page boundaries.
+    
+    PDFs often break markdown code blocks with page headers like:
+    ```python
+    def hello():
+    --- Page 2 ---
+        return "world"
+    ```
+    
+    This function rejoins split code blocks by removing page separators
+    that appear within code blocks.
+    """
+    import re
+    
+    # Pattern to match page separators that split code blocks
+    # Look for: ``` [content] --- Page N --- [content] ```
+    page_break_in_code_pattern = r'(```\w*[^\n]*\n(?:[^`]|`(?!``))*)(\n--- Page \d+ ---\n)((?:[^`]|`(?!``))*)```'
+    
+    # Keep merging until no more splits are found
+    while True:
+        matches = list(re.finditer(page_break_in_code_pattern, text, re.DOTALL))
+        if not matches:
+            break
+            
+        # Replace each match by removing the page separator
+        for match in reversed(matches):  # Reverse to maintain positions
+            before_page_break = match.group(1)
+            page_separator = match.group(2) 
+            after_page_break = match.group(3)
+            
+            # Rejoin the code block without the page separator
+            rejoined = f"{before_page_break}\n{after_page_break}```"
+            text = text[:match.start()] + rejoined + text[match.end():]
+    
+    return text
+
+
 def extract_text_from_document(file_content: bytes, filename: str, content_type: str) -> str:
     """
     Extract text from various document formats.
@@ -126,7 +165,8 @@ def extract_text_from_pdf(file_content: bytes) -> str:
 
             # If pdfplumber got good results, use them
             if text_content and len("\n".join(text_content).strip()) > 100:
-                return "\n\n".join(text_content)
+                combined_text = "\n\n".join(text_content)
+                return _preserve_code_blocks_across_pages(combined_text)
 
         except Exception as e:
             logfire.warning(f"pdfplumber extraction failed: {e}, trying PyPDF2")
@@ -147,7 +187,8 @@ def extract_text_from_pdf(file_content: bytes) -> str:
                     continue
 
             if text_content:
-                return "\n\n".join(text_content)
+                combined_text = "\n\n".join(text_content)
+                return _preserve_code_blocks_across_pages(combined_text)
             else:
                 raise ValueError(
                     "No text extracted from PDF: file may be empty, images-only, "
