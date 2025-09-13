@@ -37,6 +37,7 @@ export const useTaskEditor = (projectId: string): UseTaskEditorReturn => {
     if (localTask.status !== editingTask.status) updates.status = localTask.status;
     if (localTask.assignee !== editingTask.assignee) updates.assignee = localTask.assignee || "User";
     if (localTask.task_order !== editingTask.task_order) updates.task_order = localTask.task_order;
+    if (localTask.priority !== editingTask.priority) updates.priority = localTask.priority;
     if (localTask.feature !== editingTask.feature) updates.feature = localTask.feature || "";
 
     return updates;

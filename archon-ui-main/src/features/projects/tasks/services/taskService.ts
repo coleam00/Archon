@@ -85,7 +85,10 @@ export const taskService = {
       });
 
       // Invalidate related caches
-      // Note: We don't know the project_id here, so TanStack Query will handle invalidation
+      // Invalidate the specific project's tasks using the returned task data
+      if (task.project_id) {
+        invalidateETagCache(`/api/projects/${task.project_id}/tasks`);
+      }
       invalidateETagCache("/api/tasks/counts");
 
       return task;

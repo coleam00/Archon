@@ -585,6 +585,7 @@ async def list_project_tasks(
                 "status": task.get("status"),
                 "task_order": task.get("task_order"),
                 "assignee": task.get("assignee"),
+                "priority": task.get("priority"),
                 "feature": task.get("feature")
             } for task in tasks],
             "project_id": project_id,
@@ -769,6 +770,7 @@ class UpdateTaskRequest(BaseModel):
     status: str | None = None
     assignee: str | None = None
     task_order: int | None = None
+    priority: str | None = None
     feature: str | None = None
 
 
@@ -816,6 +818,8 @@ async def update_task(task_id: str, request: UpdateTaskRequest):
             update_fields["assignee"] = request.assignee
         if request.task_order is not None:
             update_fields["task_order"] = request.task_order
+        if request.priority is not None:
+            update_fields["priority"] = request.priority
         if request.feature is not None:
             update_fields["feature"] = request.feature
 

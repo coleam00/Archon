@@ -59,9 +59,11 @@ export interface Task {
   archived_at?: string;
   archived_by?: string;
 
+  // Priority field (required database field)
+  priority: TaskPriority;
+
   // Extended UI properties
   featureColor?: string;
-  priority?: TaskPriority;
 }
 
 // Request types

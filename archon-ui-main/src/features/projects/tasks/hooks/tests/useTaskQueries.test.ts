@@ -69,6 +69,7 @@ describe("useTaskQueries", () => {
           status: "todo",
           assignee: "User",
           task_order: 100,
+          priority: "medium",
           created_at: "2024-01-01T00:00:00Z",
           updated_at: "2024-01-01T00:00:00Z",
         },
@@ -120,6 +121,7 @@ describe("useTaskQueries", () => {
         status: "todo",
         assignee: "User",
         task_order: 100,
+        priority: "medium",
         created_at: "2024-01-01T00:00:00Z",
         updated_at: "2024-01-01T00:00:00Z",
       };
@@ -159,6 +161,7 @@ describe("useTaskQueries", () => {
         status: "todo",
         assignee: "User",
         task_order: 100,
+        priority: "medium",
         created_at: "2024-01-01T00:00:00Z",
         updated_at: "2024-01-01T00:00:00Z",
       };

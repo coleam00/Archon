@@ -11,18 +11,17 @@ import { AlertCircle } from "lucide-react";
 import type React from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "../../../ui/primitives/select";
 import { cn, glassmorphism } from "../../../ui/primitives/styles";
-
-export type Priority = "critical" | "high" | "medium" | "low";
+import type { TaskPriority } from "../types";
 
 interface TaskPriorityProps {
-  priority?: Priority;
-  onPriorityChange?: (priority: Priority) => void;
+  priority?: TaskPriority;
+  onPriorityChange?: (priority: TaskPriority) => void;
   isLoading?: boolean;
 }
 
 // Priority options for the dropdown
 const PRIORITY_OPTIONS: Array<{
-  value: Priority;
+  value: TaskPriority;
   label: string;
   color: string;
 }> = [
@@ -32,13 +31,13 @@ const PRIORITY_OPTIONS: Array<{
   { value: "low", label: "Low", color: "text-gray-600" },
 ];
 
-export const TaskPriority: React.FC<TaskPriorityProps> = ({
+export const TaskPriorityComponent: React.FC<TaskPriorityProps> = ({
   priority = "medium",
   onPriorityChange,
   isLoading = false,
 }) => {
   // Get priority-specific styling with Tron glow
-  const getPriorityStyles = (priorityValue: Priority) => {
+  const getPriorityStyles = (priorityValue: TaskPriority) => {
     switch (priorityValue) {
       case "critical":
         return {
@@ -101,7 +100,7 @@ export const TaskPriority: React.FC<TaskPriorityProps> = ({
   }
 
   return (
-    <Select value={priority} onValueChange={(value) => onPriorityChange(value as Priority)}>
+    <Select value={priority} onValueChange={(value) => onPriorityChange(value as TaskPriority)}>
       <SelectTrigger
         disabled={isLoading}
         className={cn(

@@ -42,6 +42,16 @@ class TaskService:
             return False, "Assignee must be a non-empty string"
         return True, ""
 
+    def validate_priority(self, priority: str) -> tuple[bool, str]:
+        """Validate task priority against allowed enum values"""
+        VALID_PRIORITIES = ["low", "medium", "high", "critical"]
+        if priority not in VALID_PRIORITIES:
+            return (
+                False,
+                f"Invalid priority '{priority}'. Must be one of: {', '.join(VALID_PRIORITIES)}",
+            )
+        return True, ""
+
     async def create_task(
         self,
         project_id: str,
@@ -165,7 +175,7 @@ class TaskService:
                 # Select all fields except large JSONB ones
                 query = self.supabase_client.table("archon_tasks").select(
                     "id, project_id, parent_task_id, title, description, "
-                    "status, assignee, task_order, feature, archived, "
+                    "status, assignee, task_order, priority, feature, archived, "
                     "archived_at, archived_by, created_at, updated_at, "
                     "sources, code_examples"  # Still fetch for counting, but will process differently
                 )
@@ -250,6 +260,7 @@ class TaskService:
                     "status": task["status"],
                     "assignee": task.get("assignee", "User"),
                     "task_order": task.get("task_order", 0),
+                    "priority": task.get("priority", "medium"),
                     "feature": task.get("feature"),
                     "created_at": task["created_at"],
                     "updated_at": task["updated_at"],
@@ -341,6 +352,12 @@ class TaskService:
                 if not is_valid:
                     return False, {"error": error_msg}
                 update_data["assignee"] = update_fields["assignee"]
+
+            if "priority" in update_fields:
+                is_valid, error_msg = self.validate_priority(update_fields["priority"])
+                if not is_valid:
+                    return False, {"error": error_msg}
+                update_data["priority"] = update_fields["priority"]
 
             if "task_order" in update_fields:
                 update_data["task_order"] = update_fields["task_order"]
