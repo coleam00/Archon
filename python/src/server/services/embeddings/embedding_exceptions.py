@@ -99,6 +99,22 @@ class EmbeddingAPIError(EmbeddingError):
             self.metadata["original_error_message"] = str(original_error)
 
 
+class EmbeddingAuthenticationError(EmbeddingError):
+    """
+    Raised when API authentication fails (invalid or expired API key).
+    
+    This is a CRITICAL error that should stop the entire process
+    as continuing would be pointless without valid API access.
+    """
+
+    def __init__(self, message: str, api_key_prefix: str | None = None, **kwargs):
+        super().__init__(message, **kwargs)
+        # Store masked API key prefix for debugging
+        self.api_key_prefix = api_key_prefix[:3] + "…" if api_key_prefix and len(api_key_prefix) >= 3 else None
+        if self.api_key_prefix:
+            self.metadata["api_key_prefix"] = self.api_key_prefix
+
+
 class EmbeddingValidationError(EmbeddingError):
     """
     Raised when embedding validation fails (e.g., zero vector detected).

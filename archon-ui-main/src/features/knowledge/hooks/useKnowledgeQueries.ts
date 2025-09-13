@@ -11,6 +11,7 @@ import { useActiveOperations } from "../progress/hooks";
 import { progressKeys } from "../progress/hooks/useProgressQueries";
 import type { ActiveOperation, ActiveOperationsResponse } from "../progress/types";
 import { knowledgeService } from "../services";
+import { getProviderErrorMessage } from "../utils/providerErrorHandler";
 import type {
   CrawlRequest,
   CrawlStartResponse,
@@ -273,7 +274,7 @@ export function useCrawlUrl() {
         queryClient.setQueryData(progressKeys.list(), context.previousOperations);
       }
 
-      const errorMessage = error instanceof Error ? error.message : "Failed to start crawl";
+      const errorMessage = getProviderErrorMessage(error) || "Failed to start crawl";
       showToast(errorMessage, "error");
     },
   });
