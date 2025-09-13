@@ -229,7 +229,7 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
                 <Input
                   id={fileId}
                   type="file"
-                  accept=".txt,.md,.pdf,.doc,.docx"
+                  accept=".txt,.md,.pdf,.doc,.docx,.html,.htm"
                   onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
                   disabled={isProcessing}
                   className="flex-1"
