@@ -188,8 +188,6 @@ class DocumentStorageService(BaseStorageService):
                             url_to_full_document=url_to_full_document,
                             source_id=source_id,
                             progress_callback=code_progress_callback,
-                            start_progress=0,
-                            end_progress=100,
                             cancellation_check=cancellation_check,
                         )
                         
