@@ -22,6 +22,8 @@ from pydantic import BaseModel
 from ..config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
 from ..services.crawler_manager import get_crawler
 from ..services.crawling import CrawlingService
+from ..services.credential_service import credential_service
+from ..services.embeddings.provider_error_adapters import ProviderErrorFactory
 from ..services.knowledge import DatabaseMetricsService, KnowledgeItemService, KnowledgeSummaryService
 from ..services.search.rag_service import RAGService
 from ..services.storage import DocumentStorageService
@@ -53,51 +55,6 @@ crawl_semaphore = asyncio.Semaphore(CONCURRENT_CRAWL_LIMIT)
 active_crawl_tasks: dict[str, asyncio.Task] = {}
 
 
-def _sanitize_provider_error(error_message: str, provider: str = None) -> str:
-    """Sanitize provider-specific error messages to prevent information disclosure."""
-    import re
-    
-    # Input validation
-    if not isinstance(error_message, str) or not error_message.strip():
-        return "API encountered an error. Please verify your API key."
-    
-    if len(error_message) > 2000:
-        return "API encountered an error. Please verify your API key."
-    
-    sanitized = error_message
-    
-    # Comprehensive API key patterns (case-insensitive, robust regex)
-    api_key_patterns = [
-        (r'sk-[a-zA-Z0-9]{48}', '[REDACTED_KEY]'),           # OpenAI keys
-        (r'sk-ant-[a-zA-Z0-9_-]{10,}', '[REDACTED_KEY]'),    # Anthropic keys  
-        (r'AIza[a-zA-Z0-9_-]{35}', '[REDACTED_KEY]'),        # Google AI keys
-        (r'gcp_[a-zA-Z0-9_-]+', '[REDACTED_KEY]'),           # GCP service account keys
-        (r'ya29\.[a-zA-Z0-9_-]+', '[REDACTED_TOKEN]'),       # Google OAuth tokens
-    ]
-    
-    # Apply API key sanitization
-    for pattern, replacement in api_key_patterns:
-        sanitized = re.sub(pattern, replacement, sanitized, flags=re.IGNORECASE)
-    
-    # Other sensitive data patterns
-    sensitive_patterns = [
-        (r'https?://[^\s]+', '[REDACTED_URL]'),                    # URLs
-        (r'org-[a-zA-Z0-9]{20,}', '[REDACTED_ORG]'),              # Organization IDs
-        (r'proj_[a-zA-Z0-9]{10,}', '[REDACTED_PROJECT]'),         # Project IDs
-        (r'Bearer\s+[a-zA-Z0-9._-]+', 'Bearer [REDACTED_TOKEN]'), # Bearer tokens
-        (r'"[^"]*(?:auth|token|key)[^"]*"', '[REDACTED_AUTH]'),   # Auth details in quotes
-    ]
-    
-    # Apply sensitive data sanitization  
-    for pattern, replacement in sensitive_patterns:
-        sanitized = re.sub(pattern, replacement, sanitized, flags=re.IGNORECASE)
-    
-    # Check for remaining sensitive keywords
-    sensitive_words = ['internal', 'server', 'endpoint', 'token']
-    if any(word in sanitized.lower() for word in sensitive_words if f'[REDACTED_{word.upper()}]' not in sanitized):
-        return "API encountered an error. Please verify your API key and configuration."
-    
-    return sanitized
 
 
 async def _validate_provider_api_key(provider: str = None) -> None:
@@ -135,7 +92,7 @@ async def _validate_provider_api_key(provider: str = None) -> None:
     except Exception as e:
         # Sanitize error before logging to prevent sensitive data exposure
         error_str = str(e)
-        sanitized_error = _sanitize_provider_error(error_str, provider)
+        sanitized_error = ProviderErrorFactory.sanitize_provider_error(error_str, provider or "openai")
         logger.error(f"❌ Caught exception during API key validation: {sanitized_error}")
         
         # Always fail for any exception during validation - better safe than sorry
@@ -580,7 +537,9 @@ async def refresh_knowledge_item(source_id: str):
     
     # Validate API key before starting expensive refresh operation
     logger.info("🔍 About to validate API key for refresh...")
-    await _validate_provider_api_key()
+    provider_config = await credential_service.get_active_provider("embedding")
+    provider = provider_config.get("provider", "openai")
+    await _validate_provider_api_key(provider)
     logger.info("✅ API key validation completed successfully for refresh")
     
     try:
@@ -703,7 +662,9 @@ async def crawl_knowledge_item(request: KnowledgeItemRequest):
 
     # Validate API key before starting expensive operation
     logger.info("🔍 About to validate API key...")
-    await _validate_provider_api_key()
+    provider_config = await credential_service.get_active_provider("embedding")
+    provider = provider_config.get("provider", "openai")
+    await _validate_provider_api_key(provider)
     logger.info("✅ API key validation completed successfully")
 
     try:
@@ -862,7 +823,9 @@ async def upload_document(
     
     # Validate API key before starting expensive upload operation  
     logger.info("🔍 About to validate API key for upload...")
-    await _validate_provider_api_key()
+    provider_config = await credential_service.get_active_provider("embedding")
+    provider = provider_config.get("provider", "openai")
+    await _validate_provider_api_key(provider)
     logger.info("✅ API key validation completed successfully for upload")
     
     try:
