@@ -52,6 +52,7 @@ export const useTaskEditor = (projectId: string): UseTaskEditorReturn => {
         description: localTask.description || "",
         status: (localTask.status as Task["status"]) || "todo",
         assignee: (localTask.assignee as Assignee) || "User",
+        priority: localTask.priority || "medium",
         feature: localTask.feature || "",
         task_order: localTask.task_order || getDefaultTaskOrder((localTask.status as Task["status"]) || "todo"),
       };
