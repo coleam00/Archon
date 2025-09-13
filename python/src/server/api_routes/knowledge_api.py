@@ -561,6 +561,12 @@ async def get_knowledge_item_code_examples(
 @router.post("/knowledge-items/{source_id}/refresh")
 async def refresh_knowledge_item(source_id: str):
     """Refresh a knowledge item by re-crawling its URL with the same metadata."""
+    
+    # Validate API key before starting expensive refresh operation
+    logger.info("🔍 About to validate API key for refresh...")
+    await _validate_provider_api_key()
+    logger.info("✅ API key validation completed successfully for refresh")
+    
     try:
         safe_logfire_info(f"Starting knowledge item refresh | source_id={source_id}")
 
@@ -837,6 +843,12 @@ async def upload_document(
     knowledge_type: str = Form("technical"),
 ):
     """Upload and process a document with progress tracking."""
+    
+    # Validate API key before starting expensive upload operation  
+    logger.info("🔍 About to validate API key for upload...")
+    await _validate_provider_api_key()
+    logger.info("✅ API key validation completed successfully for upload")
+    
     try:
         # DETAILED LOGGING: Track knowledge_type parameter flow
         safe_logfire_info(
