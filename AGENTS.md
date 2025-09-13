@@ -1,4 +1,6 @@
-# AGENTS.md
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Beta Development Guidelines
 
@@ -99,19 +101,7 @@ def process_batch(items):
 - Prioritize functionality over production-ready patterns
 - Focus on user experience and feature completeness
 - When updating code, don't reference what is changing (avoid keywords like LEGACY, CHANGED, REMOVED), instead focus on comments that document just the functionality of the code
-
-## Architecture Overview
-
-Archon V2 Beta is a microservices-based knowledge management system with MCP (Model Context Protocol) integration:
-
-- **Frontend (port 3737)**: React + TypeScript + Vite + TailwindCSS
-  - **UI Strategy**: Radix UI primitives in `/features`, custom components in legacy `/components`
-  - **State Management**: TanStack Query for all data fetching in `/features`
-  - **Styling**: Tron-inspired glassmorphism with Tailwind CSS
-- **Main Server (port 8181)**: FastAPI with HTTP polling for updates
-- **MCP Server (port 8051)**: Lightweight HTTP-based MCP protocol server
-- **Agents Service (port 8052)**: PydanticAI agents for AI/ML operations
-- **Database**: Supabase (PostgreSQL + pgvector for embeddings)
+- When commenting on code in the codebase, only comment on the functionality and reasoning behind the code. Refrain from speaking to Archon being in "beta" or referencing anything else that comes from these global rules.
 
 ## Development Commands
 
@@ -120,106 +110,189 @@ Archon V2 Beta is a microservices-based knowledge management system with MCP (Mo
 ```bash
 npm run dev              # Start development server on port 3737
 npm run build            # Build for production
-npm run lint             # Run ESLint
-npm run test             # Run Vitest tests
-npm run test:coverage    # Run tests with coverage report
-```
+npm run lint             # Run ESLint on legacy code (excludes /features)
+npm run lint:files path/to/file.tsx  # Lint specific files
 
-# Biome Linter Guide for AI Assistants
+# Biome for /src/features directory only
+npm run biome            # Check features directory
+npm run biome:fix        # Auto-fix issues
+npm run biome:format     # Format code (120 char lines)
+npm run biome:ai         # Machine-readable JSON output for AI
+npm run biome:ai-fix     # Auto-fix with JSON output
 
-## Overview
+# Testing
+npm run test             # Run all tests in watch mode
+npm run test:ui          # Run with Vitest UI interface
+npm run test:coverage:stream  # Run once with streaming output
+vitest run src/features/projects  # Test specific directory
 
-This project uses Biome for linting and formatting the `/src/features` directory. Biome provides fast, machine-readable feedback that AI assistants can use to improve code quality.
-
-## Configuration
-
-Biome is configured in `biome.json`:
-
-- **Scope**: Only checks `/src/features/**` directory
-- **Formatting**: 2 spaces, 80 char line width
-- **Linting**: Recommended rules enabled
-- **Import Organization**: Automatically sorts and groups imports
-
-## AI Assistant Workflow in the new /features directory
-
-1. **Check Issues**: Run `npm run biome:ai` to get JSON output
-2. **Parse Output**: Extract error locations and types
-3. **Apply Fixes**:
-   - Run `npm run biome:ai-fix` for auto-fixable issues
-   - Manually fix remaining issues based on patterns above
-4. **Verify**: Run `npm run biome:ai` again to confirm fixes
-
-## JSON Output Format
-
-When using `biome:ai`, the output is structured JSON:
-
-```json
-{
-  "diagnostics": [
-    {
-      "file": "path/to/file.tsx",
-      "line": 10,
-      "column": 5,
-      "severity": "error",
-      "message": "Description of the issue",
-      "rule": "lint/a11y/useButtonType"
-    }
-  ]
-}
+# TypeScript
+npx tsc --noEmit         # Check all TypeScript errors
+npx tsc --noEmit 2>&1 | grep "src/features"  # Check features only
 ```
 
 ### Backend (python/)
 
 ```bash
-# Using uv package manager
-uv sync                  # Install/update dependencies
-uv run pytest            # Run tests
-uv run python -m src.server.main  # Run server locally
+# Using uv package manager (preferred)
+uv sync --group all      # Install all dependencies
+uv run python -m src.server.main  # Run server locally on 8181
+uv run pytest            # Run all tests
+uv run pytest tests/test_api_essentials.py -v  # Run specific test
+uv run ruff check        # Run linter
+uv run ruff check --fix  # Auto-fix linting issues
+uv run mypy src/         # Type check
 
-# With Docker
-docker-compose up --build -d       # Start all services
-docker-compose logs -f             # View logs
-docker-compose restart              # Restart services
+# Docker operations
+docker compose up --build -d       # Start all services
+docker compose --profile backend up -d  # Backend only (for hybrid dev)
+docker compose logs -f archon-server   # View server logs
+docker compose logs -f archon-mcp      # View MCP server logs
+docker compose restart archon-server   # Restart after code changes
+docker compose down      # Stop all services
+docker compose down -v   # Stop and remove volumes
 ```
 
-### Testing
+### Quick Workflows
 
 ```bash
-# Frontend tests (from archon-ui-main/)
-npm run test:coverage:stream       # Run with streaming output
-npm run test:ui                    # Run with Vitest UI
+# Hybrid development (recommended) - backend in Docker, frontend local
+make dev                 # Or manually: docker compose --profile backend up -d && cd archon-ui-main && npm run dev
 
-# Backend tests (from python/)
-uv run pytest tests/test_api_essentials.py -v
-uv run pytest tests/test_service_integration.py -v
+# Full Docker mode
+make dev-docker          # Or: docker compose up --build -d
+
+# Run linters before committing
+make lint                # Runs both frontend and backend linters
+make lint-fe             # Frontend only (ESLint + Biome)
+make lint-be             # Backend only (Ruff + MyPy)
+
+# Testing
+make test                # Run all tests
+make test-fe             # Frontend tests only
+make test-be             # Backend tests only
 ```
 
-## Key API Endpoints
+## Architecture Overview
 
-### Knowledge Base
+Archon Beta is a microservices-based knowledge management system with MCP (Model Context Protocol) integration:
 
-- `POST /api/knowledge/crawl` - Crawl a website
-- `POST /api/knowledge/upload` - Upload documents (PDF, DOCX, MD)
-- `GET /api/knowledge/items` - List knowledge items
-- `POST /api/knowledge/search` - RAG search
+### Service Architecture
 
-### MCP Integration
+- **Frontend (port 3737)**: React + TypeScript + Vite + TailwindCSS
+  - **Dual UI Strategy**:
+    - `/features` - Modern vertical slice with Radix UI primitives + TanStack Query
+    - `/components` - Legacy custom components (being migrated)
+  - **State Management**: TanStack Query for all data fetching (no prop drilling)
+  - **Styling**: Tron-inspired glassmorphism with Tailwind CSS
+  - **Linting**: Biome for `/features`, ESLint for legacy code
 
-- `GET /api/mcp/health` - MCP server status
-- `POST /api/mcp/tools/{tool_name}` - Execute MCP tool
-- `GET /api/mcp/tools` - List available tools
+- **Main Server (port 8181)**: FastAPI with HTTP polling for updates
+  - Handles all business logic, database operations, and external API calls
+  - WebSocket support removed in favor of HTTP polling with ETag caching
 
-### Projects & Tasks (when enabled)
+- **MCP Server (port 8051)**: Lightweight HTTP-based MCP protocol server
+  - Provides tools for AI assistants (Claude, Cursor, Windsurf)
+  - Exposes knowledge search, task management, and project operations
 
-- `GET /api/projects` - List all projects
-- `POST /api/projects` - Create project
-- `GET /api/projects/{id}` - Get single project
-- `PUT /api/projects/{id}` - Update project
-- `DELETE /api/projects/{id}` - Delete project
-- `GET /api/projects/{id}/tasks` - Get tasks for project (use this, not getTasks)
-- `POST /api/tasks` - Create task
-- `PUT /api/tasks/{id}` - Update task
-- `DELETE /api/tasks/{id}` - Delete task
+- **Agents Service (port 8052)**: PydanticAI agents for AI/ML operations
+  - Handles complex AI workflows and document processing
+
+- **Database**: Supabase (PostgreSQL + pgvector for embeddings)
+  - Cloud or local Supabase both supported
+  - pgvector for semantic search capabilities
+
+### Frontend Architecture Details
+
+#### Vertical Slice Architecture (/features)
+
+Features are organized by domain hierarchy with self-contained modules:
+
+```
+src/features/
+├── ui/
+│   ├── primitives/    # Radix UI base components
+│   ├── hooks/         # Shared UI hooks (useSmartPolling, etc)
+│   └── types/         # UI type definitions
+├── projects/
+│   ├── components/    # Project UI components
+│   ├── hooks/         # Project hooks (useProjectQueries, etc)
+│   ├── services/      # Project API services
+│   ├── types/         # Project type definitions
+│   ├── tasks/         # Tasks sub-feature (nested under projects)
+│   │   ├── components/
+│   │   ├── hooks/     # Task-specific hooks
+│   │   ├── services/  # Task API services
+│   │   └── types/
+│   └── documents/     # Documents sub-feature
+│       ├── components/
+│       ├── services/
+│       └── types/
+```
+
+#### TanStack Query Patterns
+
+All data fetching uses TanStack Query with consistent patterns:
+
+```typescript
+// Query keys factory pattern
+export const projectKeys = {
+  all: ["projects"] as const,
+  lists: () => [...projectKeys.all, "list"] as const,
+  detail: (id: string) => [...projectKeys.all, "detail", id] as const,
+};
+
+// Smart polling with visibility awareness
+const { refetchInterval } = useSmartPolling(10000); // Pauses when tab inactive
+
+// Optimistic updates with rollback
+useMutation({
+  onMutate: async (data) => {
+    await queryClient.cancelQueries(key);
+    const previous = queryClient.getQueryData(key);
+    queryClient.setQueryData(key, optimisticData);
+    return { previous };
+  },
+  onError: (err, vars, context) => {
+    if (context?.previous) {
+      queryClient.setQueryData(key, context.previous);
+    }
+  },
+});
+```
+
+### Backend Architecture Details
+
+#### Service Layer Pattern
+
+```python
+# API Route -> Service -> Database
+# src/server/api_routes/projects.py
+@router.get("/{project_id}")
+async def get_project(project_id: str):
+    return await project_service.get_project(project_id)
+
+# src/server/services/project_service.py
+async def get_project(project_id: str):
+    # Business logic here
+    return await db.fetch_project(project_id)
+```
+
+#### Error Handling Patterns
+
+```python
+# Use specific exceptions
+class ProjectNotFoundError(Exception): pass
+class ValidationError(Exception): pass
+
+# Rich error responses
+@app.exception_handler(ProjectNotFoundError)
+async def handle_not_found(request, exc):
+    return JSONResponse(
+        status_code=404,
+        content={"detail": str(exc), "type": "not_found"}
+    )
+```
 
 ## Polling Architecture
 
@@ -228,80 +301,29 @@ uv run pytest tests/test_service_integration.py -v
 - **Polling intervals**: 1-2s for active operations, 5-10s for background data
 - **ETag caching**: Reduces bandwidth by ~70% via 304 Not Modified responses
 - **Smart pausing**: Stops polling when browser tab is inactive
-- **Progress endpoints**: `/api/progress/crawl`, `/api/progress/project-creation`
+- **Progress endpoints**: `/api/progress/{id}` for operation tracking
 
 ### Key Polling Hooks
 
-- `usePolling` - Generic polling with ETag support
-- `useDatabaseMutation` - Optimistic updates with rollback
-- `useProjectMutation` - Project-specific operations
-
-## Environment Variables
-
-Required in `.env`:
-
-```bash
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_KEY=your-service-key-here
-```
-
-Optional:
-
-```bash
-OPENAI_API_KEY=your-openai-key        # Can be set via UI
-LOGFIRE_TOKEN=your-logfire-token      # For observability
-LOG_LEVEL=INFO                         # DEBUG, INFO, WARNING, ERROR
-```
-
-## File Organization
-
-### Frontend Structure
-
-- `src/components/` - Legacy UI components (custom-built)
-- `src/features/` - Modern vertical slice architecture with Radix UI
-  - `ui/primitives/` - Radix UI primitives with Tron glassmorphism
-  - `projects/` - Project management feature
-  - `tasks/` - Task management sub-feature
-- `src/pages/` - Main application pages
-- `src/services/` - API communication and business logic
-- `src/hooks/` - Custom React hooks
-- `src/contexts/` - React context providers
-
-### UI Libraries
-
-- **Radix UI** (@radix-ui/react-\*) - Unstyled, accessible primitives for `/features`
-- **TanStack Query** - Data fetching and caching for `/features`
-- **React DnD** - Drag and drop for Kanban boards
-- **Tailwind CSS** - Utility-first styling with Tron-inspired glassmorphism
-- **Framer Motion** - Animations (minimal usage)
-
-### Theme Management
-
-- **ThemeContext** - Manages light/dark theme state
-- **Tailwind dark mode** - Uses `dark:` prefix with selector strategy
-- **Automatic switching** - All components respect theme via Tailwind classes
-- **Persistent** - Theme choice saved in localStorage
-- **Tron aesthetic** - Stronger neon glows in dark mode, subtle in light mode
-
-We're migrating to a vertical slice architecture where each feature is self-contained. Features are organized by domain hierarchy - main features contain their sub-features. For example, tasks are a sub-feature of projects, so they live at `features/projects/tasks/` rather than as separate siblings. Each feature level has its own components, hooks, types, and services folders. This keeps related code together and makes the codebase more maintainable as it scales.
-
-### Backend Structure
-
-- `src/server/` - Main FastAPI application
-- `src/server/api_routes/` - API route handlers
-- `src/server/services/` - Business logic services
-- `src/mcp/` - MCP server implementation
-- `src/agents/` - PydanticAI agent implementations
+- `useSmartPolling` - Adjusts interval based on page visibility/focus
+- `useCrawlProgressPolling` - Specialized for crawl progress with auto-cleanup
+- `useProjectTasks` - Smart polling for task lists
 
 ## Database Schema
 
 Key tables in Supabase:
 
 - `sources` - Crawled websites and uploaded documents
+  - Stores metadata, crawl status, and configuration
 - `documents` - Processed document chunks with embeddings
+  - Text chunks with vector embeddings for semantic search
 - `projects` - Project management (optional feature)
+  - Contains features array, documents, and metadata
 - `tasks` - Task tracking linked to projects
+  - Status: todo, doing, review, done
+  - Assignee: User, Archon, AI IDE Agent
 - `code_examples` - Extracted code snippets
+  - Language, summary, and relevance metadata
 
 ## API Naming Conventions
 
@@ -325,6 +347,25 @@ Use database values directly (no UI mapping):
 - `[resource]Error` - Error messages
 - `selected[Resource]` - Current selection
 
+## Environment Variables
+
+Required in `.env`:
+
+```bash
+SUPABASE_URL=https://your-project.supabase.co  # Or http://host.docker.internal:8000 for local
+SUPABASE_SERVICE_KEY=your-service-key-here      # Use legacy key format for cloud Supabase
+```
+
+Optional:
+
+```bash
+LOGFIRE_TOKEN=your-logfire-token      # For observability
+LOG_LEVEL=INFO                         # DEBUG, INFO, WARNING, ERROR
+ARCHON_SERVER_PORT=8181               # Server port
+ARCHON_MCP_PORT=8051                 # MCP server port
+ARCHON_UI_PORT=3737                  # Frontend port
+```
+
 ## Common Development Tasks
 
 ### Add a new API endpoint
@@ -332,57 +373,72 @@ Use database values directly (no UI mapping):
 1. Create route handler in `python/src/server/api_routes/`
 2. Add service logic in `python/src/server/services/`
 3. Include router in `python/src/server/main.py`
-4. Update frontend service in `archon-ui-main/src/services/`
+4. Update frontend service in `archon-ui-main/src/features/[feature]/services/`
 
-### Add a new UI component
-
-For **features** directory (preferred for new components):
+### Add a new UI component in features directory
 
 1. Use Radix UI primitives from `src/features/ui/primitives/`
-2. Create component in relevant feature folder under `src/features/`
-3. Use TanStack Query for data fetching
-4. Apply Tron-inspired glassmorphism styling with Tailwind
-
-For **legacy** components:
-
-1. Create component in `archon-ui-main/src/components/`
-2. Add to page in `archon-ui-main/src/pages/`
-3. Include any new API calls in services
-4. Add tests in `archon-ui-main/test/`
+2. Create component in relevant feature folder under `src/features/[feature]/components/`
+3. Define types in `src/features/[feature]/types/`
+4. Use TanStack Query hook from `src/features/[feature]/hooks/`
+5. Apply Tron-inspired glassmorphism styling with Tailwind
 
 ### Debug MCP connection issues
 
 1. Check MCP health: `curl http://localhost:8051/health`
-2. View MCP logs: `docker-compose logs archon-mcp`
+2. View MCP logs: `docker compose logs archon-mcp`
 3. Test tool execution via UI MCP page
 4. Verify Supabase connection and credentials
 
+### Fix TypeScript/Linting Issues
+
+```bash
+# TypeScript errors in features
+npx tsc --noEmit 2>&1 | grep "src/features"
+
+# Biome auto-fix for features
+npm run biome:fix
+
+# ESLint for legacy code
+npm run lint:files src/components/SomeComponent.tsx
+```
+
 ## Code Quality Standards
 
-We enforce code quality through automated linting and type checking:
+### Frontend
+
+- **TypeScript**: Strict mode enabled, no implicit any
+- **Biome** for `/src/features/`: 120 char lines, double quotes, trailing commas
+- **ESLint** for legacy code: Standard React rules
+- **Testing**: Vitest with React Testing Library
+
+### Backend
 
 - **Python 3.12** with 120 character line length
-- **Ruff** for linting - checks for errors, warnings, unused imports, and code style
-- **Mypy** for type checking - ensures type safety across the codebase
-- **Auto-formatting** on save in IDEs to maintain consistent style
-- Run `uv run ruff check` and `uv run mypy src/` locally before committing
+- **Ruff** for linting - checks for errors, warnings, unused imports
+- **Mypy** for type checking - ensures type safety
+- **Pytest** for testing with async support
 
 ## MCP Tools Available
 
-When connected to Cursor/Windsurf:
+When connected to Client/Cursor/Windsurf:
 
 - `archon:perform_rag_query` - Search knowledge base
 - `archon:search_code_examples` - Find code snippets
-- `archon:manage_project` - Project operations
-- `archon:manage_task` - Task management
+- `archon:create_project` - Create new project
+- `archon:list_projects` - List all projects
+- `archon:create_task` - Create task in project
+- `archon:list_tasks` - List and filter tasks
+- `archon:update_task` - Update task status/details
 - `archon:get_available_sources` - List knowledge sources
 
 ## Important Notes
 
 - Projects feature is optional - toggle in Settings UI
 - All services communicate via HTTP, not gRPC
-- HTTP polling handles all updates (Socket.IO removed)
+- HTTP polling handles all updates
 - Frontend uses Vite proxy for API calls in development
 - Python backend uses `uv` for dependency management
 - Docker Compose handles service orchestration
-- we use tanstack query NO PROP DRILLING! refacring in progress!
+- TanStack Query for all data fetching - NO PROP DRILLING
+- Vertical slice architecture in `/features` - features own their sub-features

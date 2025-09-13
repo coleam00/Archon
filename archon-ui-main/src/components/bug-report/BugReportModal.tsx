@@ -5,7 +5,7 @@ import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 import { Card } from "../ui/Card";
 import { Select } from "../ui/Select";
-import { useToast } from "../../contexts/ToastContext";
+import { useToast } from "../../features/ui/hooks/useToast";
 import {
   bugReportService,
   BugContext,

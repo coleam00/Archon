@@ -1,8 +1,8 @@
-import React from 'react';
-import { render as rtlRender } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ToastProvider } from '../ui/components/ToastProvider';
-import { TooltipProvider } from '../ui/primitives/tooltip';
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render as rtlRender } from "@testing-library/react";
+import type React from "react";
+import { ToastProvider } from "../ui/components/ToastProvider";
+import { TooltipProvider } from "../ui/primitives/tooltip";
 
 /**
  * Custom render function that wraps components with all necessary providers
@@ -18,15 +18,13 @@ export function renderWithProviders(
       },
     }),
     ...renderOptions
-  } = {}
+  } = {},
 ) {
   function Wrapper({ children }: { children: React.ReactNode }) {
     return (
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <ToastProvider>
-            {children}
-          </ToastProvider>
+          <ToastProvider>{children}</ToastProvider>
         </TooltipProvider>
       </QueryClientProvider>
     );
@@ -36,7 +34,7 @@ export function renderWithProviders(
 }
 
 // Re-export everything from React Testing Library
-export * from '@testing-library/react';
+export * from "@testing-library/react";
 
 // Override the default render with our custom one
 export { renderWithProviders as render };

@@ -104,6 +104,7 @@ async def generate_source_title_and_metadata(
     provider: str = None,
     original_url: str | None = None,
     source_display_name: str | None = None,
+    source_type: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """
     Generate a user-friendly title and metadata for a source based on its content.
@@ -200,7 +201,7 @@ Generate only the title, nothing else."""
     metadata = {
         "knowledge_type": knowledge_type,
         "tags": tags or [],
-        "source_type": "url",  # Default, should be overridden by caller based on actual URL
+        "source_type": source_type or "url",  # Use provided source_type or default to "url"
         "auto_generated": True
     }
 
@@ -219,6 +220,7 @@ async def update_source_info(
     original_url: str | None = None,
     source_url: str | None = None,
     source_display_name: str | None = None,
+    source_type: str | None = None,
 ):
     """
     Update or insert source information in the sources table.
@@ -246,18 +248,21 @@ async def update_source_info(
             search_logger.info(f"Preserving existing title for {source_id}: {existing_title}")
 
             # Update metadata while preserving title
-            # Determine source_type based on source_url or original_url
-            if source_url and source_url.startswith("file://"):
-                source_type = "file"
-            elif original_url and original_url.startswith("file://"):
-                source_type = "file"
-            else:
-                source_type = "url"
+            # Use provided source_type or determine from URLs
+            determined_source_type = source_type
+            if not determined_source_type:
+                # Determine source_type based on source_url or original_url
+                if source_url and source_url.startswith("file://"):
+                    determined_source_type = "file"
+                elif original_url and original_url.startswith("file://"):
+                    determined_source_type = "file"
+                else:
+                    determined_source_type = "url"
 
             metadata = {
                 "knowledge_type": knowledge_type,
                 "tags": tags or [],
-                "source_type": source_type,
+                "source_type": determined_source_type,
                 "auto_generated": False,  # Mark as not auto-generated since we're preserving
                 "update_frequency": update_frequency,
             }
@@ -295,24 +300,27 @@ async def update_source_info(
                 # Use the display name directly as the title (truncated to prevent DB issues)
                 title = source_display_name[:100].strip()
 
-                # Determine source_type based on source_url or original_url
-                if source_url and source_url.startswith("file://"):
-                    source_type = "file"
-                elif original_url and original_url.startswith("file://"):
-                    source_type = "file"
-                else:
-                    source_type = "url"
+                # Use provided source_type or determine from URLs
+                determined_source_type = source_type
+                if not determined_source_type:
+                    # Determine source_type based on source_url or original_url
+                    if source_url and source_url.startswith("file://"):
+                        determined_source_type = "file"
+                    elif original_url and original_url.startswith("file://"):
+                        determined_source_type = "file"
+                    else:
+                        determined_source_type = "url"
 
                 metadata = {
                     "knowledge_type": knowledge_type,
                     "tags": tags or [],
-                    "source_type": source_type,
+                    "source_type": determined_source_type,
                     "auto_generated": False,
                 }
             else:
                 # Fallback to AI generation only if no display name
                 title, metadata = await generate_source_title_and_metadata(
-                    source_id, content, knowledge_type, tags, original_url, source_display_name
+                    source_id, content, knowledge_type, tags, None, original_url, source_display_name, source_type
                 )
 
                 # Override the source_type from AI with actual URL-based determination
@@ -649,7 +657,7 @@ class SourceManagementService:
 
             if knowledge_type:
                 # Filter by metadata->knowledge_type
-                query = query.filter("metadata->>knowledge_type", "eq", knowledge_type)
+                query = query.contains("metadata", {"knowledge_type": knowledge_type})
 
             response = query.execute()
 

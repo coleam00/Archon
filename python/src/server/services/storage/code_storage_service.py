@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import re
+from collections import defaultdict, deque
 from collections.abc import Callable
 from difflib import SequenceMatcher
 from typing import Any
@@ -815,6 +816,7 @@ async def add_code_examples_to_supabase(
 
         # Create combined texts for embedding (code + summary)
         combined_texts = []
+        original_indices: list[int] = []
         for j in range(i, batch_end):
             # Validate inputs
             code = code_examples[j] if isinstance(code_examples[j], str) else str(code_examples[j])
@@ -826,6 +828,7 @@ async def add_code_examples_to_supabase(
 
             combined_text = f"{code}\n\nSummary: {summary}"
             combined_texts.append(combined_text)
+            original_indices.append(j)
 
         # Apply contextual embeddings if enabled
         if use_contextual_embeddings and url_to_full_document:
@@ -870,21 +873,24 @@ async def add_code_examples_to_supabase(
 
         # Prepare batch data - only for successful embeddings
         batch_data = []
-        for j, (embedding, text) in enumerate(
-            zip(valid_embeddings, successful_texts, strict=False)
-        ):
-            # Find the original index
-            orig_idx = None
-            for k, orig_text in enumerate(batch_texts):
-                if orig_text == text:
-                    orig_idx = k
-                    break
 
-            if orig_idx is None:
-                search_logger.warning("Could not map embedding back to original code example")
+        # Build positions map to handle duplicate texts correctly
+        # Each text maps to a queue of indices where it appears
+        positions_by_text = defaultdict(deque)
+        for k, text in enumerate(batch_texts):
+            # map text -> original j index (not k)
+            positions_by_text[text].append(original_indices[k])
+
+        # Map successful texts back to their original indices
+        for embedding, text in zip(valid_embeddings, successful_texts, strict=False):
+            # Get the next available index for this text (handles duplicates)
+            if positions_by_text[text]:
+                orig_idx = positions_by_text[text].popleft()  # Original j index in [i, batch_end)
+            else:
+                search_logger.warning(f"Could not map embedding back to original code example (no remaining index for text: {text[:50]}...)")
                 continue
 
-            idx = i + orig_idx  # Get the global index
+            idx = orig_idx  # Global index into urls/chunk_numbers/etc.
 
             # Use source_id from metadata if available, otherwise extract from URL
             if metadatas[idx] and "source_id" in metadatas[idx]:
@@ -902,6 +908,10 @@ async def add_code_examples_to_supabase(
                 "source_id": source_id,
                 "embedding": embedding,
             })
+
+        if not batch_data:
+            search_logger.warning("No records to insert for this batch; skipping insert.")
+            continue
 
         # Insert batch into Supabase with retry logic
         max_retries = 3

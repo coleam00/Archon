@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { FileCode, Copy, Check } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
-import { useToast } from '../../contexts/ToastContext';
+import { useToast } from '../../features/ui/hooks/useToast';
 
 type RuleType = 'claude' | 'universal';
 
