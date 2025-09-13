@@ -38,22 +38,23 @@ class OpenAIErrorAdapter(ProviderErrorAdapter):
 
         sanitized = message
         
-        # Safe API key detection using string operations
-        if 'sk-' in sanitized:
-            words = sanitized.split()
-            for i, word in enumerate(words):
-                if word.startswith('sk-') and len(word) == 51:
-                    words[i] = '[REDACTED_KEY]'
-            sanitized = ' '.join(words)
-        
-        # Essential patterns only
+        # Comprehensive OpenAI patterns with case-insensitive matching
         patterns = [
-            (r'https?://[a-zA-Z0-9.-]+/[^\s]*', '[REDACTED_URL]'),
-            (r'org-[a-zA-Z0-9]{24}', '[REDACTED_ORG]'),
+            (r'sk-[a-zA-Z0-9]{48}', '[REDACTED_KEY]'),                 # OpenAI API keys
+            (r'https?://[^\s]*openai\.com[^\s]*', '[REDACTED_URL]'),   # OpenAI URLs
+            (r'org-[a-zA-Z0-9]{20,}', '[REDACTED_ORG]'),              # Organization IDs
+            (r'proj_[a-zA-Z0-9]{10,}', '[REDACTED_PROJECT]'),         # Project IDs
+            (r'req_[a-zA-Z0-9]{10,}', '[REDACTED_REQUEST]'),          # Request IDs
+            (r'Bearer\s+[a-zA-Z0-9._-]+', 'Bearer [REDACTED_TOKEN]'), # Bearer tokens
         ]
 
         for pattern, replacement in patterns:
             sanitized = re.sub(pattern, replacement, sanitized, flags=re.IGNORECASE)
+
+        # Check for sensitive words after sanitization
+        sensitive_words = ['internal', 'server', 'endpoint']
+        if any(word in sanitized.lower() for word in sensitive_words):
+            return "OpenAI API encountered an error. Please verify your API key and quota."
 
         return sanitized
 
@@ -68,14 +69,24 @@ class GoogleAIErrorAdapter(ProviderErrorAdapter):
 
         sanitized = message
         
-        # Google AI key format: AIzaSy...
-        if 'AIza' in sanitized:
-            words = sanitized.split()
-            for i, word in enumerate(words):
-                if word.startswith('AIza') and len(word) == 39:
-                    words[i] = '[REDACTED_KEY]'
-            sanitized = ' '.join(words)
-        
+        # Comprehensive Google AI patterns
+        patterns = [
+            (r'AIza[a-zA-Z0-9_-]{35}', '[REDACTED_KEY]'),                     # Google AI API keys
+            (r'https?://[^\s]*googleapis\.com[^\s]*', '[REDACTED_URL]'),      # Google API URLs
+            (r'https?://[^\s]*googleusercontent\.com[^\s]*', '[REDACTED_URL]'), # Google content URLs
+            (r'projects/[a-zA-Z0-9_-]+', 'projects/[REDACTED_PROJECT]'),      # GCP project paths
+            (r'ya29\.[a-zA-Z0-9_-]+', '[REDACTED_TOKEN]'),                   # OAuth tokens
+            (r'Bearer\s+[a-zA-Z0-9._-]+', 'Bearer [REDACTED_TOKEN]'),        # Bearer tokens
+        ]
+
+        for pattern, replacement in patterns:
+            sanitized = re.sub(pattern, replacement, sanitized, flags=re.IGNORECASE)
+
+        # Check for sensitive words
+        sensitive_words = ['internal', 'server', 'endpoint', 'project']
+        if any(word in sanitized.lower() for word in sensitive_words):
+            return "Google AI API encountered an error. Please verify your API key."
+
         return sanitized
 
 
@@ -89,14 +100,21 @@ class AnthropicErrorAdapter(ProviderErrorAdapter):
 
         sanitized = message
         
-        # Anthropic key format: sk-ant-...
-        if 'sk-ant-' in sanitized:
-            words = sanitized.split()
-            for i, word in enumerate(words):
-                if word.startswith('sk-ant-') and len(word) > 20:
-                    words[i] = '[REDACTED_KEY]'
-            sanitized = ' '.join(words)
-        
+        # Comprehensive Anthropic patterns
+        patterns = [
+            (r'sk-ant-[a-zA-Z0-9_-]{10,}', '[REDACTED_KEY]'),                 # Anthropic API keys
+            (r'https?://[^\s]*anthropic\.com[^\s]*', '[REDACTED_URL]'),        # Anthropic URLs
+            (r'Bearer\s+[a-zA-Z0-9._-]+', 'Bearer [REDACTED_TOKEN]'),         # Bearer tokens
+        ]
+
+        for pattern, replacement in patterns:
+            sanitized = re.sub(pattern, replacement, sanitized, flags=re.IGNORECASE)
+
+        # Check for sensitive words
+        sensitive_words = ['internal', 'server', 'endpoint']
+        if any(word in sanitized.lower() for word in sensitive_words):
+            return "Anthropic API encountered an error. Please verify your API key."
+
         return sanitized
 
 
@@ -120,11 +138,25 @@ class ProviderErrorFactory:
 
     @classmethod
     def detect_provider_from_error(cls, error_str: str) -> str:
+        """Detect provider from error message with comprehensive pattern matching."""
+        if not error_str:
+            return "openai"
+            
         error_lower = error_str.lower()
         
-        if "anthropic" in error_lower or "sk-ant-" in error_str:
+        # Case-insensitive provider detection with multiple patterns
+        if ("anthropic" in error_lower or 
+            re.search(r'sk-ant-[a-zA-Z0-9_-]+', error_str, re.IGNORECASE) or
+            "claude" in error_lower):
             return "anthropic"
-        elif "google" in error_lower or "AIza" in error_str:
+        elif ("google" in error_lower or 
+              re.search(r'AIza[a-zA-Z0-9_-]+', error_str, re.IGNORECASE) or
+              "googleapis" in error_lower or 
+              "vertex" in error_lower):
             return "google"
-        else:
+        elif ("openai" in error_lower or 
+              re.search(r'sk-[a-zA-Z0-9]{48}', error_str, re.IGNORECASE) or
+              "gpt" in error_lower):
             return "openai"
+        else:
+            return "openai"  # Safe default

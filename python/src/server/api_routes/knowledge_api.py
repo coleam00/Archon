@@ -55,7 +55,9 @@ active_crawl_tasks: dict[str, asyncio.Task] = {}
 
 def _sanitize_provider_error(error_message: str, provider: str = None) -> str:
     """Sanitize provider-specific error messages to prevent information disclosure."""
-    # Simple provider detection and sanitization without complex imports
+    import re
+    
+    # Input validation
     if not isinstance(error_message, str) or not error_message.strip():
         return "API encountered an error. Please verify your API key."
     
@@ -64,23 +66,36 @@ def _sanitize_provider_error(error_message: str, provider: str = None) -> str:
     
     sanitized = error_message
     
-    # Detect and sanitize based on content
-    if 'sk-' in sanitized:
-        words = sanitized.split()
-        for i, word in enumerate(words):
-            if word.startswith('sk-') and len(word) >= 10:  # Any OpenAI-style key
-                words[i] = '[REDACTED_KEY]'
-        sanitized = ' '.join(words)
-    elif 'AIza' in sanitized:
-        words = sanitized.split()
-        for i, word in enumerate(words):
-            if word.startswith('AIza') and len(word) >= 10:  # Google AI key
-                words[i] = '[REDACTED_KEY]'
-        sanitized = ' '.join(words)
+    # Comprehensive API key patterns (case-insensitive, robust regex)
+    api_key_patterns = [
+        (r'sk-[a-zA-Z0-9]{48}', '[REDACTED_KEY]'),           # OpenAI keys
+        (r'sk-ant-[a-zA-Z0-9_-]{10,}', '[REDACTED_KEY]'),    # Anthropic keys  
+        (r'AIza[a-zA-Z0-9_-]{35}', '[REDACTED_KEY]'),        # Google AI keys
+        (r'gcp_[a-zA-Z0-9_-]+', '[REDACTED_KEY]'),           # GCP service account keys
+        (r'ya29\.[a-zA-Z0-9_-]+', '[REDACTED_TOKEN]'),       # Google OAuth tokens
+    ]
     
-    # Remove URLs
-    import re
-    sanitized = re.sub(r'https?://[^\s]+', '[REDACTED_URL]', sanitized, flags=re.IGNORECASE)
+    # Apply API key sanitization
+    for pattern, replacement in api_key_patterns:
+        sanitized = re.sub(pattern, replacement, sanitized, flags=re.IGNORECASE)
+    
+    # Other sensitive data patterns
+    sensitive_patterns = [
+        (r'https?://[^\s]+', '[REDACTED_URL]'),                    # URLs
+        (r'org-[a-zA-Z0-9]{20,}', '[REDACTED_ORG]'),              # Organization IDs
+        (r'proj_[a-zA-Z0-9]{10,}', '[REDACTED_PROJECT]'),         # Project IDs
+        (r'Bearer\s+[a-zA-Z0-9._-]+', 'Bearer [REDACTED_TOKEN]'), # Bearer tokens
+        (r'"[^"]*(?:auth|token|key)[^"]*"', '[REDACTED_AUTH]'),   # Auth details in quotes
+    ]
+    
+    # Apply sensitive data sanitization  
+    for pattern, replacement in sensitive_patterns:
+        sanitized = re.sub(pattern, replacement, sanitized, flags=re.IGNORECASE)
+    
+    # Check for remaining sensitive keywords
+    sensitive_words = ['internal', 'server', 'endpoint', 'token']
+    if any(word in sanitized.lower() for word in sensitive_words if f'[REDACTED_{word.upper()}]' not in sanitized):
+        return "API encountered an error. Please verify your API key and configuration."
     
     return sanitized
 
@@ -118,9 +133,10 @@ async def _validate_provider_api_key(provider: str = None) -> None:
         logger.error("🚨 Re-raising HTTPException from validation")
         raise
     except Exception as e:
-        # This should catch the OpenAI authentication errors
+        # Sanitize error before logging to prevent sensitive data exposure
         error_str = str(e)
-        logger.error(f"❌ Caught exception during API key validation: {error_str}")
+        sanitized_error = _sanitize_provider_error(error_str, provider)
+        logger.error(f"❌ Caught exception during API key validation: {sanitized_error}")
         
         # Always fail for any exception during validation - better safe than sorry
         logger.error("🚨 API key validation failed - blocking crawl operation")
@@ -128,7 +144,7 @@ async def _validate_provider_api_key(provider: str = None) -> None:
             status_code=401,
             detail={
                 "error": "Invalid API key",
-                "message": "Please verify your API key in Settings before starting a crawl.",
+                "message": f"Please verify your {(provider or 'openai').title()} API key in Settings before starting a crawl.",
                 "error_type": "authentication_failed",
                 "provider": provider or "openai"
             }
