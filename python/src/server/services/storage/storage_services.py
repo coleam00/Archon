@@ -168,7 +168,11 @@ class DocumentStorageService(BaseStorageService):
                             "url": doc_url,
                             "markdown": file_content,  # Use full document content as markdown
                             "html": file_content,  # Also provide as HTML for text file extraction
-                            "content_type": "application/pdf" if filename.lower().endswith('.pdf') else ("text/markdown" if filename.lower().endswith('.md') else "text/plain")
+                            "content_type": "application/pdf" if filename.lower().endswith('.pdf') else (
+                                "text/html" if filename.lower().endswith(('.html', '.htm')) else (
+                                    "text/markdown" if filename.lower().endswith('.md') else "text/plain"
+                                )
+                            )
                         }]
                         
                         logger.info(f"🔍 DEBUG: Created crawl_results with url={doc_url}, content_length={len(file_content)}")
