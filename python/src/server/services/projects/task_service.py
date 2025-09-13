@@ -59,6 +59,7 @@ class TaskService:
         description: str = "",
         assignee: str = "User",
         task_order: int = 0,
+        priority: str = "medium",
         feature: str | None = None,
         sources: list[dict[str, Any]] = None,
         code_examples: list[dict[str, Any]] = None,
@@ -79,6 +80,11 @@ class TaskService:
 
             # Validate assignee
             is_valid, error_msg = self.validate_assignee(assignee)
+            if not is_valid:
+                return False, {"error": error_msg}
+
+            # Validate priority
+            is_valid, error_msg = self.validate_priority(priority)
             if not is_valid:
                 return False, {"error": error_msg}
 
@@ -114,6 +120,7 @@ class TaskService:
                 "status": task_status,
                 "assignee": assignee,
                 "task_order": task_order,
+                "priority": priority,
                 "sources": sources or [],
                 "code_examples": code_examples or [],
                 "created_at": datetime.now().isoformat(),
@@ -138,6 +145,7 @@ class TaskService:
                         "status": task["status"],
                         "assignee": task["assignee"],
                         "task_order": task["task_order"],
+                        "priority": task["priority"],
                         "created_at": task["created_at"],
                     }
                 }

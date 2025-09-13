@@ -70,6 +70,7 @@ class CreateTaskRequest(BaseModel):
     status: str | None = "todo"
     assignee: str | None = "User"
     task_order: int | None = 0
+    priority: str | None = "medium"
     feature: str | None = None
 
 
@@ -635,6 +636,7 @@ async def create_task(request: CreateTaskRequest):
             description=request.description or "",
             assignee=request.assignee or "User",
             task_order=request.task_order or 0,
+            priority=request.priority or "medium",
             feature=request.feature,
         )
 
