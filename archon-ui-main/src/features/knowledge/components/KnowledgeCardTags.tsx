@@ -68,12 +68,51 @@ export const KnowledgeCardTags: React.FC<KnowledgeCardTagsProps> = ({ sourceId, 
     setIsEditing(false);
   };
 
+  const handleAddTagAndSave = async () => {
+    const trimmed = newTagValue.trim();
+    if (trimmed) {
+      let newTags = [...editingTags];
+
+      // If we're editing an existing tag, remove the original first
+      if (originalTagBeingEdited) {
+        newTags = newTags.filter(tag => tag !== originalTagBeingEdited);
+      }
+
+      // Add the new/modified tag if it doesn't already exist
+      if (!newTags.includes(trimmed)) {
+        newTags.push(trimmed);
+      }
+
+      // Save directly without updating local state first
+      const updatedTags = newTags.filter(tag => tag.trim().length > 0);
+
+      try {
+        await updateMutation.mutateAsync({
+          sourceId,
+          updates: {
+            tags: updatedTags,
+          },
+        });
+        setIsEditing(false);
+        setNewTagValue("");
+        setOriginalTagBeingEdited(null);
+      } catch (_error) {
+        // Reset on error
+        setEditingTags(tags);
+        setNewTagValue("");
+        setOriginalTagBeingEdited(null);
+      }
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
       e.preventDefault();
       if (newTagValue.trim()) {
-        handleAddTag();
+        // Add tag and save immediately
+        handleAddTagAndSave();
       } else {
+        // If no tag in input, just save current state
         handleSaveTags();
       }
     } else if (e.key === "Escape") {
