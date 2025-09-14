@@ -4,7 +4,7 @@
  * Handles automatic context collection and GitHub issue creation for bug reports.
  */
 
-import { getApiBasePath } from '../config/api';
+import { API_BASE_URL } from '../config/api';
 
 export interface BugContext {
   error: {
@@ -163,7 +163,7 @@ class BugReportService {
         context: bugReport.context
       };
 
-      const response = await fetch(`${getApiBasePath()}/bug-report/github`, {
+      const response = await fetch(`${API_BASE_URL}/bug-report/github`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

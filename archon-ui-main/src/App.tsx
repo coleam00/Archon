@@ -106,7 +106,7 @@ const AppContent = () => {
 
   return (
     <>
-      <Router>
+      <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <ErrorBoundaryWithBugReport>
           <MainLayout>
             {/* Migration Banner - shows when backend is up but DB schema needs work */}

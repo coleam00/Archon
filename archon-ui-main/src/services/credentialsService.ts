@@ -53,10 +53,10 @@ export interface CodeExtractionSettings {
   ENABLE_CODE_SUMMARIES: boolean;
 }
 
-import { getApiBasePath } from "../config/api";
+import { API_BASE_URL } from "../config/api";
 
 class CredentialsService {
-  private baseUrl = getApiBasePath();
+  private baseUrl = API_BASE_URL;
 
   private handleCredentialError(error: any, context: string): Error {
     const errorMessage = error instanceof Error ? error.message : String(error);
