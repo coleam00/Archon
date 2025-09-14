@@ -17,6 +17,8 @@ services:
     container_name: archon-server
     ports:
       - "${ARCHON_SERVER_PORT:-8181}:${ARCHON_SERVER_PORT:-8181}"
+    env_file:
+      - .env
     environment:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
@@ -30,6 +32,7 @@ services:
       - AGENTS_ENABLED=${AGENTS_ENABLED:-false}
     networks:
       - app-network
+      - supabase_default
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock # Docker socket for MCP container control
       - ./python/src:/app/src # Mount source code for hot reload
@@ -72,6 +75,8 @@ services:
     container_name: archon-mcp
     ports:
       - "${ARCHON_MCP_PORT:-8051}:${ARCHON_MCP_PORT:-8051}"
+    env_file:
+      - .env
     environment:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
@@ -88,6 +93,7 @@ services:
       - ARCHON_AGENTS_PORT=${ARCHON_AGENTS_PORT:-8052}
     networks:
       - app-network
+      - supabase_default
     depends_on:
       archon-server:
         condition: service_healthy
@@ -120,6 +126,8 @@ services:
     container_name: archon-agents
     ports:
       - "${ARCHON_AGENTS_PORT:-8052}:${ARCHON_AGENTS_PORT:-8052}"
+    env_file:
+      - .env
     environment:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
@@ -131,6 +139,7 @@ services:
       - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
     networks:
       - app-network
+      - supabase_default
     healthcheck:
       test:
         [
@@ -175,3 +184,5 @@ services:
 networks:
   app-network:
     driver: bridge
+  supabase_default:
+    external: true

@@ -98,39 +98,17 @@ def validate_supabase_url(url: str) -> bool:
         raise ConfigurationError("Supabase URL cannot be empty")
 
     parsed = urlparse(url)
-    # Allow HTTP and HTTPS
+    # Allow HTTP for local development (host.docker.internal or localhost)
     if parsed.scheme not in ("http", "https"):
         raise ConfigurationError("Supabase URL must use HTTP or HTTPS")
 
-    # For HTTP URLs, check if we're in a containerized/local environment
+    # Require HTTPS for production (non-local) URLs
     if parsed.scheme == "http":
         hostname = parsed.hostname or ""
 
         # Check for exact localhost and Docker internal hosts (security: prevent subdomain bypass)
-        local_hosts = [
-            "localhost", 
-            "127.0.0.1", 
-            "host.docker.internal",
-            "0.0.0.0"
-        ]
-        
-        # Allow common Docker Compose and Kubernetes service patterns
-        docker_kubernetes_patterns = [
-            # Docker Compose service names
-            lambda h: h.count('-') > 0,  # service names with hyphens (common in docker-compose)
-            lambda h: h.endswith('.local'),  # .local domains
-            lambda h: h.endswith('.localhost'),  # .localhost domains
-            # Kubernetes service patterns
-            lambda h: '.' in h and not h.startswith('www.'),  # service.namespace pattern but not www domains
-            lambda h: h.endswith('.svc.cluster.local'),  # full k8s service DNS
-        ]
-
-        # Check if hostname matches local hosts
-        if hostname in local_hosts:
-            return True
-
-        # Check Docker/Kubernetes patterns
-        if any(pattern(hostname) for pattern in docker_kubernetes_patterns):
+        local_hosts = ["localhost", "127.0.0.1", "host.docker.internal"]
+        if hostname in local_hosts or hostname.endswith(".localhost"):
             return True
 
         # Check if hostname is a private IP address
@@ -148,34 +126,13 @@ def validate_supabase_url(url: str) -> bool:
             # hostname is not a valid IP address, could be a domain name
             pass
 
-        # Check environment variables to determine if we're in a containerized environment
-        containerized_env = any([
-            os.getenv('DOCKER_CONTAINER'),  # Custom flag
-            os.getenv('KUBERNETES_SERVICE_HOST'),  # Kubernetes
-            os.getenv('HOSTNAME', '').startswith(('archon-', 'app-', 'service-')),  # Common container naming
-            os.path.exists('/.dockerenv'),  # Docker container indicator
-        ])
-
-        # If we're in a containerized environment, be more permissive
-        if containerized_env:
-            # Only block obviously external domains
-            external_patterns = [
-                '.com', '.org', '.net', '.io', '.co', '.ai', '.dev',
-                '.amazonaws.com', '.google.com', '.microsoft.com'
-            ]
-            
-            # If hostname doesn't look like an external domain, allow it
-            if not any(hostname.endswith(pattern) for pattern in external_patterns):
-                return True
-
-        # If not a local host, private IP, or containerized service, require HTTPS
+        # If not a local host or private IP, require HTTPS
         raise ConfigurationError(f"Supabase URL must use HTTPS for non-local environments (hostname: {hostname})")
 
     if not parsed.netloc:
         raise ConfigurationError("Invalid Supabase URL format")
 
     return True
-
 
 
 def load_environment_config() -> EnvironmentConfig:
