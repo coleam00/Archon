@@ -152,7 +152,7 @@ export const KnowledgeCardTags: React.FC<KnowledgeCardTagsProps> = ({ sourceId, 
       {visibleTags.map((tag) => (
         <div key={tag} className="relative">
           {isEditing ? (
-            <SimpleTooltip content={`Click to edit "${tag}" or hover to remove`}>
+            <SimpleTooltip content={`Click to edit "${tag}"`}>
               <Badge
                 color="gray"
                 variant="outline"
@@ -176,7 +176,7 @@ export const KnowledgeCardTags: React.FC<KnowledgeCardTagsProps> = ({ sourceId, 
             </SimpleTooltip>
           ) : (
             <div className="relative group">
-              <SimpleTooltip content={`Click to edit "${tag}" or hover to delete`}>
+              <SimpleTooltip content={`Click to edit "${tag}"`}>
                 <Badge
                   color="gray"
                   variant="outline"
