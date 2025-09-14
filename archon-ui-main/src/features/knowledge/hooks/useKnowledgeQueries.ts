@@ -548,24 +548,61 @@ export function useUpdateKnowledgeItem() {
     onMutate: async ({ sourceId, updates }) => {
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: knowledgeKeys.detail(sourceId) });
+      await queryClient.cancelQueries({ queryKey: knowledgeKeys.summary() });
 
-      // Snapshot the previous value
+      // Snapshot the previous values
       const previousItem = queryClient.getQueryData<KnowledgeItem>(knowledgeKeys.detail(sourceId));
+      const previousSummaries = queryClient.getQueriesData({ queryKey: knowledgeKeys.summary() });
 
-      // Optimistically update the item
+      // Optimistically update the detail item
       if (previousItem) {
-        queryClient.setQueryData<KnowledgeItem>(knowledgeKeys.detail(sourceId), {
-          ...previousItem,
-          ...updates,
-        });
+        const updatedItem = { ...previousItem };
+
+        // Handle metadata updates properly
+        if ('tags' in updates) {
+          const newTags = updates.tags as string[];
+          // Update both top-level tags and metadata.tags for consistency
+          (updatedItem as any).tags = newTags;
+          updatedItem.metadata = { ...updatedItem.metadata, tags: newTags };
+        }
+
+        queryClient.setQueryData<KnowledgeItem>(knowledgeKeys.detail(sourceId), updatedItem);
       }
 
-      return { previousItem };
+      // Optimistically update summaries cache
+      queryClient.setQueriesData({ queryKey: knowledgeKeys.summary() }, (old: any) => {
+        if (!old?.items) return old;
+
+        return {
+          ...old,
+          items: old.items.map((item: any) => {
+            if (item.source_id === sourceId) {
+              const updatedItem = { ...item };
+              if ('tags' in updates) {
+                const newTags = updates.tags as string[];
+                // Update both top-level tags and metadata.tags for consistency with summary API
+                updatedItem.tags = newTags;
+                updatedItem.metadata = { ...updatedItem.metadata, tags: newTags };
+              }
+              return updatedItem;
+            }
+            return item;
+          }),
+        };
+      });
+
+      return { previousItem, previousSummaries };
     },
     onError: (error, variables, context) => {
       // Rollback on error
       if (context?.previousItem) {
         queryClient.setQueryData(knowledgeKeys.detail(variables.sourceId), context.previousItem);
+      }
+      if (context?.previousSummaries) {
+        // Rollback all summary queries
+        for (const [queryKey, data] of context.previousSummaries) {
+          queryClient.setQueryData(queryKey, data);
+        }
       }
 
       const errorMessage = error instanceof Error ? error.message : "Failed to update item";
@@ -574,9 +611,10 @@ export function useUpdateKnowledgeItem() {
     onSuccess: (_data, { sourceId }) => {
       showToast("Item updated successfully", "success");
 
-      // Invalidate both detail and list queries
+      // Invalidate all related queries
       queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(sourceId) });
       queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: knowledgeKeys.summary() }); // Add summaries cache
     },
   });
 }

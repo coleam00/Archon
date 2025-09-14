@@ -17,6 +17,9 @@ import type { ActiveOperation } from "../progress/types";
 import type { KnowledgeItem } from "../types";
 import { extractDomain } from "../utils/knowledge-utils";
 import { KnowledgeCardActions } from "./KnowledgeCardActions";
+import { KnowledgeCardTags } from "./KnowledgeCardTags";
+import { KnowledgeCardTitle } from "./KnowledgeCardTitle";
+import { KnowledgeCardType } from "./KnowledgeCardType";
 
 interface KnowledgeCardProps {
   item: KnowledgeItem;
@@ -199,19 +202,10 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
                   <span>{isUrl ? "Web Page" : "Document"}</span>
                 </div>
               </SimpleTooltip>
-              <SimpleTooltip content={isTechnical ? "Technical documentation" : "Business/general content"}>
-                <div
-                  className={cn(
-                    "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium",
-                    isTechnical
-                      ? "bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400"
-                      : "bg-pink-100 text-pink-700 dark:bg-pink-500/10 dark:text-pink-400",
-                  )}
-                >
-                  {isTechnical ? <Terminal className="w-3.5 h-3.5" /> : <Briefcase className="w-3.5 h-3.5" />}
-                  <span>{getTypeLabel()}</span>
-                </div>
-              </SimpleTooltip>
+              <KnowledgeCardType
+                sourceId={item.source_id}
+                knowledgeType={item.knowledge_type}
+              />
             </div>
 
             {/* Actions */}
@@ -237,7 +231,14 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
           </div>
 
           {/* Title */}
-          <h3 className="text-base font-semibold text-gray-900 dark:text-white/90 line-clamp-2 mb-2">{item.title}</h3>
+          <div className="mb-2">
+            <KnowledgeCardTitle
+              sourceId={item.source_id}
+              title={item.title}
+              description={(item as any).summary}
+              accentColor={getAccentColorName()}
+            />
+          </div>
 
           {/* URL/Source */}
           {item.url &&
@@ -258,6 +259,20 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
                 <span className="truncate">{item.url.replace("file://", "")}</span>
               </div>
             ))}
+
+          {/* Tags */}
+          <div
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.stopPropagation();
+              }
+            }}
+            role="none"
+            className="mt-2"
+          >
+            <KnowledgeCardTags sourceId={item.source_id} tags={item.tags || item.metadata?.tags || []} />
+          </div>
         </div>
 
         {/* Spacer to push footer to bottom */}
@@ -285,8 +300,14 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
             </div>
             {/* Right: pills */}
             <div className="flex items-center gap-2">
-              <SimpleTooltip content={`${documentCount} document${documentCount !== 1 ? "s" : ""} indexed`}>
-                <div>
+              <SimpleTooltip content={`${documentCount} document${documentCount !== 1 ? "s" : ""} indexed - Click to view`}>
+                <div
+                  className="cursor-pointer hover:scale-105 transition-transform"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onViewDocument();
+                  }}
+                >
                   <StatPill
                     color="orange"
                     value={documentCount}
@@ -297,9 +318,20 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
                 </div>
               </SimpleTooltip>
               <SimpleTooltip
-                content={`${codeExamplesCount} code example${codeExamplesCount !== 1 ? "s" : ""} extracted`}
+                content={`${codeExamplesCount} code example${codeExamplesCount !== 1 ? "s" : ""} extracted - ${onViewCodeExamples ? "Click to view" : "No examples available"}`}
               >
-                <div>
+                <div
+                  className={cn(
+                    "transition-transform",
+                    onViewCodeExamples && "cursor-pointer hover:scale-105"
+                  )}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (onViewCodeExamples) {
+                      onViewCodeExamples();
+                    }
+                  }}
+                >
                   <StatPill
                     color="blue"
                     value={codeExamplesCount}

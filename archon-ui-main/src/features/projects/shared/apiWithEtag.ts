@@ -3,8 +3,8 @@
  * Reduces bandwidth by 70-90% through HTTP 304 responses
  */
 
-import { ProjectServiceError } from "./api";
 import { API_BASE_URL } from "../../../config/api";
+import { ProjectServiceError } from "./api";
 
 // ETag and data cache stores - ensure they're initialized
 const etagCache = typeof Map !== "undefined" ? new Map<string, string>() : null;

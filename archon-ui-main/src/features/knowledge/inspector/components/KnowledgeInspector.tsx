@@ -15,15 +15,27 @@ interface KnowledgeInspectorProps {
   item: KnowledgeItem;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  initialTab?: "documents" | "code";
 }
 
 type ViewMode = "documents" | "code";
 
-export const KnowledgeInspector: React.FC<KnowledgeInspectorProps> = ({ item, open, onOpenChange }) => {
-  const [viewMode, setViewMode] = useState<ViewMode>("documents");
+export const KnowledgeInspector: React.FC<KnowledgeInspectorProps> = ({
+  item,
+  open,
+  onOpenChange,
+  initialTab = "documents"
+}) => {
+  const [viewMode, setViewMode] = useState<ViewMode>(initialTab);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedItem, setSelectedItem] = useState<InspectorSelectedItem | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  // Reset view mode when item or initialTab changes
+  useEffect(() => {
+    setViewMode(initialTab);
+    setSelectedItem(null); // Clear selected item when switching tabs
+  }, [item.source_id, initialTab]);
 
   // Use pagination hook for current view mode
   const paginationData = useInspectorPagination({

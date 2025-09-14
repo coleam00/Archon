@@ -4,13 +4,13 @@ interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
   color?: 'purple' | 'green' | 'pink' | 'blue' | 'gray' | 'orange';
   variant?: 'solid' | 'outline';
 }
-export const Badge: React.FC<BadgeProps> = ({
+export const Badge = React.forwardRef<HTMLSpanElement, BadgeProps>(({
   children,
   color = 'gray',
   variant = 'outline',
   className = '',
   ...props
-}) => {
+}, ref) => {
   const colorMap = {
     solid: {
       purple: 'bg-purple-500/10 text-purple-500 dark:bg-purple-500/10 dark:text-purple-500',
@@ -29,11 +29,17 @@ export const Badge: React.FC<BadgeProps> = ({
       orange: 'border border-orange-500 text-orange-500 dark:border-orange-500 dark:text-orange-500 shadow-[0_0_10px_rgba(251,146,60,0.3)]'
     }
   };
-  return <span className={`
+  return <span
+    ref={ref}
+    className={`
         inline-flex items-center text-xs px-2 py-1 rounded
         ${colorMap[variant][color]}
         ${className}
-      `} {...props}>
-      {children}
-    </span>;
-};
+      `}
+    {...props}
+  >
+    {children}
+  </span>;
+});
+
+Badge.displayName = 'Badge';
