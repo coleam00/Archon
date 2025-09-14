@@ -558,45 +558,73 @@ export function useUpdateKnowledgeItem() {
       if (previousItem) {
         const updatedItem = { ...previousItem };
 
-        // Handle metadata updates properly
-        if ('tags' in updates) {
-          const newTags = updates.tags as string[];
-          // Update both top-level tags and metadata.tags for consistency
-          (updatedItem as any).tags = newTags;
-          updatedItem.metadata = { ...updatedItem.metadata, tags: newTags };
+        // Initialize metadata if missing
+        const currentMetadata = updatedItem.metadata || {};
+
+        // Handle title updates
+        if ('title' in updates && typeof updates.title === 'string') {
+          updatedItem.title = updates.title;
         }
 
-        if ('knowledge_type' in updates) {
-          const newType = updates.knowledge_type as string;
-          // Update both top-level knowledge_type and metadata.knowledge_type for consistency
-          updatedItem.knowledge_type = newType as "technical" | "business";
-          updatedItem.metadata = { ...updatedItem.metadata, knowledge_type: newType };
+        // Handle tags updates
+        if ('tags' in updates && Array.isArray(updates.tags)) {
+          const newTags = updates.tags as string[];
+          (updatedItem as any).tags = newTags;
         }
+
+        // Handle knowledge_type updates
+        if ('knowledge_type' in updates && typeof updates.knowledge_type === 'string') {
+          const newType = updates.knowledge_type as "technical" | "business";
+          updatedItem.knowledge_type = newType;
+        }
+
+        // Synchronize metadata with top-level fields
+        updatedItem.metadata = {
+          ...currentMetadata,
+          ...((updatedItem as any).tags && { tags: (updatedItem as any).tags }),
+          ...(updatedItem.knowledge_type && { knowledge_type: updatedItem.knowledge_type }),
+        };
 
         queryClient.setQueryData<KnowledgeItem>(knowledgeKeys.detail(sourceId), updatedItem);
       }
 
       // Optimistically update summaries cache
-      queryClient.setQueriesData({ queryKey: knowledgeKeys.summary() }, (old: any) => {
+      queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summary() }, (old) => {
         if (!old?.items) return old;
 
         return {
           ...old,
-          items: old.items.map((item: any) => {
+          items: old.items.map((item) => {
             if (item.source_id === sourceId) {
               const updatedItem = { ...item };
-              if ('tags' in updates) {
+
+              // Initialize metadata if missing
+              const currentMetadata = updatedItem.metadata || {};
+
+              // Update title if provided
+              if ('title' in updates && typeof updates.title === 'string') {
+                updatedItem.title = updates.title;
+              }
+
+              // Update tags if provided
+              if ('tags' in updates && Array.isArray(updates.tags)) {
                 const newTags = updates.tags as string[];
-                // Update both top-level tags and metadata.tags for consistency with summary API
                 updatedItem.tags = newTags;
-                updatedItem.metadata = { ...updatedItem.metadata, tags: newTags };
               }
-              if ('knowledge_type' in updates) {
-                const newType = updates.knowledge_type as string;
-                // Update both top-level knowledge_type and metadata.knowledge_type for consistency
-                updatedItem.knowledge_type = newType as "technical" | "business";
-                updatedItem.metadata = { ...updatedItem.metadata, knowledge_type: newType };
+
+              // Update knowledge_type if provided
+              if ('knowledge_type' in updates && typeof updates.knowledge_type === 'string') {
+                const newType = updates.knowledge_type as "technical" | "business";
+                updatedItem.knowledge_type = newType;
               }
+
+              // Synchronize metadata with top-level fields
+              updatedItem.metadata = {
+                ...currentMetadata,
+                ...(updatedItem.tags && { tags: updatedItem.tags }),
+                ...(updatedItem.knowledge_type && { knowledge_type: updatedItem.knowledge_type }),
+              };
+
               return updatedItem;
             }
             return item;
