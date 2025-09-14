@@ -12,7 +12,7 @@ from urllib.parse import urljoin
 import httpx
 
 from ..config.logfire_config import mcp_logger
-from ..config.service_discovery import get_agents_url, get_api_url
+from ..config.service_discovery import get_agents_url, get_api_url, get_discovery
 
 
 class MCPServiceClient:
@@ -22,15 +22,27 @@ class MCPServiceClient:
     """
 
     def __init__(self):
+        self.discovery = get_discovery()
         self.api_url = get_api_url()
         self.agents_url = get_agents_url()
         self.service_auth = "mcp-service-key"  # In production, use proper key management
-        self.timeout = httpx.Timeout(
-            connect=5.0,
-            read=300.0,  # 5 minutes for long operations like crawling
-            write=30.0,
-            pool=5.0,
-        )
+        
+        # Adjust timeout based on environment
+        if self.discovery.is_azure:
+            # Azure Container Apps may have higher latency
+            self.timeout = httpx.Timeout(
+                connect=10.0,  # Increased for Azure
+                read=300.0,    # 5 minutes for long operations like crawling
+                write=30.0,
+                pool=10.0,     # Increased for Azure
+            )
+        else:
+            self.timeout = httpx.Timeout(
+                connect=5.0,
+                read=300.0,    # 5 minutes for long operations like crawling
+                write=30.0,
+                pool=5.0,
+            )
 
     def _get_headers(self, request_id: str | None = None) -> dict[str, str]:
         """Get common headers for internal requests"""
@@ -64,7 +76,7 @@ class MCPServiceClient:
             "metadata": options or {},
         }
 
-        mcp_logger.info(f"Calling API service to crawl {url}")
+        mcp_logger.info(f"Calling API service to crawl {url} at {endpoint}")
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -82,16 +94,16 @@ class MCPServiceClient:
                     "error": None if result.get("success") else {"message": "Crawl failed"},
                 }
         except httpx.TimeoutException:
-            mcp_logger.error(f"Timeout crawling {url}")
+            mcp_logger.error(f"Timeout crawling {url} - endpoint: {endpoint}")
             return {
                 "success": False,
                 "error": {"code": "TIMEOUT", "message": "Crawl operation timed out"},
             }
         except httpx.HTTPStatusError as e:
-            mcp_logger.error(f"HTTP error crawling {url}: {e.response.status_code}")
+            mcp_logger.error(f"HTTP error crawling {url}: {e.response.status_code} - endpoint: {endpoint}")
             return {"success": False, "error": {"code": "HTTP_ERROR", "message": str(e)}}
         except Exception as e:
-            mcp_logger.error(f"Error crawling {url}: {str(e)}")
+            mcp_logger.error(f"Error crawling {url}: {str(e)} - endpoint: {endpoint}")
             return {"success": False, "error": {"code": "CRAWL_FAILED", "message": str(e)}}
 
     async def search(
@@ -117,7 +129,7 @@ class MCPServiceClient:
         endpoint = urljoin(self.api_url, "/api/rag/query")
         request_data = {"query": query, "source": source_filter, "match_count": match_count}
 
-        mcp_logger.info(f"Calling API service to search: {query}")
+        mcp_logger.info(f"Calling API service to search: {query} at {endpoint}")
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -137,7 +149,7 @@ class MCPServiceClient:
                 }
 
         except Exception as e:
-            mcp_logger.error(f"Error searching: {str(e)}")
+            mcp_logger.error(f"Error searching: {str(e)} - endpoint: {endpoint}")
             return {
                 "success": False,
                 "results": [],
@@ -199,10 +211,11 @@ class MCPServiceClient:
         health_status = {"api_service": False, "agents_service": False}
 
         # Check API service
-        api_health_url = urljoin(self.api_url, "/api/health")
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
-                mcp_logger.info(f"Checking API service health at: {api_health_url}")
+            api_health_url = urljoin(self.api_url, "/api/health")
+            mcp_logger.info(f"Checking API service health at: {api_health_url}")
+            
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
                 response = await client.get(api_health_url)
                 health_status["api_service"] = response.status_code == 200
                 mcp_logger.info(f"API service health check: {response.status_code}")
@@ -212,11 +225,22 @@ class MCPServiceClient:
 
         # Check Agents service
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
-                response = await client.get(urljoin(self.agents_url, "/health"))
+            agents_health_url = urljoin(self.agents_url, "/health")
+            mcp_logger.info(f"Checking Agents service health at: {agents_health_url}")
+            
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+                response = await client.get(agents_health_url)
                 health_status["agents_service"] = response.status_code == 200
-        except Exception:
-            pass
+                mcp_logger.info(f"Agents service health check: {response.status_code}")
+        except Exception as e:
+            health_status["agents_service"] = False
+            mcp_logger.warning(f"Agents service health check failed: {e}")
+
+        # Log overall health status
+        if health_status["api_service"] and health_status["agents_service"]:
+            mcp_logger.info("All dependent services are healthy")
+        else:
+            mcp_logger.warning(f"Some dependent services are unhealthy: {health_status}")
 
         return health_status
 

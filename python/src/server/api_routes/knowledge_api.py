@@ -33,8 +33,9 @@ from ..services.storage import DocumentStorageService
 from ..utils import get_supabase_client
 from ..utils.document_processing import extract_text_from_document
 
-# Get logger for this module
-logger = get_logger(__name__)
+# Import crawling service components
+from ..services.crawling import CrawlingService, get_active_orchestration
+from ..services.crawling.modes import CrawlingMode
 from ..socketio_app import get_socketio_instance
 from .socketio_handlers import (
     complete_crawl_progress,
@@ -88,10 +89,274 @@ class CrawlRequest(BaseModel):
     max_depth: int = 2  # Maximum crawl depth (1-5)
 
 
+class SpecializedCrawlRequest(BaseModel):
+    url: str
+    mode: str | None = None  # Force specific mode (e.g., 'ecommerce', 'blog')
+    knowledge_type: str = "general"
+    tags: list[str] = []
+    extract_structured_data: bool = True
+    extract_product_data: bool = True  # For e-commerce mode
+    extract_pricing: bool = True  # For e-commerce mode
+    anti_bot_mode: bool = False  # Enhanced stealth crawling
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "url": "https://amazon.com/dp/B08N5WRWNW",
+                "mode": "ecommerce",
+                "knowledge_type": "product",
+                "tags": ["electronics", "headphones"],
+                "extract_structured_data": True,
+                "extract_product_data": True,
+                "extract_pricing": True,
+                "anti_bot_mode": True
+            }
+        }
+
+
 class RagQueryRequest(BaseModel):
     query: str
     source: str | None = None
     match_count: int = 5
+
+
+class CrawlingModesResponse(BaseModel):
+    """Response model for available crawling modes."""
+    modes: list[dict]
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "modes": [
+                    {
+                        "mode": "ecommerce",
+                        "description": "Specialized crawling for e-commerce sites",
+                        "capabilities": ["product_extraction", "price_tracking"],
+                        "enabled": True
+                    }
+                ]
+            }
+        }
+
+
+@router.get("/crawling/modes", response_model=CrawlingModesResponse)
+async def get_crawling_modes():
+    """Get available crawling modes and their capabilities."""
+    try:
+        # Get a crawler instance to initialize modes
+        crawler = await get_crawler()
+        if not crawler:
+            return {"modes": [{"mode": "standard", "enabled": True, "description": "Standard crawling"}]}
+        
+        # Create a temporary crawling service to access modes
+        from ..services.crawling import CrawlingService
+        crawl_service = CrawlingService(crawler)
+        
+        modes = crawl_service.get_available_crawling_modes()
+        return {"modes": modes}
+        
+    except Exception as e:
+        safe_logfire_error(f"Failed to get crawling modes | error={str(e)}")
+        # Return basic modes as fallback
+        return {
+            "modes": [
+                {
+                    "mode": "standard",
+                    "enabled": True,
+                    "description": "Standard web crawling",
+                    "capabilities": ["general_content"]
+                },
+                {
+                    "mode": "ecommerce", 
+                    "enabled": True,
+                    "description": "E-commerce product crawling",
+                    "capabilities": ["product_extraction", "price_tracking"]
+                }
+            ]
+        }
+
+
+@router.get("/crawling/modes/{mode}/performance")
+async def get_mode_performance(mode: str):
+    """Get performance statistics for a specific crawling mode."""
+    try:
+        crawler = await get_crawler()
+        if not crawler:
+            raise HTTPException(status_code=503, detail={"error": "Crawler not available"})
+        
+        from ..services.crawling import CrawlingService
+        crawl_service = CrawlingService(crawler)
+        
+        stats = crawl_service.get_mode_performance_stats(mode)
+        
+        if "error" in stats:
+            raise HTTPException(status_code=400, detail={"error": stats["error"]})
+        
+        return stats
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        safe_logfire_error(f"Failed to get mode performance | error={str(e)} | mode={mode}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
+@router.post("/crawling/specialized")
+async def crawl_with_specialized_mode(request: SpecializedCrawlRequest):
+    """Crawl a URL using specialized crawling modes for enhanced data extraction."""
+    progress_id = str(uuid.uuid4())
+    
+    async def crawl_task():
+        crawler = None
+        try:
+            safe_logfire_info(f"Starting specialized crawl | url={request.url} | mode={request.mode} | progress_id={progress_id}")
+            
+            # Send initial progress
+            await start_crawl_progress(progress_id, {
+                "url": request.url,
+                "mode": request.mode or "auto-detect",
+                "type": "specialized_crawl"
+            })
+            
+            # Get crawler instance
+            crawler = await get_crawler()
+            if not crawler:
+                raise Exception("Crawler not available")
+            
+            # Create crawling service with specialized modes
+            from ..services.crawling import CrawlingService
+            crawl_service = CrawlingService(crawler, progress_id=progress_id)
+            
+            # Create progress callback
+            async def progress_callback(status: str, percentage: int, message: str, **kwargs):
+                await update_crawl_progress(progress_id, {
+                    "status": status,
+                    "percentage": percentage,
+                    "log": message,
+                    "progressId": progress_id,
+                    **kwargs
+                })
+            
+            # Perform specialized crawling
+            result = await crawl_service.crawl_with_specialized_mode(
+                url=request.url,
+                force_mode=request.mode,
+                progress_callback=progress_callback,
+                extract_structured_data=request.extract_structured_data,
+                anti_bot_mode=request.anti_bot_mode
+            )
+            
+            if not result.success:
+                await error_crawl_progress(progress_id, {
+                    "error": result.error or "Specialized crawling failed",
+                    "url": request.url
+                })
+                return {
+                    "success": False,
+                    "error": result.error,
+                    "progress_id": progress_id
+                }
+            
+            # Store extracted data if successful
+            if result.structured_data:
+                # Store structured data in database
+                supabase = get_supabase_client()
+                
+                # Store in specialized tables based on mode
+                if result.mode == "ecommerce" and "product" in result.structured_data:
+                    await _store_ecommerce_data(supabase, request.url, result.structured_data["product"])
+                
+                # Also store in standard knowledge base
+                document_service = DocumentStorageService(supabase)
+                chunks = [{"content": result.content.get("markdown", ""), "metadata": result.metadata}]
+                
+                await document_service.store_documents(
+                    source_id=request.url,
+                    documents=chunks,
+                    progress_callback=progress_callback
+                )
+            
+            # Send completion
+            await complete_crawl_progress(progress_id, {
+                "message": "Specialized crawling completed successfully",
+                "mode_used": result.mode,
+                "data_extracted": bool(result.structured_data),
+                "extraction_stats": result.extraction_stats
+            })
+            
+            return {
+                "success": True,
+                "progress_id": progress_id,
+                "mode_used": result.mode,
+                "structured_data": result.structured_data,
+                "extraction_stats": result.extraction_stats,
+                "url": request.url
+            }
+            
+        except Exception as e:
+            safe_logfire_error(f"Specialized crawl failed | url={request.url} | error={str(e)} | progress_id={progress_id}")
+            await error_crawl_progress(progress_id, {
+                "error": str(e),
+                "url": request.url
+            })
+            return {
+                "success": False,
+                "error": str(e),
+                "progress_id": progress_id
+            }
+        finally:
+            # Clean up task tracking
+            if progress_id in active_crawl_tasks:
+                del active_crawl_tasks[progress_id]
+    
+    # Start the crawl task
+    try:
+        async with crawl_semaphore:  # Limit concurrent crawls
+            task = asyncio.create_task(crawl_task())
+            active_crawl_tasks[progress_id] = task
+            
+            # Return immediately with progress ID
+            return {
+                "success": True,
+                "message": "Specialized crawling started",
+                "progress_id": progress_id,
+                "url": request.url,
+                "mode": request.mode or "auto-detect"
+            }
+    except Exception as e:
+        safe_logfire_error(f"Failed to start specialized crawl | url={request.url} | error={str(e)}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
+async def _store_ecommerce_data(supabase, url: str, product_data: dict):
+    """Store e-commerce product data in specialized table."""
+    try:
+        # Insert into e-commerce products table (create if needed)
+        result = supabase.table("archon_ecommerce_products").upsert({
+            "url": url,
+            "product_name": product_data.get("name", ""),
+            "brand": product_data.get("brand", ""),
+            "price_current": product_data.get("price_current"),
+            "price_original": product_data.get("price_original"),
+            "currency": product_data.get("currency", "USD"),
+            "availability": product_data.get("availability", ""),
+            "rating": product_data.get("rating"),
+            "review_count": product_data.get("review_count", 0),
+            "images": product_data.get("images", []),
+            "variants": product_data.get("variants", []),
+            "specifications": product_data.get("specifications", {}),
+            "extracted_at": datetime.now().isoformat(),
+            "metadata": product_data
+        }).execute()
+        
+        if result.data:
+            logger.info(f"Stored e-commerce data for {url}")
+        else:
+            logger.warning(f"Failed to store e-commerce data for {url}")
+            
+    except Exception as e:
+        logger.error(f"Error storing e-commerce data: {e}")
+        # Don't fail the whole operation if specialized storage fails
 
 
 @router.get("/test-socket-progress/{progress_id}")

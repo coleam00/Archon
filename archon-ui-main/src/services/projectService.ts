@@ -663,7 +663,8 @@ export const projectService = {
   async restoreDocumentVersion(projectId: string, versionNumber: number, fieldName: string = 'docs'): Promise<any> {
     try {
       const response = await callAPI<any>(`/api/projects/${projectId}/versions/${fieldName}/${versionNumber}/restore`, {
-        method: 'POST'
+        method: 'POST',
+        body: JSON.stringify({ restored_by: 'user' })
       });
       
       // Broadcast restore event

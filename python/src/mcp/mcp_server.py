@@ -332,6 +332,32 @@ def register_modules():
     else:
         logger.info("⚠ Project module skipped - Projects are disabled")
 
+    # Import and register E-commerce module for smart crawling
+    try:
+        from src.mcp.modules.ecommerce_module import register_ecommerce_tools
+
+        register_ecommerce_tools(mcp)
+        modules_registered += 1
+        logger.info("✓ E-commerce module registered (HTTP-based)")
+    except ImportError as e:
+        logger.warning(f"⚠ E-commerce module not available: {e}")
+    except Exception as e:
+        logger.error(f"✗ Error registering E-commerce module: {e}")
+        logger.error(traceback.format_exc())
+
+    # Import and register Specialized Crawling module
+    try:
+        from src.mcp.modules.specialized_crawling_module import register_specialized_crawling_tools
+
+        register_specialized_crawling_tools(mcp)
+        modules_registered += 1
+        logger.info("✓ Specialized Crawling module registered (HTTP-based)")
+    except ImportError as e:
+        logger.warning(f"⚠ Specialized Crawling module not available: {e}")
+    except Exception as e:
+        logger.error(f"✗ Error registering Specialized Crawling module: {e}")
+        logger.error(traceback.format_exc())
+
     logger.info(f"📦 Total modules registered: {modules_registered}")
 
     if modules_registered == 0:
@@ -348,6 +374,31 @@ except Exception as e:
     raise
 
 
+# Add health endpoints as MCP tools for external access
+@mcp.tool()
+async def root_endpoint(ctx: Context) -> str:
+    """Root endpoint for service information"""
+    return json.dumps({
+        "service": "archon-mcp-server",
+        "status": "running",
+        "timestamp": datetime.now().isoformat(),
+        "endpoints": {
+            "health": "Use health_check tool",
+            "mcp": "Available via MCP protocol"
+        }
+    })
+
+@mcp.tool()
+async def health_endpoint(ctx: Context) -> str:
+    """Health endpoint for external health checks"""
+    return await health_check(ctx)
+
+@mcp.tool()
+async def mcp_health_endpoint(ctx: Context) -> str:
+    """MCP-specific health endpoint"""
+    return await health_check(ctx)
+
+
 def main():
     """Main entry point for the MCP server."""
     try:
@@ -355,12 +406,14 @@ def main():
         setup_logfire(service_name="archon-mcp-server")
 
         logger.info("🚀 Starting Archon MCP Server")
-        logger.info("   Mode: Streamable HTTP")
+        logger.info("   Mode: Streamable HTTP + Health Endpoints")
         logger.info(f"   URL: http://{server_host}:{server_port}/mcp")
+        logger.info(f"   Health: Available via MCP tools")
 
         mcp_logger.info("🔥 Logfire initialized for MCP server")
         mcp_logger.info(f"🌟 Starting MCP server - host={server_host}, port={server_port}")
 
+        # Run with MCP support - host and port are configured in the FastMCP constructor
         mcp.run(transport="streamable-http")
 
     except Exception as e:

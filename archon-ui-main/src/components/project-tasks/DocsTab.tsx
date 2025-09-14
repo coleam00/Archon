@@ -509,6 +509,7 @@ export const DocsTab = ({
     title: string;
     created_at?: string;
     updated_at?: string;
+    docs?: any[]; // Add docs field to match Project interface
   } | null;
 }) => {
   // Document state
@@ -560,10 +561,21 @@ export const DocsTab = ({
 
   // Load project documents from the project data
   const loadProjectDocuments = async () => {
-    if (!project?.id || !project.docs) return;
+    if (!project?.id) {
+      console.log('DocsTab: No project ID available');
+      return;
+    }
     
     try {
       setLoading(true);
+      
+      // Check if project has docs field
+      if (!project.docs) {
+        console.log('DocsTab: Project has no docs field, documents array will be empty');
+        setDocuments([]);
+        setSelectedDocument(null);
+        return;
+      }
       
       // Use the docs directly from the project data
       const projectDocuments: ProjectDoc[] = project.docs.map((doc: any) => ({
@@ -582,10 +594,12 @@ export const DocsTab = ({
         setSelectedDocument(projectDocuments[0]);
       }
       
-      console.log(`Loaded ${projectDocuments.length} documents from project data`);
+      console.log(`DocsTab: Loaded ${projectDocuments.length} documents from project data:`, projectDocuments);
     } catch (error) {
-      console.error('Failed to load documents:', error);
+      console.error('DocsTab: Failed to load documents:', error);
       showToast('Failed to load documents', 'error');
+      setDocuments([]);
+      setSelectedDocument(null);
     } finally {
       setLoading(false);
     }

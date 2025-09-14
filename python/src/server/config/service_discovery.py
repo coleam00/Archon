@@ -2,7 +2,7 @@
 Service Discovery module for Docker and local development environments
 
 This module provides service discovery capabilities that work seamlessly
-across Docker Compose and local development environments.
+across Docker Compose, Azure Container Apps, and local development environments.
 """
 
 import os
@@ -16,6 +16,7 @@ class Environment(Enum):
     """Deployment environment types"""
 
     DOCKER_COMPOSE = "docker_compose"
+    AZURE = "azure"
     LOCAL = "local"
 
 
@@ -24,6 +25,7 @@ class ServiceDiscovery:
     Service discovery that automatically adapts to the deployment environment.
 
     In Docker Compose: Uses container names
+    In Azure: Uses external Container App URLs
     In Local: Uses localhost with different ports
     """
 
@@ -74,6 +76,10 @@ class ServiceDiscovery:
     @staticmethod
     def _detect_environment() -> Environment:
         """Detect the current deployment environment"""
+        # Check for Azure Container App environment
+        if os.getenv("CONTAINER_ENV") == "azure" or os.getenv("DEPLOYMENT_MODE") == "cloud":
+            return Environment.AZURE
+        
         # Check for Docker environment
         if os.path.exists("/.dockerenv") or os.getenv("DOCKER_CONTAINER"):
             return Environment.DOCKER_COMPOSE
@@ -90,7 +96,7 @@ class ServiceDiscovery:
             protocol: Protocol to use (default: "http")
 
         Returns:
-            Full service URL (e.g., "http://archon-api:8080")
+            Full service URL (e.g., "http://archon-api:8080" or "https://archon-server.azurecontainerapps.io")
         """
         cache_key = f"{protocol}://{service}"
         if cache_key in self._cache:
@@ -104,7 +110,19 @@ class ServiceDiscovery:
                 f"Unknown service: {service}. Valid services are: {list(self.DEFAULT_PORTS.keys())}"
             )
 
-        if self.environment == Environment.DOCKER_COMPOSE:
+        if self.environment == Environment.AZURE:
+            # Azure Container Apps use external URLs
+            # Check for override via environment variable
+            host = os.getenv(f"{service_name.upper().replace('-', '_')}_URL")
+            if host:
+                url = host
+            else:
+                # Fallback to default Azure Container App pattern
+                # Extract domain from environment or use default
+                azure_domain = os.getenv("AZURE_CONTAINER_APPS_DOMAIN", "purplemoss-0b16bcfe.eastus.azurecontainerapps.io")
+                url = f"https://{service_name}.{azure_domain}"
+        
+        elif self.environment == Environment.DOCKER_COMPOSE:
             # Docker Compose uses service names directly
             # Check for override via environment variable
             host = os.getenv(f"{service_name.upper().replace('-', '_')}_HOST", service_name)
@@ -135,7 +153,12 @@ class ServiceDiscovery:
             True if service is healthy, False otherwise
         """
         url = self.get_service_url(service)
-        health_endpoint = f"{url}/health"
+        
+        # For Azure, use HTTPS and check health endpoint
+        if self.environment == Environment.AZURE:
+            health_endpoint = f"{url}/health"
+        else:
+            health_endpoint = f"{url}/health"
 
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
@@ -181,6 +204,11 @@ class ServiceDiscovery:
     def is_docker(self) -> bool:
         """Check if running in Docker"""
         return self.environment == Environment.DOCKER_COMPOSE
+
+    @property
+    def is_azure(self) -> bool:
+        """Check if running in Azure"""
+        return self.environment == Environment.AZURE
 
     @property
     def is_local(self) -> bool:

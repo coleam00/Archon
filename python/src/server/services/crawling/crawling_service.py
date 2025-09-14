@@ -47,10 +47,22 @@ from .helpers.site_config import SiteConfig
 from .document_storage_operations import DocumentStorageOperations
 from .progress_mapper import ProgressMapper
 
+# Import specialized crawling modes
+from .modes import (
+    ModeRegistry, 
+    get_mode_registry, 
+    initialize_crawling_modes,
+    CrawlingMode,
+    CrawlingResult
+)
+
 logger = get_logger(__name__)
 
 # Global registry to track active orchestration services for cancellation support
 _active_orchestrations: Dict[str, "CrawlingService"] = {}
+
+# Legacy alias for backward compatibility
+CrawlOrchestrationService = CrawlingService
 
 
 def get_active_orchestration(progress_id: str) -> Optional["CrawlingService"]:
@@ -101,6 +113,16 @@ class CrawlingService:
 
         # Initialize operations
         self.doc_storage_ops = DocumentStorageOperations(self.supabase_client)
+
+        # Initialize specialized crawling modes
+        self.mode_registry = None
+        if crawler and self.markdown_generator:
+            try:
+                self.mode_registry = initialize_crawling_modes(crawler, self.markdown_generator)
+                logger.info("Specialized crawling modes initialized successfully")
+            except Exception as e:
+                logger.warning(f"Failed to initialize crawling modes: {e}")
+                self.mode_registry = None
 
         # Track progress state across all stages to prevent UI resets
         self.progress_state = {"progressId": self.progress_id} if self.progress_id else {}
@@ -179,14 +201,143 @@ class CrawlingService:
             await update_crawl_progress(self.progress_id, self.progress_state)
 
     # Simple delegation methods for backward compatibility
-    async def crawl_single_page(self, url: str, retry_count: int = 3) -> Dict[str, Any]:
-        """Crawl a single web page."""
+    async def crawl_single_page(self, url: str, retry_count: int = 3, use_specialized_mode: bool = True) -> Dict[str, Any]:
+        """
+        Crawl a single web page.
+        
+        Args:
+            url: URL to crawl
+            retry_count: Number of retry attempts
+            use_specialized_mode: Whether to use specialized crawling modes
+            
+        Returns:
+            Crawling result dictionary
+        """
+        # Try specialized modes first if available and requested
+        if use_specialized_mode and self.mode_registry:
+            try:
+                specialized_result = await self.crawl_with_specialized_mode(url)
+                if specialized_result.success:
+                    # Convert CrawlingResult back to legacy format for compatibility
+                    return {
+                        "success": True,
+                        "url": specialized_result.url,
+                        "markdown": specialized_result.content.get("markdown", ""),
+                        "html": specialized_result.content.get("html", ""),
+                        "title": specialized_result.content.get("title", ""),
+                        "links": specialized_result.metadata.get("links", []),
+                        "content_length": len(specialized_result.content.get("markdown", "")),
+                        "mode_used": specialized_result.mode,
+                        "structured_data": specialized_result.structured_data,
+                        "extraction_stats": specialized_result.extraction_stats
+                    }
+            except Exception as e:
+                logger.warning(f"Specialized mode failed for {url}, falling back to standard: {e}")
+        
+        # Fallback to standard single page strategy
         return await self.single_page_strategy.crawl_single_page(
             url,
             self.url_handler.transform_github_url,
             self.site_config.is_documentation_site,
             retry_count,
         )
+
+    async def crawl_with_specialized_mode(
+        self, 
+        url: str, 
+        force_mode: Optional[str] = None,
+        progress_callback: Optional[Callable] = None,
+        **kwargs
+    ) -> CrawlingResult:
+        """
+        Crawl a URL using specialized crawling modes.
+        
+        Args:
+            url: URL to crawl
+            force_mode: Optional mode to force (e.g., 'ecommerce', 'blog')
+            progress_callback: Optional progress callback
+            **kwargs: Additional crawling parameters
+            
+        Returns:
+            CrawlingResult with extracted data
+        """
+        if not self.mode_registry:
+            # Fallback to standard crawling if modes not initialized
+            logger.warning("Specialized modes not available, falling back to standard crawling")
+            result = await self.crawl_single_page(url)
+            return CrawlingResult(
+                success=result.get("success", False),
+                url=url,
+                mode="standard",
+                content={
+                    "markdown": result.get("markdown", ""),
+                    "html": result.get("html", ""),
+                    "title": result.get("title", "")
+                },
+                error=result.get("error")
+            )
+        
+        # Convert string mode to enum if provided
+        force_mode_enum = None
+        if force_mode:
+            try:
+                force_mode_enum = CrawlingMode(force_mode.lower())
+            except ValueError:
+                logger.warning(f"Invalid mode '{force_mode}', will auto-detect")
+        
+        # Use specialized mode registry for crawling
+        return await self.mode_registry.crawl_with_best_mode(
+            url=url,
+            crawler=self.crawler,
+            markdown_generator=self.markdown_generator,
+            progress_callback=progress_callback,
+            force_mode=force_mode_enum,
+            **kwargs
+        )
+    
+    def get_available_crawling_modes(self) -> List[Dict[str, Any]]:
+        """
+        Get information about available crawling modes.
+        
+        Returns:
+            List of dictionaries containing mode information
+        """
+        if not self.mode_registry:
+            return [{
+                "mode": "standard",
+                "enabled": True,
+                "description": "Standard crawling mode (fallback)",
+                "capabilities": ["general_content"]
+            }]
+        
+        return self.mode_registry.get_available_modes()
+    
+    def get_mode_performance_stats(self, mode: str = None) -> Dict[str, Any]:
+        """
+        Get performance statistics for crawling modes.
+        
+        Args:
+            mode: Optional specific mode to get stats for
+            
+        Returns:
+            Performance statistics
+        """
+        if not self.mode_registry:
+            return {"error": "Specialized modes not available"}
+        
+        if mode:
+            try:
+                mode_enum = CrawlingMode(mode.lower())
+                return self.mode_registry.get_mode_performance(mode_enum)
+            except ValueError:
+                return {"error": f"Invalid mode: {mode}"}
+        
+        # Return stats for all modes
+        stats = {}
+        for mode_enum in CrawlingMode:
+            stats[mode_enum.value] = self.mode_registry.get_mode_performance(mode_enum)
+        
+        return stats
 
     async def crawl_markdown_file(
         self, url: str, progress_callback=None, start_progress: int = 10, end_progress: int = 20

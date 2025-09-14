@@ -1,25 +1,17 @@
-# Simple Vite dev server setup
-FROM node:18-alpine
-
+﻿FROM node:18-alpine as builder
 WORKDIR /app
-
-# Install system dependencies needed for some npm packages
-RUN apk add --no-cache python3 make g++ git curl
-
-# Copy package files
 COPY package*.json ./
-
-# Install dependencies including dev dependencies for testing
 RUN npm ci
-
-# Create coverage directory with proper permissions
-RUN mkdir -p /app/coverage && chmod 777 /app/coverage
-
-# Copy source code
 COPY . .
+RUN npm run build
 
-# Expose Vite's default port
+FROM nginx:alpine
+RUN apk add --no-cache gettext
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY nginx.conf.template /etc/nginx/conf.d/default.conf.template
+COPY entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+ENV BACKEND_URL=http://localhost:8181
 EXPOSE 5173
-
-# Start Vite dev server with host binding for Docker
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+ENTRYPOINT ["/docker-entrypoint.sh"]
+CMD ["nginx", "-g", "daemon off;"]

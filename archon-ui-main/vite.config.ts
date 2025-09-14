@@ -12,14 +12,21 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
   // Load environment variables
   const env = loadEnv(mode, process.cwd(), '');
   
-  // Get host and port from environment variables or use defaults
-  // For internal Docker communication, use the service name
-  // For external access, use the HOST from environment
-  const isDocker = process.env.DOCKER_ENV === 'true' || !!process.env.HOSTNAME;
-  const internalHost = 'archon-server';  // Docker service name for internal communication
-  const externalHost = process.env.HOST || 'localhost';  // Host for external access
-  const host = isDocker ? internalHost : externalHost;
-  const port = process.env.ARCHON_SERVER_PORT || env.ARCHON_SERVER_PORT || '8181';
+  // Azure Container Apps configuration
+  // Use environment variables for backend URL, with fallbacks
+  const backendUrl = env.VITE_API_URL || 
+                     process.env.VITE_API_URL || 
+                     'http://localhost:8181';
+  
+  // MCP Server URL for Azure Container Apps
+  const mcpServerUrl = env.VITE_MCP_SERVER_URL || 
+                       process.env.VITE_MCP_SERVER_URL || 
+                       'https://archon-mcp.purplemoss-0b16bcfe.eastus.azurecontainerapps.io';
+  
+  console.log('[VITE CONFIG] Backend URL:', backendUrl);
+  console.log('[VITE CONFIG] MCP Server URL:', mcpServerUrl);
+  console.log('[VITE CONFIG] Using environment variable VITE_API_URL:', env.VITE_API_URL);
+  console.log('[VITE CONFIG] Using environment variable VITE_MCP_SERVER_URL:', env.VITE_MCP_SERVER_URL);
   
   return {
     plugins: [
@@ -282,32 +289,56 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
       strictPort: true, // Exit if port is in use
       proxy: {
         '/api': {
-          target: `http://${host}:${port}`,
+          target: backendUrl,
           changeOrigin: true,
-          secure: false,
+          secure: true, // Use true for HTTPS backends
           ws: true,
           configure: (proxy, options) => {
             proxy.on('error', (err, req, res) => {
-              console.log('🚨 [VITE PROXY ERROR]:', err.message);
-              console.log('🚨 [VITE PROXY ERROR] Target:', `http://${host}:${port}`);
-              console.log('🚨 [VITE PROXY ERROR] Request:', req.url);
+              console.log('VITE PROXY ERROR:', err.message);
+              console.log('VITE PROXY ERROR Target:', backendUrl);
+              console.log('VITE PROXY ERROR Request:', req.url);
             });
             proxy.on('proxyReq', (proxyReq, req, res) => {
-              console.log('🔄 [VITE PROXY] Forwarding:', req.method, req.url, 'to', `http://${host}:${port}${req.url}`);
+              console.log('VITE PROXY Forwarding:', req.method, req.url, 'to', `${backendUrl}${req.url}`);
             });
           }
         },
         // Socket.IO specific proxy configuration
         '/socket.io': {
-          target: `http://${host}:${port}`,
+          target: backendUrl,
           changeOrigin: true,
+          secure: true,
           ws: true
+        },
+        // Health check proxy
+        '/health': {
+          target: backendUrl,
+          changeOrigin: true,
+          secure: true
+        },
+        // MCP Server proxy for Azure Container Apps
+        '/mcp': {
+          target: mcpServerUrl,
+          changeOrigin: true,
+          secure: true,
+          ws: true,
+          configure: (proxy, options) => {
+            proxy.on('error', (err, req, res) => {
+              console.log('VITE MCP PROXY ERROR:', err.message);
+              console.log('VITE MCP PROXY ERROR Target:', mcpServerUrl);
+              console.log('VITE MCP PROXY ERROR Request:', req.url);
+            });
+            proxy.on('proxyReq', (proxyReq, req, res) => {
+              console.log('VITE MCP PROXY Forwarding:', req.method, req.url, 'to', `${mcpServerUrl}${req.url}`);
+            });
+          }
         }
       },
     },
     define: {
-      'import.meta.env.VITE_HOST': JSON.stringify(host),
-      'import.meta.env.VITE_PORT': JSON.stringify(port),
+      'import.meta.env.VITE_BACKEND_URL': JSON.stringify(backendUrl),
+      'import.meta.env.VITE_MCP_SERVER_URL': JSON.stringify(mcpServerUrl),
     },
     resolve: {
       alias: {
@@ -328,8 +359,7 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
         '**/*.test.{ts,tsx}',
       ],
       env: {
-        VITE_HOST: host,
-        VITE_PORT: port,
+        VITE_BACKEND_URL: backendUrl,
       },
       coverage: {
         provider: 'v8',

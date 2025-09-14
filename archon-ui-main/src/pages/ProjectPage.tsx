@@ -389,11 +389,36 @@ export function ProjectPage({
     }
   };
 
-  const handleProjectSelect = (project: Project) => {
-    setSelectedProject(project);
-    setShowProjectDetails(true);
-    setActiveTab('tasks'); // Default to tasks tab when a new project is selected
-    loadTasksForProject(project.id); // Load tasks for the selected project
+  const handleProjectSelect = async (project: Project) => {
+    try {
+      // Fetch the complete project data including docs, features, and data
+      const fullProject = await projectService.getProject(project.id);
+      setSelectedProject(fullProject);
+      setShowProjectDetails(true);
+      setActiveTab('tasks'); // Default to tasks tab when a new project is selected
+      loadTasksForProject(project.id); // Load tasks for the selected project
+    } catch (error) {
+      console.error('Failed to load full project data:', error);
+      // Fallback to basic project data if fetch fails
+      setSelectedProject(project);
+      setShowProjectDetails(true);
+      setActiveTab('tasks');
+      loadTasksForProject(project.id);
+    }
+  };
+
+  // Refresh project data when switching to docs tab
+  const handleTabChange = async (newTab: string) => {
+    if (newTab === 'docs' && selectedProject) {
+      try {
+        // Refresh project data to ensure latest docs are available
+        const refreshedProject = await projectService.getProject(selectedProject.id);
+        setSelectedProject(refreshedProject);
+      } catch (error) {
+        console.error('Failed to refresh project data for docs tab:', error);
+      }
+    }
+    setActiveTab(newTab);
   };
 
   const handleDeleteProject = useCallback(async (e: React.MouseEvent, projectId: string, projectTitle: string) => {
@@ -473,10 +498,21 @@ export function ProjectPage({
       // If pinning a project, also select it
       if (newPinnedState) {
         console.log(`[PIN] Selecting newly pinned project: ${project.title}`);
-        setSelectedProject({ ...project, pinned: true });
-        setShowProjectDetails(true);
-        setActiveTab('tasks'); // Default to tasks tab
-        loadTasksForProject(project.id);
+        try {
+          // Fetch the complete project data including docs, features, and data
+          const fullProject = await projectService.getProject(project.id);
+          setSelectedProject({ ...fullProject, pinned: true });
+          setShowProjectDetails(true);
+          setActiveTab('tasks'); // Default to tasks tab
+          loadTasksForProject(project.id);
+        } catch (error) {
+          console.error('Failed to load full project data for pinned project:', error);
+          // Fallback to basic project data if fetch fails
+          setSelectedProject({ ...project, pinned: true });
+          setShowProjectDetails(true);
+          setActiveTab('tasks');
+          loadTasksForProject(project.id);
+        }
       } else if (selectedProject?.id === project.id) {
         // If unpinning the currently selected project, just update its pin state
         console.log(`[PIN] Updating selected project's pin state`);
@@ -885,7 +921,7 @@ export function ProjectPage({
       {/* Project Details Section */}
       {showProjectDetails && selectedProject && (
         <motion.div variants={itemVariants}>
-          <Tabs defaultValue="tasks" value={activeTab} onValueChange={setActiveTab} className="w-full">
+          <Tabs defaultValue="tasks" value={activeTab} onValueChange={handleTabChange} className="w-full">
             <TabsList>
               <TabsTrigger value="docs" className="py-3 font-mono transition-all duration-300" color="blue">
                 Docs

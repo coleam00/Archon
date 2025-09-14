@@ -398,13 +398,33 @@ class MCPClientService {
    * Create Archon MCP client using Streamable HTTP transport
    */
   async createArchonClient(): Promise<MCPClient> {
-    // Require ARCHON_MCP_PORT to be set
+    // Check for Azure Container Apps MCP server URL first
+    const mcpServerUrl = import.meta.env.VITE_MCP_SERVER_URL;
+    if (mcpServerUrl) {
+      // Use the Azure Container App MCP server URL
+      const mcpUrl = `${mcpServerUrl}/mcp`;
+      
+      const archonConfig: MCPClientConfig = {
+        name: 'Archon',
+        transport_type: 'http',
+        connection_config: {
+          url: mcpUrl
+        },
+        auto_connect: true,
+        health_check_interval: 30,
+        is_default: true
+      };
+
+      return this.createClient(archonConfig);
+    }
+    
+    // Fallback to local development (require ARCHON_MCP_PORT to be set)
     const mcpPort = import.meta.env.ARCHON_MCP_PORT;
     if (!mcpPort) {
       throw new Error(
-        'ARCHON_MCP_PORT environment variable is required. ' +
-        'Please set it in your environment variables. ' +
-        'Default value: 8051'
+        'Neither VITE_MCP_SERVER_URL nor ARCHON_MCP_PORT environment variables are set. ' +
+        'Please set VITE_MCP_SERVER_URL for Azure Container Apps or ARCHON_MCP_PORT for local development. ' +
+        'Default values: VITE_MCP_SERVER_URL=https://archon-mcp.purplemoss-0b16bcfe.eastus.azurecontainerapps.io or ARCHON_MCP_PORT=8051'
       );
     }
     
