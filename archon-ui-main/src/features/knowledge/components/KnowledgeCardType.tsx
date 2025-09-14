@@ -8,7 +8,6 @@ import { useEffect, useRef, useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/primitives";
 import { cn } from "../../ui/primitives/styles";
 import { SimpleTooltip } from "../../ui/primitives/tooltip";
-import { useToast } from "../../ui/hooks/useToast";
 import { useUpdateKnowledgeItem } from "../hooks";
 
 interface KnowledgeCardTypeProps {
@@ -23,7 +22,6 @@ export const KnowledgeCardType: React.FC<KnowledgeCardTypeProps> = ({
   const [isEditing, setIsEditing] = useState(false);
   const selectRef = useRef<HTMLDivElement>(null);
   const updateMutation = useUpdateKnowledgeItem();
-  const { showToast } = useToast();
 
   // Handle click outside to cancel editing
   useEffect(() => {
@@ -62,11 +60,9 @@ export const KnowledgeCardType: React.FC<KnowledgeCardTypeProps> = ({
           knowledge_type: newType,
         },
       });
-      setIsEditing(false);
-    } catch (error) {
-      // Show user-facing error toast with detailed message
-      const errorMessage = error instanceof Error ? error.message : "Update failed";
-      showToast(`Failed to update knowledge type: ${errorMessage}`, "error");
+    } finally {
+      // Always exit editing mode regardless of success or failure
+      // The mutation's onError handler will show error toasts if needed
       setIsEditing(false);
     }
   };
