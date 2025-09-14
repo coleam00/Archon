@@ -149,7 +149,8 @@ class ServerHealthService {
 
   getSettings() {
     return {
-      enabled: this.disconnectScreenEnabled
+      enabled: this.disconnectScreenEnabled,
+      delay: 10000 // Default delay value to match App.tsx initial state
     };
   }
 
