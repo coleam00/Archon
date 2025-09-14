@@ -238,7 +238,7 @@ class CredentialService:
                 self._rag_settings_cache = None
                 self._rag_cache_timestamp = None
                 logger.debug(f"Invalidated RAG settings cache due to update of {key}")
-                
+
                 # Also invalidate LLM provider service cache for provider config
                 try:
                     from . import llm_provider_service
@@ -280,7 +280,7 @@ class CredentialService:
                 self._rag_settings_cache = None
                 self._rag_cache_timestamp = None
                 logger.debug(f"Invalidated RAG settings cache due to deletion of {key}")
-                
+
                 # Also invalidate LLM provider service cache for provider config
                 try:
                     from . import llm_provider_service
@@ -430,13 +430,13 @@ class CredentialService:
 
             # Get models with provider-specific fallback logic
             chat_model = rag_settings.get("MODEL_CHOICE", "")
-            
+
             # If MODEL_CHOICE is empty, try provider-specific model settings
             if not chat_model and provider == "ollama":
                 chat_model = rag_settings.get("OLLAMA_CHAT_MODEL", "")
                 if chat_model:
                     logger.debug(f"Using OLLAMA_CHAT_MODEL: {chat_model}")
-                    
+
             embedding_model = rag_settings.get("EMBEDDING_MODEL", "")
 
             return {
