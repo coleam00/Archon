@@ -69,14 +69,18 @@ export const LevelSelector: React.FC<LevelSelectorProps> = ({
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
-        <div className="text-sm font-medium text-gray-900 dark:text-white/90">
+        <div className="text-sm font-medium text-gray-900 dark:text-white/90" id="crawl-depth-label">
           Crawl Depth
         </div>
         <SimpleTooltip content={tooltipContent}>
           <Info className="w-4 h-4 text-gray-400 hover:text-cyan-500 transition-colors cursor-help" />
         </SimpleTooltip>
       </div>
-      <div className="grid grid-cols-4 gap-3">
+      <div
+        className="grid grid-cols-4 gap-3"
+        role="radiogroup"
+        aria-labelledby="crawl-depth-label"
+      >
         {LEVELS.map((level) => {
           const isSelected = value === level.value;
 
@@ -89,19 +93,28 @@ export const LevelSelector: React.FC<LevelSelectorProps> = ({
               <SimpleTooltip content={level.details}>
                 <button
                 type="button"
+                role="radio"
+                aria-checked={isSelected}
+                aria-label={`Level ${level.value}: ${level.description}`}
+                tabIndex={isSelected ? 0 : -1}
                 onClick={() => !disabled && onValueChange(level.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    if (!disabled) onValueChange(level.value);
+                  }
+                }}
                 disabled={disabled}
                 className={cn(
                   "relative w-full h-16 rounded-xl transition-all duration-200 border-2",
                   "flex flex-col items-center justify-center gap-1",
-                  "backdrop-blur-md",
+                  "backdrop-blur-md focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2",
                   isSelected
                     ? "border-cyan-500/60 bg-gradient-to-b from-cyan-100/60 via-cyan-50/30 to-white/70 dark:from-cyan-900/30 dark:via-cyan-900/15 dark:to-black/40"
                     : "border-gray-300/50 dark:border-gray-700/50 bg-gradient-to-b from-gray-50/50 via-gray-25/25 to-white/60 dark:from-gray-800/20 dark:via-gray-800/10 dark:to-black/30",
                   !disabled && "hover:border-cyan-400/50 hover:shadow-[0_0_15px_rgba(6,182,212,0.15)]",
                   disabled && "opacity-50 cursor-not-allowed"
                 )}
-                aria-label={`Select ${level.description}`}
               >
                 {/* Top accent glow for selected state */}
                 {isSelected && (

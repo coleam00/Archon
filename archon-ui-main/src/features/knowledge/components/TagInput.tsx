@@ -56,8 +56,20 @@ export const TagInput: React.FC<TagInputProps> = ({
     const value = e.target.value;
     // Handle comma-separated input for backwards compatibility
     if (value.includes(",")) {
-      const newTags = value.split(",").map(tag => tag.trim()).filter(Boolean);
-      newTags.forEach(addTag);
+      // Collect pasted candidates, trim and filter them
+      const newCandidates = value.split(",")
+        .map(tag => tag.trim())
+        .filter(Boolean);
+
+      // Merge with current tags using Set to dedupe
+      const combinedTags = new Set([...tags, ...newCandidates]);
+      const combinedArray = Array.from(combinedTags);
+
+      // Enforce maxTags limit by taking only the first N allowed tags
+      const finalTags = combinedArray.slice(0, maxTags);
+
+      // Single batched update
+      onTagsChange(finalTags);
       setInputValue("");
     } else {
       setInputValue(value);
