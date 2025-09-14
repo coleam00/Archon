@@ -63,8 +63,9 @@ export function getApiBasePath(): string {
     return '/api';
   }
   
-  // Otherwise, append /api to the base URL
-  return `${apiUrl}/api`;
+  // For production with VITE_API_URL set, return the URL as-is
+  // The backend already handles /api routes, so no need to append /api
+  return apiUrl;
 }
 
 // Export commonly used values
