@@ -28,10 +28,12 @@ export const KnowledgeCardTags: React.FC<KnowledgeCardTagsProps> = ({ sourceId, 
   // Determine how many tags to show (2 rows worth, approximately 6-8 tags depending on length)
   const MAX_TAGS_COLLAPSED = 6;
 
-  // Update local state when props change
+  // Update local state when props change, but only when not editing to avoid overwriting user input
   useEffect(() => {
-    setEditingTags(tags);
-  }, [tags]);
+    if (!isEditing) {
+      setEditingTags(tags);
+    }
+  }, [tags, isEditing]);
 
   // Focus input when starting to add a new tag
   useEffect(() => {

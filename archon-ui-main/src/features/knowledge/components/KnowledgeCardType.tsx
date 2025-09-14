@@ -4,7 +4,7 @@
  */
 
 import { Briefcase, Terminal } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/primitives";
 import { cn } from "../../ui/primitives/styles";
 import { SimpleTooltip } from "../../ui/primitives/tooltip";
@@ -20,30 +20,7 @@ export const KnowledgeCardType: React.FC<KnowledgeCardTypeProps> = ({
   knowledgeType,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
-  const selectRef = useRef<HTMLDivElement>(null);
   const updateMutation = useUpdateKnowledgeItem();
-
-  // Handle click outside to cancel editing
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (isEditing && selectRef.current && event.target) {
-        const target = event.target as Element;
-
-        // Don't close if clicking on the select component or its dropdown content
-        if (!selectRef.current.contains(target) &&
-            !target.closest('[data-radix-select-content]') &&
-            !target.closest('[data-radix-select-item]') &&
-            !target.closest('[data-radix-popper-content-wrapper]')) {
-          setIsEditing(false);
-        }
-      }
-    };
-
-    if (isEditing) {
-      document.addEventListener("mousedown", handleClickOutside);
-      return () => document.removeEventListener("mousedown", handleClickOutside);
-    }
-  }, [isEditing]);
 
   const isTechnical = knowledgeType === "technical";
 
@@ -85,11 +62,12 @@ export const KnowledgeCardType: React.FC<KnowledgeCardTypeProps> = ({
   if (isEditing) {
     return (
       <div
-        ref={selectRef}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
       >
         <Select
+          open={isEditing}
+          onOpenChange={(open) => setIsEditing(open)}
           value={knowledgeType}
           onValueChange={(value) => handleTypeChange(value as "technical" | "business")}
           disabled={updateMutation.isPending}

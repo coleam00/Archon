@@ -566,6 +566,13 @@ export function useUpdateKnowledgeItem() {
           updatedItem.metadata = { ...updatedItem.metadata, tags: newTags };
         }
 
+        if ('knowledge_type' in updates) {
+          const newType = updates.knowledge_type as string;
+          // Update both top-level knowledge_type and metadata.knowledge_type for consistency
+          updatedItem.knowledge_type = newType as "technical" | "business";
+          updatedItem.metadata = { ...updatedItem.metadata, knowledge_type: newType };
+        }
+
         queryClient.setQueryData<KnowledgeItem>(knowledgeKeys.detail(sourceId), updatedItem);
       }
 
@@ -583,6 +590,12 @@ export function useUpdateKnowledgeItem() {
                 // Update both top-level tags and metadata.tags for consistency with summary API
                 updatedItem.tags = newTags;
                 updatedItem.metadata = { ...updatedItem.metadata, tags: newTags };
+              }
+              if ('knowledge_type' in updates) {
+                const newType = updates.knowledge_type as string;
+                // Update both top-level knowledge_type and metadata.knowledge_type for consistency
+                updatedItem.knowledge_type = newType as "technical" | "business";
+                updatedItem.metadata = { ...updatedItem.metadata, knowledge_type: newType };
               }
               return updatedItem;
             }
