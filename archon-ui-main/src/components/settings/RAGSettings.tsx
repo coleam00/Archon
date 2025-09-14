@@ -117,16 +117,19 @@ export const RAGSettings = ({
   useEffect(() => {
     const loadApiCredentials = async () => {
       try {
-        const apiKeysCredentials = await credentialsService.getCredentialsByCategory('api_keys');
+        // Get decrypted values for the API keys we need for status checking
+        const keyNames = ['OPENAI_API_KEY', 'GOOGLE_API_KEY', 'ANTHROPIC_API_KEY'];
+        const statusResults = await credentialsService.checkCredentialStatus(keyNames);
+        
         const credentials: {[key: string]: string} = {};
-        apiKeysCredentials.forEach((cred) => {
-          // Handle both encrypted and unencrypted credentials
-          if (cred.is_encrypted && cred.encrypted_value) {
-            credentials[cred.key] = cred.encrypted_value; // Use encrypted_value for encrypted credentials
-          } else {
-            credentials[cred.key] = cred.value || '';
+        
+        for (const [key, result] of Object.entries(statusResults)) {
+          if (result.has_value && result.value && result.value.trim().length > 0) {
+            credentials[key] = result.value;
           }
-        });
+        }
+        
+        console.log('🔑 Loaded API credentials for status checking:', Object.keys(credentials));
         setApiCredentials(credentials);
       } catch (error) {
         console.error('Failed to load API credentials for status checking:', error);
@@ -143,17 +146,19 @@ export const RAGSettings = ({
   // Manual reload function for external calls
   const reloadApiCredentials = async () => {
     try {
-      const apiKeysCredentials = await credentialsService.getCredentialsByCategory('api_keys');
+      // Get decrypted values for the API keys we need for status checking
+      const keyNames = ['OPENAI_API_KEY', 'GOOGLE_API_KEY', 'ANTHROPIC_API_KEY'];
+      const statusResults = await credentialsService.checkCredentialStatus(keyNames);
+      
       const credentials: {[key: string]: string} = {};
-      apiKeysCredentials.forEach((cred) => {
-        // Handle both encrypted and unencrypted credentials
-        if (cred.is_encrypted && cred.encrypted_value) {
-          credentials[cred.key] = cred.encrypted_value; // Use encrypted_value for encrypted credentials
-        } else {
-          credentials[cred.key] = cred.value || '';
+      
+      for (const [key, result] of Object.entries(statusResults)) {
+        if (result.has_value && result.value && result.value.trim().length > 0) {
+          credentials[key] = result.value;
         }
-      });
-      console.log('🔄 Reloaded API credentials:', Object.keys(credentials), 'Encrypted credentials:', apiKeysCredentials.filter(c => c.is_encrypted).map(c => c.key));
+      }
+      
+      console.log('🔄 Reloaded API credentials for status checking:', Object.keys(credentials));
       setApiCredentials(credentials);
       hasLoadedCredentialsRef.current = true;
     } catch (error) {
@@ -170,12 +175,12 @@ export const RAGSettings = ({
   
   // Reload credentials periodically to catch updates from other components (like onboarding)
   useEffect(() => {
-    // Set up periodic reload every 2 seconds when component is active  
+    // Set up periodic reload every 30 seconds when component is active (reduced from 2s)
     const interval = setInterval(() => {
       if (Object.keys(ragSettings).length > 0) {
         reloadApiCredentials();
       }
-    }, 2000);
+    }, 30000); // Changed from 2000ms to 30000ms (30 seconds)
 
     return () => clearInterval(interval);
   }, [ragSettings.LLM_PROVIDER]); // Only restart interval if provider changes
@@ -186,6 +191,110 @@ export const RAGSettings = ({
   
   // API key credentials for status checking
   const [apiCredentials, setApiCredentials] = useState<{[key: string]: string}>({});
+  // Provider connection status tracking
+  const [providerConnectionStatus, setProviderConnectionStatus] = useState<{
+    [key: string]: { connected: boolean; checking: boolean; lastChecked?: Date }
+  }>({});
+
+  // Test connection to external providers
+  const testProviderConnection = async (provider: string, apiKey: string): Promise<boolean> => {
+    setProviderConnectionStatus(prev => ({
+      ...prev,
+      [provider]: { ...prev[provider], checking: true }
+    }));
+
+    try {
+      switch (provider) {
+        case 'openai':
+          // Test OpenAI connection with a simple completion request
+          const openaiResponse = await fetch('https://api.openai.com/v1/models', {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${apiKey}`,
+              'Content-Type': 'application/json'
+            }
+          });
+          
+          if (openaiResponse.ok) {
+            setProviderConnectionStatus(prev => ({
+              ...prev,
+              openai: { connected: true, checking: false, lastChecked: new Date() }
+            }));
+            return true;
+          } else {
+            throw new Error(`OpenAI API returned ${openaiResponse.status}`);
+          }
+
+        case 'google':
+          // Test Google Gemini connection 
+          const googleResponse = await fetch(`https://generativelanguage.googleapis.com/v1/models?key=${apiKey}`, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          });
+          
+          if (googleResponse.ok) {
+            setProviderConnectionStatus(prev => ({
+              ...prev,
+              google: { connected: true, checking: false, lastChecked: new Date() }
+            }));
+            return true;
+          } else {
+            throw new Error(`Google API returned ${googleResponse.status}`);
+          }
+
+        default:
+          return false;
+      }
+    } catch (error) {
+      console.error(`Failed to test ${provider} connection:`, error);
+      setProviderConnectionStatus(prev => ({
+        ...prev,
+        [provider]: { connected: false, checking: false, lastChecked: new Date() }
+      }));
+      return false;
+    }
+  };
+
+  // Test provider connections when API credentials change
+  useEffect(() => {
+    const testConnections = async () => {
+      const providers = ['openai', 'google'];
+      
+      for (const provider of providers) {
+        const keyName = provider === 'openai' ? 'OPENAI_API_KEY' : 'GOOGLE_API_KEY';
+        const apiKey = Object.keys(apiCredentials).find(key => key.toUpperCase() === keyName);
+        const keyValue = apiKey ? apiCredentials[apiKey] : undefined;
+        
+        if (keyValue && keyValue.trim().length > 0) {
+          // Don't test if we've already checked recently (within last 30 seconds)
+          const lastChecked = providerConnectionStatus[provider]?.lastChecked;
+          const now = new Date();
+          const timeSinceLastCheck = lastChecked ? now.getTime() - lastChecked.getTime() : Infinity;
+          
+          if (timeSinceLastCheck > 30000) { // 30 seconds
+            console.log(`🔄 Testing ${provider} connection...`);
+            await testProviderConnection(provider, keyValue);
+          }
+        } else {
+          // No API key, mark as disconnected
+          setProviderConnectionStatus(prev => ({
+            ...prev,
+            [provider]: { connected: false, checking: false, lastChecked: new Date() }
+          }));
+        }
+      }
+    };
+
+    // Only test if we have credentials loaded
+    if (Object.keys(apiCredentials).length > 0) {
+      testConnections();
+    }
+  }, [apiCredentials]); // Test when credentials change
+
+  // Ref to track if initial test has been run (will be used after function definitions)
+  const hasRunInitialTestRef = useRef(false);
   
   // Ollama metrics state
   const [ollamaMetrics, setOllamaMetrics] = useState({
@@ -283,6 +392,12 @@ export const RAGSettings = ({
           const responseTime = Math.round(instanceStatus.response_time_ms || (Date.now() - startTime));
           setStatus({ online: true, responseTime, checking: false });
           showToast(`${instanceName} connection successful: ${instanceStatus.models_available || 0} models available (${responseTime}ms)`, 'success');
+          
+          // Scenario 2: Manual "Test Connection" button - refresh Ollama metrics if Ollama provider is selected
+          if (ragSettings.LLM_PROVIDER === 'ollama') {
+            console.log('🔄 Fetching Ollama metrics - Test Connection button clicked');
+            fetchOllamaMetrics();
+          }
         } else {
           setStatus({ online: false, responseTime: null, checking: false });
           showToast(`${instanceName} connection failed: ${instanceStatus?.error_message || 'Instance is not healthy'}`, 'error');
@@ -300,7 +415,7 @@ export const RAGSettings = ({
         showToast(`${instanceName} connection failed: ${error.message || 'Unknown error'}`, 'error');
       }
     }
-  };
+  };;
 
   // Function to handle LLM instance deletion
   const handleDeleteLLMInstance = () => {
@@ -477,28 +592,26 @@ export const RAGSettings = ({
   //   }
   // }, [embeddingInstanceConfig.url, embeddingInstanceConfig.name, ragSettings.LLM_PROVIDER]);
 
-  // Fetch Ollama metrics when component mounts or when Ollama provider is selected or status changes
+  // Fetch Ollama metrics only when Ollama provider is initially selected (not on URL changes during typing)
   React.useEffect(() => {
-    const currentMetrics = {
-      provider: ragSettings.LLM_PROVIDER,
-      llmUrl: llmInstanceConfig.url,
-      embUrl: embeddingInstanceConfig.url,
-      llmOnline: llmStatus.online,
-      embOnline: embeddingStatus.online
-    };
-    
-    const shouldFetch = ragSettings.LLM_PROVIDER === 'ollama' &&
-                       (currentMetrics.provider !== lastMetricsFetchRef.current.provider ||
-                        currentMetrics.llmUrl !== lastMetricsFetchRef.current.llmUrl ||
-                        currentMetrics.embUrl !== lastMetricsFetchRef.current.embUrl ||
-                        currentMetrics.llmOnline !== lastMetricsFetchRef.current.llmOnline ||
-                        currentMetrics.embOnline !== lastMetricsFetchRef.current.embOnline);
-    
-    if (shouldFetch) {
-      lastMetricsFetchRef.current = currentMetrics;
-      fetchOllamaMetrics();
+    if (ragSettings.LLM_PROVIDER === 'ollama') {
+      const currentProvider = ragSettings.LLM_PROVIDER;
+      const lastProvider = lastMetricsFetchRef.current.provider;
+      
+      // Only fetch if provider changed to Ollama (scenario 1: user clicks on Ollama Provider)
+      if (currentProvider !== lastProvider) {
+        lastMetricsFetchRef.current = {
+          provider: currentProvider,
+          llmUrl: llmInstanceConfig.url,
+          embUrl: embeddingInstanceConfig.url,
+          llmOnline: llmStatus.online,
+          embOnline: embeddingStatus.online
+        };
+        console.log('🔄 Fetching Ollama metrics - Provider selected');
+        fetchOllamaMetrics();
+      }
     }
-  }, [ragSettings.LLM_PROVIDER, llmInstanceConfig.url, embeddingInstanceConfig.url, llmStatus.online, embeddingStatus.online]);
+  }, [ragSettings.LLM_PROVIDER]); // Only watch provider changes, not URL changes
 
   // Function to check if a provider is properly configured
   const getProviderStatus = (providerKey: string): 'configured' | 'missing' | 'partial' => {
@@ -507,20 +620,42 @@ export const RAGSettings = ({
         // Check if OpenAI API key is configured (case insensitive)
         const openAIKey = Object.keys(apiCredentials).find(key => key.toUpperCase() === 'OPENAI_API_KEY');
         const keyValue = openAIKey ? apiCredentials[openAIKey] : undefined;
-        const hasOpenAIKey = openAIKey && keyValue && keyValue.trim().length > 0;
+        // Don't consider encrypted placeholders as valid API keys for connection testing
+        const hasOpenAIKey = openAIKey && keyValue && keyValue.trim().length > 0 && !keyValue.includes('[ENCRYPTED]');
+        
+        // Only show configured if we have both API key AND confirmed connection
+        const openAIConnected = providerConnectionStatus['openai']?.connected || false;
+        const isChecking = providerConnectionStatus['openai']?.checking || false;
+        
         console.log('🔍 OpenAI status check:', { 
           openAIKey, 
           keyValue: keyValue ? `${keyValue.substring(0, 10)}...` : keyValue, 
           hasValue: !!keyValue, 
           hasOpenAIKey,
+          openAIConnected,
+          isChecking,
           allCredentials: Object.keys(apiCredentials)
         });
-        return hasOpenAIKey ? 'configured' : 'missing';
+        
+        if (!hasOpenAIKey) return 'missing';
+        if (isChecking) return 'partial';
+        return openAIConnected ? 'configured' : 'missing';
+        
       case 'google':
         // Check if Google API key is configured (case insensitive)
         const googleKey = Object.keys(apiCredentials).find(key => key.toUpperCase() === 'GOOGLE_API_KEY');
-        const hasGoogleKey = googleKey && apiCredentials[googleKey] && apiCredentials[googleKey].trim().length > 0;
-        return hasGoogleKey ? 'configured' : 'missing';
+        const googleKeyValue = googleKey ? apiCredentials[googleKey] : undefined;
+        // Don't consider encrypted placeholders as valid API keys for connection testing
+        const hasGoogleKey = googleKey && googleKeyValue && googleKeyValue.trim().length > 0 && !googleKeyValue.includes('[ENCRYPTED]');
+        
+        // Only show configured if we have both API key AND confirmed connection
+        const googleConnected = providerConnectionStatus['google']?.connected || false;
+        const googleChecking = providerConnectionStatus['google']?.checking || false;
+        
+        if (!hasGoogleKey) return 'missing';
+        if (googleChecking) return 'partial';
+        return googleConnected ? 'configured' : 'missing';
+        
       case 'ollama':
         // Check if both LLM and embedding instances are configured and online
         if (llmStatus.online && embeddingStatus.online) return 'configured';
@@ -544,7 +679,61 @@ export const RAGSettings = ({
       default:
         return 'missing';
     }
-  };
+  };;
+  
+  // Test Ollama connectivity when Settings page loads (scenario 4: page load)
+  // This useEffect is placed after function definitions to ensure access to manualTestConnection
+  useEffect(() => {
+    console.log('🔍 Page load check:', {
+      hasRunInitialTest: hasRunInitialTestRef.current,
+      provider: ragSettings.LLM_PROVIDER,
+      ragSettingsCount: Object.keys(ragSettings).length,
+      llmUrl: llmInstanceConfig.url,
+      llmName: llmInstanceConfig.name,
+      embUrl: embeddingInstanceConfig.url,
+      embName: embeddingInstanceConfig.name
+    });
+    
+    // Only run once when data is properly loaded and not run before
+    if (!hasRunInitialTestRef.current && 
+        ragSettings.LLM_PROVIDER === 'ollama' && 
+        Object.keys(ragSettings).length > 0 && 
+        (llmInstanceConfig.url || embeddingInstanceConfig.url)) {
+      
+      hasRunInitialTestRef.current = true;
+      console.log('🔄 Settings page loaded with Ollama - Testing connectivity');
+      
+      // Test LLM instance if configured (use URL presence as the key indicator)
+      // Only test if URL is explicitly set in ragSettings, not just using the default
+      if (llmInstanceConfig.url && ragSettings.LLM_BASE_URL) {
+        setTimeout(() => {
+          const instanceName = llmInstanceConfig.name || 'LLM Instance';
+          console.log('🔍 Testing LLM instance on page load:', instanceName, llmInstanceConfig.url);
+          manualTestConnection(llmInstanceConfig.url, setLLMStatus, instanceName);
+        }, 1000); // Increased delay to ensure component is fully ready
+      }
+      
+      // Test Embedding instance if configured and different from LLM instance
+      // Only test if URL is explicitly set in ragSettings, not just using the default
+      if (embeddingInstanceConfig.url && ragSettings.OLLAMA_EMBEDDING_URL &&
+          embeddingInstanceConfig.url !== llmInstanceConfig.url) {
+        setTimeout(() => {
+          const instanceName = embeddingInstanceConfig.name || 'Embedding Instance';
+          console.log('🔍 Testing Embedding instance on page load:', instanceName, embeddingInstanceConfig.url);
+          manualTestConnection(embeddingInstanceConfig.url, setEmbeddingStatus, instanceName);
+        }, 1500); // Stagger the tests
+      }
+      
+      // Fetch Ollama metrics after testing connections
+      setTimeout(() => {
+        console.log('📊 Fetching Ollama metrics on page load');
+        fetchOllamaMetrics();
+      }, 2000);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ragSettings.LLM_PROVIDER, llmInstanceConfig.url, llmInstanceConfig.name, 
+      embeddingInstanceConfig.url, embeddingInstanceConfig.name]); // Don't include function deps to avoid re-runs
+  
   return <Card accentColor="green" className="overflow-hidden p-8">
         {/* Description */}
         <p className="text-sm text-gray-600 dark:text-zinc-400 mb-6">

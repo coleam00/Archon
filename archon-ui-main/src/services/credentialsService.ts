@@ -156,6 +156,24 @@ class CredentialsService {
     return response.json();
   }
 
+  async checkCredentialStatus(
+    keys: string[]
+  ): Promise<{ [key: string]: { key: string; value?: string; has_value: boolean; error?: string } }> {
+    const response = await fetch(`${this.baseUrl}/api/credentials/status-check`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ keys }),
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Failed to check credential status: ${response.statusText}`);
+    }
+    
+    return response.json();
+  }
+
   async getRagSettings(): Promise<RagSettings> {
     const ragCredentials = await this.getCredentialsByCategory("rag_strategy");
     const apiKeysCredentials = await this.getCredentialsByCategory("api_keys");

@@ -9,7 +9,6 @@ import os
 from typing import Any
 
 from ...config.logfire_config import safe_span, search_logger
-from ..credential_service import credential_service
 from ..embeddings.contextual_embedding_service import generate_contextual_embeddings_batch
 from ..embeddings.embedding_service import create_embeddings_batch
 
@@ -59,7 +58,9 @@ async def add_documents_to_supabase(
 
         # Load settings from database
         try:
-            rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+            # Defensive import to handle any initialization issues
+            from ..credential_service import credential_service as cred_service
+            rag_settings = await cred_service.get_credentials_by_category("rag_strategy")
             if batch_size is None:
                 batch_size = int(rag_settings.get("DOCUMENT_STORAGE_BATCH_SIZE", "50"))
             # Clamp batch sizes to sane minimums to prevent crashes
