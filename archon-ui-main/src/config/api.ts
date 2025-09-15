@@ -8,7 +8,7 @@
 // Get the API URL from environment or use relative URLs for proxy
 export function getApiUrl(): string {
   // Check if VITE_API_URL is explicitly provided (for absolute URL mode)
-  const viteApiUrl = import.meta.env['VITE_API_URL'] as string | undefined;
+  const viteApiUrl = (import.meta.env as any).VITE_API_URL as string | undefined;
   if (viteApiUrl) {
     return viteApiUrl;
   }
