@@ -98,6 +98,7 @@ def process_batch(items):
 ### Code Quality
 
 - Remove dead code immediately rather than maintaining it - no backward compatibility or legacy functions
+- Avoid backward compatibility mappings or legacy function wrappers
 - Prioritize functionality over production-ready patterns
 - Focus on user experience and feature completeness
 - When updating code, don't reference what is changing (avoid keywords like LEGACY, CHANGED, REMOVED), instead focus on comments that document just the functionality of the code
@@ -383,6 +384,15 @@ ARCHON_UI_PORT=3737                  # Frontend port
 4. Use TanStack Query hook from `src/features/[feature]/hooks/`
 5. Apply Tron-inspired glassmorphism styling with Tailwind
 
+### Add or modify MCP tools
+
+1. MCP tools are in `python/src/mcp_server/features/[feature]/[feature]_tools.py`
+2. Follow the pattern:
+   - `find_[resource]` - Handles list, search, and get single item operations
+   - `manage_[resource]` - Handles create, update, delete with an "action" parameter
+3. Optimize responses by truncating/filtering fields in list operations
+4. Register tools in the feature's `__init__.py` file
+
 ### Debug MCP connection issues
 
 1. Check MCP health: `curl http://localhost:8051/health`
@@ -421,16 +431,28 @@ npm run lint:files src/components/SomeComponent.tsx
 
 ## MCP Tools Available
 
-When connected to Client/Cursor/Windsurf:
+When connected to Claude/Cursor/Windsurf, the following tools are available:
 
-- `archon:perform_rag_query` - Search knowledge base
-- `archon:search_code_examples` - Find code snippets
-- `archon:create_project` - Create new project
-- `archon:list_projects` - List all projects
-- `archon:create_task` - Create task in project
-- `archon:list_tasks` - List and filter tasks
-- `archon:update_task` - Update task status/details
-- `archon:get_available_sources` - List knowledge sources
+### Knowledge Base Tools
+- `archon:rag_search_knowledge_base` - Search knowledge base for relevant content
+- `archon:rag_search_code_examples` - Find code snippets in the knowledge base
+- `archon:rag_get_available_sources` - List available knowledge sources
+
+### Project Management
+- `archon:find_projects` - Find all projects, search, or get specific project (by project_id)
+- `archon:manage_project` - Manage projects with actions: "create", "update", "delete"
+
+### Task Management
+- `archon:find_tasks` - Find tasks with search, filters, or get specific task (by task_id)
+- `archon:manage_task` - Manage tasks with actions: "create", "update", "delete"
+
+### Document Management
+- `archon:find_documents` - Find documents, search, or get specific document (by document_id)
+- `archon:manage_document` - Manage documents with actions: "create", "update", "delete"
+
+### Version Control
+- `archon:find_versions` - Find version history or get specific version
+- `archon:manage_version` - Manage versions with actions: "create", "restore"
 
 ## Important Notes
 

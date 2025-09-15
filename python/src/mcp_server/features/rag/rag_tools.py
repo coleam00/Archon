@@ -40,7 +40,7 @@ def register_rag_tools(mcp: FastMCP):
     """Register all RAG tools with the MCP server."""
 
     @mcp.tool()
-    async def get_available_sources(ctx: Context) -> str:
+    async def rag_get_available_sources(ctx: Context) -> str:
         """
         Get list of available sources in the knowledge base.
 
@@ -77,7 +77,7 @@ def register_rag_tools(mcp: FastMCP):
             return json.dumps({"success": False, "error": str(e)}, indent=2)
 
     @mcp.tool()
-    async def perform_rag_query(
+    async def rag_search_knowledge_base(
         ctx: Context, query: str, source_domain: str | None = None, match_count: int = 5
     ) -> str:
         """
@@ -134,7 +134,7 @@ def register_rag_tools(mcp: FastMCP):
             return json.dumps({"success": False, "results": [], "error": str(e)}, indent=2)
 
     @mcp.tool()
-    async def search_code_examples(
+    async def rag_search_code_examples(
         ctx: Context, query: str, source_domain: str | None = None, match_count: int = 5
     ) -> str:
         """

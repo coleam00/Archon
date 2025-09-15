@@ -197,48 +197,56 @@ MCP_INSTRUCTIONS = """
    - First TODO: Update Archon task status
    - Last TODO: Update Archon with findings/completion
 
-2. **Research First**: Before implementing, use perform_rag_query and search_code_examples
+2. **Research First**: Before implementing, use rag_search_knowledge_base and rag_search_code_examples
 3. **Task-Driven Development**: Never code without checking current tasks first
 
 ## 📋 Core Workflow
 
 ### Task Management Cycle
-1. **Get current task**: `get_task(task_id="...")`
-2. **Mark as doing**: `update_task(task_id="...", status="doing")`
-3. **Research phase**:
-   - `perform_rag_query(query="...", match_count=5)`
-   - `search_code_examples(query="...", match_count=3)`
-4. **Implementation**: Code based on research findings
-5. **Mark for review**: `update_task(task_id="...", status="review")`
-6. **Get next task**: `list_tasks(filter_by="status", filter_value="todo")`
+1. **Get current task**: `list_tasks(task_id="...")` 
+2. **Search/List tasks**: `list_tasks(query="auth", filter_by="status", filter_value="todo")`
+3. **Mark as doing**: `manage_task("update", task_id="...", status="doing")`
+4. **Research phase**:
+   - `rag_search_knowledge_base(query="...", match_count=5)`
+   - `rag_search_code_examples(query="...", match_count=3)`
+5. **Implementation**: Code based on research findings
+6. **Mark for review**: `manage_task("update", task_id="...", status="review")`
+7. **Get next task**: `list_tasks(filter_by="status", filter_value="todo")`
 
-### Available Task Functions
-- `create_task(project_id, title, description, assignee="User", ...)`
-- `list_tasks(filter_by="status", filter_value="todo", project_id=None)`
-- `get_task(task_id)`
-- `update_task(task_id, title=None, status=None, assignee=None, ...)`
-- `delete_task(task_id)`
+### Consolidated Task Tools (Optimized ~2 tools from 5)
+- `list_tasks(query=None, task_id=None, filter_by=None, filter_value=None, per_page=10)`
+  - **Consolidated**: list + search + get in one tool
+  - **NEW**: Search with keyword query parameter
+  - **NEW**: task_id parameter for getting single task (full details)
+  - Filter by status, project, or assignee
+  - **Optimized**: Returns truncated descriptions and array counts (lists only)
+  - **Default**: 10 items per page (was 50)
+- `manage_task(action, task_id=None, project_id=None, ...)`
+  - **Consolidated**: create + update + delete in one tool
+  - action: "create" | "update" | "delete"
+  - Examples:
+    - `manage_task("create", project_id="p-1", title="Fix auth")`
+    - `manage_task("update", task_id="t-1", status="doing")`
+    - `manage_task("delete", task_id="t-1")`
 
 ## 🏗️ Project Management
 
-### Project Functions
-- `create_project(title, description, github_repo=None)`
-- `list_projects()`
-- `get_project(project_id)`
-- `update_project(project_id, title=None, description=None, ...)`
-- `delete_project(project_id)`
+### Project Tools (Consolidated)
+- `list_projects(project_id=None, query=None, page=1, per_page=10)`
+  - List all projects, search by query, or get specific project by ID
+- `manage_project(action, project_id=None, title=None, description=None, github_repo=None)`
+  - Actions: "create", "update", "delete"
 
-### Document Functions
-- `create_document(project_id, title, document_type, content=None, ...)`
-- `list_documents(project_id)`
-- `get_document(project_id, doc_id)`
-- `update_document(project_id, doc_id, title=None, content=None, ...)`
-- `delete_document(project_id, doc_id)`
+### Document Tools (Consolidated)
+- `list_documents(project_id, document_id=None, query=None, document_type=None, page=1, per_page=10)`
+  - List project documents, search, filter by type, or get specific document
+- `manage_document(action, project_id, document_id=None, title=None, document_type=None, content=None, ...)`
+  - Actions: "create", "update", "delete"
 
 ## 🔍 Research Patterns
-- **Architecture patterns**: `perform_rag_query(query="[tech] architecture patterns", match_count=5)`
-- **Code examples**: `search_code_examples(query="[feature] implementation", match_count=3)`
-- **Source discovery**: `get_available_sources()`
+- **Architecture patterns**: `rag_search_knowledge_base(query="[tech] architecture patterns", match_count=5)`
+- **Code examples**: `rag_search_code_examples(query="[feature] implementation", match_count=3)`
+- **Source discovery**: `rag_get_available_sources()`
 - Keep match_count around 3-5 for focused results
 
 ## 📊 Task Status Flow
@@ -247,12 +255,12 @@ MCP_INSTRUCTIONS = """
 - Use 'review' for completed work awaiting validation
 - Mark tasks 'done' only after verification
 
-## 💾 Version Management
-- `create_version(project_id, field_name, content, change_summary)`
-- `list_versions(project_id, field_name=None)`
-- `get_version(project_id, field_name, version_number)`
-- `restore_version(project_id, field_name, version_number)`
-- Field names: "docs", "features", "data", "prd"
+## 💾 Version Management (Consolidated)
+- `list_versions(project_id, field_name=None, version_number=None, page=1, per_page=10)`
+  - List all versions, filter by field, or get specific version
+- `manage_version(action, project_id, field_name, version_number=None, content=None, change_summary=None, ...)`
+  - Actions: "create", "restore"
+  - Field names: "docs", "features", "data", "prd"
 
 ## 🎯 Best Practices
 1. **Atomic Tasks**: Create tasks that take 1-4 hours
@@ -260,6 +268,12 @@ MCP_INSTRUCTIONS = """
 3. **Use Features**: Group related tasks with feature labels
 4. **Add Sources**: Link relevant documentation to tasks
 5. **Track Progress**: Update task status as you work
+
+## 📊 Optimization Updates
+- **Payload Optimization**: Tasks in lists return truncated descriptions (200 chars)
+- **Array Counts**: Source/example arrays replaced with counts in list responses
+- **Smart Defaults**: Default page size reduced from 50 to 10 items
+- **Search Support**: New `query` parameter in list_tasks for keyword search
 """
 
 # Initialize the main FastMCP server with fixed configuration
@@ -380,7 +394,7 @@ def register_modules():
 
     # Import and register RAG module (HTTP-based version)
     try:
-        from src.mcp_server.modules.rag_module import register_rag_tools
+        from src.mcp_server.features.rag import register_rag_tools
 
         register_rag_tools(mcp)
         modules_registered += 1

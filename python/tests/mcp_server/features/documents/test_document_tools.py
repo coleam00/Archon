@@ -39,9 +39,9 @@ async def test_create_document_success(mock_mcp, mock_context):
     # Register tools with mock MCP
     register_document_tools(mock_mcp)
 
-    # Get the create_document function from registered tools
-    create_document = mock_mcp._tools.get("create_document")
-    assert create_document is not None, "create_document tool not registered"
+    # Get the manage_document function from registered tools
+    manage_document = mock_mcp._tools.get("manage_document")
+    assert manage_document is not None, "manage_document tool not registered"
 
     # Mock HTTP response
     mock_response = MagicMock()
@@ -57,8 +57,9 @@ async def test_create_document_success(mock_mcp, mock_context):
         mock_client.return_value.__aenter__.return_value = mock_async_client
 
         # Test the function
-        result = await create_document(
+        result = await manage_document(
             mock_context,
+            action="create",
             project_id="project-123",
             title="Test Document",
             document_type="spec",
@@ -72,13 +73,13 @@ async def test_create_document_success(mock_mcp, mock_context):
 
 
 @pytest.mark.asyncio
-async def test_list_documents_success(mock_mcp, mock_context):
+async def test_find_documents_success(mock_mcp, mock_context):
     """Test successful document listing."""
     register_document_tools(mock_mcp)
 
-    # Get the list_documents function from registered tools
-    list_documents = mock_mcp._tools.get("list_documents")
-    assert list_documents is not None, "list_documents tool not registered"
+    # Get the find_documents function from registered tools
+    find_documents = mock_mcp._tools.get("find_documents")
+    assert find_documents is not None, "find_documents tool not registered"
 
     # Mock HTTP response
     mock_response = MagicMock()
@@ -95,7 +96,7 @@ async def test_list_documents_success(mock_mcp, mock_context):
         mock_async_client.get.return_value = mock_response
         mock_client.return_value.__aenter__.return_value = mock_async_client
 
-        result = await list_documents(mock_context, project_id="project-123")
+        result = await find_documents(mock_context, project_id="project-123")
 
         result_data = json.loads(result)
         assert result_data["success"] is True
@@ -108,9 +109,9 @@ async def test_update_document_partial_update(mock_mcp, mock_context):
     """Test partial document update."""
     register_document_tools(mock_mcp)
 
-    # Get the update_document function from registered tools
-    update_document = mock_mcp._tools.get("update_document")
-    assert update_document is not None, "update_document tool not registered"
+    # Get the manage_document function from registered tools
+    manage_document = mock_mcp._tools.get("manage_document")
+    assert manage_document is not None, "manage_document tool not registered"
 
     # Mock HTTP response
     mock_response = MagicMock()
@@ -126,8 +127,8 @@ async def test_update_document_partial_update(mock_mcp, mock_context):
         mock_client.return_value.__aenter__.return_value = mock_async_client
 
         # Update only title
-        result = await update_document(
-            mock_context, project_id="project-123", doc_id="doc-123", title="Updated Title"
+        result = await manage_document(
+            mock_context, action="update", project_id="project-123", document_id="doc-123", title="Updated Title"
         )
 
         result_data = json.loads(result)
@@ -145,9 +146,9 @@ async def test_delete_document_not_found(mock_mcp, mock_context):
     """Test deleting a non-existent document."""
     register_document_tools(mock_mcp)
 
-    # Get the delete_document function from registered tools
-    delete_document = mock_mcp._tools.get("delete_document")
-    assert delete_document is not None, "delete_document tool not registered"
+    # Get the manage_document function from registered tools
+    manage_document = mock_mcp._tools.get("manage_document")
+    assert manage_document is not None, "manage_document tool not registered"
 
     # Mock 404 response
     mock_response = MagicMock()
@@ -159,8 +160,8 @@ async def test_delete_document_not_found(mock_mcp, mock_context):
         mock_async_client.delete.return_value = mock_response
         mock_client.return_value.__aenter__.return_value = mock_async_client
 
-        result = await delete_document(
-            mock_context, project_id="project-123", doc_id="non-existent"
+        result = await manage_document(
+            mock_context, action="delete", project_id="project-123", document_id="non-existent"
         )
 
         result_data = json.loads(result)
@@ -170,5 +171,5 @@ async def test_delete_document_not_found(mock_mcp, mock_context):
         assert isinstance(result_data["error"], dict), (
             "Error should be structured format, not string"
         )
-        assert result_data["error"]["type"] == "not_found"
-        assert "not found" in result_data["error"]["message"].lower()
+        assert result_data["error"]["type"] == "http_error"
+        assert "404" in result_data["error"]["message"].lower()
