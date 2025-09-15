@@ -10,6 +10,7 @@ import { useInspectorPagination } from "../hooks/useInspectorPagination";
 import { ContentViewer } from "./ContentViewer";
 import { InspectorHeader } from "./InspectorHeader";
 import { InspectorSidebar } from "./InspectorSidebar";
+import { copyToClipboard } from "../../../../utils/clipboard";
 
 interface KnowledgeInspectorProps {
   item: KnowledgeItem;
@@ -80,12 +81,12 @@ export const KnowledgeInspector: React.FC<KnowledgeInspectorProps> = ({ item, op
   }, [viewMode, currentItems, selectedItem]);
 
   const handleCopy = useCallback(async (text: string, id: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
+    const result = await copyToClipboard(text);
+    if (result.success) {
       setCopiedId(id);
       setTimeout(() => setCopiedId((v) => (v === id ? null : v)), 2000);
-    } catch (error) {
-      console.error("Failed to copy to clipboard:", error);
+    } else {
+      console.error("Failed to copy to clipboard:", result.error);
     }
   }, []);
 
