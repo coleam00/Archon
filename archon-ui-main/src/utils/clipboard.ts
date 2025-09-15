@@ -26,8 +26,18 @@ export const copyToClipboard = async (text: string): Promise<ClipboardResult> =>
   }
 
   // Fallback to document.execCommand for older browsers or insecure contexts
+  let textarea: HTMLTextAreaElement | null = null;
   try {
-    const textarea = document.createElement('textarea');
+    // Ensure document.body exists before proceeding
+    if (!document.body) {
+      return {
+        success: false,
+        method: 'failed',
+        error: 'document.body is not available'
+      };
+    }
+
+    textarea = document.createElement('textarea');
     textarea.value = text;
     textarea.style.position = 'fixed';
     textarea.style.top = '-9999px';
@@ -36,29 +46,38 @@ export const copyToClipboard = async (text: string): Promise<ClipboardResult> =>
     textarea.style.pointerEvents = 'none';
     textarea.setAttribute('readonly', '');
     textarea.setAttribute('aria-hidden', 'true');
-    
+
     document.body.appendChild(textarea);
     textarea.select();
     textarea.setSelectionRange(0, text.length);
-    
+
     const success = document.execCommand('copy');
-    document.body.removeChild(textarea);
-    
+
     if (success) {
       return { success: true, method: 'execCommand' };
     } else {
-      return { 
-        success: false, 
-        method: 'failed', 
-        error: 'execCommand copy returned false' 
+      return {
+        success: false,
+        method: 'failed',
+        error: 'execCommand copy returned false'
       };
     }
   } catch (error) {
-    return { 
-      success: false, 
-      method: 'failed', 
-      error: error instanceof Error ? error.message : 'Unknown error' 
+    return {
+      success: false,
+      method: 'failed',
+      error: error instanceof Error ? error.message : 'Unknown error'
     };
+  } finally {
+    // Always clean up the textarea element if it was created and added to DOM
+    if (textarea && document.body && document.body.contains(textarea)) {
+      try {
+        document.body.removeChild(textarea);
+      } catch (cleanupError) {
+        // Ignore cleanup errors - element may have already been removed
+        console.warn('Failed to cleanup textarea element:', cleanupError);
+      }
+    }
   }
 };
 
@@ -67,17 +86,29 @@ export const copyToClipboard = async (text: string): Promise<ClipboardResult> =>
  * @returns boolean - True if any clipboard method is available
  */
 export const isClipboardSupported = (): boolean => {
-  // Check modern clipboard API
-  if (navigator.clipboard && navigator.clipboard.writeText) {
+  // Check modern clipboard API with proper SSR guards
+  if (
+    typeof navigator !== 'undefined' &&
+    typeof navigator.clipboard !== 'undefined' &&
+    typeof navigator.clipboard.writeText === 'function'
+  ) {
     return true;
   }
-  
-  // Check execCommand fallback
-  try {
-    return document.queryCommandSupported?.('copy') ?? false;
-  } catch {
-    return false;
+
+  // Check execCommand fallback with SSR guards
+  if (
+    typeof document !== 'undefined' &&
+    typeof document.queryCommandSupported === 'function'
+  ) {
+    try {
+      return document.queryCommandSupported('copy');
+    } catch {
+      return false;
+    }
   }
+
+  // Return false if running in SSR or globals are unavailable
+  return false;
 };
 
 /**
