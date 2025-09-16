@@ -27,7 +27,7 @@ const ideConfigurations: Record<
       JSON.stringify(
         {
           name: "archon",
-          transport: "http",
+          type: "http",
           url: `http://${config.host}:${config.port}/mcp`,
         },
         null,
@@ -203,7 +203,7 @@ export const McpConfigSection: React.FC<McpConfigSectionProps> = ({ config, stat
   };
 
   const handleClaudeCodeCommand = () => {
-    const command = `claude mcp add --transport http archon http://${config.host}:${config.port}/mcp`;
+    const command = `claude mcp add --type http archon http://${config.host}:${config.port}/mcp`;
     navigator.clipboard.writeText(command);
     showToast("Command copied to clipboard", "success");
   };
@@ -258,7 +258,7 @@ export const McpConfigSection: React.FC<McpConfigSectionProps> = ({ config, stat
               )}
             >
               <code className="text-sm font-mono text-cyan-600 dark:text-cyan-400">
-                claude mcp add --transport http archon http://{config.host}:{config.port}/mcp
+                claude mcp add --type http archon http://{config.host}:{config.port}/mcp
               </code>
               <Button variant="outline" size="sm" onClick={handleClaudeCodeCommand}>
                 <Copy className="w-3 h-3 mr-1" />
