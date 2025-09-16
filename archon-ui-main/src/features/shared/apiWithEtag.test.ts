@@ -8,6 +8,7 @@ describe("apiWithEtag", () => {
     vi.resetAllMocks();
 
     // Mock AbortSignal.timeout for test environment
+    // Note: Production now uses 20s timeout for database performance issues
     global.AbortSignal = {
       timeout: vi.fn((ms: number) => ({
         aborted: false,
