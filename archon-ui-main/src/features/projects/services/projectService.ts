@@ -5,7 +5,7 @@
 
 import { validateCreateProject, validateUpdateProject } from "../schemas";
 import { formatRelativeTime, formatZodErrors, ValidationError } from "../shared/api";
-import { callAPIWithETag, invalidateETagCache } from "../shared/apiWithEtag";
+import { callAPIWithETag } from "../../shared/apiWithEtag";
 import type { CreateProjectRequest, Project, ProjectFeatures, UpdateProjectRequest } from "../types";
 
 export const projectService = {
@@ -93,8 +93,6 @@ export const projectService = {
         body: JSON.stringify(validation.data),
       });
 
-      // Invalidate project list cache after creation
-      invalidateETagCache("/api/projects");
 
       // Project creation response received
       return response;
@@ -129,9 +127,6 @@ export const projectService = {
         body: JSON.stringify(validation.data),
       });
 
-      // Invalidate caches after update
-      invalidateETagCache("/api/projects");
-      invalidateETagCache(`/api/projects/${projectId}`);
 
       // API update response received
 
@@ -161,9 +156,6 @@ export const projectService = {
         method: "DELETE",
       });
 
-      // Invalidate caches after deletion
-      invalidateETagCache("/api/projects");
-      invalidateETagCache(`/api/projects/${projectId}`);
     } catch (error) {
       console.error(`Failed to delete project ${projectId}:`, error);
       throw error;

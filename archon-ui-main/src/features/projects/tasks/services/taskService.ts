@@ -4,7 +4,7 @@
  */
 
 import { formatZodErrors, ValidationError } from "../../shared/api";
-import { callAPIWithETag, invalidateETagCache } from "../../shared/apiWithEtag";
+import { callAPIWithETag } from "../../../shared/apiWithEtag";
 
 import { validateCreateTask, validateUpdateTask, validateUpdateTaskStatus } from "../schemas";
 import type { CreateTaskRequest, DatabaseTaskStatus, Task, TaskCounts, UpdateTaskRequest } from "../types";
@@ -57,9 +57,6 @@ export const taskService = {
         body: JSON.stringify(requestData),
       });
 
-      // Invalidate task list cache for the project
-      invalidateETagCache(`/api/projects/${taskData.project_id}/tasks`);
-      invalidateETagCache("/api/tasks/counts");
 
       return task;
     } catch (error) {
@@ -84,9 +81,6 @@ export const taskService = {
         body: JSON.stringify(validation.data),
       });
 
-      // Invalidate related caches
-      // Note: We don't know the project_id here, so TanStack Query will handle invalidation
-      invalidateETagCache("/api/tasks/counts");
 
       return task;
     } catch (error) {
@@ -115,8 +109,6 @@ export const taskService = {
         body: JSON.stringify({ status }),
       });
 
-      // Invalidate task counts cache when status changes
-      invalidateETagCache("/api/tasks/counts");
 
       return task;
     } catch (error) {
@@ -134,8 +126,6 @@ export const taskService = {
         method: "DELETE",
       });
 
-      // Invalidate task counts cache after deletion
-      invalidateETagCache("/api/tasks/counts");
     } catch (error) {
       console.error(`Failed to delete task ${taskId}:`, error);
       throw error;

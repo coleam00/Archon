@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { callAPIWithETag } from "../../../features/projects/shared/apiWithEtag";
+import { callAPIWithETag } from "../../../features/shared/apiWithEtag";
 import type { HealthResponse } from "../types";
 
 /**

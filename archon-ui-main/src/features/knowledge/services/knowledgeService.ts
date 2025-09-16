@@ -3,7 +3,7 @@
  * Handles all knowledge-related API operations using TanStack Query patterns
  */
 
-import { callAPIWithETag, invalidateETagCache } from "../../projects/shared/apiWithEtag";
+import { callAPIWithETag } from "../../shared/apiWithEtag";
 import type {
   ChunksResponse,
   CodeExamplesResponse,
@@ -58,10 +58,6 @@ export const knowledgeService = {
       method: "DELETE",
     });
 
-    // Invalidate cache after deletion
-    invalidateETagCache("/api/knowledge-items");
-    invalidateETagCache("/api/knowledge-items/summary");
-    invalidateETagCache(`/api/knowledge-items/${sourceId}`);
 
     return response;
   },
@@ -75,10 +71,6 @@ export const knowledgeService = {
       body: JSON.stringify(updates),
     });
 
-    // Invalidate both list and specific item cache
-    invalidateETagCache("/api/knowledge-items");
-    invalidateETagCache("/api/knowledge-items/summary");
-    invalidateETagCache(`/api/knowledge-items/${sourceId}`);
 
     return response;
   },
@@ -92,9 +84,6 @@ export const knowledgeService = {
       body: JSON.stringify(request),
     });
 
-    // Invalidate list cache as new item will be added
-    invalidateETagCache("/api/knowledge-items");
-    invalidateETagCache("/api/knowledge-items/summary");
 
     return response;
   },
@@ -107,10 +96,6 @@ export const knowledgeService = {
       method: "POST",
     });
 
-    // Invalidate caches
-    invalidateETagCache("/api/knowledge-items");
-    invalidateETagCache("/api/knowledge-items/summary");
-    invalidateETagCache(`/api/knowledge-items/${sourceId}`);
 
     return response;
   },
@@ -152,9 +137,6 @@ export const knowledgeService = {
       throw new Error(error.error || `HTTP ${response.status}`);
     }
 
-    // Invalidate list cache
-    invalidateETagCache("/api/knowledge-items");
-    invalidateETagCache("/api/knowledge-items/summary");
 
     return response.json();
   },
