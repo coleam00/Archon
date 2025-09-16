@@ -239,6 +239,20 @@ class CredentialService:
                 self._rag_cache_timestamp = None
                 logger.debug(f"Invalidated RAG settings cache due to update of {key}")
 
+                # Also invalidate LLM provider service cache for provider config
+                try:
+                    from . import llm_provider_service
+                    # Clear the provider config caches that depend on RAG settings
+                    cache_keys_to_clear = ["provider_config_llm", "provider_config_embedding", "rag_strategy_settings"]
+                    for cache_key in cache_keys_to_clear:
+                        if cache_key in llm_provider_service._settings_cache:
+                            del llm_provider_service._settings_cache[cache_key]
+                            logger.debug(f"Invalidated LLM provider service cache key: {cache_key}")
+                except ImportError:
+                    logger.warning("Could not import llm_provider_service to invalidate cache")
+                except Exception as e:
+                    logger.error(f"Error invalidating LLM provider service cache: {e}")
+
             logger.info(
                 f"Successfully {'encrypted and ' if is_encrypted else ''}stored credential: {key}"
             )
@@ -266,6 +280,20 @@ class CredentialService:
                 self._rag_settings_cache = None
                 self._rag_cache_timestamp = None
                 logger.debug(f"Invalidated RAG settings cache due to deletion of {key}")
+
+                # Also invalidate LLM provider service cache for provider config
+                try:
+                    from . import llm_provider_service
+                    # Clear the provider config caches that depend on RAG settings
+                    cache_keys_to_clear = ["provider_config_llm", "provider_config_embedding", "rag_strategy_settings"]
+                    for cache_key in cache_keys_to_clear:
+                        if cache_key in llm_provider_service._settings_cache:
+                            del llm_provider_service._settings_cache[cache_key]
+                            logger.debug(f"Invalidated LLM provider service cache key: {cache_key}")
+                except ImportError:
+                    logger.warning("Could not import llm_provider_service to invalidate cache")
+                except Exception as e:
+                    logger.error(f"Error invalidating LLM provider service cache: {e}")
 
             logger.info(f"Successfully deleted credential: {key}")
             return True
@@ -400,8 +428,15 @@ class CredentialService:
             # Get base URL if needed
             base_url = self._get_provider_base_url(provider, rag_settings)
 
-            # Get models
+            # Get models with provider-specific fallback logic
             chat_model = rag_settings.get("MODEL_CHOICE", "")
+
+            # If MODEL_CHOICE is empty, try provider-specific model settings
+            if not chat_model and provider == "ollama":
+                chat_model = rag_settings.get("OLLAMA_CHAT_MODEL", "")
+                if chat_model:
+                    logger.debug(f"Using OLLAMA_CHAT_MODEL: {chat_model}")
+
             embedding_model = rag_settings.get("EMBEDDING_MODEL", "")
 
             return {

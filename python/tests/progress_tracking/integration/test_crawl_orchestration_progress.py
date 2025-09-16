@@ -168,17 +168,17 @@ class TestCrawlOrchestrationProgressIntegration:
         mapper = crawling_service.progress_mapper
         tracker = crawling_service.progress_tracker
         
-        # Test sequence of stage progressions with mapping
+        # Test sequence of stage progressions with mapping (updated for new ranges)
         test_stages = [
-            ("analyzing", 100, 2),      # Should map to ~2%
-            ("crawling", 100, 5),       # Should map to ~5% 
-            ("processing", 100, 8),     # Should map to ~8%
-            ("source_creation", 100, 10), # Should map to ~10%
-            ("document_storage", 25, 15), # 25% of 10-30% = 15%
-            ("document_storage", 50, 20), # 50% of 10-30% = 20%
-            ("document_storage", 100, 30), # 100% of 10-30% = 30%
-            ("code_extraction", 50, 62),  # 50% of 30-95% = 62.5% ≈ 62%
-            ("code_extraction", 100, 95), # 100% of 30-95% = 95%
+            ("analyzing", 100, 3),      # Should map to ~3%
+            ("crawling", 100, 15),      # Should map to ~15% 
+            ("processing", 100, 20),    # Should map to ~20%
+            ("source_creation", 100, 25), # Should map to ~25%
+            ("document_storage", 25, 29), # 25% of 25-40% = 29%
+            ("document_storage", 50, 32), # 50% of 25-40% = 32.5% ≈ 32%
+            ("document_storage", 100, 40), # 100% of 25-40% = 40%
+            ("code_extraction", 50, 65),  # 50% of 40-90% = 65%
+            ("code_extraction", 100, 90), # 100% of 40-90% = 90%
             ("finalization", 100, 100),   # Should map to 100%
         ]
         

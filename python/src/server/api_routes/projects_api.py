@@ -659,15 +659,16 @@ async def create_task(request: CreateTaskRequest):
 async def list_tasks(
     status: str | None = None,
     project_id: str | None = None,
-    include_closed: bool = False,
+    include_closed: bool = True,
     page: int = 1,
-    per_page: int = 50,
+    per_page: int = 10,
     exclude_large_fields: bool = False,
+    q: str | None = None,  # Search query parameter
 ):
-    """List tasks with optional filters including status and project."""
+    """List tasks with optional filters including status, project, and keyword search."""
     try:
         logfire.info(
-            f"Listing tasks | status={status} | project_id={project_id} | include_closed={include_closed} | page={page} | per_page={per_page}"
+            f"Listing tasks | status={status} | project_id={project_id} | include_closed={include_closed} | page={page} | per_page={per_page} | q={q}"
         )
 
         # Use TaskService to list tasks
@@ -677,6 +678,7 @@ async def list_tasks(
             status=status,
             include_closed=include_closed,
             exclude_large_fields=exclude_large_fields,
+            search_query=q,  # Pass search query to service
         )
 
         if not success:

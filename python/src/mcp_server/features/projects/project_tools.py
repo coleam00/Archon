@@ -1,8 +1,7 @@
 """
-Simple project management tools for Archon MCP Server.
+Consolidated project management tools for Archon MCP Server.
 
-Provides separate, focused tools for each project operation.
-No complex PRP examples - just straightforward project management.
+Reduces the number of individual CRUD operations while maintaining full functionality.
 """
 
 import asyncio
@@ -24,331 +23,308 @@ from src.server.config.service_discovery import get_api_url
 
 logger = logging.getLogger(__name__)
 
+# Optimization constants
+MAX_DESCRIPTION_LENGTH = 1000
+DEFAULT_PAGE_SIZE = 10  # Reduced from 50
+
+def truncate_text(text: str, max_length: int = MAX_DESCRIPTION_LENGTH) -> str:
+    """Truncate text to maximum length with ellipsis."""
+    if text and len(text) > max_length:
+        return text[:max_length - 3] + "..."
+    return text
+
+def optimize_project_response(project: dict) -> dict:
+    """Optimize project object for MCP response."""
+    project = project.copy()  # Don't modify original
+    
+    # Truncate description if present
+    if "description" in project and project["description"]:
+        project["description"] = truncate_text(project["description"])
+    
+    # Remove or summarize large fields
+    if "features" in project and isinstance(project["features"], list):
+        project["features_count"] = len(project["features"])
+        if len(project["features"]) > 3:
+            project["features"] = project["features"][:3]  # Keep first 3
+    
+    return project
+
 
 def register_project_tools(mcp: FastMCP):
-    """Register individual project management tools with the MCP server."""
+    """Register consolidated project management tools with the MCP server."""
 
     @mcp.tool()
-    async def create_project(
+    async def find_projects(
         ctx: Context,
-        title: str,
-        description: str = "",
-        github_repo: str | None = None,
+        project_id: str | None = None,  # For getting single project
+        query: str | None = None,  # Search capability
+        page: int = 1,
+        per_page: int = DEFAULT_PAGE_SIZE,
     ) -> str:
         """
-        Create a new project with automatic AI assistance.
-
-        The project creation starts a background process that generates PRP documentation
-        and initial tasks based on the title and description.
-
+        List and search projects (consolidated: list + search + get).
+        
         Args:
-            title: Project title - should be descriptive (required)
-            description: Project description explaining goals and scope
-            github_repo: GitHub repository URL (e.g., "https://github.com/org/repo")
-
+            project_id: Get specific project by ID (returns full details)
+            query: Keyword search in title/description
+            page: Page number for pagination  
+            per_page: Items per page (default: 10)
+        
         Returns:
-            JSON with project details:
-            {
-                "success": true,
-                "project": {...},
-                "project_id": "550e8400-e29b-41d4-a716-446655440000",
-                "message": "Project created successfully"
-            }
-
+            JSON array of projects or single project (optimized payloads for lists)
+        
         Examples:
-            # Simple project
-            create_project(
-                title="Task Management API",
-                description="RESTful API for managing tasks and projects"
-            )
-
-            # Project with GitHub integration
-            create_project(
-                title="OAuth2 Authentication System",
-                description="Implement secure OAuth2 authentication with multiple providers",
-                github_repo="https://github.com/myorg/auth-service"
-            )
+            list_projects()  # All projects
+            list_projects(query="auth")  # Search projects
+            list_projects(project_id="proj-123")  # Get specific project
         """
         try:
             api_url = get_api_url()
             timeout = get_default_timeout()
-
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(
-                    urljoin(api_url, "/api/projects"),
-                    json={"title": title, "description": description, "github_repo": github_repo},
-                )
-
-                if response.status_code == 200:
-                    result = response.json()
-
-                    # Handle async project creation
-                    if "progress_id" in result:
-                        # Poll for completion with proper error handling and backoff
-                        max_attempts = get_max_polling_attempts()
-                        polling_timeout = get_polling_timeout()
-
-                        for attempt in range(max_attempts):
-                            try:
-                                # Exponential backoff
-                                sleep_interval = get_polling_interval(attempt)
-                                await asyncio.sleep(sleep_interval)
-
-                                # Create new client with polling timeout
-                                async with httpx.AsyncClient(
-                                    timeout=polling_timeout
-                                ) as poll_client:
-                                    list_response = await poll_client.get(
-                                        urljoin(api_url, "/api/projects")
-                                    )
-                                    list_response.raise_for_status()  # Raise on HTTP errors
-
-                                    response_data = list_response.json()
-                                    # Extract projects array from response
-                                    projects = response_data.get("projects", [])
-                                    # Find project with matching title created recently
-                                    for proj in projects:
-                                        if proj.get("title") == title:
-                                            return json.dumps({
-                                                "success": True,
-                                                "project": proj,
-                                                "project_id": proj["id"],
-                                                "message": f"Project created successfully with ID: {proj['id']}",
-                                            })
-
-                            except httpx.RequestError as poll_error:
-                                logger.warning(
-                                    f"Polling attempt {attempt + 1}/{max_attempts} failed: {poll_error}"
-                                )
-                                if attempt == max_attempts - 1:  # Last attempt
-                                    return MCPErrorFormatter.format_error(
-                                        error_type="polling_timeout",
-                                        message=f"Project creation polling failed after {max_attempts} attempts",
-                                        details={
-                                            "progress_id": result["progress_id"],
-                                            "title": title,
-                                            "last_error": str(poll_error),
-                                        },
-                                        suggestion="The project may still be creating. Use list_projects to check status",
-                                    )
-                            except Exception as poll_error:
-                                logger.warning(
-                                    f"Unexpected error during polling attempt {attempt + 1}: {poll_error}"
-                                )
-
-                        # If we couldn't find it after polling
-                        return json.dumps({
-                            "success": True,
-                            "progress_id": result["progress_id"],
-                            "message": f"Project creation in progress after {max_attempts} checks. Use list_projects to find it once complete.",
-                        })
+            
+            # Single project get mode
+            if project_id:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.get(urljoin(api_url, f"/api/projects/{project_id}"))
+                    
+                    if response.status_code == 200:
+                        project = response.json()
+                        # Don't optimize single project get - return full details
+                        return json.dumps({"success": True, "project": project})
+                    elif response.status_code == 404:
+                        return MCPErrorFormatter.format_error(
+                            error_type="not_found",
+                            message=f"Project {project_id} not found",
+                            suggestion="Verify the project ID is correct",
+                            http_status=404,
+                        )
                     else:
-                        # Direct response (shouldn't happen with current API)
-                        return json.dumps({"success": True, "project": result})
-                else:
-                    return MCPErrorFormatter.from_http_error(response, "create project")
-
-        except httpx.ConnectError as e:
-            return MCPErrorFormatter.from_exception(
-                e, "create project", {"title": title, "api_url": api_url}
-            )
-        except httpx.TimeoutException as e:
-            return MCPErrorFormatter.from_exception(
-                e, "create project", {"title": title, "timeout": str(timeout)}
-            )
-        except Exception as e:
-            logger.error(f"Error creating project: {e}", exc_info=True)
-            return MCPErrorFormatter.from_exception(e, "create project", {"title": title})
-
-    @mcp.tool()
-    async def list_projects(ctx: Context) -> str:
-        """
-        List all projects.
-
-        Returns:
-            JSON array of all projects with their basic information
-
-        Example:
-            list_projects()
-        """
-        try:
-            api_url = get_api_url()
-            timeout = get_default_timeout()
-
+                        return MCPErrorFormatter.from_http_error(response, "get project")
+            
+            # List mode
             async with httpx.AsyncClient(timeout=timeout) as client:
-                # CRITICAL: Pass include_content=False for lightweight response
-                response = await client.get(
-                    urljoin(api_url, "/api/projects"),
-                    params={"include_content": False}
-                )
-
+                response = await client.get(urljoin(api_url, "/api/projects"))
+                
                 if response.status_code == 200:
-                    response_data = response.json()
-                    # Response already includes projects array and count
+                    data = response.json()
+                    projects = data.get("projects", [])
+                    
+                    # Apply search filter if provided
+                    if query:
+                        query_lower = query.lower()
+                        projects = [
+                            p for p in projects
+                            if query_lower in p.get("title", "").lower()
+                            or query_lower in p.get("description", "").lower()
+                        ]
+                    
+                    # Apply pagination
+                    start_idx = (page - 1) * per_page
+                    end_idx = start_idx + per_page
+                    paginated = projects[start_idx:end_idx]
+                    
+                    # Optimize project responses
+                    optimized = [optimize_project_response(p) for p in paginated]
+                    
                     return json.dumps({
                         "success": True,
-                        "projects": response_data,
-                        "count": response_data.get("count", 0),
+                        "projects": optimized,
+                        "count": len(optimized),
+                        "total": len(projects),
+                        "page": page,
+                        "per_page": per_page,
+                        "query": query
                     })
                 else:
                     return MCPErrorFormatter.from_http_error(response, "list projects")
-
+                    
         except httpx.RequestError as e:
-            return MCPErrorFormatter.from_exception(e, "list projects", {"api_url": api_url})
+            return MCPErrorFormatter.from_exception(e, "list projects")
         except Exception as e:
             logger.error(f"Error listing projects: {e}", exc_info=True)
             return MCPErrorFormatter.from_exception(e, "list projects")
 
     @mcp.tool()
-    async def get_project(ctx: Context, project_id: str) -> str:
-        """
-        Get detailed information about a specific project.
-
-        Args:
-            project_id: UUID of the project
-
-        Returns:
-            JSON with complete project details
-
-        Example:
-            get_project(project_id="550e8400-e29b-41d4-a716-446655440000")
-        """
-        try:
-            api_url = get_api_url()
-            timeout = get_default_timeout()
-
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.get(urljoin(api_url, f"/api/projects/{project_id}"))
-
-                if response.status_code == 200:
-                    project = response.json()
-                    return json.dumps({"success": True, "project": project})
-                elif response.status_code == 404:
-                    return MCPErrorFormatter.format_error(
-                        error_type="not_found",
-                        message=f"Project {project_id} not found",
-                        suggestion="Verify the project ID is correct",
-                        http_status=404,
-                    )
-                else:
-                    return MCPErrorFormatter.from_http_error(response, "get project")
-
-        except httpx.RequestError as e:
-            return MCPErrorFormatter.from_exception(e, "get project", {"project_id": project_id})
-        except Exception as e:
-            logger.error(f"Error getting project: {e}", exc_info=True)
-            return MCPErrorFormatter.from_exception(e, "get project")
-
-    @mcp.tool()
-    async def delete_project(ctx: Context, project_id: str) -> str:
-        """
-        Delete a project.
-
-        Args:
-            project_id: UUID of the project to delete
-
-        Returns:
-            JSON confirmation of deletion
-
-        Example:
-            delete_project(project_id="550e8400-e29b-41d4-a716-446655440000")
-        """
-        try:
-            api_url = get_api_url()
-            timeout = get_default_timeout()
-
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.delete(urljoin(api_url, f"/api/projects/{project_id}"))
-
-                if response.status_code == 200:
-                    return json.dumps({
-                        "success": True,
-                        "message": f"Project {project_id} deleted successfully",
-                    })
-                elif response.status_code == 404:
-                    return MCPErrorFormatter.format_error(
-                        error_type="not_found",
-                        message=f"Project {project_id} not found",
-                        suggestion="Verify the project ID is correct",
-                        http_status=404,
-                    )
-                else:
-                    return MCPErrorFormatter.from_http_error(response, "delete project")
-
-        except httpx.RequestError as e:
-            return MCPErrorFormatter.from_exception(e, "delete project", {"project_id": project_id})
-        except Exception as e:
-            logger.error(f"Error deleting project: {e}", exc_info=True)
-            return MCPErrorFormatter.from_exception(e, "delete project")
-
-    @mcp.tool()
-    async def update_project(
+    async def manage_project(
         ctx: Context,
-        project_id: str,
+        action: str,  # "create" | "update" | "delete"
+        project_id: str | None = None,
         title: str | None = None,
         description: str | None = None,
         github_repo: str | None = None,
     ) -> str:
         """
-        Update a project's basic information.
-
+        Manage projects (consolidated: create/update/delete).
+        
         Args:
-            project_id: UUID of the project to update
-            title: New title (optional)
-            description: New description (optional)
-            github_repo: New GitHub repository URL (optional)
-
-        Returns:
-            JSON with updated project details
-
-        Example:
-            update_project(project_id="550e8400-e29b-41d4-a716-446655440000",
-                         title="Updated Project Title")
+            action: "create" | "update" | "delete"
+            project_id: Project UUID for update/delete
+            title: Project title (required for create)
+            description: Project goals and scope
+            github_repo: GitHub URL (e.g. "https://github.com/org/repo")
+        
+        Examples:
+            manage_project("create", title="Auth System")
+            manage_project("update", project_id="p-1", description="Updated")
+            manage_project("delete", project_id="p-1")
+        
+        Returns: {success: bool, project?: object, message: string}
         """
         try:
             api_url = get_api_url()
             timeout = get_default_timeout()
-
-            # Build update payload with only provided fields
-            update_data = {}
-            if title is not None:
-                update_data["title"] = title
-            if description is not None:
-                update_data["description"] = description
-            if github_repo is not None:
-                update_data["github_repo"] = github_repo
-
-            if not update_data:
-                return MCPErrorFormatter.format_error(
-                    error_type="validation_error",
-                    message="No fields to update",
-                    suggestion="Provide at least one field to update (title, description, or github_repo)",
-                )
-
+            
             async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.put(
-                    urljoin(api_url, f"/api/projects/{project_id}"), json=update_data
-                )
-
-                if response.status_code == 200:
-                    project = response.json()
-                    return json.dumps({
-                        "success": True,
-                        "project": project,
-                        "message": "Project updated successfully",
-                    })
-                elif response.status_code == 404:
-                    return MCPErrorFormatter.format_error(
-                        error_type="not_found",
-                        message=f"Project {project_id} not found",
-                        suggestion="Verify the project ID is correct",
-                        http_status=404,
+                if action == "create":
+                    if not title:
+                        return MCPErrorFormatter.format_error(
+                            "validation_error",
+                            "title required for create"
+                        )
+                    
+                    response = await client.post(
+                        urljoin(api_url, "/api/projects"),
+                        json={
+                            "title": title,
+                            "description": description or "",
+                            "github_repo": github_repo
+                        }
                     )
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        
+                        # Handle async project creation with polling
+                        if "progress_id" in result:
+                            max_attempts = get_max_polling_attempts()
+                            polling_timeout = get_polling_timeout()
+                            
+                            for attempt in range(max_attempts):
+                                try:
+                                    # Exponential backoff
+                                    sleep_interval = get_polling_interval(attempt)
+                                    await asyncio.sleep(sleep_interval)
+                                    
+                                    async with httpx.AsyncClient(timeout=polling_timeout) as poll_client:
+                                        poll_response = await poll_client.get(
+                                            urljoin(api_url, f"/api/progress/{result['progress_id']}")
+                                        )
+                                        
+                                        if poll_response.status_code == 200:
+                                            poll_data = poll_response.json()
+                                            
+                                            if poll_data.get("status") == "completed":
+                                                project = poll_data.get("result", {}).get("project", {})
+                                                return json.dumps({
+                                                    "success": True,
+                                                    "project": optimize_project_response(project),
+                                                    "project_id": project.get("id"),
+                                                    "message": poll_data.get("result", {}).get("message", "Project created successfully")
+                                                })
+                                            elif poll_data.get("status") == "failed":
+                                                error_msg = poll_data.get("error", "Project creation failed")
+                                                return MCPErrorFormatter.format_error(
+                                                    "creation_failed",
+                                                    error_msg,
+                                                    details=poll_data.get("details")
+                                                )
+                                            # Continue polling if still processing
+                                            
+                                except httpx.RequestError as poll_error:
+                                    logger.warning(f"Polling attempt {attempt + 1} failed: {poll_error}")
+                                    if attempt == max_attempts - 1:
+                                        return MCPErrorFormatter.format_error(
+                                            "timeout",
+                                            "Project creation timed out",
+                                            suggestion="Check project status manually"
+                                        )
+                            
+                            return MCPErrorFormatter.format_error(
+                                "timeout",
+                                "Project creation timed out after maximum attempts",
+                                details={"progress_id": result.get("progress_id")}
+                            )
+                        else:
+                            # Synchronous response
+                            project = result.get("project", {})
+                            return json.dumps({
+                                "success": True,
+                                "project": optimize_project_response(project),
+                                "project_id": project.get("id"),
+                                "message": result.get("message", "Project created successfully")
+                            })
+                    else:
+                        return MCPErrorFormatter.from_http_error(response, "create project")
+                        
+                elif action == "update":
+                    if not project_id:
+                        return MCPErrorFormatter.format_error(
+                            "validation_error",
+                            "project_id required for update"
+                        )
+                    
+                    update_data = {}
+                    if title is not None:
+                        update_data["title"] = title
+                    if description is not None:
+                        update_data["description"] = description
+                    if github_repo is not None:
+                        update_data["github_repo"] = github_repo
+                    
+                    if not update_data:
+                        return MCPErrorFormatter.format_error(
+                            "validation_error",
+                            "No fields to update"
+                        )
+                    
+                    response = await client.put(
+                        urljoin(api_url, f"/api/projects/{project_id}"),
+                        json=update_data
+                    )
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        project = result.get("project")
+                        
+                        if project:
+                            project = optimize_project_response(project)
+                        
+                        return json.dumps({
+                            "success": True,
+                            "project": project,
+                            "message": result.get("message", "Project updated successfully")
+                        })
+                    else:
+                        return MCPErrorFormatter.from_http_error(response, "update project")
+                        
+                elif action == "delete":
+                    if not project_id:
+                        return MCPErrorFormatter.format_error(
+                            "validation_error",
+                            "project_id required for delete"
+                        )
+                    
+                    response = await client.delete(
+                        urljoin(api_url, f"/api/projects/{project_id}")
+                    )
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        return json.dumps({
+                            "success": True,
+                            "message": result.get("message", "Project deleted successfully")
+                        })
+                    else:
+                        return MCPErrorFormatter.from_http_error(response, "delete project")
+                        
                 else:
-                    return MCPErrorFormatter.from_http_error(response, "update project")
-
+                    return MCPErrorFormatter.format_error(
+                        "invalid_action",
+                        f"Unknown action: {action}"
+                    )
+                    
         except httpx.RequestError as e:
-            return MCPErrorFormatter.from_exception(e, "update project", {"project_id": project_id})
+            return MCPErrorFormatter.from_exception(e, f"{action} project")
         except Exception as e:
-            logger.error(f"Error updating project: {e}", exc_info=True)
-            return MCPErrorFormatter.from_exception(e, "update project")
+            logger.error(f"Error managing project ({action}): {e}", exc_info=True)
+            return MCPErrorFormatter.from_exception(e, f"{action} project")

@@ -8,8 +8,7 @@ import { MCPPage } from './pages/MCPPage';
 import { OnboardingPage } from './pages/OnboardingPage';
 import { MainLayout } from './components/layout/MainLayout';
 import { ThemeProvider } from './contexts/ThemeContext';
-import { ToastProvider } from './contexts/ToastContext';
-import { ToastProvider as FeaturesToastProvider } from './features/ui/components/ToastProvider';
+import { ToastProvider } from './features/ui/components/ToastProvider';
 import { SettingsProvider, useSettings } from './contexts/SettingsContext';
 import { TooltipProvider } from './features/ui/primitives/tooltip';
 import { ProjectPage } from './pages/ProjectPage';
@@ -134,13 +133,11 @@ export function App() {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <ToastProvider>
-          <FeaturesToastProvider>
-            <TooltipProvider>
-              <SettingsProvider>
-                <AppContent />
-              </SettingsProvider>
-            </TooltipProvider>
-          </FeaturesToastProvider>
+          <TooltipProvider>
+            <SettingsProvider>
+              <AppContent />
+            </SettingsProvider>
+          </TooltipProvider>
         </ToastProvider>
       </ThemeProvider>
       {import.meta.env.VITE_SHOW_DEVTOOLS === 'true' && (

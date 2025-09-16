@@ -29,7 +29,10 @@ class URLHandler:
             True if URL is a sitemap, False otherwise
         """
         try:
-            return url.endswith("sitemap.xml") or "sitemap" in urlparse(url).path
+            parsed = urlparse(url)
+            path = parsed.path.lower()
+            # Only match URLs that end with .xml and contain sitemap in the filename
+            return path.endswith(".xml") and "sitemap" in path
         except Exception as e:
             logger.warning(f"Error checking if URL is sitemap: {e}")
             return False

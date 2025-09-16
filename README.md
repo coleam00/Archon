@@ -54,11 +54,13 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
 
 1. **Clone Repository**:
    ```bash
-   git clone https://github.com/coleam00/archon.git
+   git clone -b stable https://github.com/coleam00/archon.git
    ```
    ```bash
    cd archon
    ```
+   
+   **Note:** The `stable` branch is recommended for using Archon. If you want to contribute or try the latest features, use the `main` branch with `git clone https://github.com/coleam00/archon.git`
 2. **Environment Configuration**:
 
    ```bash

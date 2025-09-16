@@ -1,8 +1,8 @@
-import React from 'react';
-import { cn, glassmorphism, compoundStyles } from '../../ui/primitives';
-import { Monitor, Clock, Activity } from 'lucide-react';
-import { motion } from 'framer-motion';
-import type { McpClient } from '../types';
+import { motion } from "framer-motion";
+import { Activity, Clock, Monitor } from "lucide-react";
+import type React from "react";
+import { cn, compoundStyles, glassmorphism } from "../../ui/primitives";
+import type { McpClient } from "../types";
 
 interface McpClientListProps {
   clients: McpClient[];
@@ -10,20 +10,17 @@ interface McpClientListProps {
 }
 
 const clientIcons: Record<string, string> = {
-  'Claude': '🤖',
-  'Cursor': '💻',
-  'Windsurf': '🏄',
-  'Cline': '🔧',
-  'KiRo': '🚀',
-  'Augment': '⚡',
-  'Gemini': '🌐',
-  'Unknown': '❓'
+  Claude: "🤖",
+  Cursor: "💻",
+  Windsurf: "🏄",
+  Cline: "🔧",
+  KiRo: "🚀",
+  Augment: "⚡",
+  Gemini: "🌐",
+  Unknown: "❓",
 };
 
-export const McpClientList: React.FC<McpClientListProps> = ({
-  clients,
-  className
-}) => {
+export const McpClientList: React.FC<McpClientListProps> = ({ clients, className }) => {
   const formatDuration = (connectedAt: string): string => {
     const now = new Date();
     const connected = new Date(connectedAt);
@@ -39,10 +36,10 @@ export const McpClientList: React.FC<McpClientListProps> = ({
     const activity = new Date(lastActivity);
     const seconds = Math.floor((now.getTime() - activity.getTime()) / 1000);
 
-    if (seconds < 5) return 'Active';
+    if (seconds < 5) return "Active";
     if (seconds < 60) return `${seconds}s ago`;
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-    return 'Idle';
+    return "Idle";
   };
 
   if (clients.length === 0) {
@@ -72,13 +69,11 @@ export const McpClientList: React.FC<McpClientListProps> = ({
             "flex items-center justify-between p-4 rounded-lg",
             glassmorphism.background.card,
             glassmorphism.border.default,
-            client.status === 'active'
-              ? "border-green-500/50 shadow-[0_0_15px_rgba(34,197,94,0.2)]"
-              : ""
+            client.status === "active" ? "border-green-500/50 shadow-[0_0_15px_rgba(34,197,94,0.2)]" : "",
           )}
         >
           <div className="flex items-center gap-3">
-            <span className="text-2xl">{clientIcons[client.client_type] || '❓'}</span>
+            <span className="text-2xl">{clientIcons[client.client_type] || "❓"}</span>
             <div>
               <p className="font-medium text-white">{client.client_type}</p>
               <p className="text-xs text-zinc-400">Session: {client.session_id.slice(0, 8)}</p>
@@ -93,10 +88,7 @@ export const McpClientList: React.FC<McpClientListProps> = ({
 
             <div className="flex items-center gap-1">
               <Activity className="w-3 h-3 text-green-400" />
-              <span className={cn(
-                "text-zinc-400",
-                client.status === 'active' && "text-green-400"
-              )}>
+              <span className={cn("text-zinc-400", client.status === "active" && "text-green-400")}>
                 {formatLastActivity(client.last_activity)}
               </span>
             </div>

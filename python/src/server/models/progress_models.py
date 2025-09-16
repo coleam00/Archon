@@ -2,7 +2,7 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ProgressDetails(BaseModel):
@@ -21,8 +21,7 @@ class ProgressDetails(BaseModel):
     embeddings_created: int | None = Field(None, alias="embeddingsCreated")
     code_blocks_found: int | None = Field(None, alias="codeBlocksFound")
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class BaseProgressResponse(BaseModel):
@@ -63,8 +62,7 @@ class BaseProgressResponse(BaseModel):
             return result
         return []
 
-    class Config:
-        populate_by_name = True  # Accept both snake_case and camelCase
+    model_config = ConfigDict(populate_by_name=True)  # Accept both snake_case and camelCase
 
 
 class CrawlProgressResponse(BaseProgressResponse):
@@ -81,7 +79,7 @@ class CrawlProgressResponse(BaseProgressResponse):
     total_pages: int = Field(0, alias="totalPages")
     processed_pages: int = Field(0, alias="processedPages")
     crawl_type: str | None = Field(None, alias="crawlType")  # 'normal', 'sitemap', 'llms-txt', 'refresh'
-    
+
     # Code extraction specific fields
     code_blocks_found: int = Field(0, alias="codeBlocksFound")
     code_examples_stored: int = Field(0, alias="codeExamplesStored")
@@ -112,21 +110,20 @@ class CrawlProgressResponse(BaseProgressResponse):
         """Convert duration to string if it's a float."""
         if v is None:
             return None
-        if isinstance(v, (int, float)):
+        if isinstance(v, int | float):
             return str(v)
         return v
 
-    class Config:
-        populate_by_name = True  # Accept both snake_case and camelCase
+    model_config = ConfigDict(populate_by_name=True)  # Accept both snake_case and camelCase
 
 
 class UploadProgressResponse(BaseProgressResponse):
     """Progress response for document upload operations."""
 
     status: Literal[
-        "starting", "reading", "extracting", "chunking",
-        "creating_source", "summarizing", "storing",
-        "completed", "failed", "cancelled"
+        "starting", "reading", "text_extraction", "chunking",
+        "source_creation", "summarizing", "storing",
+        "completed", "failed", "cancelled", "error"
     ]
 
     # Upload-specific fields
@@ -139,8 +136,7 @@ class UploadProgressResponse(BaseProgressResponse):
     word_count: int | None = Field(None, alias="wordCount")
     source_id: str | None = Field(None, alias="sourceId")
 
-    class Config:
-        populate_by_name = True  # Accept both snake_case and camelCase
+    model_config = ConfigDict(populate_by_name=True)  # Accept both snake_case and camelCase
 
 
 class ProjectCreationProgressResponse(BaseProgressResponse):
@@ -148,7 +144,7 @@ class ProjectCreationProgressResponse(BaseProgressResponse):
 
     status: Literal[
         "starting", "analyzing", "generating_prp", "creating_tasks",
-        "organizing", "completed", "failed"
+        "organizing", "completed", "failed", "error"
     ]
 
     # Project creation specific
@@ -156,8 +152,7 @@ class ProjectCreationProgressResponse(BaseProgressResponse):
     tasks_created: int = Field(0, alias="tasksCreated")
     total_tasks_planned: int | None = Field(None, alias="totalTasksPlanned")
 
-    class Config:
-        populate_by_name = True  # Accept both snake_case and camelCase
+    model_config = ConfigDict(populate_by_name=True)  # Accept both snake_case and camelCase
 
 
 def create_progress_response(
@@ -166,11 +161,11 @@ def create_progress_response(
 ) -> BaseProgressResponse:
     """
     Factory function to create the appropriate progress response based on operation type.
-    
+
     Args:
         operation_type: Type of operation (crawl, upload, project_creation)
         progress_data: Raw progress data from ProgressTracker
-    
+
     Returns:
         Appropriate progress response model
     """
@@ -186,7 +181,7 @@ def create_progress_response(
 
     # Ensure essential fields have defaults if missing
     if "status" not in progress_data:
-        progress_data["status"] = "running"
+        progress_data["status"] = "starting"
     if "progress" not in progress_data:
         progress_data["progress"] = 0
     if "message" not in progress_data and "log" in progress_data:
@@ -201,7 +196,6 @@ def create_progress_response(
         "total_chunks": "totalChunks",
         "current_batch": "currentBatch",
         "total_batches": "totalBatches",
-        "completed_batches": "currentBatch",  # Alternative name
         "current_operation": "currentOperation",
         "chunks_per_second": "chunksPerSecond",
         "estimated_time_remaining": "estimatedTimeRemaining",
@@ -217,12 +211,8 @@ def create_progress_response(
         if snake_field in progress_data:
             # Use the camelCase name since ProgressDetails expects it
             details_data[camel_field] = progress_data[snake_field]
-    
-    # Also check for crawl-specific fields that might use alternative names
-    if 'pages_crawled' not in progress_data and 'processed_pages' in progress_data:
-        details_data['pagesCrawled'] = progress_data['processed_pages']
-    if 'totalPages' not in details_data and 'total_pages' in progress_data:
-        details_data['totalPages'] = progress_data['total_pages']
+
+    # (removed redundant remapping; handled via detail_field_mappings)
 
     # Create details object if we have any detail fields
     if details_data:
@@ -235,14 +225,14 @@ def create_progress_response(
             from ..config.logfire_config import get_logger
             logger = get_logger(__name__)
             logger.info(f"Code extraction progress fields present: completed_summaries={progress_data.get('completed_summaries')}, total_summaries={progress_data.get('total_summaries')}")
-        
+
         return model_class(**progress_data)
     except Exception as e:
         # Log validation errors for debugging
         from ..config.logfire_config import get_logger
         logger = get_logger(__name__)
         logger.error(f"Failed to create {model_class.__name__}: {e}", exc_info=True)
-        
+
         essential_fields = {
             "progress_id": progress_data.get("progress_id", "unknown"),
             "status": progress_data.get("status", "running"),

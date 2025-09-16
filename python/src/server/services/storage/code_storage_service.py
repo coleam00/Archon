@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import re
+from collections import defaultdict, deque
 from collections.abc import Callable
 from difflib import SequenceMatcher
 from typing import Any
@@ -505,6 +506,20 @@ def generate_code_example_summary(
     Returns:
         A dictionary with 'summary' and 'example_name'
     """
+    import asyncio
+    
+    # Run the async version in the current thread
+    return asyncio.run(_generate_code_example_summary_async(code, context_before, context_after, language, provider))
+
+
+async def _generate_code_example_summary_async(
+    code: str, context_before: str, context_after: str, language: str = "", provider: str = None
+) -> dict[str, str]:
+    """
+    Async version of generate_code_example_summary using unified LLM provider service.
+    """
+    from ..llm_provider_service import get_llm_client
+    
     # Get model choice from credential service (RAG setting)
     model_choice = _get_model_choice()
 
@@ -535,89 +550,57 @@ Format your response as JSON:
 """
 
     try:
-        # Get LLM client using fallback
-        try:
-            import os
-
-            import openai
-
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                # Try to get from credential service with direct fallback
-                from ..credential_service import credential_service
-
-                if (
-                    credential_service._cache_initialized
-                    and "OPENAI_API_KEY" in credential_service._cache
-                ):
-                    cached_key = credential_service._cache["OPENAI_API_KEY"]
-                    if isinstance(cached_key, dict) and cached_key.get("is_encrypted"):
-                        api_key = credential_service._decrypt_value(cached_key["encrypted_value"])
-                    else:
-                        api_key = cached_key
-                else:
-                    api_key = os.getenv("OPENAI_API_KEY", "")
-
-            if not api_key:
-                raise ValueError("No OpenAI API key available")
-
-            client = openai.OpenAI(api_key=api_key)
-        except Exception as e:
-            search_logger.error(
-                f"Failed to create LLM client fallback: {e} - returning default values"
+        # Use unified LLM provider service
+        async with get_llm_client(provider=provider) as client:
+            search_logger.info(
+                f"Generating summary for {hash(code) & 0xffffff:06x} using model: {model_choice}"
             )
-            return {
-                "example_name": f"Code Example{f' ({language})' if language else ''}",
-                "summary": "Code example for demonstration purposes.",
+            
+            response = await client.chat.completions.create(
+                model=model_choice,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a helpful assistant that analyzes code examples and provides JSON responses with example names and summaries.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={"type": "json_object"},
+                max_tokens=500,
+                temperature=0.3,
+            )
+
+            response_content = response.choices[0].message.content.strip()
+            search_logger.debug(f"LLM API response: {repr(response_content[:200])}...")
+
+            result = json.loads(response_content)
+
+            # Validate the response has the required fields
+            if not result.get("example_name") or not result.get("summary"):
+                search_logger.warning(f"Incomplete response from LLM: {result}")
+
+            final_result = {
+                "example_name": result.get(
+                    "example_name", f"Code Example{f' ({language})' if language else ''}"
+                ),
+                "summary": result.get("summary", "Code example for demonstration purposes."),
             }
 
-        search_logger.debug(
-            f"Calling OpenAI API with model: {model_choice}, language: {language}, code length: {len(code)}"
-        )
-
-        response = client.chat.completions.create(
-            model=model_choice,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant that analyzes code examples and provides JSON responses with example names and summaries.",
-                },
-                {"role": "user", "content": prompt},
-            ],
-            response_format={"type": "json_object"},
-        )
-
-        response_content = response.choices[0].message.content.strip()
-        search_logger.debug(f"OpenAI API response: {repr(response_content[:200])}...")
-
-        result = json.loads(response_content)
-
-        # Validate the response has the required fields
-        if not result.get("example_name") or not result.get("summary"):
-            search_logger.warning(f"Incomplete response from OpenAI: {result}")
-
-        final_result = {
-            "example_name": result.get(
-                "example_name", f"Code Example{f' ({language})' if language else ''}"
-            ),
-            "summary": result.get("summary", "Code example for demonstration purposes."),
-        }
-
-        search_logger.info(
-            f"Generated code example summary - Name: '{final_result['example_name']}', Summary length: {len(final_result['summary'])}"
-        )
-        return final_result
+            search_logger.info(
+                f"Generated code example summary - Name: '{final_result['example_name']}', Summary length: {len(final_result['summary'])}"
+            )
+            return final_result
 
     except json.JSONDecodeError as e:
         search_logger.error(
-            f"Failed to parse JSON response from OpenAI: {e}, Response: {repr(response_content) if 'response_content' in locals() else 'No response'}"
+            f"Failed to parse JSON response from LLM: {e}, Response: {repr(response_content) if 'response_content' in locals() else 'No response'}"
         )
         return {
             "example_name": f"Code Example{f' ({language})' if language else ''}",
             "summary": "Code example for demonstration purposes.",
         }
     except Exception as e:
-        search_logger.error(f"Error generating code example summary: {e}, Model: {model_choice}")
+        search_logger.error(f"Error generating code summary using unified LLM provider: {e}")
         return {
             "example_name": f"Code Example{f' ({language})' if language else ''}",
             "summary": "Code example for demonstration purposes.",
@@ -815,6 +798,7 @@ async def add_code_examples_to_supabase(
 
         # Create combined texts for embedding (code + summary)
         combined_texts = []
+        original_indices: list[int] = []
         for j in range(i, batch_end):
             # Validate inputs
             code = code_examples[j] if isinstance(code_examples[j], str) else str(code_examples[j])
@@ -826,6 +810,7 @@ async def add_code_examples_to_supabase(
 
             combined_text = f"{code}\n\nSummary: {summary}"
             combined_texts.append(combined_text)
+            original_indices.append(j)
 
         # Apply contextual embeddings if enabled
         if use_contextual_embeddings and url_to_full_document:
@@ -863,6 +848,30 @@ async def add_code_examples_to_supabase(
         # Use only successful embeddings
         valid_embeddings = result.embeddings
         successful_texts = result.texts_processed
+        
+        # Get model information for tracking
+        from ..llm_provider_service import get_embedding_model
+        from ..credential_service import credential_service
+        
+        # Get embedding model name
+        embedding_model_name = await get_embedding_model(provider=provider)
+        
+        # Get LLM chat model (used for code summaries and contextual embeddings if enabled)
+        llm_chat_model = None
+        try:
+            # First check if contextual embeddings were used
+            if use_contextual_embeddings:
+                provider_config = await credential_service.get_active_provider("llm")
+                llm_chat_model = provider_config.get("chat_model", "")
+                if not llm_chat_model:
+                    # Fallback to MODEL_CHOICE
+                    llm_chat_model = await credential_service.get_credential("MODEL_CHOICE", "gpt-4o-mini")
+            else:
+                # For code summaries, we use MODEL_CHOICE
+                llm_chat_model = _get_model_choice()
+        except Exception as e:
+            search_logger.warning(f"Failed to get LLM chat model: {e}")
+            llm_chat_model = "gpt-4o-mini"  # Default fallback
 
         if not valid_embeddings:
             search_logger.warning("Skipping batch - no successful embeddings created")
@@ -870,21 +879,24 @@ async def add_code_examples_to_supabase(
 
         # Prepare batch data - only for successful embeddings
         batch_data = []
-        for j, (embedding, text) in enumerate(
-            zip(valid_embeddings, successful_texts, strict=False)
-        ):
-            # Find the original index
-            orig_idx = None
-            for k, orig_text in enumerate(batch_texts):
-                if orig_text == text:
-                    orig_idx = k
-                    break
 
-            if orig_idx is None:
-                search_logger.warning("Could not map embedding back to original code example")
+        # Build positions map to handle duplicate texts correctly
+        # Each text maps to a queue of indices where it appears
+        positions_by_text = defaultdict(deque)
+        for k, text in enumerate(batch_texts):
+            # map text -> original j index (not k)
+            positions_by_text[text].append(original_indices[k])
+
+        # Map successful texts back to their original indices
+        for embedding, text in zip(valid_embeddings, successful_texts, strict=False):
+            # Get the next available index for this text (handles duplicates)
+            if positions_by_text[text]:
+                orig_idx = positions_by_text[text].popleft()  # Original j index in [i, batch_end)
+            else:
+                search_logger.warning(f"Could not map embedding back to original code example (no remaining index for text: {text[:50]}...)")
                 continue
 
-            idx = i + orig_idx  # Get the global index
+            idx = orig_idx  # Global index into urls/chunk_numbers/etc.
 
             # Use source_id from metadata if available, otherwise extract from URL
             if metadatas[idx] and "source_id" in metadatas[idx]:
@@ -893,6 +905,23 @@ async def add_code_examples_to_supabase(
                 parsed_url = urlparse(urls[idx])
                 source_id = parsed_url.netloc or parsed_url.path
 
+            # Determine the correct embedding column based on dimension
+            embedding_dim = len(embedding) if isinstance(embedding, list) else len(embedding.tolist())
+            embedding_column = None
+            
+            if embedding_dim == 768:
+                embedding_column = "embedding_768"
+            elif embedding_dim == 1024:
+                embedding_column = "embedding_1024"
+            elif embedding_dim == 1536:
+                embedding_column = "embedding_1536"
+            elif embedding_dim == 3072:
+                embedding_column = "embedding_3072"
+            else:
+                # Default to closest supported dimension
+                search_logger.warning(f"Unsupported embedding dimension {embedding_dim}, using embedding_1536")
+                embedding_column = "embedding_1536"
+            
             batch_data.append({
                 "url": urls[idx],
                 "chunk_number": chunk_numbers[idx],
@@ -900,8 +929,15 @@ async def add_code_examples_to_supabase(
                 "summary": summaries[idx],
                 "metadata": metadatas[idx],  # Store as JSON object, not string
                 "source_id": source_id,
-                "embedding": embedding,
+                embedding_column: embedding,
+                "llm_chat_model": llm_chat_model,  # Add LLM model tracking
+                "embedding_model": embedding_model_name,  # Add embedding model tracking
+                "embedding_dimension": embedding_dim,  # Add dimension tracking
             })
+
+        if not batch_data:
+            search_logger.warning("No records to insert for this batch; skipping insert.")
+            continue
 
         # Insert batch into Supabase with retry logic
         max_retries = 3

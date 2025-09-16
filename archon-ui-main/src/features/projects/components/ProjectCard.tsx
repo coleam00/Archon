@@ -28,12 +28,21 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
   onDelete,
 }) => {
   return (
-    <motion.div
-      role="listitem"
+    <motion.li
+      tabIndex={0}
+      aria-label={`Select project ${project.title}`}
+      aria-current={isSelected ? "true" : undefined}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect(project);
+        }
+      }}
       onClick={() => onSelect(project)}
       className={cn(
         "relative rounded-xl backdrop-blur-md w-72 min-h-[180px] cursor-pointer overflow-visible group flex flex-col",
         "transition-all duration-300",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-zinc-900",
         project.pinned
           ? "bg-gradient-to-b from-purple-100/80 via-purple-50/30 to-purple-100/50 dark:from-purple-900/30 dark:via-purple-900/20 dark:to-purple-900/10"
           : isSelected
@@ -253,6 +262,6 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
           onDelete={(e) => onDelete(e, project.id, project.title)}
         />
       </div>
-    </motion.div>
+    </motion.li>
   );
 };

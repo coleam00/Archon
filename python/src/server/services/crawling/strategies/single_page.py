@@ -242,7 +242,7 @@ class SinglePageCrawlStrategy:
 
             # Report initial progress (single file = 1 page)
             await report_progress(
-                start_progress, 
+                start_progress,
                 f"Fetching text file: {url}",
                 total_pages=1,
                 processed_pages=0
@@ -260,7 +260,7 @@ class SinglePageCrawlStrategy:
 
                 # Report completion progress
                 await report_progress(
-                    end_progress, 
+                    end_progress,
                     f"Text file crawled successfully: {original_url}",
                     total_pages=1,
                     processed_pages=1

@@ -168,7 +168,8 @@ services:
     ports:
       - "${BIND_IP:-127.0.0.1}:${ARCHON_UI_PORT:-3737}:3737"
     environment:
-      - VITE_API_URL=http://${HOST:-localhost}:${ARCHON_SERVER_PORT:-8181}
+      # Don't set VITE_API_URL so frontend uses relative URLs through proxy
+      # - VITE_API_URL=http://${HOST:-localhost}:${ARCHON_SERVER_PORT:-8181}
       - VITE_ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
       - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
       - HOST=${HOST:-localhost}
@@ -180,6 +181,7 @@ services:
       - VITE_MCP_USE_PROXY=${VITE_MCP_USE_PROXY:-false}
       - VITE_MCP_PORT=${VITE_MCP_PORT:-8051}
       - VITE_SHOW_DEVTOOLS=${VITE_SHOW_DEVTOOLS:-false}
+      - DOCKER_ENV=true
     networks:
       - app-network
     healthcheck:

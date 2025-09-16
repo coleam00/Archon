@@ -71,11 +71,18 @@ def extract_text_from_document(file_content: bytes, filename: str, content_type:
             ".markdown",
             ".rst",
         )):
-            return file_content.decode("utf-8", errors="ignore")
+            # Decode text and check if it has content
+            text = file_content.decode("utf-8", errors="ignore").strip()
+            if not text:
+                raise ValueError(f"The file {filename} appears to be empty.")
+            return text
 
         else:
             raise ValueError(f"Unsupported file format: {content_type} ({filename})")
 
+    except ValueError:
+        # Re-raise ValueError with original message for unsupported formats
+        raise
     except Exception as e:
         logfire.error(
             "Document text extraction failed",
@@ -83,7 +90,8 @@ def extract_text_from_document(file_content: bytes, filename: str, content_type:
             content_type=content_type,
             error=str(e),
         )
-        raise Exception(f"Failed to extract text from {filename}: {str(e)}")
+        # Re-raise with context, preserving original exception chain
+        raise Exception(f"Failed to extract text from {filename}") from e
 
 
 def extract_text_from_pdf(file_content: bytes) -> str:
@@ -141,10 +149,13 @@ def extract_text_from_pdf(file_content: bytes) -> str:
             if text_content:
                 return "\n\n".join(text_content)
             else:
-                raise Exception("No text could be extracted from PDF")
+                raise ValueError(
+                    "No text extracted from PDF: file may be empty, images-only, "
+                    "or scanned document without OCR"
+                )
 
         except Exception as e:
-            raise Exception(f"PyPDF2 failed to extract text: {str(e)}")
+            raise Exception("PyPDF2 failed to extract text") from e
 
     # If we get here, no libraries worked
     raise Exception("Failed to extract text from PDF - no working PDF libraries available")
@@ -182,9 +193,9 @@ def extract_text_from_docx(file_content: bytes) -> str:
                     text_content.append(" | ".join(row_text))
 
         if not text_content:
-            raise Exception("No text content found in document")
+            raise ValueError("No text content found in document")
 
         return "\n\n".join(text_content)
 
     except Exception as e:
-        raise Exception(f"Failed to extract text from Word document: {str(e)}")
+        raise Exception("Failed to extract text from Word document") from e

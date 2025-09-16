@@ -39,10 +39,10 @@ async def test_create_project_success(mock_mcp, mock_context):
     """Test successful project creation with polling."""
     register_project_tools(mock_mcp)
 
-    # Get the create_project function
-    create_project = mock_mcp._tools.get("create_project")
+    # Get the manage_project function
+    manage_project = mock_mcp._tools.get("manage_project")
 
-    assert create_project is not None, "create_project tool not registered"
+    assert manage_project is not None, "manage_project tool not registered"
 
     # Mock initial creation response with progress_id
     mock_create_response = MagicMock()
@@ -52,27 +52,29 @@ async def test_create_project_success(mock_mcp, mock_context):
         "message": "Project creation started",
     }
 
-    # Mock list projects response for polling - API returns dict with projects array
-    mock_list_response = MagicMock()
-    mock_list_response.status_code = 200
-    mock_list_response.json.return_value = {
-        "projects": [
-            {"id": "project-123", "title": "Test Project", "created_at": "2024-01-01"}
-        ],
-        "count": 1
+    # Mock progress endpoint response for polling
+    mock_progress_response = MagicMock()
+    mock_progress_response.status_code = 200
+    mock_progress_response.json.return_value = {
+        "status": "completed",
+        "result": {
+            "project": {"id": "project-123", "title": "Test Project", "created_at": "2024-01-01"},
+            "message": "Project created successfully"
+        }
     }
 
     with patch("src.mcp_server.features.projects.project_tools.httpx.AsyncClient") as mock_client:
         mock_async_client = AsyncMock()
         # First call creates project, subsequent calls list projects
         mock_async_client.post.return_value = mock_create_response
-        mock_async_client.get.return_value = mock_list_response
+        mock_async_client.get.return_value = mock_progress_response
         mock_client.return_value.__aenter__.return_value = mock_async_client
 
         # Mock sleep to speed up test
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            result = await create_project(
+            result = await manage_project(
                 mock_context,
+                action="create",
                 title="Test Project",
                 description="A test project",
                 github_repo="https://github.com/test/repo",
@@ -90,7 +92,7 @@ async def test_create_project_direct_response(mock_mcp, mock_context):
     """Test project creation with direct response (no polling)."""
     register_project_tools(mock_mcp)
 
-    create_project = mock_mcp._tools.get("create_project")
+    manage_project = mock_mcp._tools.get("manage_project")
 
     # Mock direct creation response (no progress_id)
     mock_create_response = MagicMock()
@@ -105,7 +107,7 @@ async def test_create_project_direct_response(mock_mcp, mock_context):
         mock_async_client.post.return_value = mock_create_response
         mock_client.return_value.__aenter__.return_value = mock_async_client
 
-        result = await create_project(mock_context, title="Test Project")
+        result = await manage_project(mock_context, action="create", title="Test Project")
 
         result_data = json.loads(result)
         assert result_data["success"] is True
@@ -114,14 +116,14 @@ async def test_create_project_direct_response(mock_mcp, mock_context):
 
 
 @pytest.mark.asyncio
-async def test_list_projects_success(mock_mcp, mock_context):
+async def test_find_projects_success(mock_mcp, mock_context):
     """Test listing projects."""
     register_project_tools(mock_mcp)
 
-    # Get the list_projects function
-    list_projects = mock_mcp._tools.get("list_projects")
+    # Get the find_projects function
+    find_projects = mock_mcp._tools.get("find_projects")
 
-    assert list_projects is not None, "list_projects tool not registered"
+    assert find_projects is not None, "find_projects tool not registered"
 
     # Mock HTTP response - API returns dict with projects array
     mock_response = MagicMock()
@@ -139,7 +141,7 @@ async def test_list_projects_success(mock_mcp, mock_context):
         mock_async_client.get.return_value = mock_response
         mock_client.return_value.__aenter__.return_value = mock_async_client
 
-        result = await list_projects(mock_context)
+        result = await find_projects(mock_context)
 
         result_data = json.loads(result)
         assert result_data["success"] is True
@@ -152,10 +154,10 @@ async def test_get_project_not_found(mock_mcp, mock_context):
     """Test getting a non-existent project."""
     register_project_tools(mock_mcp)
 
-    # Get the get_project function
-    get_project = mock_mcp._tools.get("get_project")
+    # Get the find_projects function (used for getting single project)
+    find_projects = mock_mcp._tools.get("find_projects")
 
-    assert get_project is not None, "get_project tool not registered"
+    assert find_projects is not None, "find_projects tool not registered"
 
     # Mock 404 response
     mock_response = MagicMock()
@@ -167,7 +169,7 @@ async def test_get_project_not_found(mock_mcp, mock_context):
         mock_async_client.get.return_value = mock_response
         mock_client.return_value.__aenter__.return_value = mock_async_client
 
-        result = await get_project(mock_context, project_id="non-existent")
+        result = await find_projects(mock_context, project_id="non-existent")
 
         result_data = json.loads(result)
         assert result_data["success"] is False

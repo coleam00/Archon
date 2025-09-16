@@ -57,7 +57,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
     return (
       <motion.div initial="hidden" animate="visible" variants={itemVariants} className="mb-10">
         <div className="flex items-center justify-center py-12">
-          <div className="text-center" role="status" aria-live="polite" aria-busy="true">
+          <div className="text-center" aria-live="polite" aria-busy="true">
             <Loader2 className="w-8 h-8 text-purple-500 mx-auto mb-4 animate-spin" />
             <p className="text-gray-600 dark:text-gray-400">Loading your projects...</p>
           </div>
@@ -98,20 +98,21 @@ export const ProjectList: React.FC<ProjectListProps> = ({
 
   return (
     <motion.div initial="hidden" animate="visible" className="relative mb-10" variants={itemVariants}>
-      <div className="overflow-x-auto overflow-y-visible pb-4 pt-2 scrollbar-thin">
-        <div className="flex gap-4 min-w-max" role="list" aria-label="Projects">
+      <div className="overflow-x-auto overflow-y-visible pb-4 pt-2 pr-6 md:pr-8 scrollbar-thin">
+        <ul className="flex gap-4 min-w-max pl-6 md:pl-8" aria-label="Projects">
           {sortedProjects.map((project) => (
-            <ProjectCard
-              key={project.id}
-              project={project}
-              isSelected={selectedProject?.id === project.id}
-              taskCounts={taskCounts[project.id] || { todo: 0, doing: 0, review: 0, done: 0 }}
-              onSelect={onProjectSelect}
-              onPin={onPinProject}
-              onDelete={onDeleteProject}
-            />
+            <li key={project.id}>
+              <ProjectCard
+                project={project}
+                isSelected={selectedProject?.id === project.id}
+                taskCounts={taskCounts[project.id] || { todo: 0, doing: 0, review: 0, done: 0 }}
+                onSelect={onProjectSelect}
+                onPin={onPinProject}
+                onDelete={onDeleteProject}
+              />
+            </li>
           ))}
-        </div>
+        </ul>
       </div>
     </motion.div>
   );
