@@ -148,7 +148,7 @@ export const LevelSelector: React.FC<LevelSelectorProps> = ({
                     ? "text-cyan-600 dark:text-cyan-400"
                     : "text-gray-500 dark:text-gray-400"
                 )}>
-                  level{level.value !== "1" ? "s" : ""}
+                  {level.value === "1" ? "level" : "levels"}
                 </div>
                 </button>
               </SimpleTooltip>
