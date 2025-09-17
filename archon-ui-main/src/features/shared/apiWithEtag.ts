@@ -1,22 +1,11 @@
 /**
- * ETag-aware API client for TanStack Query integration
- * Reduces bandwidth by 70-90% through HTTP 304 responses
+ * Simple API client for TanStack Query integration
+ * Browser automatically handles ETags and HTTP caching for bandwidth optimization
  */
 
 import { API_BASE_URL } from "../../config/api";
 import { ProjectServiceError } from "../projects/shared/api";
 
-export class NotModifiedError extends Error {
-  constructor() {
-    super("Resource not modified");
-    this.name = "NotModifiedError";
-  }
-}
-
-// Debug flag for console logging (only in dev or when VITE_SHOW_DEVTOOLS is enabled)
-const ETAG_DEBUG =
-  typeof import.meta !== "undefined" &&
-  (import.meta.env?.DEV === true || import.meta.env?.VITE_SHOW_DEVTOOLS === "true");
 
 /**
  * Build full URL with test environment handling
@@ -32,17 +21,14 @@ function buildFullUrl(cleanEndpoint: string): string {
     const testHost = "localhost";
     const testPort = process.env?.ARCHON_SERVER_PORT || "8181";
     fullUrl = `http://${testHost}:${testPort}${fullUrl}`;
-    if (ETAG_DEBUG) {
-      console.log(`[Test] Converted URL: ${fullUrl}`);
-    }
   }
 
   return fullUrl;
 }
 
 /**
- * ETag-aware API call function for JSON APIs
- * Handles 304 Not Modified responses by returning cached data
+ * Simple API call function for JSON APIs
+ * Browser automatically handles ETags/304s through its HTTP cache
  *
  * NOTE: This wrapper is designed for JSON-only API calls.
  * For file uploads or FormData requests, use fetch() directly.
@@ -61,7 +47,6 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
       ...((options.headers as Record<string, string>) || {}),
     };
 
-    // Browser will handle ETag headers automatically
 
     // Make the request with timeout
     // NOTE: Increased to 20s due to database performance issues with large DELETE operations
@@ -74,16 +59,8 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
       signal: options.signal ?? AbortSignal.timeout(20000), // 20 second timeout (was 10s)
     });
 
-    // Handle 304 Not Modified - let TanStack Query handle caching
-    if (response.status === 304) {
-      if (ETAG_DEBUG) {
-        console.log(`%c[ETag] 304 Not Modified for ${cleanEndpoint}`, "color: #10b981; font-weight: bold");
-      }
-      throw new NotModifiedError();
-    }
-
     // Handle errors
-    if (!response.ok && response.status !== 304) {
+    if (!response.ok) {
       let errorMessage = `HTTP error! status: ${response.status}`;
       try {
         const errorBody = await response.text();
@@ -117,21 +94,9 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
       throw new ProjectServiceError(result.error, "API_ERROR", response.status);
     }
 
-    // ETag headers are handled by browser automatically
-    if (ETAG_DEBUG) {
-      const etag = response.headers.get("ETag");
-      if (etag) {
-        console.log(
-          `%c[ETag] Response for ${cleanEndpoint}`,
-          "color: #3b82f6; font-weight: bold",
-          `ETag: ${etag.substring(0, 12)}...`,
-        );
-      }
-    }
-
     return result as T;
   } catch (error) {
-    if (error instanceof ProjectServiceError || error instanceof NotModifiedError) {
+    if (error instanceof ProjectServiceError) {
       throw error;
     }
 

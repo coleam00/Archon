@@ -206,7 +206,7 @@ export const knowledgeService = {
    * Search the knowledge base
    */
   async searchKnowledgeBase(options: SearchOptions): Promise<SearchResultsResponse> {
-    return callAPIWithETag("/api/knowledge-items/search", {
+    return callAPIWithETag<SearchResultsResponse>("/api/knowledge-items/search", {
       method: "POST",
       body: JSON.stringify(options),
     });
