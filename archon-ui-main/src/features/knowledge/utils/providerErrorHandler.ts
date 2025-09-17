@@ -13,7 +13,7 @@ export interface ProviderError extends Error {
 /**
  * Parse backend error responses into provider-aware error objects
  */
-export function parseProviderError(error: any): ProviderError {
+export function parseProviderError(error: unknown): ProviderError {
   const providerError = error as ProviderError;
   
   // Check if this is a structured provider error from backend
@@ -44,7 +44,7 @@ export function parseProviderError(error: any): ProviderError {
 /**
  * Get user-friendly error message for any LLM provider
  */
-export function getProviderErrorMessage(error: any): string {
+export function getProviderErrorMessage(error: unknown): string {
   const parsed = parseProviderError(error);
   
   if (parsed.isProviderError) {
