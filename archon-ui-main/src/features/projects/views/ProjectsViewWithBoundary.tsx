@@ -1,8 +1,8 @@
 import { QueryErrorResetBoundary } from "@tanstack/react-query";
 import { useState } from "react";
 import { FeatureErrorBoundary } from "../../ui/components";
-import { ProjectsView } from "./ProjectsView";
 import { ProjectsViewSidebar } from "./ProjectsViewSidebar";
+import { ProjectsViewWithToggle } from "./ProjectsViewWithToggle";
 
 export const ProjectsViewWithBoundary = () => {
   // Feature flag to toggle between old and new layouts
@@ -20,7 +20,10 @@ export const ProjectsViewWithBoundary = () => {
               onToggleLayout={() => setUseSidebarLayout(!useSidebarLayout)}
             />
           ) : (
-            <ProjectsView />
+            <ProjectsViewWithToggle
+              useSidebarLayout={useSidebarLayout}
+              onToggleLayout={() => setUseSidebarLayout(!useSidebarLayout)}
+            />
           )}
         </FeatureErrorBoundary>
       )}
