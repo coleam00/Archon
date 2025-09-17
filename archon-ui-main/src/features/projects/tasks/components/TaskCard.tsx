@@ -5,9 +5,9 @@ import { useDrag, useDrop } from "react-dnd";
 import { useTaskActions } from "../hooks";
 import type { Assignee, Task, TaskPriority } from "../types";
 import { getOrderColor, getOrderGlow, ItemTypes } from "../utils/task-styles";
+import { TaskPriorityComponent } from ".";
 import { TaskAssignee } from "./TaskAssignee";
 import { TaskCardActions } from "./TaskCardActions";
-import { TaskPriorityComponent } from ".";
 
 export interface TaskCardProps {
   task: Task;

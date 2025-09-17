@@ -96,7 +96,7 @@ describe("apiWithEtag", () => {
       global.fetch = vi.fn().mockRejectedValue(networkError);
 
       await expect(callAPIWithETag("/test-endpoint")).rejects.toThrowError(
-        new APIServiceError("Failed to call API /test-endpoint: Network error", "NETWORK_ERROR", 500)
+        new APIServiceError("Failed to call API /test-endpoint: Network error", "NETWORK_ERROR", 500),
       );
     });
 
@@ -112,7 +112,7 @@ describe("apiWithEtag", () => {
       global.fetch = vi.fn().mockResolvedValue(mockResponse);
 
       await expect(callAPIWithETag("/test-endpoint")).rejects.toThrowError(
-        new APIServiceError("Database connection failed", "API_ERROR", 200)
+        new APIServiceError("Database connection failed", "API_ERROR", 200),
       );
     });
 
@@ -132,7 +132,7 @@ describe("apiWithEtag", () => {
       global.fetch = vi.fn().mockResolvedValue(errorResponse);
 
       await expect(callAPIWithETag("/test-endpoint")).rejects.toThrowError(
-        new APIServiceError("Validation failed", "HTTP_ERROR", 422)
+        new APIServiceError("Validation failed", "HTTP_ERROR", 422),
       );
     });
 
@@ -142,7 +142,7 @@ describe("apiWithEtag", () => {
       global.fetch = vi.fn().mockRejectedValue(timeoutError);
 
       await expect(callAPIWithETag("/test-endpoint")).rejects.toThrowError(
-        new APIServiceError("Failed to call API /test-endpoint: Request timeout", "NETWORK_ERROR", 500)
+        new APIServiceError("Failed to call API /test-endpoint: Request timeout", "NETWORK_ERROR", 500),
       );
     });
 
@@ -326,7 +326,7 @@ describe("apiWithEtag", () => {
       global.fetch = vi.fn().mockResolvedValue(errorResponse);
 
       await expect(callAPIWithETag("/api/error")).rejects.toThrowError(
-        new APIServiceError("Server error", "HTTP_ERROR", 500)
+        new APIServiceError("Server error", "HTTP_ERROR", 500),
       );
     });
   });

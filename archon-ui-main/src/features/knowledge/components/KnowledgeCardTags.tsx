@@ -75,7 +75,7 @@ export const KnowledgeCardTags: React.FC<KnowledgeCardTagsProps> = ({ sourceId, 
 
       // If we're editing an existing tag, remove the original first
       if (originalTagBeingEdited) {
-        newTags = newTags.filter(tag => tag !== originalTagBeingEdited);
+        newTags = newTags.filter((tag) => tag !== originalTagBeingEdited);
       }
 
       // Add the new/modified tag if it doesn't already exist
@@ -84,7 +84,7 @@ export const KnowledgeCardTags: React.FC<KnowledgeCardTagsProps> = ({ sourceId, 
       }
 
       // Save directly without updating local state first
-      const updatedTags = newTags.filter(tag => tag.trim().length > 0);
+      const updatedTags = newTags.filter((tag) => tag.trim().length > 0);
 
       try {
         await updateMutation.mutateAsync({
@@ -128,7 +128,7 @@ export const KnowledgeCardTags: React.FC<KnowledgeCardTagsProps> = ({ sourceId, 
 
       // If we're editing an existing tag, remove the original first
       if (originalTagBeingEdited) {
-        newTags = newTags.filter(tag => tag !== originalTagBeingEdited);
+        newTags = newTags.filter((tag) => tag !== originalTagBeingEdited);
       }
 
       // Add the new/modified tag if it doesn't already exist

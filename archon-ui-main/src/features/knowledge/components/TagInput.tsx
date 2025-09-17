@@ -28,18 +28,14 @@ export const TagInput: React.FC<TagInputProps> = ({
 
   const addTag = (tag: string) => {
     const trimmedTag = tag.trim();
-    if (
-      trimmedTag &&
-      !tags.includes(trimmedTag) &&
-      tags.length < maxTags
-    ) {
+    if (trimmedTag && !tags.includes(trimmedTag) && tags.length < maxTags) {
       onTagsChange([...tags, trimmedTag]);
       setInputValue("");
     }
   };
 
   const removeTag = (tagToRemove: string) => {
-    onTagsChange(tags.filter(tag => tag !== tagToRemove));
+    onTagsChange(tags.filter((tag) => tag !== tagToRemove));
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -57,8 +53,9 @@ export const TagInput: React.FC<TagInputProps> = ({
     // Handle comma-separated input for backwards compatibility
     if (value.includes(",")) {
       // Collect pasted candidates, trim and filter them
-      const newCandidates = value.split(",")
-        .map(tag => tag.trim())
+      const newCandidates = value
+        .split(",")
+        .map((tag) => tag.trim())
         .filter(Boolean);
 
       // Merge with current tags using Set to dedupe
@@ -78,9 +75,7 @@ export const TagInput: React.FC<TagInputProps> = ({
 
   return (
     <div className="space-y-3">
-      <div className="text-sm font-medium text-gray-900 dark:text-white/90">
-        Tags
-      </div>
+      <div className="text-sm font-medium text-gray-900 dark:text-white/90">Tags</div>
 
       {/* Tag Display */}
       {tags.length > 0 && (
@@ -96,7 +91,7 @@ export const TagInput: React.FC<TagInputProps> = ({
                 "backdrop-blur-md bg-gradient-to-r from-blue-100/80 to-blue-50/60 dark:from-blue-900/40 dark:to-blue-800/30",
                 "border border-blue-300/50 dark:border-blue-700/50",
                 "text-blue-700 dark:text-blue-300",
-                "transition-all duration-200"
+                "transition-all duration-200",
               )}
             >
               <span className="max-w-24 truncate">{tag}</span>
@@ -135,7 +130,9 @@ export const TagInput: React.FC<TagInputProps> = ({
       <div className="text-xs text-gray-500 dark:text-gray-400 space-y-1">
         <p>Press Enter or comma to add tags • Backspace to remove last tag</p>
         {maxTags && (
-          <p>{tags.length}/{maxTags} tags used</p>
+          <p>
+            {tags.length}/{maxTags} tags used
+          </p>
         )}
       </div>
     </div>

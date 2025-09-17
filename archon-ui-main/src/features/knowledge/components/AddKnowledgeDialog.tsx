@@ -7,8 +7,8 @@ import { Globe, Loader2, Upload } from "lucide-react";
 import { useId, useState } from "react";
 import { useToast } from "../../ui/hooks/useToast";
 import { Button, Input, Label } from "../../ui/primitives";
-import { cn } from "../../ui/primitives/styles";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/primitives/dialog";
+import { cn } from "../../ui/primitives/styles";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/primitives/tabs";
 import { useCrawlUrl, useUploadDocument } from "../hooks";
 import type { CrawlRequest, UploadMetadata } from "../types";
@@ -145,7 +145,7 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
                 "backdrop-blur-md border-2 font-medium text-sm",
                 activeTab === "crawl"
                   ? "bg-gradient-to-b from-cyan-100/70 via-cyan-50/40 to-white/80 dark:from-cyan-900/40 dark:via-cyan-800/25 dark:to-black/50 border-cyan-400/60 text-cyan-700 dark:text-cyan-300 shadow-[0_0_20px_rgba(34,211,238,0.25)]"
-                  : "bg-gradient-to-b from-white/40 via-white/30 to-white/60 dark:from-gray-800/40 dark:via-gray-800/30 dark:to-black/60 border-gray-300/40 dark:border-gray-600/40 text-gray-600 dark:text-gray-300 hover:border-cyan-300/50 hover:text-cyan-600 dark:hover:text-cyan-400 hover:shadow-[0_0_15px_rgba(34,211,238,0.15)]"
+                  : "bg-gradient-to-b from-white/40 via-white/30 to-white/60 dark:from-gray-800/40 dark:via-gray-800/30 dark:to-black/60 border-gray-300/40 dark:border-gray-600/40 text-gray-600 dark:text-gray-300 hover:border-cyan-300/50 hover:text-cyan-600 dark:hover:text-cyan-400 hover:shadow-[0_0_15px_rgba(34,211,238,0.15)]",
               )}
             >
               {/* Top accent glow for active state */}
@@ -155,10 +155,7 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
                   <div className="-mt-1 h-8 w-full bg-gradient-to-b from-cyan-500/30 to-transparent blur-md" />
                 </div>
               )}
-              <Globe className={cn(
-                "w-5 h-5",
-                activeTab === "crawl" ? "text-cyan-500" : "text-current"
-              )} />
+              <Globe className={cn("w-5 h-5", activeTab === "crawl" ? "text-cyan-500" : "text-current")} />
               <div className="flex flex-col items-start gap-0.5">
                 <span className="font-semibold">Crawl Website</span>
                 <span className="text-xs opacity-80">Scan web pages</span>
@@ -174,7 +171,7 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
                 "backdrop-blur-md border-2 font-medium text-sm",
                 activeTab === "upload"
                   ? "bg-gradient-to-b from-purple-100/70 via-purple-50/40 to-white/80 dark:from-purple-900/40 dark:via-purple-800/25 dark:to-black/50 border-purple-400/60 text-purple-700 dark:text-purple-300 shadow-[0_0_20px_rgba(147,51,234,0.25)]"
-                  : "bg-gradient-to-b from-white/40 via-white/30 to-white/60 dark:from-gray-800/40 dark:via-gray-800/30 dark:to-black/60 border-gray-300/40 dark:border-gray-600/40 text-gray-600 dark:text-gray-300 hover:border-purple-300/50 hover:text-purple-600 dark:hover:text-purple-400 hover:shadow-[0_0_15px_rgba(147,51,234,0.15)]"
+                  : "bg-gradient-to-b from-white/40 via-white/30 to-white/60 dark:from-gray-800/40 dark:via-gray-800/30 dark:to-black/60 border-gray-300/40 dark:border-gray-600/40 text-gray-600 dark:text-gray-300 hover:border-purple-300/50 hover:text-purple-600 dark:hover:text-purple-400 hover:shadow-[0_0_15px_rgba(147,51,234,0.15)]",
               )}
             >
               {/* Top accent glow for active state */}
@@ -184,10 +181,7 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
                   <div className="-mt-1 h-8 w-full bg-gradient-to-b from-purple-500/30 to-transparent blur-md" />
                 </div>
               )}
-              <Upload className={cn(
-                "w-5 h-5",
-                activeTab === "upload" ? "text-purple-500" : "text-current"
-              )} />
+              <Upload className={cn("w-5 h-5", activeTab === "upload" ? "text-purple-500" : "text-current")} />
               <div className="flex flex-col items-start gap-0.5">
                 <span className="font-semibold">Upload Document</span>
                 <span className="text-xs opacity-80">Add local files</span>
@@ -204,7 +198,7 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
               </Label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Globe className="h-5 w-5" style={{ color: '#0891b2' }} />
+                  <Globe className="h-5 w-5" style={{ color: "#0891b2" }} />
                 </div>
                 <Input
                   id={urlId}
@@ -222,17 +216,9 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
             </div>
 
             <div className="space-y-6">
-              <KnowledgeTypeSelector
-                value={crawlType}
-                onValueChange={setCrawlType}
-                disabled={isProcessing}
-              />
+              <KnowledgeTypeSelector value={crawlType} onValueChange={setCrawlType} disabled={isProcessing} />
 
-              <LevelSelector
-                value={maxDepth}
-                onValueChange={setMaxDepth}
-                disabled={isProcessing}
-              />
+              <LevelSelector value={maxDepth} onValueChange={setMaxDepth} disabled={isProcessing} />
             </div>
 
             <TagInput
@@ -279,34 +265,31 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
                   disabled={isProcessing}
                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed z-10"
                 />
-                <div className={cn(
-                  "relative h-20 rounded-xl border-2 border-dashed transition-all duration-200",
-                  "backdrop-blur-md bg-gradient-to-b from-white/60 via-white/40 to-white/50 dark:from-black/60 dark:via-black/40 dark:to-black/50",
-                  "flex flex-col items-center justify-center gap-2 text-center p-4",
-                  selectedFile
-                    ? "border-purple-400/70 bg-gradient-to-b from-purple-50/60 to-white/60 dark:from-purple-900/20 dark:to-black/50"
-                    : "border-gray-300/60 dark:border-gray-600/60 hover:border-purple-400/50 hover:bg-gradient-to-b hover:from-purple-50/40 hover:to-white/60 dark:hover:from-purple-900/10 dark:hover:to-black/50",
-                  isProcessing && "opacity-50 cursor-not-allowed"
-                )}>
-                  <Upload className={cn(
-                    "w-6 h-6",
-                    selectedFile ? "text-purple-500" : "text-gray-400 dark:text-gray-500"
-                  )} />
+                <div
+                  className={cn(
+                    "relative h-20 rounded-xl border-2 border-dashed transition-all duration-200",
+                    "backdrop-blur-md bg-gradient-to-b from-white/60 via-white/40 to-white/50 dark:from-black/60 dark:via-black/40 dark:to-black/50",
+                    "flex flex-col items-center justify-center gap-2 text-center p-4",
+                    selectedFile
+                      ? "border-purple-400/70 bg-gradient-to-b from-purple-50/60 to-white/60 dark:from-purple-900/20 dark:to-black/50"
+                      : "border-gray-300/60 dark:border-gray-600/60 hover:border-purple-400/50 hover:bg-gradient-to-b hover:from-purple-50/40 hover:to-white/60 dark:hover:from-purple-900/10 dark:hover:to-black/50",
+                    isProcessing && "opacity-50 cursor-not-allowed",
+                  )}
+                >
+                  <Upload
+                    className={cn("w-6 h-6", selectedFile ? "text-purple-500" : "text-gray-400 dark:text-gray-500")}
+                  />
                   <div className="text-sm">
                     {selectedFile ? (
                       <div className="space-y-1">
-                        <p className="font-medium text-purple-700 dark:text-purple-400">
-                          {selectedFile.name}
-                        </p>
+                        <p className="font-medium text-purple-700 dark:text-purple-400">{selectedFile.name}</p>
                         <p className="text-xs text-purple-600 dark:text-purple-400">
                           {Math.round(selectedFile.size / 1024)} KB
                         </p>
                       </div>
                     ) : (
                       <div className="space-y-1">
-                        <p className="font-medium text-gray-700 dark:text-gray-300">
-                          Click to browse or drag & drop
-                        </p>
+                        <p className="font-medium text-gray-700 dark:text-gray-300">Click to browse or drag & drop</p>
                         <p className="text-xs text-gray-500 dark:text-gray-400">
                           PDF, DOC, DOCX, TXT, MD files supported
                         </p>
@@ -317,11 +300,7 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
               </div>
             </div>
 
-            <KnowledgeTypeSelector
-              value={uploadType}
-              onValueChange={setUploadType}
-              disabled={isProcessing}
-            />
+            <KnowledgeTypeSelector value={uploadType} onValueChange={setUploadType} disabled={isProcessing} />
 
             <TagInput
               tags={uploadTags}

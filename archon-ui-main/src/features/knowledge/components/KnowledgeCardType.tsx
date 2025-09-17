@@ -15,10 +15,7 @@ interface KnowledgeCardTypeProps {
   knowledgeType: "technical" | "business";
 }
 
-export const KnowledgeCardType: React.FC<KnowledgeCardTypeProps> = ({
-  sourceId,
-  knowledgeType,
-}) => {
+export const KnowledgeCardType: React.FC<KnowledgeCardTypeProps> = ({ sourceId, knowledgeType }) => {
   const [isEditing, setIsEditing] = useState(false);
   const updateMutation = useUpdateKnowledgeItem();
 
@@ -61,10 +58,7 @@ export const KnowledgeCardType: React.FC<KnowledgeCardTypeProps> = ({
 
   if (isEditing) {
     return (
-      <div
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
-      >
+      <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
         <Select
           open={isEditing}
           onOpenChange={(open) => setIsEditing(open)}
@@ -79,7 +73,7 @@ export const KnowledgeCardType: React.FC<KnowledgeCardTypeProps> = ({
               "focus:ring-1 focus:ring-cyan-400",
               isTechnical
                 ? "bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400"
-                : "bg-pink-100 text-pink-700 dark:bg-pink-500/10 dark:text-pink-400"
+                : "bg-pink-100 text-pink-700 dark:bg-pink-500/10 dark:text-pink-400",
             )}
           >
             <SelectValue>
@@ -109,7 +103,9 @@ export const KnowledgeCardType: React.FC<KnowledgeCardTypeProps> = ({
   }
 
   return (
-    <SimpleTooltip content={`${isTechnical ? "Technical documentation" : "Business/general content"} - Click to change`}>
+    <SimpleTooltip
+      content={`${isTechnical ? "Technical documentation" : "Business/general content"} - Click to change`}
+    >
       <div
         className={cn(
           "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium cursor-pointer",
@@ -117,7 +113,7 @@ export const KnowledgeCardType: React.FC<KnowledgeCardTypeProps> = ({
           isTechnical
             ? "bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400"
             : "bg-pink-100 text-pink-700 dark:bg-pink-500/10 dark:text-pink-400",
-          updateMutation.isPending && "opacity-50 cursor-not-allowed"
+          updateMutation.isPending && "opacity-50 cursor-not-allowed",
         )}
         onClick={handleClick}
       >

@@ -24,7 +24,7 @@ export const KnowledgeInspector: React.FC<KnowledgeInspectorProps> = ({
   item,
   open,
   onOpenChange,
-  initialTab = "documents"
+  initialTab = "documents",
 }) => {
   const [viewMode, setViewMode] = useState<ViewMode>(initialTab);
   const [searchQuery, setSearchQuery] = useState("");

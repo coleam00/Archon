@@ -1,6 +1,16 @@
 /**
  * Shared Error Classes and Utilities
  * Common error handling across all features
+ *
+ * NOTE: We intentionally DO NOT include a NotModifiedError (304) class.
+ * Our architecture relies on the browser's native HTTP cache to handle ETags and 304 responses
+ * transparently. When the server returns 304, the browser automatically serves cached data
+ * and our JavaScript code receives it as a normal 200 response. This simplification means:
+ * - We never see 304 status codes in our application code
+ * - No manual ETag handling is needed
+ * - TanStack Query manages freshness through staleTime, not HTTP status codes
+ *
+ * If you're looking to handle caching, configure TanStack Query's staleTime instead.
  */
 
 /**

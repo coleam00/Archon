@@ -1,6 +1,14 @@
 /**
  * Simple API client for TanStack Query integration
- * Browser automatically handles ETags and HTTP caching for bandwidth optimization
+ *
+ * IMPORTANT: Browser automatically handles ETags and HTTP caching for bandwidth optimization.
+ * We do NOT explicitly handle 304 responses because:
+ * 1. The browser's native HTTP cache handles If-None-Match headers automatically
+ * 2. When server returns 304, browser serves cached data as a 200 response to our code
+ * 3. TanStack Query manages data freshness through staleTime configuration
+ *
+ * This simplification eliminates complex ETag management while maintaining bandwidth efficiency.
+ * For cache control, configure TanStack Query's staleTime/gcTime instead of manual HTTP caching.
  */
 
 import { API_BASE_URL } from "../../config/api";

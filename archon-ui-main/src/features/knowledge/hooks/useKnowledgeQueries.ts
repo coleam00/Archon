@@ -11,7 +11,6 @@ import { useActiveOperations } from "../progress/hooks";
 import { progressKeys } from "../progress/hooks/useProgressQueries";
 import type { ActiveOperation, ActiveOperationsResponse } from "../progress/types";
 import { knowledgeService } from "../services";
-import { getProviderErrorMessage } from "../utils/providerErrorHandler";
 import type {
   CrawlRequest,
   CrawlStartResponse,
@@ -20,6 +19,7 @@ import type {
   KnowledgeItemsResponse,
   UploadMetadata,
 } from "../types";
+import { getProviderErrorMessage } from "../utils/providerErrorHandler";
 
 // Query keys factory for better organization and type safety
 export const knowledgeKeys = {
@@ -563,18 +563,18 @@ export function useUpdateKnowledgeItem() {
         const currentMetadata = updatedItem.metadata || {};
 
         // Handle title updates
-        if ('title' in updates && typeof updates.title === 'string') {
+        if ("title" in updates && typeof updates.title === "string") {
           updatedItem.title = updates.title;
         }
 
         // Handle tags updates
-        if ('tags' in updates && Array.isArray(updates.tags)) {
+        if ("tags" in updates && Array.isArray(updates.tags)) {
           const newTags = updates.tags as string[];
           (updatedItem as any).tags = newTags;
         }
 
         // Handle knowledge_type updates
-        if ('knowledge_type' in updates && typeof updates.knowledge_type === 'string') {
+        if ("knowledge_type" in updates && typeof updates.knowledge_type === "string") {
           const newType = updates.knowledge_type as "technical" | "business";
           updatedItem.knowledge_type = newType;
         }
@@ -603,18 +603,18 @@ export function useUpdateKnowledgeItem() {
               const currentMetadata = updatedItem.metadata || {};
 
               // Update title if provided
-              if ('title' in updates && typeof updates.title === 'string') {
+              if ("title" in updates && typeof updates.title === "string") {
                 updatedItem.title = updates.title;
               }
 
               // Update tags if provided
-              if ('tags' in updates && Array.isArray(updates.tags)) {
+              if ("tags" in updates && Array.isArray(updates.tags)) {
                 const newTags = updates.tags as string[];
                 updatedItem.tags = newTags;
               }
 
               // Update knowledge_type if provided
-              if ('knowledge_type' in updates && typeof updates.knowledge_type === 'string') {
+              if ("knowledge_type" in updates && typeof updates.knowledge_type === "string") {
                 const newType = updates.knowledge_type as "technical" | "business";
                 updatedItem.knowledge_type = newType;
               }

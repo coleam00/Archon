@@ -202,10 +202,7 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
                   <span>{isUrl ? "Web Page" : "Document"}</span>
                 </div>
               </SimpleTooltip>
-              <KnowledgeCardType
-                sourceId={item.source_id}
-                knowledgeType={item.knowledge_type}
-              />
+              <KnowledgeCardType sourceId={item.source_id} knowledgeType={item.knowledge_type} />
             </div>
 
             {/* Actions */}
@@ -300,7 +297,9 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
             </div>
             {/* Right: pills */}
             <div className="flex items-center gap-2">
-              <SimpleTooltip content={`${documentCount} document${documentCount !== 1 ? "s" : ""} indexed - Click to view`}>
+              <SimpleTooltip
+                content={`${documentCount} document${documentCount !== 1 ? "s" : ""} indexed - Click to view`}
+              >
                 <div
                   className="cursor-pointer hover:scale-105 transition-transform"
                   onClick={(e) => {
@@ -321,10 +320,7 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
                 content={`${codeExamplesCount} code example${codeExamplesCount !== 1 ? "s" : ""} extracted - ${onViewCodeExamples ? "Click to view" : "No examples available"}`}
               >
                 <div
-                  className={cn(
-                    "transition-transform",
-                    onViewCodeExamples && "cursor-pointer hover:scale-105"
-                  )}
+                  className={cn("transition-transform", onViewCodeExamples && "cursor-pointer hover:scale-105")}
                   onClick={(e) => {
                     e.stopPropagation();
                     if (onViewCodeExamples) {
