@@ -1,7 +1,8 @@
 import { motion } from "framer-motion";
-import { Menu, Plus } from "lucide-react";
+import { Layout, Menu, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { Toggle } from "../../../components/ui/Toggle";
 import { useStaggeredEntrance } from "../../../hooks/useStaggeredEntrance";
 import { DeleteConfirmModal } from "../../ui/components/DeleteConfirmModal";
 import { Button } from "../../ui/primitives";
@@ -15,6 +16,8 @@ import type { Project } from "../types";
 interface ProjectsViewSidebarProps {
   className?: string;
   "data-id"?: string;
+  useSidebarLayout?: boolean;
+  onToggleLayout?: () => void;
 }
 
 const containerVariants = {
@@ -25,7 +28,12 @@ const containerVariants = {
   },
 };
 
-export function ProjectsViewSidebar({ className = "", "data-id": dataId }: ProjectsViewSidebarProps) {
+export function ProjectsViewSidebar({
+  className = "",
+  "data-id": dataId,
+  useSidebarLayout = true,
+  onToggleLayout
+}: ProjectsViewSidebarProps) {
   const { projectId } = useParams();
   const navigate = useNavigate();
 
@@ -254,10 +262,28 @@ export function ProjectsViewSidebar({ className = "", "data-id": dataId }: Proje
           </div>
         </div>
 
-        <Button onClick={() => setIsNewProjectModalOpen(true)} variant="cyan" className="shadow-lg shadow-cyan-500/20">
-          <Plus className="w-4 h-4 mr-2" />
-          <span className="hidden sm:inline">New Project</span>
-        </Button>
+        <div className="flex items-center gap-4">
+          {/* Layout Toggle */}
+          {onToggleLayout && (
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-600 dark:text-gray-400 hidden md:inline">
+                Sidebar Layout
+              </span>
+              <Toggle
+                checked={useSidebarLayout}
+                onCheckedChange={onToggleLayout}
+                accentColor="purple"
+                icon={<Layout className="w-4 h-4" />}
+              />
+            </div>
+          )}
+
+          {/* New Project Button */}
+          <Button onClick={() => setIsNewProjectModalOpen(true)} variant="cyan" className="shadow-lg shadow-cyan-500/20">
+            <Plus className="w-4 h-4 mr-2" />
+            <span className="hidden sm:inline">New Project</span>
+          </Button>
+        </div>
       </div>
 
       {/* Main Layout: Sidebar + Content */}
