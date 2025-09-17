@@ -1,13 +1,13 @@
 import { Tag } from "lucide-react";
 import type React from "react";
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 import { useDrag, useDrop } from "react-dnd";
 import { useTaskActions } from "../hooks";
-import type { Assignee, Task } from "../types";
+import type { Assignee, Task, TaskPriority } from "../types";
 import { getOrderColor, getOrderGlow, ItemTypes } from "../utils/task-styles";
 import { TaskAssignee } from "./TaskAssignee";
 import { TaskCardActions } from "./TaskCardActions";
-import { type Priority, TaskPriority } from "./TaskPriority";
+import { TaskPriorityComponent } from ".";
 
 export interface TaskCardProps {
   task: Task;
@@ -34,12 +34,8 @@ export const TaskCard: React.FC<TaskCardProps> = ({
   selectedTasks,
   onTaskSelect,
 }) => {
-  // Local state for frontend-only priority
-  // NOTE: Priority is display-only and doesn't sync with backend yet
-  const [localPriority, setLocalPriority] = useState<Priority>("medium");
-
-  // Use business logic hook
-  const { changeAssignee, isUpdating } = useTaskActions(projectId);
+  // Use business logic hook with changePriority
+  const { changeAssignee, changePriority, isUpdating } = useTaskActions(projectId);
 
   // Handlers - now just call hook methods
   const handleEdit = useCallback(() => {
@@ -59,10 +55,12 @@ export const TaskCard: React.FC<TaskCardProps> = ({
     }
   }, [onDelete, task]);
 
-  const handlePriorityChange = useCallback((priority: Priority) => {
-    // Frontend-only priority change
-    setLocalPriority(priority);
-  }, []);
+  const handlePriorityChange = useCallback(
+    (priority: TaskPriority) => {
+      changePriority(task.id, priority);
+    },
+    [changePriority, task.id],
+  );
 
   const handleAssigneeChange = useCallback(
     (newAssignee: Assignee) => {
@@ -218,8 +216,12 @@ export const TaskCard: React.FC<TaskCardProps> = ({
           <div className="flex items-center justify-between mt-auto pt-2 pl-1.5 pr-3">
             <TaskAssignee assignee={task.assignee} onAssigneeChange={handleAssigneeChange} isLoading={isUpdating} />
 
-            {/* Priority display (frontend-only for now) */}
-            <TaskPriority priority={localPriority} onPriorityChange={handlePriorityChange} isLoading={false} />
+            {/* Priority display connected to database */}
+            <TaskPriorityComponent
+              priority={task.priority}
+              onPriorityChange={handlePriorityChange}
+              isLoading={isUpdating}
+            />
           </div>
         </div>
       </div>

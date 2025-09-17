@@ -18,9 +18,8 @@ import {
   TextArea,
 } from "../../../ui/primitives";
 import { useTaskEditor } from "../hooks";
-import type { Assignee, Task } from "../types";
+import type { Assignee, Task, TaskPriority } from "../types";
 import { FeatureSelect } from "./FeatureSelect";
-import type { Priority } from "./TaskPriority";
 
 interface TaskEditModalProps {
   isModalOpen: boolean;
@@ -52,7 +51,7 @@ export const TaskEditModal = memo(
           status: "todo",
           assignee: "User" as Assignee,
           feature: "",
-          priority: "medium" as Priority, // Frontend-only priority
+          priority: "medium" as TaskPriority, // Direct priority field
         });
       }
     }, [editingTask]);
@@ -133,9 +132,9 @@ export const TaskEditModal = memo(
               <FormField>
                 <Label>Priority</Label>
                 <Select
-                  value={(localTask as Task & { priority?: Priority })?.priority || "medium"}
+                  value={localTask?.priority || "medium"}
                   onValueChange={(value) =>
-                    setLocalTask((prev) => (prev ? { ...prev, priority: value as Priority } : null))
+                    setLocalTask((prev) => (prev ? { ...prev, priority: value as TaskPriority } : null))
                   }
                 >
                   <SelectTrigger className="w-full">

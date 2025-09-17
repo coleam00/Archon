@@ -81,7 +81,6 @@ export const taskService = {
         body: JSON.stringify(validation.data),
       });
 
-
       return task;
     } catch (error) {
       console.error(`Failed to update task ${taskId}:`, error);

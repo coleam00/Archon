@@ -22,6 +22,8 @@ from pydantic import BaseModel
 from ..config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
 from ..services.crawler_manager import get_crawler
 from ..services.crawling import CrawlingService
+from ..services.credential_service import credential_service
+from ..services.embeddings.provider_error_adapters import ProviderErrorFactory
 from ..services.knowledge import DatabaseMetricsService, KnowledgeItemService, KnowledgeSummaryService
 from ..services.search.rag_service import RAGService
 from ..services.storage import DocumentStorageService
@@ -51,6 +53,59 @@ crawl_semaphore = asyncio.Semaphore(CONCURRENT_CRAWL_LIMIT)
 
 # Track active async crawl tasks for cancellation support
 active_crawl_tasks: dict[str, asyncio.Task] = {}
+
+
+
+
+async def _validate_provider_api_key(provider: str = None) -> None:
+    """Validate LLM provider API key before starting operations."""
+    logger.info("🔑 Starting API key validation...")
+    
+    try:
+        if not provider:
+            provider = "openai"
+
+        logger.info(f"🔑 Testing {provider.title()} API key with minimal embedding request...")
+        
+        # Test API key with minimal embedding request - this will fail if key is invalid
+        from ..services.embeddings.embedding_service import create_embedding
+        test_result = await create_embedding(text="test")
+        
+        if not test_result:
+            logger.error(f"❌ {provider.title()} API key validation failed - no embedding returned")
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": f"Invalid {provider.title()} API key",
+                    "message": f"Please verify your {provider.title()} API key in Settings.",
+                    "error_type": "authentication_failed",
+                    "provider": provider
+                }
+            )
+            
+        logger.info(f"✅ {provider.title()} API key validation successful")
+
+    except HTTPException:
+        # Re-raise our intended HTTP exceptions
+        logger.error("🚨 Re-raising HTTPException from validation")
+        raise
+    except Exception as e:
+        # Sanitize error before logging to prevent sensitive data exposure
+        error_str = str(e)
+        sanitized_error = ProviderErrorFactory.sanitize_provider_error(error_str, provider or "openai")
+        logger.error(f"❌ Caught exception during API key validation: {sanitized_error}")
+        
+        # Always fail for any exception during validation - better safe than sorry
+        logger.error("🚨 API key validation failed - blocking crawl operation")
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "Invalid API key",
+                "message": f"Please verify your {(provider or 'openai').title()} API key in Settings before starting a crawl.",
+                "error_type": "authentication_failed",
+                "provider": provider or "openai"
+            }
+        ) from None
 
 
 # Request Models
@@ -479,6 +534,14 @@ async def get_knowledge_item_code_examples(
 @router.post("/knowledge-items/{source_id}/refresh")
 async def refresh_knowledge_item(source_id: str):
     """Refresh a knowledge item by re-crawling its URL with the same metadata."""
+    
+    # Validate API key before starting expensive refresh operation
+    logger.info("🔍 About to validate API key for refresh...")
+    provider_config = await credential_service.get_active_provider("embedding")
+    provider = provider_config.get("provider", "openai")
+    await _validate_provider_api_key(provider)
+    logger.info("✅ API key validation completed successfully for refresh")
+    
     try:
         safe_logfire_info(f"Starting knowledge item refresh | source_id={source_id}")
 
@@ -596,6 +659,13 @@ async def crawl_knowledge_item(request: KnowledgeItemRequest):
     # Basic URL validation
     if not request.url.startswith(("http://", "https://")):
         raise HTTPException(status_code=422, detail="URL must start with http:// or https://")
+
+    # Validate API key before starting expensive operation
+    logger.info("🔍 About to validate API key...")
+    provider_config = await credential_service.get_active_provider("embedding")
+    provider = provider_config.get("provider", "openai")
+    await _validate_provider_api_key(provider)
+    logger.info("✅ API key validation completed successfully")
 
     try:
         safe_logfire_info(
@@ -750,6 +820,14 @@ async def upload_document(
     knowledge_type: str = Form("technical"),
 ):
     """Upload and process a document with progress tracking."""
+    
+    # Validate API key before starting expensive upload operation  
+    logger.info("🔍 About to validate API key for upload...")
+    provider_config = await credential_service.get_active_provider("embedding")
+    provider = provider_config.get("provider", "openai")
+    await _validate_provider_api_key(provider)
+    logger.info("✅ API key validation completed successfully for upload")
+    
     try:
         # DETAILED LOGGING: Track knowledge_type parameter flow
         safe_logfire_info(

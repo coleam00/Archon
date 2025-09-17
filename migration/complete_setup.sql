@@ -700,6 +700,13 @@ EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
 
+-- Create task_priority enum if it doesn't exist
+DO $$ BEGIN
+    CREATE TYPE task_priority AS ENUM ('low', 'medium', 'high', 'critical');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
 -- Assignee is now a text field to allow any agent name
 -- No longer using enum to support flexible agent assignments
 
@@ -727,6 +734,7 @@ CREATE TABLE IF NOT EXISTS archon_tasks (
   status task_status DEFAULT 'todo',
   assignee TEXT DEFAULT 'User' CHECK (assignee IS NOT NULL AND assignee != ''),
   task_order INTEGER DEFAULT 0,
+  priority task_priority DEFAULT 'medium' NOT NULL,
   feature TEXT,
   sources JSONB DEFAULT '[]'::jsonb,
   code_examples JSONB DEFAULT '[]'::jsonb,
@@ -776,6 +784,7 @@ CREATE INDEX IF NOT EXISTS idx_archon_tasks_project_id ON archon_tasks(project_i
 CREATE INDEX IF NOT EXISTS idx_archon_tasks_status ON archon_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_archon_tasks_assignee ON archon_tasks(assignee);
 CREATE INDEX IF NOT EXISTS idx_archon_tasks_order ON archon_tasks(task_order);
+CREATE INDEX IF NOT EXISTS idx_archon_tasks_priority ON archon_tasks(priority);
 CREATE INDEX IF NOT EXISTS idx_archon_tasks_archived ON archon_tasks(archived);
 CREATE INDEX IF NOT EXISTS idx_archon_tasks_archived_at ON archon_tasks(archived_at);
 CREATE INDEX IF NOT EXISTS idx_archon_project_sources_project_id ON archon_project_sources(project_id);
@@ -838,6 +847,7 @@ $$ LANGUAGE plpgsql;
 
 -- Add comments to document the soft delete fields
 COMMENT ON COLUMN archon_tasks.assignee IS 'The agent or user assigned to this task. Can be any valid agent name or "User"';
+COMMENT ON COLUMN archon_tasks.priority IS 'Task priority level independent of visual ordering - used for semantic importance (low, medium, high, critical)';
 COMMENT ON COLUMN archon_tasks.archived IS 'Soft delete flag - TRUE if task is archived/deleted';
 COMMENT ON COLUMN archon_tasks.archived_at IS 'Timestamp when task was archived';
 COMMENT ON COLUMN archon_tasks.archived_by IS 'User/system that archived the task';
