@@ -2,9 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { callAPIWithETag } from "./apiWithEtag";
 import { APIServiceError } from "./errors";
 
-describe("Simplified API Client (Option 3)", () => {
+// Preserve original globals to restore after tests
+const originalAbortSignal = global.AbortSignal as any;
+const originalFetch = global.fetch;
+
+describe("apiWithEtag", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
     vi.resetAllMocks();
     // Reset fetch to undefined to ensure clean state
     if (global.fetch) {
@@ -14,7 +17,7 @@ describe("Simplified API Client (Option 3)", () => {
     // Mock AbortSignal.timeout for test environment
     // Note: Production now uses 20s timeout for database performance issues
     global.AbortSignal = {
-      timeout: vi.fn((ms: number) => ({
+      timeout: vi.fn((_ms: number) => ({
         aborted: false,
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
@@ -25,6 +28,13 @@ describe("Simplified API Client (Option 3)", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    // Restore original globals to prevent test pollution
+    global.AbortSignal = originalAbortSignal;
+    if (originalFetch) {
+      global.fetch = originalFetch;
+    } else if (global.fetch) {
+      delete (global as any).fetch;
+    }
   });
 
   describe("callAPIWithETag", () => {
@@ -62,8 +72,9 @@ describe("Simplified API Client (Option 3)", () => {
 
       global.fetch = vi.fn().mockResolvedValue(errorResponse);
 
-      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow(APIServiceError);
-      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow("Bad request");
+      const errorPromise = callAPIWithETag("/test-endpoint");
+      await expect(errorPromise).rejects.toThrow(APIServiceError);
+      await expect(errorPromise).rejects.toThrow("Bad request");
     });
 
     it("should return undefined for 204 No Content", async () => {
@@ -84,9 +95,8 @@ describe("Simplified API Client (Option 3)", () => {
       const networkError = new Error("Network error");
       global.fetch = vi.fn().mockRejectedValue(networkError);
 
-      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow(APIServiceError);
-      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow(
-        "Failed to call API /test-endpoint: Network error",
+      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrowError(
+        new APIServiceError("Failed to call API /test-endpoint: Network error", "NETWORK_ERROR", 500)
       );
     });
 
@@ -101,8 +111,9 @@ describe("Simplified API Client (Option 3)", () => {
 
       global.fetch = vi.fn().mockResolvedValue(mockResponse);
 
-      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow(APIServiceError);
-      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow("Database connection failed");
+      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrowError(
+        new APIServiceError("Database connection failed", "API_ERROR", 200)
+      );
     });
 
     it("should handle nested error structure from backend", async () => {
@@ -120,8 +131,9 @@ describe("Simplified API Client (Option 3)", () => {
 
       global.fetch = vi.fn().mockResolvedValue(errorResponse);
 
-      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow(APIServiceError);
-      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow("Validation failed");
+      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrowError(
+        new APIServiceError("Validation failed", "HTTP_ERROR", 422)
+      );
     });
 
     it("should handle request timeout", async () => {
@@ -129,9 +141,8 @@ describe("Simplified API Client (Option 3)", () => {
       timeoutError.name = "AbortError";
       global.fetch = vi.fn().mockRejectedValue(timeoutError);
 
-      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow(APIServiceError);
-      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow(
-        "Failed to call API /test-endpoint: Request timeout",
+      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrowError(
+        new APIServiceError("Failed to call API /test-endpoint: Request timeout", "NETWORK_ERROR", 500)
       );
     });
 
@@ -314,8 +325,9 @@ describe("Simplified API Client (Option 3)", () => {
 
       global.fetch = vi.fn().mockResolvedValue(errorResponse);
 
-      await expect(callAPIWithETag("/api/error")).rejects.toThrow(APIServiceError);
-      await expect(callAPIWithETag("/api/error")).rejects.toThrow("Server error");
+      await expect(callAPIWithETag("/api/error")).rejects.toThrowError(
+        new APIServiceError("Server error", "HTTP_ERROR", 500)
+      );
     });
   });
 
