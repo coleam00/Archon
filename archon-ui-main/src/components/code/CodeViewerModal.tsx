@@ -30,7 +30,7 @@ import 'prismjs/components/prism-graphql'
 import 'prismjs/themes/prism-tomorrow.css'
 import { Button } from '../ui/Button'
 import { Badge } from '../ui/Badge'
-import { copyToClipboard } from '../../utils/clipboard'
+import { copyToClipboard } from '../../features/shared/utils/clipboard'
 
 export interface CodeExample {
   id: string

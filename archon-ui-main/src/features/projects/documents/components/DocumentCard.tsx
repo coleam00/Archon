@@ -15,7 +15,7 @@ import type React from "react";
 import { memo, useCallback, useState } from "react";
 import { Button } from "../../../ui/primitives";
 import type { DocumentCardProps, DocumentType } from "../types";
-import { copyToClipboard } from "../../../../utils/clipboard";
+import { copyToClipboard } from "../../../shared/utils/clipboard";
 
 const getDocumentIcon = (type?: DocumentType) => {
   switch (type) {

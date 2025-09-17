@@ -3,7 +3,7 @@ import { FileCode, Copy, Check } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { useToast } from '../../features/ui/hooks/useToast';
-import { copyToClipboard } from '../../utils/clipboard';
+import { copyToClipboard } from '../../features/shared/utils/clipboard';
 
 type RuleType = 'claude' | 'universal';
 

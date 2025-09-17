@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useToast } from "../../ui/hooks";
 import { Button, cn, glassmorphism, Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/primitives";
 import type { McpServerConfig, McpServerStatus, SupportedIDE } from "../types";
-import { copyToClipboard } from "../../../utils/clipboard";
+import { copyToClipboard } from "../../shared/utils/clipboard";
 
 interface McpConfigSectionProps {
   config?: McpServerConfig;

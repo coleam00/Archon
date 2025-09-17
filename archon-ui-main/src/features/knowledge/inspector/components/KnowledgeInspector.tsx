@@ -10,7 +10,7 @@ import { useInspectorPagination } from "../hooks/useInspectorPagination";
 import { ContentViewer } from "./ContentViewer";
 import { InspectorHeader } from "./InspectorHeader";
 import { InspectorSidebar } from "./InspectorSidebar";
-import { copyToClipboard } from "../../../../utils/clipboard";
+import { copyToClipboard } from "../../../shared/utils/clipboard";
 
 interface KnowledgeInspectorProps {
   item: KnowledgeItem;

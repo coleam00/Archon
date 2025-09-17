@@ -11,7 +11,7 @@ import {
   BugContext,
   BugReportData,
 } from "../../services/bugReportService";
-import { copyToClipboard } from "../../utils/clipboard";
+import { copyToClipboard } from "../../features/shared/utils/clipboard";
 
 interface BugReportModalProps {
   isOpen: boolean;

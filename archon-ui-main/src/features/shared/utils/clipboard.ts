@@ -124,12 +124,3 @@ export const getSecurityContext = (): string => {
   return 'insecure';
 };
 
-/**
- * Simple wrapper that provides the old API for backward compatibility
- * @param text - Text to copy
- * @returns Promise<boolean> - True if successful
- */
-export const copyTextToClipboard = async (text: string): Promise<boolean> => {
-  const result = await copyToClipboard(text);
-  return result.success;
-};

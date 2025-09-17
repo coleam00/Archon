@@ -3,7 +3,7 @@ import { Copy, Check, Link, Unlink } from 'lucide-react';
 import { NeonButton, type CornerRadius, type GlowIntensity, type ColorOption } from '../ui/NeonButton';
 import { motion } from 'framer-motion';
 import { cn } from '../../lib/utils';
-import { copyToClipboard } from '../../utils/clipboard';
+import { copyToClipboard } from '../../features/shared/utils/clipboard';
 
 export const ButtonPlayground: React.FC = () => {
   const [showLayer2, setShowLayer2] = useState(true);
