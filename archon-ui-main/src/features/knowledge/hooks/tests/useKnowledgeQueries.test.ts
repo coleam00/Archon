@@ -62,19 +62,18 @@ describe("useKnowledgeQueries", () => {
       expect(knowledgeKeys.detail("source-123")).toEqual(["knowledge", "detail", "source-123"]);
       expect(knowledgeKeys.chunks("source-123", "example.com")).toEqual([
         "knowledge",
-        "detail",
         "source-123",
         "chunks",
         "example.com",
       ]);
-      expect(knowledgeKeys.codeExamples("source-123")).toEqual(["knowledge", "detail", "source-123", "code-examples"]);
+      expect(knowledgeKeys.codeExamples("source-123")).toEqual(["knowledge", "source-123", "code-examples"]);
       expect(knowledgeKeys.search("test query")).toEqual(["knowledge", "search", "test query"]);
       expect(knowledgeKeys.sources()).toEqual(["knowledge", "sources"]);
     });
 
-    it("should handle filter in list key", () => {
+    it("should handle filter in summaries key", () => {
       const filter = { knowledge_type: "technical" as const, page: 2 };
-      expect(knowledgeKeys.list(filter)).toEqual(["knowledge", "list", filter]);
+      expect(knowledgeKeys.summaries(filter)).toEqual(["knowledge", "summaries", filter]);
     });
   });
 
@@ -127,7 +126,7 @@ describe("useKnowledgeQueries", () => {
 
       // Pre-populate cache
       const queryClient = new QueryClient();
-      queryClient.setQueryData(knowledgeKeys.list(), initialData);
+      queryClient.setQueryData(knowledgeKeys.lists(), initialData);
 
       await result.current.mutateAsync("source-1");
 

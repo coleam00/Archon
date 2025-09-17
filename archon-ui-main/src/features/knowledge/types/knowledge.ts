@@ -33,6 +33,7 @@ export interface KnowledgeItem {
   status: "active" | "processing" | "error" | "completed";
   document_count: number;
   code_examples_count: number;
+  tags?: string[]; // Optional tags array
   metadata: KnowledgeItemMetadata;
   created_at: string;
   updated_at: string;

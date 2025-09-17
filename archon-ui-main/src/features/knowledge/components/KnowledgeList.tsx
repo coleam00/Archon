@@ -6,7 +6,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertCircle, Loader2 } from "lucide-react";
 import { Button } from "../../ui/primitives";
-import type { ActiveOperation } from "../progress/types";
+import type { ActiveOperation } from "../../progress/types";
 import type { KnowledgeItem } from "../types";
 import { KnowledgeCard } from "./KnowledgeCard";
 import { KnowledgeTable } from "./KnowledgeTable";

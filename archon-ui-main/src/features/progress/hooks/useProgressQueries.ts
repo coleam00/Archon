@@ -5,14 +5,16 @@
 
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
+import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../shared/queryPatterns";
 import { progressService } from "../services";
 import type { ActiveOperationsResponse, ProgressResponse, ProgressStatus } from "../types";
 
 // Query keys factory
 export const progressKeys = {
   all: ["progress"] as const,
-  detail: (progressId: string) => [...progressKeys.all, progressId] as const,
-  list: () => [...progressKeys.all, "list"] as const,
+  lists: () => [...progressKeys.all, "list"] as const,
+  detail: (id: string) => [...progressKeys.all, "detail", id] as const,
+  active: () => [...progressKeys.all, "active"] as const,
 };
 
 // Terminal states that should stop polling
@@ -43,7 +45,7 @@ export function useOperationProgress(
   }, [progressId]);
 
   const query = useQuery<ProgressResponse | null>({
-    queryKey: progressId ? progressKeys.detail(progressId) : ["progress-undefined"],
+    queryKey: progressId ? progressKeys.detail(progressId) : DISABLED_QUERY_KEY,
     queryFn: async () => {
       if (!progressId) throw new Error("No progress ID");
 
@@ -82,7 +84,7 @@ export function useOperationProgress(
       return options?.pollingInterval ?? 1000;
     },
     retry: false, // Don't retry on error
-    staleTime: 0, // Always refetch
+    staleTime: STALE_TIMES.instant, // Always fresh for real-time progress
   });
 
   // Handle completion and error callbacks
@@ -164,11 +166,11 @@ export function useOperationProgress(
  */
 export function useActiveOperations(enabled = false) {
   return useQuery<ActiveOperationsResponse>({
-    queryKey: progressKeys.list(),
+    queryKey: progressKeys.lists(),
     queryFn: () => progressService.listActiveOperations(),
     enabled,
     refetchInterval: enabled ? 5000 : false, // Only poll when explicitly enabled
-    staleTime: 3000,
+    staleTime: STALE_TIMES.realtime, // Near real-time for active operations
   });
 }
 
@@ -178,10 +180,10 @@ export function useActiveOperations(enabled = false) {
  */
 export function useCrawlProgressPolling() {
   const { data, isLoading } = useQuery({
-    queryKey: progressKeys.list(),
+    queryKey: progressKeys.lists(),
     queryFn: () => progressService.listActiveOperations(),
     refetchInterval: 5000, // Poll every 5 seconds
-    staleTime: 0,
+    staleTime: STALE_TIMES.instant, // Always fresh for active progress
   });
 
   const activeOperations = data?.operations || [];
@@ -256,7 +258,7 @@ export function useMultipleOperations(
         return 1000;
       },
       retry: false,
-      staleTime: 0,
+      staleTime: STALE_TIMES.instant, // Always fresh for real-time progress
     })),
   });
 

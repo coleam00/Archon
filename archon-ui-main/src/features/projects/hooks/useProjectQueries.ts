@@ -1,20 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../shared/queryPatterns";
 import { useSmartPolling } from "../../ui/hooks";
 import { useToast } from "../../ui/hooks/useToast";
-import { projectService, taskService } from "../services";
+import { projectService } from "../services";
 import type { CreateProjectRequest, Project, UpdateProjectRequest } from "../types";
 
 // Query keys factory for better organization
 export const projectKeys = {
   all: ["projects"] as const,
   lists: () => [...projectKeys.all, "list"] as const,
-  list: (filters?: unknown) => [...projectKeys.lists(), filters] as const,
-  details: () => [...projectKeys.all, "detail"] as const,
-  detail: (id: string) => [...projectKeys.details(), id] as const,
-  tasks: (projectId: string) => [...projectKeys.detail(projectId), "tasks"] as const,
-  taskCounts: () => ["taskCounts"] as const,
-  features: (projectId: string) => [...projectKeys.detail(projectId), "features"] as const,
-  documents: (projectId: string) => [...projectKeys.detail(projectId), "documents"] as const,
+  detail: (id: string) => [...projectKeys.all, "detail", id] as const,
+  features: (id: string) => [...projectKeys.all, id, "features"] as const,
+  // Documents keys moved to documentKeys in documents feature
+  // Tasks keys moved to taskKeys in tasks feature
 };
 
 // Fetch all projects with smart polling
@@ -26,27 +24,17 @@ export function useProjects() {
     queryFn: () => projectService.listProjects(),
     refetchInterval, // Smart interval based on page visibility/focus
     refetchOnWindowFocus: true, // Refetch immediately when tab gains focus (ETag makes this cheap)
-    staleTime: 15000, // Consider data stale after 15 seconds
-  });
-}
-
-// Fetch task counts for all projects
-export function useTaskCounts() {
-  return useQuery<Awaited<ReturnType<typeof taskService.getTaskCountsForAllProjects>>>({
-    queryKey: projectKeys.taskCounts(),
-    queryFn: () => taskService.getTaskCountsForAllProjects(),
-    refetchInterval: false, // Don't poll, only refetch manually
-    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
+    staleTime: STALE_TIMES.normal,
   });
 }
 
 // Fetch project features
 export function useProjectFeatures(projectId: string | undefined) {
   return useQuery({
-    queryKey: projectId ? projectKeys.features(projectId) : ["features-undefined"],
+    queryKey: projectId ? projectKeys.features(projectId) : DISABLED_QUERY_KEY,
     queryFn: () => (projectId ? projectService.getProjectFeatures(projectId) : Promise.reject("No project ID")),
     enabled: !!projectId,
-    staleTime: 30000, // Cache for 30 seconds
+    staleTime: STALE_TIMES.normal,
   });
 }
 

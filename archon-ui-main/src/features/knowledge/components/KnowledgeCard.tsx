@@ -8,12 +8,12 @@ import { format } from "date-fns";
 import { motion } from "framer-motion";
 import { Briefcase, Clock, Code, ExternalLink, File, FileText, Globe, Terminal } from "lucide-react";
 import { useState } from "react";
+import { KnowledgeCardProgress } from "../../progress/components/KnowledgeCardProgress";
+import type { ActiveOperation } from "../../progress/types";
 import { StatPill } from "../../ui/primitives";
 import { cn } from "../../ui/primitives/styles";
 import { SimpleTooltip } from "../../ui/primitives/tooltip";
 import { useDeleteKnowledgeItem, useRefreshKnowledgeItem } from "../hooks";
-import { KnowledgeCardProgress } from "../progress/components/KnowledgeCardProgress";
-import type { ActiveOperation } from "../progress/types";
 import type { KnowledgeItem } from "../types";
 import { extractDomain } from "../utils/knowledge-utils";
 import { KnowledgeCardActions } from "./KnowledgeCardActions";
@@ -232,7 +232,7 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
             <KnowledgeCardTitle
               sourceId={item.source_id}
               title={item.title}
-              description={(item as any).summary}
+              description={item.metadata?.description}
               accentColor={getAccentColorName()}
             />
           </div>

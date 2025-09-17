@@ -3,12 +3,13 @@ import { renderHook, waitFor } from "@testing-library/react";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Task } from "../../types";
-import { taskKeys, useCreateTask, useProjectTasks } from "../useTaskQueries";
+import { taskKeys, useCreateTask, useProjectTasks, useTaskCounts } from "../useTaskQueries";
 
 // Mock the services
 vi.mock("../../services", () => ({
   taskService: {
     getTasksByProject: vi.fn(),
+    getTaskCountsForAllProjects: vi.fn(),
     createTask: vi.fn(),
     updateTask: vi.fn(),
     deleteTask: vi.fn(),
@@ -54,7 +55,11 @@ describe("useTaskQueries", () => {
 
   describe("taskKeys", () => {
     it("should generate correct query keys", () => {
-      expect(taskKeys.all("project-123")).toEqual(["projects", "project-123", "tasks"]);
+      expect(taskKeys.all).toEqual(["tasks"]);
+      expect(taskKeys.lists()).toEqual(["tasks", "list"]);
+      expect(taskKeys.detail("task-123")).toEqual(["tasks", "detail", "task-123"]);
+      expect(taskKeys.byProject("project-123")).toEqual(["projects", "project-123", "tasks"]);
+      expect(taskKeys.counts()).toEqual(["tasks", "counts"]);
     });
   });
 

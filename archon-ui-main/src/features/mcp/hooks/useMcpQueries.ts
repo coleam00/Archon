@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { STALE_TIMES } from "../../shared/queryPatterns";
 import { useSmartPolling } from "../../ui/hooks";
 import { mcpApi } from "../services";
 
@@ -9,6 +10,7 @@ export const mcpKeys = {
   config: () => [...mcpKeys.all, "config"] as const,
   sessions: () => [...mcpKeys.all, "sessions"] as const,
   clients: () => [...mcpKeys.all, "clients"] as const,
+  health: () => [...mcpKeys.all, "health"] as const,
 };
 
 export function useMcpStatus() {
@@ -19,7 +21,7 @@ export function useMcpStatus() {
     queryFn: () => mcpApi.getStatus(),
     refetchInterval,
     refetchOnWindowFocus: false,
-    staleTime: 3000,
+    staleTime: STALE_TIMES.frequent,
     throwOnError: true,
   });
 }
@@ -28,7 +30,7 @@ export function useMcpConfig() {
   return useQuery({
     queryKey: mcpKeys.config(),
     queryFn: () => mcpApi.getConfig(),
-    staleTime: Infinity, // Config rarely changes
+    staleTime: STALE_TIMES.static, // Config rarely changes
     throwOnError: true,
   });
 }
@@ -41,7 +43,7 @@ export function useMcpClients() {
     queryFn: () => mcpApi.getClients(),
     refetchInterval,
     refetchOnWindowFocus: false,
-    staleTime: 8000,
+    staleTime: STALE_TIMES.frequent,
     throwOnError: true,
   });
 }
@@ -54,7 +56,7 @@ export function useMcpSessionInfo() {
     queryFn: () => mcpApi.getSessionInfo(),
     refetchInterval,
     refetchOnWindowFocus: false,
-    staleTime: 8000,
+    staleTime: STALE_TIMES.frequent,
     throwOnError: true,
   });
 }
