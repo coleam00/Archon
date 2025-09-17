@@ -30,6 +30,8 @@ export function useProjects() {
 
 // Fetch project features
 export function useProjectFeatures(projectId: string | undefined) {
+  // TODO: Phase 4 - Add explicit typing: useQuery<Awaited<ReturnType<typeof projectService.getProjectFeatures>>>
+  // See PRPs/local/frontend-state-management-refactor.md Phase 4: Configure Request Deduplication
   return useQuery({
     queryKey: projectId ? projectKeys.features(projectId) : DISABLED_QUERY_KEY,
     queryFn: () => (projectId ? projectService.getProjectFeatures(projectId) : Promise.reject("No project ID")),

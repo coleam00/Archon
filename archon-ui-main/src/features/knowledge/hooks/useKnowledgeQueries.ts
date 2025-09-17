@@ -27,9 +27,23 @@ export const knowledgeKeys = {
   all: ["knowledge"] as const,
   lists: () => [...knowledgeKeys.all, "list"] as const,
   detail: (id: string) => [...knowledgeKeys.all, "detail", id] as const,
-  chunks: (id: string, domain?: string) => [...knowledgeKeys.all, id, "chunks", domain ?? "all"] as const,
-  codeExamples: (id: string) => [...knowledgeKeys.all, id, "code-examples"] as const,
-  summaries: (filter?: KnowledgeItemsFilter) => [...knowledgeKeys.all, "summaries", filter ?? {}] as const,
+  // Include domain + pagination to avoid cache collisions
+  chunks: (
+    id: string,
+    opts?: { domain?: string; limit?: number; offset?: number },
+  ) =>
+    [
+      ...knowledgeKeys.all,
+      id,
+      "chunks",
+      { domain: opts?.domain ?? "all", limit: opts?.limit, offset: opts?.offset },
+    ] as const,
+  // Include pagination in the key
+  codeExamples: (id: string, opts?: { limit?: number; offset?: number }) =>
+    [...knowledgeKeys.all, id, "code-examples", { limit: opts?.limit, offset: opts?.offset }] as const,
+  // Prefix helper for targeting all summaries queries
+  summariesPrefix: () => [...knowledgeKeys.all, "summaries"] as const,
+  summaries: (filter?: KnowledgeItemsFilter) => [...knowledgeKeys.all, "summaries", filter] as const,
   sources: () => [...knowledgeKeys.all, "sources"] as const,
   search: (query: string) => [...knowledgeKeys.all, "search", query] as const,
 };
@@ -49,11 +63,16 @@ export function useKnowledgeItem(sourceId: string | null) {
 /**
  * Fetch document chunks for a knowledge item
  */
-export function useKnowledgeItemChunks(sourceId: string | null, domainFilter?: string) {
+export function useKnowledgeItemChunks(
+  sourceId: string | null,
+  opts?: { domain?: string; limit?: number; offset?: number }
+) {
+  // TODO: Phase 4 - Add explicit typing: useQuery<DocumentChunk[]> or appropriate return type
+  // See PRPs/local/frontend-state-management-refactor.md Phase 4: Configure Request Deduplication
   return useQuery({
-    queryKey: sourceId ? knowledgeKeys.chunks(sourceId, domainFilter) : DISABLED_QUERY_KEY,
+    queryKey: sourceId ? knowledgeKeys.chunks(sourceId, opts) : DISABLED_QUERY_KEY,
     queryFn: () =>
-      sourceId ? knowledgeService.getKnowledgeItemChunks(sourceId, { domainFilter }) : Promise.reject("No source ID"),
+      sourceId ? knowledgeService.getKnowledgeItemChunks(sourceId, { domainFilter: opts?.domain, offset: opts?.offset }) : Promise.reject("No source ID"),
     enabled: !!sourceId,
     staleTime: STALE_TIMES.normal,
   });
@@ -95,13 +114,13 @@ export function useCrawlUrl() {
     onMutate: async (request) => {
       // Cancel any outgoing refetches to prevent race conditions
       await queryClient.cancelQueries({ queryKey: knowledgeKeys.lists() });
-      await queryClient.cancelQueries({ queryKey: knowledgeKeys.summaries() });
+      await queryClient.cancelQueries({ queryKey: knowledgeKeys.summariesPrefix() });
       await queryClient.cancelQueries({ queryKey: progressKeys.lists() });
 
       // Snapshot the previous values for rollback
       const previousKnowledge = queryClient.getQueryData<KnowledgeItem[]>(knowledgeKeys.lists());
       const previousSummaries = queryClient.getQueriesData<KnowledgeItemsResponse>({
-        queryKey: knowledgeKeys.summaries(),
+        queryKey: knowledgeKeys.summariesPrefix(),
       });
       const previousOperations = queryClient.getQueryData<ActiveOperationsResponse>(progressKeys.lists());
 
@@ -112,7 +131,13 @@ export function useCrawlUrl() {
       // Create optimistic knowledge item
       const optimisticItem: KnowledgeItem = {
         id: tempItemId,
-        title: new URL(request.url).hostname || "New crawl",
+        title: (() => {
+          try {
+            return new URL(request.url).hostname || "New crawl";
+          } catch {
+            return "New crawl";
+          }
+        })(),
         url: request.url,
         source_id: tempProgressId,
         source_type: "url",
@@ -145,7 +170,7 @@ export function useCrawlUrl() {
       // This can cause items to appear in filtered views where they shouldn't be visible.
       // Solution: Check each cache's filter criteria before adding the optimistic item.
       // See: https://github.com/coleam00/Archon/pull/676#issuecomment-XXXXX
-      queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summaries() }, (old) => {
+      queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summariesPrefix() }, (old) => {
         if (!old) {
           return {
             items: [optimisticItem],
@@ -215,7 +240,7 @@ export function useCrawlUrl() {
         });
 
         // Also update summaries cache with real progress ID
-        queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summaries() }, (old) => {
+        queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summariesPrefix() }, (old) => {
           if (!old) return old;
           return {
             ...old,
@@ -304,12 +329,12 @@ export function useUploadDocument() {
       knowledgeService.uploadDocument(file, metadata),
     onMutate: async ({ file, metadata }) => {
       // Cancel any outgoing refetches to prevent race conditions
-      await queryClient.cancelQueries({ queryKey: knowledgeKeys.summaries() });
+      await queryClient.cancelQueries({ queryKey: knowledgeKeys.summariesPrefix() });
       await queryClient.cancelQueries({ queryKey: progressKeys.lists() });
 
       // Snapshot the previous values for rollback
       const previousSummaries = queryClient.getQueriesData<KnowledgeItemsResponse>({
-        queryKey: knowledgeKeys.summaries(),
+        queryKey: knowledgeKeys.summariesPrefix(),
       });
       const previousOperations = queryClient.getQueryData<ActiveOperationsResponse>(progressKeys.lists());
 
@@ -345,7 +370,7 @@ export function useUploadDocument() {
       // Same issue as crawlUrl - adds items to ALL summary caches regardless of filters.
       // Should check filter criteria (knowledge_type, tags, etc.) before adding to each cache.
       // See: https://github.com/coleam00/Archon/pull/676#issuecomment-XXXXX
-      queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summaries() }, (old) => {
+      queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summariesPrefix() }, (old) => {
         if (!old) {
           return {
             items: [optimisticItem],
@@ -398,7 +423,7 @@ export function useUploadDocument() {
       // Replace temporary IDs with real ones from the server
       if (context && response?.progressId) {
         // Update summaries cache with real progress ID
-        queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summaries() }, (old) => {
+        queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summariesPrefix() }, (old) => {
           if (!old) return old;
           return {
             ...old,
@@ -438,7 +463,7 @@ export function useUploadDocument() {
       // Invalidate queries to get fresh data - with a short delay for fast uploads
       setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
-        queryClient.invalidateQueries({ queryKey: knowledgeKeys.summaries() });
+        queryClient.invalidateQueries({ queryKey: knowledgeKeys.summariesPrefix() });
         queryClient.invalidateQueries({ queryKey: progressKeys.lists() });
       }, 1000);
 
@@ -476,6 +501,8 @@ export function useStopCrawl() {
     },
     onError: (error, progressId) => {
       // If it's a 404, the operation might have already completed or been cancelled
+      // TODO: Phase 4 - Improve error type safety, create proper error interface instead of 'as any'
+      // See PRPs/local/frontend-state-management-refactor.md Phase 4: Configure Request Deduplication
       const is404Error =
         (error as any)?.statusCode === 404 ||
         (error instanceof Error && (error.message.includes("404") || error.message.includes("not found")));
@@ -502,10 +529,10 @@ export function useDeleteKnowledgeItem() {
     mutationFn: (sourceId: string) => knowledgeService.deleteKnowledgeItem(sourceId),
     onMutate: async (sourceId) => {
       // Cancel summary queries (all filters)
-      await queryClient.cancelQueries({ queryKey: knowledgeKeys.summaries() });
+      await queryClient.cancelQueries({ queryKey: knowledgeKeys.summariesPrefix() });
 
       // Snapshot all summary caches (for all filters)
-      const summariesPrefix = knowledgeKeys.summaries();
+      const summariesPrefix = knowledgeKeys.summariesPrefix();
       const previousEntries = queryClient.getQueriesData<KnowledgeItemsResponse>({
         queryKey: summariesPrefix,
       });
@@ -535,7 +562,7 @@ export function useDeleteKnowledgeItem() {
       showToast(data.message || "Item deleted successfully", "success");
 
       // Invalidate summaries to reconcile with server
-      queryClient.invalidateQueries({ queryKey: knowledgeKeys.summaries() });
+      queryClient.invalidateQueries({ queryKey: knowledgeKeys.summariesPrefix() });
       // Also invalidate detail views
       queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
     },
@@ -555,11 +582,11 @@ export function useUpdateKnowledgeItem() {
     onMutate: async ({ sourceId, updates }) => {
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: knowledgeKeys.detail(sourceId) });
-      await queryClient.cancelQueries({ queryKey: knowledgeKeys.summaries() });
+      await queryClient.cancelQueries({ queryKey: knowledgeKeys.summariesPrefix() });
 
       // Snapshot the previous values
       const previousItem = queryClient.getQueryData<KnowledgeItem>(knowledgeKeys.detail(sourceId));
-      const previousSummaries = queryClient.getQueriesData({ queryKey: knowledgeKeys.summaries() });
+      const previousSummaries = queryClient.getQueriesData({ queryKey: knowledgeKeys.summariesPrefix() });
 
       // Optimistically update the detail item
       if (previousItem) {
@@ -597,7 +624,7 @@ export function useUpdateKnowledgeItem() {
       }
 
       // Optimistically update summaries cache
-      queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summaries() }, (old) => {
+      queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summariesPrefix() }, (old) => {
         if (!old?.items) return old;
 
         return {
@@ -664,7 +691,7 @@ export function useUpdateKnowledgeItem() {
       // Invalidate all related queries
       queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(sourceId) });
       queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: knowledgeKeys.summaries() }); // Add summaries cache
+      queryClient.invalidateQueries({ queryKey: knowledgeKeys.summariesPrefix() }); // Add summaries cache
     },
   });
 }
@@ -730,14 +757,16 @@ export function useKnowledgeSummaries(filter?: KnowledgeItemsFilter) {
   }, [activeOperationsData]);
 
   // Fetch summaries with smart polling when there are active operations
-  const { refetchInterval } = useSmartPolling(hasActiveOperations ? 5000 : 30000);
+  const { refetchInterval } = useSmartPolling(
+    hasActiveOperations ? STALE_TIMES.frequent : STALE_TIMES.normal,
+  );
 
   const summaryQuery = useQuery<KnowledgeItemsResponse>({
     queryKey: knowledgeKeys.summaries(filter),
     queryFn: () => knowledgeService.getKnowledgeSummaries(filter),
     refetchInterval: hasActiveOperations ? refetchInterval : false, // Poll when ANY operations are active
     refetchOnWindowFocus: true,
-    staleTime: 30000, // Consider data stale after 30 seconds
+    staleTime: STALE_TIMES.normal, // Consider data stale after 30 seconds
   });
 
   // When operations complete, remove them from tracking
@@ -759,13 +788,13 @@ export function useKnowledgeSummaries(filter?: KnowledgeItemsFilter) {
       // Invalidate after a delay to allow backend database to become consistent
       const timer = setTimeout(() => {
         // Invalidate all summaries regardless of filter
-        queryClient.invalidateQueries({ queryKey: knowledgeKeys.summaries() });
+        queryClient.invalidateQueries({ queryKey: knowledgeKeys.summariesPrefix() });
         // Also invalidate lists for consistency
         queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
 
         // For uploads, also refetch immediately to ensure UI shows the item
         if (hasCompletedUpload) {
-          queryClient.refetchQueries({ queryKey: knowledgeKeys.summaries() });
+          queryClient.refetchQueries({ queryKey: knowledgeKeys.summariesPrefix() });
         }
       }, delay);
 
@@ -790,7 +819,7 @@ export function useKnowledgeChunks(
 ) {
   return useQuery({
     queryKey: sourceId
-      ? [...knowledgeKeys.detail(sourceId), "chunks", options?.limit, options?.offset]
+      ? knowledgeKeys.chunks(sourceId, { limit: options?.limit, offset: options?.offset })
       : DISABLED_QUERY_KEY,
     queryFn: () =>
       sourceId
@@ -813,7 +842,7 @@ export function useKnowledgeCodeExamples(
 ) {
   return useQuery({
     queryKey: sourceId
-      ? [...knowledgeKeys.codeExamples(sourceId), options?.limit, options?.offset]
+      ? knowledgeKeys.codeExamples(sourceId, { limit: options?.limit, offset: options?.offset })
       : DISABLED_QUERY_KEY,
     queryFn: () =>
       sourceId

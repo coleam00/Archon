@@ -60,13 +60,18 @@ describe("useKnowledgeQueries", () => {
       expect(knowledgeKeys.all).toEqual(["knowledge"]);
       expect(knowledgeKeys.lists()).toEqual(["knowledge", "list"]);
       expect(knowledgeKeys.detail("source-123")).toEqual(["knowledge", "detail", "source-123"]);
-      expect(knowledgeKeys.chunks("source-123", "example.com")).toEqual([
+      expect(knowledgeKeys.chunks("source-123", { domain: "example.com" })).toEqual([
         "knowledge",
         "source-123",
         "chunks",
-        "example.com",
+        { domain: "example.com", limit: undefined, offset: undefined },
       ]);
-      expect(knowledgeKeys.codeExamples("source-123")).toEqual(["knowledge", "source-123", "code-examples"]);
+      expect(knowledgeKeys.codeExamples("source-123")).toEqual([
+        "knowledge",
+        "source-123",
+        "code-examples",
+        { limit: undefined, offset: undefined },
+      ]);
       expect(knowledgeKeys.search("test query")).toEqual(["knowledge", "search", "test query"]);
       expect(knowledgeKeys.sources()).toEqual(["knowledge", "sources"]);
     });
