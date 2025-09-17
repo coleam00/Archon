@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { DISABLED_QUERY_KEY } from "../../../shared/queryPatterns";
+import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../../shared/queryPatterns";
 import { projectService } from "../../services";
 import type { ProjectDocument } from "../types";
 
@@ -26,5 +26,6 @@ export function useProjectDocuments(projectId: string | undefined) {
       return (project.docs || []) as ProjectDocument[];
     },
     enabled: !!projectId,
+    staleTime: STALE_TIMES.normal,
   });
 }
