@@ -256,8 +256,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
               )}
             >
               {/* Mobile Header with Close */}
-              <div className="flex items-center justify-between p-4 border-b border-gray-200/30 dark:border-gray-700/30">
-                <h2 className="font-semibold text-gray-900 dark:text-white">Projects</h2>
+              <div className="flex items-center justify-end p-4 border-b border-gray-200/30 dark:border-gray-700/30">
                 <Button
                   variant="ghost"
                   size="sm"
@@ -326,8 +325,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
       transition={{ duration: 0.3, ease: [0.23, 1, 0.32, 1] }}
     >
       {/* Sidebar Header */}
-      <div className="flex items-center justify-between p-4 border-b border-gray-200/30 dark:border-gray-700/30">
-        {!isCollapsed && <h2 className="font-semibold text-gray-900 dark:text-white">Projects</h2>}
+      <div className="flex items-center justify-end p-4 border-b border-gray-200/30 dark:border-gray-700/30">
         <Button
           variant="ghost"
           size="sm"

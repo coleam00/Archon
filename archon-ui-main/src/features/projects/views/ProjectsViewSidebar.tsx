@@ -276,19 +276,21 @@ export function ProjectsViewSidebar({ className = "", "data-id": dataId }: Proje
           />
         </div>
 
-        {/* Mobile Sidebar Overlay */}
-        <ProjectSidebar
-          projects={sortedProjects}
-          selectedProject={selectedProject}
-          taskCounts={taskCounts}
-          isLoading={isLoadingProjects}
-          error={projectsError as Error | null}
-          onProjectSelect={handleProjectSelect}
-          onPinProject={handlePinProject}
-          onDeleteProject={handleDeleteProject}
-          isMobileOpen={isMobileSidebarOpen}
-          onMobileClose={() => setIsMobileSidebarOpen(false)}
-        />
+        {/* Mobile Sidebar Overlay - only render when needed */}
+        {isMobileSidebarOpen && (
+          <ProjectSidebar
+            projects={sortedProjects}
+            selectedProject={selectedProject}
+            taskCounts={taskCounts}
+            isLoading={isLoadingProjects}
+            error={projectsError as Error | null}
+            onProjectSelect={handleProjectSelect}
+            onPinProject={handlePinProject}
+            onDeleteProject={handleDeleteProject}
+            isMobileOpen={isMobileSidebarOpen}
+            onMobileClose={() => setIsMobileSidebarOpen(false)}
+          />
+        )}
 
         {/* Main Content */}
         <ProjectMainContent

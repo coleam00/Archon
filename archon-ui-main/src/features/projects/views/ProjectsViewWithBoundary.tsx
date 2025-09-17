@@ -8,7 +8,7 @@ import { ProjectsViewSidebar } from "./ProjectsViewSidebar";
 export const ProjectsViewWithBoundary = () => {
   // Feature flag to toggle between old and new layouts
   // In a real app, this would come from a settings/feature flag service
-  const [useSidebarLayout, setUseSidebarLayout] = useState(false);
+  const [useSidebarLayout, setUseSidebarLayout] = useState(true);
 
   return (
     <QueryErrorResetBoundary>
