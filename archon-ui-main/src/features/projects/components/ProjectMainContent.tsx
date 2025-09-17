@@ -31,9 +31,9 @@ const ProjectStatsHeader: React.FC<ProjectStatsHeaderProps> = ({ project, taskCo
   const completionPercentage = totalTasks > 0 ? Math.round((taskCounts.done / totalTasks) * 100) : 0;
 
   return (
-    <div className={cn("p-6 border-b", glassmorphism.border.default)}>
+    <div className={cn("p-4 border-b", glassmorphism.border.default)}>
       {/* Project Title and Description */}
-      <div className="flex items-start justify-between mb-4">
+      <div className="flex items-start justify-between mb-3">
         <div className="flex-1">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">{project.title}</h1>
           {project.description && (
@@ -46,7 +46,7 @@ const ProjectStatsHeader: React.FC<ProjectStatsHeaderProps> = ({ project, taskCo
       </div>
 
       {/* Task Stats Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {/* Todo Tasks */}
         <motion.div
           className={cn(
@@ -85,25 +85,6 @@ const ProjectStatsHeader: React.FC<ProjectStatsHeaderProps> = ({ project, taskCo
           </div>
         </motion.div>
 
-        {/* Done Tasks */}
-        <motion.div
-          className={cn(
-            "flex items-center gap-3 p-4 rounded-lg border",
-            glassmorphism.background.subtle,
-            glassmorphism.border.default,
-            "hover:shadow-md transition-shadow duration-200",
-          )}
-          whileHover={{ scale: 1.02 }}
-        >
-          <div className="p-2 rounded-full bg-green-100 dark:bg-green-900/30">
-            <CheckCircle2 className="w-5 h-5 text-green-600 dark:text-green-400" />
-          </div>
-          <div>
-            <div className="font-bold text-lg text-gray-900 dark:text-white">{taskCounts.done}</div>
-            <div className="text-xs text-gray-500 dark:text-gray-400 font-medium">Done</div>
-          </div>
-        </motion.div>
-
         {/* Progress Summary */}
         <motion.div
           className={cn(
@@ -124,11 +105,30 @@ const ProjectStatsHeader: React.FC<ProjectStatsHeaderProps> = ({ project, taskCo
             <div className="text-xs text-gray-500 dark:text-gray-400 font-medium">Total</div>
           </div>
         </motion.div>
+
+        {/* Done Tasks */}
+        <motion.div
+          className={cn(
+            "flex items-center gap-3 p-4 rounded-lg border",
+            glassmorphism.background.subtle,
+            glassmorphism.border.default,
+            "hover:shadow-md transition-shadow duration-200",
+          )}
+          whileHover={{ scale: 1.02 }}
+        >
+          <div className="p-2 rounded-full bg-green-100 dark:bg-green-900/30">
+            <CheckCircle2 className="w-5 h-5 text-green-600 dark:text-green-400" />
+          </div>
+          <div>
+            <div className="font-bold text-lg text-gray-900 dark:text-white">{taskCounts.done}</div>
+            <div className="text-xs text-gray-500 dark:text-gray-400 font-medium">Done</div>
+          </div>
+        </motion.div>
       </div>
 
       {/* Progress Bar */}
       {totalTasks > 0 && (
-        <div className="mt-4">
+        <div className="mt-3">
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Progress</span>
             <span className="text-sm text-gray-500 dark:text-gray-400">{completionPercentage}% Complete</span>
@@ -187,7 +187,7 @@ export const ProjectMainContent: React.FC<ProjectMainContentProps> = ({
 
   return (
     <motion.div
-      className={cn("flex-1 flex flex-col", className)}
+      className={cn("flex-1 flex flex-col min-h-0", className)}
       variants={itemVariants}
       initial="hidden"
       animate="visible"
@@ -196,9 +196,9 @@ export const ProjectMainContent: React.FC<ProjectMainContentProps> = ({
       <ProjectStatsHeader project={selectedProject} taskCounts={projectTaskCounts} />
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col">
-        <Tabs defaultValue="tasks" value={activeTab} onValueChange={onTabChange} className="flex-1 flex flex-col">
-          <div className="px-6 pt-4">
+      <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+        <Tabs defaultValue="tasks" value={activeTab} onValueChange={onTabChange} className="flex-1 flex flex-col min-h-0">
+          <div className="px-6 pt-4 flex-shrink-0">
             <TabsList>
               <TabsTrigger value="tasks" className="py-3 font-mono transition-all duration-300" color="orange">
                 Tasks
@@ -213,7 +213,7 @@ export const ProjectMainContent: React.FC<ProjectMainContentProps> = ({
           </div>
 
           {/* Tab Content */}
-          <div className="flex-1 flex flex-col min-h-0">
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
             {activeTab === "tasks" && (
               <TabsContent value="tasks" className="flex-1 flex flex-col mt-0">
                 <TasksTab projectId={selectedProject.id} />
