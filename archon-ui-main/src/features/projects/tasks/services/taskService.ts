@@ -52,13 +52,14 @@ export const taskService = {
       // The validation.data already has defaults from schema
       const requestData = validation.data;
 
-      const task = await callAPIWithETag<Task>("/api/tasks", {
+      // Backend returns { message: string, task: Task } for mutations
+      const response = await callAPIWithETag<{ message: string; task: Task }>("/api/tasks", {
         method: "POST",
         body: JSON.stringify(requestData),
       });
 
 
-      return task;
+      return response.task;
     } catch (error) {
       console.error("Failed to create task:", error);
       throw error;
@@ -76,12 +77,13 @@ export const taskService = {
     }
 
     try {
-      const task = await callAPIWithETag<Task>(`/api/tasks/${taskId}`, {
+      // Backend returns { message: string, task: Task } for mutations
+      const response = await callAPIWithETag<{ message: string; task: Task }>(`/api/tasks/${taskId}`, {
         method: "PUT",
         body: JSON.stringify(validation.data),
       });
 
-      return task;
+      return response.task;
     } catch (error) {
       console.error(`Failed to update task ${taskId}:`, error);
       throw error;
@@ -103,13 +105,14 @@ export const taskService = {
 
     try {
       // Use the standard update task endpoint with JSON body
-      const task = await callAPIWithETag<Task>(`/api/tasks/${taskId}`, {
+      // Backend returns { message: string, task: Task } for mutations
+      const response = await callAPIWithETag<{ message: string; task: Task }>(`/api/tasks/${taskId}`, {
         method: "PUT",
         body: JSON.stringify({ status }),
       });
 
 
-      return task;
+      return response.task;
     } catch (error) {
       console.error(`Failed to update task status ${taskId}:`, error);
       throw error;
