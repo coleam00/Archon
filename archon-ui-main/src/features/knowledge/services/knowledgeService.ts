@@ -65,7 +65,7 @@ export const knowledgeService = {
   /**
    * Update a knowledge item
    */
-  async updateKnowledgeItem(sourceId: string, updates: Partial<KnowledgeItem>): Promise<KnowledgeItem> {
+  async updateKnowledgeItem(sourceId: string, updates: Partial<KnowledgeItem> & { tags?: string[] }): Promise<KnowledgeItem> {
     const response = await callAPIWithETag<KnowledgeItem>(`/api/knowledge-items/${sourceId}`, {
       method: "PUT",
       body: JSON.stringify(updates),

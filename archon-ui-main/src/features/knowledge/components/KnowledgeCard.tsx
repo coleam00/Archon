@@ -268,7 +268,7 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
             role="none"
             className="mt-2"
           >
-            <KnowledgeCardTags sourceId={item.source_id} tags={item.tags || item.metadata?.tags || []} />
+            <KnowledgeCardTags sourceId={item.source_id} tags={item.metadata?.tags || []} />
           </div>
         </div>
 

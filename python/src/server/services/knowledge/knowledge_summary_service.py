@@ -142,10 +142,9 @@ class KnowledgeSummaryService:
                         "code_examples_count": code_counts.get(source_id, 0),
                         "knowledge_type": knowledge_type,
                         "source_type": source_type,
-                        "tags": metadata.get("tags", []),
                         "created_at": source.get("created_at"),
                         "updated_at": source.get("updated_at"),
-                        "metadata": metadata,  # Include full metadata for debugging
+                        "metadata": metadata,  # Include full metadata (contains tags)
                     }
                     summaries.append(summary)
             

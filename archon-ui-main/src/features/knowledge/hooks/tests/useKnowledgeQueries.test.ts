@@ -121,12 +121,22 @@ describe("useKnowledgeQueries", () => {
         message: "Item deleted",
       });
 
-      const wrapper = createWrapper();
-      const { result } = renderHook(() => useDeleteKnowledgeItem(), { wrapper });
+      // Create QueryClient instance that will be used by the test
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
 
-      // Pre-populate cache
-      const queryClient = new QueryClient();
+      // Pre-populate cache with the same client instance
       queryClient.setQueryData(knowledgeKeys.lists(), initialData);
+
+      // Create wrapper with the pre-populated QueryClient
+      const wrapper = ({ children }: { children: React.ReactNode }) =>
+        React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+      const { result } = renderHook(() => useDeleteKnowledgeItem(), { wrapper });
 
       await result.current.mutateAsync("source-1");
 

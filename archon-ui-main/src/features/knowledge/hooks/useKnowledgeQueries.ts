@@ -140,6 +140,11 @@ export function useCrawlUrl() {
 
       // CRITICAL: Also add optimistic item to SUMMARIES cache (what the UI actually uses!)
       // This ensures the card shows up immediately in the knowledge base view
+      // TODO: [Phase 3 - Optimistic Updates] Fix filter-blind optimistic updates
+      // Currently adds items to ALL summary caches regardless of their filters (e.g., knowledge_type, tags).
+      // This can cause items to appear in filtered views where they shouldn't be visible.
+      // Solution: Check each cache's filter criteria before adding the optimistic item.
+      // See: https://github.com/coleam00/Archon/pull/676#issuecomment-XXXXX
       queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summaries() }, (old) => {
         if (!old) {
           return {
@@ -336,6 +341,10 @@ export function useUploadDocument() {
       };
 
       // Add optimistic item to SUMMARIES cache (what the UI uses!)
+      // TODO: [Phase 3 - Optimistic Updates] Fix filter-blind optimistic updates for uploads
+      // Same issue as crawlUrl - adds items to ALL summary caches regardless of filters.
+      // Should check filter criteria (knowledge_type, tags, etc.) before adding to each cache.
+      // See: https://github.com/coleam00/Archon/pull/676#issuecomment-XXXXX
       queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summaries() }, (old) => {
         if (!old) {
           return {
@@ -541,7 +550,7 @@ export function useUpdateKnowledgeItem() {
   const { showToast } = useToast();
 
   return useMutation({
-    mutationFn: ({ sourceId, updates }: { sourceId: string; updates: Partial<KnowledgeItem> }) =>
+    mutationFn: ({ sourceId, updates }: { sourceId: string; updates: Partial<KnowledgeItem> & { tags?: string[] } }) =>
       knowledgeService.updateKnowledgeItem(sourceId, updates),
     onMutate: async ({ sourceId, updates }) => {
       // Cancel any outgoing refetches
@@ -564,24 +573,25 @@ export function useUpdateKnowledgeItem() {
           updatedItem.title = updates.title;
         }
 
-        // Handle tags updates
+        // Handle tags updates - update in metadata only
         if ("tags" in updates && Array.isArray(updates.tags)) {
           const newTags = updates.tags as string[];
-          (updatedItem as any).tags = newTags;
+          updatedItem.metadata = {
+            ...currentMetadata,
+            tags: newTags,
+          };
         }
 
         // Handle knowledge_type updates
         if ("knowledge_type" in updates && typeof updates.knowledge_type === "string") {
           const newType = updates.knowledge_type as "technical" | "business";
           updatedItem.knowledge_type = newType;
+          // Also update in metadata for consistency
+          updatedItem.metadata = {
+            ...updatedItem.metadata,
+            knowledge_type: newType,
+          };
         }
-
-        // Synchronize metadata with top-level fields
-        updatedItem.metadata = {
-          ...currentMetadata,
-          ...((updatedItem as any).tags && { tags: (updatedItem as any).tags }),
-          ...(updatedItem.knowledge_type && { knowledge_type: updatedItem.knowledge_type }),
-        };
 
         queryClient.setQueryData<KnowledgeItem>(knowledgeKeys.detail(sourceId), updatedItem);
       }
@@ -604,24 +614,25 @@ export function useUpdateKnowledgeItem() {
                 updatedItem.title = updates.title;
               }
 
-              // Update tags if provided
+              // Update tags if provided - update in metadata only
               if ("tags" in updates && Array.isArray(updates.tags)) {
                 const newTags = updates.tags as string[];
-                updatedItem.tags = newTags;
+                updatedItem.metadata = {
+                  ...currentMetadata,
+                  tags: newTags,
+                };
               }
 
               // Update knowledge_type if provided
               if ("knowledge_type" in updates && typeof updates.knowledge_type === "string") {
                 const newType = updates.knowledge_type as "technical" | "business";
                 updatedItem.knowledge_type = newType;
+                // Also update in metadata for consistency
+                updatedItem.metadata = {
+                  ...updatedItem.metadata,
+                  knowledge_type: newType,
+                };
               }
-
-              // Synchronize metadata with top-level fields
-              updatedItem.metadata = {
-                ...currentMetadata,
-                ...(updatedItem.tags && { tags: updatedItem.tags }),
-                ...(updatedItem.knowledge_type && { knowledge_type: updatedItem.knowledge_type }),
-              };
 
               return updatedItem;
             }
