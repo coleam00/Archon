@@ -62,10 +62,10 @@ export function useCreateTask() {
         ...newTaskData,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
-        // Ensure all required fields have defaults
+        // Ensure all required fields have defaults (let backend handle assignee default)
         task_order: newTaskData.task_order ?? 100,
         status: newTaskData.status ?? "todo",
-        assignee: newTaskData.assignee ?? "User",
+        assignee: newTaskData.assignee ?? "User", // Keep for now as UI needs a value for optimistic update
       } as Task;
 
       // Optimistically add the new task

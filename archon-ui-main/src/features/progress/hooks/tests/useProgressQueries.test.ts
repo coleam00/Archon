@@ -3,7 +3,12 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActiveOperationsResponse, ProgressResponse } from "../../types";
-import { progressKeys, useActiveOperations, useCrawlProgressPolling, useOperationProgress } from "../useProgressQueries";
+import {
+  progressKeys,
+  useActiveOperations,
+  useCrawlProgressPolling,
+  useOperationProgress,
+} from "../useProgressQueries";
 
 // Mock the services
 vi.mock("../../services", () => ({
@@ -89,10 +94,9 @@ describe("useProgressQueries", () => {
       const { progressService } = await import("../../services");
       vi.mocked(progressService.getProgress).mockResolvedValue(completedProgress);
 
-      const { result } = renderHook(
-        () => useOperationProgress("progress-123", { onComplete }),
-        { wrapper: createWrapper() },
-      );
+      const { result } = renderHook(() => useOperationProgress("progress-123", { onComplete }), {
+        wrapper: createWrapper(),
+      });
 
       await waitFor(() => {
         expect(result.current.data?.status).toBe("completed");
@@ -113,10 +117,9 @@ describe("useProgressQueries", () => {
       const { progressService } = await import("../../services");
       vi.mocked(progressService.getProgress).mockResolvedValue(errorProgress);
 
-      const { result } = renderHook(
-        () => useOperationProgress("progress-123", { onError }),
-        { wrapper: createWrapper() },
-      );
+      const { result } = renderHook(() => useOperationProgress("progress-123", { onError }), {
+        wrapper: createWrapper(),
+      });
 
       await waitFor(() => {
         expect(result.current.data?.status).toBe("error");
