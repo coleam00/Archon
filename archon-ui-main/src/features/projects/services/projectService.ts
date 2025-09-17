@@ -3,9 +3,10 @@
  * Focused service for project CRUD operations only
  */
 
-import { validateCreateProject, validateUpdateProject } from "../schemas";
-import { formatRelativeTime, formatZodErrors, ValidationError } from "../shared/api";
 import { callAPIWithETag } from "../../shared/apiWithEtag";
+import { formatZodErrors, ValidationError } from "../../shared/errors";
+import { validateCreateProject, validateUpdateProject } from "../schemas";
+import { formatRelativeTime } from "../shared/api";
 import type { CreateProjectRequest, Project, ProjectFeatures, UpdateProjectRequest } from "../types";
 
 export const projectService = {
@@ -93,7 +94,6 @@ export const projectService = {
         body: JSON.stringify(validation.data),
       });
 
-
       // Project creation response received
       return response;
     } catch (error) {
@@ -127,7 +127,6 @@ export const projectService = {
         body: JSON.stringify(validation.data),
       });
 
-
       // API update response received
 
       // Ensure pinned property is properly handled as boolean
@@ -155,7 +154,6 @@ export const projectService = {
       await callAPIWithETag(`/api/projects/${projectId}`, {
         method: "DELETE",
       });
-
     } catch (error) {
       console.error(`Failed to delete project ${projectId}:`, error);
       throw error;

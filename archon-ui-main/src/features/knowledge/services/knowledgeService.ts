@@ -4,6 +4,7 @@
  */
 
 import { callAPIWithETag } from "../../shared/apiWithEtag";
+import { APIServiceError } from "../../shared/errors";
 import type {
   ChunksResponse,
   CodeExamplesResponse,
@@ -58,7 +59,6 @@ export const knowledgeService = {
       method: "DELETE",
     });
 
-
     return response;
   },
 
@@ -70,7 +70,6 @@ export const knowledgeService = {
       method: "PUT",
       body: JSON.stringify(updates),
     });
-
 
     return response;
   },
@@ -84,7 +83,6 @@ export const knowledgeService = {
       body: JSON.stringify(request),
     });
 
-
     return response;
   },
 
@@ -95,7 +93,6 @@ export const knowledgeService = {
     const response = await callAPIWithETag<RefreshResponse>(`/api/knowledge-items/${sourceId}/refresh`, {
       method: "POST",
     });
-
 
     return response;
   },
@@ -133,10 +130,9 @@ export const knowledgeService = {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || `HTTP ${response.status}`);
+      const err = await response.json().catch(() => ({}));
+      throw new APIServiceError(err.error || `HTTP ${response.status}`, "HTTP_ERROR", response.status);
     }
-
 
     return response.json();
   },

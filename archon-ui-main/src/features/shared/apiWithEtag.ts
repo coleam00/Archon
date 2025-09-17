@@ -4,8 +4,7 @@
  */
 
 import { API_BASE_URL } from "../../config/api";
-import { ProjectServiceError } from "../projects/shared/api";
-
+import { APIServiceError } from "./errors";
 
 /**
  * Build full URL with test environment handling
@@ -47,7 +46,6 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
       ...((options.headers as Record<string, string>) || {}),
     };
 
-
     // Make the request with timeout
     // NOTE: Increased to 20s due to database performance issues with large DELETE operations
     // Root cause: Sequential scan on crawled_pages table when deleting sources with 7K+ rows
@@ -78,7 +76,7 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
       } catch (_e) {
         // Ignore parse errors
       }
-      throw new ProjectServiceError(errorMessage, "HTTP_ERROR", response.status);
+      throw new APIServiceError(errorMessage, "HTTP_ERROR", response.status);
     }
 
     // Handle 204 No Content (DELETE operations)
@@ -91,16 +89,16 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
 
     // Check for API errors
     if (result.error) {
-      throw new ProjectServiceError(result.error, "API_ERROR", response.status);
+      throw new APIServiceError(result.error, "API_ERROR", response.status);
     }
 
     return result as T;
   } catch (error) {
-    if (error instanceof ProjectServiceError) {
+    if (error instanceof APIServiceError) {
       throw error;
     }
 
-    throw new ProjectServiceError(
+    throw new APIServiceError(
       `Failed to call API ${endpoint}: ${error instanceof Error ? error.message : "Unknown error"}`,
       "NETWORK_ERROR",
       500,

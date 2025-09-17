@@ -1,64 +1,12 @@
 /**
  * Shared API utilities for project features
- * Common error handling and API calling functions
+ * Project-specific API functions and utilities
  */
+
+import { APIServiceError } from "../../shared/errors";
 
 // API configuration - use relative URL to go through Vite proxy
 const API_BASE_URL = "/api";
-
-// Error classes
-export class ProjectServiceError extends Error {
-  constructor(
-    message: string,
-    public code?: string,
-    public statusCode?: number,
-  ) {
-    super(message);
-    this.name = "ProjectServiceError";
-  }
-}
-
-export class ValidationError extends ProjectServiceError {
-  constructor(message: string) {
-    super(message, "VALIDATION_ERROR", 400);
-    this.name = "ValidationError";
-  }
-}
-
-export class MCPToolError extends ProjectServiceError {
-  constructor(
-    message: string,
-    public toolName: string,
-  ) {
-    super(message, "MCP_TOOL_ERROR", 500);
-    this.name = "MCPToolError";
-  }
-}
-
-// Helper function to format validation errors
-interface ValidationErrorDetail {
-  path: string[];
-  message: string;
-}
-
-interface ValidationErrorObject {
-  errors: ValidationErrorDetail[];
-}
-
-export function formatValidationErrors(errors: ValidationErrorObject): string {
-  return errors.errors.map((error: ValidationErrorDetail) => `${error.path.join(".")}: ${error.message}`).join(", ");
-}
-
-// Helper to convert Zod errors to ValidationErrorObject format
-export function formatZodErrors(zodError: { issues: Array<{ path: (string | number)[]; message: string }> }): string {
-  const validationErrors: ValidationErrorObject = {
-    errors: zodError.issues.map((issue) => ({
-      path: issue.path.map(String),
-      message: issue.message,
-    })),
-  };
-  return formatValidationErrors(validationErrors);
-}
 
 // Helper function to call FastAPI endpoints directly
 export async function callAPI<T = unknown>(endpoint: string, options: RequestInit = {}): Promise<T> {
@@ -87,7 +35,7 @@ export async function callAPI<T = unknown>(endpoint: string, options: RequestIni
         // Ignore parse errors, use default message
       }
 
-      throw new ProjectServiceError(errorMessage, "HTTP_ERROR", response.status);
+      throw new APIServiceError(errorMessage, "HTTP_ERROR", response.status);
     }
 
     // Handle 204 No Content responses (common for DELETE operations)
@@ -99,16 +47,16 @@ export async function callAPI<T = unknown>(endpoint: string, options: RequestIni
 
     // Check if response has error field (from FastAPI error format)
     if (result.error) {
-      throw new ProjectServiceError(result.error, "API_ERROR", response.status);
+      throw new APIServiceError(result.error, "API_ERROR", response.status);
     }
 
     return result as T;
   } catch (error) {
-    if (error instanceof ProjectServiceError) {
+    if (error instanceof APIServiceError) {
       throw error;
     }
 
-    throw new ProjectServiceError(
+    throw new APIServiceError(
       `Failed to call API ${endpoint}: ${error instanceof Error ? error.message : "Unknown error"}`,
       "NETWORK_ERROR",
       500,

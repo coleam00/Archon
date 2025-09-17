@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { callAPIWithETag } from "./apiWithEtag";
-import { ProjectServiceError } from "../projects/shared/api";
+import { APIServiceError } from "./errors";
 
 describe("Simplified API Client (Option 3)", () => {
   beforeEach(() => {
@@ -34,7 +34,7 @@ describe("Simplified API Client (Option 3)", () => {
         ok: true,
         status: 200,
         json: () => Promise.resolve(mockData),
-        headers: new Headers({ "ETag": "W/\"123456\"" }),
+        headers: new Headers({ ETag: 'W/"123456"' }),
       };
 
       global.fetch = vi.fn().mockResolvedValue(mockResponse);
@@ -48,11 +48,11 @@ describe("Simplified API Client (Option 3)", () => {
           headers: expect.objectContaining({
             "Content-Type": "application/json",
           }),
-        })
+        }),
       );
     });
 
-    it("should throw ProjectServiceError for HTTP errors", async () => {
+    it("should throw APIServiceError for HTTP errors", async () => {
       const errorResponse = {
         ok: false,
         status: 400,
@@ -62,7 +62,7 @@ describe("Simplified API Client (Option 3)", () => {
 
       global.fetch = vi.fn().mockResolvedValue(errorResponse);
 
-      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow(ProjectServiceError);
+      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow(APIServiceError);
       await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow("Bad request");
     });
 
@@ -84,8 +84,10 @@ describe("Simplified API Client (Option 3)", () => {
       const networkError = new Error("Network error");
       global.fetch = vi.fn().mockRejectedValue(networkError);
 
-      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow(ProjectServiceError);
-      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow("Failed to call API /test-endpoint: Network error");
+      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow(APIServiceError);
+      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow(
+        "Failed to call API /test-endpoint: Network error",
+      );
     });
 
     it("should handle API errors in response body", async () => {
@@ -99,7 +101,7 @@ describe("Simplified API Client (Option 3)", () => {
 
       global.fetch = vi.fn().mockResolvedValue(mockResponse);
 
-      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow(ProjectServiceError);
+      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow(APIServiceError);
       await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow("Database connection failed");
     });
 
@@ -107,15 +109,18 @@ describe("Simplified API Client (Option 3)", () => {
       const errorResponse = {
         ok: false,
         status: 422,
-        text: () => Promise.resolve(JSON.stringify({
-          detail: { error: "Validation failed" }
-        })),
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              detail: { error: "Validation failed" },
+            }),
+          ),
         headers: new Headers(),
       };
 
       global.fetch = vi.fn().mockResolvedValue(errorResponse);
 
-      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow(ProjectServiceError);
+      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow(APIServiceError);
       await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow("Validation failed");
     });
 
@@ -124,8 +129,10 @@ describe("Simplified API Client (Option 3)", () => {
       timeoutError.name = "AbortError";
       global.fetch = vi.fn().mockRejectedValue(timeoutError);
 
-      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow(ProjectServiceError);
-      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow("Failed to call API /test-endpoint: Request timeout");
+      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow(APIServiceError);
+      await expect(callAPIWithETag("/test-endpoint")).rejects.toThrow(
+        "Failed to call API /test-endpoint: Request timeout",
+      );
     });
 
     it("should pass custom headers correctly", async () => {
@@ -141,7 +148,7 @@ describe("Simplified API Client (Option 3)", () => {
 
       await callAPIWithETag("/test-endpoint", {
         headers: {
-          "Authorization": "Bearer token123",
+          Authorization: "Bearer token123",
           "Custom-Header": "custom-value",
         },
       });
@@ -151,10 +158,10 @@ describe("Simplified API Client (Option 3)", () => {
         expect.objectContaining({
           headers: expect.objectContaining({
             "Content-Type": "application/json",
-            "Authorization": "Bearer token123",
+            Authorization: "Bearer token123",
             "Custom-Header": "custom-value",
           }),
-        })
+        }),
       );
     });
 
@@ -167,9 +174,9 @@ describe("Simplified API Client (Option 3)", () => {
         status: 200, // Browser converts 304 to 200 with cached data
         json: () => Promise.resolve(mockData),
         headers: new Headers({
-          "ETag": "W/\"abc123\"",
+          ETag: 'W/"abc123"',
           // Browser might add this header to indicate cache hit
-          "X-From-Cache": "true"
+          "X-From-Cache": "true",
         }),
       };
 
@@ -194,7 +201,7 @@ describe("Simplified API Client (Option 3)", () => {
         ok: true,
         status: 200,
         json: () => Promise.resolve(freshData),
-        headers: new Headers({ "ETag": "W/\"new-etag\"" }),
+        headers: new Headers({ ETag: 'W/"new-etag"' }),
       };
 
       global.fetch = vi.fn().mockResolvedValue(mockResponse);
@@ -209,7 +216,7 @@ describe("Simplified API Client (Option 3)", () => {
           headers: expect.not.objectContaining({
             "If-None-Match": expect.any(String), // We don't add this
           }),
-        })
+        }),
       );
     });
 
@@ -254,7 +261,7 @@ describe("Simplified API Client (Option 3)", () => {
         ok: true,
         status: 200,
         json: () => Promise.resolve(mockData),
-        headers: new Headers({ "ETag": "W/\"workflow-v1\"" }),
+        headers: new Headers({ ETag: 'W/"workflow-v1"' }),
       };
 
       global.fetch = vi.fn().mockResolvedValue(mockResponse);
@@ -276,10 +283,10 @@ describe("Simplified API Client (Option 3)", () => {
         status: 200, // Even if server sent 304, browser gives us 200
         json: () => Promise.resolve(mockData),
         headers: new Headers({
-          "ETag": "W/\"large-data\"",
+          ETag: 'W/"large-data"',
           // These headers indicate the browser's cache was used
-          "Date": new Date().toUTCString(),
-          "Age": "0", // Indicates how long since fetched from origin
+          Date: new Date().toUTCString(),
+          Age: "0", // Indicates how long since fetched from origin
         }),
       };
 
@@ -296,18 +303,19 @@ describe("Simplified API Client (Option 3)", () => {
       const errorResponse = {
         ok: false,
         status: 500,
-        text: () => Promise.resolve(JSON.stringify({
-          detail: "Server error"
-        })),
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              detail: "Server error",
+            }),
+          ),
         headers: new Headers(),
       };
 
       global.fetch = vi.fn().mockResolvedValue(errorResponse);
 
-      await expect(callAPIWithETag("/api/error"))
-        .rejects.toThrow(ProjectServiceError);
-      await expect(callAPIWithETag("/api/error"))
-        .rejects.toThrow("Server error");
+      await expect(callAPIWithETag("/api/error")).rejects.toThrow(APIServiceError);
+      await expect(callAPIWithETag("/api/error")).rejects.toThrow("Server error");
     });
   });
 
@@ -324,8 +332,8 @@ describe("Simplified API Client (Option 3)", () => {
         status: 200,
         json: () => Promise.resolve(freshData),
         headers: new Headers({
-          "ETag": "W/\"v1\"",
-          "Cache-Control": "private, must-revalidate"
+          ETag: 'W/"v1"',
+          "Cache-Control": "private, must-revalidate",
         }),
       };
 
@@ -341,9 +349,9 @@ describe("Simplified API Client (Option 3)", () => {
         status: 200, // Browser converts 304 to 200
         json: () => Promise.resolve(freshData), // Same data from cache
         headers: new Headers({
-          "ETag": "W/\"v1\"", // Same ETag
+          ETag: 'W/"v1"', // Same ETag
           "Cache-Control": "private, must-revalidate",
-          "X-Cache": "HIT" // Some CDNs/proxies add this
+          "X-Cache": "HIT", // Some CDNs/proxies add this
         }),
       };
 
@@ -365,7 +373,7 @@ describe("Simplified API Client (Option 3)", () => {
         ok: true,
         status: 200,
         json: () => Promise.resolve(v1Data),
-        headers: new Headers({ "ETag": "W/\"v1\"" }),
+        headers: new Headers({ ETag: 'W/"v1"' }),
       });
 
       const result1 = await callAPIWithETag("/api/content");
@@ -379,7 +387,7 @@ describe("Simplified API Client (Option 3)", () => {
         ok: true,
         status: 200, // New data, not 304
         json: () => Promise.resolve(v2Data),
-        headers: new Headers({ "ETag": "W/\"v2\"" }), // New ETag
+        headers: new Headers({ ETag: 'W/"v2"' }), // New ETag
       });
 
       const result2 = await callAPIWithETag("/api/content");

@@ -3,8 +3,8 @@
  * Focused service for task CRUD operations only
  */
 
-import { formatZodErrors, ValidationError } from "../../shared/api";
 import { callAPIWithETag } from "../../../shared/apiWithEtag";
+import { formatZodErrors, ValidationError } from "../../../shared/errors";
 
 import { validateCreateTask, validateUpdateTask, validateUpdateTaskStatus } from "../schemas";
 import type { CreateTaskRequest, DatabaseTaskStatus, Task, TaskCounts, UpdateTaskRequest } from "../types";
@@ -58,7 +58,6 @@ export const taskService = {
         body: JSON.stringify(requestData),
       });
 
-
       return response.task;
     } catch (error) {
       console.error("Failed to create task:", error);
@@ -111,7 +110,6 @@ export const taskService = {
         body: JSON.stringify({ status }),
       });
 
-
       return response.task;
     } catch (error) {
       console.error(`Failed to update task status ${taskId}:`, error);
@@ -127,7 +125,6 @@ export const taskService = {
       await callAPIWithETag<void>(`/api/tasks/${taskId}`, {
         method: "DELETE",
       });
-
     } catch (error) {
       console.error(`Failed to delete task ${taskId}:`, error);
       throw error;
