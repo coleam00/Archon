@@ -1,10 +1,10 @@
 /**
  * Simple API client for TanStack Query integration
  *
- * IMPORTANT: Browser automatically handles ETags and HTTP caching for bandwidth optimization.
+ * IMPORTANT: The Fetch API automatically handles ETags and HTTP caching for bandwidth optimization.
  * We do NOT explicitly handle 304 responses because:
  * 1. The browser's native HTTP cache handles If-None-Match headers automatically
- * 2. When server returns 304, browser serves cached data as a 200 response to our code
+ * 2. When server returns 304, fetch returns the cached stored response (typically as 200) and updates cache headers
  * 3. TanStack Query manages data freshness through staleTime configuration
  *
  * This simplification eliminates complex ETag management while maintaining bandwidth efficiency.
@@ -48,7 +48,12 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
     // Construct the full URL
     const fullUrl = buildFullUrl(cleanEndpoint);
 
-    // Build headers with If-None-Match if we have an ETag
+    // Build headers - merge default Content-Type with provided headers
+    // NOTE: We do NOT add If-None-Match headers; the browser handles ETag revalidation automatically
+    // Also note: Currently assumes headers are passed as plain objects (Record<string, string>)
+    // If we ever need to support Headers instances or [string, string][] tuples,
+    // we should normalize with: new Headers(options.headers), set defaults, then
+    // convert back with Object.fromEntries(headers.entries())
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       ...((options.headers as Record<string, string>) || {}),
