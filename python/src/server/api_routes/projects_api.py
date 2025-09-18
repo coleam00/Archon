@@ -587,7 +587,9 @@ async def list_project_tasks(
                 "task_order": task.get("task_order"),
                 "assignee": task.get("assignee"),
                 "priority": task.get("priority"),
-                "feature": task.get("feature")
+                "feature": task.get("feature"),
+                "description": task.get("description"),
+                "updated_at": task.get("updated_at"),
             } for task in tasks],
             "project_id": project_id,
             "count": len(tasks)
