@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { callAPIWithETag } from "../../../features/shared/apiWithEtag";
+import { STALE_TIMES } from "../../../features/shared/queryPatterns";
 import type { HealthResponse } from "../types";
 
 /**
@@ -38,10 +39,10 @@ export function useBackendHealth() {
       return Math.min(1500 * 1.5 ** attemptIndex, 10000);
     },
     // Refetch every 30 seconds when healthy
-    refetchInterval: 30000,
+    refetchInterval: STALE_TIMES.normal,
     // Keep trying to connect on window focus
     refetchOnWindowFocus: true,
-    // Consider data fresh for 20 seconds
-    staleTime: 20000,
+    // Consider data fresh for 30 seconds
+    staleTime: STALE_TIMES.normal,
   });
 }

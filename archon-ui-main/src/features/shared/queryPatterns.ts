@@ -22,3 +22,13 @@ export const STALE_TIMES = {
   rare: 300_000, // 5 minutes - for rarely changing configuration
   static: Infinity, // Never stale - for static data like settings
 } as const;
+
+// Re-export commonly used TanStack Query types for convenience
+export type { QueryKey, QueryOptions } from "@tanstack/react-query";
+
+// Helper to create a disabled query options object
+export const DISABLED_QUERY_OPTIONS = {
+  enabled: false,
+  staleTime: Infinity,
+  gcTime: 0,
+} as const;
