@@ -98,10 +98,10 @@ Covers all utility functions with 8 test cases:
 
 ## Performance Characteristics
 
-- **Bundle Impact**: <5KB (nanoid: ~2.5KB gzipped)
-- **Update Speed**: <50ms for optimistic render (before server response)
-- **ID Generation**: ~1M IDs/second (nanoid performance)
-- **Memory**: Minimal - only `_optimistic` and `_localId` metadata added
+- **Bundle Impact**: ~130 bytes ([nanoid v5, minified+gzipped](https://bundlephobia.com/package/nanoid@5.0.9)) - build/environment dependent
+- **Update Speed**: Typically snappy on modern devices; actual latency varies by device and workload
+- **ID Generation**: Per [nanoid benchmarks](https://github.com/ai/nanoid#benchmark): secure sync ≈5M ops/s, non-secure ≈2.7M ops/s, async crypto ≈135k ops/s
+- **Memory**: Minimal - only `_optimistic` and `_localId` metadata added per optimistic entity
 
 ## Migration Notes
 

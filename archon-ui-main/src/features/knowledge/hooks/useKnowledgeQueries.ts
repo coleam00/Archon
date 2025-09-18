@@ -5,7 +5,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { createOptimisticId } from "@/features/shared/optimistic";
+import { createOptimisticEntity, createOptimisticId } from "@/features/shared/optimistic";
 import { useActiveOperations } from "../../progress/hooks";
 import { progressKeys } from "../../progress/hooks/useProgressQueries";
 import type { ActiveOperation, ActiveOperationsResponse } from "../../progress/types";
@@ -29,10 +29,7 @@ export const knowledgeKeys = {
   lists: () => [...knowledgeKeys.all, "list"] as const,
   detail: (id: string) => [...knowledgeKeys.all, "detail", id] as const,
   // Include domain + pagination to avoid cache collisions
-  chunks: (
-    id: string,
-    opts?: { domain?: string; limit?: number; offset?: number },
-  ) =>
+  chunks: (id: string, opts?: { domain?: string; limit?: number; offset?: number }) =>
     [
       ...knowledgeKeys.all,
       id,
@@ -66,7 +63,7 @@ export function useKnowledgeItem(sourceId: string | null) {
  */
 export function useKnowledgeItemChunks(
   sourceId: string | null,
-  opts?: { domain?: string; limit?: number; offset?: number }
+  opts?: { domain?: string; limit?: number; offset?: number },
 ) {
   // TODO: Phase 4 - Add explicit typing: useQuery<DocumentChunk[]> or appropriate return type
   // See PRPs/local/frontend-state-management-refactor.md Phase 4: Configure Request Deduplication
@@ -139,13 +136,9 @@ export function useCrawlUrl() {
       });
       const previousOperations = queryClient.getQueryData<ActiveOperationsResponse>(progressKeys.active());
 
-      // Generate temporary IDs
+      // Generate temporary progress ID and optimistic entity
       const tempProgressId = createOptimisticId();
-      const tempItemId = createOptimisticId();
-
-      // Create optimistic knowledge item
-      const optimisticItem: KnowledgeItem = {
-        id: tempItemId,
+      const optimisticItem = createOptimisticEntity<KnowledgeItem>({
         title: (() => {
           try {
             return new URL(request.url).hostname || "New crawl";
@@ -169,7 +162,8 @@ export function useCrawlUrl() {
         },
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
-      };
+      } as Omit<KnowledgeItem, "id">);
+      const tempItemId = optimisticItem.id;
 
       // Add optimistic knowledge item to the list
       queryClient.setQueryData<KnowledgeItem[]>(knowledgeKeys.lists(), (old) => {
@@ -178,29 +172,32 @@ export function useCrawlUrl() {
         return [optimisticItem, ...old];
       });
 
-      // CRITICAL: Also add optimistic item to SUMMARIES cache (what the UI actually uses!)
-      // This ensures the card shows up immediately in the knowledge base view
-      // TODO: [Phase 3 - Optimistic Updates] Fix filter-blind optimistic updates
-      // Currently adds items to ALL summary caches regardless of their filters (e.g., knowledge_type, tags).
-      // This can cause items to appear in filtered views where they shouldn't be visible.
-      // Solution: Check each cache's filter criteria before adding the optimistic item.
-      // See: https://github.com/coleam00/Archon/pull/676#issuecomment-XXXXX
-      queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summariesPrefix() }, (old) => {
+      // Respect each cache's filter (knowledge_type, tags, etc.)
+      const entries = queryClient.getQueriesData<KnowledgeItemsResponse>({
+        queryKey: knowledgeKeys.summariesPrefix(),
+      });
+      for (const [qk, old] of entries) {
+        const filter = qk[qk.length - 1] as KnowledgeItemsFilter | undefined;
+        const matchesType = !filter?.knowledge_type || optimisticItem.knowledge_type === filter.knowledge_type;
+        const matchesTags =
+          !filter?.tags || filter.tags.every((t) => (optimisticItem.metadata?.tags ?? []).includes(t));
+        if (!(matchesType && matchesTags)) continue;
         if (!old) {
-          return {
+          queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
             items: [optimisticItem],
             total: 1,
             page: 1,
             per_page: 100,
             pages: 1,
-          };
+          });
+        } else {
+          queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
+            ...old,
+            items: [optimisticItem, ...old.items],
+            total: (old.total ?? old.items.length) + 1,
+          });
         }
-        return {
-          ...old,
-          items: [optimisticItem, ...old.items],
-          total: old.total + 1,
-        };
-      });
+      }
 
       // Create optimistic progress operation
       const optimisticOperation: ActiveOperation = {
@@ -353,13 +350,10 @@ export function useUploadDocument() {
       });
       const previousOperations = queryClient.getQueryData<ActiveOperationsResponse>(progressKeys.active());
 
-      // Generate temporary IDs
       const tempProgressId = createOptimisticId();
-      const tempItemId = createOptimisticId();
 
       // Create optimistic knowledge item for the upload
-      const optimisticItem: KnowledgeItem = {
-        id: tempItemId,
+      const optimisticItem = createOptimisticEntity<KnowledgeItem>({
         title: file.name,
         url: `file://${file.name}`,
         source_id: tempProgressId,
@@ -378,29 +372,35 @@ export function useUploadDocument() {
         },
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
-      };
+      } as Omit<KnowledgeItem, "id">);
+      const tempItemId = optimisticItem.id;
 
-      // Add optimistic item to SUMMARIES cache (what the UI uses!)
-      // TODO: [Phase 3 - Optimistic Updates] Fix filter-blind optimistic updates for uploads
-      // Same issue as crawlUrl - adds items to ALL summary caches regardless of filters.
-      // Should check filter criteria (knowledge_type, tags, etc.) before adding to each cache.
-      // See: https://github.com/coleam00/Archon/pull/676#issuecomment-XXXXX
-      queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summariesPrefix() }, (old) => {
+      // Respect each cache's filter (knowledge_type, tags, etc.)
+      const entries = queryClient.getQueriesData<KnowledgeItemsResponse>({
+        queryKey: knowledgeKeys.summariesPrefix(),
+      });
+      for (const [qk, old] of entries) {
+        const filter = qk[qk.length - 1] as KnowledgeItemsFilter | undefined;
+        const matchesType = !filter?.knowledge_type || optimisticItem.knowledge_type === filter.knowledge_type;
+        const matchesTags =
+          !filter?.tags || filter.tags.every((t) => (optimisticItem.metadata?.tags ?? []).includes(t));
+        if (!(matchesType && matchesTags)) continue;
         if (!old) {
-          return {
+          queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
             items: [optimisticItem],
             total: 1,
             page: 1,
             per_page: 100,
             pages: 1,
-          };
+          });
+        } else {
+          queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
+            ...old,
+            items: [optimisticItem, ...old.items],
+            total: (old.total ?? old.items.length) + 1,
+          });
         }
-        return {
-          ...old,
-          items: [optimisticItem, ...old.items],
-          total: old.total + 1,
-        };
-      });
+      }
 
       // Create optimistic progress operation for upload
       const optimisticOperation: ActiveOperation = {
@@ -555,10 +555,12 @@ export function useDeleteKnowledgeItem() {
       // Optimistically remove the item from each cached summary
       for (const [queryKey, data] of previousEntries) {
         if (!data) continue;
+        const nextItems = data.items.filter((item) => item.source_id !== sourceId);
+        const removed = data.items.length - nextItems.length;
         queryClient.setQueryData<KnowledgeItemsResponse>(queryKey, {
           ...data,
-          items: data.items.filter((item) => item.source_id !== sourceId),
-          total: Math.max(0, (data.total ?? data.items.length) - 1),
+          items: nextItems,
+          total: Math.max(0, (data.total ?? data.items.length) - removed),
         });
       }
 
@@ -772,9 +774,7 @@ export function useKnowledgeSummaries(filter?: KnowledgeItemsFilter) {
   }, [activeOperationsData]);
 
   // Fetch summaries with smart polling when there are active operations
-  const { refetchInterval } = useSmartPolling(
-    hasActiveOperations ? STALE_TIMES.frequent : STALE_TIMES.normal,
-  );
+  const { refetchInterval } = useSmartPolling(hasActiveOperations ? STALE_TIMES.frequent : STALE_TIMES.normal);
 
   const summaryQuery = useQuery<KnowledgeItemsResponse>({
     queryKey: knowledgeKeys.summaries(filter),

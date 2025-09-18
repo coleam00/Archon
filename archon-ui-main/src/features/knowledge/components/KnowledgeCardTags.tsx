@@ -162,12 +162,6 @@ export const KnowledgeCardTags: React.FC<KnowledgeCardTagsProps> = ({ sourceId, 
     }
   };
 
-  const handleTagClick = () => {
-    if (!isEditing) {
-      setIsEditing(true);
-    }
-  };
-
   const handleEditTag = (tagToEdit: string) => {
     // When clicking an existing tag in edit mode, put it in the input for editing
     if (isEditing) {

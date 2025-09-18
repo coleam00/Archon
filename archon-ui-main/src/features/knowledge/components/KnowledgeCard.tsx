@@ -6,11 +6,11 @@
 
 import { format } from "date-fns";
 import { motion } from "framer-motion";
-import { Briefcase, Clock, Code, ExternalLink, File, FileText, Globe, Terminal } from "lucide-react";
+import { Clock, Code, ExternalLink, File, FileText, Globe } from "lucide-react";
 import { useState } from "react";
-import { isOptimistic } from "../../shared/optimistic";
 import { KnowledgeCardProgress } from "../../progress/components/KnowledgeCardProgress";
 import type { ActiveOperation } from "../../progress/types";
+import { isOptimistic } from "../../shared/optimistic";
 import { StatPill } from "../../ui/primitives";
 import { OptimisticIndicator } from "../../ui/primitives/OptimisticIndicator";
 import { cn } from "../../ui/primitives/styles";
@@ -141,11 +141,6 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
   const getSourceIcon = () => {
     if (isUrl) return <Globe className="w-5 h-5" />;
     return <File className="w-5 h-5" />;
-  };
-
-  const getTypeLabel = () => {
-    if (isTechnical) return "Technical";
-    return "Business";
   };
 
   return (
