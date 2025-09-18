@@ -1,6 +1,8 @@
 import { motion } from "framer-motion";
 import { Activity, CheckCircle2, ListTodo } from "lucide-react";
 import type React from "react";
+import { isOptimistic } from "../../shared/optimistic";
+import { OptimisticIndicator } from "../../ui/primitives/OptimisticIndicator";
 import { cn } from "../../ui/primitives/styles";
 import type { Project } from "../types";
 import { ProjectCardActions } from "./ProjectCardActions";
@@ -27,6 +29,9 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
   onPin,
   onDelete,
 }) => {
+  // Check if project is optimistic
+  const optimistic = isOptimistic(project);
+
   return (
     <motion.div
       tabIndex={0}
@@ -59,6 +64,7 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
           : "shadow-[0_10px_30px_-15px_rgba(0,0,0,0.1)] dark:shadow-[0_10px_30px_-15px_rgba(0,0,0,0.7)]",
         "hover:shadow-[0_15px_40px_-15px_rgba(0,0,0,0.2)] dark:hover:shadow-[0_15px_40px_-15px_rgba(0,0,0,0.9)]",
         isSelected ? "scale-[1.02]" : "hover:scale-[1.01]", // Use scale instead of translate to avoid clipping
+        optimistic && "opacity-80 ring-1 ring-cyan-400/30",
       )}
     >
       {/* Subtle aurora glow effect for selected card */}
@@ -71,7 +77,7 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
       {/* Main content area with padding */}
       <div className="flex-1 p-4 pb-2">
         {/* Title section */}
-        <div className="flex items-center justify-center mb-4 min-h-[48px]">
+        <div className="flex flex-col items-center justify-center mb-4 min-h-[48px]">
           <h3
             className={cn(
               "font-medium text-center leading-tight line-clamp-2 transition-all duration-300",
@@ -84,6 +90,7 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
           >
             {project.title}
           </h3>
+          <OptimisticIndicator isOptimistic={optimistic} className="mt-1" />
         </div>
 
         {/* Task count pills */}

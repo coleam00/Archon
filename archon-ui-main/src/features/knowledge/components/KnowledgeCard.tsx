@@ -8,9 +8,11 @@ import { format } from "date-fns";
 import { motion } from "framer-motion";
 import { Briefcase, Clock, Code, ExternalLink, File, FileText, Globe, Terminal } from "lucide-react";
 import { useState } from "react";
+import { isOptimistic } from "../../shared/optimistic";
 import { KnowledgeCardProgress } from "../../progress/components/KnowledgeCardProgress";
 import type { ActiveOperation } from "../../progress/types";
 import { StatPill } from "../../ui/primitives";
+import { OptimisticIndicator } from "../../ui/primitives/OptimisticIndicator";
 import { cn } from "../../ui/primitives/styles";
 import { SimpleTooltip } from "../../ui/primitives/tooltip";
 import { useDeleteKnowledgeItem, useRefreshKnowledgeItem } from "../hooks";
@@ -43,6 +45,9 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
   const [isHovered, setIsHovered] = useState(false);
   const deleteMutation = useDeleteKnowledgeItem();
   const refreshMutation = useRefreshKnowledgeItem();
+
+  // Check if item is optimistic
+  const optimistic = isOptimistic(item);
 
   // Determine card styling based on type and status
   // Check if it's a real URL (not a file:// URL)
@@ -168,6 +173,7 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
           getBorderColor(),
           isHovered && "shadow-[0_0_30px_rgba(6,182,212,0.2)]",
           "min-h-[240px] flex flex-col",
+          optimistic && "opacity-80 ring-1 ring-cyan-400/30",
         )}
       >
         {/* Top accent glow tied to type (does not change size) */}
@@ -235,6 +241,7 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
               description={item.metadata?.description}
               accentColor={getAccentColorName()}
             />
+            <OptimisticIndicator isOptimistic={optimistic} className="mt-2" />
           </div>
 
           {/* URL/Source */}

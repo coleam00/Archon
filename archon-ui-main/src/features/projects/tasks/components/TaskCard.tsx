@@ -2,6 +2,8 @@ import { Tag } from "lucide-react";
 import type React from "react";
 import { useCallback } from "react";
 import { useDrag, useDrop } from "react-dnd";
+import { isOptimistic } from "../../../shared/optimistic";
+import { OptimisticIndicator } from "../../../ui/primitives/OptimisticIndicator";
 import { useTaskActions } from "../hooks";
 import type { Assignee, Task, TaskPriority } from "../types";
 import { getOrderColor, getOrderGlow, ItemTypes } from "../utils/task-styles";
@@ -34,6 +36,9 @@ export const TaskCard: React.FC<TaskCardProps> = ({
   selectedTasks,
   onTaskSelect,
 }) => {
+  // Check if task is optimistic
+  const optimistic = isOptimistic(task);
+
   // Use business logic hook with changePriority
   const { changeAssignee, changePriority, isUpdating } = useTaskActions(projectId);
 
@@ -152,7 +157,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
       }}
     >
       <div
-        className={`${cardBaseStyles} ${transitionStyles} ${hoverEffectClasses} ${highlightGlow} ${selectionGlow} w-full min-h-[140px] h-full`}
+        className={`${cardBaseStyles} ${transitionStyles} ${hoverEffectClasses} ${highlightGlow} ${selectionGlow} ${optimistic ? "opacity-80 ring-1 ring-cyan-400/30" : ""} w-full min-h-[140px] h-full`}
       >
         {/* Priority indicator with beautiful glow */}
         <div
@@ -177,8 +182,11 @@ export const TaskCard: React.FC<TaskCardProps> = ({
               </div>
             )}
 
+            {/* Optimistic indicator */}
+            <OptimisticIndicator isOptimistic={optimistic} className="ml-auto" />
+
             {/* Action buttons group */}
-            <div className="ml-auto flex items-center gap-1.5">
+            <div className={`${optimistic ? "" : "ml-auto"} flex items-center gap-1.5`}>
               <TaskCardActions
                 taskId={task.id}
                 taskTitle={task.title}

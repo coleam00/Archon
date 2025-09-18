@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { createOptimisticEntity, replaceOptimisticEntity, removeDuplicateEntities, type OptimisticEntity } from "@/features/shared/optimistic";
 import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../../shared/queryPatterns";
 import { useSmartPolling } from "../../../ui/hooks";
 import { useToast } from "../../../ui/hooks/useToast";
@@ -55,18 +56,21 @@ export function useCreateTask() {
       // Snapshot the previous value
       const previousTasks = queryClient.getQueryData<Task[]>(taskKeys.byProject(newTaskData.project_id));
 
-      // Create optimistic task with temporary ID
-      const tempId = `temp-${Date.now()}`;
-      const optimisticTask: Task = {
-        id: tempId, // Temporary ID until real one comes back
-        ...newTaskData,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        // Ensure all required fields have defaults (let backend handle assignee default)
-        task_order: newTaskData.task_order ?? 100,
-        status: newTaskData.status ?? "todo",
-        assignee: newTaskData.assignee ?? "User", // Keep for now as UI needs a value for optimistic update
-      } as Task;
+      // Create optimistic task with stable ID
+      const optimisticTask = createOptimisticEntity<Task>(
+        {
+          project_id: newTaskData.project_id,
+          title: newTaskData.title,
+          description: newTaskData.description || "",
+          status: newTaskData.status ?? "todo",
+          assignee: newTaskData.assignee ?? "User",
+          feature: newTaskData.feature,
+          task_order: newTaskData.task_order ?? 100,
+          priority: newTaskData.priority ?? "medium",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }
+      );
 
       // Optimistically add the new task
       queryClient.setQueryData(taskKeys.byProject(newTaskData.project_id), (old: Task[] | undefined) => {
@@ -74,7 +78,7 @@ export function useCreateTask() {
         return [...old, optimisticTask];
       });
 
-      return { previousTasks, tempId };
+      return { previousTasks, optimisticId: optimisticTask._localId };
     },
     onError: (error, variables, context) => {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -85,20 +89,21 @@ export function useCreateTask() {
       }
       showToast(`Failed to create task: ${errorMessage}`, "error");
     },
-    onSuccess: (data, variables, context) => {
-      // Replace optimistic task with real one from server
-      queryClient.setQueryData(taskKeys.byProject(variables.project_id), (old: Task[] | undefined) => {
-        if (!old) return [data];
-        // Replace only the specific temp task with real one
-        return old
-          .map((task) => (task.id === context?.tempId ? data : task))
-          .filter(
-            (task, index, self) =>
-              // Remove any duplicates just in case
-              index === self.findIndex((t) => t.id === task.id),
-          );
+    onSuccess: (serverTask, variables, context) => {
+      // Replace optimistic with server data
+      queryClient.setQueryData(
+        taskKeys.byProject(variables.project_id),
+        (tasks: (Task & Partial<OptimisticEntity>)[] = []) => {
+          const replaced = replaceOptimisticEntity(tasks, context?.optimisticId || "", serverTask);
+          return removeDuplicateEntities(replaced);
+        }
+      );
+
+      // Invalidate counts since we have a new task
+      queryClient.invalidateQueries({
+        queryKey: taskKeys.counts(),
       });
-      queryClient.invalidateQueries({ queryKey: taskKeys.counts() });
+
       showToast("Task created successfully", "success");
     },
     onSettled: (_data, _error, variables) => {

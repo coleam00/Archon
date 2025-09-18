@@ -5,6 +5,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
+import { createOptimisticId } from "@/features/shared/optimistic";
 import { useActiveOperations } from "../../progress/hooks";
 import { progressKeys } from "../../progress/hooks/useProgressQueries";
 import type { ActiveOperation, ActiveOperationsResponse } from "../../progress/types";
@@ -139,8 +140,8 @@ export function useCrawlUrl() {
       const previousOperations = queryClient.getQueryData<ActiveOperationsResponse>(progressKeys.active());
 
       // Generate temporary IDs
-      const tempProgressId = `temp-progress-${Date.now()}`;
-      const tempItemId = `temp-item-${Date.now()}`;
+      const tempProgressId = createOptimisticId();
+      const tempItemId = createOptimisticId();
 
       // Create optimistic knowledge item
       const optimisticItem: KnowledgeItem = {
@@ -353,8 +354,8 @@ export function useUploadDocument() {
       const previousOperations = queryClient.getQueryData<ActiveOperationsResponse>(progressKeys.active());
 
       // Generate temporary IDs
-      const tempProgressId = `temp-upload-${Date.now()}`;
-      const tempItemId = `temp-item-${Date.now()}`;
+      const tempProgressId = createOptimisticId();
+      const tempItemId = createOptimisticId();
 
       // Create optimistic knowledge item for the upload
       const optimisticItem: KnowledgeItem = {
