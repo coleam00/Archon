@@ -49,11 +49,11 @@ export function useOperationProgress(
 
   const query = useQuery<ProgressResponse | null>({
     queryKey: progressId ? progressKeys.detail(progressId) : DISABLED_QUERY_KEY,
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       if (!progressId) throw new Error("No progress ID");
 
       try {
-        const data = await progressService.getProgress(progressId);
+        const data = await progressService.getProgress(progressId, signal);
         consecutiveNotFound.current = 0; // Reset counter on success
         return data;
       } catch (error: unknown) {
@@ -198,7 +198,7 @@ export function useActiveOperations(enabled = false) {
 
   return useQuery<ActiveOperationsResponse>({
     queryKey: progressKeys.active(),
-    queryFn: () => progressService.listActiveOperations(),
+    queryFn: ({ signal }) => progressService.listActiveOperations(signal),
     enabled,
     refetchInterval: enabled ? refetchInterval : false, // Only poll when explicitly enabled, pause when hidden
     staleTime: STALE_TIMES.realtime, // Near real-time for active operations
@@ -250,9 +250,9 @@ export function useMultipleOperations(
   const queries = useQueries({
     queries: progressIds.map((progressId) => ({
       queryKey: progressKeys.detail(progressId),
-      queryFn: async (): Promise<ProgressResponse | null> => {
+      queryFn: async ({ signal }): Promise<ProgressResponse | null> => {
         try {
-          const data = await progressService.getProgress(progressId);
+          const data = await progressService.getProgress(progressId, signal);
           notFoundCounts.current.set(progressId, 0); // Reset counter on success
           return data;
         } catch (error: unknown) {

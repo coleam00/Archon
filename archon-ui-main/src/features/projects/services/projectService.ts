@@ -13,10 +13,10 @@ export const projectService = {
   /**
    * Get all projects
    */
-  async listProjects(): Promise<Project[]> {
+  async listProjects(signal?: AbortSignal): Promise<Project[]> {
     try {
       // Fetching projects from API
-      const response = await callAPIWithETag<{ projects: Project[] }>("/api/projects");
+      const response = await callAPIWithETag<{ projects: Project[] }>("/api/projects", { signal });
       // API response received
 
       const projects = response.projects || [];
@@ -41,6 +41,10 @@ export const projectService = {
       // All projects processed
       return processedProjects;
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        console.debug(`Request cancelled: list projects`);
+        throw error;
+      }
       console.error("Failed to list projects:", error);
       throw error;
     }
@@ -49,9 +53,9 @@ export const projectService = {
   /**
    * Get a specific project by ID
    */
-  async getProject(projectId: string): Promise<Project> {
+  async getProject(projectId: string, signal?: AbortSignal): Promise<Project> {
     try {
-      const project = await callAPIWithETag<Project>(`/api/projects/${projectId}`);
+      const project = await callAPIWithETag<Project>(`/api/projects/${projectId}`, { signal });
 
       return {
         ...project,
@@ -59,6 +63,10 @@ export const projectService = {
         updated: project.updated || formatRelativeTime(project.updated_at),
       };
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        console.debug(`Request cancelled: get project ${projectId}`);
+        throw error;
+      }
       console.error(`Failed to get project ${projectId}:`, error);
       throw error;
     }
@@ -67,7 +75,10 @@ export const projectService = {
   /**
    * Create a new project
    */
-  async createProject(projectData: CreateProjectRequest): Promise<{
+  async createProject(
+    projectData: CreateProjectRequest,
+    signal?: AbortSignal,
+  ): Promise<{
     project_id: string;
     project: Project;
     status: string;
@@ -90,6 +101,7 @@ export const projectService = {
         status: string;
         message: string;
       }>("/api/projects", {
+        signal,
         method: "POST",
         body: JSON.stringify(validation.data),
       });
@@ -97,6 +109,10 @@ export const projectService = {
       // Project creation response received
       return response;
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        console.debug(`Request cancelled: create project`);
+        throw error;
+      }
       console.error("[PROJECT SERVICE] Failed to initiate project creation:", error);
       if (error instanceof Error) {
         console.error("[PROJECT SERVICE] Error details:", {
@@ -111,7 +127,7 @@ export const projectService = {
   /**
    * Update an existing project
    */
-  async updateProject(projectId: string, updates: UpdateProjectRequest): Promise<Project> {
+  async updateProject(projectId: string, updates: UpdateProjectRequest, signal?: AbortSignal): Promise<Project> {
     // Validate input
     // Updating project with provided data
     const validation = validateUpdateProject(updates);
@@ -123,6 +139,7 @@ export const projectService = {
     try {
       // Sending update request to API
       const project = await callAPIWithETag<Project>(`/api/projects/${projectId}`, {
+        signal,
         method: "PUT",
         body: JSON.stringify(validation.data),
       });
@@ -141,6 +158,10 @@ export const projectService = {
 
       return processedProject;
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        console.debug(`Request cancelled: update project ${projectId}`);
+        throw error;
+      }
       console.error(`Failed to update project ${projectId}:`, error);
       throw error;
     }
@@ -149,12 +170,17 @@ export const projectService = {
   /**
    * Delete a project
    */
-  async deleteProject(projectId: string): Promise<void> {
+  async deleteProject(projectId: string, signal?: AbortSignal): Promise<void> {
     try {
       await callAPIWithETag(`/api/projects/${projectId}`, {
+        signal,
         method: "DELETE",
       });
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        console.debug(`Request cancelled: delete project ${projectId}`);
+        throw error;
+      }
       console.error(`Failed to delete project ${projectId}:`, error);
       throw error;
     }
@@ -163,14 +189,21 @@ export const projectService = {
   /**
    * Get features from a project's features JSONB field
    */
-  async getProjectFeatures(projectId: string): Promise<{ features: ProjectFeatures; count: number }> {
+  async getProjectFeatures(
+    projectId: string,
+    signal?: AbortSignal,
+  ): Promise<{ features: ProjectFeatures; count: number }> {
     try {
       const response = await callAPIWithETag<{
         features: ProjectFeatures;
         count: number;
-      }>(`/api/projects/${projectId}/features`);
+      }>(`/api/projects/${projectId}/features`, { signal });
       return response;
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        console.debug(`Request cancelled: get project features ${projectId}`);
+        throw error;
+      }
       console.error(`Failed to get features for project ${projectId}:`, error);
       throw error;
     }

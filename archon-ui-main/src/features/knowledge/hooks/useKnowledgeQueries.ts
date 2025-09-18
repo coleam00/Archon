@@ -52,7 +52,8 @@ export const knowledgeKeys = {
 export function useKnowledgeItem(sourceId: string | null) {
   return useQuery<KnowledgeItem>({
     queryKey: sourceId ? knowledgeKeys.detail(sourceId) : DISABLED_QUERY_KEY,
-    queryFn: () => (sourceId ? knowledgeService.getKnowledgeItem(sourceId) : Promise.reject("No source ID")),
+    queryFn: ({ signal }) =>
+      sourceId ? knowledgeService.getKnowledgeItem(sourceId, signal) : Promise.reject("No source ID"),
     enabled: !!sourceId,
     staleTime: STALE_TIMES.normal,
   });
@@ -69,13 +70,17 @@ export function useKnowledgeItemChunks(
   // See PRPs/local/frontend-state-management-refactor.md Phase 4: Configure Request Deduplication
   return useQuery({
     queryKey: sourceId ? knowledgeKeys.chunks(sourceId, opts) : DISABLED_QUERY_KEY,
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       sourceId
-        ? knowledgeService.getKnowledgeItemChunks(sourceId, {
-            domainFilter: opts?.domain,
-            limit: opts?.limit,
-            offset: opts?.offset,
-          })
+        ? knowledgeService.getKnowledgeItemChunks(
+            sourceId,
+            {
+              domainFilter: opts?.domain,
+              limit: opts?.limit,
+              offset: opts?.offset,
+            },
+            signal,
+          )
         : Promise.reject("No source ID"),
     enabled: !!sourceId,
     staleTime: STALE_TIMES.normal,
@@ -88,7 +93,8 @@ export function useKnowledgeItemChunks(
 export function useCodeExamples(sourceId: string | null) {
   return useQuery({
     queryKey: sourceId ? knowledgeKeys.codeExamples(sourceId) : DISABLED_QUERY_KEY,
-    queryFn: () => (sourceId ? knowledgeService.getCodeExamples(sourceId) : Promise.reject("No source ID")),
+    queryFn: ({ signal }) =>
+      sourceId ? knowledgeService.getCodeExamples(sourceId, undefined, signal) : Promise.reject("No source ID"),
     enabled: !!sourceId,
     staleTime: STALE_TIMES.normal,
   });
@@ -776,7 +782,7 @@ export function useKnowledgeSummaries(filter?: KnowledgeItemsFilter) {
 
   const summaryQuery = useQuery<KnowledgeItemsResponse>({
     queryKey: knowledgeKeys.summaries(filter),
-    queryFn: () => knowledgeService.getKnowledgeSummaries(filter),
+    queryFn: ({ signal }) => knowledgeService.getKnowledgeSummaries(filter, signal),
     refetchInterval: hasActiveOperations ? refetchInterval : false, // Poll when ANY operations are active
     refetchOnWindowFocus: true,
     staleTime: STALE_TIMES.normal, // Consider data stale after 30 seconds
@@ -834,12 +840,16 @@ export function useKnowledgeChunks(
     queryKey: sourceId
       ? knowledgeKeys.chunks(sourceId, { limit: options?.limit, offset: options?.offset })
       : DISABLED_QUERY_KEY,
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       sourceId
-        ? knowledgeService.getKnowledgeItemChunks(sourceId, {
-            limit: options?.limit,
-            offset: options?.offset,
-          })
+        ? knowledgeService.getKnowledgeItemChunks(
+            sourceId,
+            {
+              limit: options?.limit,
+              offset: options?.offset,
+            },
+            signal,
+          )
         : Promise.reject("No source ID"),
     enabled: options?.enabled !== false && !!sourceId,
     staleTime: STALE_TIMES.normal,
@@ -857,12 +867,16 @@ export function useKnowledgeCodeExamples(
     queryKey: sourceId
       ? knowledgeKeys.codeExamples(sourceId, { limit: options?.limit, offset: options?.offset })
       : DISABLED_QUERY_KEY,
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       sourceId
-        ? knowledgeService.getCodeExamples(sourceId, {
-            limit: options?.limit,
-            offset: options?.offset,
-          })
+        ? knowledgeService.getCodeExamples(
+            sourceId,
+            {
+              limit: options?.limit,
+              offset: options?.offset,
+            },
+            signal,
+          )
         : Promise.reject("No source ID"),
     enabled: options?.enabled !== false && !!sourceId,
     staleTime: STALE_TIMES.normal,

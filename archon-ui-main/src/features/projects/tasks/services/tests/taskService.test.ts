@@ -251,7 +251,7 @@ describe("taskService", () => {
 
       const result = await taskService.getTasksByProject(projectId);
 
-      expect(callAPIWithETag).toHaveBeenCalledWith(`/api/projects/${projectId}/tasks`);
+      expect(callAPIWithETag).toHaveBeenCalledWith(`/api/projects/${projectId}/tasks`, { signal: undefined });
       expect(result).toEqual(mockTasks);
       expect(result).toHaveLength(2);
     });

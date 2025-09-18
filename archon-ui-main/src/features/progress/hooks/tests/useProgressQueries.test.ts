@@ -77,7 +77,7 @@ describe("useProgressQueries", () => {
 
       await waitFor(() => {
         expect(result.current.data).toEqual(mockProgress);
-        expect(progressService.getProgress).toHaveBeenCalledWith("progress-123");
+        expect(progressService.getProgress).toHaveBeenCalledWith("progress-123", expect.any(AbortSignal));
       });
     });
 

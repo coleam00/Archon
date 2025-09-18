@@ -13,13 +13,17 @@ export const taskService = {
   /**
    * Get all tasks for a project
    */
-  async getTasksByProject(projectId: string): Promise<Task[]> {
+  async getTasksByProject(projectId: string, signal?: AbortSignal): Promise<Task[]> {
     try {
-      const tasks = await callAPIWithETag<Task[]>(`/api/projects/${projectId}/tasks`);
+      const tasks = await callAPIWithETag<Task[]>(`/api/projects/${projectId}/tasks`, { signal });
 
       // Return tasks as-is; UI uses DB status values (todo/doing/review/done)
       return tasks;
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        console.debug(`Request cancelled: get tasks for project ${projectId}`);
+        throw error; // Let TanStack Query handle the cancellation
+      }
       console.error(`Failed to get tasks for project ${projectId}:`, error);
       throw error;
     }
@@ -28,11 +32,15 @@ export const taskService = {
   /**
    * Get a specific task by ID
    */
-  async getTask(taskId: string): Promise<Task> {
+  async getTask(taskId: string, signal?: AbortSignal): Promise<Task> {
     try {
-      const task = await callAPIWithETag<Task>(`/api/tasks/${taskId}`);
+      const task = await callAPIWithETag<Task>(`/api/tasks/${taskId}`, { signal });
       return task;
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        console.debug(`Request cancelled: get task ${taskId}`);
+        throw error;
+      }
       console.error(`Failed to get task ${taskId}:`, error);
       throw error;
     }
@@ -41,7 +49,7 @@ export const taskService = {
   /**
    * Create a new task
    */
-  async createTask(taskData: CreateTaskRequest): Promise<Task> {
+  async createTask(taskData: CreateTaskRequest, signal?: AbortSignal): Promise<Task> {
     // Validate input
     const validation = validateCreateTask(taskData);
     if (!validation.success) {
@@ -54,12 +62,17 @@ export const taskService = {
 
       // Backend returns { message: string, task: Task } for mutations
       const response = await callAPIWithETag<{ message: string; task: Task }>("/api/tasks", {
+        signal,
         method: "POST",
         body: JSON.stringify(requestData),
       });
 
       return response.task;
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        console.debug(`Request cancelled: create task`);
+        throw error;
+      }
       console.error("Failed to create task:", error);
       throw error;
     }
@@ -68,7 +81,7 @@ export const taskService = {
   /**
    * Update an existing task
    */
-  async updateTask(taskId: string, updates: UpdateTaskRequest): Promise<Task> {
+  async updateTask(taskId: string, updates: UpdateTaskRequest, signal?: AbortSignal): Promise<Task> {
     // Validate input
     const validation = validateUpdateTask(updates);
     if (!validation.success) {
@@ -78,12 +91,17 @@ export const taskService = {
     try {
       // Backend returns { message: string, task: Task } for mutations
       const response = await callAPIWithETag<{ message: string; task: Task }>(`/api/tasks/${taskId}`, {
+        signal,
         method: "PUT",
         body: JSON.stringify(validation.data),
       });
 
       return response.task;
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        console.debug(`Request cancelled: update task ${taskId}`);
+        throw error;
+      }
       console.error(`Failed to update task ${taskId}:`, error);
       throw error;
     }
@@ -92,7 +110,7 @@ export const taskService = {
   /**
    * Update task status (for drag & drop operations)
    */
-  async updateTaskStatus(taskId: string, status: DatabaseTaskStatus): Promise<Task> {
+  async updateTaskStatus(taskId: string, status: DatabaseTaskStatus, signal?: AbortSignal): Promise<Task> {
     // Validate input
     const validation = validateUpdateTaskStatus({
       task_id: taskId,
@@ -106,12 +124,17 @@ export const taskService = {
       // Use the standard update task endpoint with JSON body
       // Backend returns { message: string, task: Task } for mutations
       const response = await callAPIWithETag<{ message: string; task: Task }>(`/api/tasks/${taskId}`, {
+        signal,
         method: "PUT",
         body: JSON.stringify({ status }),
       });
 
       return response.task;
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        console.debug(`Request cancelled: update task status ${taskId}`);
+        throw error;
+      }
       console.error(`Failed to update task status ${taskId}:`, error);
       throw error;
     }
@@ -120,12 +143,17 @@ export const taskService = {
   /**
    * Delete a task
    */
-  async deleteTask(taskId: string): Promise<void> {
+  async deleteTask(taskId: string, signal?: AbortSignal): Promise<void> {
     try {
       await callAPIWithETag<void>(`/api/tasks/${taskId}`, {
+        signal,
         method: "DELETE",
       });
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        console.debug(`Request cancelled: delete task ${taskId}`);
+        throw error;
+      }
       console.error(`Failed to delete task ${taskId}:`, error);
       throw error;
     }
@@ -134,7 +162,12 @@ export const taskService = {
   /**
    * Update task order for better drag-and-drop support
    */
-  async updateTaskOrder(taskId: string, newOrder: number, newStatus?: DatabaseTaskStatus): Promise<Task> {
+  async updateTaskOrder(
+    taskId: string,
+    newOrder: number,
+    newStatus?: DatabaseTaskStatus,
+    signal?: AbortSignal,
+  ): Promise<Task> {
     try {
       const updates: UpdateTaskRequest = {
         task_order: newOrder,
@@ -144,10 +177,14 @@ export const taskService = {
         updates.status = newStatus;
       }
 
-      const task = await this.updateTask(taskId, updates);
+      const task = await this.updateTask(taskId, updates, signal);
 
       return task;
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        console.debug(`Request cancelled: update task order for ${taskId}`);
+        throw error;
+      }
       console.error(`Failed to update task order for ${taskId}:`, error);
       throw error;
     }
@@ -171,11 +208,15 @@ export const taskService = {
    * Get task counts for all projects in a single batch request
    * Optimized endpoint to avoid N+1 query problem
    */
-  async getTaskCountsForAllProjects(): Promise<Record<string, TaskCounts>> {
+  async getTaskCountsForAllProjects(signal?: AbortSignal): Promise<Record<string, TaskCounts>> {
     try {
-      const response = await callAPIWithETag<Record<string, TaskCounts>>("/api/projects/task-counts");
+      const response = await callAPIWithETag<Record<string, TaskCounts>>("/api/projects/task-counts", { signal });
       return response || {};
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        console.debug(`Request cancelled: get task counts for all projects`);
+        throw error;
+      }
       console.error("Failed to get task counts for all projects:", error);
       throw error;
     }
