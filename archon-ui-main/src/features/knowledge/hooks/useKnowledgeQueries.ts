@@ -188,7 +188,6 @@ export function useCrawlUrl() {
             total: 1,
             page: 1,
             per_page: 100,
-            pages: 1,
           });
         } else {
           queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
@@ -391,7 +390,6 @@ export function useUploadDocument() {
             total: 1,
             page: 1,
             per_page: 100,
-            pages: 1,
           });
         } else {
           queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
