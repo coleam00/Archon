@@ -548,24 +548,102 @@ export function useUpdateKnowledgeItem() {
     onMutate: async ({ sourceId, updates }) => {
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: knowledgeKeys.detail(sourceId) });
+      await queryClient.cancelQueries({ queryKey: knowledgeKeys.summary() });
 
-      // Snapshot the previous value
+      // Snapshot the previous values
       const previousItem = queryClient.getQueryData<KnowledgeItem>(knowledgeKeys.detail(sourceId));
+      const previousSummaries = queryClient.getQueriesData({ queryKey: knowledgeKeys.summary() });
 
-      // Optimistically update the item
+      // Optimistically update the detail item
       if (previousItem) {
-        queryClient.setQueryData<KnowledgeItem>(knowledgeKeys.detail(sourceId), {
-          ...previousItem,
-          ...updates,
-        });
+        const updatedItem = { ...previousItem };
+
+        // Initialize metadata if missing
+        const currentMetadata = updatedItem.metadata || {};
+
+        // Handle title updates
+        if ('title' in updates && typeof updates.title === 'string') {
+          updatedItem.title = updates.title;
+        }
+
+        // Handle tags updates
+        if ('tags' in updates && Array.isArray(updates.tags)) {
+          const newTags = updates.tags as string[];
+          (updatedItem as any).tags = newTags;
+        }
+
+        // Handle knowledge_type updates
+        if ('knowledge_type' in updates && typeof updates.knowledge_type === 'string') {
+          const newType = updates.knowledge_type as "technical" | "business";
+          updatedItem.knowledge_type = newType;
+        }
+
+        // Synchronize metadata with top-level fields
+        updatedItem.metadata = {
+          ...currentMetadata,
+          ...((updatedItem as any).tags && { tags: (updatedItem as any).tags }),
+          ...(updatedItem.knowledge_type && { knowledge_type: updatedItem.knowledge_type }),
+        };
+
+        queryClient.setQueryData<KnowledgeItem>(knowledgeKeys.detail(sourceId), updatedItem);
       }
 
-      return { previousItem };
+      // Optimistically update summaries cache
+      queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summary() }, (old) => {
+        if (!old?.items) return old;
+
+        return {
+          ...old,
+          items: old.items.map((item) => {
+            if (item.source_id === sourceId) {
+              const updatedItem = { ...item };
+
+              // Initialize metadata if missing
+              const currentMetadata = updatedItem.metadata || {};
+
+              // Update title if provided
+              if ('title' in updates && typeof updates.title === 'string') {
+                updatedItem.title = updates.title;
+              }
+
+              // Update tags if provided
+              if ('tags' in updates && Array.isArray(updates.tags)) {
+                const newTags = updates.tags as string[];
+                updatedItem.tags = newTags;
+              }
+
+              // Update knowledge_type if provided
+              if ('knowledge_type' in updates && typeof updates.knowledge_type === 'string') {
+                const newType = updates.knowledge_type as "technical" | "business";
+                updatedItem.knowledge_type = newType;
+              }
+
+              // Synchronize metadata with top-level fields
+              updatedItem.metadata = {
+                ...currentMetadata,
+                ...(updatedItem.tags && { tags: updatedItem.tags }),
+                ...(updatedItem.knowledge_type && { knowledge_type: updatedItem.knowledge_type }),
+              };
+
+              return updatedItem;
+            }
+            return item;
+          }),
+        };
+      });
+
+      return { previousItem, previousSummaries };
     },
     onError: (error, variables, context) => {
       // Rollback on error
       if (context?.previousItem) {
         queryClient.setQueryData(knowledgeKeys.detail(variables.sourceId), context.previousItem);
+      }
+      if (context?.previousSummaries) {
+        // Rollback all summary queries
+        for (const [queryKey, data] of context.previousSummaries) {
+          queryClient.setQueryData(queryKey, data);
+        }
       }
 
       const errorMessage = error instanceof Error ? error.message : "Failed to update item";
@@ -574,9 +652,10 @@ export function useUpdateKnowledgeItem() {
     onSuccess: (_data, { sourceId }) => {
       showToast("Item updated successfully", "success");
 
-      // Invalidate both detail and list queries
+      // Invalidate all related queries
       queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(sourceId) });
       queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: knowledgeKeys.summary() }); // Add summaries cache
     },
   });
 }

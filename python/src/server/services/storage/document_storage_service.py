@@ -9,7 +9,6 @@ import os
 from typing import Any
 
 from ...config.logfire_config import safe_span, search_logger
-from ..credential_service import credential_service
 from ..embeddings.contextual_embedding_service import generate_contextual_embeddings_batch
 from ..embeddings.embedding_service import create_embeddings_batch
 
@@ -59,7 +58,9 @@ async def add_documents_to_supabase(
 
         # Load settings from database
         try:
-            rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+            # Defensive import to handle any initialization issues
+            from ..credential_service import credential_service as cred_service
+            rag_settings = await cred_service.get_credentials_by_category("rag_strategy")
             if batch_size is None:
                 batch_size = int(rag_settings.get("DOCUMENT_STORAGE_BATCH_SIZE", "50"))
             # Clamp batch sizes to sane minimums to prevent crashes
@@ -326,6 +327,26 @@ async def add_documents_to_supabase(
             # Use only successful embeddings
             batch_embeddings = result.embeddings
             successful_texts = result.texts_processed
+            
+            # Get model information for tracking
+            from ..llm_provider_service import get_embedding_model
+            from ..credential_service import credential_service
+            
+            # Get embedding model name
+            embedding_model_name = await get_embedding_model(provider=provider)
+            
+            # Get LLM chat model (used for contextual embeddings if enabled)
+            llm_chat_model = None
+            if use_contextual_embeddings:
+                try:
+                    provider_config = await credential_service.get_active_provider("llm")
+                    llm_chat_model = provider_config.get("chat_model", "")
+                    if not llm_chat_model:
+                        # Fallback to MODEL_CHOICE or provider defaults
+                        llm_chat_model = await credential_service.get_credential("MODEL_CHOICE", "gpt-4o-mini")
+                except Exception as e:
+                    search_logger.warning(f"Failed to get LLM chat model: {e}")
+                    llm_chat_model = "gpt-4o-mini"  # Default fallback
 
             if not batch_embeddings:
                 search_logger.warning(
@@ -361,13 +382,33 @@ async def add_documents_to_supabase(
                     )
                     continue
 
+                # Determine the correct embedding column based on dimension
+                embedding_dim = len(embedding) if isinstance(embedding, list) else len(embedding.tolist())
+                embedding_column = None
+                
+                if embedding_dim == 768:
+                    embedding_column = "embedding_768"
+                elif embedding_dim == 1024:
+                    embedding_column = "embedding_1024"
+                elif embedding_dim == 1536:
+                    embedding_column = "embedding_1536"
+                elif embedding_dim == 3072:
+                    embedding_column = "embedding_3072"
+                else:
+                    # Default to closest supported dimension
+                    search_logger.warning(f"Unsupported embedding dimension {embedding_dim}, using embedding_1536")
+                    embedding_column = "embedding_1536"
+                
                 data = {
                     "url": batch_urls[j],
                     "chunk_number": batch_chunk_numbers[j],
                     "content": text,  # Use the successful text
                     "metadata": {"chunk_size": len(text), **batch_metadatas[j]},
                     "source_id": source_id,
-                    "embedding": embedding,  # Use the successful embedding
+                    embedding_column: embedding,  # Use the successful embedding with correct column
+                    "llm_chat_model": llm_chat_model,  # Add LLM model tracking
+                    "embedding_model": embedding_model_name,  # Add embedding model tracking
+                    "embedding_dimension": embedding_dim,  # Add dimension tracking
                 }
                 batch_data.append(data)
 
