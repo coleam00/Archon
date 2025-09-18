@@ -97,6 +97,15 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
             # For Ollama, don't use the base_url from config - let _get_optimal_ollama_instance decide
             base_url = provider_config["base_url"] if provider_name != "ollama" else None
 
+        # Validate provider name
+        allowed_providers = {"openai", "ollama", "google", "openrouter", "anthropic", "grok"}
+        if provider_name not in allowed_providers:
+            raise ValueError(f"Unsupported provider: {provider_name}. Allowed: {allowed_providers}")
+
+        # Validate API key format for security
+        if api_key and len(api_key.strip()) == 0:
+            api_key = None  # Treat empty strings as None
+
         logger.info(f"Creating LLM client for provider: {provider_name}")
 
         if provider_name == "openai":
@@ -155,6 +164,35 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
             )
             logger.info("Google Gemini client created successfully")
 
+        elif provider_name == "openrouter":
+            if not api_key:
+                raise ValueError("OpenRouter API key not found")
+
+            client = openai.AsyncOpenAI(
+                api_key=api_key,
+                base_url=base_url or "https://openrouter.ai/api/v1",
+            )
+            logger.info("OpenRouter client created successfully")
+
+        elif provider_name == "anthropic":
+            if not api_key:
+                raise ValueError("Anthropic API key not found")
+
+            client = openai.AsyncOpenAI(
+                api_key=api_key,
+                base_url=base_url or "https://api.anthropic.com/v1",
+            )
+            logger.info("Anthropic client created successfully")
+
+        elif provider_name == "grok":
+            if not api_key:
+                raise ValueError("Grok API key not found")
+
+            client = openai.AsyncOpenAI(
+                api_key=api_key,
+                base_url=base_url or "https://api.x.ai/v1",
+            )
+            logger.info("Grok client created successfully")
         else:
             raise ValueError(f"Unsupported LLM provider: {provider_name}")
 
@@ -250,6 +288,11 @@ async def get_embedding_model(provider: str | None = None) -> str:
             provider_name = provider_config["provider"]
             custom_model = provider_config["embedding_model"]
 
+        # Validate provider name
+        allowed_providers = {"openai", "ollama", "google", "openrouter", "anthropic", "grok"}
+        if provider_name not in allowed_providers:
+            logger.warning(f"Unknown embedding provider: {provider_name}, falling back to OpenAI")
+            provider_name = "openai"
         # Use custom model if specified
         if custom_model:
             return custom_model

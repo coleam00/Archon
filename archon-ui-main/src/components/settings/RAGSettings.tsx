@@ -842,13 +842,6 @@ export const RAGSettings = ({
                     );
                   }
                 })()}
-                {(provider.key === 'anthropic' || provider.key === 'grok' || provider.key === 'openrouter') && (
-                  <div className="absolute inset-0 bg-black/20 rounded-lg flex items-center justify-center">
-                    <div className="bg-yellow-500/80 text-black text-xs font-bold px-2 py-1 rounded transform -rotate-12">
-                      Coming Soon
-                    </div>
-                  </div>
-                )}
               </button>
             ))}
           </div>

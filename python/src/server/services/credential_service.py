@@ -239,6 +239,14 @@ class CredentialService:
                 self._rag_cache_timestamp = None
                 logger.debug(f"Invalidated RAG settings cache due to update of {key}")
 
+                # Also invalidate provider service cache to ensure immediate effect
+                try:
+                    from .llm_provider_service import clear_provider_cache
+                    clear_provider_cache()
+                    logger.debug("Also cleared LLM provider service cache")
+                except Exception as e:
+                    logger.warning(f"Failed to clear provider service cache: {e}")
+
                 # Also invalidate LLM provider service cache for provider config
                 try:
                     from . import llm_provider_service
@@ -280,6 +288,14 @@ class CredentialService:
                 self._rag_settings_cache = None
                 self._rag_cache_timestamp = None
                 logger.debug(f"Invalidated RAG settings cache due to deletion of {key}")
+
+                # Also invalidate provider service cache to ensure immediate effect
+                try:
+                    from .llm_provider_service import clear_provider_cache
+                    clear_provider_cache()
+                    logger.debug("Also cleared LLM provider service cache")
+                except Exception as e:
+                    logger.warning(f"Failed to clear provider service cache: {e}")
 
                 # Also invalidate LLM provider service cache for provider config
                 try:
@@ -464,6 +480,9 @@ class CredentialService:
         key_mapping = {
             "openai": "OPENAI_API_KEY",
             "google": "GOOGLE_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY",
+            "anthropic": "ANTHROPIC_API_KEY",
+            "grok": "GROK_API_KEY",
             "ollama": None,  # No API key needed
         }
 
@@ -478,6 +497,12 @@ class CredentialService:
             return rag_settings.get("LLM_BASE_URL", "http://localhost:11434/v1")
         elif provider == "google":
             return "https://generativelanguage.googleapis.com/v1beta/openai/"
+        elif provider == "openrouter":
+            return "https://openrouter.ai/api/v1"
+        elif provider == "anthropic":
+            return "https://api.anthropic.com/v1"
+        elif provider == "grok":
+            return "https://api.x.ai/v1"
         return None  # Use default for OpenAI
 
     async def set_active_provider(self, provider: str, service_type: str = "llm") -> bool:
