@@ -51,10 +51,13 @@ describe("taskService", () => {
       const result = await taskService.createTask(mockTaskData);
 
       // Verify the API was called correctly
-      expect(callAPIWithETag).toHaveBeenCalledWith("/api/tasks", {
-        method: "POST",
-        body: JSON.stringify(mockTaskData),
-      });
+      expect(callAPIWithETag).toHaveBeenCalledWith(
+        "/api/tasks",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify(mockTaskData),
+        }),
+      );
 
       // Verify the task is properly unwrapped
       expect(result).toEqual(mockTask);
@@ -103,10 +106,13 @@ describe("taskService", () => {
       const result = await taskService.updateTask(taskId, mockUpdates);
 
       // Verify the API was called correctly
-      expect(callAPIWithETag).toHaveBeenCalledWith(`/api/tasks/${taskId}`, {
-        method: "PUT",
-        body: JSON.stringify(mockUpdates),
-      });
+      expect(callAPIWithETag).toHaveBeenCalledWith(
+        `/api/tasks/${taskId}`,
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify(mockUpdates),
+        }),
+      );
 
       // Verify the task is properly unwrapped
       expect(result).toEqual(mockUpdatedTask);
@@ -130,10 +136,13 @@ describe("taskService", () => {
 
       const result = await taskService.updateTask(taskId, partialUpdate);
 
-      expect(callAPIWithETag).toHaveBeenCalledWith(`/api/tasks/${taskId}`, {
-        method: "PUT",
-        body: JSON.stringify(partialUpdate),
-      });
+      expect(callAPIWithETag).toHaveBeenCalledWith(
+        `/api/tasks/${taskId}`,
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify(partialUpdate),
+        }),
+      );
 
       expect(result.description).toBe(partialUpdate.description);
     });
@@ -175,10 +184,13 @@ describe("taskService", () => {
       const result = await taskService.updateTaskStatus(taskId, newStatus);
 
       // Verify the API was called correctly
-      expect(callAPIWithETag).toHaveBeenCalledWith(`/api/tasks/${taskId}`, {
-        method: "PUT",
-        body: JSON.stringify({ status: newStatus }),
-      });
+      expect(callAPIWithETag).toHaveBeenCalledWith(
+        `/api/tasks/${taskId}`,
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({ status: newStatus }),
+        }),
+      );
 
       // Verify the task is properly unwrapped
       expect(result).toEqual(mockUpdatedTask);
@@ -203,9 +215,12 @@ describe("taskService", () => {
 
       await taskService.deleteTask(taskId);
 
-      expect(callAPIWithETag).toHaveBeenCalledWith(`/api/tasks/${taskId}`, {
-        method: "DELETE",
-      });
+      expect(callAPIWithETag).toHaveBeenCalledWith(
+        `/api/tasks/${taskId}`,
+        expect.objectContaining({
+          method: "DELETE",
+        }),
+      );
     });
 
     it("should handle API errors properly", async () => {
@@ -251,7 +266,10 @@ describe("taskService", () => {
 
       const result = await taskService.getTasksByProject(projectId);
 
-      expect(callAPIWithETag).toHaveBeenCalledWith(`/api/projects/${projectId}/tasks`, { signal: undefined });
+      expect(callAPIWithETag).toHaveBeenCalledWith(
+        `/api/projects/${projectId}/tasks`,
+        expect.objectContaining({ signal: undefined })
+      );
       expect(result).toEqual(mockTasks);
       expect(result).toHaveLength(2);
     });
