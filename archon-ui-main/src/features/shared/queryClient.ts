@@ -1,5 +1,5 @@
 import { QueryClient } from "@tanstack/react-query";
-import { STALE_TIMES } from "./queryPatterns";
+import { createRetryLogic, STALE_TIMES } from "./queryPatterns";
 
 /**
  * Centralized QueryClient configuration for the entire application
@@ -19,19 +19,8 @@ export const queryClient = new QueryClient({
       // Keep unused data in cache for 10 minutes (was 5 minutes)
       gcTime: 10 * 60 * 1000,
 
-      // Smart retry logic - don't retry on 4xx errors
-      retry: (failureCount, error: any) => {
-        // Don't retry on 404 (Not Found)
-        if (error?.status === 404) return false;
-        // Don't retry on 400 (Bad Request)
-        if (error?.status === 400) return false;
-        // Don't retry on 401 (Unauthorized)
-        if (error?.status === 401) return false;
-        // Don't retry on 403 (Forbidden)
-        if (error?.status === 403) return false;
-        // Retry up to 2 times for other errors (5xx, network, etc)
-        return failureCount < 2;
-      },
+      // Smart retry logic - don't retry on 4xx errors or aborts
+      retry: createRetryLogic(2),
 
       // Exponential backoff for retries
       retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),

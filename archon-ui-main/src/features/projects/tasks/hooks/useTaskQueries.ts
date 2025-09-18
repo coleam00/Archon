@@ -34,10 +34,11 @@ export function useProjectTasks(projectId: string | undefined, enabled = true) {
 
 // Fetch task counts for all projects
 export function useTaskCounts() {
+  const { refetchInterval: countsRefetchInterval } = useSmartPolling(10_000); // 10s bg polling with smart pause
   return useQuery<Awaited<ReturnType<typeof taskService.getTaskCountsForAllProjects>>>({
     queryKey: taskKeys.counts(),
     queryFn: () => taskService.getTaskCountsForAllProjects(),
-    refetchInterval: false, // Don't poll, only refetch manually
+    refetchInterval: countsRefetchInterval,
     staleTime: STALE_TIMES.frequent,
   });
 }
@@ -47,7 +48,7 @@ export function useCreateTask() {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
 
-  return useMutation({
+  return useMutation<Task, Error, CreateTaskRequest, { previousTasks?: Task[]; optimisticId: string }>({
     mutationFn: (taskData: CreateTaskRequest) => taskService.createTask(taskData),
     onMutate: async (newTaskData) => {
       // Cancel any outgoing refetches
@@ -82,7 +83,9 @@ export function useCreateTask() {
     },
     onError: (error, variables, context) => {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error("Failed to create task:", error, { variables });
+      console.error("Failed to create task:", error?.message, {
+        project_id: variables?.project_id,
+      });
       // Rollback on error
       if (context?.previousTasks) {
         queryClient.setQueryData(taskKeys.byProject(variables.project_id), context.previousTasks);
@@ -138,7 +141,10 @@ export function useUpdateTask(projectId: string) {
     },
     onError: (error, variables, context) => {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error("Failed to update task:", error, { variables });
+      console.error("Failed to update task:", error?.message, {
+        taskId: variables?.taskId,
+        changedFields: Object.keys(variables?.updates ?? {}),
+      });
       // Rollback on error
       if (context?.previousTasks) {
         queryClient.setQueryData(taskKeys.byProject(projectId), context.previousTasks);
@@ -190,7 +196,7 @@ export function useDeleteTask(projectId: string) {
     },
     onError: (error, taskId, context) => {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error("Failed to delete task:", error, { taskId });
+      console.error("Failed to delete task:", error?.message, { taskId });
       // Rollback on error
       if (context?.previousTasks) {
         queryClient.setQueryData(taskKeys.byProject(projectId), context.previousTasks);

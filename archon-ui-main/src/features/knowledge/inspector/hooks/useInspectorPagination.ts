@@ -20,7 +20,7 @@ export interface UseInspectorPaginationResult {
   items: (DocumentChunk | CodeExample)[];
   isLoading: boolean;
   hasNextPage: boolean;
-  fetchNextPage: () => void;
+  fetchNextPage: (options?: any) => Promise<any>;
   isFetchingNextPage: boolean;
   totalCount: number;
   loadedCount: number;
