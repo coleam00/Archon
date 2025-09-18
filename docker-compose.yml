@@ -30,6 +30,7 @@ services:
       - ARCHON_MCP_PORT=${ARCHON_MCP_PORT:-8051}
       - ARCHON_AGENTS_PORT=${ARCHON_AGENTS_PORT:-8052}
       - AGENTS_ENABLED=${AGENTS_ENABLED:-false}
+      - ARCHON_HOST=${HOST:-localhost}
     networks:
       - app-network
       - supabase_default

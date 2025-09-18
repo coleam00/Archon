@@ -3,16 +3,20 @@
  * Handles polling for operation progress with TanStack Query
  */
 
-import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
+import { type UseQueryResult, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef } from "react";
+import { APIServiceError } from "../../shared/errors";
+import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../shared/queryPatterns";
+import { useSmartPolling } from "../../ui/hooks";
 import { progressService } from "../services";
 import type { ActiveOperationsResponse, ProgressResponse, ProgressStatus } from "../types";
 
 // Query keys factory
 export const progressKeys = {
   all: ["progress"] as const,
-  detail: (progressId: string) => [...progressKeys.all, progressId] as const,
-  list: () => [...progressKeys.all, "list"] as const,
+  lists: () => [...progressKeys.all, "list"] as const,
+  detail: (id: string) => [...progressKeys.all, "detail", id] as const,
+  active: () => [...progressKeys.all, "active"] as const,
 };
 
 // Terminal states that should stop polling
@@ -34,6 +38,7 @@ export function useOperationProgress(
   const hasCalledComplete = useRef(false);
   const hasCalledError = useRef(false);
   const consecutiveNotFound = useRef(0);
+  const { refetchInterval: smartInterval } = useSmartPolling(options?.pollingInterval ?? 1000);
 
   // Reset refs when progressId changes
   useEffect(() => {
@@ -43,7 +48,7 @@ export function useOperationProgress(
   }, [progressId]);
 
   const query = useQuery<ProgressResponse | null>({
-    queryKey: progressId ? progressKeys.detail(progressId) : ["progress-undefined"],
+    queryKey: progressId ? progressKeys.detail(progressId) : DISABLED_QUERY_KEY,
     queryFn: async () => {
       if (!progressId) throw new Error("No progress ID");
 
@@ -52,9 +57,14 @@ export function useOperationProgress(
         consecutiveNotFound.current = 0; // Reset counter on success
         return data;
       } catch (error: unknown) {
-        // Handle 404 errors specially
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        if (errorMessage.includes("404") || errorMessage.includes("not found")) {
+        // Handle 404 errors specially - check status code first, then message as fallback
+        const isNotFound =
+          (error instanceof APIServiceError && error.statusCode === 404) ||
+          (error as { status?: number })?.status === 404 ||
+          (error as { response?: { status?: number } })?.response?.status === 404 ||
+          (error instanceof Error && /not found/i.test(error.message));
+
+        if (isNotFound) {
           consecutiveNotFound.current++;
 
           // After 5 consecutive 404s, assume the operation is gone
@@ -79,14 +89,16 @@ export function useOperationProgress(
       }
 
       // Keep polling on undefined (initial), null (transient 404), or active operations
-      return options?.pollingInterval ?? 1000;
+      // Use smart interval that pauses when tab is hidden
+      return smartInterval;
     },
     retry: false, // Don't retry on error
-    staleTime: 0, // Always refetch
+    staleTime: STALE_TIMES.instant, // Always fresh for real-time progress
   });
 
   // Handle completion and error callbacks
   useEffect(() => {
+    const timers: ReturnType<typeof setTimeout>[] = [];
     if (!query.data) return;
 
     const status = query.data.status;
@@ -97,11 +109,13 @@ export function useOperationProgress(
       options?.onComplete?.(query.data);
 
       // Clean up the query after completion
-      setTimeout(() => {
-        if (progressId) {
-          queryClient.removeQueries({ queryKey: progressKeys.detail(progressId) });
-        }
-      }, 2000);
+      timers.push(
+        setTimeout(() => {
+          if (progressId) {
+            queryClient.removeQueries({ queryKey: progressKeys.detail(progressId), exact: true });
+          }
+        }, 2000),
+      );
     }
 
     // Handle cancellation
@@ -110,11 +124,13 @@ export function useOperationProgress(
       options?.onError?.(query.data.error || "Operation was cancelled");
 
       // Clean up the query after cancellation
-      setTimeout(() => {
-        if (progressId) {
-          queryClient.removeQueries({ queryKey: progressKeys.detail(progressId) });
-        }
-      }, 2000);
+      timers.push(
+        setTimeout(() => {
+          if (progressId) {
+            queryClient.removeQueries({ queryKey: progressKeys.detail(progressId), exact: true });
+          }
+        }, 2000),
+      );
     }
 
     // Handle errors
@@ -123,16 +139,24 @@ export function useOperationProgress(
       options?.onError?.(query.data.error || "Operation failed");
 
       // Clean up the query after error
-      setTimeout(() => {
-        if (progressId) {
-          queryClient.removeQueries({ queryKey: progressKeys.detail(progressId) });
-        }
-      }, 5000);
+      timers.push(
+        setTimeout(() => {
+          if (progressId) {
+            queryClient.removeQueries({ queryKey: progressKeys.detail(progressId), exact: true });
+          }
+        }, 5000),
+      );
     }
+
+    // Cleanup function to clear all timeouts
+    return () => {
+      timers.forEach(clearTimeout);
+    };
   }, [query.data?.status, progressId, queryClient, options, query.data]);
 
   // Forward query errors (e.g., "Operation no longer exists") to onError callback
   useEffect(() => {
+    const timers: ReturnType<typeof setTimeout>[] = [];
     if (!query.error || hasCalledError.current) return;
 
     hasCalledError.current = true;
@@ -140,11 +164,18 @@ export function useOperationProgress(
     options?.onError?.(errorMessage);
 
     // Clean up the query after error
-    setTimeout(() => {
-      if (progressId) {
-        queryClient.removeQueries({ queryKey: progressKeys.detail(progressId) });
-      }
-    }, 5000);
+    timers.push(
+      setTimeout(() => {
+        if (progressId) {
+          queryClient.removeQueries({ queryKey: progressKeys.detail(progressId), exact: true });
+        }
+      }, 5000),
+    );
+
+    // Cleanup function to clear timeouts
+    return () => {
+      timers.forEach(clearTimeout);
+    };
   }, [query.error, progressId, queryClient, options]);
 
   return {
@@ -163,31 +194,27 @@ export function useOperationProgress(
  * @param enabled - Whether to enable polling (default: false)
  */
 export function useActiveOperations(enabled = false) {
+  const { refetchInterval } = useSmartPolling(5000);
+
   return useQuery<ActiveOperationsResponse>({
-    queryKey: progressKeys.list(),
+    queryKey: progressKeys.active(),
     queryFn: () => progressService.listActiveOperations(),
     enabled,
-    refetchInterval: enabled ? 5000 : false, // Only poll when explicitly enabled
-    staleTime: 3000,
+    refetchInterval: enabled ? refetchInterval : false, // Only poll when explicitly enabled, pause when hidden
+    staleTime: STALE_TIMES.realtime, // Near real-time for active operations
   });
 }
 
 /**
  * Hook for polling all crawl operations
  * Used in the CrawlingProgress component
+ * Delegates to useActiveOperations for consistency
  */
 export function useCrawlProgressPolling() {
-  const { data, isLoading } = useQuery({
-    queryKey: progressKeys.list(),
-    queryFn: () => progressService.listActiveOperations(),
-    refetchInterval: 5000, // Poll every 5 seconds
-    staleTime: 0,
-  });
-
-  const activeOperations = data?.operations || [];
+  const { data, isLoading } = useActiveOperations(true); // Always enabled for crawling progress
 
   return {
-    activeOperations,
+    activeOperations: data?.operations || [],
     isLoading,
     totalCount: data?.count || 0,
   };
@@ -209,26 +236,34 @@ export function useMultipleOperations(
   const errorIds = useRef(new Set<string>());
   // Track consecutive 404s per operation
   const notFoundCounts = useRef<Map<string, number>>(new Map());
+  const { refetchInterval: smartInterval } = useSmartPolling(1000);
 
   // Reset tracking sets when progress IDs change
+  // Use sorted JSON stringification for stable dependency that handles reordering
+  const progressIdsKey = useMemo(() => JSON.stringify([...progressIds].sort()), [progressIds]);
   useEffect(() => {
     completedIds.current.clear();
     errorIds.current.clear();
     notFoundCounts.current.clear();
-  }, [progressIds.join(",")]); // Use join to create stable dependency
+  }, [progressIdsKey]); // Stable dependency across reorderings
 
-  const queries = (useQueries as any)({
+  const queries = useQueries({
     queries: progressIds.map((progressId) => ({
-      queryKey: progressKeys.detail(progressId) as readonly unknown[],
+      queryKey: progressKeys.detail(progressId),
       queryFn: async (): Promise<ProgressResponse | null> => {
         try {
           const data = await progressService.getProgress(progressId);
           notFoundCounts.current.set(progressId, 0); // Reset counter on success
           return data;
         } catch (error: unknown) {
-          // Handle 404 errors specially for resilience
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          if (errorMessage.includes("404") || errorMessage.includes("not found")) {
+          // Handle 404 errors specially for resilience - check status code first
+          const isNotFound =
+            (error instanceof APIServiceError && error.statusCode === 404) ||
+            (error as { status?: number })?.status === 404 ||
+            (error as { response?: { status?: number } })?.response?.status === 404 ||
+            (error instanceof Error && /not found/i.test(error.message));
+
+          if (isNotFound) {
             const currentCount = (notFoundCounts.current.get(progressId) || 0) + 1;
             notFoundCounts.current.set(progressId, currentCount);
 
@@ -244,8 +279,8 @@ export function useMultipleOperations(
           throw error;
         }
       },
-      refetchInterval: (query: { state: { data?: ProgressResponse } }) => {
-        const data = query.state.data as ProgressResponse | null | undefined;
+      refetchInterval: (query: { state: { data: ProgressResponse | null | undefined } }) => {
+        const data = query.state.data;
 
         // Only stop polling when we have actual data and it's in a terminal state
         if (data && TERMINAL_STATES.includes(data.status)) {
@@ -253,16 +288,19 @@ export function useMultipleOperations(
         }
 
         // Keep polling on undefined (initial), null (transient 404), or active operations
-        return 1000;
+        // Use smart interval that pauses when tab is hidden
+        return smartInterval;
       },
       retry: false,
-      staleTime: 0,
+      staleTime: STALE_TIMES.instant, // Always fresh for real-time progress
     })),
-  });
+  }) as UseQueryResult<ProgressResponse | null, Error>[];
 
   // Handle callbacks for each operation
   useEffect(() => {
-    queries.forEach((query: any, index: number) => {
+    const timers: ReturnType<typeof setTimeout>[] = [];
+
+    queries.forEach((query, index) => {
       const progressId = progressIds[index];
       if (!query.data || !progressId) return;
 
@@ -277,9 +315,11 @@ export function useMultipleOperations(
         options?.onComplete?.(progressId, data);
 
         // Clean up after completion
-        setTimeout(() => {
-          queryClient.removeQueries({ queryKey: progressKeys.detail(progressId) });
-        }, 2000);
+        timers.push(
+          setTimeout(() => {
+            queryClient.removeQueries({ queryKey: progressKeys.detail(progressId), exact: true });
+          }, 2000),
+        );
       }
 
       // Handle errors
@@ -288,16 +328,25 @@ export function useMultipleOperations(
         options?.onError?.(progressId, data.error || "Operation failed");
 
         // Clean up after error
-        setTimeout(() => {
-          queryClient.removeQueries({ queryKey: progressKeys.detail(progressId) });
-        }, 5000);
+        timers.push(
+          setTimeout(() => {
+            queryClient.removeQueries({ queryKey: progressKeys.detail(progressId), exact: true });
+          }, 5000),
+        );
       }
     });
+
+    // Cleanup function to clear all timeouts
+    return () => {
+      timers.forEach(clearTimeout);
+    };
   }, [queries, progressIds, queryClient, options]);
 
   // Forward query errors (e.g., 404s after threshold) to onError callback
   useEffect(() => {
-    queries.forEach((query: any, index: number) => {
+    const timers: ReturnType<typeof setTimeout>[] = [];
+
+    queries.forEach((query, index) => {
       const progressId = progressIds[index];
       if (!query.error || !progressId || errorIds.current.has(progressId)) return;
 
@@ -306,13 +355,20 @@ export function useMultipleOperations(
       options?.onError?.(progressId, errorMessage);
 
       // Clean up after error
-      setTimeout(() => {
-        queryClient.removeQueries({ queryKey: progressKeys.detail(progressId) });
-      }, 5000);
+      timers.push(
+        setTimeout(() => {
+          queryClient.removeQueries({ queryKey: progressKeys.detail(progressId), exact: true });
+        }, 5000),
+      );
     });
+
+    // Cleanup function to clear all timeouts
+    return () => {
+      timers.forEach(clearTimeout);
+    };
   }, [queries, progressIds, queryClient, options]);
 
-  return queries.map((query: any, index: number) => {
+  return queries.map((query, index) => {
     const data = query.data as ProgressResponse | null;
     return {
       progressId: progressIds[index],

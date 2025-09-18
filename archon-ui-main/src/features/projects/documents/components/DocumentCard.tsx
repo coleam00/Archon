@@ -15,6 +15,7 @@ import type React from "react";
 import { memo, useCallback, useState } from "react";
 import { Button } from "../../../ui/primitives";
 import type { DocumentCardProps, DocumentType } from "../types";
+import { copyToClipboard } from "../../../shared/utils/clipboard";
 
 const getDocumentIcon = (type?: DocumentType) => {
   switch (type) {
@@ -67,11 +68,13 @@ export const DocumentCard = memo(({ document, isActive, onSelect, onDelete }: Do
   const [isCopied, setIsCopied] = useState(false);
 
   const handleCopyId = useCallback(
-    (e: React.MouseEvent) => {
+    async (e: React.MouseEvent) => {
       e.stopPropagation();
-      navigator.clipboard.writeText(document.id);
-      setIsCopied(true);
-      setTimeout(() => setIsCopied(false), 2000);
+      const result = await copyToClipboard(document.id);
+      if (result.success) {
+        setIsCopied(true);
+        setTimeout(() => setIsCopied(false), 2000);
+      }
     },
     [document.id],
   );

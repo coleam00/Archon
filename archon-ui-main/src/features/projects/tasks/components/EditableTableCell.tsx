@@ -1,7 +1,17 @@
 import type React from "react";
 import { useEffect, useRef, useState } from "react";
-import { Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../../ui/primitives";
+import {
+  ComboBox,
+  type ComboBoxOption,
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../../ui/primitives";
 import { cn } from "../../../ui/primitives/styles";
+import { COMMON_ASSIGNEES } from "../types";
 
 interface EditableTableCellProps {
   value: string;
@@ -16,8 +26,11 @@ interface EditableTableCellProps {
 // Status options for the status select
 const STATUS_OPTIONS = ["todo", "doing", "review", "done"] as const;
 
-// Assignee options
-const ASSIGNEE_OPTIONS = ["User", "Archon", "AI IDE Agent"] as const;
+// Convert common assignees to ComboBox options
+const ASSIGNEE_OPTIONS: ComboBoxOption[] = COMMON_ASSIGNEES.map((name) => ({
+  value: name,
+  label: name,
+}));
 
 export const EditableTableCell = ({
   value,
@@ -81,7 +94,7 @@ export const EditableTableCell = ({
   };
 
   // Get the appropriate options based on type
-  const selectOptions = type === "status" ? STATUS_OPTIONS : type === "assignee" ? ASSIGNEE_OPTIONS : options || [];
+  const selectOptions = type === "status" ? STATUS_OPTIONS : options || [];
 
   if (!isEditing) {
     return (
@@ -106,13 +119,40 @@ export const EditableTableCell = ({
         )}
         title={value || placeholder}
       >
-        <span className={cn(!value && "text-gray-400 italic")}>{value || placeholder}</span>
+        <span className={cn(!value && "text-gray-400 italic")}>
+          {/* Truncate long assignee names */}
+          {type === "assignee" && value && value.length > 20 ? `${value.slice(0, 17)}...` : value || placeholder}
+        </span>
       </div>
     );
   }
 
-  // Render select for select types
-  if (type === "select" || type === "status" || type === "assignee") {
+  // Render ComboBox for assignee type
+  if (type === "assignee") {
+    return (
+      <ComboBox
+        options={ASSIGNEE_OPTIONS}
+        value={editValue}
+        onValueChange={(newValue) => {
+          setEditValue(newValue);
+          // Auto-save on change
+          setTimeout(() => {
+            onSave(newValue);
+            setIsEditing(false);
+          }, 0);
+        }}
+        placeholder="Select assignee..."
+        searchPlaceholder="Assign to..."
+        emptyMessage="Press Enter to add"
+        className={cn("w-full h-7 text-sm", className)}
+        allowCustomValue={true}
+        disabled={isSaving}
+      />
+    );
+  }
+
+  // Render select for select/status types
+  if (type === "select" || type === "status") {
     return (
       <Select
         value={editValue}

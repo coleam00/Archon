@@ -5,7 +5,6 @@
  * - Knowledge item management (CRUD, search)
  * - Crawling and URL processing
  * - Document upload and processing
- * - Progress tracking for long-running operations
  * - Document browsing and viewing
  */
 
@@ -13,8 +12,6 @@
 export * from "./components";
 // Hooks
 export * from "./hooks";
-// Sub-features
-export * from "./progress";
 // Services
 export * from "./services";
 // Types

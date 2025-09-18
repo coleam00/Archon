@@ -30,6 +30,7 @@ import 'prismjs/components/prism-graphql'
 import 'prismjs/themes/prism-tomorrow.css'
 import { Button } from '../ui/Button'
 import { Badge } from '../ui/Badge'
+import { copyToClipboard } from '../../features/shared/utils/clipboard'
 
 export interface CodeExample {
   id: string
@@ -102,11 +103,15 @@ export const CodeViewerModal: React.FC<CodeViewerModalProps> = ({
     setActiveExampleIndex(0)
   }, [searchQuery])
 
-  const handleCopyCode = () => {
+  const handleCopyCode = async () => {
     if (activeExample) {
-      navigator.clipboard.writeText(activeExample.code)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      const result = await copyToClipboard(activeExample.code)
+      if (result.success) {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 2000)
+      } else {
+        console.error('Failed to copy to clipboard:', result.error)
+      }
     }
   }
 

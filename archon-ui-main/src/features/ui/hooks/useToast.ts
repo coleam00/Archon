@@ -1,5 +1,6 @@
 import { AlertCircle, CheckCircle, Info, XCircle } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createOptimisticId } from "../../shared/optimistic";
 
 // Toast types
 interface Toast {
@@ -34,15 +35,12 @@ export function useToast() {
  * Create toast context value with state management
  * Used internally by ToastProvider component
  */
-// Counter for ensuring unique IDs even when created in same millisecond
-let toastIdCounter = 0;
-
 export function createToastContext() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const timeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const showToast = useCallback((message: string, type: Toast["type"] = "info", duration = 4000) => {
-    const id = `${Date.now()}-${toastIdCounter++}`;
+    const id = createOptimisticId();
     const newToast: Toast = { id, message, type, duration };
 
     setToasts((prev) => [...prev, newToast]);

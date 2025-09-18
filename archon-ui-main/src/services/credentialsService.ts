@@ -70,10 +70,10 @@ export interface OllamaInstance {
   lastHealthCheck?: string;
 }
 
-import { getApiUrl } from "../config/api";
+import { getApiBasePath } from "../config/api";
 
 class CredentialsService {
-  private baseUrl = API_BASE_URL;
+  private baseUrl = getApiBasePath();
 
   private handleCredentialError(error: any, context: string): Error {
     const errorMessage = error instanceof Error ? error.message : String(error);

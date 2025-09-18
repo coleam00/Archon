@@ -5,7 +5,7 @@
  * and handles different environments (development, Docker, production)
  */
 
-// Get the API URL from environment or construct it
+// Get the API URL from environment or use relative URLs for proxy
 export function getApiUrl(): string {
   let apiUrl = '';
   

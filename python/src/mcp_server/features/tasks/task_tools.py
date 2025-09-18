@@ -130,6 +130,13 @@ def register_task_tools(mcp: FastMCP):
                 params["include_closed"] = include_closed
                 if project_id:
                     params["project_id"] = project_id
+            elif filter_by == "assignee" and filter_value:
+                # Use generic tasks endpoint for assignee filtering
+                url = urljoin(api_url, "/api/tasks")
+                params["assignee"] = filter_value
+                params["include_closed"] = include_closed
+                if project_id:
+                    params["project_id"] = project_id
             elif project_id:
                 # Direct project_id parameter provided
                 url = urljoin(api_url, "/api/tasks")
@@ -212,13 +219,17 @@ def register_task_tools(mcp: FastMCP):
             title: Task title text
             description: Detailed task description
             status: "todo" | "doing" | "review" | "done"
-            assignee: "User" | "Archon" | "AI IDE Agent"
+            assignee: String name of the assignee. Can be any agent name,
+                     "User" for human assignment, or custom agent identifiers
+                     created by your system (e.g., "ResearchAgent-1", "CodeReviewer").
+                     Common values: "User", "Archon", "Coding Agent"
+                     Default: "User"
             task_order: Priority 0-100 (higher = more priority)
             feature: Feature label for grouping
-        
+
         Examples:
-          manage_task("create", project_id="p-1", title="Fix auth bug")
-          manage_task("update", task_id="t-1", status="doing")
+          manage_task("create", project_id="p-1", title="Fix auth bug", assignee="CodeAnalyzer-v2")
+          manage_task("update", task_id="t-1", status="doing", assignee="User")
           manage_task("delete", task_id="t-1")
         
         Returns: {success: bool, task?: object, message: string}

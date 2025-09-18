@@ -24,6 +24,7 @@ class DocumentStorageService(BaseStorageService):
         source_id: str,
         knowledge_type: str = "documentation",
         tags: list[str] | None = None,
+        extract_code_examples: bool = True,
         progress_callback: Any | None = None,
         cancellation_check: Any | None = None,
     ) -> tuple[bool, dict[str, Any]]:
@@ -36,7 +37,9 @@ class DocumentStorageService(BaseStorageService):
             source_id: Source identifier
             knowledge_type: Type of knowledge
             tags: Optional list of tags
+            extract_code_examples: Whether to extract code examples from the document
             progress_callback: Optional callback for progress
+            cancellation_check: Optional function to check for cancellation
 
         Returns:
             Tuple of (success, result_dict)
@@ -145,10 +148,65 @@ class DocumentStorageService(BaseStorageService):
                     cancellation_check=cancellation_check,
                 )
 
+                # Extract code examples if requested
+                code_examples_count = 0
+                if extract_code_examples and len(chunks) > 0:
+                    try:
+                        await report_progress("Extracting code examples...", 85)
+                        
+                        logger.info(f"🔍 DEBUG: Starting code extraction for {filename} | extract_code_examples={extract_code_examples}")
+                        
+                        # Import code extraction service
+                        from ..crawling.code_extraction_service import CodeExtractionService
+                        
+                        code_service = CodeExtractionService(self.supabase_client)
+                        
+                        # Create crawl_results format expected by code extraction service
+                        # markdown: cleaned plaintext (HTML->markdown for HTML files, raw content otherwise)
+                        # html: empty string to prevent HTML extraction path confusion
+                        # content_type: proper type to guide extraction method selection
+                        crawl_results = [{
+                            "url": doc_url,
+                            "markdown": file_content,  # Cleaned plaintext/markdown content
+                            "html": "",  # Empty to prevent HTML extraction path
+                            "content_type": "application/pdf" if filename.lower().endswith('.pdf') else (
+                                "text/markdown" if filename.lower().endswith(('.html', '.htm', '.md')) else "text/plain"
+                            )
+                        }]
+                        
+                        logger.info(f"🔍 DEBUG: Created crawl_results with url={doc_url}, content_length={len(file_content)}")
+                        
+                        # Create progress callback for code extraction
+                        async def code_progress_callback(data: dict):
+                            logger.info(f"🔍 DEBUG: Code extraction progress: {data}")
+                            if progress_callback:
+                                # Map code extraction progress (0-100) to our remaining range (85-95)
+                                raw_progress = data.get("progress", data.get("percentage", 0))
+                                mapped_progress = 85 + (raw_progress / 100.0) * 10  # 85% to 95%
+                                message = data.get("log", "Extracting code examples...")
+                                await progress_callback(message, int(mapped_progress))
+                        
+                        logger.info(f"🔍 DEBUG: About to call extract_and_store_code_examples...")
+                        code_examples_count = await code_service.extract_and_store_code_examples(
+                            crawl_results=crawl_results,
+                            url_to_full_document=url_to_full_document,
+                            source_id=source_id,
+                            progress_callback=code_progress_callback,
+                            cancellation_check=cancellation_check,
+                        )
+                        
+                        logger.info(f"🔍 DEBUG: Code extraction completed: {code_examples_count} code examples found for {filename}")
+                        
+                    except Exception as e:
+                        # Log error with full traceback but don't fail the entire upload
+                        logger.error(f"Code extraction failed for {filename}: {e}", exc_info=True)
+                        code_examples_count = 0
+                
                 await report_progress("Document upload completed!", 100)
 
                 result = {
                     "chunks_stored": len(chunks),
+                    "code_examples_stored": code_examples_count,
                     "total_word_count": total_word_count,
                     "source_id": source_id,
                     "filename": filename,
@@ -156,10 +214,11 @@ class DocumentStorageService(BaseStorageService):
 
                 span.set_attribute("success", True)
                 span.set_attribute("chunks_stored", len(chunks))
+                span.set_attribute("code_examples_stored", code_examples_count)
                 span.set_attribute("total_word_count", total_word_count)
 
                 logger.info(
-                    f"Document upload completed successfully: filename={filename}, chunks_stored={len(chunks)}, total_word_count={total_word_count}"
+                    f"Document upload completed successfully: filename={filename}, chunks_stored={len(chunks)}, code_examples_stored={code_examples_count}, total_word_count={total_word_count}"
                 )
 
                 return True, result
@@ -192,6 +251,7 @@ class DocumentStorageService(BaseStorageService):
                 source_id=doc.get("source_id", "upload"),
                 knowledge_type=doc.get("knowledge_type", "documentation"),
                 tags=doc.get("tags"),
+                extract_code_examples=doc.get("extract_code_examples", True),
                 progress_callback=kwargs.get("progress_callback"),
                 cancellation_check=kwargs.get("cancellation_check"),
             )
