@@ -159,7 +159,7 @@ class CredentialsService {
   async checkCredentialStatus(
     keys: string[]
   ): Promise<{ [key: string]: { key: string; value?: string; has_value: boolean; error?: string } }> {
-    const response = await fetch(`${this.baseUrl}/api/credentials/status-check`, {
+    const response = await fetch(`${this.baseUrl}/credentials/status-check`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

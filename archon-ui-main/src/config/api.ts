@@ -21,14 +21,32 @@ export function getApiUrl(): string {
   else {
     const protocol = window.location.protocol;
     const host = window.location.hostname;
-    // Use configured port or default to 8181
-    const port = import.meta.env.VITE_ARCHON_SERVER_PORT || '8181';
     
-    if (!import.meta.env.VITE_ARCHON_SERVER_PORT) {
-      console.info('[Archon] Using default ARCHON_SERVER_PORT: 8181');
+    // CRITICAL FIX: In production with nginx proxy, don't add port number
+    // Check if we're running behind a proxy (HTTPS on standard port or specific host)
+    const isProxied = (
+      // Running on HTTPS with standard port (443) - likely behind proxy
+      (protocol === 'https:' && (window.location.port === '' || window.location.port === '443')) ||
+      // Running on the production domain - definitely behind proxy
+      host.includes('prometheusags.ai') ||
+      // Check if HOST env var indicates production setup
+      (import.meta.env.VITE_HOST && import.meta.env.VITE_HOST.includes('prometheusags.ai'))
+    );
+    
+    if (isProxied) {
+      // For production/proxy setup, use the current domain without port
+      // The nginx proxy will handle routing /api/* to the correct backend port
+      apiUrl = `${protocol}//${host}`;
+    } else {
+      // For local development, use configured port or default to 8181
+      const port = import.meta.env.VITE_ARCHON_SERVER_PORT || '8181';
+      
+      if (!import.meta.env.VITE_ARCHON_SERVER_PORT) {
+        console.info('[Archon] Using default ARCHON_SERVER_PORT: 8181');
+      }
+      
+      apiUrl = `${protocol}//${host}:${port}`;
     }
-    
-    apiUrl = `${protocol}//${host}:${port}`;
   }
   
   // Ensure HTTPS protocol if current page is HTTPS (prevents mixed content errors)
@@ -37,15 +55,13 @@ export function getApiUrl(): string {
     if (import.meta.env.VITE_API_URL_HTTPS) {
       apiUrl = import.meta.env.VITE_API_URL_HTTPS;
     } else {
-      // Convert HTTP to HTTPS and handle port appropriately
+      // Convert HTTP to HTTPS
       apiUrl = apiUrl.replace('http:', 'https:');
       
-      // If the URL has a non-standard port (not 80), check if we should use standard HTTPS port
+      // For production domains, remove non-standard ports when converting to HTTPS
       const url = new URL(apiUrl);
-      if (url.port === '8181' || url.port === '80') {
-        // For common development/HTTP ports, try standard HTTPS port first
-        const httpsPort = import.meta.env.VITE_API_HTTPS_PORT || '443';
-        url.port = httpsPort;
+      if (url.hostname.includes('prometheusags.ai') && (url.port === '8181' || url.port === '80')) {
+        url.port = ''; // Use standard HTTPS port (443)
         apiUrl = url.toString();
       }
     }
