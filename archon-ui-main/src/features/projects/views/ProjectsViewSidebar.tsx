@@ -43,6 +43,7 @@ export function ProjectsViewSidebar({
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [projectToDelete, setProjectToDelete] = useState<{
     id: string;
     title: string;
@@ -153,6 +154,11 @@ export function ProjectsViewSidebar({
     setProjectToDelete(null);
   };
 
+  // Handle fullscreen toggle
+  const toggleFullscreen = () => {
+    setIsFullscreen(!isFullscreen);
+  };
+
   // Keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -168,10 +174,14 @@ export function ProjectsViewSidebar({
         return;
       }
 
-      // Escape to close mobile sidebar
-      if (e.key === "Escape" && isMobileSidebarOpen) {
+      // Escape to close mobile sidebar or exit fullscreen
+      if (e.key === "Escape") {
         e.preventDefault();
-        setIsMobileSidebarOpen(false);
+        if (isFullscreen) {
+          setIsFullscreen(false);
+        } else if (isMobileSidebarOpen) {
+          setIsMobileSidebarOpen(false);
+        }
         return;
       }
 
@@ -213,7 +223,7 @@ export function ProjectsViewSidebar({
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [sortedProjects, selectedProject, handleProjectSelect, isMobileSidebarOpen]);
+  }, [sortedProjects, selectedProject, handleProjectSelect, isMobileSidebarOpen, isFullscreen]);
 
   // Staggered entrance animation
   const isVisible = useStaggeredEntrance([1, 2], 0.15);
@@ -226,84 +236,102 @@ export function ProjectsViewSidebar({
       className={cn("flex flex-col h-screen max-h-screen overflow-hidden", className)}
       data-id={dataId}
     >
-      {/* Top Header */}
-      <div className={cn("flex items-center justify-between p-4 border-b", glassmorphism.border.default)}>
-        <div className="flex items-center gap-3">
-          {/* Mobile menu button */}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setIsMobileSidebarOpen(true)}
-            className="p-2 md:hidden"
-            aria-label="Open projects sidebar"
-          >
-            <Menu className="w-4 h-4" />
-          </Button>
+      {/* Top Header - hide in fullscreen */}
+      {!isFullscreen && (
+        <motion.div
+          className={cn("flex items-center justify-between p-4 border-b", glassmorphism.border.default)}
+          initial={false}
+          animate={{ opacity: isFullscreen ? 0 : 1, height: isFullscreen ? 0 : 'auto' }}
+          transition={{ duration: 0.3, ease: "easeInOut" }}
+        >
+          <div className="flex items-center gap-3">
+            {/* Mobile menu button */}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setIsMobileSidebarOpen(true)}
+              className="p-2 md:hidden"
+              aria-label="Open projects sidebar"
+            >
+              <Menu className="w-4 h-4" />
+            </Button>
 
-          <img
-            src="/logo-neon.png"
-            alt="Projects"
-            className="w-7 h-7 filter drop-shadow-[0_0_8px_rgba(59,130,246,0.8)]"
-          />
-          <h1 className="text-xl font-bold text-gray-800 dark:text-white">Projects</h1>
+            <img
+              src="/logo-neon.png"
+              alt="Projects"
+              className="w-7 h-7 filter drop-shadow-[0_0_8px_rgba(59,130,246,0.8)]"
+            />
+            <h1 className="text-xl font-bold text-gray-800 dark:text-white">Projects</h1>
 
-          {/* Current project indicator on mobile */}
-          {selectedProject && (
-            <div className="md:hidden px-2 py-1 bg-purple-100 dark:bg-purple-900/30 rounded text-sm font-medium text-purple-700 dark:text-purple-300 truncate max-w-32">
-              {selectedProject.title}
+            {/* Current project indicator on mobile */}
+            {selectedProject && (
+              <div className="md:hidden px-2 py-1 bg-purple-100 dark:bg-purple-900/30 rounded text-sm font-medium text-purple-700 dark:text-purple-300 truncate max-w-32">
+                {selectedProject.title}
+              </div>
+            )}
+
+            {/* Keyboard shortcuts hint */}
+            <div className="hidden lg:flex text-xs text-gray-500 dark:text-gray-400 space-x-4">
+              <span>⌘K Search</span>
+              <span>↑↓ Navigate</span>
+              <span>⌘N New</span>
             </div>
-          )}
-
-          {/* Keyboard shortcuts hint */}
-          <div className="hidden lg:flex text-xs text-gray-500 dark:text-gray-400 space-x-4">
-            <span>⌘K Search</span>
-            <span>↑↓ Navigate</span>
-            <span>⌘N New</span>
           </div>
-        </div>
 
-        <div className="flex items-center gap-4">
-          {/* Layout Toggle */}
-          {onToggleLayout && (
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-600 dark:text-gray-400 hidden md:inline">
-                Sidebar Layout
-              </span>
-              <Toggle
-                checked={useSidebarLayout}
-                onCheckedChange={onToggleLayout}
-                accentColor="purple"
-                icon={<Layout className="w-4 h-4" />}
-              />
-            </div>
-          )}
+          <div className="flex items-center gap-4">
+            {/* Layout Toggle */}
+            {onToggleLayout && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-600 dark:text-gray-400 hidden md:inline">
+                  Sidebar Layout
+                </span>
+                <Toggle
+                  checked={useSidebarLayout}
+                  onCheckedChange={onToggleLayout}
+                  accentColor="purple"
+                  icon={<Layout className="w-4 h-4" />}
+                />
+              </div>
+            )}
 
-          {/* New Project Button */}
-          <Button onClick={() => setIsNewProjectModalOpen(true)} variant="cyan" className="shadow-lg shadow-cyan-500/20">
-            <Plus className="w-4 h-4 mr-2" />
-            <span className="hidden sm:inline">New Project</span>
-          </Button>
-        </div>
-      </div>
+            {/* New Project Button */}
+            <Button onClick={() => setIsNewProjectModalOpen(true)} variant="cyan" className="shadow-lg shadow-cyan-500/20">
+              <Plus className="w-4 h-4 mr-2" />
+              <span className="hidden sm:inline">New Project</span>
+            </Button>
+          </div>
+        </motion.div>
+      )}
 
       {/* Main Layout: Sidebar + Content */}
       <div className="flex flex-1 min-h-0">
-        {/* Desktop Sidebar */}
-        <div className="hidden md:flex">
-          <ProjectSidebar
-            projects={sortedProjects}
-            selectedProject={selectedProject}
-            taskCounts={taskCounts}
-            isLoading={isLoadingProjects}
-            error={projectsError as Error | null}
-            onProjectSelect={handleProjectSelect}
-            onPinProject={handlePinProject}
-            onDeleteProject={handleDeleteProject}
-          />
-        </div>
+        {/* Desktop Sidebar - hide in fullscreen */}
+        {!isFullscreen && (
+          <motion.div
+            className="hidden md:flex"
+            initial={false}
+            animate={{
+              opacity: isFullscreen ? 0 : 1,
+              width: isFullscreen ? 0 : 'auto',
+              marginRight: isFullscreen ? 0 : undefined
+            }}
+            transition={{ duration: 0.3, ease: "easeInOut" }}
+          >
+            <ProjectSidebar
+              projects={sortedProjects}
+              selectedProject={selectedProject}
+              taskCounts={taskCounts}
+              isLoading={isLoadingProjects}
+              error={projectsError as Error | null}
+              onProjectSelect={handleProjectSelect}
+              onPinProject={handlePinProject}
+              onDeleteProject={handleDeleteProject}
+            />
+          </motion.div>
+        )}
 
-        {/* Mobile Sidebar Overlay - only render when needed */}
-        {isMobileSidebarOpen && (
+        {/* Mobile Sidebar Overlay - only render when needed and not in fullscreen */}
+        {isMobileSidebarOpen && !isFullscreen && (
           <ProjectSidebar
             projects={sortedProjects}
             selectedProject={selectedProject}
@@ -319,13 +347,24 @@ export function ProjectsViewSidebar({
         )}
 
         {/* Main Content */}
-        <ProjectMainContent
-          selectedProject={selectedProject}
-          taskCounts={taskCounts}
-          activeTab={activeTab}
-          onTabChange={setActiveTab}
+        <motion.div
           className={cn("flex-1", glassmorphism.background.subtle)}
-        />
+          initial={false}
+          animate={{
+            marginLeft: isFullscreen ? 0 : undefined,
+          }}
+          transition={{ duration: 0.3, ease: "easeInOut" }}
+        >
+          <ProjectMainContent
+            selectedProject={selectedProject}
+            taskCounts={taskCounts}
+            activeTab={activeTab}
+            onTabChange={setActiveTab}
+            className="h-full"
+            isFullscreen={isFullscreen}
+            onToggleFullscreen={toggleFullscreen}
+          />
+        </motion.div>
       </div>
 
       {/* Modals */}

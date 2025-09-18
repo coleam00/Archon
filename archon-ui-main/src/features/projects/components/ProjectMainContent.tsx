@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Activity, CheckCircle2, ListTodo, Settings } from "lucide-react";
+import { Activity, CheckCircle2, ListTodo, Maximize2, Minimize2, Settings } from "lucide-react";
 import type React from "react";
 import { Button, Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/primitives";
 import { cn, glassmorphism } from "../../ui/primitives/styles";
@@ -13,6 +13,8 @@ interface ProjectMainContentProps {
   activeTab: string;
   onTabChange: (tab: string) => void;
   className?: string;
+  isFullscreen?: boolean;
+  onToggleFullscreen?: () => void;
 }
 
 interface ProjectStatsHeaderProps {
@@ -162,6 +164,8 @@ export const ProjectMainContent: React.FC<ProjectMainContentProps> = ({
   activeTab,
   onTabChange,
   className,
+  isFullscreen = false,
+  onToggleFullscreen,
 }) => {
   if (!selectedProject) {
     return (
@@ -187,7 +191,7 @@ export const ProjectMainContent: React.FC<ProjectMainContentProps> = ({
 
   return (
     <motion.div
-      className={cn("flex-1 flex flex-col min-h-0", className)}
+      className={cn("flex-1 flex flex-col min-h-0 relative", className)}
       variants={itemVariants}
       initial="hidden"
       animate="visible"
@@ -227,6 +231,35 @@ export const ProjectMainContent: React.FC<ProjectMainContentProps> = ({
           </div>
         </Tabs>
       </div>
+
+      {/* Fullscreen Toggle Button */}
+      {onToggleFullscreen && (
+        <motion.div
+          className="absolute bottom-6 right-6 z-10"
+          initial={{ opacity: 0, scale: 0.8 }}
+          animate={{ opacity: 1, scale: 1 }}
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+        >
+          <Button
+            onClick={onToggleFullscreen}
+            variant="ghost"
+            className={cn(
+              "w-12 h-12 rounded-full shadow-lg backdrop-blur-sm border transition-all duration-200",
+              glassmorphism.background.card,
+              glassmorphism.border.default,
+              "hover:shadow-xl hover:border-purple-300 dark:hover:border-purple-700"
+            )}
+            aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+          >
+            {isFullscreen ? (
+              <Minimize2 className="w-5 h-5 text-gray-700 dark:text-gray-300" />
+            ) : (
+              <Maximize2 className="w-5 h-5 text-gray-700 dark:text-gray-300" />
+            )}
+          </Button>
+        </motion.div>
+      )}
     </motion.div>
   );
 };
