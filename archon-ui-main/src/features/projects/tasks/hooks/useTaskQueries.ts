@@ -38,7 +38,7 @@ export function useTaskCounts() {
     queryKey: taskKeys.counts(),
     queryFn: () => taskService.getTaskCountsForAllProjects(),
     refetchInterval: false, // Don't poll, only refetch manually
-    staleTime: STALE_TIMES.rare,
+    staleTime: STALE_TIMES.frequent,
   });
 }
 
