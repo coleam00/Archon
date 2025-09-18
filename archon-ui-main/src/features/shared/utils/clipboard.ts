@@ -15,8 +15,12 @@ export interface ClipboardResult {
  * @returns Promise<ClipboardResult> - Result of the copy operation
  */
 export const copyToClipboard = async (text: string): Promise<ClipboardResult> => {
-  // Try modern clipboard API first
-  if (navigator.clipboard && navigator.clipboard.writeText) {
+  // Try modern clipboard API first with SSR-safe guards
+  if (
+    typeof navigator !== 'undefined' &&
+    navigator.clipboard &&
+    navigator.clipboard.writeText
+  ) {
     try {
       await navigator.clipboard.writeText(text);
       return { success: true, method: 'clipboard-api' };
@@ -26,6 +30,15 @@ export const copyToClipboard = async (text: string): Promise<ClipboardResult> =>
   }
 
   // Fallback to document.execCommand for older browsers or insecure contexts
+  // Add SSR guards for document access
+  if (typeof document === 'undefined') {
+    return {
+      success: false,
+      method: 'failed',
+      error: 'Running in server-side environment - clipboard not available'
+    };
+  }
+
   let textarea: HTMLTextAreaElement | null = null;
   try {
     // Ensure document.body exists before proceeding
