@@ -41,7 +41,7 @@ export function useInspectorPagination({
       ...knowledgeKeys.detail(sourceId),
       viewMode === "documents" ? "chunks-infinite" : "code-examples-infinite",
     ],
-    queryFn: ({ pageParam }: { pageParam: unknown }) => {
+    queryFn: ({ pageParam, signal }: { pageParam: unknown; signal?: AbortSignal }) => {
       const page = Number(pageParam) || 0;
       const service =
         viewMode === "documents" ? knowledgeService.getKnowledgeItemChunks : knowledgeService.getCodeExamples;
@@ -49,7 +49,7 @@ export function useInspectorPagination({
       return service(sourceId, {
         limit: PAGE_SIZE,
         offset: page * PAGE_SIZE,
-      });
+      }, signal);
     },
     getNextPageParam: (lastPage, allPages) => {
       const hasMore = (lastPage as ChunksResponse | CodeExamplesResponse)?.has_more;

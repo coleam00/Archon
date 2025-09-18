@@ -111,6 +111,10 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
       throw error;
     }
 
+    if (error instanceof Error && error.name === "AbortError") {
+      throw error;
+    }
+
     throw new APIServiceError(
       `Failed to call API ${endpoint}: ${error instanceof Error ? error.message : "Unknown error"}`,
       "NETWORK_ERROR",

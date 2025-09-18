@@ -10,15 +10,15 @@ export const progressService = {
   /**
    * Get progress for an operation
    */
-  async getProgress(progressId: string): Promise<ProgressResponse> {
-    return callAPIWithETag<ProgressResponse>(`/api/progress/${progressId}`);
+  async getProgress(progressId: string, signal?: AbortSignal): Promise<ProgressResponse> {
+    return callAPIWithETag<ProgressResponse>(`/api/progress/${progressId}`, { signal });
   },
 
   /**
    * List all active operations
    */
-  async listActiveOperations(): Promise<ActiveOperationsResponse> {
+  async listActiveOperations(signal?: AbortSignal): Promise<ActiveOperationsResponse> {
     // IMPORTANT: Use trailing slash to avoid FastAPI redirect that breaks in Docker
-    return callAPIWithETag<ActiveOperationsResponse>("/api/progress/");
+    return callAPIWithETag<ActiveOperationsResponse>("/api/progress/", { signal });
   },
 };

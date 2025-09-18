@@ -1,5 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createOptimisticEntity, replaceOptimisticEntity, removeDuplicateEntities, type OptimisticEntity } from "@/features/shared/optimistic";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  createOptimisticEntity,
+  type OptimisticEntity,
+  removeDuplicateEntities,
+  replaceOptimisticEntity,
+} from "@/features/shared/optimistic";
 import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../../shared/queryPatterns";
 import { useSmartPolling } from "../../../ui/hooks";
 import { useToast } from "../../../ui/hooks/useToast";
@@ -19,15 +24,19 @@ export const taskKeys = {
 export function useProjectTasks(projectId: string | undefined, enabled = true) {
   const { refetchInterval } = useSmartPolling(2000); // 2s active per guideline for real-time task updates
 
+  // Check if there's an update mutation in progress for this project
+  const isMutating = useIsMutating({ mutationKey: ['updateTask', projectId] });
+
   return useQuery<Task[]>({
     queryKey: projectId ? taskKeys.byProject(projectId) : DISABLED_QUERY_KEY,
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       if (!projectId) throw new Error("No project ID");
-      return taskService.getTasksByProject(projectId);
+      return taskService.getTasksByProject(projectId, signal);
     },
     enabled: !!projectId && enabled,
-    refetchInterval, // Smart interval based on page visibility/focus
-    refetchOnWindowFocus: true, // Refetch immediately when tab gains focus (ETag makes this cheap)
+    // Pause polling while mutation is in progress to avoid overwriting optimistic updates
+    refetchInterval: isMutating ? false : refetchInterval,
+    refetchOnWindowFocus: !isMutating, // Don't refetch on focus during mutations
     staleTime: STALE_TIMES.frequent,
   });
 }
@@ -36,7 +45,7 @@ export function useProjectTasks(projectId: string | undefined, enabled = true) {
 export function useTaskCounts() {
   return useQuery<Awaited<ReturnType<typeof taskService.getTaskCountsForAllProjects>>>({
     queryKey: taskKeys.counts(),
-    queryFn: () => taskService.getTaskCountsForAllProjects(),
+    queryFn: ({ signal }) => taskService.getTaskCountsForAllProjects(signal),
     refetchInterval: false, // Don't poll, only refetch manually
     staleTime: STALE_TIMES.rare,
   });
@@ -48,7 +57,8 @@ export function useCreateTask() {
   const { showToast } = useToast();
 
   return useMutation({
-    mutationFn: (taskData: CreateTaskRequest) => taskService.createTask(taskData),
+    mutationFn: (taskData: CreateTaskRequest, context?: { signal?: AbortSignal }) =>
+      taskService.createTask(taskData, context?.signal),
     onMutate: async (newTaskData) => {
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: taskKeys.byProject(newTaskData.project_id) });
@@ -57,20 +67,18 @@ export function useCreateTask() {
       const previousTasks = queryClient.getQueryData<Task[]>(taskKeys.byProject(newTaskData.project_id));
 
       // Create optimistic task with stable ID
-      const optimisticTask = createOptimisticEntity<Task>(
-        {
-          project_id: newTaskData.project_id,
-          title: newTaskData.title,
-          description: newTaskData.description || "",
-          status: newTaskData.status ?? "todo",
-          assignee: newTaskData.assignee ?? "User",
-          feature: newTaskData.feature,
-          task_order: newTaskData.task_order ?? 100,
-          priority: newTaskData.priority ?? "medium",
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        }
-      );
+      const optimisticTask = createOptimisticEntity<Task>({
+        project_id: newTaskData.project_id,
+        title: newTaskData.title,
+        description: newTaskData.description || "",
+        status: newTaskData.status ?? "todo",
+        assignee: newTaskData.assignee ?? "User",
+        feature: newTaskData.feature,
+        task_order: newTaskData.task_order ?? 100,
+        priority: newTaskData.priority ?? "medium",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
 
       // Optimistically add the new task
       queryClient.setQueryData(taskKeys.byProject(newTaskData.project_id), (old: Task[] | undefined) => {
@@ -96,7 +104,7 @@ export function useCreateTask() {
         (tasks: (Task & Partial<OptimisticEntity>)[] = []) => {
           const replaced = replaceOptimisticEntity(tasks, context?.optimisticId || "", serverTask);
           return removeDuplicateEntities(replaced);
-        }
+        },
       );
 
       // Invalidate counts since we have a new task
@@ -119,10 +127,13 @@ export function useUpdateTask(projectId: string) {
   const { showToast } = useToast();
 
   return useMutation<Task, Error, { taskId: string; updates: UpdateTaskRequest }, { previousTasks?: Task[] }>({
-    mutationFn: ({ taskId, updates }: { taskId: string; updates: UpdateTaskRequest }) =>
-      taskService.updateTask(taskId, updates),
+    mutationKey: ['updateTask', projectId],
+    mutationFn: (
+      { taskId, updates }: { taskId: string; updates: UpdateTaskRequest },
+      context?: { signal?: AbortSignal },
+    ) => taskService.updateTask(taskId, updates, context?.signal),
     onMutate: async ({ taskId, updates }) => {
-      // Cancel any outgoing refetches
+      // Cancel any outgoing refetches to prevent race conditions
       await queryClient.cancelQueries({ queryKey: taskKeys.byProject(projectId) });
 
       // Snapshot the previous value
@@ -131,7 +142,7 @@ export function useUpdateTask(projectId: string) {
       // Optimistically update
       queryClient.setQueryData<Task[]>(taskKeys.byProject(projectId), (old) => {
         if (!old) return old;
-        return old.map((task) => (task.id === taskId ? { ...task, ...updates } : task));
+        return old.map((task) => (task.id === taskId ? { ...task, ...updates, updated_at: new Date().toISOString() } : task));
       });
 
       return { previousTasks };
@@ -172,7 +183,7 @@ export function useDeleteTask(projectId: string) {
   const { showToast } = useToast();
 
   return useMutation<void, Error, string, { previousTasks?: Task[] }>({
-    mutationFn: (taskId: string) => taskService.deleteTask(taskId),
+    mutationFn: (taskId: string, context?: { signal?: AbortSignal }) => taskService.deleteTask(taskId, context?.signal),
     onMutate: async (taskId) => {
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: taskKeys.byProject(projectId) });

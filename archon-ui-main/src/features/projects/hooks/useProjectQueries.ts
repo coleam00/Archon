@@ -27,7 +27,7 @@ export function useProjects() {
 
   return useQuery<Project[]>({
     queryKey: projectKeys.lists(),
-    queryFn: () => projectService.listProjects(),
+    queryFn: ({ signal }) => projectService.listProjects(signal),
     refetchInterval, // Smart interval based on page visibility/focus
     refetchOnWindowFocus: true, // Refetch immediately when tab gains focus (ETag makes this cheap)
     staleTime: STALE_TIMES.normal,
@@ -40,7 +40,8 @@ export function useProjectFeatures(projectId: string | undefined) {
   // See PRPs/local/frontend-state-management-refactor.md Phase 4: Configure Request Deduplication
   return useQuery({
     queryKey: projectId ? projectKeys.features(projectId) : DISABLED_QUERY_KEY,
-    queryFn: () => (projectId ? projectService.getProjectFeatures(projectId) : Promise.reject("No project ID")),
+    queryFn: ({ signal }) =>
+      projectId ? projectService.getProjectFeatures(projectId, signal) : Promise.reject("No project ID"),
     enabled: !!projectId,
     staleTime: STALE_TIMES.normal,
   });

@@ -25,7 +25,7 @@ export const knowledgeService = {
    * Get lightweight summaries of knowledge items
    * Use this for card displays and frequent updates
    */
-  async getKnowledgeSummaries(filter?: KnowledgeItemsFilter): Promise<KnowledgeItemsResponse> {
+  async getKnowledgeSummaries(filter?: KnowledgeItemsFilter, signal?: AbortSignal): Promise<KnowledgeItemsResponse> {
     const params = new URLSearchParams();
 
     if (filter?.page) params.append("page", filter.page.toString());
@@ -41,21 +41,22 @@ export const knowledgeService = {
     const queryString = params.toString();
     const endpoint = `/api/knowledge-items/summary${queryString ? `?${queryString}` : ""}`;
 
-    return callAPIWithETag<KnowledgeItemsResponse>(endpoint);
+    return callAPIWithETag<KnowledgeItemsResponse>(endpoint, { signal });
   },
 
   /**
    * Get a specific knowledge item
    */
-  async getKnowledgeItem(sourceId: string): Promise<KnowledgeItem> {
-    return callAPIWithETag<KnowledgeItem>(`/api/knowledge-items/${sourceId}`);
+  async getKnowledgeItem(sourceId: string, signal?: AbortSignal): Promise<KnowledgeItem> {
+    return callAPIWithETag<KnowledgeItem>(`/api/knowledge-items/${sourceId}`, { signal });
   },
 
   /**
    * Delete a knowledge item
    */
-  async deleteKnowledgeItem(sourceId: string): Promise<{ success: boolean; message: string }> {
+  async deleteKnowledgeItem(sourceId: string, signal?: AbortSignal): Promise<{ success: boolean; message: string }> {
     const response = await callAPIWithETag<{ success: boolean; message: string }>(`/api/knowledge-items/${sourceId}`, {
+      signal,
       method: "DELETE",
     });
 
@@ -68,8 +69,10 @@ export const knowledgeService = {
   async updateKnowledgeItem(
     sourceId: string,
     updates: Partial<KnowledgeItem> & { tags?: string[] },
+    signal?: AbortSignal,
   ): Promise<KnowledgeItem> {
     const response = await callAPIWithETag<KnowledgeItem>(`/api/knowledge-items/${sourceId}`, {
+      signal,
       method: "PUT",
       body: JSON.stringify(updates),
     });
@@ -80,8 +83,9 @@ export const knowledgeService = {
   /**
    * Start crawling a URL
    */
-  async crawlUrl(request: CrawlRequest): Promise<CrawlStartResponse> {
+  async crawlUrl(request: CrawlRequest, signal?: AbortSignal): Promise<CrawlStartResponse> {
     const response = await callAPIWithETag<CrawlStartResponse>("/api/knowledge-items/crawl", {
+      signal,
       method: "POST",
       body: JSON.stringify(request),
     });
@@ -92,8 +96,9 @@ export const knowledgeService = {
   /**
    * Refresh an existing knowledge item
    */
-  async refreshKnowledgeItem(sourceId: string): Promise<RefreshResponse> {
+  async refreshKnowledgeItem(sourceId: string, signal?: AbortSignal): Promise<RefreshResponse> {
     const response = await callAPIWithETag<RefreshResponse>(`/api/knowledge-items/${sourceId}/refresh`, {
+      signal,
       method: "POST",
     });
 
@@ -106,6 +111,7 @@ export const knowledgeService = {
   async uploadDocument(
     file: File,
     metadata: UploadMetadata,
+    signal?: AbortSignal,
   ): Promise<{ success: boolean; progressId: string; message: string; filename: string }> {
     const formData = new FormData();
     formData.append("file", file);
@@ -129,7 +135,7 @@ export const knowledgeService = {
     const response = await fetch(uploadUrl, {
       method: "POST",
       body: formData,
-      signal: AbortSignal.timeout(30000), // 30 second timeout for file uploads
+      signal: signal ?? AbortSignal.timeout(30000), // 30 second timeout for file uploads
     });
 
     if (!response.ok) {
@@ -143,8 +149,9 @@ export const knowledgeService = {
   /**
    * Stop a running crawl
    */
-  async stopCrawl(progressId: string): Promise<{ success: boolean; message: string }> {
+  async stopCrawl(progressId: string, signal?: AbortSignal): Promise<{ success: boolean; message: string }> {
     return callAPIWithETag<{ success: boolean; message: string }>(`/api/knowledge-items/stop/${progressId}`, {
+      signal,
       method: "POST",
     });
   },
@@ -159,6 +166,7 @@ export const knowledgeService = {
       limit?: number;
       offset?: number;
     },
+    signal?: AbortSignal,
   ): Promise<ChunksResponse> {
     const params = new URLSearchParams();
     if (options?.domainFilter) {
@@ -174,7 +182,7 @@ export const knowledgeService = {
     const queryString = params.toString();
     const endpoint = `/api/knowledge-items/${sourceId}/chunks${queryString ? `?${queryString}` : ""}`;
 
-    return callAPIWithETag<ChunksResponse>(endpoint);
+    return callAPIWithETag<ChunksResponse>(endpoint, { signal });
   },
 
   /**
@@ -186,6 +194,7 @@ export const knowledgeService = {
       limit?: number;
       offset?: number;
     },
+    signal?: AbortSignal,
   ): Promise<CodeExamplesResponse> {
     const params = new URLSearchParams();
     if (options?.limit !== undefined) {
@@ -198,14 +207,15 @@ export const knowledgeService = {
     const queryString = params.toString();
     const endpoint = `/api/knowledge-items/${sourceId}/code-examples${queryString ? `?${queryString}` : ""}`;
 
-    return callAPIWithETag<CodeExamplesResponse>(endpoint);
+    return callAPIWithETag<CodeExamplesResponse>(endpoint, { signal });
   },
 
   /**
    * Search the knowledge base
    */
-  async searchKnowledgeBase(options: SearchOptions): Promise<SearchResultsResponse> {
+  async searchKnowledgeBase(options: SearchOptions, signal?: AbortSignal): Promise<SearchResultsResponse> {
     return callAPIWithETag<SearchResultsResponse>("/api/knowledge-items/search", {
+      signal,
       method: "POST",
       body: JSON.stringify(options),
     });
@@ -214,7 +224,7 @@ export const knowledgeService = {
   /**
    * Get available knowledge sources
    */
-  async getKnowledgeSources(): Promise<KnowledgeSource[]> {
-    return callAPIWithETag<KnowledgeSource[]>("/api/knowledge-items/sources");
+  async getKnowledgeSources(signal?: AbortSignal): Promise<KnowledgeSource[]> {
+    return callAPIWithETag<KnowledgeSource[]>("/api/knowledge-items/sources", { signal });
   },
 };

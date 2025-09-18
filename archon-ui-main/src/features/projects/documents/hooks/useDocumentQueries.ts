@@ -20,9 +20,9 @@ export const documentKeys = {
 export function useProjectDocuments(projectId: string | undefined) {
   return useQuery({
     queryKey: projectId ? documentKeys.byProject(projectId) : DISABLED_QUERY_KEY,
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       if (!projectId) return [];
-      const project = await projectService.getProject(projectId);
+      const project = await projectService.getProject(projectId, signal);
       return (project.docs || []) as ProjectDocument[];
     },
     enabled: !!projectId,

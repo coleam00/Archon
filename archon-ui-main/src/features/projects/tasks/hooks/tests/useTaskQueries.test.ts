@@ -92,7 +92,7 @@ describe("useTaskQueries", () => {
         expect(result.current.data).toEqual(mockTasks);
       });
 
-      expect(taskService.getTasksByProject).toHaveBeenCalledWith("project-123");
+      expect(taskService.getTasksByProject).toHaveBeenCalledWith("project-123", expect.any(AbortSignal));
     });
 
     it("should not fetch tasks when projectId is undefined", () => {
@@ -153,7 +153,7 @@ describe("useTaskQueries", () => {
           description: "New Description",
           status: "todo",
           assignee: "User",
-        });
+        }, undefined);
       });
     });
 
@@ -193,7 +193,7 @@ describe("useTaskQueries", () => {
         project_id: "project-123",
         title: "Minimal Task",
         description: "",
-      });
+      }, undefined);
     });
 
     it("should rollback on error", async () => {
