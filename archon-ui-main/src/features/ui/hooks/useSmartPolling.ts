@@ -3,7 +3,12 @@ import { useEffect, useState } from "react";
 /**
  * Smart polling hook that adjusts interval based on page visibility and focus
  *
- * Reduces unnecessary API calls when user is not actively using the app
+ * Behavior:
+ * - Hidden: Disables polling (returns false)
+ * - Visible but unfocused: Polls at 1.5x base interval (min 5s) for background polling
+ * - Visible and focused: Polls at base interval for active use
+ *
+ * Ensures background polling is always slower than foreground to reduce API load
  */
 export function useSmartPolling(baseInterval: number = 10000) {
   const [isVisible, setIsVisible] = useState(true);
@@ -49,8 +54,9 @@ export function useSmartPolling(baseInterval: number = 10000) {
     }
 
     if (!hasFocus) {
-      // Page is visible but not focused - poll less frequently
-      return 5000; // 5 seconds for background polling (aligned with polling guidelines)
+      // Page is visible but not focused - poll slower than active
+      // Use 1.5x base interval with a minimum of 5s to ensure background is always slower
+      return Math.max(baseInterval * 1.5, 5000);
     }
 
     // Page is active - use normal interval

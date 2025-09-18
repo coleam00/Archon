@@ -86,7 +86,7 @@ describe("useSmartPolling", () => {
     expect(result.current.refetchInterval).toBe(5000);
   });
 
-  it("should slow down to 5 seconds when window loses focus", () => {
+  it("should slow down when window loses focus", () => {
     const { result } = renderHook(() => useSmartPolling(5000));
 
     // Initially focused
@@ -98,10 +98,10 @@ describe("useSmartPolling", () => {
       window.dispatchEvent(new Event("blur"));
     });
 
-    // Should be slowed down to 5 seconds for background polling
+    // Should be slowed down - 5000 * 1.5 = 7500, but min 5000, so 7500
     expect(result.current.hasFocus).toBe(false);
     expect(result.current.isActive).toBe(false);
-    expect(result.current.refetchInterval).toBe(5000);
+    expect(result.current.refetchInterval).toBe(7500);
   });
 
   it("should resume normal speed when window regains focus", () => {
@@ -112,7 +112,7 @@ describe("useSmartPolling", () => {
       window.dispatchEvent(new Event("blur"));
     });
 
-    expect(result.current.refetchInterval).toBe(5000);
+    expect(result.current.refetchInterval).toBe(7500);
 
     // Focus window again
     act(() => {
@@ -124,26 +124,57 @@ describe("useSmartPolling", () => {
     expect(result.current.refetchInterval).toBe(5000);
   });
 
-  it("should handle different base intervals", () => {
+  it("should handle different base intervals with dynamic background polling", () => {
     const { result: result1 } = renderHook(() => useSmartPolling(1000));
     const { result: result2 } = renderHook(() => useSmartPolling(10000));
 
     expect(result1.current.refetchInterval).toBe(1000);
     expect(result2.current.refetchInterval).toBe(10000);
 
-    // When blurred, both should be 5 seconds for background polling
+    // When blurred, should use 1.5x base with 5s minimum
     act(() => {
       window.dispatchEvent(new Event("blur"));
     });
 
-    expect(result1.current.refetchInterval).toBe(5000);
-    expect(result2.current.refetchInterval).toBe(5000);
+    expect(result1.current.refetchInterval).toBe(5000); // 1000 * 1.5 = 1500, min 5000 = 5000
+    expect(result2.current.refetchInterval).toBe(15000); // 10000 * 1.5 = 15000
   });
 
   it("should use default interval of 10000ms when not specified", () => {
     const { result } = renderHook(() => useSmartPolling());
 
     expect(result.current.refetchInterval).toBe(10000);
+  });
+
+  it("should ensure background polling is always slower than foreground", () => {
+    // Test edge cases where old logic would fail
+    const testCases = [
+      { base: 1000, expectedBackground: 5000 }, // Minimum kicks in
+      { base: 2000, expectedBackground: 5000 }, // Minimum kicks in
+      { base: 4000, expectedBackground: 6000 }, // 1.5x base
+      { base: 5000, expectedBackground: 7500 }, // 1.5x base
+      { base: 10000, expectedBackground: 15000 }, // 1.5x base
+    ];
+
+    testCases.forEach(({ base, expectedBackground }) => {
+      const { result } = renderHook(() => useSmartPolling(base));
+
+      // Foreground should use base interval
+      expect(result.current.refetchInterval).toBe(base);
+
+      // Background should be slower
+      act(() => {
+        window.dispatchEvent(new Event("blur"));
+      });
+
+      expect(result.current.refetchInterval).toBe(expectedBackground);
+      expect(result.current.refetchInterval).toBeGreaterThan(base);
+
+      // Cleanup for next iteration
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
+    });
   });
 
   it("should cleanup event listeners on unmount", () => {
