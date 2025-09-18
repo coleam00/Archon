@@ -172,13 +172,6 @@ export const ComboBox = React.forwardRef<HTMLButtonElement, ComboBoxProps>(
           <Button
             ref={ref}
             variant="ghost"
-            role="combobox"
-            aria-expanded={open}
-            aria-haspopup="listbox"
-            aria-controls={open ? listboxId : undefined}
-            aria-label={ariaLabel}
-            aria-labelledby={ariaLabelledBy}
-            aria-describedby={ariaDescribedBy}
             disabled={disabled || isLoading}
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => {
@@ -186,6 +179,11 @@ export const ComboBox = React.forwardRef<HTMLButtonElement, ComboBoxProps>(
               e.stopPropagation();
               // Allow Space to open the dropdown
               if (e.key === " ") {
+                e.preventDefault();
+                setOpen(true);
+              }
+              // Also open on Enter/ArrowDown for better keyboard UX
+              if (e.key === "Enter" || e.key === "ArrowDown") {
                 e.preventDefault();
                 setOpen(true);
               }
@@ -240,10 +238,22 @@ export const ComboBox = React.forwardRef<HTMLButtonElement, ComboBoxProps>(
               <input
                 ref={inputRef}
                 type="text"
-                role="searchbox"
-                aria-label="Search options"
+                role="combobox"
+                aria-label={ariaLabel ?? "Search options"}
+                aria-labelledby={ariaLabelledBy}
+                aria-describedby={ariaDescribedBy}
                 aria-controls={listboxId}
+                aria-expanded={open}
                 aria-autocomplete="list"
+                aria-activedescendant={
+                  open
+                    ? (hasCustomOption && highlightedIndex === filteredOptions.length
+                        ? `${listboxId}-custom`
+                        : highlightedIndex < filteredOptions.length
+                        ? `${listboxId}-opt-${highlightedIndex}`
+                        : undefined)
+                    : undefined
+                }
                 value={search}
                 onChange={(e) => {
                   setSearch(e.target.value);
@@ -298,6 +308,7 @@ export const ComboBox = React.forwardRef<HTMLButtonElement, ComboBoxProps>(
                         <button
                           type="button"
                           key={option.value}
+                          id={`${listboxId}-opt-${index}`}
                           role="option"
                           aria-selected={isSelected}
                           data-highlighted={isHighlighted}
@@ -329,6 +340,7 @@ export const ComboBox = React.forwardRef<HTMLButtonElement, ComboBoxProps>(
                     {hasCustomOption && (
                       <button
                         type="button"
+                        id={`${listboxId}-custom`}
                         role="option"
                         aria-selected={false}
                         data-highlighted={highlightedIndex === filteredOptions.length}
@@ -345,7 +357,7 @@ export const ComboBox = React.forwardRef<HTMLButtonElement, ComboBoxProps>(
                           highlightedIndex === filteredOptions.length && "bg-cyan-100/50 dark:bg-cyan-800/30",
                         )}
                       >
-                        <span className="ml-4.5">Add "{search}"</span>
+                        <span className="ml-4">Add "{search}"</span>
                       </button>
                     )}
                   </>

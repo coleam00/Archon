@@ -16,7 +16,7 @@ export const taskKeys = {
 
 // Fetch tasks for a specific project
 export function useProjectTasks(projectId: string | undefined, enabled = true) {
-  const { refetchInterval } = useSmartPolling(5000); // 5 second base interval for faster MCP updates
+  const { refetchInterval } = useSmartPolling(2000); // 2s active per guideline for real-time task updates
 
   return useQuery<Task[]>({
     queryKey: projectId ? taskKeys.byProject(projectId) : DISABLED_QUERY_KEY,
@@ -53,7 +53,7 @@ export function useCreateTask() {
       await queryClient.cancelQueries({ queryKey: taskKeys.byProject(newTaskData.project_id) });
 
       // Snapshot the previous value
-      const previousTasks = queryClient.getQueryData(taskKeys.byProject(newTaskData.project_id));
+      const previousTasks = queryClient.getQueryData<Task[]>(taskKeys.byProject(newTaskData.project_id));
 
       // Create optimistic task with temporary ID
       const tempId = `temp-${Date.now()}`;
@@ -141,7 +141,10 @@ export function useUpdateTask(projectId: string) {
       showToast(`Failed to update task: ${errorMessage}`, "error");
       // Refetch on error to ensure consistency
       queryClient.invalidateQueries({ queryKey: taskKeys.byProject(projectId) });
-      queryClient.invalidateQueries({ queryKey: taskKeys.counts() });
+      // Only invalidate counts if status was changed
+      if (variables.updates?.status) {
+        queryClient.invalidateQueries({ queryKey: taskKeys.counts() });
+      }
     },
     onSuccess: (data, { updates }) => {
       // Merge server response to keep timestamps and computed fields in sync
@@ -195,6 +198,8 @@ export function useDeleteTask(projectId: string) {
     onSettled: () => {
       // Always refetch counts after deletion
       queryClient.invalidateQueries({ queryKey: taskKeys.counts() });
+      // Also refetch the project's task list to reconcile server-side ordering
+      queryClient.invalidateQueries({ queryKey: taskKeys.byProject(projectId) });
     },
   });
 }

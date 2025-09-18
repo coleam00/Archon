@@ -72,7 +72,13 @@ export function useKnowledgeItemChunks(
   return useQuery({
     queryKey: sourceId ? knowledgeKeys.chunks(sourceId, opts) : DISABLED_QUERY_KEY,
     queryFn: () =>
-      sourceId ? knowledgeService.getKnowledgeItemChunks(sourceId, { domainFilter: opts?.domain, offset: opts?.offset }) : Promise.reject("No source ID"),
+      sourceId
+        ? knowledgeService.getKnowledgeItemChunks(sourceId, {
+            domainFilter: opts?.domain,
+            limit: opts?.limit,
+            offset: opts?.offset,
+          })
+        : Promise.reject("No source ID"),
     enabled: !!sourceId,
     staleTime: STALE_TIMES.normal,
   });
@@ -112,17 +118,25 @@ export function useCrawlUrl() {
   >({
     mutationFn: (request: CrawlRequest) => knowledgeService.crawlUrl(request),
     onMutate: async (request) => {
+      // TODO: Phase 3 - Fix optimistic updates writing to wrong cache
+      // knowledgeKeys.lists() is never queried - actual data comes from knowledgeKeys.summaries(filter)
+      // This makes all optimistic updates invisible. Should either:
+      // 1. Remove optimistic updates for knowledge items
+      // 2. Update all summary caches with optimistic data
+      // 3. Create a real query that uses lists()
+      // See: PRPs/local/frontend-state-management-refactor.md Phase 3
+
       // Cancel any outgoing refetches to prevent race conditions
       await queryClient.cancelQueries({ queryKey: knowledgeKeys.lists() });
       await queryClient.cancelQueries({ queryKey: knowledgeKeys.summariesPrefix() });
-      await queryClient.cancelQueries({ queryKey: progressKeys.lists() });
+      await queryClient.cancelQueries({ queryKey: progressKeys.active() });
 
       // Snapshot the previous values for rollback
       const previousKnowledge = queryClient.getQueryData<KnowledgeItem[]>(knowledgeKeys.lists());
       const previousSummaries = queryClient.getQueriesData<KnowledgeItemsResponse>({
         queryKey: knowledgeKeys.summariesPrefix(),
       });
-      const previousOperations = queryClient.getQueryData<ActiveOperationsResponse>(progressKeys.lists());
+      const previousOperations = queryClient.getQueryData<ActiveOperationsResponse>(progressKeys.active());
 
       // Generate temporary IDs
       const tempProgressId = `temp-progress-${Date.now()}`;
@@ -202,7 +216,7 @@ export function useCrawlUrl() {
       };
 
       // Add optimistic operation to active operations
-      queryClient.setQueryData<ActiveOperationsResponse>(progressKeys.lists(), (old) => {
+      queryClient.setQueryData<ActiveOperationsResponse>(progressKeys.active(), (old) => {
         if (!old) {
           return {
             operations: [optimisticOperation],
@@ -257,7 +271,7 @@ export function useCrawlUrl() {
         });
 
         // Update progress operation with real progress ID
-        queryClient.setQueryData<ActiveOperationsResponse>(progressKeys.lists(), (old) => {
+        queryClient.setQueryData<ActiveOperationsResponse>(progressKeys.active(), (old) => {
           if (!old) return old;
           return {
             ...old,
@@ -279,7 +293,7 @@ export function useCrawlUrl() {
 
       // Invalidate to get fresh data
       queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: progressKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: progressKeys.active() });
 
       showToast(`Crawl started: ${response.message}`, "success");
 
@@ -298,7 +312,7 @@ export function useCrawlUrl() {
         }
       }
       if (context?.previousOperations) {
-        queryClient.setQueryData(progressKeys.lists(), context.previousOperations);
+        queryClient.setQueryData(progressKeys.active(), context.previousOperations);
       }
 
       const errorMessage = getProviderErrorMessage(error) || "Failed to start crawl";
@@ -330,13 +344,13 @@ export function useUploadDocument() {
     onMutate: async ({ file, metadata }) => {
       // Cancel any outgoing refetches to prevent race conditions
       await queryClient.cancelQueries({ queryKey: knowledgeKeys.summariesPrefix() });
-      await queryClient.cancelQueries({ queryKey: progressKeys.lists() });
+      await queryClient.cancelQueries({ queryKey: progressKeys.active() });
 
       // Snapshot the previous values for rollback
       const previousSummaries = queryClient.getQueriesData<KnowledgeItemsResponse>({
         queryKey: knowledgeKeys.summariesPrefix(),
       });
-      const previousOperations = queryClient.getQueryData<ActiveOperationsResponse>(progressKeys.lists());
+      const previousOperations = queryClient.getQueryData<ActiveOperationsResponse>(progressKeys.active());
 
       // Generate temporary IDs
       const tempProgressId = `temp-upload-${Date.now()}`;
@@ -402,7 +416,7 @@ export function useUploadDocument() {
       };
 
       // Add optimistic operation to active operations
-      queryClient.setQueryData<ActiveOperationsResponse>(progressKeys.lists(), (old) => {
+      queryClient.setQueryData<ActiveOperationsResponse>(progressKeys.active(), (old) => {
         if (!old) {
           return {
             operations: [optimisticOperation],
@@ -440,7 +454,7 @@ export function useUploadDocument() {
         });
 
         // Update progress operation with real progress ID
-        queryClient.setQueryData<ActiveOperationsResponse>(progressKeys.lists(), (old) => {
+        queryClient.setQueryData<ActiveOperationsResponse>(progressKeys.active(), (old) => {
           if (!old) return old;
           return {
             ...old,
@@ -464,7 +478,7 @@ export function useUploadDocument() {
       setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
         queryClient.invalidateQueries({ queryKey: knowledgeKeys.summariesPrefix() });
-        queryClient.invalidateQueries({ queryKey: progressKeys.lists() });
+        queryClient.invalidateQueries({ queryKey: progressKeys.active() });
       }, 1000);
 
       // Don't show success here - upload is just starting in background
@@ -478,7 +492,7 @@ export function useUploadDocument() {
         }
       }
       if (context?.previousOperations) {
-        queryClient.setQueryData(progressKeys.lists(), context.previousOperations);
+        queryClient.setQueryData(progressKeys.active(), context.previousOperations);
       }
 
       // Display the actual error message from backend

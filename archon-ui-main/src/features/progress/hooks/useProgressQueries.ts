@@ -4,7 +4,7 @@
  */
 
 import { type UseQueryResult, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { APIServiceError } from "../../shared/errors";
 import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../shared/queryPatterns";
 import { useSmartPolling } from "../../ui/hooks";
@@ -112,7 +112,7 @@ export function useOperationProgress(
       timers.push(
         setTimeout(() => {
           if (progressId) {
-            queryClient.removeQueries({ queryKey: progressKeys.detail(progressId) });
+            queryClient.removeQueries({ queryKey: progressKeys.detail(progressId), exact: true });
           }
         }, 2000),
       );
@@ -127,7 +127,7 @@ export function useOperationProgress(
       timers.push(
         setTimeout(() => {
           if (progressId) {
-            queryClient.removeQueries({ queryKey: progressKeys.detail(progressId) });
+            queryClient.removeQueries({ queryKey: progressKeys.detail(progressId), exact: true });
           }
         }, 2000),
       );
@@ -142,7 +142,7 @@ export function useOperationProgress(
       timers.push(
         setTimeout(() => {
           if (progressId) {
-            queryClient.removeQueries({ queryKey: progressKeys.detail(progressId) });
+            queryClient.removeQueries({ queryKey: progressKeys.detail(progressId), exact: true });
           }
         }, 5000),
       );
@@ -167,7 +167,7 @@ export function useOperationProgress(
     timers.push(
       setTimeout(() => {
         if (progressId) {
-          queryClient.removeQueries({ queryKey: progressKeys.detail(progressId) });
+          queryClient.removeQueries({ queryKey: progressKeys.detail(progressId), exact: true });
         }
       }, 5000),
     );
@@ -197,7 +197,7 @@ export function useActiveOperations(enabled = false) {
   const { refetchInterval } = useSmartPolling(5000);
 
   return useQuery<ActiveOperationsResponse>({
-    queryKey: progressKeys.lists(),
+    queryKey: progressKeys.active(),
     queryFn: () => progressService.listActiveOperations(),
     enabled,
     refetchInterval: enabled ? refetchInterval : false, // Only poll when explicitly enabled, pause when hidden
@@ -208,21 +208,13 @@ export function useActiveOperations(enabled = false) {
 /**
  * Hook for polling all crawl operations
  * Used in the CrawlingProgress component
+ * Delegates to useActiveOperations for consistency
  */
 export function useCrawlProgressPolling() {
-  const { refetchInterval } = useSmartPolling(5000);
-
-  const { data, isLoading } = useQuery({
-    queryKey: progressKeys.lists(),
-    queryFn: () => progressService.listActiveOperations(),
-    refetchInterval, // Smart polling that pauses when hidden
-    staleTime: STALE_TIMES.instant, // Always fresh for active progress
-  });
-
-  const activeOperations = data?.operations || [];
+  const { data, isLoading } = useActiveOperations(true); // Always enabled for crawling progress
 
   return {
-    activeOperations,
+    activeOperations: data?.operations || [],
     isLoading,
     totalCount: data?.count || 0,
   };
@@ -248,15 +240,16 @@ export function useMultipleOperations(
 
   // Reset tracking sets when progress IDs change
   // Use sorted JSON stringification for stable dependency that handles reordering
+  const progressIdsKey = useMemo(() => JSON.stringify([...progressIds].sort()), [progressIds]);
   useEffect(() => {
     completedIds.current.clear();
     errorIds.current.clear();
     notFoundCounts.current.clear();
-  }, [JSON.stringify([...progressIds].sort())]); // Stable dependency across reorderings
+  }, [progressIdsKey]); // Stable dependency across reorderings
 
   const queries = useQueries({
     queries: progressIds.map((progressId) => ({
-      queryKey: progressKeys.detail(progressId) as readonly unknown[],
+      queryKey: progressKeys.detail(progressId),
       queryFn: async (): Promise<ProgressResponse | null> => {
         try {
           const data = await progressService.getProgress(progressId);
@@ -324,7 +317,7 @@ export function useMultipleOperations(
         // Clean up after completion
         timers.push(
           setTimeout(() => {
-            queryClient.removeQueries({ queryKey: progressKeys.detail(progressId) });
+            queryClient.removeQueries({ queryKey: progressKeys.detail(progressId), exact: true });
           }, 2000),
         );
       }
@@ -337,7 +330,7 @@ export function useMultipleOperations(
         // Clean up after error
         timers.push(
           setTimeout(() => {
-            queryClient.removeQueries({ queryKey: progressKeys.detail(progressId) });
+            queryClient.removeQueries({ queryKey: progressKeys.detail(progressId), exact: true });
           }, 5000),
         );
       }
@@ -364,7 +357,7 @@ export function useMultipleOperations(
       // Clean up after error
       timers.push(
         setTimeout(() => {
-          queryClient.removeQueries({ queryKey: progressKeys.detail(progressId) });
+          queryClient.removeQueries({ queryKey: progressKeys.detail(progressId), exact: true });
         }, 5000),
       );
     });

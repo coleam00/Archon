@@ -280,7 +280,7 @@ describe("taskService", () => {
         title: "Full Task",
         description: "This is a detailed description that should persist",
         status: "todo",
-        assignee: "AI IDE Agent",
+        assignee: "Coding Agent",
         task_order: 100,
         priority: "critical",
         feature: "authentication",

@@ -109,7 +109,8 @@ GET /api/agent-chat/sessions/{id}/messages - Chat messages
 ### Database Types (from backend)
 ```typescript
 type DatabaseTaskStatus = 'todo' | 'doing' | 'review' | 'done';
-type Assignee = 'User' | 'Archon' | 'AI IDE Agent';
+type Assignee = string; // Flexible string to support any agent name
+// Common values: 'User', 'Archon', 'Coding Agent'
 ```
 
 ### Request/Response Types
