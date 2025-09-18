@@ -130,6 +130,13 @@ def register_task_tools(mcp: FastMCP):
                 params["include_closed"] = include_closed
                 if project_id:
                     params["project_id"] = project_id
+            elif filter_by == "assignee" and filter_value:
+                # Use generic tasks endpoint for assignee filtering
+                url = urljoin(api_url, "/api/tasks")
+                params["assignee"] = filter_value
+                params["include_closed"] = include_closed
+                if project_id:
+                    params["project_id"] = project_id
             elif project_id:
                 # Direct project_id parameter provided
                 url = urljoin(api_url, "/api/tasks")
