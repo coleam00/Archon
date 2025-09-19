@@ -4,6 +4,7 @@ __pycache__
 .claude/settings.local.json
 PRPs/local
 PRPs/completed/
+PRPs/stories/
 /logs/
 .zed
 tmp/

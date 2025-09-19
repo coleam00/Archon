@@ -106,6 +106,8 @@ export function useFeatureDetail(id: string | undefined) {
 ## Mutations with Optimistic Updates
 
 ```typescript
+import { createOptimisticEntity, replaceOptimisticEntity } from "@/features/shared/optimistic";
+
 export function useCreateFeature() {
   const queryClient = useQueryClient();
 
@@ -119,13 +121,13 @@ export function useCreateFeature() {
       // Snapshot for rollback
       const previous = queryClient.getQueryData(featureKeys.lists());
 
-      // Optimistic update (use timestamp IDs for now - Phase 3 will use UUIDs)
-      const tempId = `temp-${Date.now()}`;
+      // Optimistic update with nanoid for stable IDs
+      const optimisticEntity = createOptimisticEntity(newData);
       queryClient.setQueryData(featureKeys.lists(), (old: Feature[] = []) =>
-        [...old, { ...newData, id: tempId }]
+        [...old, optimisticEntity]
       );
 
-      return { previous, tempId };
+      return { previous, localId: optimisticEntity._localId };
     },
 
     onError: (err, variables, context) => {
@@ -138,7 +140,7 @@ export function useCreateFeature() {
     onSuccess: (data, variables, context) => {
       // Replace optimistic with real data
       queryClient.setQueryData(featureKeys.lists(), (old: Feature[] = []) =>
-        old.map(item => item.id === context?.tempId ? data : item)
+        replaceOptimisticEntity(old, context?.localId, data)
       );
     },
   });
@@ -176,7 +178,7 @@ vi.mock("../../../shared/queryPatterns", () => ({
 
 Each feature is self-contained:
 
-```
+```text
 src/features/projects/
 ├── components/         # UI components
 ├── hooks/
@@ -189,7 +191,7 @@ src/features/projects/
 
 Sub-features (like tasks under projects) follow the same structure:
 
-```
+```text
 src/features/projects/tasks/
 ├── components/
 ├── hooks/
@@ -220,8 +222,16 @@ When refactoring to these patterns:
 4. **Don't skip mocking in tests** - Mock both services and patterns
 5. **Don't use inconsistent patterns** - Follow the established conventions
 
-## Future Improvements (Phase 3+)
+## Completed Improvements (Phases 1-5)
 
-- Replace timestamp IDs (`temp-${Date.now()}`) with UUIDs
+- ✅ Phase 1: Removed manual frontend ETag cache layer (backend ETags remain; browser-managed)
+- ✅ Phase 2: Standardized query keys with factories
+- ✅ Phase 3: Implemented UUID-based optimistic updates using nanoid
+- ✅ Phase 4: Configured request deduplication
+- ✅ Phase 5: Removed manual cache invalidations
+
+## Future Considerations
+
 - Add Server-Sent Events for real-time updates
-- Consider Zustand for complex client state
+- Consider WebSocket fallback for critical updates
+- Evaluate Zustand for complex client state management
