@@ -6,6 +6,7 @@ Handles extraction and storage of code examples from documents.
 
 import asyncio
 import json
+import time
 import os
 import re
 from collections import defaultdict, deque
@@ -757,14 +758,18 @@ Format your response as JSON:
                     },
                     {"role": "user", "content": prompt},
                 ],
-                response_format={"type": "json_object"},
-                max_tokens=500,
-                temperature=0.3,
-            )
+                "max_tokens": 2000 if (_is_reasoning_model(model_choice) or provider == "grok") else 500,  # 2000 tokens for both reasoning models (GPT-5) and Grok for complex reasoning
+                "temperature": 0.3,
+            }
 
             # Try to use response_format, but handle gracefully if not supported
-            # Note: Grok reasoning models don't work well with response_format
-            if provider in ["openai", "google", "anthropic"] or (provider == "openrouter" and model_choice.startswith("openai/")):
+            # Note: Grok and reasoning models (GPT-5, o1, o3) don't work well with response_format
+            supports_response_format = (
+                provider in ["openai", "google", "anthropic"] or
+                (provider == "openrouter" and model_choice.startswith("openai/"))
+            )
+            # Exclude reasoning models from using response_format
+            if supports_response_format and not _is_reasoning_model(model_choice):
                 request_params["response_format"] = {"type": "json_object"}
 
             # Grok-specific parameter validation and filtering
@@ -783,48 +788,71 @@ Format your response as JSON:
                     if param not in supported_params:
                         search_logger.warning(f"Parameter '{param}' may not be supported by Grok reasoning models")
 
-            start_time = time.time()  # Initialize for all models
+            # Enhanced debugging for Grok provider
+            # Implement retry logic for Grok and reasoning models (GPT-5, o1, o3) empty responses
+            is_reasoning = _is_reasoning_model(model_choice)
 
+            start_time = time.time()  # Initialize for all models
             if provider == "grok" or is_reasoning:
                 model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
                 search_logger.debug(f"{model_type} request params: {request_params}")
                 search_logger.debug(f"{model_type} prompt length: {len(prompt)} characters")
                 search_logger.debug(f"{model_type} prompt preview: {prompt[:200]}...")
 
-            # Simplified retry logic - reduced from 3 to 2 retries to surface issues faster
-            max_retries = 2 if (provider == "grok" or is_reasoning) else 1
+            max_retries = 3 if (provider == "grok" or is_reasoning) else 1
             retry_delay = 1.0  # Start with 1 second delay
             failure_reasons = []  # Track failure reasons for circuit breaker analysis
 
             for attempt in range(max_retries):
                 try:
-                    if provider == "grok" and attempt > 0:
-                        search_logger.info(f"Grok retry attempt {attempt + 1}/{max_retries} after {retry_delay:.1f}s delay")
+                    if (provider == "grok" or is_reasoning) and attempt > 0:
+                        model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
+                        search_logger.info(f"{model_type} retry attempt {attempt + 1}/{max_retries} after {retry_delay:.1f}s delay")
                         await asyncio.sleep(retry_delay)
+                    elif is_reasoning and attempt == 0:
+                        # Small delay for reasoning models on first attempt to help with cold start
+                        search_logger.debug(f"reasoning model ({model_choice}) first attempt - adding 0.5s delay for cold start")
+                        await asyncio.sleep(0.5)
 
-                    response = await client.chat.completions.create(**request_params)
+                    # Convert max_tokens to max_completion_tokens for GPT-5/reasoning models
+                    final_params = prepare_chat_completion_params(model_choice, request_params)
+                    response = await client.chat.completions.create(**final_params)
 
                     # Check for empty response - handle Grok reasoning models
                     message = response.choices[0].message if response.choices else None
                     response_content = None
 
-                    # Enhanced Grok debugging - log both content fields
-                    if provider == "grok" and message:
+                    # Enhanced debugging for Grok and reasoning models - log both content fields
+                    if (provider == "grok" or is_reasoning) and message:
                         content_preview = message.content[:100] if message.content else "None"
-                        reasoning_preview = getattr(message, 'reasoning_content', 'N/A')[:100] if hasattr(message, 'reasoning_content') and getattr(message, 'reasoning_content') else "None"
-                        search_logger.debug(f"Grok response fields - content: '{content_preview}', reasoning_content: '{reasoning_preview}'")
+                        reasoning_preview = getattr(message, 'reasoning_content', 'N/A')[:100] if hasattr(message, 'reasoning_content') and message.reasoning_content else "None"
+                        model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
+
+                        # Additional debugging for first attempt failures
+                        finish_reason = getattr(response.choices[0], 'finish_reason', 'unknown') if response.choices else 'no_choices'
+                        usage_info = getattr(response, 'usage', None)
+                        if usage_info:
+                            completion_tokens = getattr(usage_info, 'completion_tokens', 0)
+                            reasoning_tokens = getattr(getattr(usage_info, 'completion_tokens_details', None), 'reasoning_tokens', 0) if hasattr(usage_info, 'completion_tokens_details') else 0
+                            search_logger.debug(f"{model_type} attempt {attempt + 1} - finish_reason: {finish_reason}, completion_tokens: {completion_tokens}, reasoning_tokens: {reasoning_tokens}")
+                        else:
+                            search_logger.debug(f"{model_type} attempt {attempt + 1} - finish_reason: {finish_reason}, no usage info")
+
+                        search_logger.debug(f"{model_type} response fields - content: '{content_preview}', reasoning_content: '{reasoning_preview}'")
 
                     if message:
-                        # For Grok reasoning models, check content first, then reasoning_content
-                        if provider == "grok":
+                        # For Grok and reasoning models, check content first, then reasoning_content
+                        if provider == "grok" or is_reasoning:
                             # First try content (where final answer should be)
                             if message.content and message.content.strip():
                                 response_content = message.content.strip()
-                                search_logger.debug(f"Grok using content field: {len(response_content)} chars")
+                                model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
+                                search_logger.debug(f"{model_type} using content field: {len(response_content)} chars")
                             # Fallback to reasoning_content if content is empty
                             elif hasattr(message, 'reasoning_content') and message.reasoning_content:
                                 response_content = message.reasoning_content.strip()
-                                search_logger.debug(f"Grok fallback to reasoning_content: {len(response_content)} chars")
+                                model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
+                                search_logger.debug(f"{model_type} fallback to reasoning_content: {len(response_content)} chars")
                             else:
                                 search_logger.debug(f"Grok no content in either field: content='{message.content}', reasoning_content='{getattr(message, 'reasoning_content', 'N/A')}'")
                         elif message.content:
@@ -834,50 +862,35 @@ Format your response as JSON:
 
                     if response_content and response_content.strip():
                         # Success - break out of retry loop
-                        if provider == "grok" and attempt > 0:
-                            search_logger.info(f"Grok request succeeded on attempt {attempt + 1}")
+                        if (provider == "grok" or is_reasoning) and attempt > 0:
+                            model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
+                            search_logger.info(f"{model_type} request succeeded on attempt {attempt + 1}")
                         break
                     elif (provider == "grok" or is_reasoning) and attempt < max_retries - 1:
-                        # Empty response from Grok or reasoning models - track failure and retry
+                        # Empty response from Grok or reasoning models - retry with exponential backoff
                         model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
-                        failure_reason = f"empty_response_attempt_{attempt + 1}"
-                        failure_reasons.append(failure_reason)
-
                         search_logger.warning(f"{model_type} empty response on attempt {attempt + 1}, retrying...")
-
                         retry_delay *= 2  # Exponential backoff
                         continue
                     else:
-                        # Final attempt failed or not Grok - handle below
+                        # Final attempt failed or not Grok/reasoning model - handle below
                         break
 
                 except Exception as e:
                     if (provider == "grok" or is_reasoning) and attempt < max_retries - 1:
                         model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
-                        failure_reason = f"exception_attempt_{attempt + 1}_{type(e).__name__}"
-                        failure_reasons.append(failure_reason)
-
                         search_logger.error(f"{model_type} request failed on attempt {attempt + 1}: {e}, retrying...")
                         retry_delay *= 2
                         continue
                     else:
                         # Re-raise on final attempt or non-Grok/reasoning providers
-                        if failure_reasons:
-                            # Add structured failure analysis for circuit breaker pattern
-                            failure_analysis = {
-                                "total_attempts": attempt + 1,
-                                "failure_pattern": failure_reasons,
-                                "final_error": str(e),
-                                "model": model_choice,
-                                "provider": provider
-                            }
-                            search_logger.error(f"Circuit breaker analysis: {failure_analysis}")
                         raise
 
-            # Log timing for Grok requests
-            if provider == "grok":
+            # Log timing for Grok and reasoning model requests
+            if provider == "grok" or is_reasoning:
                 elapsed_time = time.time() - start_time
-                search_logger.debug(f"Grok total response time: {elapsed_time:.2f}s")
+                model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
+                search_logger.debug(f"{model_type} total response time: {elapsed_time:.2f}s")
 
             # Handle empty response with streamlined fallback logic
             if not response_content:
@@ -916,8 +929,65 @@ Format your response as JSON:
                         failure_reason = f"empty_response_attempt_{attempt + 1}"
                         failure_reasons.append(failure_reason)
 
-                        search_logger.warning(f"{model_type} empty response on attempt {attempt + 1}, retrying...")
+                        async with get_llm_client(provider="openai") as fallback_client:
+                            search_logger.info("Using OpenAI fallback for Grok failure")
+                            # Convert max_tokens to max_completion_tokens for GPT-5/reasoning models
+                            final_fallback_params = prepare_chat_completion_params(fallback_params["model"], fallback_params)
+                            fallback_response = await fallback_client.chat.completions.create(**final_fallback_params)
+                            fallback_content = fallback_response.choices[0].message.content
 
+                            if fallback_content and fallback_content.strip():
+                                search_logger.info("OpenAI fallback succeeded")
+                                response_content = fallback_content.strip()
+                            else:
+                                search_logger.error("OpenAI fallback also returned empty response")
+                                raise ValueError("Both Grok and OpenAI fallback failed")
+
+                    except Exception as fallback_error:
+                        search_logger.error(f"OpenAI fallback failed: {fallback_error}")
+                        raise ValueError(f"Grok failed and fallback to OpenAI also failed: {fallback_error}") from fallback_error
+                elif is_reasoning:
+                    # Implement fallback for reasoning model (GPT-5, o1, o3) failures
+                    search_logger.error("Reasoning model empty response debugging:")
+                    search_logger.error(f"  - Model: {model_choice}")
+                    search_logger.error(f"  - Provider: {provider}")
+                    search_logger.error(f"  - Request took: {elapsed_time:.2f}s")
+                    search_logger.error(f"  - Full response: {response}")
+                    search_logger.error(f"  - Response choices length: {len(response.choices) if response.choices else 0}")
+                    if response.choices:
+                        search_logger.error(f"  - First choice: {response.choices[0]}")
+                        search_logger.error(f"  - Message content: '{response.choices[0].message.content}'")
+                        search_logger.error(f"  - Message role: {response.choices[0].message.role}")
+                    search_logger.error("Check: 1) API key validity, 2) rate limits, 3) model availability")
+
+                    # Implement fallback to non-reasoning model for reasoning model failures
+                    search_logger.warning(f"Attempting fallback to gpt-4o-mini due to {model_choice} failure...")
+                    try:
+                        # Use a reliable non-reasoning model as fallback
+                        fallback_params = {
+                            "model": "gpt-4o-mini",
+                            "messages": request_params["messages"],
+                            "max_tokens": request_params.get("max_tokens", 500),
+                            "temperature": request_params.get("temperature", 0.3),
+                            "response_format": {"type": "json_object"}
+                        }
+
+                        async with get_llm_client(provider="openai") as fallback_client:
+                            search_logger.info(f"Using gpt-4o-mini fallback for {model_choice} failure")
+                            # No parameter conversion needed for non-reasoning model
+                            fallback_response = await fallback_client.chat.completions.create(**fallback_params)
+                            fallback_content = fallback_response.choices[0].message.content
+
+                            if fallback_content and fallback_content.strip():
+                                search_logger.info(f"gpt-4o-mini fallback succeeded for {model_choice}")
+                                response_content = fallback_content.strip()
+                            else:
+                                search_logger.error("gpt-4o-mini fallback also returned empty response")
+                                raise ValueError(f"Both {model_choice} and gpt-4o-mini fallback failed")
+
+                    except Exception as fallback_error:
+                        search_logger.error(f"gpt-4o-mini fallback failed: {fallback_error}")
+                        raise ValueError(f"{model_choice} failed and fallback to gpt-4o-mini also failed: {fallback_error}") from fallback_error
                 else:
                     # No fallback attempted - fail fast with detailed context
                     search_logger.error(f"No fallback configured for {provider}/{model_choice} - failing fast")

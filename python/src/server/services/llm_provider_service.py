@@ -500,6 +500,7 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
                 base_url=base_url or "https://api.x.ai/v1",
             )
             logger.info("Grok client created successfully")
+
         else:
             raise ValueError(f"Unsupported LLM provider: {provider_name}")
 
@@ -774,7 +775,6 @@ def requires_max_completion_tokens(model_name: str) -> bool:
         "o1",           # o1, o1-mini, o1-preview, etc.
         "o3",           # o3, o3-mini, etc.
         "gpt-5",        # gpt-5, gpt-5-nano, gpt-5-mini, etc.
-        "grok-3",       # grok-3 series are reasoning models
     ]
 
     # Check for reasoning models (including OpenRouter prefixed models)

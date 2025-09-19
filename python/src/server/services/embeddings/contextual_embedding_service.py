@@ -10,7 +10,7 @@ import os
 import openai
 
 from ...config.logfire_config import search_logger
-from ..llm_provider_service import get_llm_client
+from ..llm_provider_service import get_llm_client, prepare_chat_completion_params, requires_max_completion_tokens
 from ..threading_service import get_threading_service
 from ..credential_service import credential_service
 
@@ -64,18 +64,21 @@ Please give a short succinct context to situate this chunk within the overall do
                 # Get model from provider configuration
                 model = await _get_model_choice(provider)
 
-                response = await client.chat.completions.create(
-                    model=model,
-                    messages=[
+                # Prepare parameters and convert max_tokens for GPT-5/reasoning models
+                params = {
+                    "model": model,
+                    "messages": [
                         {
                             "role": "system",
                             "content": "You are a helpful assistant that provides concise contextual information.",
                         },
                         {"role": "user", "content": prompt},
                     ],
-                    temperature=0.3,
-                    max_tokens=200,
-                )
+                    "temperature": 0.3,
+                    "max_tokens": 1200 if requires_max_completion_tokens(model) else 200,  # Much more tokens for reasoning models (GPT-5 needs extra for reasoning process)
+                }
+                final_params = prepare_chat_completion_params(model, params)
+                response = await client.chat.completions.create(**final_params)
 
                 context = response.choices[0].message.content.strip()
                 contextual_text = f"{context}\n---\n{chunk}"
@@ -192,18 +195,21 @@ async def generate_contextual_embeddings_batch(
             batch_prompt += "For each chunk, provide a short succinct context to situate it within the overall document for improving search retrieval. Format your response as:\\nCHUNK 1: [context]\\nCHUNK 2: [context]\\netc."
 
             # Make single API call for ALL chunks
-            response = await client.chat.completions.create(
-                model=model_choice,
-                messages=[
+            # Prepare parameters and convert max_tokens for GPT-5/reasoning models
+            batch_params = {
+                "model": model_choice,
+                "messages": [
                     {
                         "role": "system",
                         "content": "You are a helpful assistant that generates contextual information for document chunks.",
                     },
                     {"role": "user", "content": batch_prompt},
                 ],
-                temperature=0,
-                max_tokens=100 * len(chunks),  # Limit response size
-            )
+                "temperature": 0,
+                "max_tokens": (600 if requires_max_completion_tokens(model_choice) else 100) * len(chunks),  # Much more tokens for reasoning models (GPT-5 needs extra reasoning space)
+            }
+            final_batch_params = prepare_chat_completion_params(model_choice, batch_params)
+            response = await client.chat.completions.create(**final_batch_params)
 
             # Parse response
             response_text = response.choices[0].message.content
