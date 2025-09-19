@@ -10,7 +10,7 @@ import os
 import openai
 
 from ...config.logfire_config import search_logger
-from ..llm_provider_service import get_llm_client
+from ..llm_provider_service import get_llm_client, prepare_llm_params
 from ..threading_service import get_threading_service
 
 
@@ -65,6 +65,10 @@ Please give a short succinct context to situate this chunk within the overall do
                 # Get model from provider configuration
                 model = await _get_model_choice(provider)
 
+                # Prepare compatible parameters for the API call
+                params = prepare_llm_params(provider or "openai", model,
+                                          temperature=0.3, max_tokens=200)
+
                 response = await client.chat.completions.create(
                     model=model,
                     messages=[
@@ -74,8 +78,7 @@ Please give a short succinct context to situate this chunk within the overall do
                         },
                         {"role": "user", "content": prompt},
                     ],
-                    temperature=0.3,
-                    max_tokens=200,
+                    **params
                 )
 
                 context = response.choices[0].message.content.strip()
@@ -122,7 +125,7 @@ async def _get_model_choice(provider: str | None = None) -> str:
     # Handle empty model case - fallback to provider-specific defaults or explicit config
     if not model:
         search_logger.warning(f"chat_model is empty for provider {provider_name}, using fallback logic")
-        
+
         if provider_name == "ollama":
             # Try to get OLLAMA_CHAT_MODEL specifically
             try:
@@ -143,7 +146,7 @@ async def _get_model_choice(provider: str | None = None) -> str:
         else:
             # OpenAI or other providers
             model = "gpt-4o-mini"
-    
+
     search_logger.debug(f"Using model from credential service: {model}")
 
     return model
@@ -187,6 +190,10 @@ async def generate_contextual_embeddings_batch(
 
             batch_prompt += "For each chunk, provide a short succinct context to situate it within the overall document for improving search retrieval. Format your response as:\\nCHUNK 1: [context]\\nCHUNK 2: [context]\\netc."
 
+            # Prepare compatible parameters for the API call
+            params = prepare_llm_params(provider or "openai", model_choice,
+                                      temperature=0, max_tokens=100 * len(chunks))
+
             # Make single API call for ALL chunks
             response = await client.chat.completions.create(
                 model=model_choice,
@@ -197,8 +204,7 @@ async def generate_contextual_embeddings_batch(
                     },
                     {"role": "user", "content": batch_prompt},
                 ],
-                temperature=0,
-                max_tokens=100 * len(chunks),  # Limit response size
+                **params
             )
 
             # Parse response

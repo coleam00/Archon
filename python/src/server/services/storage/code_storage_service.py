@@ -507,7 +507,7 @@ def generate_code_example_summary(
         A dictionary with 'summary' and 'example_name'
     """
     import asyncio
-    
+
     # Run the async version in the current thread
     return asyncio.run(_generate_code_example_summary_async(code, context_before, context_after, language, provider))
 
@@ -518,8 +518,8 @@ async def _generate_code_example_summary_async(
     """
     Async version of generate_code_example_summary using unified LLM provider service.
     """
-    from ..llm_provider_service import get_llm_client
-    
+    from ..llm_provider_service import get_llm_client, prepare_llm_params
+
     # Get model choice from credential service (RAG setting)
     model_choice = _get_model_choice()
 
@@ -555,7 +555,11 @@ Format your response as JSON:
             search_logger.info(
                 f"Generating summary for {hash(code) & 0xffffff:06x} using model: {model_choice}"
             )
-            
+
+            # Prepare compatible parameters for the API call
+            params = prepare_llm_params(provider or "openai", model_choice,
+                                      max_tokens=500, temperature=0.3)
+
             response = await client.chat.completions.create(
                 model=model_choice,
                 messages=[
@@ -566,8 +570,7 @@ Format your response as JSON:
                     {"role": "user", "content": prompt},
                 ],
                 response_format={"type": "json_object"},
-                max_tokens=500,
-                temperature=0.3,
+                **params
             )
 
             response_content = response.choices[0].message.content.strip()
@@ -848,14 +851,14 @@ async def add_code_examples_to_supabase(
         # Use only successful embeddings
         valid_embeddings = result.embeddings
         successful_texts = result.texts_processed
-        
+
         # Get model information for tracking
-        from ..llm_provider_service import get_embedding_model
         from ..credential_service import credential_service
-        
+        from ..llm_provider_service import get_embedding_model
+
         # Get embedding model name
         embedding_model_name = await get_embedding_model(provider=provider)
-        
+
         # Get LLM chat model (used for code summaries and contextual embeddings if enabled)
         llm_chat_model = None
         try:
@@ -908,7 +911,7 @@ async def add_code_examples_to_supabase(
             # Determine the correct embedding column based on dimension
             embedding_dim = len(embedding) if isinstance(embedding, list) else len(embedding.tolist())
             embedding_column = None
-            
+
             if embedding_dim == 768:
                 embedding_column = "embedding_768"
             elif embedding_dim == 1024:
@@ -921,7 +924,7 @@ async def add_code_examples_to_supabase(
                 # Default to closest supported dimension
                 search_logger.warning(f"Unsupported embedding dimension {embedding_dim}, using embedding_1536")
                 embedding_column = "embedding_1536"
-            
+
             batch_data.append({
                 "url": urls[idx],
                 "chunk_number": chunk_numbers[idx],
