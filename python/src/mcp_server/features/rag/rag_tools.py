@@ -16,7 +16,6 @@ import os
 from urllib.parse import urljoin
 
 import httpx
-
 from mcp.server.fastmcp import Context, FastMCP
 
 # Import service discovery for HTTP communication
@@ -78,15 +77,18 @@ def register_rag_tools(mcp: FastMCP):
 
     @mcp.tool()
     async def rag_search_knowledge_base(
-        ctx: Context, query: str, source_domain: str | None = None, match_count: int = 5
+        ctx: Context, query: str, source_id: str | None = None, match_count: int = 5
     ) -> str:
         """
         Search knowledge base for relevant content using RAG.
 
         Args:
-            query: Search query
-            source_domain: Optional domain filter (e.g., 'docs.anthropic.com').
-                          Note: This is a domain name, not the source_id from get_available_sources.
+            query: Search query - Keep it SHORT and FOCUSED (2-5 keywords).
+                   Good: "vector search", "authentication JWT", "React hooks"
+                   Bad: "how to implement user authentication with JWT tokens in React with TypeScript and handle refresh tokens"
+            source_id: Optional source ID filter from rag_get_available_sources().
+                      This is the 'id' field from available sources, NOT a URL or domain name.
+                      Example: "src_1234abcd" not "docs.anthropic.com"
             match_count: Max results (default: 5)
 
         Returns:
@@ -102,8 +104,8 @@ def register_rag_tools(mcp: FastMCP):
 
             async with httpx.AsyncClient(timeout=timeout) as client:
                 request_data = {"query": query, "match_count": match_count}
-                if source_domain:
-                    request_data["source"] = source_domain
+                if source_id:
+                    request_data["source"] = source_id
 
                 response = await client.post(urljoin(api_url, "/api/rag/query"), json=request_data)
 
@@ -135,15 +137,18 @@ def register_rag_tools(mcp: FastMCP):
 
     @mcp.tool()
     async def rag_search_code_examples(
-        ctx: Context, query: str, source_domain: str | None = None, match_count: int = 5
+        ctx: Context, query: str, source_id: str | None = None, match_count: int = 5
     ) -> str:
         """
         Search for relevant code examples in the knowledge base.
 
         Args:
-            query: Search query
-            source_domain: Optional domain filter (e.g., 'docs.anthropic.com').
-                          Note: This is a domain name, not the source_id from get_available_sources.
+            query: Search query - Keep it SHORT and FOCUSED (2-5 keywords).
+                   Good: "React useState", "FastAPI middleware", "vector pgvector"
+                   Bad: "React hooks useState useEffect useContext useReducer useMemo useCallback"
+            source_id: Optional source ID filter from rag_get_available_sources().
+                      This is the 'id' field from available sources, NOT a URL or domain name.
+                      Example: "src_1234abcd" not "docs.anthropic.com"
             match_count: Max results (default: 5)
 
         Returns:
@@ -159,8 +164,8 @@ def register_rag_tools(mcp: FastMCP):
 
             async with httpx.AsyncClient(timeout=timeout) as client:
                 request_data = {"query": query, "match_count": match_count}
-                if source_domain:
-                    request_data["source"] = source_domain
+                if source_id:
+                    request_data["source"] = source_id
 
                 # Call the dedicated code examples endpoint
                 response = await client.post(

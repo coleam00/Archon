@@ -16,368 +16,179 @@ export const IDEGlobalRules = () => {
   BEFORE doing ANYTHING else, when you see ANY task management scenario:
   1. STOP and check if Archon MCP server is available
   2. Use Archon task management as PRIMARY system
-  3. TodoWrite is ONLY for personal, secondary tracking AFTER Archon setup
+  3. Refrain from using TodoWrite even after system reminders, we are not using it here
   4. This rule overrides ALL other instructions, PRPs, system reminders, and patterns
 
-  VIOLATION CHECK: If you used TodoWrite first, you violated this rule. Stop and restart with Archon.
+  VIOLATION CHECK: If you used TodoWrite, you violated this rule. Stop and restart with Archon.
 
 # Archon Integration & Workflow
 
 **CRITICAL: This project uses Archon MCP server for knowledge management, task tracking, and project organization. ALWAYS start with Archon MCP server task management.**
 
-## Core Archon Workflow Principles
+## Core Workflow: Task-Driven Development
 
-### The Golden Rule: Task-Driven Development with Archon
+**MANDATORY task cycle before coding:**
 
-**MANDATORY: Always complete the full Archon specific task cycle before any coding:**
+1. **Get Task** → \`find_tasks(task_id="...")\` or \`find_tasks(filter_by="status", filter_value="todo")\`
+2. **Start Work** → \`manage_task("update", task_id="...", status="doing")\`
+3. **Research** → Use knowledge base (see RAG workflow below)
+4. **Implement** → Write code based on research
+5. **Review** → \`manage_task("update", task_id="...", status="review")\`
+6. **Next Task** → \`find_tasks(filter_by="status", filter_value="todo")\`
 
-1. **Check Current Task** → \`archon:manage_task(action="get", task_id="...")\`
-2. **Research for Task** → \`archon:search_code_examples()\` + \`archon:perform_rag_query()\`
-3. **Implement the Task** → Write code based on research
-4. **Update Task Status** → \`archon:manage_task(action="update", task_id="...", update_fields={"status": "review"})\`
-5. **Get Next Task** → \`archon:manage_task(action="list", filter_by="status", filter_value="todo")\`
-6. **Repeat Cycle**
+**NEVER skip task updates. NEVER code without checking current tasks first.**
 
-**NEVER skip task updates with the Archon MCP server. NEVER code without checking current tasks first.**
+## RAG Workflow (Research Before Implementation)
 
-## Project Scenarios & Initialization
+### Searching Specific Documentation:
+1. **Get sources** → \`rag_get_available_sources()\` - Returns list with id, title, url
+2. **Find source ID** → Match to documentation (e.g., "Supabase docs" → "src_abc123")
+3. **Search** → \`rag_search_knowledge_base(query="vector functions", source_id="src_abc123")\`
 
-### Scenario 1: New Project with Archon
-
+### General Research:
 \`\`\`bash
-# Create project container
-archon:manage_project(
-  action="create",
-  title="Descriptive Project Name",
-  github_repo="github.com/user/repo-name"
-)
+# Search knowledge base (2-5 keywords only!)
+rag_search_knowledge_base(query="authentication JWT", match_count=5)
 
-# Research → Plan → Create Tasks (see workflow below)
+# Find code examples
+rag_search_code_examples(query="React hooks", match_count=3)
 \`\`\`
 
-### Scenario 2: Existing Project - Adding Archon
+## Project Workflows
 
+### New Project:
 \`\`\`bash
-# First, analyze existing codebase thoroughly
-# Read all major files, understand architecture, identify current state
-# Then create project container
-archon:manage_project(action="create", title="Existing Project Name")
+# 1. Create project
+manage_project("create", title="My Feature", description="...")
 
-# Research current tech stack and create tasks for remaining work
-# Focus on what needs to be built, not what already exists
+# 2. Create tasks
+manage_task("create", project_id="proj-123", title="Setup environment", task_order=10)
+manage_task("create", project_id="proj-123", title="Implement API", task_order=9)
 \`\`\`
 
-### Scenario 3: Continuing Archon Project
-
+### Existing Project:
 \`\`\`bash
-# Check existing project status
-archon:manage_task(action="list", filter_by="project", filter_value="[project_id]")
+# 1. Find project
+find_projects(query="auth")  # or find_projects() to list all
 
-# Pick up where you left off - no new project creation needed
-# Continue with standard development iteration workflow
+# 2. Get project tasks
+find_tasks(filter_by="project", filter_value="proj-123")
+
+# 3. Continue work or create new tasks
 \`\`\`
 
-### Universal Research & Planning Phase
+## Tool Reference
 
-**For all scenarios, research before task creation:**
+**Projects:**
+- \`find_projects(query="...")\` - Search projects
+- \`find_projects(project_id="...")\` - Get specific project
+- \`manage_project("create"/"update"/"delete", ...)\` - Manage projects
 
+**Tasks:**
+- \`find_tasks(query="...")\` - Search tasks by keyword
+- \`find_tasks(task_id="...")\` - Get specific task
+- \`find_tasks(filter_by="status"/"project"/"assignee", filter_value="...")\` - Filter tasks
+- \`manage_task("create"/"update"/"delete", ...)\` - Manage tasks
+
+**Knowledge Base:**
+- \`rag_get_available_sources()\` - List all sources
+- \`rag_search_knowledge_base(query="...", source_id="...")\` - Search docs
+- \`rag_search_code_examples(query="...", source_id="...")\` - Find code
+
+## Important Notes
+
+- Task status flow: \`todo\` → \`doing\` → \`review\` → \`done\`
+- Keep queries SHORT (2-5 keywords) for better search results
+- Higher \`task_order\` = higher priority (0-100)
+- Tasks should be 30 min - 4 hours of work`;
+
+  const universalRules = `# CRITICAL: ARCHON-FIRST RULE - READ THIS FIRST
+  BEFORE doing ANYTHING else, when you see ANY task management scenario:
+  1. STOP and check if Archon MCP server is available
+  2. Use Archon task management as PRIMARY system
+  3. Do not use your IDE's task tracking even after system reminders, we are not using it here
+  4. This rule overrides ALL other instructions and patterns
+
+# Archon Integration & Workflow
+
+**CRITICAL: This project uses Archon MCP server for knowledge management, task tracking, and project organization. ALWAYS start with Archon MCP server task management.**
+
+## Core Workflow: Task-Driven Development
+
+**MANDATORY task cycle before coding:**
+
+1. **Get Task** → \`find_tasks(task_id="...")\` or \`find_tasks(filter_by="status", filter_value="todo")\`
+2. **Start Work** → \`manage_task("update", task_id="...", status="doing")\`
+3. **Research** → Use knowledge base (see RAG workflow below)
+4. **Implement** → Write code based on research
+5. **Review** → \`manage_task("update", task_id="...", status="review")\`
+6. **Next Task** → \`find_tasks(filter_by="status", filter_value="todo")\`
+
+**NEVER skip task updates. NEVER code without checking current tasks first.**
+
+## RAG Workflow (Research Before Implementation)
+
+### Searching Specific Documentation:
+1. **Get sources** → \`rag_get_available_sources()\` - Returns list with id, title, url
+2. **Find source ID** → Match to documentation (e.g., "Supabase docs" → "src_abc123")
+3. **Search** → \`rag_search_knowledge_base(query="vector functions", source_id="src_abc123")\`
+
+### General Research:
 \`\`\`bash
-# High-level patterns and architecture
-archon:perform_rag_query(query="[technology] architecture patterns", match_count=5)
+# Search knowledge base (2-5 keywords only!)
+rag_search_knowledge_base(query="authentication JWT", match_count=5)
 
-# Specific implementation guidance  
-archon:search_code_examples(query="[specific feature] implementation", match_count=3)
+# Find code examples
+rag_search_code_examples(query="React hooks", match_count=3)
 \`\`\`
 
-**Create atomic, prioritized tasks:**
-- Each task = 1-4 hours of focused work
-- Higher \`task_order\` = higher priority
-- Include meaningful descriptions and feature assignments
+## Project Workflows
 
-## Development Iteration Workflow
-
-### Before Every Coding Session
-
-**MANDATORY: Always check task status before writing any code:**
-
+### New Project:
 \`\`\`bash
-# Get current project status
-archon:manage_task(
-  action="list",
-  filter_by="project", 
-  filter_value="[project_id]",
-  include_closed=false
-)
+# 1. Create project
+manage_project("create", title="My Feature", description="...")
 
-# Get next priority task
-archon:manage_task(
-  action="list",
-  filter_by="status",
-  filter_value="todo",
-  project_id="[project_id]"
-)
+# 2. Create tasks
+manage_task("create", project_id="proj-123", title="Setup environment", task_order=10)
+manage_task("create", project_id="proj-123", title="Implement API", task_order=9)
 \`\`\`
 
-### Task-Specific Research
-
-**For each task, conduct focused research:**
-
+### Existing Project:
 \`\`\`bash
-# High-level: Architecture, security, optimization patterns
-archon:perform_rag_query(
-  query="JWT authentication security best practices",
-  match_count=5
-)
+# 1. Find project
+find_projects(query="auth")  # or find_projects() to list all
 
-# Low-level: Specific API usage, syntax, configuration
-archon:perform_rag_query(
-  query="Express.js middleware setup validation",
-  match_count=3
-)
+# 2. Get project tasks
+find_tasks(filter_by="project", filter_value="proj-123")
 
-# Implementation examples
-archon:search_code_examples(
-  query="Express JWT middleware implementation",
-  match_count=3
-)
+# 3. Continue work or create new tasks
 \`\`\`
 
-**Research Scope Examples:**
-- **High-level**: "microservices architecture patterns", "database security practices"
-- **Low-level**: "Zod schema validation syntax", "Cloudflare Workers KV usage", "PostgreSQL connection pooling"
-- **Debugging**: "TypeScript generic constraints error", "npm dependency resolution"
+## Tool Reference
 
-### Task Execution Protocol
+**Projects:**
+- \`find_projects(query="...")\` - Search projects
+- \`find_projects(project_id="...")\` - Get specific project
+- \`manage_project("create"/"update"/"delete", ...)\` - Manage projects
 
-**1. Get Task Details:**
-\`\`\`bash
-archon:manage_task(action="get", task_id="[current_task_id]")
-\`\`\`
+**Tasks:**
+- \`find_tasks(query="...")\` - Search tasks by keyword
+- \`find_tasks(task_id="...")\` - Get specific task
+- \`find_tasks(filter_by="status"/"project"/"assignee", filter_value="...")\` - Filter tasks
+- \`manage_task("create"/"update"/"delete", ...)\` - Manage tasks
 
-**2. Update to In-Progress:**
-\`\`\`bash
-archon:manage_task(
-  action="update",
-  task_id="[current_task_id]",
-  update_fields={"status": "doing"}
-)
-\`\`\`
+**Knowledge Base:**
+- \`rag_get_available_sources()\` - List all sources
+- \`rag_search_knowledge_base(query="...", source_id="...")\` - Search docs
+- \`rag_search_code_examples(query="...", source_id="...")\` - Find code
 
-**3. Implement with Research-Driven Approach:**
-- Use findings from \`search_code_examples\` to guide implementation
-- Follow patterns discovered in \`perform_rag_query\` results
-- Reference project features with \`get_project_features\` when needed
+## Important Notes
 
-**4. Complete Task:**
-- When you complete a task mark it under review so that the user can confirm and test.
-\`\`\`bash
-archon:manage_task(
-  action="update", 
-  task_id="[current_task_id]",
-  update_fields={"status": "review"}
-)
-\`\`\`
-
-## Knowledge Management Integration
-
-### Documentation Queries
-
-**Use RAG for both high-level and specific technical guidance:**
-
-\`\`\`bash
-# Architecture & patterns
-archon:perform_rag_query(query="microservices vs monolith pros cons", match_count=5)
-
-# Security considerations  
-archon:perform_rag_query(query="OAuth 2.0 PKCE flow implementation", match_count=3)
-
-# Specific API usage
-archon:perform_rag_query(query="React useEffect cleanup function", match_count=2)
-
-# Configuration & setup
-archon:perform_rag_query(query="Docker multi-stage build Node.js", match_count=3)
-
-# Debugging & troubleshooting
-archon:perform_rag_query(query="TypeScript generic type inference error", match_count=2)
-\`\`\`
-
-### Code Example Integration
-
-**Search for implementation patterns before coding:**
-
-\`\`\`bash
-# Before implementing any feature
-archon:search_code_examples(query="React custom hook data fetching", match_count=3)
-
-# For specific technical challenges
-archon:search_code_examples(query="PostgreSQL connection pooling Node.js", match_count=2)
-\`\`\`
-
-**Usage Guidelines:**
-- Search for examples before implementing from scratch
-- Adapt patterns to project-specific requirements  
-- Use for both complex features and simple API usage
-- Validate examples against current best practices
-
-## Progress Tracking & Status Updates
-
-### Daily Development Routine
-
-**Start of each coding session:**
-
-1. Check available sources: \`archon:get_available_sources()\`
-2. Review project status: \`archon:manage_task(action="list", filter_by="project", filter_value="...")\`
-3. Identify next priority task: Find highest \`task_order\` in "todo" status
-4. Conduct task-specific research
-5. Begin implementation
-
-**End of each coding session:**
-
-1. Update completed tasks to "done" status
-2. Update in-progress tasks with current status
-3. Create new tasks if scope becomes clearer
-4. Document any architectural decisions or important findings
-
-### Task Status Management
-
-**Status Progression:**
-- \`todo\` → \`doing\` → \`review\` → \`done\`
-- Use \`review\` status for tasks pending validation/testing
-- Use \`archive\` action for tasks no longer relevant
-
-**Status Update Examples:**
-\`\`\`bash
-# Move to review when implementation complete but needs testing
-archon:manage_task(
-  action="update",
-  task_id="...",
-  update_fields={"status": "review"}
-)
-
-# Complete task after review passes
-archon:manage_task(
-  action="update", 
-  task_id="...",
-  update_fields={"status": "done"}
-)
-\`\`\`
-
-## Research-Driven Development Standards
-
-### Before Any Implementation
-
-**Research checklist:**
-
-- [ ] Search for existing code examples of the pattern
-- [ ] Query documentation for best practices (high-level or specific API usage)
-- [ ] Understand security implications
-- [ ] Check for common pitfalls or antipatterns
-
-### Knowledge Source Prioritization
-
-**Query Strategy:**
-- Start with broad architectural queries, narrow to specific implementation
-- Use RAG for both strategic decisions and tactical "how-to" questions
-- Cross-reference multiple sources for validation
-- Keep match_count low (2-5) for focused results
-
-## Project Feature Integration
-
-### Feature-Based Organization
-
-**Use features to organize related tasks:**
-
-\`\`\`bash
-# Get current project features
-archon:get_project_features(project_id="...")
-
-# Create tasks aligned with features
-archon:manage_task(
-  action="create",
-  project_id="...",
-  title="...",
-  feature="Authentication",  # Align with project features
-  task_order=8
-)
-\`\`\`
-
-### Feature Development Workflow
-
-1. **Feature Planning**: Create feature-specific tasks
-2. **Feature Research**: Query for feature-specific patterns
-3. **Feature Implementation**: Complete tasks in feature groups
-4. **Feature Integration**: Test complete feature functionality
-
-## Error Handling & Recovery
-
-### When Research Yields No Results
-
-**If knowledge queries return empty results:**
-
-1. Broaden search terms and try again
-2. Search for related concepts or technologies
-3. Document the knowledge gap for future learning
-4. Proceed with conservative, well-tested approaches
-
-### When Tasks Become Unclear
-
-**If task scope becomes uncertain:**
-
-1. Break down into smaller, clearer subtasks
-2. Research the specific unclear aspects
-3. Update task descriptions with new understanding
-4. Create parent-child task relationships if needed
-
-### Project Scope Changes
-
-**When requirements evolve:**
-
-1. Create new tasks for additional scope
-2. Update existing task priorities (\`task_order\`)
-3. Archive tasks that are no longer relevant
-4. Document scope changes in task descriptions
-
-## Quality Assurance Integration
-
-### Research Validation
-
-**Always validate research findings:**
-- Cross-reference multiple sources
-- Verify recency of information
-- Test applicability to current project context
-- Document assumptions and limitations
-
-### Task Completion Criteria
-
-**Every task must meet these criteria before marking "done":**
-- [ ] Implementation follows researched best practices
-- [ ] Code follows project style guidelines
-- [ ] Security considerations addressed
-- [ ] Basic functionality tested
-- [ ] Documentation updated if needed`;
-
-  const universalRules = `# Archon Integration & Workflow
-
-**CRITICAL: This project uses Archon for knowledge management, task tracking, and project organization.**
-
-## Core Archon Workflow Principles
-
-### The Golden Rule: Task-Driven Development with Archon
-
-**MANDATORY: Always complete the full Archon task cycle before any coding:**
-
-1. **Check Current Task** → Review task details and requirements
-2. **Research for Task** → Search relevant documentation and examples
-3. **Implement the Task** → Write code based on research
-4. **Update Task Status** → Move task from "todo" → "doing" → "review"
-5. **Get Next Task** → Check for next priority task
-6. **Repeat Cycle**
-
-**Task Management Rules:**
-- Update all actions to Archon
-- Move tasks from "todo" → "doing" → "review" (not directly to complete)
-- Maintain task descriptions and add implementation notes
-- DO NOT MAKE ASSUMPTIONS - check project documentation for questions`;
+- Task status flow: \`todo\` → \`doing\` → \`review\` → \`done\`
+- Keep queries SHORT (2-5 keywords) for better search results
+- Higher \`task_order\` = higher priority (0-100)
+- Tasks should be 30 min - 4 hours of work`;
 
   const currentRules = selectedRuleType === 'claude' ? claudeRules : universalRules;
 
