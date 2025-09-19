@@ -105,14 +105,26 @@ class ServiceDiscovery:
             )
 
         if self.environment == Environment.DOCKER_COMPOSE:
-            # Docker Compose uses service names directly
-            # Check for override via environment variable
-            host = os.getenv(f"{service_name.upper().replace('-', '_')}_HOST", service_name)
-            url = f"{protocol}://{host}:{port}"
+            # For MCP service, check if proxy mode is enabled for external access
+            if service == "mcp" and os.getenv("VITE_MCP_USE_PROXY", "false").lower() == "true":
+                # Use external host and protocol for proxy mode
+                external_host = os.getenv("HOST", "localhost")
+                external_protocol = os.getenv("VITE_MCP_PROTOCOL", protocol)
+                url = f"{external_protocol}://{external_host}:{port}"
+            else:
+                # Docker Compose uses service names directly
+                # Check for override via environment variable
+                host = os.getenv(f"{service_name.upper().replace('-', '_')}_HOST", service_name)
+                url = f"{protocol}://{host}:{port}"
 
         else:
             # Local development - everything on localhost
-            url = f"{protocol}://localhost:{port}"
+            # Use environment variables if available
+            host = os.getenv("HOST", "localhost")
+            # For MCP in local mode, respect the protocol setting
+            if service == "mcp":
+                protocol = os.getenv("VITE_MCP_PROTOCOL", protocol)
+            url = f"{protocol}://{host}:{port}"
 
         self._cache[cache_key] = url
         return url
@@ -217,7 +229,8 @@ def get_api_url() -> str:
 
 def get_mcp_url() -> str:
     """Get the MCP service URL"""
-    return get_discovery().get_service_url("mcp")
+    protocol = os.getenv("VITE_MCP_PROTOCOL", "http")
+    return get_discovery().get_service_url("mcp", protocol)
 
 
 def get_agents_url() -> str:

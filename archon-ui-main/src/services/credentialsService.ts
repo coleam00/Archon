@@ -73,7 +73,8 @@ export interface OllamaInstance {
 import { getApiUrl } from "../config/api";
 
 class CredentialsService {
-  private baseUrl = getApiUrl();
+  // Use relative URLs to work with proxy in all environments
+  private baseUrl = '';
 
   private handleCredentialError(error: any, context: string): Error {
     const errorMessage = error instanceof Error ? error.message : String(error);

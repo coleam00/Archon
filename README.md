@@ -64,7 +64,7 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
 2. **Environment Configuration**:
 
    ```bash
-   cp .env.example .env
+   cp .env.unified.local .env
    # Edit .env and add your Supabase credentials:
    # SUPABASE_URL=https://your-project.supabase.co
    # SUPABASE_SERVICE_KEY=your-service-key-here
@@ -81,7 +81,7 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
    **Full Docker Mode (Recommended for Normal Archon Usage)**
 
    ```bash
-   docker compose up --build -d
+   docker compose -f docker-compose.unified.yml up --build -d
    ```
 
    This starts all core microservices in Docker:
@@ -175,7 +175,7 @@ If you need to completely reset your database and start fresh:
 3. **Restart Services**:
 
    ```bash
-   docker compose --profile full up -d
+   docker compose -f docker-compose.unified.yml up -d
    ```
 
 4. **Reconfigure**:
@@ -210,7 +210,7 @@ To upgrade Archon to the latest version:
 
 3. **Rebuild and restart**:
    ```bash
-   docker compose up -d --build
+   docker compose -f docker-compose.unified.yml up -d --build
    ```
 
 This is the same command used for initial setup - it rebuilds containers with the latest code and restarts services.
@@ -240,54 +240,63 @@ This is the same command used for initial setup - it rebuilds containers with th
 - **Document Management**: Version-controlled documents with collaborative editing capabilities
 - **Progress Tracking**: Real-time updates and status management across all project activities
 
-### 🔄 Real-time Collaboration
+### 🔄 Real-time Updates
 
-- **WebSocket Updates**: Live progress tracking for crawling, processing, and AI operations
-- **Multi-user Support**: Collaborative knowledge building and project management
+- **HTTP Polling**: Live progress tracking for crawling, processing, and AI operations with ETag caching
+- **Smart Polling**: Automatically pauses when browser tab is inactive to save resources
 - **Background Processing**: Asynchronous operations that don't block the user interface
-- **Health Monitoring**: Built-in service health checks and automatic reconnection
+- **Health Monitoring**: Built-in service health checks and status reporting
 
 ## Architecture
 
-### Microservices Structure
+### Unified Architecture
 
-Archon uses true microservices architecture with clear separation of concerns:
+Archon uses a unified microservices architecture with configurable deployment modes:
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   Frontend UI   │    │  Server (API)   │    │   MCP Server    │    │ Agents Service  │
-│                 │    │                 │    │                 │    │                 │
-│  React + Vite   │◄──►│    FastAPI +    │◄──►│    Lightweight  │◄──►│   PydanticAI    │
-│  Port 3737      │    │    SocketIO     │    │    HTTP Wrapper │    │   Port 8052     │
+│                 │    │                 │    │                 │    │    (Optional)   │
+│  React + Vite   │◄──►│    FastAPI +    │◄──►│   HTTP-based    │◄──►│   PydanticAI    │
+│  Port 3737      │    │   HTTP Polling  │    │   MCP Protocol  │    │   Port 8052     │
 │                 │    │    Port 8181    │    │    Port 8051    │    │                 │
 └─────────────────┘    └─────────────────┘    └─────────────────┘    └─────────────────┘
          │                        │                        │                        │
-         └────────────────────────┼────────────────────────┼────────────────────────┘
-                                  │                        │
-                         ┌─────────────────┐               │
-                         │    Database     │               │
-                         │                 │               │
-                         │    Supabase     │◄──────────────┘
-                         │    PostgreSQL   │
-                         │    PGVector     │
-                         └─────────────────┘
+         │                        │             ┌──────────┼────────────────────────┘
+         │                        │             │          │                         
+  ┌──────┼────────────────────────┼─────────────┘          │                         
+  │      │                        │                        │                         
+  │ ┌─────────────────┐          │              ┌─────────────────┐                 
+  │ │   Development   │          │              │   Production    │                 
+  │ │   localhost     │          │              │   LAN/Remote    │                 
+  │ │   127.0.0.1     │          │              │   0.0.0.0       │                 
+  │ └─────────────────┘          │              └─────────────────┘                 
+  │                              │                                                  
+  └──────────────────────────────┼──────────────────────────────────────────────────
+                                 │                                                  
+                        ┌─────────────────┐                                        
+                        │    Database     │                                        
+                        │    Supabase     │                                        
+                        │   PostgreSQL    │                                        
+                        │    PGVector     │                                        
+                        └─────────────────┘                                        
 ```
 
 ### Service Responsibilities
 
 | Service        | Location             | Purpose                      | Key Features                                                       |
 | -------------- | -------------------- | ---------------------------- | ------------------------------------------------------------------ |
-| **Frontend**   | `archon-ui-main/`    | Web interface and dashboard  | React, TypeScript, TailwindCSS, Socket.IO client                   |
-| **Server**     | `python/src/server/` | Core business logic and APIs | FastAPI, service layer, Socket.IO broadcasts, all ML/AI operations |
-| **MCP Server** | `python/src/mcp/`    | MCP protocol interface       | Lightweight HTTP wrapper, MCP tools, session management         |
-| **Agents**     | `python/src/agents/` | PydanticAI agent hosting     | Document and RAG agents, streaming responses                       |
+| **Frontend**   | `archon-ui-main/`    | Web interface and dashboard  | React, TypeScript, TailwindCSS, HTTP polling client               |
+| **Server**     | `python/src/server/` | Core business logic and APIs | FastAPI, service layer, ETag caching, all ML/AI operations        |
+| **MCP Server** | `python/src/mcp/`    | MCP protocol interface       | HTTP-based MCP tools, AI IDE connections, session management      |
+| **Agents**     | `python/src/agents/` | PydanticAI agent hosting     | Document and RAG agents, streaming responses (optional)           |
 
 ### Communication Patterns
 
 - **HTTP-based**: All inter-service communication uses HTTP APIs
-- **Socket.IO**: Real-time updates from Server to Frontend
-- **MCP Protocol**: AI clients connect to MCP Server via SSE or stdio
-- **No Direct Imports**: Services are truly independent with no shared code dependencies
+- **HTTP Polling**: Real-time updates from Server to Frontend with ETag caching
+- **MCP Protocol**: AI clients connect to MCP Server via HTTP (SSE mode)
+- **Configurable Exposure**: Services can bind to localhost-only or LAN-wide access
 
 ### Key Architectural Benefits
 
@@ -481,6 +490,96 @@ docker system prune -f
 - **Frontend**: Ensure you're running in hybrid mode (`make dev`) for best HMR experience
 - **Backend**: Check that volumes are mounted correctly in `docker-compose.yml`
 - **File permissions**: On some systems, mounted volumes may have permission issues
+
+## 🌐 LAN/Production Deployment
+
+### Overview
+
+Deploy Archon on your local network for access from multiple devices or for production use with HTTPS support.
+
+### Prerequisites
+
+- Domain name (can be local like `archon.homelab.local`)
+- Reverse proxy (Traefik, Nginx, or Caddy) for HTTPS
+- Docker and Docker Compose
+
+### Configuration Files
+
+1. **`.env.unified.lan`** - LAN-specific environment variables:
+   ```bash
+   DEPLOYMENT_MODE=lan
+   BUILD_TARGET=production
+   HOST=archon.yourdomain.com  # Your domain
+   BIND_IP=0.0.0.0             # Allow external access
+   VITE_MCP_PROTOCOL=https
+   VITE_MCP_USE_PROXY=true
+   COMPOSE_PROFILES=prod
+   ```
+
+2. **`docker-compose.unified.yml`** - Unified deployment with profiles for dev/prod
+
+### Deployment Steps
+
+```bash
+# 1. Copy the LAN environment template
+cp .env.unified.lan .env
+
+# 2. Edit .env with your domain
+nano .env  # Update HOST to your domain
+
+# 3. Build and deploy all services
+docker-compose -f docker-compose.unified.yml --profile prod build --no-cache
+docker-compose -f docker-compose.unified.yml --profile prod up -d
+
+# 4. Check status
+docker-compose -f docker-compose.unified.yml ps
+```
+
+### Key Fixes Applied for LAN Deployment
+
+During development, we identified and fixed several critical issues for LAN deployment:
+
+1. **Service Discovery Fix** (`python/src/server/config/service_discovery.py`)
+   - Fixed hard-coded localhost in Docker Compose environment
+   - Added support for `VITE_MCP_USE_PROXY` to use external URLs
+   - Properly respects HOST environment variable
+
+2. **Credential Service Fix** (`python/src/server/services/credential_service.py`)
+   - Removed HOST and PORT from database-loaded credentials
+   - Prevents database settings from overriding environment variables
+   - Ensures deployment-specific config comes from environment only
+
+3. **MCP Configuration Fix** (`python/src/server/api_routes/mcp_api.py`)
+   - Updated `/api/mcp/config` endpoint to use service discovery
+   - Returns correct external URLs based on deployment mode
+
+4. **Frontend Multi-Stage Build** (`archon-ui-main/Dockerfile`)
+   - Added production stage for optimized builds
+   - Proper build args for Vite environment variables
+   - Static file serving for production
+
+5. **Docker Compose Updates** (`docker-compose.unified.yml`)
+   - Added `VITE_MCP_USE_PROXY` environment variable
+   - Proper profile configuration for dev/prod separation
+   - Docker socket access for container monitoring
+
+### Common LAN Deployment Issues
+
+#### MCP Dashboard Shows "localhost"
+- **Cause**: Database settings overriding environment variables
+- **Fix**: Applied in credential service - HOST/PORT no longer loaded from database
+
+#### Docker Status Shows "unavailable"
+- **Cause**: Docker socket not accessible in production
+- **Fix**: Set `DOCKER_SOCKET=/var/run/docker.sock` in `.env.unified.lan`
+
+#### Frontend Build Fails
+- **Cause**: Missing production stage in Dockerfile
+- **Fix**: Added multi-stage Dockerfile with development and production targets
+
+#### 406 Not Acceptable on MCP Endpoint
+- **Expected**: The `/mcp` endpoint requires SSE headers
+- **Note**: Frontend shouldn't call this directly - it's for MCP clients only
 
 ## 📈 Progress
 
