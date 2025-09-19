@@ -4,7 +4,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { createOptimisticEntity, createOptimisticId } from "@/features/shared/optimistic";
 import { useActiveOperations } from "../../progress/hooks";
 import { progressKeys } from "../../progress/hooks/useProgressQueries";
@@ -65,7 +65,6 @@ export function useKnowledgeItemChunks(
   sourceId: string | null,
   opts?: { domain?: string; limit?: number; offset?: number },
 ) {
-  // TODO: Phase 4 - Add explicit typing: useQuery<DocumentChunk[]> or appropriate return type
   // See PRPs/local/frontend-state-management-refactor.md Phase 4: Configure Request Deduplication
   return useQuery({
     queryKey: sourceId ? knowledgeKeys.chunks(sourceId, opts) : DISABLED_QUERY_KEY,
@@ -116,7 +115,6 @@ export function useCrawlUrl() {
   >({
     mutationFn: (request: CrawlRequest) => knowledgeService.crawlUrl(request),
     onMutate: async (request) => {
-      // TODO: Phase 3 - Fix optimistic updates writing to wrong cache
       // knowledgeKeys.lists() is never queried - actual data comes from knowledgeKeys.summaries(filter)
       // This makes all optimistic updates invisible. Should either:
       // 1. Remove optimistic updates for knowledge items
@@ -473,12 +471,10 @@ export function useUploadDocument() {
         });
       }
 
-      // Invalidate queries to get fresh data - with a short delay for fast uploads
-      setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
-        queryClient.invalidateQueries({ queryKey: knowledgeKeys.summariesPrefix() });
-        queryClient.invalidateQueries({ queryKey: progressKeys.active() });
-      }, 1000);
+      // Invalidate queries to get fresh data - backend is consistent after successful upload initiation
+      queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: knowledgeKeys.summariesPrefix() });
+      queryClient.invalidateQueries({ queryKey: progressKeys.active() });
 
       // Don't show success here - upload is just starting in background
       // Success/failure will be shown via progress polling
@@ -514,7 +510,6 @@ export function useStopCrawl() {
     },
     onError: (error, progressId) => {
       // If it's a 404, the operation might have already completed or been cancelled
-      // TODO: Phase 4 - Improve error type safety, create proper error interface instead of 'as any'
       // See PRPs/local/frontend-state-management-refactor.md Phase 4: Configure Request Deduplication
       const is404Error =
         (error as any)?.statusCode === 404 ||
@@ -726,10 +721,9 @@ export function useRefreshKnowledgeItem() {
       // Remove the item from cache as it's being refreshed
       queryClient.removeQueries({ queryKey: knowledgeKeys.detail(sourceId) });
 
-      // Invalidate list after a delay
-      setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
-      }, 5000);
+      // Invalidate lists and summaries immediately - backend is consistent after refresh initiation
+      queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: knowledgeKeys.summariesPrefix() });
 
       return data;
     },
@@ -746,8 +740,6 @@ export function useRefreshKnowledgeItem() {
  * Only polls when there are active operations that we started
  */
 export function useKnowledgeSummaries(filter?: KnowledgeItemsFilter) {
-  const queryClient = useQueryClient();
-
   // Track active crawl IDs locally - only set when we start a crawl/refresh
   const [activeCrawlIds, setActiveCrawlIds] = useState<string[]>([]);
 
@@ -783,37 +775,8 @@ export function useKnowledgeSummaries(filter?: KnowledgeItemsFilter) {
   });
 
   // When operations complete, remove them from tracking
-  useEffect(() => {
-    const completedOps = activeOperations.filter(
-      (op) => op.status === "completed" || op.status === "failed" || op.status === "error",
-    );
-
-    if (completedOps.length > 0) {
-      // Remove completed operations from tracking
-      setActiveCrawlIds((prev) => prev.filter((id) => !completedOps.some((op) => op.progressId === id)));
-
-      // Check if any completed operations are uploads (they complete faster)
-      const hasCompletedUpload = completedOps.some((op) => op.operation_type === "upload" || op.type === "upload");
-
-      // Use shorter delay for uploads (1s) vs crawls (5s) to handle fast operations
-      const delay = hasCompletedUpload ? 1000 : 5000;
-
-      // Invalidate after a delay to allow backend database to become consistent
-      const timer = setTimeout(() => {
-        // Invalidate all summaries regardless of filter
-        queryClient.invalidateQueries({ queryKey: knowledgeKeys.summariesPrefix() });
-        // Also invalidate lists for consistency
-        queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
-
-        // For uploads, also refetch immediately to ensure UI shows the item
-        if (hasCompletedUpload) {
-          queryClient.refetchQueries({ queryKey: knowledgeKeys.summariesPrefix() });
-        }
-      }, delay);
-
-      return () => clearTimeout(timer);
-    }
-  }, [activeOperations, queryClient]);
+  // Trust smart polling to handle eventual consistency - no manual invalidation needed
+  // Active operations are already tracked and polling handles updates when operations complete
 
   return {
     ...summaryQuery,
