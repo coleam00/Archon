@@ -1,10 +1,9 @@
 import { useState } from 'react';
-import { 
-  LinkIcon, 
-  Upload, 
-  BoxIcon, 
+import {
+  LinkIcon,
+  Upload,
+  BoxIcon,
   Brain,
-  Plus,
   Folder,
   Files,
   File as FileIcon
