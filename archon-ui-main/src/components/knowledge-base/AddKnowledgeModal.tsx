@@ -13,7 +13,7 @@ import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { Badge } from '../ui/Badge';
 import { GlassCrawlDepthSelector } from '../ui/GlassCrawlDepthSelector';
-import { useToast } from '../../contexts/ToastContext';
+import { useToast } from '../../features/ui/hooks/useToast';
 import { knowledgeBaseService } from '../../services/knowledgeBaseService';
 import { CrawlProgressData } from '../../types/crawl';
 
