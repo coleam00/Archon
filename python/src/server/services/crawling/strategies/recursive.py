@@ -4,6 +4,7 @@ Recursive Crawling Strategy
 Handles recursive crawling of websites by following internal links.
 """
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import urldefrag
@@ -40,8 +41,6 @@ class RecursiveCrawlStrategy:
         max_depth: int = 3,
         max_concurrent: int | None = None,
         progress_callback: Callable[..., Awaitable[None]] | None = None,
-        start_progress: int = 10,
-        end_progress: int = 60,
         cancellation_check: Callable[[], None] | None = None,
     ) -> list[dict[str, Any]]:
         """
@@ -54,8 +53,7 @@ class RecursiveCrawlStrategy:
             max_depth: Maximum crawl depth
             max_concurrent: Maximum concurrent crawls
             progress_callback: Optional callback for progress updates
-            start_progress: Starting progress percentage
-            end_progress: Ending progress percentage
+            cancellation_check: Optional function to check for cancellation
 
         Returns:
             List of crawl results
@@ -69,12 +67,26 @@ class RecursiveCrawlStrategy:
         # Load settings from database - fail fast on configuration errors
         try:
             settings = await credential_service.get_credentials_by_category("rag_strategy")
-            batch_size = int(settings.get("CRAWL_BATCH_SIZE", "50"))
+
+            # Clamp batch_size to prevent zero step in range()
+            raw_batch_size = int(settings.get("CRAWL_BATCH_SIZE", "50"))
+            batch_size = max(1, raw_batch_size)
+            if batch_size != raw_batch_size:
+                logger.warning(f"Invalid CRAWL_BATCH_SIZE={raw_batch_size}, clamped to {batch_size}")
+
             if max_concurrent is None:
                 # CRAWL_MAX_CONCURRENT: Pages to crawl in parallel within this single crawl operation
                 # (Different from server-level CONCURRENT_CRAWL_LIMIT which limits total crawl operations)
-                max_concurrent = int(settings.get("CRAWL_MAX_CONCURRENT", "10"))
-            memory_threshold = float(settings.get("MEMORY_THRESHOLD_PERCENT", "80"))
+                raw_max_concurrent = int(settings.get("CRAWL_MAX_CONCURRENT", "10"))
+                max_concurrent = max(1, raw_max_concurrent)
+                if max_concurrent != raw_max_concurrent:
+                    logger.warning(f"Invalid CRAWL_MAX_CONCURRENT={raw_max_concurrent}, clamped to {max_concurrent}")
+
+            # Clamp memory threshold to sane bounds for dispatcher
+            raw_memory_threshold = float(settings.get("MEMORY_THRESHOLD_PERCENT", "80"))
+            memory_threshold = min(99.0, max(10.0, raw_memory_threshold))
+            if memory_threshold != raw_memory_threshold:
+                logger.warning(f"Invalid MEMORY_THRESHOLD_PERCENT={raw_memory_threshold}, clamped to {memory_threshold}")
             check_interval = float(settings.get("DISPATCHER_CHECK_INTERVAL", "0.5"))
         except (ValueError, KeyError, TypeError) as e:
             # Critical configuration errors should fail fast
@@ -130,12 +142,12 @@ class RecursiveCrawlStrategy:
             max_session_permit=max_concurrent,
         )
 
-        async def report_progress(progress_val: int, message: str, **kwargs):
+        async def report_progress(progress_val: int, message: str, status: str = "crawling", **kwargs):
             """Helper to report progress if callback is available"""
             if progress_callback:
                 # Pass step information as flattened kwargs for consistency
                 await progress_callback(
-                    "crawling",
+                    status,
                     progress_val,
                     message,
                     current_step=message,
@@ -151,12 +163,27 @@ class RecursiveCrawlStrategy:
         current_urls = {normalize_url(u) for u in start_urls}
         results_all = []
         total_processed = 0
-        total_discovered = len(start_urls)  # Track total URLs discovered
+        total_discovered = len(current_urls)  # Track total URLs discovered (normalized & de-duped)
+        cancelled = False
 
         for depth in range(max_depth):
             # Check for cancellation at the start of each depth level
             if cancellation_check:
-                cancellation_check()
+                try:
+                    cancellation_check()
+                except asyncio.CancelledError:
+                    cancelled = True
+                    await report_progress(
+                        int(((depth) / max_depth) * 99),  # Cap at 99% for cancellation
+                        f"Crawl cancelled at depth {depth + 1}",
+                        status="cancelled",
+                        total_pages=total_discovered,
+                        processed_pages=total_processed,
+                    )
+                    break
+                except Exception:
+                    logger.exception("Unexpected error from cancellation_check()")
+                    raise
 
             urls_to_crawl = [
                 normalize_url(url) for url in current_urls if normalize_url(url) not in visited
@@ -165,15 +192,11 @@ class RecursiveCrawlStrategy:
                 break
 
             # Calculate progress for this depth level
-            depth_start = start_progress + int(
-                (depth / max_depth) * (end_progress - start_progress) * 0.8
-            )
-            depth_end = start_progress + int(
-                ((depth + 1) / max_depth) * (end_progress - start_progress) * 0.8
-            )
+            # Report 0-100 to properly integrate with ProgressMapper architecture
+            depth_progress = int((depth / max(max_depth, 1)) * 100)
 
             await report_progress(
-                depth_start,
+                depth_progress,
                 f"Crawling depth {depth + 1}/{max_depth}: {len(urls_to_crawl)} URLs to process",
                 total_pages=total_discovered,
                 processed_pages=total_processed,
@@ -186,7 +209,14 @@ class RecursiveCrawlStrategy:
             for batch_idx in range(0, len(urls_to_crawl), batch_size):
                 # Check for cancellation before processing each batch
                 if cancellation_check:
-                    cancellation_check()
+                    try:
+                        cancellation_check()
+                    except asyncio.CancelledError:
+                        cancelled = True
+                        break
+                    except Exception:
+                        logger.exception("Unexpected error from cancellation_check()")
+                        raise
 
                 batch_urls = urls_to_crawl[batch_idx : batch_idx + batch_size]
                 batch_end_idx = min(batch_idx + batch_size, len(urls_to_crawl))
@@ -199,13 +229,15 @@ class RecursiveCrawlStrategy:
                     transformed_batch_urls.append(transformed)
                     url_mapping[transformed] = url
 
-                # Calculate progress for this batch within the depth
-                batch_progress = depth_start + int(
-                    (batch_idx / len(urls_to_crawl)) * (depth_end - depth_start)
-                )
+                # Calculate overall progress based on URLs actually being crawled at this depth
+                # Use a more accurate progress calculation that accounts for depth
+                urls_at_this_depth = len(urls_to_crawl)
+                progress_within_depth = (batch_idx / urls_at_this_depth) if urls_at_this_depth > 0 else 0
+                # Weight by depth to show overall progress (later depths contribute less)
+                overall_progress = int(((depth + progress_within_depth) / max_depth) * 100)
                 await report_progress(
-                    batch_progress,
-                    f"Depth {depth + 1}: crawling URLs {batch_idx + 1}-{batch_end_idx} of {len(urls_to_crawl)}",
+                    min(overall_progress, 99),  # Never show 100% until actually complete
+                    f"Crawling URLs {batch_idx + 1}-{batch_end_idx} of {len(urls_to_crawl)} at depth {depth + 1}",
                     total_pages=total_discovered,
                     processed_pages=total_processed,
                 )
@@ -223,10 +255,19 @@ class RecursiveCrawlStrategy:
                     if cancellation_check:
                         try:
                             cancellation_check()
-                        except Exception:
-                            # If cancelled, break out of the loop
-                            logger.info("Crawl cancelled during batch processing")
+                        except asyncio.CancelledError:
+                            cancelled = True
+                            await report_progress(
+                                min(int((total_processed / max(total_discovered, 1)) * 100), 99),
+                                "Crawl cancelled during batch processing",
+                                status="cancelled",
+                                total_pages=total_discovered,
+                                processed_pages=total_processed,
+                            )
                             break
+                        except Exception:
+                            logger.exception("Unexpected error from cancellation_check()")
+                            raise
 
                     # Map back to original URL using the mapping dict
                     original_url = url_mapping.get(result.url, result.url)
@@ -260,32 +301,29 @@ class RecursiveCrawlStrategy:
                             f"Failed to crawl {original_url}: {getattr(result, 'error_message', 'Unknown error')}"
                         )
 
-                    # Report progress every few URLs
-                    current_idx = batch_idx + i + 1
-                    if current_idx % 5 == 0 or current_idx == len(urls_to_crawl):
-                        current_progress = depth_start + int(
-                            (current_idx / len(urls_to_crawl)) * (depth_end - depth_start)
-                        )
-                        await report_progress(
-                            current_progress,
-                            f"Depth {depth + 1}: processed {current_idx}/{len(urls_to_crawl)} URLs ({depth_successful} successful)",
-                            total_pages=total_discovered,
-                            processed_pages=total_processed,
-                        )
+                    # Skip the confusing "processed X/Y URLs" updates
+                    # The "crawling URLs" message at the start of each batch is more accurate
                     i += 1
+                if cancelled:
+                    break
+
+            if cancelled:
+                break
 
             current_urls = next_level_urls
 
             # Report completion of this depth
             await report_progress(
-                depth_end,
+                int(((depth + 1) / max_depth) * 100),
                 f"Depth {depth + 1} completed: {depth_successful} pages crawled, {len(next_level_urls)} URLs found for next depth",
                 total_pages=total_discovered,
                 processed_pages=total_processed,
             )
 
+        if cancelled:
+            return results_all
         await report_progress(
-            end_progress,
+            100,
             f"Recursive crawling completed: {len(results_all)} total pages crawled across {max_depth} depth levels",
             total_pages=total_discovered,
             processed_pages=total_processed,

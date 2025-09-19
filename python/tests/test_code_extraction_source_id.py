@@ -64,9 +64,7 @@ class TestCodeExtractionSourceId:
             crawl_results,
             url_to_full_document,
             correct_source_id,
-            None,
-            0,
-            100
+            None
         )
         
         # Verify that extracted blocks use the correct source_id
@@ -102,9 +100,7 @@ class TestCodeExtractionSourceId:
             crawl_results,
             url_to_full_document,
             source_id,
-            None,
-            0,
-            100
+            None
         )
         
         # Verify the correct source_id was passed (now with cancellation_check parameter)
@@ -113,8 +109,6 @@ class TestCodeExtractionSourceId:
             url_to_full_document,
             source_id,  # This should be the third argument
             None,
-            0,
-            100,
             None  # cancellation_check parameter
         )
         assert result == 5
@@ -134,7 +128,7 @@ class TestCodeExtractionSourceId:
         source_ids_seen = []
         
         original_extract = code_service._extract_code_blocks_from_documents
-        async def track_source_id(crawl_results, source_id, progress_callback=None, start=0, end=100, cancellation_check=None):
+        async def track_source_id(crawl_results, source_id, progress_callback=None, cancellation_check=None):
             source_ids_seen.append(source_id)
             return []  # Return empty list to skip further processing
         
@@ -157,9 +151,7 @@ class TestCodeExtractionSourceId:
                 crawl_results,
                 url_to_full_document,
                 expected_source_id,
-                None,
-                0,
-                100
+                None
             )
             
             # Verify the provided source_id was used

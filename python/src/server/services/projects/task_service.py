@@ -42,6 +42,16 @@ class TaskService:
             return False, "Assignee must be a non-empty string"
         return True, ""
 
+    def validate_priority(self, priority: str) -> tuple[bool, str]:
+        """Validate task priority against allowed enum values"""
+        VALID_PRIORITIES = ["low", "medium", "high", "critical"]
+        if priority not in VALID_PRIORITIES:
+            return (
+                False,
+                f"Invalid priority '{priority}'. Must be one of: {', '.join(VALID_PRIORITIES)}",
+            )
+        return True, ""
+
     async def create_task(
         self,
         project_id: str,
@@ -49,6 +59,7 @@ class TaskService:
         description: str = "",
         assignee: str = "User",
         task_order: int = 0,
+        priority: str = "medium",
         feature: str | None = None,
         sources: list[dict[str, Any]] = None,
         code_examples: list[dict[str, Any]] = None,
@@ -69,6 +80,11 @@ class TaskService:
 
             # Validate assignee
             is_valid, error_msg = self.validate_assignee(assignee)
+            if not is_valid:
+                return False, {"error": error_msg}
+
+            # Validate priority
+            is_valid, error_msg = self.validate_priority(priority)
             if not is_valid:
                 return False, {"error": error_msg}
 
@@ -104,6 +120,7 @@ class TaskService:
                 "status": task_status,
                 "assignee": assignee,
                 "task_order": task_order,
+                "priority": priority,
                 "sources": sources or [],
                 "code_examples": code_examples or [],
                 "created_at": datetime.now().isoformat(),
@@ -128,6 +145,7 @@ class TaskService:
                         "status": task["status"],
                         "assignee": task["assignee"],
                         "task_order": task["task_order"],
+                        "priority": task["priority"],
                         "created_at": task["created_at"],
                     }
                 }
@@ -144,7 +162,8 @@ class TaskService:
         status: str = None,
         include_closed: bool = False,
         exclude_large_fields: bool = False,
-        include_archived: bool = False
+        include_archived: bool = False,
+        search_query: str = None
     ) -> tuple[bool, dict[str, Any]]:
         """
         List tasks with various filters.
@@ -155,6 +174,7 @@ class TaskService:
             include_closed: Include done tasks
             exclude_large_fields: If True, excludes sources and code_examples fields
             include_archived: If True, includes archived tasks
+            search_query: Keyword search in title, description, and feature fields
 
         Returns:
             Tuple of (success, result_dict)
@@ -165,7 +185,7 @@ class TaskService:
                 # Select all fields except large JSONB ones
                 query = self.supabase_client.table("archon_tasks").select(
                     "id, project_id, parent_task_id, title, description, "
-                    "status, assignee, task_order, feature, archived, "
+                    "status, assignee, task_order, priority, feature, archived, "
                     "archived_at, archived_by, created_at, updated_at, "
                     "sources, code_examples"  # Still fetch for counting, but will process differently
                 )
@@ -193,6 +213,33 @@ class TaskService:
                 # Only exclude done tasks if no specific status filter is applied
                 query = query.neq("status", "done")
                 filters_applied.append("exclude done tasks")
+
+            # Apply keyword search if provided
+            if search_query:
+                # Split search query into terms
+                search_terms = search_query.lower().split()
+                
+                # Build the filter expression for AND-of-ORs
+                # Each term must match in at least one field (OR), and all terms must match (AND)
+                if len(search_terms) == 1:
+                    # Single term: simple OR across fields
+                    term = search_terms[0]
+                    query = query.or_(
+                        f"title.ilike.%{term}%,"
+                        f"description.ilike.%{term}%,"
+                        f"feature.ilike.%{term}%"
+                    )
+                else:
+                    # Multiple terms: use text search for proper AND logic
+                    # Note: This requires full-text search columns to be set up in the database
+                    # For now, we'll search for the full phrase in any field
+                    full_query = search_query.lower()
+                    query = query.or_(
+                        f"title.ilike.%{full_query}%,"
+                        f"description.ilike.%{full_query}%,"
+                        f"feature.ilike.%{full_query}%"
+                    )
+                filters_applied.append(f"search={search_query}")
 
             # Filter out archived tasks only if not including them
             if not include_archived:
@@ -250,6 +297,7 @@ class TaskService:
                     "status": task["status"],
                     "assignee": task.get("assignee", "User"),
                     "task_order": task.get("task_order", 0),
+                    "priority": task.get("priority", "medium"),
                     "feature": task.get("feature"),
                     "created_at": task["created_at"],
                     "updated_at": task["updated_at"],
@@ -341,6 +389,12 @@ class TaskService:
                 if not is_valid:
                     return False, {"error": error_msg}
                 update_data["assignee"] = update_fields["assignee"]
+
+            if "priority" in update_fields:
+                is_valid, error_msg = self.validate_priority(update_fields["priority"])
+                if not is_valid:
+                    return False, {"error": error_msg}
+                update_data["priority"] = update_fields["priority"]
 
             if "task_order" in update_fields:
                 update_data["task_order"] = update_fields["task_order"]

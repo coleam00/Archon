@@ -13,6 +13,7 @@ import asyncio
 import json
 import uuid
 from datetime import datetime
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -20,8 +21,10 @@ from pydantic import BaseModel
 # Import unified logging
 from ..config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
 from ..services.crawler_manager import get_crawler
-from ..services.crawling import CrawlOrchestrationService
-from ..services.knowledge import DatabaseMetricsService, KnowledgeItemService
+from ..services.crawling import CrawlingService
+from ..services.credential_service import credential_service
+from ..services.embeddings.provider_error_adapters import ProviderErrorFactory
+from ..services.knowledge import DatabaseMetricsService, KnowledgeItemService, KnowledgeSummaryService
 from ..services.search.rag_service import RAGService
 from ..services.storage import DocumentStorageService
 from ..utils import get_supabase_client
@@ -50,6 +53,59 @@ crawl_semaphore = asyncio.Semaphore(CONCURRENT_CRAWL_LIMIT)
 
 # Track active async crawl tasks for cancellation support
 active_crawl_tasks: dict[str, asyncio.Task] = {}
+
+
+
+
+async def _validate_provider_api_key(provider: str = None) -> None:
+    """Validate LLM provider API key before starting operations."""
+    logger.info("🔑 Starting API key validation...")
+    
+    try:
+        if not provider:
+            provider = "openai"
+
+        logger.info(f"🔑 Testing {provider.title()} API key with minimal embedding request...")
+        
+        # Test API key with minimal embedding request - this will fail if key is invalid
+        from ..services.embeddings.embedding_service import create_embedding
+        test_result = await create_embedding(text="test")
+        
+        if not test_result:
+            logger.error(f"❌ {provider.title()} API key validation failed - no embedding returned")
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": f"Invalid {provider.title()} API key",
+                    "message": f"Please verify your {provider.title()} API key in Settings.",
+                    "error_type": "authentication_failed",
+                    "provider": provider
+                }
+            )
+            
+        logger.info(f"✅ {provider.title()} API key validation successful")
+
+    except HTTPException:
+        # Re-raise our intended HTTP exceptions
+        logger.error("🚨 Re-raising HTTPException from validation")
+        raise
+    except Exception as e:
+        # Sanitize error before logging to prevent sensitive data exposure
+        error_str = str(e)
+        sanitized_error = ProviderErrorFactory.sanitize_provider_error(error_str, provider or "openai")
+        logger.error(f"❌ Caught exception during API key validation: {sanitized_error}")
+        
+        # Always fail for any exception during validation - better safe than sorry
+        logger.error("🚨 API key validation failed - blocking crawl operation")
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "Invalid API key",
+                "message": f"Please verify your {(provider or 'openai').title()} API key in Settings before starting a crawl.",
+                "error_type": "authentication_failed",
+                "provider": provider or "openai"
+            }
+        ) from None
 
 
 # Request Models
@@ -96,8 +152,8 @@ async def get_crawl_progress(progress_id: str):
     Frontend should poll this endpoint to track crawl progress.
     """
     try:
-        from ..utils.progress.progress_tracker import ProgressTracker
         from ..models.progress_models import create_progress_response
+        from ..utils.progress.progress_tracker import ProgressTracker
 
         # Get progress from the tracker's in-memory storage
         progress_data = ProgressTracker.get_progress(progress_id)
@@ -109,16 +165,16 @@ async def get_crawl_progress(progress_id: str):
 
         # Ensure we have the progress_id in the data
         progress_data["progress_id"] = progress_id
-        
+
         # Get operation type for proper model selection
         operation_type = progress_data.get("type", "crawl")
-        
+
         # Create standardized response using Pydantic model
         progress_response = create_progress_response(operation_type, progress_data)
-        
+
         # Convert to dict with camelCase fields for API response
         response_data = progress_response.model_dump(by_alias=True, exclude_none=True)
-        
+
         safe_logfire_info(
             f"Progress retrieved | operation_id={progress_id} | status={response_data.get('status')} | "
             f"progress={response_data.get('progress')} | totalPages={response_data.get('totalPages')} | "
@@ -159,6 +215,37 @@ async def get_knowledge_items(
     except Exception as e:
         safe_logfire_error(
             f"Failed to get knowledge items | error={str(e)} | page={page} | per_page={per_page}"
+        )
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
+@router.get("/knowledge-items/summary")
+async def get_knowledge_items_summary(
+    page: int = 1, per_page: int = 20, knowledge_type: str | None = None, search: str | None = None
+):
+    """
+    Get lightweight summaries of knowledge items.
+    
+    Returns minimal data optimized for frequent polling:
+    - Only counts, no actual document/code content
+    - Basic metadata for display
+    - Efficient batch queries
+    
+    Use this endpoint for card displays and frequent polling.
+    """
+    try:
+        # Input guards
+        page = max(1, page)
+        per_page = min(100, max(1, per_page))
+        service = KnowledgeSummaryService(get_supabase_client())
+        result = await service.get_summaries(
+            page=page, per_page=per_page, knowledge_type=knowledge_type, search=search
+        )
+        return result
+
+    except Exception as e:
+        safe_logfire_error(
+            f"Failed to get knowledge summaries | error={str(e)} | page={page} | per_page={per_page}"
         )
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
@@ -238,15 +325,50 @@ async def delete_knowledge_item(source_id: str):
 
 
 @router.get("/knowledge-items/{source_id}/chunks")
-async def get_knowledge_item_chunks(source_id: str, domain_filter: str | None = None):
-    """Get all document chunks for a specific knowledge item with optional domain filtering."""
+async def get_knowledge_item_chunks(
+    source_id: str,
+    domain_filter: str | None = None,
+    limit: int = 20,
+    offset: int = 0
+):
+    """
+    Get document chunks for a specific knowledge item with pagination.
+    
+    Args:
+        source_id: The source ID
+        domain_filter: Optional domain filter for URLs
+        limit: Maximum number of chunks to return (default 20, max 100)
+        offset: Number of chunks to skip (for pagination)
+    
+    Returns:
+        Paginated chunks with metadata
+    """
     try:
-        safe_logfire_info(f"Fetching chunks for source_id: {source_id}, domain_filter: {domain_filter}")
+        # Validate pagination parameters
+        limit = min(limit, 100)  # Cap at 100 to prevent excessive data transfer
+        limit = max(limit, 1)    # At least 1
+        offset = max(offset, 0)   # Can't be negative
 
-        # Query document chunks with content for this specific source
+        safe_logfire_info(
+            f"Fetching chunks | source_id={source_id} | domain_filter={domain_filter} | "
+            f"limit={limit} | offset={offset}"
+        )
+
         supabase = get_supabase_client()
-        
-        # Build the query
+
+        # First get total count
+        count_query = supabase.from_("archon_crawled_pages").select(
+            "id", count="exact", head=True
+        )
+        count_query = count_query.eq("source_id", source_id)
+
+        if domain_filter:
+            count_query = count_query.ilike("url", f"%{domain_filter}%")
+
+        count_result = count_query.execute()
+        total = count_result.count if hasattr(count_result, "count") else 0
+
+        # Build the main query with pagination
         query = supabase.from_("archon_crawled_pages").select(
             "id, source_id, content, metadata, url"
         )
@@ -254,14 +376,17 @@ async def get_knowledge_item_chunks(source_id: str, domain_filter: str | None = 
 
         # Apply domain filtering if provided
         if domain_filter:
-            # Case-insensitive URL match
             query = query.ilike("url", f"%{domain_filter}%")
 
         # Deterministic ordering (URL then id)
         query = query.order("url", desc=False).order("id", desc=False)
 
+        # Apply pagination
+        query = query.range(offset, offset + limit - 1)
+
         result = query.execute()
-        if getattr(result, "error", None):
+        # Check for error more explicitly to work with mocks
+        if hasattr(result, "error") and result.error is not None:
             safe_logfire_error(
                 f"Supabase query error | source_id={source_id} | error={result.error}"
             )
@@ -269,16 +394,88 @@ async def get_knowledge_item_chunks(source_id: str, domain_filter: str | None = 
 
         chunks = result.data if result.data else []
 
-        safe_logfire_info(f"Found {len(chunks)} chunks for {source_id}")
+        # Extract useful fields from metadata to top level for frontend
+        # This ensures the API response matches the TypeScript DocumentChunk interface
+        for chunk in chunks:
+            metadata = chunk.get("metadata", {}) or {}
+
+            # Generate meaningful titles from available data
+            title = None
+
+            # Try to get title from various metadata fields
+            if metadata.get("filename"):
+                title = metadata.get("filename")
+            elif metadata.get("headers"):
+                title = metadata.get("headers").split(";")[0].strip("# ")
+            elif metadata.get("title") and metadata.get("title").strip():
+                title = metadata.get("title").strip()
+            else:
+                # Try to extract from content first for more specific titles
+                if chunk.get("content"):
+                    content = chunk.get("content", "").strip()
+                    # Look for markdown headers at the start
+                    lines = content.split("\n")[:5]
+                    for line in lines:
+                        line = line.strip()
+                        if line.startswith("# "):
+                            title = line[2:].strip()
+                            break
+                        elif line.startswith("## "):
+                            title = line[3:].strip()
+                            break
+                        elif line.startswith("### "):
+                            title = line[4:].strip()
+                            break
+
+                    # Fallback: use first meaningful line that looks like a title
+                    if not title:
+                        for line in lines:
+                            line = line.strip()
+                            # Skip code blocks, empty lines, and very short lines
+                            if (line and not line.startswith("```") and not line.startswith("Source:")
+                                and len(line) > 15 and len(line) < 80
+                                and not line.startswith("from ") and not line.startswith("import ")
+                                and "=" not in line and "{" not in line):
+                                title = line
+                                break
+
+                # If no content-based title found, generate from URL
+                if not title:
+                    url = chunk.get("url", "")
+                    if url:
+                        # Extract meaningful part from URL
+                        if url.endswith(".txt"):
+                            title = url.split("/")[-1].replace(".txt", "").replace("-", " ").title()
+                        else:
+                            # Get domain and path info
+                            parsed = urlparse(url)
+                            if parsed.path and parsed.path != "/":
+                                title = parsed.path.strip("/").replace("-", " ").replace("_", " ").title()
+                            else:
+                                title = parsed.netloc.replace("www.", "").title()
+
+            chunk["title"] = title or ""
+            chunk["section"] = metadata.get("headers", "").replace(";", " > ") if metadata.get("headers") else None
+            chunk["source_type"] = metadata.get("source_type")
+            chunk["knowledge_type"] = metadata.get("knowledge_type")
+
+        safe_logfire_info(
+            f"Fetched {len(chunks)} chunks for {source_id} | total={total}"
+        )
 
         return {
             "success": True,
             "source_id": source_id,
             "domain_filter": domain_filter,
             "chunks": chunks,
-            "count": len(chunks),
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < total,
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         safe_logfire_error(
             f"Failed to fetch chunks | error={str(e)} | source_id={source_id}"
@@ -287,29 +484,86 @@ async def get_knowledge_item_chunks(source_id: str, domain_filter: str | None = 
 
 
 @router.get("/knowledge-items/{source_id}/code-examples")
-async def get_knowledge_item_code_examples(source_id: str):
-    """Get all code examples for a specific knowledge item."""
+async def get_knowledge_item_code_examples(
+    source_id: str,
+    limit: int = 20,
+    offset: int = 0
+):
+    """
+    Get code examples for a specific knowledge item with pagination.
+    
+    Args:
+        source_id: The source ID
+        limit: Maximum number of examples to return (default 20, max 100)
+        offset: Number of examples to skip (for pagination)
+    
+    Returns:
+        Paginated code examples with metadata
+    """
     try:
-        safe_logfire_info(f"Fetching code examples for source_id: {source_id}")
+        # Validate pagination parameters
+        limit = min(limit, 100)  # Cap at 100 to prevent excessive data transfer
+        limit = max(limit, 1)    # At least 1
+        offset = max(offset, 0)   # Can't be negative
 
-        # Query code examples with full content for this specific source
+        safe_logfire_info(
+            f"Fetching code examples | source_id={source_id} | limit={limit} | offset={offset}"
+        )
+
         supabase = get_supabase_client()
+
+        # First get total count
+        count_result = (
+            supabase.from_("archon_code_examples")
+            .select("id", count="exact", head=True)
+            .eq("source_id", source_id)
+            .execute()
+        )
+        total = count_result.count if hasattr(count_result, "count") else 0
+
+        # Get paginated code examples
         result = (
             supabase.from_("archon_code_examples")
             .select("id, source_id, content, summary, metadata")
             .eq("source_id", source_id)
+            .order("id", desc=False)  # Deterministic ordering
+            .range(offset, offset + limit - 1)
             .execute()
         )
 
+        # Check for error to match chunks endpoint pattern
+        if hasattr(result, "error") and result.error is not None:
+            safe_logfire_error(
+                f"Supabase query error (code examples) | source_id={source_id} | error={result.error}"
+            )
+            raise HTTPException(status_code=500, detail={"error": str(result.error)})
+
         code_examples = result.data if result.data else []
 
-        safe_logfire_info(f"Found {len(code_examples)} code examples for {source_id}")
+        # Extract title and example_name from metadata to top level for frontend
+        # This ensures the API response matches the TypeScript CodeExample interface
+        for example in code_examples:
+            metadata = example.get("metadata", {}) or {}
+            # Extract fields to match frontend TypeScript types
+            example["title"] = metadata.get("title")  # AI-generated title
+            example["example_name"] = metadata.get("example_name")  # Same as title for compatibility
+            example["language"] = metadata.get("language")  # Programming language
+            example["file_path"] = metadata.get("file_path")  # Original file path if available
+            # Note: content field is already at top level from database
+            # Note: summary field is already at top level from database
+
+        safe_logfire_info(
+            f"Fetched {len(code_examples)} code examples for {source_id} | total={total}"
+        )
 
         return {
             "success": True,
             "source_id": source_id,
             "code_examples": code_examples,
-            "count": len(code_examples),
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < total,
         }
 
     except Exception as e:
@@ -322,6 +576,14 @@ async def get_knowledge_item_code_examples(source_id: str):
 @router.post("/knowledge-items/{source_id}/refresh")
 async def refresh_knowledge_item(source_id: str):
     """Refresh a knowledge item by re-crawling its URL with the same metadata."""
+    
+    # Validate API key before starting expensive refresh operation
+    logger.info("🔍 About to validate API key for refresh...")
+    provider_config = await credential_service.get_active_provider("embedding")
+    provider = provider_config.get("provider", "openai")
+    await _validate_provider_api_key(provider)
+    logger.info("✅ API key validation completed successfully for refresh")
+    
     try:
         safe_logfire_info(f"Starting knowledge item refresh | source_id={source_id}")
 
@@ -376,7 +638,7 @@ async def refresh_knowledge_item(source_id: str):
             )
 
         # Use the same crawl orchestration as regular crawl
-        crawl_service = CrawlOrchestrationService(
+        crawl_service = CrawlingService(
             crawler=crawler, supabase_client=get_supabase_client()
         )
         crawl_service.set_progress_id(progress_id)
@@ -398,7 +660,15 @@ async def refresh_knowledge_item(source_id: str):
                     safe_logfire_info(
                         f"Acquired crawl semaphore for refresh | source_id={source_id}"
                     )
-                    await crawl_service.orchestrate_crawl(request_dict)
+                    result = await crawl_service.orchestrate_crawl(request_dict)
+
+                    # Store the ACTUAL crawl task for proper cancellation
+                    crawl_task = result.get("task")
+                    if crawl_task:
+                        active_crawl_tasks[progress_id] = crawl_task
+                        safe_logfire_info(
+                            f"Stored actual refresh crawl task | progress_id={progress_id} | task_name={crawl_task.get_name()}"
+                        )
             finally:
                 # Clean up task from registry when done (success or failure)
                 if progress_id in active_crawl_tasks:
@@ -407,9 +677,8 @@ async def refresh_knowledge_item(source_id: str):
                         f"Cleaned up refresh task from registry | progress_id={progress_id}"
                     )
 
-        task = asyncio.create_task(_perform_refresh_with_semaphore())
-        # Track the task for cancellation support
-        active_crawl_tasks[progress_id] = task
+        # Start the wrapper task - we don't need to track it since we'll track the actual crawl task
+        asyncio.create_task(_perform_refresh_with_semaphore())
 
         return {"progressId": progress_id, "message": f"Started refresh for {url}"}
 
@@ -433,6 +702,13 @@ async def crawl_knowledge_item(request: KnowledgeItemRequest):
     if not request.url.startswith(("http://", "https://")):
         raise HTTPException(status_code=422, detail="URL must start with http:// or https://")
 
+    # Validate API key before starting expensive operation
+    logger.info("🔍 About to validate API key...")
+    provider_config = await credential_service.get_active_provider("embedding")
+    provider = provider_config.get("provider", "openai")
+    await _validate_provider_api_key(provider)
+    logger.info("✅ API key validation completed successfully")
+
     try:
         safe_logfire_info(
             f"Starting knowledge item crawl | url={str(request.url)} | knowledge_type={request.knowledge_type} | tags={request.tags}"
@@ -443,7 +719,7 @@ async def crawl_knowledge_item(request: KnowledgeItemRequest):
         # Initialize progress tracker IMMEDIATELY so it's available for polling
         from ..utils.progress.progress_tracker import ProgressTracker
         tracker = ProgressTracker(progress_id, operation_type="crawl")
-        
+
         # Detect crawl type from URL
         url_str = str(request.url)
         crawl_type = "normal"
@@ -451,42 +727,41 @@ async def crawl_knowledge_item(request: KnowledgeItemRequest):
             crawl_type = "sitemap"
         elif url_str.endswith(".txt"):
             crawl_type = "llms-txt" if "llms" in url_str.lower() else "text_file"
-        
+
         await tracker.start({
             "url": url_str,
             "current_url": url_str,
             "crawl_type": crawl_type,
-            "status": "initializing",
+            # Don't override status - let tracker.start() set it to "starting"
             "progress": 0,
             "log": f"Starting crawl for {request.url}"
         })
 
-        # Start background task
-        task = asyncio.create_task(_perform_crawl_with_progress(progress_id, request, tracker))
-        # Track the task for cancellation support
-        active_crawl_tasks[progress_id] = task
+        # Start background task - no need to track this wrapper task
+        # The actual crawl task will be stored inside _perform_crawl_with_progress
+        asyncio.create_task(_perform_crawl_with_progress(progress_id, request, tracker))
         safe_logfire_info(
             f"Crawl started successfully | progress_id={progress_id} | url={str(request.url)}"
         )
         # Create a proper response that will be converted to camelCase
         from pydantic import BaseModel, Field
-        
+
         class CrawlStartResponse(BaseModel):
             success: bool
             progress_id: str = Field(alias="progressId")
             message: str
             estimated_duration: str = Field(alias="estimatedDuration")
-            
+
             class Config:
                 populate_by_name = True
-        
+
         response = CrawlStartResponse(
             success=True,
             progress_id=progress_id,
             message="Crawling started",
             estimated_duration="3-5 minutes"
         )
-        
+
         return response.model_dump(by_alias=True)
     except Exception as e:
         safe_logfire_error(f"Failed to start crawl | error={str(e)} | url={str(request.url)}")
@@ -494,7 +769,7 @@ async def crawl_knowledge_item(request: KnowledgeItemRequest):
 
 
 async def _perform_crawl_with_progress(
-    progress_id: str, request: KnowledgeItemRequest, tracker: "ProgressTracker"
+    progress_id: str, request: KnowledgeItemRequest, tracker
 ):
     """Perform the actual crawl operation with progress tracking using service layer."""
     # Acquire semaphore to limit concurrent crawls
@@ -518,16 +793,8 @@ async def _perform_crawl_with_progress(
                 return
 
             supabase_client = get_supabase_client()
-            orchestration_service = CrawlOrchestrationService(crawler, supabase_client)
+            orchestration_service = CrawlingService(crawler, supabase_client)
             orchestration_service.set_progress_id(progress_id)
-
-            # Store the current task in active_crawl_tasks for cancellation support
-            current_task = asyncio.current_task()
-            if current_task:
-                active_crawl_tasks[progress_id] = current_task
-                safe_logfire_info(
-                    f"Stored current task in active_crawl_tasks | progress_id={progress_id}"
-                )
 
             # Convert request to dict for service
             request_dict = {
@@ -539,11 +806,20 @@ async def _perform_crawl_with_progress(
                 "generate_summary": True,
             }
 
-            # Orchestrate the crawl (now returns immediately with task info)
+            # Orchestrate the crawl - this returns immediately with task info including the actual task
             result = await orchestration_service.orchestrate_crawl(request_dict)
 
+            # Store the ACTUAL crawl task for proper cancellation
+            crawl_task = result.get("task")
+            if crawl_task:
+                active_crawl_tasks[progress_id] = crawl_task
+                safe_logfire_info(
+                    f"Stored actual crawl task in active_crawl_tasks | progress_id={progress_id} | task_name={crawl_task.get_name()}"
+                )
+            else:
+                safe_logfire_error(f"No task returned from orchestrate_crawl | progress_id={progress_id}")
+
             # The orchestration service now runs in background and handles all progress updates
-            # Just log that the task was started
             safe_logfire_info(
                 f"Crawl task started | progress_id={progress_id} | task_id={result.get('task_id')}"
             )
@@ -584,8 +860,17 @@ async def upload_document(
     file: UploadFile = File(...),
     tags: str | None = Form(None),
     knowledge_type: str = Form("technical"),
+    extract_code_examples: bool = Form(True),
 ):
     """Upload and process a document with progress tracking."""
+    
+    # Validate API key before starting expensive upload operation  
+    logger.info("🔍 About to validate API key for upload...")
+    provider_config = await credential_service.get_active_provider("embedding")
+    provider = provider_config.get("provider", "openai")
+    await _validate_provider_api_key(provider)
+    logger.info("✅ API key validation completed successfully for upload")
+    
     try:
         # DETAILED LOGGING: Track knowledge_type parameter flow
         safe_logfire_info(
@@ -626,13 +911,14 @@ async def upload_document(
             "log": f"Starting upload for {file.filename}"
         })
         # Start background task for processing with file content and metadata
-        task = asyncio.create_task(
+        # Upload tasks can be tracked directly since they don't spawn sub-tasks
+        upload_task = asyncio.create_task(
             _perform_upload_with_progress(
-                progress_id, file_content, file_metadata, tag_list, knowledge_type, tracker
+                progress_id, file_content, file_metadata, tag_list, knowledge_type, extract_code_examples, tracker
             )
         )
         # Track the task for cancellation support
-        active_crawl_tasks[progress_id] = task
+        active_crawl_tasks[progress_id] = upload_task
         safe_logfire_info(
             f"Document upload started successfully | progress_id={progress_id} | filename={file.filename}"
         )
@@ -656,6 +942,7 @@ async def _perform_upload_with_progress(
     file_metadata: dict,
     tag_list: list[str],
     knowledge_type: str,
+    extract_code_examples: bool,
     tracker: "ProgressTracker",
 ):
     """Perform document upload with progress tracking using service layer."""
@@ -693,7 +980,13 @@ async def _perform_upload_with_progress(
             safe_logfire_info(
                 f"Document text extracted | filename={filename} | extracted_length={len(extracted_text)} | content_type={content_type}"
             )
+        except ValueError as ex:
+            # ValueError indicates unsupported format or empty file - user error
+            logger.warning(f"Document validation failed: {filename} - {str(ex)}")
+            await tracker.error(str(ex))
+            return
         except Exception as ex:
+            # Other exceptions are system errors - log with full traceback
             logger.error(f"Failed to extract text from document: {filename}", exc_info=True)
             await tracker.error(f"Failed to extract text from document: {str(ex)}")
             return
@@ -710,7 +1003,8 @@ async def _perform_upload_with_progress(
         ):
             """Progress callback for tracking document processing"""
             # Map the document storage progress to overall progress range
-            mapped_percentage = progress_mapper.map_progress("document_storage", percentage)
+            # Use "storing" stage for uploads (30-100%), not "document_storage" (25-40%)
+            mapped_percentage = progress_mapper.map_progress("storing", percentage)
 
             await tracker.update(
                 status="storing",
@@ -728,6 +1022,7 @@ async def _perform_upload_with_progress(
             source_id=source_id,
             knowledge_type=knowledge_type,
             tags=tag_list,
+            extract_code_examples=extract_code_examples,
             progress_callback=document_progress_callback,
             cancellation_check=check_upload_cancellation,
         )
@@ -783,10 +1078,11 @@ async def _perform_upload_with_progress(
             await tracker.complete({
                 "log": "Document uploaded successfully!",
                 "chunks_stored": result.get("chunks_stored"),
+                "code_examples_stored": result.get("code_examples_stored", 0),
                 "sourceId": result.get("source_id"),
             })
             safe_logfire_info(
-                f"Document uploaded successfully | progress_id={progress_id} | source_id={result.get('source_id')} | chunks_stored={result.get('chunks_stored')}"
+                f"Document uploaded successfully | progress_id={progress_id} | source_id={result.get('source_id')} | chunks_stored={result.get('chunks_stored')} | code_examples_stored={result.get('code_examples_stored', 0)}"
             )
         else:
             error_msg = result.get("error", "Unknown error")
@@ -1288,25 +1584,6 @@ async def knowledge_health():
     return result
 
 
-@router.get("/knowledge-items/task/{task_id}")
-async def get_crawl_task_status(task_id: str):
-    """Get status of a background crawl task."""
-    try:
-        from ..services.background_task_manager import get_task_manager
-
-        task_manager = get_task_manager()
-        status = await task_manager.get_task_status(task_id)
-
-        if "error" in status and status["error"] == "Task not found":
-            raise HTTPException(status_code=404, detail={"error": "Task not found"})
-
-        return status
-    except HTTPException:
-        raise
-    except Exception as e:
-        safe_logfire_error(f"Failed to get task status | error={str(e)} | task_id={task_id}")
-        raise HTTPException(status_code=500, detail={"error": str(e)})
-
 
 @router.post("/knowledge-items/stop/{progress_id}")
 async def stop_crawl_task(progress_id: str):
@@ -1331,7 +1608,7 @@ async def stop_crawl_task(progress_id: str):
                 task.cancel()
                 try:
                     await asyncio.wait_for(task, timeout=2.0)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
+                except (TimeoutError, asyncio.CancelledError):
                     pass
             del active_crawl_tasks[progress_id]
             found = True
@@ -1343,10 +1620,14 @@ async def stop_crawl_task(progress_id: str):
         if found:
             try:
                 from ..utils.progress.progress_tracker import ProgressTracker
+                # Get current progress from existing tracker, default to 0 if not found
+                current_state = ProgressTracker.get_progress(progress_id)
+                current_progress = current_state.get("progress", 0) if current_state else 0
+
                 tracker = ProgressTracker(progress_id, operation_type="crawl")
                 await tracker.update(
                     status="cancelled",
-                    progress=-1,
+                    progress=current_progress,
                     log="Crawl cancelled by user"
                 )
             except Exception:

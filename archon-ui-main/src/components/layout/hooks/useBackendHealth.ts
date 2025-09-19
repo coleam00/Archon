@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { callAPIWithETag } from "../../../features/projects/shared/apiWithEtag";
+import { callAPIWithETag } from "../../../features/shared/apiWithEtag";
+import { createRetryLogic, STALE_TIMES } from "../../../features/shared/queryPatterns";
 import type { HealthResponse } from "../types";
 
 /**
@@ -13,10 +14,10 @@ export function useBackendHealth() {
       // Use existing ETag infrastructure with timeout
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
-      
+
       // Chain signals: React Query's signal + our timeout
       if (signal) {
-        signal.addEventListener('abort', () => controller.abort());
+        signal.addEventListener("abort", () => controller.abort());
       }
 
       return callAPIWithETag<HealthResponse>("/api/health", {
@@ -25,23 +26,17 @@ export function useBackendHealth() {
         clearTimeout(timeoutId);
       });
     },
-    // Retry configuration for startup scenarios
-    retry: (failureCount) => {
-      // Keep retrying during startup, up to 5 times
-      if (failureCount < 5) {
-        return true;
-      }
-      return false;
-    },
+    // Retry configuration for startup scenarios - respect 4xx but allow more attempts
+    retry: createRetryLogic(5),
     retryDelay: (attemptIndex) => {
       // Exponential backoff: 1.5s, 2.25s, 3.375s, etc.
       return Math.min(1500 * 1.5 ** attemptIndex, 10000);
     },
     // Refetch every 30 seconds when healthy
-    refetchInterval: 30000,
+    refetchInterval: STALE_TIMES.normal,
     // Keep trying to connect on window focus
     refetchOnWindowFocus: true,
-    // Consider data fresh for 20 seconds
-    staleTime: 20000,
+    // Consider data fresh for 30 seconds
+    staleTime: STALE_TIMES.normal,
   });
 }

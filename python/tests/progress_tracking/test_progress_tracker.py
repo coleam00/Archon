@@ -1,226 +1,226 @@
-"""Unit tests for the ProgressTracker class."""
+"""
+Tests for ProgressTracker
+"""
 
 import pytest
 from datetime import datetime
-from unittest.mock import patch
 
-from src.server.utils.progress.progress_tracker import ProgressTracker
+from src.server.utils.progress import ProgressTracker
 
 
 class TestProgressTracker:
-    """Test cases for ProgressTracker functionality."""
+    """Test suite for ProgressTracker"""
 
-    @pytest.fixture
-    def progress_tracker(self):
-        """Create a fresh ProgressTracker for each test."""
-        return ProgressTracker("test-progress-id", "crawl")
-
-    def test_init_creates_initial_state(self, progress_tracker):
-        """Test that initialization creates correct initial state."""
-        assert progress_tracker.progress_id == "test-progress-id"
-        assert progress_tracker.operation_type == "crawl"
-        assert progress_tracker.state["progress_id"] == "test-progress-id"
-        assert progress_tracker.state["type"] == "crawl"
-        assert progress_tracker.state["status"] == "initializing"
-        assert progress_tracker.state["progress"] == 0
-        assert isinstance(progress_tracker.state["logs"], list)
-        assert len(progress_tracker.state["logs"]) == 0
-
-    def test_get_progress_returns_state(self, progress_tracker):
-        """Test that get_progress returns the correct state."""
-        state = ProgressTracker.get_progress("test-progress-id")
-        assert state is not None
-        assert state["progress_id"] == "test-progress-id"
-        assert state["type"] == "crawl"
-
-    def test_clear_progress_removes_state(self, progress_tracker):
-        """Test that clear_progress removes the state from memory."""
-        # Verify state exists
-        assert ProgressTracker.get_progress("test-progress-id") is not None
+    def test_initialization(self):
+        """Test ProgressTracker initialization"""
+        progress_id = "test-123"
+        tracker = ProgressTracker(progress_id, operation_type="crawl")
         
-        # Clear progress
-        ProgressTracker.clear_progress("test-progress-id")
+        assert tracker.progress_id == progress_id
+        assert tracker.operation_type == "crawl"
+        assert tracker.state["status"] == "initializing"
+        assert tracker.state["progress"] == 0
+        assert "start_time" in tracker.state
         
-        # Verify state is gone
-        assert ProgressTracker.get_progress("test-progress-id") is None
-
+    def test_get_progress(self):
+        """Test getting progress by ID"""
+        progress_id = "test-456"
+        tracker = ProgressTracker(progress_id, operation_type="upload")
+        
+        # Should be able to get progress by ID
+        retrieved = ProgressTracker.get_progress(progress_id)
+        assert retrieved is not None
+        assert retrieved["progress_id"] == progress_id
+        assert retrieved["type"] == "upload"
+        
+    def test_clear_progress(self):
+        """Test clearing progress from memory"""
+        progress_id = "test-789"
+        ProgressTracker(progress_id, operation_type="crawl")
+        
+        # Verify it exists
+        assert ProgressTracker.get_progress(progress_id) is not None
+        
+        # Clear it
+        ProgressTracker.clear_progress(progress_id)
+        
+        # Verify it's gone
+        assert ProgressTracker.get_progress(progress_id) is None
+        
     @pytest.mark.asyncio
-    async def test_start_updates_status_and_time(self, progress_tracker):
-        """Test that start() updates status and start time."""
-        initial_data = {"test_key": "test_value"}
+    async def test_start(self):
+        """Test starting progress tracking"""
+        tracker = ProgressTracker("test-start", operation_type="crawl")
         
-        await progress_tracker.start(initial_data)
+        initial_data = {
+            "url": "https://example.com",
+            "crawl_type": "normal"
+        }
         
-        assert progress_tracker.state["status"] == "starting"
-        assert "start_time" in progress_tracker.state
-        assert progress_tracker.state["test_key"] == "test_value"
-
+        await tracker.start(initial_data)
+        
+        assert tracker.state["status"] == "starting"
+        assert tracker.state["url"] == "https://example.com"
+        assert tracker.state["crawl_type"] == "normal"
+        
     @pytest.mark.asyncio
-    async def test_update_progress_and_logs(self, progress_tracker):
-        """Test that update() correctly updates progress and adds logs."""
-        await progress_tracker.update(
+    async def test_update(self):
+        """Test updating progress"""
+        tracker = ProgressTracker("test-update", operation_type="crawl")
+        
+        await tracker.update(
             status="crawling",
-            progress=25,
-            log="Processing page 5/20",
-            total_pages=20,
-            processed_pages=5
+            progress=50,
+            log="Processing page 5/10",
+            current_url="https://example.com/page5"
         )
         
-        assert progress_tracker.state["status"] == "crawling"
-        assert progress_tracker.state["progress"] == 25
-        assert progress_tracker.state["log"] == "Processing page 5/20"
-        assert progress_tracker.state["total_pages"] == 20
-        assert progress_tracker.state["processed_pages"] == 5
+        assert tracker.state["status"] == "crawling"
+        assert tracker.state["progress"] == 50
+        assert tracker.state["log"] == "Processing page 5/10"
+        assert tracker.state["current_url"] == "https://example.com/page5"
+        assert len(tracker.state["logs"]) == 1
         
-        # Check log entry was added
-        assert len(progress_tracker.state["logs"]) == 1
-        log_entry = progress_tracker.state["logs"][0]
-        assert log_entry["message"] == "Processing page 5/20"
-        assert log_entry["status"] == "crawling"
-        assert log_entry["progress"] == 25
-
     @pytest.mark.asyncio
-    async def test_progress_never_goes_backwards(self, progress_tracker):
-        """Test that progress values cannot decrease."""
-        # Set initial progress
-        await progress_tracker.update("crawling", 50, "Halfway done")
-        assert progress_tracker.state["progress"] == 50
+    async def test_progress_never_goes_backwards(self):
+        """Test that progress never decreases"""
+        tracker = ProgressTracker("test-backwards", operation_type="crawl")
         
-        # Try to set lower progress
-        await progress_tracker.update("crawling", 30, "Should not decrease")
+        # Set progress to 50%
+        await tracker.update(status="crawling", progress=50, log="Half way")
+        assert tracker.state["progress"] == 50
         
-        # Progress should remain at 50
-        assert progress_tracker.state["progress"] == 50
-        # But status and message should update
-        assert progress_tracker.state["log"] == "Should not decrease"
-
+        # Try to set it to 30% - should stay at 50%
+        await tracker.update(status="crawling", progress=30, log="Should not go back")
+        assert tracker.state["progress"] == 50  # Should not decrease
+        
+        # Can increase to 70%
+        await tracker.update(status="crawling", progress=70, log="Moving forward")
+        assert tracker.state["progress"] == 70
+        
     @pytest.mark.asyncio
-    async def test_progress_clamped_to_0_100(self, progress_tracker):
-        """Test that progress values are clamped to 0-100 range."""
-        # Test negative progress
-        await progress_tracker.update("starting", -10, "Negative progress")
-        assert progress_tracker.state["progress"] == 0
+    async def test_complete(self):
+        """Test marking progress as completed"""
+        tracker = ProgressTracker("test-complete", operation_type="crawl")
         
-        # Test progress over 100
-        await progress_tracker.update("running", 150, "Over 100 progress")
-        assert progress_tracker.state["progress"] == 100
-
+        await tracker.complete({
+            "chunks_stored": 100,
+            "source_id": "source-123",
+            "log": "Crawl completed successfully"
+        })
+        
+        assert tracker.state["status"] == "completed"
+        assert tracker.state["progress"] == 100
+        assert tracker.state["chunks_stored"] == 100
+        assert tracker.state["source_id"] == "source-123"
+        assert "end_time" in tracker.state
+        assert "duration" in tracker.state
+        
     @pytest.mark.asyncio
-    async def test_complete_sets_100_percent_and_duration(self, progress_tracker):
-        """Test that complete() sets progress to 100% and calculates duration."""
-        completion_data = {"chunks_stored": 500, "word_count": 10000}
+    async def test_error(self):
+        """Test marking progress as error"""
+        tracker = ProgressTracker("test-error", operation_type="crawl")
         
-        await progress_tracker.complete(completion_data)
-        
-        assert progress_tracker.state["status"] == "completed"
-        assert progress_tracker.state["progress"] == 100
-        assert progress_tracker.state["chunks_stored"] == 500
-        assert progress_tracker.state["word_count"] == 10000
-        assert "end_time" in progress_tracker.state
-        assert "duration" in progress_tracker.state
-        assert "duration_formatted" in progress_tracker.state
-
-    @pytest.mark.asyncio
-    async def test_error_sets_error_status(self, progress_tracker):
-        """Test that error() sets error status and details."""
-        error_details = {"error_code": 500, "component": "embedding_service"}
-        
-        await progress_tracker.error("Failed to create embeddings", error_details)
-        
-        assert progress_tracker.state["status"] == "error"
-        assert progress_tracker.state["error"] == "Failed to create embeddings"
-        assert progress_tracker.state["error_details"]["error_code"] == 500
-        assert "error_time" in progress_tracker.state
-
-    @pytest.mark.asyncio
-    async def test_update_batch_progress(self, progress_tracker):
-        """Test batch progress calculation and updates."""
-        await progress_tracker.update_batch_progress(
-            current_batch=3,
-            total_batches=6,
-            batch_size=25,
-            message="Processing batch 3 of 6"
+        await tracker.error(
+            "Failed to connect to URL",
+            error_details={"code": 404, "url": "https://example.com"}
         )
         
-        expected_progress = int((3 / 6) * 100)  # 50%
-        assert progress_tracker.state["progress"] == expected_progress
-        assert progress_tracker.state["status"] == "processing_batch"
-        assert progress_tracker.state["current_batch"] == 3
-        assert progress_tracker.state["total_batches"] == 6
-        assert progress_tracker.state["batch_size"] == 25
-
+        assert tracker.state["status"] == "error"
+        assert tracker.state["error"] == "Failed to connect to URL"
+        assert tracker.state["error_details"]["code"] == 404
+        assert "error_time" in tracker.state
+        
     @pytest.mark.asyncio
-    async def test_update_crawl_stats(self, progress_tracker):
-        """Test crawling statistics updates."""
-        await progress_tracker.update_crawl_stats(
-            processed_pages=15,
-            total_pages=30,
-            current_url="https://example.com/page15"
+    async def test_update_crawl_stats(self):
+        """Test updating crawl statistics"""
+        tracker = ProgressTracker("test-crawl-stats", operation_type="crawl")
+        
+        await tracker.update_crawl_stats(
+            processed_pages=5,
+            total_pages=10,
+            current_url="https://example.com/page5",
+            pages_found=15
         )
         
-        expected_progress = int((15 / 30) * 100)  # 50%
-        assert progress_tracker.state["progress"] == expected_progress
-        assert progress_tracker.state["status"] == "crawling"
-        assert progress_tracker.state["processed_pages"] == 15
-        assert progress_tracker.state["total_pages"] == 30
-        assert progress_tracker.state["current_url"] == "https://example.com/page15"
-        assert "Processing page 15/30: https://example.com/page15" in progress_tracker.state["log"]
-
+        assert tracker.state["status"] == "crawling"
+        assert tracker.state["progress"] == 50  # 5/10 = 50%
+        assert tracker.state["processed_pages"] == 5
+        assert tracker.state["total_pages"] == 10
+        assert tracker.state["current_url"] == "https://example.com/page5"
+        assert tracker.state["pages_found"] == 15
+        
     @pytest.mark.asyncio
-    async def test_update_storage_progress(self, progress_tracker):
-        """Test document storage progress updates."""
-        await progress_tracker.update_storage_progress(
-            chunks_stored=75,
+    async def test_update_storage_progress(self):
+        """Test updating storage progress"""
+        tracker = ProgressTracker("test-storage", operation_type="crawl")
+        
+        await tracker.update_storage_progress(
+            chunks_stored=25,
             total_chunks=100,
-            operation="storing embeddings"
+            operation="Storing embeddings",
+            word_count=5000,
+            embeddings_created=25
         )
         
-        expected_progress = int((75 / 100) * 100)  # 75%
-        assert progress_tracker.state["progress"] == expected_progress
-        assert progress_tracker.state["status"] == "document_storage"
-        assert progress_tracker.state["chunks_stored"] == 75
-        assert progress_tracker.state["total_chunks"] == 100
-        assert "storing embeddings: 75/100 chunks" in progress_tracker.state["log"]
-
-    def test_format_duration(self, progress_tracker):
-        """Test duration formatting for different time ranges."""
-        # Test seconds
-        formatted = progress_tracker._format_duration(45.5)
-        assert "45.5 seconds" in formatted
+        assert tracker.state["status"] == "document_storage"
+        assert tracker.state["progress"] == 25  # 25/100 = 25%
+        assert tracker.state["chunks_stored"] == 25
+        assert tracker.state["total_chunks"] == 100
+        assert tracker.state["word_count"] == 5000
+        assert tracker.state["embeddings_created"] == 25
         
-        # Test minutes
-        formatted = progress_tracker._format_duration(125.0)
-        assert "2.1 minutes" in formatted
+    @pytest.mark.asyncio
+    async def test_update_code_extraction_progress(self):
+        """Test updating code extraction progress"""
+        tracker = ProgressTracker("test-code", operation_type="crawl")
         
-        # Test hours
-        formatted = progress_tracker._format_duration(7200.0)
-        assert "2.0 hours" in formatted
-
-    def test_get_state_returns_copy(self, progress_tracker):
-        """Test that get_state returns a copy, not the original state."""
-        state_copy = progress_tracker.get_state()
+        await tracker.update_code_extraction_progress(
+            completed_summaries=3,
+            total_summaries=10,
+            code_blocks_found=15,
+            current_file="main.py"
+        )
         
-        # Modify the copy
-        state_copy["test_modification"] = "should not affect original"
+        assert tracker.state["status"] == "code_extraction"
+        assert tracker.state["progress"] == 30  # 3/10 = 30%
+        assert tracker.state["completed_summaries"] == 3
+        assert tracker.state["total_summaries"] == 10
+        assert tracker.state["code_blocks_found"] == 15
+        assert tracker.state["current_file"] == "main.py"
         
-        # Original state should be unchanged
-        assert "test_modification" not in progress_tracker.state
-
-    def test_multiple_trackers_independent(self):
-        """Test that multiple trackers maintain independent state."""
-        tracker1 = ProgressTracker("id-1", "crawl")
-        tracker2 = ProgressTracker("id-2", "upload")
+    @pytest.mark.asyncio
+    async def test_update_batch_progress(self):
+        """Test updating batch progress"""
+        tracker = ProgressTracker("test-batch", operation_type="upload")
         
-        # Verify they have different states
-        assert tracker1.progress_id != tracker2.progress_id
-        assert tracker1.state["progress_id"] != tracker2.state["progress_id"]
-        assert tracker1.state["type"] != tracker2.state["type"]
+        await tracker.update_batch_progress(
+            current_batch=3,
+            total_batches=5,
+            batch_size=100,
+            message="Processing batch 3 of 5"
+        )
         
-        # Verify they can be retrieved independently
-        state1 = ProgressTracker.get_progress("id-1")
-        state2 = ProgressTracker.get_progress("id-2")
+        assert tracker.state["status"] == "processing_batch"
+        assert tracker.state["progress"] == 60  # 3/5 = 60%
+        assert tracker.state["current_batch"] == 3
+        assert tracker.state["total_batches"] == 5
+        assert tracker.state["batch_size"] == 100
         
-        assert state1["progress_id"] == "id-1"
-        assert state2["progress_id"] == "id-2"
-        assert state1["type"] == "crawl"
-        assert state2["type"] == "upload"
+    def test_multiple_trackers(self):
+        """Test multiple progress trackers don't interfere"""
+        tracker1 = ProgressTracker("tracker-1", operation_type="crawl")
+        tracker2 = ProgressTracker("tracker-2", operation_type="upload")
+        
+        # Both should exist independently
+        assert ProgressTracker.get_progress("tracker-1") is not None
+        assert ProgressTracker.get_progress("tracker-2") is not None
+        
+        # They should have different types
+        assert ProgressTracker.get_progress("tracker-1")["type"] == "crawl"
+        assert ProgressTracker.get_progress("tracker-2")["type"] == "upload"
+        
+        # Clearing one shouldn't affect the other
+        ProgressTracker.clear_progress("tracker-1")
+        assert ProgressTracker.get_progress("tracker-1") is None
+        assert ProgressTracker.get_progress("tracker-2") is not None

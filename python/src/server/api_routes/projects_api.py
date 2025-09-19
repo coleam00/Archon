@@ -9,7 +9,8 @@ Handles:
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
+from email.utils import format_datetime
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
@@ -70,6 +71,7 @@ class CreateTaskRequest(BaseModel):
     status: str | None = "todo"
     assignee: str | None = "User"
     task_order: int | None = 0
+    priority: str | None = "medium"
     feature: str | None = None
 
 
@@ -577,19 +579,45 @@ async def list_project_tasks(
 
         tasks = result.get("tasks", [])
 
-        # Generate ETag from task data (excluding timestamps for consistency)
-        etag_data = {
-            "tasks": [{
-                "id": task.get("id"),
-                "title": task.get("title"),
-                "status": task.get("status"),
-                "task_order": task.get("task_order"),
-                "assignee": task.get("assignee"),
-                "feature": task.get("feature")
-            } for task in tasks],
-            "project_id": project_id,
-            "count": len(tasks)
-        }
+        # Generate ETag from task data (includes description and updated_at to drive polling invalidation)
+        etag_tasks: list[dict[str, object]] = []
+        last_modified_dt: datetime | None = None
+
+        for task in tasks:
+            raw_updated = task.get("updated_at")
+            parsed_updated: datetime | None = None
+            if isinstance(raw_updated, datetime):
+                parsed_updated = raw_updated
+            elif isinstance(raw_updated, str):
+                try:
+                    parsed_updated = datetime.fromisoformat(raw_updated.replace("Z", "+00:00"))
+                except ValueError:
+                    parsed_updated = None
+
+            if parsed_updated is not None:
+                parsed_updated = parsed_updated.astimezone(timezone.utc)
+                if last_modified_dt is None or parsed_updated > last_modified_dt:
+                    last_modified_dt = parsed_updated
+
+            etag_tasks.append(
+                {
+                    "id": task.get("id") or "",
+                    "title": task.get("title") or "",
+                    "status": task.get("status") or "",
+                    "task_order": task.get("task_order") or 0,
+                    "assignee": task.get("assignee") or "",
+                    "priority": task.get("priority") or "",
+                    "feature": task.get("feature") or "",
+                    "description": task.get("description") or "",
+                    "updated_at": (
+                        parsed_updated.isoformat()
+                        if parsed_updated is not None
+                        else (str(raw_updated) if raw_updated else "")
+                    ),
+                }
+            )
+
+        etag_data = {"tasks": etag_tasks, "project_id": project_id, "count": len(tasks)}
         current_etag = generate_etag(etag_data)
 
         # Check if client's ETag matches (304 Not Modified)
@@ -597,14 +625,18 @@ async def list_project_tasks(
             response.status_code = 304
             response.headers["ETag"] = current_etag
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
-            response.headers["Last-Modified"] = datetime.utcnow().isoformat()
+            response.headers["Last-Modified"] = format_datetime(
+                last_modified_dt or datetime.now(timezone.utc)
+            )
             logfire.debug(f"Tasks unchanged, returning 304 | project_id={project_id} | etag={current_etag}")
             return None
 
         # Set ETag headers for successful response
         response.headers["ETag"] = current_etag
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
-        response.headers["Last-Modified"] = datetime.utcnow().isoformat()
+        response.headers["Last-Modified"] = format_datetime(
+            last_modified_dt or datetime.now(timezone.utc)
+        )
 
         logfire.debug(
             f"Project tasks retrieved | project_id={project_id} | task_count={len(tasks)} | etag={current_etag}"
@@ -615,7 +647,7 @@ async def list_project_tasks(
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(f"Failed to list project tasks | error={str(e)} | project_id={project_id}")
+        logfire.error(f"Failed to list project tasks | project_id={project_id}", exc_info=True)
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -634,6 +666,7 @@ async def create_task(request: CreateTaskRequest):
             description=request.description or "",
             assignee=request.assignee or "User",
             task_order=request.task_order or 0,
+            priority=request.priority or "medium",
             feature=request.feature,
         )
 
@@ -659,15 +692,16 @@ async def create_task(request: CreateTaskRequest):
 async def list_tasks(
     status: str | None = None,
     project_id: str | None = None,
-    include_closed: bool = False,
+    include_closed: bool = True,
     page: int = 1,
-    per_page: int = 50,
+    per_page: int = 10,
     exclude_large_fields: bool = False,
+    q: str | None = None,  # Search query parameter
 ):
-    """List tasks with optional filters including status and project."""
+    """List tasks with optional filters including status, project, and keyword search."""
     try:
         logfire.info(
-            f"Listing tasks | status={status} | project_id={project_id} | include_closed={include_closed} | page={page} | per_page={per_page}"
+            f"Listing tasks | status={status} | project_id={project_id} | include_closed={include_closed} | page={page} | per_page={per_page} | q={q}"
         )
 
         # Use TaskService to list tasks
@@ -677,6 +711,7 @@ async def list_tasks(
             status=status,
             include_closed=include_closed,
             exclude_large_fields=exclude_large_fields,
+            search_query=q,  # Pass search query to service
         )
 
         if not success:
@@ -769,6 +804,7 @@ class UpdateTaskRequest(BaseModel):
     status: str | None = None
     assignee: str | None = None
     task_order: int | None = None
+    priority: str | None = None
     feature: str | None = None
 
 
@@ -816,6 +852,8 @@ async def update_task(task_id: str, request: UpdateTaskRequest):
             update_fields["assignee"] = request.assignee
         if request.task_order is not None:
             update_fields["task_order"] = request.task_order
+        if request.priority is not None:
+            update_fields["priority"] = request.priority
         if request.feature is not None:
             update_fields["feature"] = request.feature
 

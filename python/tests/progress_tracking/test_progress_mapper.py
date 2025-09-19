@@ -1,4 +1,6 @@
-"""Unit tests for the ProgressMapper class."""
+"""
+Tests for ProgressMapper
+"""
 
 import pytest
 
@@ -6,214 +8,253 @@ from src.server.services.crawling.progress_mapper import ProgressMapper
 
 
 class TestProgressMapper:
-    """Test cases for ProgressMapper functionality."""
+    """Test suite for ProgressMapper"""
 
-    @pytest.fixture
-    def progress_mapper(self):
-        """Create a fresh ProgressMapper for each test."""
-        return ProgressMapper()
-
-    def test_init_sets_initial_state(self, progress_mapper):
-        """Test that initialization sets correct initial state."""
-        assert progress_mapper.last_overall_progress == 0
-        assert progress_mapper.current_stage == "starting"
-
-    def test_stage_ranges_are_valid(self, progress_mapper):
-        """Test that all stage ranges are valid and sequential."""
-        ranges = progress_mapper.STAGE_RANGES
+    def test_initialization(self):
+        """Test ProgressMapper initialization"""
+        mapper = ProgressMapper()
         
-        # Test that ranges don't overlap (except for aliases)
-        crawl_stages = ["starting", "analyzing", "crawling", "processing", 
-                       "source_creation", "document_storage", "code_extraction", 
-                       "finalization", "completed"]
+        assert mapper.last_overall_progress == 0
+        assert mapper.current_stage == "starting"
         
-        last_end = 0
-        for stage in crawl_stages[:-1]:  # Exclude completed which is (100, 100)
-            start, end = ranges[stage]
-            assert start >= last_end, f"Stage {stage} starts before previous stage ends"
-            assert end > start, f"Stage {stage} has invalid range: {start}-{end}"
-            last_end = end
-
-        # Test that code extraction gets the largest range (it's the longest)
-        code_start, code_end = ranges["code_extraction"]
-        code_range = code_end - code_start
+    def test_map_progress_basic(self):
+        """Test basic progress mapping"""
+        mapper = ProgressMapper()
         
-        doc_start, doc_end = ranges["document_storage"]  
-        doc_range = doc_end - doc_start
+        # Starting stage (0-1%)
+        progress = mapper.map_progress("starting", 50)
+        assert progress == 0  # 50% of 0-1 range
         
-        assert code_range > doc_range, "Code extraction should have larger range than document storage"
-
-    def test_map_progress_basic_functionality(self, progress_mapper):
-        """Test basic progress mapping functionality."""
-        # Test crawling stage at 50%
-        result = progress_mapper.map_progress("crawling", 50.0)
+        # Analyzing stage (1-3%)
+        progress = mapper.map_progress("analyzing", 50)
+        assert progress == 2  # 1 + (50% of 2) = 2
         
-        # Should be halfway between crawling range (2-5%)
-        expected = 2 + (50 / 100) * (5 - 2)  # 3.5%, rounded to 4
-        assert result == 4
-
-    def test_map_progress_document_storage(self, progress_mapper):
-        """Test progress mapping for document storage stage."""
-        # Test document storage at 25%
-        result = progress_mapper.map_progress("document_storage", 25.0)
+        # Crawling stage (3-15%)
+        progress = mapper.map_progress("crawling", 50)
+        assert progress == 9  # 3 + (50% of 12) = 9
         
-        # Should be 25% through document_storage range (10-30%)
-        expected = 10 + (25 / 100) * (30 - 10)  # 10 + 5 = 15
-        assert result == 15
-
-    def test_map_progress_code_extraction(self, progress_mapper):
-        """Test progress mapping for code extraction stage."""
-        # Test code extraction at 50%  
-        result = progress_mapper.map_progress("code_extraction", 50.0)
+    def test_progress_never_goes_backwards(self):
+        """Test that progress never decreases"""
+        mapper = ProgressMapper()
         
-        # Should be 50% through code_extraction range (30-95%)
-        expected = 30 + (50 / 100) * (95 - 30)  # 30 + 32.5 = 62.5, rounded to 62
-        assert result == 62
-
-    def test_map_progress_never_goes_backwards(self, progress_mapper):
-        """Test that mapped progress never decreases."""
-        # Set initial progress to 50%
-        result1 = progress_mapper.map_progress("document_storage", 100.0)  # Should be 30%
-        assert result1 == 30
+        # Move to 50% of crawling (3-15%) = 9%
+        progress1 = mapper.map_progress("crawling", 50)
+        assert progress1 == 9
         
-        # Try to map a lower stage with lower progress
-        result2 = progress_mapper.map_progress("crawling", 50.0)  # Would normally be ~3.5%
+        # Try to go back to analyzing (1-3%) - should stay at 9%
+        progress2 = mapper.map_progress("analyzing", 100)
+        assert progress2 == 9  # Should not go backwards
         
-        # Should maintain higher progress
-        assert result2 == 30  # Stays at previous high value
-
-    def test_map_progress_clamping(self, progress_mapper):
-        """Test that stage progress is clamped to 0-100 range."""
-        # Test negative progress
-        result = progress_mapper.map_progress("crawling", -10.0)
-        expected = 2  # Start of crawling range
-        assert result == expected
+        # Can move forward to document_storage
+        progress3 = mapper.map_progress("document_storage", 50)
+        assert progress3 == 32  # 25 + (50% of 15) = 32.5 -> 32
         
-        # Test progress over 100
-        result = progress_mapper.map_progress("crawling", 150.0)  
-        expected = 5  # End of crawling range
-        assert result == expected
-
-    def test_completion_always_returns_100(self, progress_mapper):
-        """Test that completion stages always return 100%."""
-        assert progress_mapper.map_progress("completed", 0) == 100
-        assert progress_mapper.map_progress("complete", 50) == 100
-        assert progress_mapper.map_progress("completed", 100) == 100
-
-    def test_error_returns_negative_one(self, progress_mapper):
-        """Test that error stage returns -1."""
-        assert progress_mapper.map_progress("error", 50) == -1
-
-    def test_unknown_stage_maintains_current_progress(self, progress_mapper):
-        """Test that unknown stages don't change progress."""
+    def test_completion_handling(self):
+        """Test completion status handling"""
+        mapper = ProgressMapper()
+        
+        # Jump straight to completed
+        progress = mapper.map_progress("completed", 0)
+        assert progress == 100
+        
+        # Any percentage at completed should be 100
+        progress = mapper.map_progress("completed", 50)
+        assert progress == 100
+        
+    def test_error_handling(self):
+        """Test error status handling - preserves last known progress"""
+        mapper = ProgressMapper()
+        
+        # Error with no prior progress should return 0 (initial state)
+        progress = mapper.map_progress("error", 50)
+        assert progress == 0
+        
+        # Set some progress first, then error should preserve it
+        mapper.map_progress("crawling", 50)  # Should map to somewhere in the crawling range
+        current_progress = mapper.last_overall_progress
+        error_progress = mapper.map_progress("error", 50)
+        assert error_progress == current_progress  # Should preserve the progress
+        
+    def test_cancelled_handling(self):
+        """Test cancelled status handling - preserves last known progress"""
+        mapper = ProgressMapper()
+        
+        # Cancelled with no prior progress should return 0 (initial state)
+        progress = mapper.map_progress("cancelled", 50)
+        assert progress == 0
+        
+        # Set some progress first, then cancelled should preserve it
+        mapper.map_progress("crawling", 75)  # Should map to somewhere in the crawling range
+        current_progress = mapper.last_overall_progress
+        cancelled_progress = mapper.map_progress("cancelled", 50)
+        assert cancelled_progress == current_progress  # Should preserve the progress
+        
+    def test_unknown_stage(self):
+        """Test handling of unknown stages"""
+        mapper = ProgressMapper()
+        
         # Set some initial progress
-        progress_mapper.map_progress("crawling", 50)
-        current = progress_mapper.last_overall_progress
+        mapper.map_progress("crawling", 50)
+        current = mapper.last_overall_progress
         
-        # Try unknown stage
-        result = progress_mapper.map_progress("unknown_stage", 75)
+        # Unknown stage should maintain current progress
+        progress = mapper.map_progress("unknown_stage", 50)
+        assert progress == current
         
-        # Should maintain current progress
-        assert result == current
-
-    def test_get_stage_range(self, progress_mapper):
-        """Test getting stage ranges."""
-        assert progress_mapper.get_stage_range("crawling") == (2, 5)
-        assert progress_mapper.get_stage_range("document_storage") == (10, 30)
-        assert progress_mapper.get_stage_range("code_extraction") == (30, 95)
-        assert progress_mapper.get_stage_range("unknown") == (0, 100)  # Default
-
-    def test_calculate_stage_progress(self, progress_mapper):
-        """Test stage progress calculation from current/max values."""
-        # Test normal case
-        result = progress_mapper.calculate_stage_progress(25, 100)
-        assert result == 25.0
+    def test_stage_ranges(self):
+        """Test all defined stage ranges"""
+        mapper = ProgressMapper()
         
-        # Test division by zero protection
-        result = progress_mapper.calculate_stage_progress(10, 0)
-        assert result == 0.0
+        # Verify ranges are correctly defined with new balanced values
+        assert mapper.STAGE_RANGES["starting"] == (0, 1)
+        assert mapper.STAGE_RANGES["analyzing"] == (1, 3)
+        assert mapper.STAGE_RANGES["crawling"] == (3, 15)
+        assert mapper.STAGE_RANGES["processing"] == (15, 20)
+        assert mapper.STAGE_RANGES["source_creation"] == (20, 25)
+        assert mapper.STAGE_RANGES["document_storage"] == (25, 40)
+        assert mapper.STAGE_RANGES["code_extraction"] == (40, 90)
+        assert mapper.STAGE_RANGES["finalization"] == (90, 100)
+        assert mapper.STAGE_RANGES["completed"] == (100, 100)
         
-        # Test negative max protection
-        result = progress_mapper.calculate_stage_progress(10, -5)
-        assert result == 0.0
-
-    def test_map_batch_progress(self, progress_mapper):
-        """Test batch progress mapping."""
-        # Test batch 3 of 6 in document_storage stage
-        result = progress_mapper.map_batch_progress("document_storage", 3, 6)
+        # Upload-specific stages
+        assert mapper.STAGE_RANGES["reading"] == (0, 5)
+        assert mapper.STAGE_RANGES["text_extraction"] == (5, 10)
+        assert mapper.STAGE_RANGES["chunking"] == (10, 15)
+        # Note: source_creation is shared between crawl and upload operations at (20, 25)
+        assert mapper.STAGE_RANGES["summarizing"] == (25, 35)
+        assert mapper.STAGE_RANGES["storing"] == (35, 100)
         
-        # Should be (3-1)/6 = 33.3% through document_storage stage
-        # document_storage is 10-30%, so 33.3% of 20% = 6.67%, so 10 + 6.67 = 16.67 ≈ 17
-        assert result == 17
-
-    def test_map_with_substage(self, progress_mapper):
-        """Test progress mapping with substage information."""
-        # For now, this should work the same as regular mapping
-        result = progress_mapper.map_with_substage("document_storage", "embeddings", 50.0)
-        expected = progress_mapper.map_progress("document_storage", 50.0)
-        assert result == expected
-
-    def test_reset_functionality(self, progress_mapper):
-        """Test that reset() clears state."""
+    def test_calculate_stage_progress(self):
+        """Test calculating percentage within a stage"""
+        mapper = ProgressMapper()
+        
+        # 5 out of 10 = 50%
+        progress = mapper.calculate_stage_progress(5, 10)
+        assert progress == 50.0
+        
+        # 0 out of 10 = 0%
+        progress = mapper.calculate_stage_progress(0, 10)
+        assert progress == 0.0
+        
+        # 10 out of 10 = 100%
+        progress = mapper.calculate_stage_progress(10, 10)
+        assert progress == 100.0
+        
+        # Handle division by zero
+        progress = mapper.calculate_stage_progress(5, 0)
+        assert progress == 0.0
+        
+    def test_map_batch_progress(self):
+        """Test batch progress mapping"""
+        mapper = ProgressMapper()
+        
+        # Batch 1 of 5 in document_storage stage
+        progress = mapper.map_batch_progress("document_storage", 1, 5)
+        assert progress == 25  # Start of document_storage range (25-40)
+        
+        # Batch 3 of 5
+        progress = mapper.map_batch_progress("document_storage", 3, 5)
+        assert progress == 31  # 40% through 25-40 range
+        
+        # Batch 5 of 5
+        progress = mapper.map_batch_progress("document_storage", 5, 5)
+        assert progress == 37  # 80% through 25-40 range
+        
+    def test_map_with_substage(self):
+        """Test mapping with substage information"""
+        mapper = ProgressMapper()
+        
+        # Currently just uses main stage
+        progress = mapper.map_with_substage("document_storage", "embeddings", 50)
+        assert progress == 32  # 50% of 25-40 range = 32.5 -> 32
+        
+    def test_reset(self):
+        """Test resetting the mapper"""
+        mapper = ProgressMapper()
+        
         # Set some progress
-        progress_mapper.map_progress("crawling", 50)
-        assert progress_mapper.last_overall_progress > 0
-        assert progress_mapper.current_stage != "starting"
+        mapper.map_progress("document_storage", 50)
+        assert mapper.last_overall_progress == 32  # 25 + (50% of 15) = 32.5 -> 32
+        assert mapper.current_stage == "document_storage"
         
         # Reset
-        progress_mapper.reset()
+        mapper.reset()
+        assert mapper.last_overall_progress == 0
+        assert mapper.current_stage == "starting"
         
-        # Should be back to initial state
-        assert progress_mapper.last_overall_progress == 0
-        assert progress_mapper.current_stage == "starting"
-
-    def test_get_current_stage_and_progress(self, progress_mapper):
-        """Test getting current stage and progress."""
-        # Initial state
-        assert progress_mapper.get_current_stage() == "starting"
-        assert progress_mapper.get_current_progress() == 0
+    def test_get_current_stage(self):
+        """Test getting current stage"""
+        mapper = ProgressMapper()
         
-        # After mapping some progress
-        progress_mapper.map_progress("document_storage", 50)
-        assert progress_mapper.get_current_stage() == "document_storage"
-        assert progress_mapper.get_current_progress() == 20  # 50% of 10-30% range
-
-    def test_realistic_crawl_sequence(self, progress_mapper):
-        """Test a realistic sequence of crawl progress updates."""
-        stages = [
-            ("starting", 0, 0),
-            ("analyzing", 100, 2),
-            ("crawling", 100, 5),
-            ("processing", 100, 8),
-            ("source_creation", 100, 10),
-            ("document_storage", 25, 15),  # 25% of storage
-            ("document_storage", 50, 20),  # 50% of storage
-            ("document_storage", 75, 25),  # 75% of storage
-            ("document_storage", 100, 30), # Complete storage
-            ("code_extraction", 25, 46),   # 25% of extraction
-            ("code_extraction", 50, 62),   # 50% of extraction
-            ("code_extraction", 100, 95),  # Complete extraction
-            ("finalization", 100, 100),    # Finalization
-            ("completed", 0, 100),         # Completion
-        ]
+        assert mapper.get_current_stage() == "starting"
         
-        progress_mapper.reset()
+        mapper.map_progress("crawling", 50)
+        assert mapper.get_current_stage() == "crawling"
         
-        for stage, stage_progress, expected_overall in stages:
-            result = progress_mapper.map_progress(stage, stage_progress)
-            assert result == expected_overall, f"Stage {stage} at {stage_progress}% should map to {expected_overall}%, got {result}%"
-
-    def test_upload_stage_ranges(self, progress_mapper):
-        """Test upload-specific stage ranges."""
-        upload_stages = ["reading", "extracting", "chunking", "creating_source", "summarizing", "storing"]
+        mapper.map_progress("code_extraction", 50)
+        assert mapper.get_current_stage() == "code_extraction"
         
-        # Test that upload stages have valid ranges
-        last_end = 0
-        for stage in upload_stages:
-            start, end = progress_mapper.get_stage_range(stage)
-            assert start >= last_end, f"Upload stage {stage} overlaps with previous"
-            assert end > start, f"Upload stage {stage} has invalid range"
-            last_end = end
+    def test_get_current_progress(self):
+        """Test getting current progress"""
+        mapper = ProgressMapper()
         
-        # Test that final upload stage reaches 100%
-        assert progress_mapper.get_stage_range("storing")[1] == 100
+        assert mapper.get_current_progress() == 0
+        
+        mapper.map_progress("crawling", 50)
+        assert mapper.get_current_progress() == 9  # 3 + (50% of 12) = 9
+        
+        mapper.map_progress("code_extraction", 50)
+        assert mapper.get_current_progress() == 65  # 40 + (50% of 50) = 65
+        
+    def test_get_stage_range(self):
+        """Test getting stage range"""
+        mapper = ProgressMapper()
+        
+        assert mapper.get_stage_range("starting") == (0, 1)
+        assert mapper.get_stage_range("code_extraction") == (40, 90)
+        assert mapper.get_stage_range("unknown") == (0, 100)  # Default range
+        
+    def test_realistic_crawl_sequence(self):
+        """Test a realistic crawl progress sequence"""
+        mapper = ProgressMapper()
+        
+        # Starting
+        assert mapper.map_progress("starting", 0) == 0
+        assert mapper.map_progress("starting", 100) == 1
+        
+        # Analyzing
+        assert mapper.map_progress("analyzing", 0) == 1
+        assert mapper.map_progress("analyzing", 100) == 3
+        
+        # Crawling
+        assert mapper.map_progress("crawling", 0) == 3
+        assert mapper.map_progress("crawling", 33) == 7  # 3 + (33% of 12) = 6.96 -> 7
+        assert mapper.map_progress("crawling", 66) == 11  # 3 + (66% of 12) = 10.92 -> 11
+        assert mapper.map_progress("crawling", 100) == 15
+        
+        # Processing
+        assert mapper.map_progress("processing", 0) == 15
+        assert mapper.map_progress("processing", 100) == 20
+        
+        # Source creation
+        assert mapper.map_progress("source_creation", 0) == 20
+        assert mapper.map_progress("source_creation", 100) == 25
+        
+        # Document storage
+        assert mapper.map_progress("document_storage", 0) == 25
+        assert mapper.map_progress("document_storage", 50) == 32  # 25 + (50% of 15) = 32.5 -> 32
+        assert mapper.map_progress("document_storage", 100) == 40
+        
+        # Code extraction (longest phase)
+        assert mapper.map_progress("code_extraction", 0) == 40
+        assert mapper.map_progress("code_extraction", 25) == 52  # 40 + (25% of 50) = 52.5 -> 52
+        assert mapper.map_progress("code_extraction", 50) == 65  # 40 + (50% of 50) = 65
+        assert mapper.map_progress("code_extraction", 75) == 78  # 40 + (75% of 50) = 77.5 -> 78
+        assert mapper.map_progress("code_extraction", 100) == 90
+        
+        # Finalization
+        assert mapper.map_progress("finalization", 0) == 90
+        assert mapper.map_progress("finalization", 100) == 100
+        
+        # Completed
+        assert mapper.map_progress("completed", 0) == 100

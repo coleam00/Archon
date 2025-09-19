@@ -4,12 +4,12 @@ import pytest
 from pydantic import ValidationError
 
 from src.server.models.progress_models import (
-    ProgressDetails,
     BaseProgressResponse,
     CrawlProgressResponse,
-    UploadProgressResponse,
+    ProgressDetails,
     ProjectCreationProgressResponse,
-    create_progress_response
+    UploadProgressResponse,
+    create_progress_response,
 )
 
 
@@ -25,7 +25,7 @@ class TestProgressDetails:
             total_batches=6,
             chunks_per_second=5.5
         )
-        
+
         assert details.current_chunk == 25
         assert details.total_chunks == 100
         assert details.current_batch == 3
@@ -41,7 +41,7 @@ class TestProgressDetails:
             totalBatches=6,
             chunksPerSecond=5.5
         )
-        
+
         assert details.current_chunk == 25
         assert details.total_chunks == 100
         assert details.current_batch == 3
@@ -55,9 +55,9 @@ class TestProgressDetails:
             total_chunks=100,
             chunks_per_second=2.5
         )
-        
+
         data = details.model_dump(by_alias=True)
-        
+
         assert "currentChunk" in data
         assert "totalChunks" in data
         assert "chunksPerSecond" in data
@@ -76,9 +76,9 @@ class TestBaseProgressResponse:
             progress=50.0,
             message="Processing..."
         )
-        
+
         assert response.progress_id == "test-123"
-        assert response.status == "running" 
+        assert response.status == "running"
         assert response.progress == 50.0
         assert response.message == "Processing..."
 
@@ -91,15 +91,15 @@ class TestBaseProgressResponse:
             progress=50.0
         )
         assert response.progress == 50.0
-        
+
         # Invalid progress - too high
         with pytest.raises(ValidationError):
             BaseProgressResponse(
                 progress_id="test-123",
-                status="running", 
+                status="running",
                 progress=150.0
             )
-        
+
         # Invalid progress - too low
         with pytest.raises(ValidationError):
             BaseProgressResponse(
@@ -118,7 +118,7 @@ class TestBaseProgressResponse:
             logs=["Starting", "Processing", "Almost done"]
         )
         assert response.logs == ["Starting", "Processing", "Almost done"]
-        
+
         # Test with single string
         response = BaseProgressResponse(
             progress_id="test-123",
@@ -127,7 +127,7 @@ class TestBaseProgressResponse:
             logs="Single log message"
         )
         assert response.logs == ["Single log message"]
-        
+
         # Test with list of dicts (log entries)
         response = BaseProgressResponse(
             progress_id="test-123",
@@ -149,7 +149,7 @@ class TestBaseProgressResponse:
             currentStep="processing",  # camelCase
             stepMessage="Working on it"  # camelCase
         )
-        
+
         assert response.progress_id == "test-123"
         assert response.current_step == "processing"
         assert response.step_message == "Working on it"
@@ -162,7 +162,7 @@ class TestCrawlProgressResponse:
         """Test creating crawl response with batch processing information."""
         response = CrawlProgressResponse(
             progress_id="crawl-123",
-            status="document_storage", 
+            status="document_storage",
             progress=45.0,
             message="Processing batch 3/6",
             total_pages=60,
@@ -173,7 +173,7 @@ class TestCrawlProgressResponse:
             chunks_in_batch=25,
             active_workers=4
         )
-        
+
         assert response.progress_id == "crawl-123"
         assert response.status == "document_storage"
         assert response.current_batch == 3
@@ -195,7 +195,7 @@ class TestCrawlProgressResponse:
             completed_summaries=30,
             total_summaries=40
         )
-        
+
         assert response.code_blocks_found == 150
         assert response.code_examples_stored == 120
         assert response.completed_documents == 45
@@ -207,10 +207,10 @@ class TestCrawlProgressResponse:
         """Test that only valid crawl statuses are accepted."""
         valid_statuses = [
             "starting", "analyzing", "crawling", "processing",
-            "source_creation", "document_storage", "code_extraction", 
-            "finalization", "completed", "failed", "cancelled"
+            "source_creation", "document_storage", "code_extraction", "code_storage",
+            "finalization", "completed", "failed", "cancelled", "stopping", "error"
         ]
-        
+
         for status in valid_statuses:
             response = CrawlProgressResponse(
                 progress_id="test-123",
@@ -218,7 +218,7 @@ class TestCrawlProgressResponse:
                 progress=50.0
             )
             assert response.status == status
-        
+
         # Invalid status should raise validation error
         with pytest.raises(ValidationError):
             CrawlProgressResponse(
@@ -240,7 +240,7 @@ class TestCrawlProgressResponse:
             totalBatches=6,  # camelCase
             currentBatch=3  # camelCase
         )
-        
+
         assert response.current_url == "https://example.com/page1"
         assert response.total_pages == 100
         assert response.processed_pages == 50
@@ -258,16 +258,16 @@ class TestCrawlProgressResponse:
             duration=123.45
         )
         assert response.duration == "123.45"
-        
+
         # Test with int
         response = CrawlProgressResponse(
             progress_id="test-123",
-            status="completed", 
+            status="completed",
             progress=100.0,
             duration=120
         )
         assert response.duration == "120"
-        
+
         # Test with None
         response = CrawlProgressResponse(
             progress_id="test-123",
@@ -293,7 +293,7 @@ class TestUploadProgressResponse:
             chunks_stored=400,
             word_count=5000
         )
-        
+
         assert response.progress_id == "upload-123"
         assert response.status == "storing"
         assert response.upload_type == "document"
@@ -305,11 +305,11 @@ class TestUploadProgressResponse:
     def test_upload_status_validation(self):
         """Test upload status validation."""
         valid_statuses = [
-            "starting", "reading", "extracting", "chunking",
-            "creating_source", "summarizing", "storing",
-            "completed", "failed", "cancelled"
+            "starting", "reading", "text_extraction", "chunking",
+            "source_creation", "summarizing", "storing",
+            "completed", "failed", "cancelled", "error"
         ]
-        
+
         for status in valid_statuses:
             response = UploadProgressResponse(
                 progress_id="test-123",
@@ -317,6 +317,33 @@ class TestUploadProgressResponse:
                 progress=50.0
             )
             assert response.status == status
+
+
+class TestProjectCreationProgressResponse:
+    """Test cases for ProjectCreationProgressResponse model."""
+
+    def test_project_creation_status_validation(self):
+        """Test project creation status validation."""
+        valid_statuses = [
+            "starting", "analyzing", "generating_prp", "creating_tasks",
+            "organizing", "completed", "failed", "error"
+        ]
+
+        for status in valid_statuses:
+            response = ProjectCreationProgressResponse(
+                progress_id="test-123",
+                status=status,
+                progress=50.0
+            )
+            assert response.status == status
+
+        # Invalid status should raise validation error
+        with pytest.raises(ValidationError):
+            ProjectCreationProgressResponse(
+                progress_id="test-123",
+                status="invalid_status",
+                progress=50.0
+            )
 
 
 class TestProgressResponseFactory:
@@ -334,9 +361,9 @@ class TestProgressResponseFactory:
             "total_pages": 60,
             "processed_pages": 60
         }
-        
+
         response = create_progress_response("crawl", progress_data)
-        
+
         assert isinstance(response, CrawlProgressResponse)
         assert response.progress_id == "crawl-123"
         assert response.status == "document_storage"
@@ -353,9 +380,9 @@ class TestProgressResponseFactory:
             "file_name": "document.pdf",
             "chunks_stored": 300
         }
-        
+
         response = create_progress_response("upload", progress_data)
-        
+
         assert isinstance(response, UploadProgressResponse)
         assert response.progress_id == "upload-123"
         assert response.status == "storing"
@@ -374,9 +401,9 @@ class TestProgressResponseFactory:
             "total_chunks": 300,
             "chunks_per_second": 5.5
         }
-        
+
         response = create_progress_response("crawl", progress_data)
-        
+
         assert response.details is not None
         assert response.details.current_batch == 3
         assert response.details.total_batches == 6
@@ -391,16 +418,16 @@ class TestProgressResponseFactory:
             "progress_id": "test-123",
             "progress": 50
         }
-        
+
         response = create_progress_response("crawl", progress_data)
-        assert response.status == "running"  # Default
-        
+        assert response.status == "starting"  # Default
+
         # Missing progress
         progress_data = {
             "progress_id": "test-123",
             "status": "processing"
         }
-        
+
         response = create_progress_response("crawl", progress_data)
         assert response.progress == 0  # Default
 
@@ -411,7 +438,7 @@ class TestProgressResponseFactory:
             "status": "processing",
             "progress": 50
         }
-        
+
         response = create_progress_response("unknown_type", progress_data)
         assert isinstance(response, BaseProgressResponse)
         assert not isinstance(response, CrawlProgressResponse)
@@ -420,13 +447,13 @@ class TestProgressResponseFactory:
         """Test that factory falls back to base response on validation errors."""
         # Create invalid data that would fail CrawlProgressResponse validation
         progress_data = {
-            "progress_id": "test-123", 
+            "progress_id": "test-123",
             "status": "invalid_crawl_status",  # Invalid status
             "progress": 50
         }
-        
+
         response = create_progress_response("crawl", progress_data)
-        
+
         # Should fall back to BaseProgressResponse
         assert isinstance(response, BaseProgressResponse)
         assert response.progress_id == "test-123"

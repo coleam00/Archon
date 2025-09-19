@@ -1,15 +1,15 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
+import { queryClient } from './features/shared/queryClient';
 import { KnowledgeBasePage } from './pages/KnowledgeBasePage';
 import { SettingsPage } from './pages/SettingsPage';
 import { MCPPage } from './pages/MCPPage';
 import { OnboardingPage } from './pages/OnboardingPage';
 import { MainLayout } from './components/layout/MainLayout';
 import { ThemeProvider } from './contexts/ThemeContext';
-import { ToastProvider } from './contexts/ToastContext';
-import { ToastProvider as FeaturesToastProvider } from './features/ui/components/ToastProvider';
+import { ToastProvider } from './features/ui/components/ToastProvider';
 import { SettingsProvider, useSettings } from './contexts/SettingsContext';
 import { TooltipProvider } from './features/ui/primitives/tooltip';
 import { ProjectPage } from './pages/ProjectPage';
@@ -19,27 +19,6 @@ import { MigrationBanner } from './components/ui/MigrationBanner';
 import { serverHealthService } from './services/serverHealthService';
 import { useMigrationStatus } from './hooks/useMigrationStatus';
 
-// Create a client with optimized settings for our polling use case
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      // Keep data fresh for 2 seconds by default
-      staleTime: 2000,
-      // Cache data for 5 minutes
-      gcTime: 5 * 60 * 1000,
-      // Retry failed requests 3 times
-      retry: 3,
-      // Refetch on window focus
-      refetchOnWindowFocus: true,
-      // Don't refetch on reconnect by default (we handle this manually)
-      refetchOnReconnect: false,
-    },
-    mutations: {
-      // Retry mutations once on failure
-      retry: 1,
-    },
-  },
-});
 
 const AppRoutes = () => {
   const { projectsEnabled } = useSettings();
@@ -134,13 +113,11 @@ export function App() {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <ToastProvider>
-          <FeaturesToastProvider>
-            <TooltipProvider>
-              <SettingsProvider>
-                <AppContent />
-              </SettingsProvider>
-            </TooltipProvider>
-          </FeaturesToastProvider>
+          <TooltipProvider>
+            <SettingsProvider>
+              <AppContent />
+            </SettingsProvider>
+          </TooltipProvider>
         </ToastProvider>
       </ThemeProvider>
       {import.meta.env.VITE_SHOW_DEVTOOLS === 'true' && (

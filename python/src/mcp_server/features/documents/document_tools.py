@@ -1,8 +1,7 @@
 """
-Simple document management tools for Archon MCP Server.
+Consolidated document management tools for Archon MCP Server.
 
-Provides separate, focused tools for each document operation.
-Supports various document types including specs, designs, notes, and PRPs.
+Reduces the number of individual CRUD operations while maintaining full functionality.
 """
 
 import json
@@ -19,309 +18,265 @@ from src.server.config.service_discovery import get_api_url
 
 logger = logging.getLogger(__name__)
 
+# Optimization constants
+DEFAULT_PAGE_SIZE = 10
+
+def optimize_document_response(doc: dict) -> dict:
+    """Optimize document object for MCP response."""
+    doc = doc.copy()  # Don't modify original
+    
+    # Remove full content in list views
+    if "content" in doc:
+        del doc["content"]
+    
+    return doc
+
 
 def register_document_tools(mcp: FastMCP):
-    """Register individual document management tools with the MCP server."""
+    """Register consolidated document management tools with the MCP server."""
 
     @mcp.tool()
-    async def create_document(
+    async def find_documents(
         ctx: Context,
         project_id: str,
-        title: str,
-        document_type: str,
-        content: dict[str, Any] | None = None,
-        tags: list[str] | None = None,
-        author: str | None = None,
+        document_id: str | None = None,  # For getting single document
+        query: str | None = None,  # Search capability
+        document_type: str | None = None,  # Filter by type
+        page: int = 1,
+        per_page: int = DEFAULT_PAGE_SIZE,
     ) -> str:
         """
-        Create a new document with automatic versioning.
-
+        Find and search documents (consolidated: list + search + get).
+        
         Args:
             project_id: Project UUID (required)
-            title: Document title (required)
-            document_type: Type of document. Common types:
-                - "spec": Technical specifications
-                - "design": Design documents
-                - "note": General notes
-                - "prp": Product requirement prompts
-                - "api": API documentation
-                - "guide": User guides
-            content: Document content as structured JSON (optional).
-                     Can be any JSON structure that fits your needs.
-            tags: List of tags for categorization (e.g., ["backend", "auth"])
-            author: Document author name (optional)
-
+            document_id: Get specific document (returns full content)
+            query: Search in title/content
+            document_type: Filter by type (spec/design/note/prp/api/guide)
+            page: Page number for pagination
+            per_page: Items per page (default: 10)
+        
         Returns:
-            JSON with document details:
-            {
-                "success": true,
-                "document": {...},
-                "document_id": "doc-123",
-                "message": "Document created successfully"
-            }
-
+            JSON array of documents or single document
+        
         Examples:
-            # Create API specification
-            create_document(
-                project_id="550e8400-e29b-41d4-a716-446655440000",
-                title="REST API Specification",
-                document_type="spec",
-                content={
-                    "endpoints": [
-                        {"path": "/users", "method": "GET", "description": "List users"},
-                        {"path": "/users/{id}", "method": "GET", "description": "Get user"}
-                    ],
-                    "authentication": "Bearer token",
-                    "version": "1.0.0"
-                },
-                tags=["api", "backend"],
-                author="API Team"
-            )
-
-            # Create design document
-            create_document(
-                project_id="550e8400-e29b-41d4-a716-446655440000",
-                title="Authentication Flow Design",
-                document_type="design",
-                content={
-                    "overview": "OAuth2 implementation design",
-                    "components": ["AuthProvider", "TokenManager", "UserSession"],
-                    "flow": {"step1": "Redirect to provider", "step2": "Exchange code"}
-                }
-            )
+            find_documents(project_id="p-1")  # All project docs
+            find_documents(project_id="p-1", query="api")  # Search
+            find_documents(project_id="p-1", document_id="d-1")  # Get one
+            find_documents(project_id="p-1", document_type="spec")  # Filter
         """
         try:
             api_url = get_api_url()
             timeout = get_default_timeout()
-
+            
+            # Single document get mode
+            if document_id:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.get(
+                        urljoin(api_url, f"/api/projects/{project_id}/docs/{document_id}")
+                    )
+                    
+                    if response.status_code == 200:
+                        document = response.json()
+                        # Don't optimize single document - return full content
+                        return json.dumps({"success": True, "document": document})
+                    elif response.status_code == 404:
+                        return MCPErrorFormatter.format_error(
+                            error_type="not_found",
+                            message=f"Document {document_id} not found",
+                            suggestion="Verify the document ID is correct",
+                            http_status=404,
+                        )
+                    else:
+                        return MCPErrorFormatter.from_http_error(response, "get document")
+            
+            # List mode
             async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(
-                    urljoin(api_url, f"/api/projects/{project_id}/docs"),
-                    json={
-                        "document_type": document_type,
-                        "title": title,
-                        "content": content or {},
-                        "tags": tags,
-                        "author": author,
-                    },
-                )
-
-                if response.status_code == 200:
-                    result = response.json()
-                    return json.dumps({
-                        "success": True,
-                        "document": result.get("document"),
-                        "document_id": result.get("document", {}).get("id"),
-                        "message": result.get("message", "Document created successfully"),
-                    })
-                else:
-                    return MCPErrorFormatter.from_http_error(response, "create document")
-
-        except httpx.RequestError as e:
-            return MCPErrorFormatter.from_exception(
-                e, "create document", {"project_id": project_id, "title": title}
-            )
-        except Exception as e:
-            logger.error(f"Error creating document: {e}", exc_info=True)
-            return MCPErrorFormatter.from_exception(e, "create document")
-
-    @mcp.tool()
-    async def list_documents(ctx: Context, project_id: str) -> str:
-        """
-        List all documents for a project.
-
-        Args:
-            project_id: Project UUID (required)
-
-        Returns:
-            JSON array of documents
-
-        Example:
-            list_documents(project_id="uuid")
-        """
-        try:
-            api_url = get_api_url()
-            timeout = get_default_timeout()
-
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                # Pass include_content=False for lightweight response
                 response = await client.get(
-                    urljoin(api_url, f"/api/projects/{project_id}/docs"),
-                    params={"include_content": False}
+                    urljoin(api_url, f"/api/projects/{project_id}/docs")
                 )
-
+                
                 if response.status_code == 200:
-                    result = response.json()
+                    data = response.json()
+                    documents = data.get("documents", [])
+                    
+                    # Apply filters
+                    if document_type:
+                        documents = [d for d in documents if d.get("document_type") == document_type]
+                    
+                    if query:
+                        query_lower = query.lower()
+                        documents = [
+                            d for d in documents
+                            if query_lower in d.get("title", "").lower()
+                            or query_lower in str(d.get("content", "")).lower()
+                        ]
+                    
+                    # Apply pagination
+                    start_idx = (page - 1) * per_page
+                    end_idx = start_idx + per_page
+                    paginated = documents[start_idx:end_idx]
+                    
+                    # Optimize document responses - remove content from list views
+                    optimized = [optimize_document_response(d) for d in paginated]
+                    
                     return json.dumps({
                         "success": True,
-                        "documents": result.get("documents", []),
-                        "count": len(result.get("documents", [])),
+                        "documents": optimized,
+                        "count": len(optimized),
+                        "total": len(documents),
+                        "project_id": project_id,
+                        "query": query,
+                        "document_type": document_type
                     })
                 else:
                     return MCPErrorFormatter.from_http_error(response, "list documents")
-
+                    
         except httpx.RequestError as e:
-            return MCPErrorFormatter.from_exception(e, "list documents", {"project_id": project_id})
+            return MCPErrorFormatter.from_exception(e, "list documents")
         except Exception as e:
             logger.error(f"Error listing documents: {e}", exc_info=True)
             return MCPErrorFormatter.from_exception(e, "list documents")
 
     @mcp.tool()
-    async def get_document(ctx: Context, project_id: str, doc_id: str) -> str:
-        """
-        Get detailed information about a specific document.
-
-        Args:
-            project_id: Project UUID (required)
-            doc_id: Document UUID (required)
-
-        Returns:
-            JSON with complete document details
-
-        Example:
-            get_document(project_id="uuid", doc_id="doc-uuid")
-        """
-        try:
-            api_url = get_api_url()
-            timeout = get_default_timeout()
-
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.get(
-                    urljoin(api_url, f"/api/projects/{project_id}/docs/{doc_id}")
-                )
-
-                if response.status_code == 200:
-                    document = response.json()
-                    return json.dumps({"success": True, "document": document})
-                elif response.status_code == 404:
-                    return MCPErrorFormatter.format_error(
-                        error_type="not_found",
-                        message=f"Document {doc_id} not found",
-                        suggestion="Verify the document ID is correct and exists in this project",
-                        http_status=404,
-                    )
-                else:
-                    return MCPErrorFormatter.from_http_error(response, "get document")
-
-        except httpx.RequestError as e:
-            return MCPErrorFormatter.from_exception(
-                e, "get document", {"project_id": project_id, "doc_id": doc_id}
-            )
-        except Exception as e:
-            logger.error(f"Error getting document: {e}", exc_info=True)
-            return MCPErrorFormatter.from_exception(e, "get document")
-
-    @mcp.tool()
-    async def update_document(
+    async def manage_document(
         ctx: Context,
+        action: str,  # "create" | "update" | "delete"
         project_id: str,
-        doc_id: str,
+        document_id: str | None = None,
         title: str | None = None,
+        document_type: str | None = None,
         content: dict[str, Any] | None = None,
         tags: list[str] | None = None,
         author: str | None = None,
     ) -> str:
         """
-        Update a document's properties.
-
+        Manage documents (consolidated: create/update/delete).
+        
         Args:
+            action: "create" | "update" | "delete"
             project_id: Project UUID (required)
-            doc_id: Document UUID (required)
-            title: New document title (optional)
-            content: New document content (optional)
-            tags: New tags list (optional)
-            author: New author (optional)
-
-        Returns:
-            JSON with updated document details
-
-        Example:
-            update_document(project_id="uuid", doc_id="doc-uuid", title="New Title",
-                          content={"updated": "content"})
+            document_id: Document UUID for update/delete
+            title: Document title
+            document_type: spec/design/note/prp/api/guide
+            content: Structured JSON content
+            tags: List of tags (e.g. ["backend", "auth"])
+            author: Document author name
+        
+        Examples:
+            manage_document("create", project_id="p-1", title="API Spec", document_type="spec")
+            manage_document("update", project_id="p-1", document_id="d-1", content={...})
+            manage_document("delete", project_id="p-1", document_id="d-1")
+        
+        Returns: {success: bool, document?: object, message: string}
         """
         try:
             api_url = get_api_url()
             timeout = get_default_timeout()
-
-            # Build update fields
-            update_fields: dict[str, Any] = {}
-            if title is not None:
-                update_fields["title"] = title
-            if content is not None:
-                update_fields["content"] = content
-            if tags is not None:
-                update_fields["tags"] = tags
-            if author is not None:
-                update_fields["author"] = author
-
+            
             async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.put(
-                    urljoin(api_url, f"/api/projects/{project_id}/docs/{doc_id}"),
-                    json=update_fields,
-                )
-
-                if response.status_code == 200:
-                    result = response.json()
-                    return json.dumps({
-                        "success": True,
-                        "document": result.get("document"),
-                        "message": result.get("message", "Document updated successfully"),
-                    })
-                else:
-                    return MCPErrorFormatter.from_http_error(response, "update document")
-
-        except httpx.RequestError as e:
-            return MCPErrorFormatter.from_exception(
-                e, "update document", {"project_id": project_id, "doc_id": doc_id}
-            )
-        except Exception as e:
-            logger.error(f"Error updating document: {e}", exc_info=True)
-            return MCPErrorFormatter.from_exception(e, "update document")
-
-    @mcp.tool()
-    async def delete_document(ctx: Context, project_id: str, doc_id: str) -> str:
-        """
-        Delete a document.
-
-        Args:
-            project_id: Project UUID (required)
-            doc_id: Document UUID (required)
-
-        Returns:
-            JSON confirmation of deletion
-
-        Example:
-            delete_document(project_id="uuid", doc_id="doc-uuid")
-        """
-        try:
-            api_url = get_api_url()
-            timeout = get_default_timeout()
-
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.delete(
-                    urljoin(api_url, f"/api/projects/{project_id}/docs/{doc_id}")
-                )
-
-                if response.status_code == 200:
-                    result = response.json()
-                    return json.dumps({
-                        "success": True,
-                        "message": result.get("message", f"Document {doc_id} deleted successfully"),
-                    })
-                elif response.status_code == 404:
-                    return MCPErrorFormatter.format_error(
-                        error_type="not_found",
-                        message=f"Document {doc_id} not found",
-                        suggestion="Verify the document ID is correct and exists in this project",
-                        http_status=404,
+                if action == "create":
+                    if not title or not document_type:
+                        return MCPErrorFormatter.format_error(
+                            "validation_error",
+                            "title and document_type required for create"
+                        )
+                    
+                    response = await client.post(
+                        urljoin(api_url, f"/api/projects/{project_id}/docs"),
+                        json={
+                            "title": title,
+                            "document_type": document_type,
+                            "content": content or {},
+                            "tags": tags or [],
+                            "author": author or "User",
+                        }
                     )
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        document = result.get("document")
+                        
+                        # Don't optimize for create - return full document
+                        return json.dumps({
+                            "success": True,
+                            "document": document,
+                            "document_id": document.get("id") if document else None,
+                            "message": result.get("message", "Document created successfully")
+                        })
+                    else:
+                        return MCPErrorFormatter.from_http_error(response, "create document")
+                        
+                elif action == "update":
+                    if not document_id:
+                        return MCPErrorFormatter.format_error(
+                            "validation_error",
+                            "document_id required for update"
+                        )
+                    
+                    update_data = {}
+                    if title is not None:
+                        update_data["title"] = title
+                    if content is not None:
+                        update_data["content"] = content
+                    if tags is not None:
+                        update_data["tags"] = tags
+                    if author is not None:
+                        update_data["author"] = author
+                    
+                    if not update_data:
+                        return MCPErrorFormatter.format_error(
+                            "validation_error",
+                            "No fields to update"
+                        )
+                    
+                    response = await client.put(
+                        urljoin(api_url, f"/api/projects/{project_id}/docs/{document_id}"),
+                        json=update_data
+                    )
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        document = result.get("document")
+                        
+                        # Don't optimize for update - return full document
+                        
+                        return json.dumps({
+                            "success": True,
+                            "document": document,
+                            "message": result.get("message", "Document updated successfully")
+                        })
+                    else:
+                        return MCPErrorFormatter.from_http_error(response, "update document")
+                        
+                elif action == "delete":
+                    if not document_id:
+                        return MCPErrorFormatter.format_error(
+                            "validation_error",
+                            "document_id required for delete"
+                        )
+                    
+                    response = await client.delete(
+                        urljoin(api_url, f"/api/projects/{project_id}/docs/{document_id}")
+                    )
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        return json.dumps({
+                            "success": True,
+                            "message": result.get("message", "Document deleted successfully")
+                        })
+                    else:
+                        return MCPErrorFormatter.from_http_error(response, "delete document")
+                        
                 else:
-                    return MCPErrorFormatter.from_http_error(response, "delete document")
-
+                    return MCPErrorFormatter.format_error(
+                        "invalid_action",
+                        f"Unknown action: {action}"
+                    )
+                    
         except httpx.RequestError as e:
-            return MCPErrorFormatter.from_exception(
-                e, "delete document", {"project_id": project_id, "doc_id": doc_id}
-            )
+            return MCPErrorFormatter.from_exception(e, f"{action} document")
         except Exception as e:
-            logger.error(f"Error deleting document: {e}", exc_info=True)
-            return MCPErrorFormatter.from_exception(e, "delete document")
+            logger.error(f"Error managing document ({action}): {e}", exc_info=True)
+            return MCPErrorFormatter.from_exception(e, f"{action} document")

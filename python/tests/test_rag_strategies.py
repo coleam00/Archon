@@ -168,42 +168,6 @@ class TestHybridSearchStrategy:
         assert hasattr(hybrid_strategy, "search_documents_hybrid")
         assert hasattr(hybrid_strategy, "search_code_examples_hybrid")
 
-    def test_merge_search_results(self, hybrid_strategy):
-        """Test search result merging"""
-        vector_results = [
-            {
-                "id": "1",
-                "content": "Vector result 1",
-                "score": 0.9,
-                "url": "url1",
-                "chunk_number": 1,
-                "metadata": {},
-                "source_id": "source1",
-                "similarity": 0.9,
-            }
-        ]
-        keyword_results = [
-            {
-                "id": "2",
-                "content": "Keyword result 1",
-                "score": 0.8,
-                "url": "url2",
-                "chunk_number": 1,
-                "metadata": {},
-                "source_id": "source2",
-            }
-        ]
-
-        merged = hybrid_strategy._merge_search_results(
-            vector_results, keyword_results, match_count=5
-        )
-
-        assert isinstance(merged, list)
-        assert len(merged) <= 5
-        # Should contain results from both sources
-        if merged:
-            assert any("Vector result" in str(r) or "Keyword result" in str(r) for r in merged)
-
 
 class TestRerankingStrategy:
     """Test reranking strategy implementation"""

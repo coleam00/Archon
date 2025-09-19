@@ -4,8 +4,11 @@ import { z } from "zod";
 export const DatabaseTaskStatusSchema = z.enum(["todo", "doing", "review", "done"]);
 export const TaskPrioritySchema = z.enum(["low", "medium", "high", "critical"]);
 
-// Assignee schema - simplified to predefined options
-export const AssigneeSchema = z.enum(["User", "Archon", "AI IDE Agent"]);
+// Assignee schema - flexible string for any agent name
+export const AssigneeSchema = z
+  .string()
+  .min(1, "Assignee cannot be empty")
+  .max(100, "Assignee name must be less than 100 characters");
 
 // Task schemas
 export const CreateTaskSchema = z.object({

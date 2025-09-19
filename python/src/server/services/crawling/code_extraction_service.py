@@ -4,6 +4,7 @@ Code Extraction Service
 Handles extraction, processing, and storage of code examples from documents.
 """
 
+import asyncio
 import re
 from collections.abc import Callable
 from typing import Any
@@ -137,8 +138,6 @@ class CodeExtractionService:
         url_to_full_document: dict[str, str],
         source_id: str,
         progress_callback: Callable | None = None,
-        start_progress: int = 0,
-        end_progress: int = 100,
         cancellation_check: Callable[[], None] | None = None,
     ) -> int:
         """
@@ -149,24 +148,26 @@ class CodeExtractionService:
             url_to_full_document: Mapping of URLs to full document content
             source_id: The unique source_id for all documents
             progress_callback: Optional async callback for progress updates
-            start_progress: Starting progress percentage (default: 0)
-            end_progress: Ending progress percentage (default: 100)
+            cancellation_check: Optional function to check for cancellation
 
         Returns:
             Number of code examples stored
         """
-        # Divide the progress range into phases:
-        # - Extract code blocks: start_progress to 40% of range
-        # - Generate summaries: 40% to 80% of range
-        # - Store examples: 80% to end_progress
-        progress_range = end_progress - start_progress
-        extract_end = start_progress + int(progress_range * 0.4)
-        summary_end = start_progress + int(progress_range * 0.8)
+        # Phase 1: Extract code blocks (0-20% of overall code_extraction progress)
+        extraction_callback = None
+        if progress_callback:
+            async def extraction_progress(data: dict):
+                # Scale progress to 0-20% range
+                raw_progress = data.get("progress", 0)
+                scaled_progress = int(raw_progress * 0.2)  # 0-20%
+                data["progress"] = scaled_progress
+                await progress_callback(data)
+            extraction_callback = extraction_progress
 
         # Extract code blocks from all documents
         safe_logfire_info(f"Starting code extraction for {len(crawl_results)} documents with source_id: {source_id}")
         all_code_blocks = await self._extract_code_blocks_from_documents(
-            crawl_results, source_id, progress_callback, start_progress, extract_end, cancellation_check
+            crawl_results, source_id, extraction_callback, cancellation_check
         )
         safe_logfire_info(f"Extracted {len(all_code_blocks)} total code blocks from {len(crawl_results)} documents")
 
@@ -176,7 +177,7 @@ class CodeExtractionService:
             if progress_callback:
                 await progress_callback({
                     "status": "code_extraction",
-                    "progress": end_progress,
+                    "progress": 100,
                     "log": "No code examples found to extract",
                     "code_blocks_found": 0,
                     "completed_documents": len(crawl_results),
@@ -192,17 +193,39 @@ class CodeExtractionService:
                 f"Sample code block {i + 1} | language={block.get('language', 'none')} | code_length={len(block.get('code', ''))}"
             )
 
-        # Generate summaries for code blocks with mapped progress
+        # Phase 2: Generate summaries (20-90% of overall progress - this is the slowest part!)
+        summary_callback = None
+        if progress_callback:
+            async def summary_progress(data: dict):
+                # Scale progress to 20-90% range
+                raw_progress = data.get("progress", 0)
+                scaled_progress = 20 + int(raw_progress * 0.7)  # 20-90%
+                data["progress"] = scaled_progress
+                await progress_callback(data)
+            summary_callback = summary_progress
+
+        # Generate summaries for code blocks
         summary_results = await self._generate_code_summaries(
-            all_code_blocks, progress_callback, extract_end, summary_end, cancellation_check
+            all_code_blocks, summary_callback, cancellation_check
         )
 
         # Prepare code examples for storage
         storage_data = self._prepare_code_examples_for_storage(all_code_blocks, summary_results)
 
-        # Store code examples in database with final phase progress
+        # Phase 3: Store in database (90-100% of overall progress)
+        storage_callback = None
+        if progress_callback:
+            async def storage_progress(data: dict):
+                # Scale progress to 90-100% range
+                raw_progress = data.get("progress", 0)
+                scaled_progress = 90 + int(raw_progress * 0.1)  # 90-100%
+                data["progress"] = scaled_progress
+                await progress_callback(data)
+            storage_callback = storage_progress
+
+        # Store code examples in database
         return await self._store_code_examples(
-            storage_data, url_to_full_document, progress_callback, summary_end, end_progress
+            storage_data, url_to_full_document, storage_callback
         )
 
     async def _extract_code_blocks_from_documents(
@@ -210,8 +233,6 @@ class CodeExtractionService:
         crawl_results: list[dict[str, Any]],
         source_id: str,
         progress_callback: Callable | None = None,
-        start_progress: int = 0,
-        end_progress: int = 100,
         cancellation_check: Callable[[], None] | None = None,
     ) -> list[dict[str, Any]]:
         """
@@ -233,8 +254,17 @@ class CodeExtractionService:
         for doc in crawl_results:
             # Check for cancellation before processing each document
             if cancellation_check:
-                cancellation_check()
-            
+                try:
+                    cancellation_check()
+                except asyncio.CancelledError:
+                    if progress_callback:
+                        await progress_callback({
+                            "status": "cancelled",
+                            "progress": 99,
+                            "message": f"Code extraction cancelled at document {completed_docs + 1}/{total_docs}"
+                        })
+                    raise
+
             try:
                 source_url = doc["url"]
                 html_content = doc.get("html", "")
@@ -246,8 +276,6 @@ class CodeExtractionService:
                 )
 
                 # Get dynamic minimum length based on document context
-                # Extract some context from the document for analysis
-                doc_context = md[:1000] if md else html_content[:1000] if html_content else ""
 
                 # Check markdown first to see if it has code blocks
                 if md:
@@ -265,12 +293,16 @@ class CodeExtractionService:
                 # Improved extraction logic - check for text files first, then HTML, then markdown
                 code_blocks = []
 
-                # Check if this is a text file (e.g., .txt, .md)
+                # Check if this is a text file (e.g., .txt, .md, .html after cleaning) or PDF
                 is_text_file = source_url.endswith((
                     ".txt",
                     ".text",
                     ".md",
-                )) or "text/plain" in doc.get("content_type", "")
+                    ".html",
+                    ".htm",
+                )) or "text/plain" in doc.get("content_type", "") or "text/markdown" in doc.get("content_type", "")
+                
+                is_pdf_file = source_url.endswith(".pdf") or "application/pdf" in doc.get("content_type", "")
 
                 if is_text_file:
                     # For text files, use specialized text extraction
@@ -296,7 +328,19 @@ class CodeExtractionService:
                     else:
                         safe_logfire_info(f"⚠️ NO CONTENT for text file | url={source_url}")
 
-                # If not a text file or no code blocks found, try HTML extraction first
+                # If this is a PDF file, use specialized PDF extraction
+                elif is_pdf_file:
+                    safe_logfire_info(f"📄 PDF FILE DETECTED | url={source_url}")
+                    # For PDFs, use the content that should be PDF-extracted text
+                    pdf_content = html_content if html_content else md
+                    if pdf_content:
+                        safe_logfire_info(f"📝 Using {'HTML' if html_content else 'MARKDOWN'} content for PDF extraction")
+                        code_blocks = await self._extract_pdf_code_blocks(pdf_content, source_url)
+                        safe_logfire_info(f"📦 PDF extraction complete | found={len(code_blocks)} blocks | url={source_url}")
+                    else:
+                        safe_logfire_info(f"⚠️ NO CONTENT for PDF file | url={source_url}")
+
+                # If not a text file or PDF, or no code blocks found, try HTML extraction as fallback
                 if len(code_blocks) == 0 and html_content and not is_text_file:
                     safe_logfire_info(
                         f"Trying HTML extraction first | url={source_url} | html_length={len(html_content)}"
@@ -338,14 +382,11 @@ class CodeExtractionService:
                 # Update progress only after completing document extraction
                 completed_docs += 1
                 if progress_callback and total_docs > 0:
-                    # Calculate progress within the specified range
-                    raw_progress = completed_docs / total_docs
-                    mapped_progress = start_progress + int(
-                        raw_progress * (end_progress - start_progress)
-                    )
+                    # Report raw progress (0-100) for this extraction phase
+                    raw_progress = int((completed_docs / total_docs) * 100)
                     await progress_callback({
                         "status": "code_extraction",
-                        "progress": mapped_progress,
+                        "progress": raw_progress,
                         "log": f"Extracted code from {completed_docs}/{total_docs} documents ({len(all_code_blocks)} code blocks found)",
                         "completed_documents": completed_docs,
                         "total_documents": total_docs,
@@ -893,6 +934,135 @@ class CodeExtractionService:
             )
         return code_blocks
 
+    async def _extract_pdf_code_blocks(
+        self, content: str, url: str
+    ) -> list[dict[str, Any]]:
+        """
+        Extract code blocks from PDF-extracted text that lacks markdown formatting.
+        PDFs lose markdown delimiters, so we need to detect code patterns in plain text.
+        
+        This uses a much simpler approach - look for distinct code segments separated by prose.
+        """
+        import re
+        
+        safe_logfire_info(f"🔍 PDF CODE EXTRACTION START | url={url} | content_length={len(content)}")
+        
+        code_blocks = []
+        min_length = await self._get_min_code_length()
+        
+        # Split content into paragraphs/sections
+        # Use double newlines and page breaks as natural boundaries
+        sections = re.split(r'\n\n+|--- Page \d+ ---', content)
+        
+        safe_logfire_info(f"📄 Split PDF into {len(sections)} sections")
+        
+        for i, section in enumerate(sections):
+            section = section.strip()
+            if not section or len(section) < 50:  # Skip very short sections
+                continue
+                
+            # Check if this section looks like code
+            if self._is_pdf_section_code_like(section):
+                safe_logfire_info(f"🔍 Analyzing section {i} as potential code (length: {len(section)})")
+                
+                # Try to detect language
+                language = self._detect_language_from_content(section)
+                
+                # Clean the content
+                cleaned_code = self._clean_code_content(section, language)
+                
+                # Check length after cleaning
+                if len(cleaned_code) >= min_length:
+                    # Validate quality
+                    if await self._validate_code_quality(cleaned_code, language):
+                        # Get context from adjacent sections
+                        context_before = sections[i-1].strip() if i > 0 else ""
+                        context_after = sections[i+1].strip() if i < len(sections)-1 else ""
+                        
+                        safe_logfire_info(f"✅ PDF code section | language={language} | length={len(cleaned_code)}")
+                        code_blocks.append({
+                            "code": cleaned_code,
+                            "language": language,
+                            "context_before": context_before,
+                            "context_after": context_after,
+                            "full_context": f"{context_before}\n\n{cleaned_code}\n\n{context_after}",
+                            "source_type": "pdf_section",
+                        })
+                    else:
+                        safe_logfire_info(f"❌ PDF section failed validation | language={language}")
+                else:
+                    safe_logfire_info(f"❌ PDF section too short after cleaning: {len(cleaned_code)} < {min_length}")
+            else:
+                safe_logfire_info(f"📝 Section {i} identified as prose/documentation")
+        
+        safe_logfire_info(f"🔍 PDF CODE EXTRACTION COMPLETE | total_blocks={len(code_blocks)} | url={url}")
+        return code_blocks
+    
+    def _is_pdf_section_code_like(self, section: str) -> bool:
+        """
+        Determine if a PDF section contains code rather than prose.
+        """
+        import re
+        
+        # Count code indicators vs prose indicators
+        code_score = 0
+        prose_score = 0
+        
+        # Code indicators (higher weight for stronger indicators)
+        code_patterns = [
+            (r'\bfrom \w+(?:\.\w+)* import\b', 3),  # Python imports (strong)
+            (r'\bdef \w+\s*\(', 3),  # Function definitions (strong)
+            (r'\bclass \w+\s*[\(:]', 3),  # Class definitions (strong)
+            (r'\w+\s*=\s*\w+\(', 2),  # Function calls assigned (medium)
+            (r'\w+\s*=\s*\[.*\]', 2),  # List assignments (medium)
+            (r'\w+\.\w+\(', 2),  # Method calls (medium)
+            (r'^\s*#[^#]', 1),  # Single-line comments (weak)
+            (r'\bpip install\b', 2),  # Package management (medium)
+            (r'\bpytest\b', 2),  # Testing commands (medium)
+            (r'\bgit clone\b', 2),  # Git commands (medium)
+            (r':\s*\n\s+\w+:', 2),  # YAML structure (medium)
+            (r'\blambda\s+\w+:', 2),  # Lambda functions (medium)
+        ]
+        
+        # Prose indicators  
+        prose_patterns = [
+            (r'\b(the|this|that|these|those|are|is|was|were|will|would|should|could|have|has|had)\b', 1),
+            (r'[.!?]\s+[A-Z]', 2),  # Sentence endings
+            (r'\b(however|therefore|furthermore|moreover|additionally|specifically)\b', 2),
+            (r'\bTable of Contents\b', 3),
+            (r'\bAPI Reference\b', 2),
+        ]
+        
+        # Count patterns
+        for pattern, weight in code_patterns:
+            matches = len(re.findall(pattern, section, re.IGNORECASE | re.MULTILINE))
+            code_score += matches * weight
+            
+        for pattern, weight in prose_patterns:
+            matches = len(re.findall(pattern, section, re.IGNORECASE | re.MULTILINE))
+            prose_score += matches * weight
+        
+        # Additional checks
+        lines = section.split('\n')
+        non_empty_lines = [line.strip() for line in lines if line.strip()]
+        
+        if not non_empty_lines:
+            return False
+            
+        # If section is mostly single words or very short lines, probably not code
+        short_lines = sum(1 for line in non_empty_lines if len(line.split()) < 3)
+        if len(non_empty_lines) > 0 and short_lines / len(non_empty_lines) > 0.7:
+            prose_score += 3
+            
+        # If section has common code structure indicators
+        if any('(' in line and ')' in line for line in non_empty_lines[:5]):
+            code_score += 2
+            
+        safe_logfire_info(f"📊 Section scoring: code_score={code_score}, prose_score={prose_score}")
+        
+        # Code-like if code score significantly higher than prose score
+        return code_score > prose_score and code_score > 2
+
     def _detect_language_from_content(self, code: str) -> str:
         """
         Try to detect programming language from code content.
@@ -1369,8 +1539,6 @@ class CodeExtractionService:
         self,
         all_code_blocks: list[dict[str, Any]],
         progress_callback: Callable | None = None,
-        start_progress: int = 0,
-        end_progress: int = 100,
         cancellation_check: Callable[[], None] | None = None,
     ) -> list[dict[str, str]]:
         """
@@ -1396,7 +1564,7 @@ class CodeExtractionService:
             if progress_callback:
                 await progress_callback({
                     "status": "code_extraction",
-                    "progress": end_progress,
+                    "progress": 100,
                     "log": f"Skipped AI summary generation (disabled). Using default summaries for {len(all_code_blocks)} code blocks.",
                 })
 
@@ -1410,37 +1578,35 @@ class CodeExtractionService:
         # Extract just the code blocks for batch processing
         code_blocks_for_summaries = [item["block"] for item in all_code_blocks]
 
-        # Generate summaries with mapped progress tracking
+        # Generate summaries with progress tracking
         summary_progress_callback = None
         if progress_callback:
-            # Create a wrapper that maps the progress to the correct range
-            async def mapped_callback(data: dict):
+            # Create a wrapper that ensures correct status
+            async def wrapped_callback(data: dict):
                 # Check for cancellation during summary generation
                 if cancellation_check:
-                    cancellation_check()
-                
-                # Map the progress from generate_code_summaries_batch (0-100) to our range
-                if "progress" in data or "percentage" in data:
-                    raw_progress = data.get("progress", data.get("percentage", 0))
-                    # Map from 0-100 to start_progress-end_progress
-                    mapped_progress = start_progress + int(
-                        (raw_progress / 100) * (end_progress - start_progress)
-                    )
-                    data["progress"] = mapped_progress
-                    # Remove old percentage field if present
-                    if "percentage" in data:
-                        del data["percentage"]
-                    # Change the status to match what the orchestration expects
-                    data["status"] = "code_extraction"
+                    try:
+                        cancellation_check()
+                    except asyncio.CancelledError:
+                        # Update data to show cancellation and re-raise
+                        data["status"] = "cancelled"
+                        data["progress"] = 99
+                        data["message"] = "Code summary generation cancelled"
+                        await progress_callback(data)
+                        raise
+
+                # Ensure status is code_extraction
+                data["status"] = "code_extraction"
+                # Pass through the raw progress (0-100)
                 await progress_callback(data)
 
-            summary_progress_callback = mapped_callback
+            summary_progress_callback = wrapped_callback
 
         try:
             results = await generate_code_summaries_batch(
                 code_blocks_for_summaries, max_workers, progress_callback=summary_progress_callback
             )
-            
+
             # Ensure all results are valid dicts
             validated_results = []
             for result in results:
@@ -1452,19 +1618,11 @@ class CodeExtractionService:
                         "example_name": "Code Example",
                         "summary": "Code example for demonstration purposes."
                     })
-            
+
             return validated_results
         except asyncio.CancelledError:
-            # If cancelled, return default summaries for all blocks
-            default_summaries = []
-            for item in all_code_blocks:
-                block = item["block"]
-                language = block.get("language", "")
-                default_summaries.append({
-                    "example_name": f"Code Example{f' ({language})' if language else ''}",
-                    "summary": "Code example for demonstration purposes.",
-                })
-            return default_summaries
+            # Let the caller handle cancellation (upstream emits the cancel progress)
+            raise
 
     def _prepare_code_examples_for_storage(
         self, all_code_blocks: list[dict[str, Any]], summary_results: list[dict[str, str]]
@@ -1526,8 +1684,6 @@ class CodeExtractionService:
         storage_data: dict[str, list[Any]],
         url_to_full_document: dict[str, str],
         progress_callback: Callable | None = None,
-        start_progress: int = 0,
-        end_progress: int = 100,
     ) -> int:
         """
         Store code examples in the database.
@@ -1535,24 +1691,16 @@ class CodeExtractionService:
         Returns:
             Number of code examples stored
         """
-        # Create mapped progress callback for storage phase
+        # Create progress callback for storage phase
         storage_progress_callback = None
         if progress_callback:
 
-            async def mapped_storage_callback(data: dict):
-                # Extract values from the dictionary
-                message = data.get("log", "")
-                progress_val = data.get("progress", data.get("percentage", 0))
-
-                # Map storage progress (0-100) to our range (start_progress to end_progress)
-                mapped_progress = start_progress + int(
-                    (progress_val / 100) * (end_progress - start_progress)
-                )
-
+            async def storage_callback(data: dict):
+                # Pass through the raw progress (0-100) with correct status
                 update_data = {
-                    "status": "code_storage",
-                    "progress": mapped_progress,
-                    "log": message,
+                    "status": "code_extraction",  # Keep as code_extraction for consistency
+                    "progress": data.get("progress", data.get("percentage", 0)),
+                    "log": data.get("log", "Storing code examples..."),
                 }
 
                 # Pass through any additional batch info
@@ -1560,10 +1708,12 @@ class CodeExtractionService:
                     update_data["batch_number"] = data["batch_number"]
                 if "total_batches" in data:
                     update_data["total_batches"] = data["total_batches"]
+                if "examples_stored" in data:
+                    update_data["examples_stored"] = data["examples_stored"]
 
                 await progress_callback(update_data)
 
-            storage_progress_callback = mapped_storage_callback
+            storage_progress_callback = storage_callback
 
         try:
             await add_code_examples_to_supabase(
@@ -1579,12 +1729,12 @@ class CodeExtractionService:
                 provider=None,  # Use configured provider
             )
 
-            # Report final progress for code storage phase (not overall completion)
+            # Report completion of code extraction/storage phase
             if progress_callback:
                 await progress_callback({
-                    "status": "code_extraction",  # Keep status as code_extraction, not completed
-                    "progress": end_progress,
-                    "log": f"Code extraction phase completed. Stored {len(storage_data['examples'])} code examples.",
+                    "status": "code_extraction",
+                    "progress": 100,
+                    "log": f"Code extraction completed. Stored {len(storage_data['examples'])} code examples.",
                     "code_blocks_found": len(storage_data['examples']),
                     "code_examples_stored": len(storage_data['examples']),
                 })
@@ -1593,5 +1743,5 @@ class CodeExtractionService:
             return len(storage_data["examples"])
 
         except Exception as e:
-            safe_logfire_error(f"Error storing code examples | error={str(e)}")
-            return 0
+            safe_logfire_error(f"Error storing code examples | error={e}")
+            raise RuntimeError("Failed to store code examples") from e

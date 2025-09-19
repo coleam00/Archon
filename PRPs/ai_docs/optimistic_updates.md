@@ -1,148 +1,135 @@
-# Optimistic Updates Pattern (Future State)
+# Optimistic Updates Pattern Guide
 
-**⚠️ STATUS:** This is not currently implemented. There is a proof‑of‑concept (POC) on the frontend Project page. This document describes the desired future state for handling optimistic updates in a simple, consistent way.
+## Core Architecture
 
-## Mental Model
+### Shared Utilities Module
+**Location**: `src/features/shared/optimistic.ts`
 
-Think of optimistic updates as "assuming success" - update the UI immediately for instant feedback, then verify with the server. If something goes wrong, revert to the last known good state.
+Provides type-safe utilities for managing optimistic state across all features:
+- `createOptimisticId()` - Generates stable UUIDs using nanoid
+- `createOptimisticEntity<T>()` - Creates entities with `_optimistic` and `_localId` metadata
+- `isOptimistic()` - Type guard for checking optimistic state
+- `replaceOptimisticEntity()` - Replaces optimistic items by `_localId` (race-condition safe)
+- `removeDuplicateEntities()` - Deduplicates after replacement
+- `cleanOptimisticMetadata()` - Strips optimistic fields when needed
 
-## The Pattern
-
+### TypeScript Interface
 ```typescript
-// 1. Save current state (for rollback) — take an immutable snapshot
-const previousState = structuredClone(currentState);
-
-// 2. Update UI immediately
-setState(newState);
-
-// 3. Call API
-try {
-  const serverState = await api.updateResource(newState);
-  // Success — use server as the source of truth
-  setState(serverState);
-} catch (error) {
-  // 4. Rollback on failure
-  setState(previousState);
-  showToast("Failed to update. Reverted changes.", "error");
+interface OptimisticEntity {
+  _optimistic: boolean;
+  _localId: string;
 }
 ```
 
-## Implementation Approach
+## Implementation Patterns
 
-### Simple Hook Pattern
+### Mutation Hooks Pattern
+**Reference**: `src/features/projects/tasks/hooks/useTaskQueries.ts:44-108`
 
-```typescript
-function useOptimistic<T>(initialValue: T, updateFn: (value: T) => Promise<T>) {
-  const [value, setValue] = useState(initialValue);
-  const [isUpdating, setIsUpdating] = useState(false);
-  const previousValueRef = useRef<T>(initialValue);
-  const opSeqRef = useRef(0);      // monotonically increasing op id
-  const mountedRef = useRef(true); // avoid setState after unmount
-  useEffect(() => () => { mountedRef.current = false; }, []);
+1. **onMutate**: Create optimistic entity with stable ID
+   - Use `createOptimisticEntity<T>()` for type-safe creation
+   - Store `optimisticId` in context for later replacement
 
-  const optimisticUpdate = async (newValue: T) => {
-    const opId = ++opSeqRef.current;
-    // Save for rollback
-    previousValueRef.current = value;
+2. **onSuccess**: Replace optimistic with server response
+   - Use `replaceOptimisticEntity()` matching by `_localId`
+   - Apply `removeDuplicateEntities()` to prevent duplicates
 
-    // Update immediately
-    if (mountedRef.current) setValue(newValue);
-    if (mountedRef.current) setIsUpdating(true);
+3. **onError**: Rollback to previous state
+   - Restore snapshot from context
 
-    try {
-      const result = await updateFn(newValue);
-      // Apply only if latest op and still mounted
-      if (mountedRef.current && opId === opSeqRef.current) {
-        setValue(result); // Server is source of truth
-      }
-    } catch (error) {
-      // Rollback
-      if (mountedRef.current && opId === opSeqRef.current) {
-        setValue(previousValueRef.current);
-      }
-      throw error;
-    } finally {
-      if (mountedRef.current && opId === opSeqRef.current) {
-        setIsUpdating(false);
-      }
-    }
-  };
+### UI Component Pattern
+**References**:
+- `src/features/projects/tasks/components/TaskCard.tsx:39-40,160,186`
+- `src/features/projects/components/ProjectCard.tsx:32-33,67,93`
+- `src/features/knowledge/components/KnowledgeCard.tsx:49-50,176,244`
 
-  return { value, optimisticUpdate, isUpdating };
-}
-```
+1. Check optimistic state: `const optimistic = isOptimistic(entity)`
+2. Apply conditional styling: Add opacity and ring effect when optimistic
+3. Display indicator: Use `<OptimisticIndicator>` component for visual feedback
 
-### Usage Example
+### Visual Indicator Component
+**Location**: `src/features/ui/primitives/OptimisticIndicator.tsx`
 
-```typescript
-// In a component
-const {
-  value: task,
-  optimisticUpdate,
-  isUpdating,
-} = useOptimistic(initialTask, (task) =>
-  projectService.updateTask(task.id, task),
-);
+Reusable component showing:
+- Spinning loader icon (Loader2 from lucide-react)
+- "Saving..." text with pulse animation
+- Configurable via props: `showSpinner`, `pulseAnimation`
 
-// Handle user action
-const handleStatusChange = (newStatus: string) => {
-  optimisticUpdate({ ...task, status: newStatus }).catch((error) =>
-    showToast("Failed to update task", "error"),
-  );
-};
-```
+## Feature Integration
 
-## Key Principles
+### Tasks
+- **Mutations**: `src/features/projects/tasks/hooks/useTaskQueries.ts`
+- **UI**: `src/features/projects/tasks/components/TaskCard.tsx`
+- Creates tasks with `priority: "medium"` default
 
-1. **Keep it simple** — save, update, roll back.
-2. **Server is the source of truth** — always use the server response as the final state.
-3. **User feedback** — show loading states and clear error messages.
-4. **Selective usage** — only where instant feedback matters:
-   - Drag‑and‑drop
-   - Status changes
-   - Toggle switches
-   - Quick edits
+### Projects
+- **Mutations**: `src/features/projects/hooks/useProjectQueries.ts`
+- **UI**: `src/features/projects/components/ProjectCard.tsx`
+- Handles `prd: null`, `data_schema: null` for new projects
 
-## What NOT to Do
+### Knowledge
+- **Mutations**: `src/features/knowledge/hooks/useKnowledgeQueries.ts`
+- **UI**: `src/features/knowledge/components/KnowledgeCard.tsx`
+- Uses `createOptimisticId()` directly for progress tracking
 
-- Don't track complex state histories
-- Don't try to merge conflicts
-- Use with caution for create/delete operations. If used, generate temporary client IDs, reconcile with server‑assigned IDs, ensure idempotency, and define clear rollback/error states. Prefer non‑optimistic flows when side effects are complex.
-- Don't over-engineer with queues or reconciliation
+### Toasts
+- **Location**: `src/features/ui/hooks/useToast.ts:43`
+- Uses `createOptimisticId()` for unique toast IDs
 
-## When to Implement
+## Testing
 
-Implement optimistic updates when:
+### Unit Tests
+**Location**: `src/features/shared/optimistic.test.ts`
 
-- Users complain about UI feeling "slow"
-- Drag-and-drop or reordering feels laggy
-- Quick actions (like checkbox toggles) feel unresponsive
-- Network latency is noticeable (> 200ms)
+Covers all utility functions with 8 test cases:
+- ID uniqueness and format validation
+- Entity creation with metadata
+- Type guard functionality
+- Replacement logic
+- Deduplication
+- Metadata cleanup
 
-## Success Metrics
+### Manual Testing Checklist
+1. **Rapid Creation**: Create 5+ items quickly - verify no duplicates
+2. **Visual Feedback**: Check optimistic indicators appear immediately
+3. **ID Stability**: Confirm nanoid-based IDs after server response
+4. **Error Handling**: Stop backend, attempt creation - verify rollback
+5. **Race Conditions**: Use browser console script for concurrent creates
 
-When implemented correctly:
+## Performance Characteristics
 
-- UI feels instant (< 100ms response)
-- Rollbacks are rare (< 1% of updates)
-- Error messages are clear
-- Users understand what happened when things fail
+- **Bundle Impact**: ~130 bytes ([nanoid v5, minified+gzipped](https://bundlephobia.com/package/nanoid@5.0.9)) - build/environment dependent
+- **Update Speed**: Typically snappy on modern devices; actual latency varies by device and workload
+- **ID Generation**: Per [nanoid benchmarks](https://github.com/ai/nanoid#benchmark): secure sync ≈5M ops/s, non-secure ≈2.7M ops/s, async crypto ≈135k ops/s
+- **Memory**: Minimal - only `_optimistic` and `_localId` metadata added per optimistic entity
 
-## Production Considerations
+## Migration Notes
 
-The examples above are simplified for clarity. Production implementations should consider:
+### From Timestamp-based IDs
+**Before**: `const tempId = \`temp-\${Date.now()}\``
+**After**: `const optimisticId = createOptimisticId()`
 
-1. **Deep cloning**: Use `structuredClone()` or a deep clone utility for complex state
+### Key Differences
+- No timestamp collisions during rapid creation
+- Stable IDs survive re-renders
+- Type-safe with full TypeScript inference
+- ~60% code reduction through shared utilities
 
-   ```typescript
-   const previousState = structuredClone(currentState); // Proper deep clone
-   ```
+## Best Practices
 
-2. **Race conditions**: Handle out-of-order responses with operation IDs
-3. **Unmount safety**: Avoid setState after component unmount
-4. **Debouncing**: For rapid updates (e.g., sliders), debounce API calls
-5. **Conflict resolution**: For collaborative editing, consider operational transforms
-6. **Polling/ETag interplay**: When polling, ignore stale responses (e.g., compare opId or Last-Modified) and rely on ETag/304 to prevent flicker overriding optimistic state.
-7. **Idempotency & retries**: Use idempotency keys on write APIs so client retries (or duplicate submits) don't create duplicate effects.
+1. **Always use shared utilities** - Don't implement custom optimistic logic
+2. **Match by _localId** - Never match by the entity's `id` field
+3. **Include deduplication** - Always call `removeDuplicateEntities()` after replacement
+4. **Show visual feedback** - Users should see pending state clearly
+5. **Handle errors gracefully** - Always implement rollback in `onError`
 
-These complexities are why we recommend starting simple and only adding optimistic updates where the UX benefit is clear.
+## Dependencies
+
+- **nanoid**: v5.0.9 - UUID generation
+- **@tanstack/react-query**: v5.x - Mutation state management
+- **React**: v18.x - UI components
+- **TypeScript**: v5.x - Type safety
+
+---
+
+*Last updated: Phase 3 implementation (PR #695)*
