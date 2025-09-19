@@ -868,3 +868,35 @@ export function useKnowledgeCodeExamples(
     staleTime: STALE_TIMES.normal,
   });
 }
+
+/**
+ * Upload multiple documents mutation
+ */
+export function useUploadDocumentsBatch() {
+  const queryClient = useQueryClient();
+  const { showToast } = useToast();
+
+  return useMutation<
+    { success: boolean; progressId: string; message: string; filename?: string },
+    Error,
+    {
+      files: File[];
+      metadata?: UploadMetadata & { groupBy?: 'file' | 'folder' | 'batch'; groupDisplayName?: string }
+    }
+  >({
+    mutationFn: async ({ files, metadata }) => {
+      return knowledgeService.uploadDocumentsBatch(files, metadata || {});
+    },
+    onSuccess: (data) => {
+      // Invalidate knowledge items to refresh the list
+      queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
+      showToast(`Batch upload started: ${data.message}`, "success");
+      return data;
+    },
+    onError: (error) => {
+      const message = getProviderErrorMessage(error);
+      showToast(`Batch upload failed: ${message}`, "error");
+      throw error;
+    },
+  });
+}

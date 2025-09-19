@@ -10,7 +10,7 @@ import { Button, Input, Label } from "../../ui/primitives";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/primitives/dialog";
 import { cn } from "../../ui/primitives/styles";
 import { Tabs, TabsContent } from "../../ui/primitives/tabs";
-import { useCrawlUrl, useUploadDocument } from "../hooks";
+import { useCrawlUrl, useUploadDocument, useUploadDocumentsBatch } from "../hooks";
 import type { CrawlRequest, UploadMetadata } from "../types";
 import { KnowledgeTypeSelector } from "./KnowledgeTypeSelector";
 import { LevelSelector } from "./LevelSelector";
@@ -33,6 +33,7 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
   const { showToast } = useToast();
   const crawlMutation = useCrawlUrl();
   const uploadMutation = useUploadDocument();
+  const batchUploadMutation = useUploadDocumentsBatch();
 
   // Generate unique IDs for form elements
   const urlId = useId();
@@ -46,6 +47,10 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
 
   // Upload form state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [groupByFolder, setGroupByFolder] = useState(false);
+  const [groupAsSingle, setGroupAsSingle] = useState(false);
+  const [groupDisplayName, setGroupDisplayName] = useState('');
   const [uploadType, setUploadType] = useState<"technical" | "business">("technical");
   const [uploadTags, setUploadTags] = useState<string[]>([]);
 

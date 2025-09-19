@@ -217,4 +217,50 @@ export const knowledgeService = {
   async getKnowledgeSources(): Promise<KnowledgeSource[]> {
     return callAPIWithETag<KnowledgeSource[]>("/api/knowledge-items/sources");
   },
+
+  /**
+   * Upload multiple documents with progress tracking
+   */
+  async uploadDocumentsBatch(
+    files: File[],
+    metadata: UploadMetadata & { groupBy?: 'file' | 'folder' | 'batch'; groupDisplayName?: string } = {}
+  ): Promise<{ success: boolean; progressId: string; message: string; filename?: string }> {
+    const formData = new FormData();
+
+    for (const f of files) {
+      const anyFile = f as any;
+      const rel = (anyFile.webkitRelativePath as string) || f.name;
+      formData.append('files', f, rel);
+    }
+
+    if (metadata.knowledge_type) {
+      formData.append('knowledge_type', metadata.knowledge_type);
+    }
+
+    if (metadata.tags && metadata.tags.length > 0) {
+      for (const tag of metadata.tags) {
+        formData.append('tags', tag);
+      }
+    }
+
+    if (metadata.groupBy) {
+      formData.append('groupBy', metadata.groupBy);
+    }
+
+    if (metadata.groupDisplayName) {
+      formData.append('groupDisplayName', metadata.groupDisplayName);
+    }
+
+    const response = await fetch('/api/knowledge-items/upload-batch', {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new APIServiceError(error.error || `HTTP ${response.status}`, response.status);
+    }
+
+    return response.json();
+  },
 };
