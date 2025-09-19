@@ -251,7 +251,7 @@ export const knowledgeService = {
       formData.append('groupDisplayName', metadata.groupDisplayName);
     }
 
-    const response = await fetch('/api/knowledge-items/upload-batch', {
+    const response = await fetch('/api/documents/upload-batch', {
       method: 'POST',
       body: formData,
     });
