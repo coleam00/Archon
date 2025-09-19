@@ -255,7 +255,7 @@ class SinglePageCrawlStrategy:
             )
 
             result = await self.crawler.arun(url=url, config=crawl_config)
-            if result.success and result.markdown:
+            if result.success and result.markdown and result.markdown:
                 logger.info(f"Successfully crawled markdown file: {url}")
 
                 # Report completion progress
