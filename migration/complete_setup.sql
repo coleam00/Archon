@@ -474,7 +474,115 @@ $$;
 -- SECTION 5B: HYBRID SEARCH FUNCTIONS WITH TS_VECTOR
 -- =====================================================
 
--- Hybrid search function for archon_crawled_pages
+-- Multi-dimensional hybrid search function for archon_crawled_pages
+CREATE OR REPLACE FUNCTION hybrid_search_archon_crawled_pages_multi(
+    query_embedding VECTOR,
+    embedding_dimension INTEGER,
+    query_text TEXT,
+    match_count INT DEFAULT 10,
+    filter JSONB DEFAULT '{}'::jsonb,
+    source_filter TEXT DEFAULT NULL
+)
+RETURNS TABLE (
+    id BIGINT,
+    url VARCHAR,
+    chunk_number INTEGER,
+    content TEXT,
+    metadata JSONB,
+    source_id TEXT,
+    similarity FLOAT,
+    match_type TEXT
+)
+LANGUAGE plpgsql
+AS $$
+#variable_conflict use_column
+DECLARE
+    max_vector_results INT;
+    max_text_results INT;
+    sql_query TEXT;
+    embedding_column TEXT;
+BEGIN
+    -- Determine which embedding column to use based on dimension
+    CASE embedding_dimension
+        WHEN 384 THEN embedding_column := 'embedding_384';
+        WHEN 768 THEN embedding_column := 'embedding_768';
+        WHEN 1024 THEN embedding_column := 'embedding_1024';
+        WHEN 1536 THEN embedding_column := 'embedding_1536';
+        WHEN 3072 THEN embedding_column := 'embedding_3072';
+        ELSE RAISE EXCEPTION 'Unsupported embedding dimension: %', embedding_dimension;
+    END CASE;
+
+    -- Calculate how many results to fetch from each search type
+    max_vector_results := match_count;
+    max_text_results := match_count;
+    
+    -- Build dynamic query with proper embedding column
+    sql_query := format('
+    WITH vector_results AS (
+        -- Vector similarity search
+        SELECT 
+            cp.id,
+            cp.url,
+            cp.chunk_number,
+            cp.content,
+            cp.metadata,
+            cp.source_id,
+            1 - (cp.%I <=> $1) AS vector_sim
+        FROM archon_crawled_pages cp
+        WHERE cp.metadata @> $4
+            AND ($5 IS NULL OR cp.source_id = $5)
+            AND cp.%I IS NOT NULL
+        ORDER BY cp.%I <=> $1
+        LIMIT $2
+    ),
+    text_results AS (
+        -- Full-text search with ranking
+        SELECT 
+            cp.id,
+            cp.url,
+            cp.chunk_number,
+            cp.content,
+            cp.metadata,
+            cp.source_id,
+            ts_rank_cd(cp.content_search_vector, plainto_tsquery(''english'', $6)) AS text_sim
+        FROM archon_crawled_pages cp
+        WHERE cp.metadata @> $4
+            AND ($5 IS NULL OR cp.source_id = $5)
+            AND cp.content_search_vector @@ plainto_tsquery(''english'', $6)
+        ORDER BY text_sim DESC
+        LIMIT $3
+    ),
+    combined_results AS (
+        -- Combine results from both searches
+        SELECT 
+            COALESCE(v.id, t.id) AS id,
+            COALESCE(v.url, t.url) AS url,
+            COALESCE(v.chunk_number, t.chunk_number) AS chunk_number,
+            COALESCE(v.content, t.content) AS content,
+            COALESCE(v.metadata, t.metadata) AS metadata,
+            COALESCE(v.source_id, t.source_id) AS source_id,
+            -- Use vector similarity if available, otherwise text similarity
+            COALESCE(v.vector_sim, t.text_sim, 0)::float8 AS similarity,
+            -- Determine match type
+            CASE 
+                WHEN v.id IS NOT NULL AND t.id IS NOT NULL THEN ''hybrid''
+                WHEN v.id IS NOT NULL THEN ''vector''
+                ELSE ''keyword''
+            END AS match_type
+        FROM vector_results v
+        FULL OUTER JOIN text_results t ON v.id = t.id
+    )
+    SELECT * FROM combined_results
+    ORDER BY similarity DESC
+    LIMIT $2', 
+    embedding_column, embedding_column, embedding_column);
+
+    -- Execute dynamic query
+    RETURN QUERY EXECUTE sql_query USING query_embedding, max_vector_results, max_text_results, filter, source_filter, query_text;
+END;
+$$;
+
+-- Legacy compatibility function (defaults to 1536D)
 CREATE OR REPLACE FUNCTION hybrid_search_archon_crawled_pages(
     query_embedding vector(1536),
     query_text TEXT,
@@ -494,48 +602,91 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 AS $$
+BEGIN
+    RETURN QUERY SELECT * FROM hybrid_search_archon_crawled_pages_multi(query_embedding, 1536, query_text, match_count, filter, source_filter);
+END;
+$$;
+
+-- Multi-dimensional hybrid search function for archon_code_examples
+CREATE OR REPLACE FUNCTION hybrid_search_archon_code_examples_multi(
+    query_embedding VECTOR,
+    embedding_dimension INTEGER,
+    query_text TEXT,
+    match_count INT DEFAULT 10,
+    filter JSONB DEFAULT '{}'::jsonb,
+    source_filter TEXT DEFAULT NULL
+)
+RETURNS TABLE (
+    id BIGINT,
+    url VARCHAR,
+    chunk_number INTEGER,
+    content TEXT,
+    summary TEXT,
+    metadata JSONB,
+    source_id TEXT,
+    similarity FLOAT,
+    match_type TEXT
+)
+LANGUAGE plpgsql
+AS $$
+#variable_conflict use_column
 DECLARE
     max_vector_results INT;
     max_text_results INT;
+    sql_query TEXT;
+    embedding_column TEXT;
 BEGIN
+    -- Determine which embedding column to use based on dimension
+    CASE embedding_dimension
+        WHEN 384 THEN embedding_column := 'embedding_384';
+        WHEN 768 THEN embedding_column := 'embedding_768';
+        WHEN 1024 THEN embedding_column := 'embedding_1024';
+        WHEN 1536 THEN embedding_column := 'embedding_1536';
+        WHEN 3072 THEN embedding_column := 'embedding_3072';
+        ELSE RAISE EXCEPTION 'Unsupported embedding dimension: %', embedding_dimension;
+    END CASE;
+
     -- Calculate how many results to fetch from each search type
     max_vector_results := match_count;
     max_text_results := match_count;
     
-    RETURN QUERY
+    -- Build dynamic query with proper embedding column
+    sql_query := format('
     WITH vector_results AS (
         -- Vector similarity search
         SELECT 
-            cp.id,
-            cp.url,
-            cp.chunk_number,
-            cp.content,
-            cp.metadata,
-            cp.source_id,
-            1 - (cp.embedding <=> query_embedding) AS vector_sim
-        FROM archon_crawled_pages cp
-        WHERE cp.metadata @> filter
-            AND (source_filter IS NULL OR cp.source_id = source_filter)
-            AND cp.embedding IS NOT NULL
-        ORDER BY cp.embedding <=> query_embedding
-        LIMIT max_vector_results
+            ce.id,
+            ce.url,
+            ce.chunk_number,
+            ce.content,
+            ce.summary,
+            ce.metadata,
+            ce.source_id,
+            1 - (ce.%I <=> $1) AS vector_sim
+        FROM archon_code_examples ce
+        WHERE ce.metadata @> $4
+            AND ($5 IS NULL OR ce.source_id = $5)
+            AND ce.%I IS NOT NULL
+        ORDER BY ce.%I <=> $1
+        LIMIT $2
     ),
     text_results AS (
-        -- Full-text search with ranking
+        -- Full-text search with ranking (searches both content and summary)
         SELECT 
-            cp.id,
-            cp.url,
-            cp.chunk_number,
-            cp.content,
-            cp.metadata,
-            cp.source_id,
-            ts_rank_cd(cp.content_search_vector, plainto_tsquery('english', query_text)) AS text_sim
-        FROM archon_crawled_pages cp
-        WHERE cp.metadata @> filter
-            AND (source_filter IS NULL OR cp.source_id = source_filter)
-            AND cp.content_search_vector @@ plainto_tsquery('english', query_text)
+            ce.id,
+            ce.url,
+            ce.chunk_number,
+            ce.content,
+            ce.summary,
+            ce.metadata,
+            ce.source_id,
+            ts_rank_cd(ce.content_search_vector, plainto_tsquery(''english'', $6)) AS text_sim
+        FROM archon_code_examples ce
+        WHERE ce.metadata @> $4
+            AND ($5 IS NULL OR ce.source_id = $5)
+            AND ce.content_search_vector @@ plainto_tsquery(''english'', $6)
         ORDER BY text_sim DESC
-        LIMIT max_text_results
+        LIMIT $3
     ),
     combined_results AS (
         -- Combine results from both searches
@@ -544,26 +695,31 @@ BEGIN
             COALESCE(v.url, t.url) AS url,
             COALESCE(v.chunk_number, t.chunk_number) AS chunk_number,
             COALESCE(v.content, t.content) AS content,
+            COALESCE(v.summary, t.summary) AS summary,
             COALESCE(v.metadata, t.metadata) AS metadata,
             COALESCE(v.source_id, t.source_id) AS source_id,
             -- Use vector similarity if available, otherwise text similarity
             COALESCE(v.vector_sim, t.text_sim, 0)::float8 AS similarity,
             -- Determine match type
             CASE 
-                WHEN v.id IS NOT NULL AND t.id IS NOT NULL THEN 'hybrid'
-                WHEN v.id IS NOT NULL THEN 'vector'
-                ELSE 'keyword'
+                WHEN v.id IS NOT NULL AND t.id IS NOT NULL THEN ''hybrid''
+                WHEN v.id IS NOT NULL THEN ''vector''
+                ELSE ''keyword''
             END AS match_type
         FROM vector_results v
         FULL OUTER JOIN text_results t ON v.id = t.id
     )
     SELECT * FROM combined_results
     ORDER BY similarity DESC
-    LIMIT match_count;
+    LIMIT $2', 
+    embedding_column, embedding_column, embedding_column);
+
+    -- Execute dynamic query
+    RETURN QUERY EXECUTE sql_query USING query_embedding, max_vector_results, max_text_results, filter, source_filter, query_text;
 END;
 $$;
 
--- Hybrid search function for archon_code_examples
+-- Legacy compatibility function (defaults to 1536D)
 CREATE OR REPLACE FUNCTION hybrid_search_archon_code_examples(
     query_embedding vector(1536),
     query_text TEXT,
@@ -584,81 +740,16 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 AS $$
-DECLARE
-    max_vector_results INT;
-    max_text_results INT;
 BEGIN
-    -- Calculate how many results to fetch from each search type
-    max_vector_results := match_count;
-    max_text_results := match_count;
-    
-    RETURN QUERY
-    WITH vector_results AS (
-        -- Vector similarity search
-        SELECT 
-            ce.id,
-            ce.url,
-            ce.chunk_number,
-            ce.content,
-            ce.summary,
-            ce.metadata,
-            ce.source_id,
-            1 - (ce.embedding <=> query_embedding) AS vector_sim
-        FROM archon_code_examples ce
-        WHERE ce.metadata @> filter
-            AND (source_filter IS NULL OR ce.source_id = source_filter)
-            AND ce.embedding IS NOT NULL
-        ORDER BY ce.embedding <=> query_embedding
-        LIMIT max_vector_results
-    ),
-    text_results AS (
-        -- Full-text search with ranking (searches both content and summary)
-        SELECT 
-            ce.id,
-            ce.url,
-            ce.chunk_number,
-            ce.content,
-            ce.summary,
-            ce.metadata,
-            ce.source_id,
-            ts_rank_cd(ce.content_search_vector, plainto_tsquery('english', query_text)) AS text_sim
-        FROM archon_code_examples ce
-        WHERE ce.metadata @> filter
-            AND (source_filter IS NULL OR ce.source_id = source_filter)
-            AND ce.content_search_vector @@ plainto_tsquery('english', query_text)
-        ORDER BY text_sim DESC
-        LIMIT max_text_results
-    ),
-    combined_results AS (
-        -- Combine results from both searches
-        SELECT 
-            COALESCE(v.id, t.id) AS id,
-            COALESCE(v.url, t.url) AS url,
-            COALESCE(v.chunk_number, t.chunk_number) AS chunk_number,
-            COALESCE(v.content, t.content) AS content,
-            COALESCE(v.summary, t.summary) AS summary,
-            COALESCE(v.metadata, t.metadata) AS metadata,
-            COALESCE(v.source_id, t.source_id) AS source_id,
-            -- Use vector similarity if available, otherwise text similarity
-            COALESCE(v.vector_sim, t.text_sim, 0)::float8 AS similarity,
-            -- Determine match type
-            CASE 
-                WHEN v.id IS NOT NULL AND t.id IS NOT NULL THEN 'hybrid'
-                WHEN v.id IS NOT NULL THEN 'vector'
-                ELSE 'keyword'
-            END AS match_type
-        FROM vector_results v
-        FULL OUTER JOIN text_results t ON v.id = t.id
-    )
-    SELECT * FROM combined_results
-    ORDER BY similarity DESC
-    LIMIT match_count;
+    RETURN QUERY SELECT * FROM hybrid_search_archon_code_examples_multi(query_embedding, 1536, query_text, match_count, filter, source_filter);
 END;
 $$;
 
 -- Add comments to document the new functionality
-COMMENT ON FUNCTION hybrid_search_archon_crawled_pages IS 'Performs hybrid search combining vector similarity and full-text search with configurable weighting';
-COMMENT ON FUNCTION hybrid_search_archon_code_examples IS 'Performs hybrid search on code examples combining vector similarity and full-text search';
+COMMENT ON FUNCTION hybrid_search_archon_crawled_pages_multi IS 'Multi-dimensional hybrid search combining vector similarity and full-text search with configurable embedding dimensions';
+COMMENT ON FUNCTION hybrid_search_archon_crawled_pages IS 'Legacy hybrid search function for backward compatibility (uses 1536D embeddings)';
+COMMENT ON FUNCTION hybrid_search_archon_code_examples_multi IS 'Multi-dimensional hybrid search on code examples with configurable embedding dimensions';
+COMMENT ON FUNCTION hybrid_search_archon_code_examples IS 'Legacy hybrid search function for code examples (uses 1536D embeddings)';
 
 -- =====================================================
 -- SECTION 6: RLS POLICIES FOR KNOWLEDGE BASE
@@ -700,6 +791,13 @@ EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
 
+-- Create task_priority enum if it doesn't exist
+DO $$ BEGIN
+    CREATE TYPE task_priority AS ENUM ('low', 'medium', 'high', 'critical');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
 -- Assignee is now a text field to allow any agent name
 -- No longer using enum to support flexible agent assignments
 
@@ -727,6 +825,7 @@ CREATE TABLE IF NOT EXISTS archon_tasks (
   status task_status DEFAULT 'todo',
   assignee TEXT DEFAULT 'User' CHECK (assignee IS NOT NULL AND assignee != ''),
   task_order INTEGER DEFAULT 0,
+  priority task_priority DEFAULT 'medium' NOT NULL,
   feature TEXT,
   sources JSONB DEFAULT '[]'::jsonb,
   code_examples JSONB DEFAULT '[]'::jsonb,
@@ -776,6 +875,7 @@ CREATE INDEX IF NOT EXISTS idx_archon_tasks_project_id ON archon_tasks(project_i
 CREATE INDEX IF NOT EXISTS idx_archon_tasks_status ON archon_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_archon_tasks_assignee ON archon_tasks(assignee);
 CREATE INDEX IF NOT EXISTS idx_archon_tasks_order ON archon_tasks(task_order);
+CREATE INDEX IF NOT EXISTS idx_archon_tasks_priority ON archon_tasks(priority);
 CREATE INDEX IF NOT EXISTS idx_archon_tasks_archived ON archon_tasks(archived);
 CREATE INDEX IF NOT EXISTS idx_archon_tasks_archived_at ON archon_tasks(archived_at);
 CREATE INDEX IF NOT EXISTS idx_archon_project_sources_project_id ON archon_project_sources(project_id);
@@ -838,6 +938,7 @@ $$ LANGUAGE plpgsql;
 
 -- Add comments to document the soft delete fields
 COMMENT ON COLUMN archon_tasks.assignee IS 'The agent or user assigned to this task. Can be any valid agent name or "User"';
+COMMENT ON COLUMN archon_tasks.priority IS 'Task priority level independent of visual ordering - used for semantic importance (low, medium, high, critical)';
 COMMENT ON COLUMN archon_tasks.archived IS 'Soft delete flag - TRUE if task is archived/deleted';
 COMMENT ON COLUMN archon_tasks.archived_at IS 'Timestamp when task was archived';
 COMMENT ON COLUMN archon_tasks.archived_by IS 'User/system that archived the task';

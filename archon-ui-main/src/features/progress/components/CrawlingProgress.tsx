@@ -7,9 +7,9 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertCircle, CheckCircle, Globe, Loader2, StopCircle, XCircle } from "lucide-react";
 import { useState } from "react";
-import { Button } from "../../../ui/primitives";
-import { cn } from "../../../ui/primitives/styles";
-import { useStopCrawl } from "../../hooks";
+import { useStopCrawl } from "../../knowledge/hooks";
+import { Button } from "../../ui/primitives";
+import { cn } from "../../ui/primitives/styles";
 import { useCrawlProgressPolling } from "../hooks";
 import type { ActiveOperation } from "../types/progress";
 

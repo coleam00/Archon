@@ -11,6 +11,7 @@ import {
   BugContext,
   BugReportData,
 } from "../../services/bugReportService";
+import { copyToClipboard } from "../../features/shared/utils/clipboard";
 
 interface BugReportModalProps {
   isOpen: boolean;
@@ -99,13 +100,21 @@ export const BugReportModal: React.FC<BugReportModalProps> = ({
         // Fallback: copy to clipboard
         const formattedReport =
           bugReportService.formatReportForClipboard(bugReportData);
-        await navigator.clipboard.writeText(formattedReport);
+        const clipboardResult = await copyToClipboard(formattedReport);
 
-        showToast(
-          "Failed to create GitHub issue, but bug report was copied to clipboard. Please paste it in a new GitHub issue.",
-          "warning",
-          10000,
-        );
+        if (clipboardResult.success) {
+          showToast(
+            "Failed to create GitHub issue, but bug report was copied to clipboard. Please paste it in a new GitHub issue.",
+            "warning",
+            10000,
+          );
+        } else {
+          showToast(
+            "Failed to create GitHub issue and could not copy to clipboard. Please report manually.",
+            "error",
+            10000,
+          );
+        }
       }
     } catch (error) {
       console.error("Bug report submission failed:", error);
@@ -118,15 +127,15 @@ export const BugReportModal: React.FC<BugReportModalProps> = ({
     }
   };
 
-  const copyToClipboard = async () => {
+  const handleCopyToClipboard = async () => {
     const bugReportData: BugReportData = { ...report, context };
     const formattedReport =
       bugReportService.formatReportForClipboard(bugReportData);
 
-    try {
-      await navigator.clipboard.writeText(formattedReport);
+    const result = await copyToClipboard(formattedReport);
+    if (result.success) {
       showToast("Bug report copied to clipboard", "success");
-    } catch {
+    } else {
       showToast("Failed to copy to clipboard", "error");
     }
   };
@@ -372,7 +381,7 @@ export const BugReportModal: React.FC<BugReportModalProps> = ({
                   <Button
                     type="button"
                     variant="ghost"
-                    onClick={copyToClipboard}
+                    onClick={handleCopyToClipboard}
                     className="sm:order-1"
                   >
                     <Copy className="w-4 h-4 mr-2" />

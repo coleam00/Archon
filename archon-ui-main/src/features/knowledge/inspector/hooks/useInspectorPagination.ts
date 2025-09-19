@@ -5,6 +5,7 @@
 
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
+import { STALE_TIMES } from "@/features/shared/queryPatterns";
 import { knowledgeKeys } from "../../hooks/useKnowledgeQueries";
 import { knowledgeService } from "../../services";
 import type { ChunksResponse, CodeExample, CodeExamplesResponse, DocumentChunk } from "../../types";
@@ -19,7 +20,7 @@ export interface UseInspectorPaginationResult {
   items: (DocumentChunk | CodeExample)[];
   isLoading: boolean;
   hasNextPage: boolean;
-  fetchNextPage: () => void;
+  fetchNextPage: (options?: any) => Promise<any>;
   isFetchingNextPage: boolean;
   totalCount: number;
   loadedCount: number;
@@ -56,7 +57,7 @@ export function useInspectorPagination({
       return hasMore ? allPages.length : undefined;
     },
     enabled: !!sourceId,
-    staleTime: 60000,
+    staleTime: STALE_TIMES.normal,
     initialPageParam: 0,
   });
 

@@ -1,6 +1,8 @@
 import { memo, useCallback, useEffect, useState } from "react";
 import {
   Button,
+  ComboBox,
+  type ComboBoxOption,
   Dialog,
   DialogContent,
   DialogFooter,
@@ -18,9 +20,8 @@ import {
   TextArea,
 } from "../../../ui/primitives";
 import { useTaskEditor } from "../hooks";
-import type { Assignee, Task } from "../types";
+import { type Assignee, COMMON_ASSIGNEES, type Task, type TaskPriority } from "../types";
 import { FeatureSelect } from "./FeatureSelect";
-import type { Priority } from "./TaskPriority";
 
 interface TaskEditModalProps {
   isModalOpen: boolean;
@@ -31,7 +32,13 @@ interface TaskEditModalProps {
   onOpenChange?: (open: boolean) => void;
 }
 
-const ASSIGNEE_OPTIONS = ["User", "Archon", "AI IDE Agent"] as const;
+// Convert common assignees to ComboBox options
+const ASSIGNEE_OPTIONS: ComboBoxOption[] = COMMON_ASSIGNEES.map((name) => ({
+  value: name,
+  label: name,
+  description:
+    name === "User" ? "Assign to human user" : name === "Archon" ? "Assign to Archon system" : "Assign to Coding Agent",
+}));
 
 export const TaskEditModal = memo(
   ({ isModalOpen, editingTask, projectId, onClose, onSaved, onOpenChange }: TaskEditModalProps) => {
@@ -52,7 +59,7 @@ export const TaskEditModal = memo(
           status: "todo",
           assignee: "User" as Assignee,
           feature: "",
-          priority: "medium" as Priority, // Frontend-only priority
+          priority: "medium" as TaskPriority, // Direct priority field
         });
       }
     }, [editingTask]);
@@ -133,9 +140,9 @@ export const TaskEditModal = memo(
               <FormField>
                 <Label>Priority</Label>
                 <Select
-                  value={(localTask as Task & { priority?: Priority })?.priority || "medium"}
+                  value={localTask?.priority || "medium"}
                   onValueChange={(value) =>
-                    setLocalTask((prev) => (prev ? { ...prev, priority: value as Priority } : null))
+                    setLocalTask((prev) => (prev ? { ...prev, priority: value as TaskPriority } : null))
                   }
                 >
                   <SelectTrigger className="w-full">
@@ -154,23 +161,16 @@ export const TaskEditModal = memo(
             <FormGrid columns={2}>
               <FormField>
                 <Label>Assignee</Label>
-                <Select
+                <ComboBox
+                  options={ASSIGNEE_OPTIONS}
                   value={localTask?.assignee || "User"}
-                  onValueChange={(value) =>
-                    setLocalTask((prev) => (prev ? { ...prev, assignee: value as Assignee } : null))
-                  }
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {ASSIGNEE_OPTIONS.map((option) => (
-                      <SelectItem key={option} value={option}>
-                        {option}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  onValueChange={(value) => setLocalTask((prev) => (prev ? { ...prev, assignee: value } : null))}
+                  placeholder="Select or type assignee..."
+                  searchPlaceholder="Search or enter custom..."
+                  emptyMessage="Type a custom assignee name"
+                  className="w-full"
+                  allowCustomValue={true}
+                />
               </FormField>
 
               <FormField>

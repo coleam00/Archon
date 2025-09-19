@@ -4,14 +4,14 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { CrawlingProgress } from "../../progress/components/CrawlingProgress";
+import type { ActiveOperation } from "../../progress/types";
 import { useToast } from "../../ui/hooks/useToast";
 import { AddKnowledgeDialog } from "../components/AddKnowledgeDialog";
 import { KnowledgeHeader } from "../components/KnowledgeHeader";
 import { KnowledgeList } from "../components/KnowledgeList";
 import { useKnowledgeSummaries } from "../hooks/useKnowledgeQueries";
 import { KnowledgeInspector } from "../inspector/components/KnowledgeInspector";
-import { CrawlingProgress } from "../progress/components/CrawlingProgress";
-import type { ActiveOperation } from "../progress/types";
 import type { KnowledgeItem, KnowledgeItemsFilter } from "../types";
 
 export const KnowledgeView = () => {

@@ -3,9 +3,10 @@
  * Focused service for project CRUD operations only
  */
 
+import { callAPIWithETag } from "../../shared/apiWithEtag";
+import { formatZodErrors, ValidationError } from "../../shared/errors";
 import { validateCreateProject, validateUpdateProject } from "../schemas";
-import { formatRelativeTime, formatZodErrors, ValidationError } from "../shared/api";
-import { callAPIWithETag, invalidateETagCache } from "../shared/apiWithEtag";
+import { formatRelativeTime } from "../shared/api";
 import type { CreateProjectRequest, Project, ProjectFeatures, UpdateProjectRequest } from "../types";
 
 export const projectService = {
@@ -93,9 +94,6 @@ export const projectService = {
         body: JSON.stringify(validation.data),
       });
 
-      // Invalidate project list cache after creation
-      invalidateETagCache("/api/projects");
-
       // Project creation response received
       return response;
     } catch (error) {
@@ -129,10 +127,6 @@ export const projectService = {
         body: JSON.stringify(validation.data),
       });
 
-      // Invalidate caches after update
-      invalidateETagCache("/api/projects");
-      invalidateETagCache(`/api/projects/${projectId}`);
-
       // API update response received
 
       // Ensure pinned property is properly handled as boolean
@@ -160,10 +154,6 @@ export const projectService = {
       await callAPIWithETag(`/api/projects/${projectId}`, {
         method: "DELETE",
       });
-
-      // Invalidate caches after deletion
-      invalidateETagCache("/api/projects");
-      invalidateETagCache(`/api/projects/${projectId}`);
     } catch (error) {
       console.error(`Failed to delete project ${projectId}:`, error);
       throw error;

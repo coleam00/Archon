@@ -4,6 +4,7 @@ __pycache__
 .claude/settings.local.json
 PRPs/local
 PRPs/completed/
+PRPs/stories/
 /logs/
 .bmad-core
 lan-migration-docs/
@@ -22,3 +23,5 @@ temp/
 .cursor/
 CLAUDE.md
 UAT/
+
+.DS_Store

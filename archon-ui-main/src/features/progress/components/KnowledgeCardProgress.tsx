@@ -6,7 +6,7 @@
 
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertCircle, CheckCircle2, Code, FileText, Link, Loader2 } from "lucide-react";
-import { cn } from "../../../ui/primitives/styles";
+import { cn } from "../../ui/primitives/styles";
 import type { ActiveOperation } from "../types/progress";
 
 interface KnowledgeCardProgressProps {

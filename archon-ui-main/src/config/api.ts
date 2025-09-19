@@ -20,10 +20,10 @@ export function getApiUrl(): string {
   // For development, construct from window location
   const protocol = window.location.protocol;
   const host = window.location.hostname;
-  
+
   // Check if port is explicitly set (not just empty string)
   const portEnv = import.meta.env.VITE_ARCHON_SERVER_PORT;
-  
+
   // Only add port if it's actually defined and not empty
   if (portEnv === undefined) {
     // No port env var at all - use default for local dev

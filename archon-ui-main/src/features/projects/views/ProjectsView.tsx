@@ -9,13 +9,8 @@ import { NewProjectModal } from "../components/NewProjectModal";
 import { ProjectHeader } from "../components/ProjectHeader";
 import { ProjectList } from "../components/ProjectList";
 import { DocsTab } from "../documents/DocsTab";
-import {
-  projectKeys,
-  useDeleteProject,
-  useProjects,
-  useTaskCounts,
-  useUpdateProject,
-} from "../hooks/useProjectQueries";
+import { projectKeys, useDeleteProject, useProjects, useUpdateProject } from "../hooks/useProjectQueries";
+import { useTaskCounts } from "../tasks/hooks";
 import { TasksTab } from "../tasks/TasksTab";
 import type { Project } from "../types";
 
