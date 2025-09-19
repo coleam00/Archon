@@ -119,6 +119,24 @@ export function useCrawlUrl() {
       await queryClient.cancelQueries({ queryKey: knowledgeKeys.summariesPrefix() });
       await queryClient.cancelQueries({ queryKey: progressKeys.active() });
 
+      // TODO: Fix invisible optimistic updates
+      // ISSUE: Optimistic updates are applied to knowledgeKeys.summaries(filter) queries,
+      // but the UI component (KnowledgeView) queries with dynamic filters that we don't have access to here.
+      // This means optimistic updates only work if the filter happens to match what's being viewed.
+      //
+      // CURRENT BEHAVIOR:
+      // - We update all cached summaries queries (lines 158-179 below)
+      // - BUT if the user changes filters after mutation starts, they won't see the optimistic update
+      // - AND we have no way to know what filter the user is currently viewing
+      //
+      // PROPER FIX requires one of:
+      // 1. Pass current filter from KnowledgeView to mutation hooks (prop drilling)
+      // 2. Create KnowledgeFilterContext to share filter state
+      // 3. Restructure to have a single source of truth query key like other features
+      //
+      // IMPACT: Users don't see immediate feedback when adding knowledge items - items only
+      // appear after the server responds (usually 1-3 seconds later)
+
       // Snapshot the previous values for rollback
       const previousSummaries = queryClient.getQueriesData<KnowledgeItemsResponse>({
         queryKey: knowledgeKeys.summariesPrefix(),
