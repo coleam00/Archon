@@ -161,13 +161,13 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[600px] max-h-[90vh] flex flex-col">
+      <DialogContent className="sm:max-w-[600px] max-h-[95vh] min-h-[500px] flex flex-col">
         <DialogHeader className="flex-shrink-0">
           <DialogTitle>Add Knowledge</DialogTitle>
           <DialogDescription>Crawl websites or upload documents to expand your knowledge base.</DialogDescription>
         </DialogHeader>
 
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto px-1">
 
         <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "crawl" | "upload")}>
           {/* Enhanced Tab Buttons */}
@@ -284,7 +284,7 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
           </TabsContent>
 
           {/* Upload Tab */}
-          <TabsContent value="upload" className="space-y-6 mt-6">
+          <TabsContent value="upload" className="space-y-6 mt-6 pb-6">
             {/* Enhanced File Input Section */}
             <div className="space-y-3">
               <Label className="text-sm font-medium text-gray-900 dark:text-white/90">
