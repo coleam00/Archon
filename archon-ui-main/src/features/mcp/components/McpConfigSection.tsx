@@ -189,7 +189,7 @@ export const McpConfigSection: React.FC<McpConfigSectionProps> = ({ config, stat
   const handleCopyConfig = async () => {
     const configText = ideConfigurations[selectedIDE].configGenerator(config);
     const result = await copyToClipboard(configText);
-    
+
     if (result.success) {
       showToast("Configuration copied to clipboard", "success");
     } else {
@@ -212,7 +212,7 @@ export const McpConfigSection: React.FC<McpConfigSectionProps> = ({ config, stat
   const handleClaudeCodeCommand = async () => {
     const command = `claude mcp add --transport http archon http://${config.host}:${config.port}/mcp`;
     const result = await copyToClipboard(command);
-    
+
     if (result.success) {
       showToast("Command copied to clipboard", "success");
     } else {

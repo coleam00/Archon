@@ -10,3 +10,5 @@ PRPs/stories/
 tmp/
 temp/
 UAT/
+
+.DS_Store

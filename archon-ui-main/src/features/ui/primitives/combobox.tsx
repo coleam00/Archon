@@ -247,11 +247,11 @@ export const ComboBox = React.forwardRef<HTMLButtonElement, ComboBoxProps>(
                 aria-autocomplete="list"
                 aria-activedescendant={
                   open
-                    ? (hasCustomOption && highlightedIndex === filteredOptions.length
-                        ? `${listboxId}-custom`
-                        : highlightedIndex < filteredOptions.length
+                    ? hasCustomOption && highlightedIndex === filteredOptions.length
+                      ? `${listboxId}-custom`
+                      : highlightedIndex < filteredOptions.length
                         ? `${listboxId}-opt-${highlightedIndex}`
-                        : undefined)
+                        : undefined
                     : undefined
                 }
                 value={search}

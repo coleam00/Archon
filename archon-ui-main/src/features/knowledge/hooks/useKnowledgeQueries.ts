@@ -115,20 +115,11 @@ export function useCrawlUrl() {
   >({
     mutationFn: (request: CrawlRequest) => knowledgeService.crawlUrl(request),
     onMutate: async (request) => {
-      // knowledgeKeys.lists() is never queried - actual data comes from knowledgeKeys.summaries(filter)
-      // This makes all optimistic updates invisible. Should either:
-      // 1. Remove optimistic updates for knowledge items
-      // 2. Update all summary caches with optimistic data
-      // 3. Create a real query that uses lists()
-      // See: PRPs/local/frontend-state-management-refactor.md Phase 3
-
       // Cancel any outgoing refetches to prevent race conditions
-      await queryClient.cancelQueries({ queryKey: knowledgeKeys.lists() });
       await queryClient.cancelQueries({ queryKey: knowledgeKeys.summariesPrefix() });
       await queryClient.cancelQueries({ queryKey: progressKeys.active() });
 
       // Snapshot the previous values for rollback
-      const previousKnowledge = queryClient.getQueryData<KnowledgeItem[]>(knowledgeKeys.lists());
       const previousSummaries = queryClient.getQueriesData<KnowledgeItemsResponse>({
         queryKey: knowledgeKeys.summariesPrefix(),
       });
@@ -163,14 +154,7 @@ export function useCrawlUrl() {
       } as Omit<KnowledgeItem, "id">);
       const tempItemId = optimisticItem.id;
 
-      // Add optimistic knowledge item to the list
-      queryClient.setQueryData<KnowledgeItem[]>(knowledgeKeys.lists(), (old) => {
-        if (!old) return [optimisticItem];
-        // Add at the beginning for visibility
-        return [optimisticItem, ...old];
-      });
-
-      // Respect each cache's filter (knowledge_type, tags, etc.)
+      // Update all summaries caches with optimistic data, respecting each cache's filter
       const entries = queryClient.getQueriesData<KnowledgeItemsResponse>({
         queryKey: knowledgeKeys.summariesPrefix(),
       });
@@ -227,28 +211,12 @@ export function useCrawlUrl() {
       });
 
       // Return context for rollback and replacement
-      return { previousKnowledge, previousSummaries, previousOperations, tempProgressId, tempItemId };
+      return { previousSummaries, previousOperations, tempProgressId, tempItemId };
     },
     onSuccess: (response, _variables, context) => {
       // Replace temporary IDs with real ones from the server
       if (context) {
-        // Update knowledge item with real source_id if we get it
-        queryClient.setQueryData<KnowledgeItem[]>(knowledgeKeys.lists(), (old) => {
-          if (!old) return old;
-          return old.map((item) => {
-            if (item.id === context.tempItemId) {
-              // Update with real progress ID, but keep the optimistic item
-              // The real item will come through polling/invalidation
-              return {
-                ...item,
-                source_id: response.progressId,
-              };
-            }
-            return item;
-          });
-        });
-
-        // Also update summaries cache with real progress ID
+        // Update summaries cache with real progress ID
         queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summariesPrefix() }, (old) => {
           if (!old) return old;
           return {
@@ -287,7 +255,6 @@ export function useCrawlUrl() {
       }
 
       // Invalidate to get fresh data
-      queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
       queryClient.invalidateQueries({ queryKey: progressKeys.active() });
 
       showToast(`Crawl started: ${response.message}`, "success");
@@ -297,9 +264,6 @@ export function useCrawlUrl() {
     },
     onError: (error, _variables, context) => {
       // Rollback optimistic updates on error
-      if (context?.previousKnowledge) {
-        queryClient.setQueryData(knowledgeKeys.lists(), context.previousKnowledge);
-      }
       if (context?.previousSummaries) {
         // Rollback all summary queries
         for (const [queryKey, data] of context.previousSummaries) {
@@ -471,9 +435,8 @@ export function useUploadDocument() {
         });
       }
 
-      // Invalidate queries to get fresh data - backend is consistent after successful upload initiation
-      queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: knowledgeKeys.summariesPrefix() });
+      // Only invalidate progress to start tracking the new operation
+      // The lists/summaries will refresh automatically via polling when operations are active
       queryClient.invalidateQueries({ queryKey: progressKeys.active() });
 
       // Don't show success here - upload is just starting in background
@@ -700,8 +663,7 @@ export function useUpdateKnowledgeItem() {
 
       // Invalidate all related queries
       queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(sourceId) });
-      queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: knowledgeKeys.summariesPrefix() }); // Add summaries cache
+      queryClient.invalidateQueries({ queryKey: knowledgeKeys.summariesPrefix() });
     },
   });
 }
@@ -721,8 +683,7 @@ export function useRefreshKnowledgeItem() {
       // Remove the item from cache as it's being refreshed
       queryClient.removeQueries({ queryKey: knowledgeKeys.detail(sourceId) });
 
-      // Invalidate lists and summaries immediately - backend is consistent after refresh initiation
-      queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
+      // Invalidate summaries immediately - backend is consistent after refresh initiation
       queryClient.invalidateQueries({ queryKey: knowledgeKeys.summariesPrefix() });
 
       return data;

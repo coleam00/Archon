@@ -1,5 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createOptimisticEntity, replaceOptimisticEntity, removeDuplicateEntities, type OptimisticEntity } from "@/features/shared/optimistic";
+import {
+  createOptimisticEntity,
+  replaceOptimisticEntity,
+  removeDuplicateEntities,
+  type OptimisticEntity,
+} from "@/features/shared/optimistic";
 import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../../shared/queryPatterns";
 import { useSmartPolling } from "../../../ui/hooks";
 import { useToast } from "../../../ui/hooks/useToast";
@@ -58,20 +63,18 @@ export function useCreateTask() {
       const previousTasks = queryClient.getQueryData<Task[]>(taskKeys.byProject(newTaskData.project_id));
 
       // Create optimistic task with stable ID
-      const optimisticTask = createOptimisticEntity<Task>(
-        {
-          project_id: newTaskData.project_id,
-          title: newTaskData.title,
-          description: newTaskData.description || "",
-          status: newTaskData.status ?? "todo",
-          assignee: newTaskData.assignee ?? "User",
-          feature: newTaskData.feature,
-          task_order: newTaskData.task_order ?? 100,
-          priority: newTaskData.priority ?? "medium",
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        }
-      );
+      const optimisticTask = createOptimisticEntity<Task>({
+        project_id: newTaskData.project_id,
+        title: newTaskData.title,
+        description: newTaskData.description || "",
+        status: newTaskData.status ?? "todo",
+        assignee: newTaskData.assignee ?? "User",
+        feature: newTaskData.feature,
+        task_order: newTaskData.task_order ?? 100,
+        priority: newTaskData.priority ?? "medium",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
 
       // Optimistically add the new task
       queryClient.setQueryData(taskKeys.byProject(newTaskData.project_id), (old: Task[] | undefined) => {
@@ -99,7 +102,7 @@ export function useCreateTask() {
         (tasks: (Task & Partial<OptimisticEntity>)[] = []) => {
           const replaced = replaceOptimisticEntity(tasks, context?.optimisticId || "", serverTask);
           return removeDuplicateEntities(replaced);
-        }
+        },
       );
 
       // Invalidate counts since we have a new task

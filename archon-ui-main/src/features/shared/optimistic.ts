@@ -29,7 +29,7 @@ export function createOptimisticId(): string {
  */
 export function createOptimisticEntity<T extends { id: string }>(
   data: Omit<T, "id" | keyof OptimisticEntity>,
-  additionalDefaults?: Partial<T>
+  additionalDefaults?: Partial<T>,
 ): T & OptimisticEntity {
   const optimisticId = createOptimisticId();
   return {
@@ -48,7 +48,7 @@ export function createOptimisticEntity<T extends { id: string }>(
 export function replaceOptimisticEntity<T extends { id: string }>(
   entities: (T & Partial<OptimisticEntity>)[],
   localId: string,
-  serverEntity: T
+  serverEntity: T,
 ): T[] {
   return entities.map((entity) => {
     if ("_localId" in entity && entity._localId === localId) {

@@ -11,10 +11,7 @@ import { TooltipProvider } from "../ui/primitives/tooltip";
  */
 export function renderWithProviders(
   ui: React.ReactElement,
-  {
-    queryClient = createTestQueryClient(),
-    ...renderOptions
-  } = {},
+  { queryClient = createTestQueryClient(), ...renderOptions } = {},
 ) {
   function Wrapper({ children }: { children: React.ReactNode }) {
     return (

@@ -37,8 +37,8 @@ function getErrorStatus(error: unknown): number | undefined {
   const anyErr = error as any;
 
   // Check common status properties in order of likelihood
-  if (typeof anyErr.statusCode === "number") return anyErr.statusCode;  // APIServiceError
-  if (typeof anyErr.status === "number") return anyErr.status;          // fetch Response
+  if (typeof anyErr.statusCode === "number") return anyErr.statusCode; // APIServiceError
+  if (typeof anyErr.status === "number") return anyErr.status; // fetch Response
   if (typeof anyErr.response?.status === "number") return anyErr.response.status; // axios
 
   return undefined;
