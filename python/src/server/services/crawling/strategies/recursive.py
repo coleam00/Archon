@@ -276,10 +276,10 @@ class RecursiveCrawlStrategy:
                     visited.add(norm_url)
                     total_processed += 1
 
-                    if result.success and result.markdown:
+                    if result.success and result.markdown and result.markdown.fit_markdown:
                         results_all.append({
                             "url": original_url,
-                            "markdown": result.markdown,
+                            "markdown": result.markdown.fit_markdown,
                             "html": result.html,  # Always use raw HTML for code extraction
                         })
                         depth_successful += 1

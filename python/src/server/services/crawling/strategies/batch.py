@@ -231,12 +231,12 @@ class BatchCrawlStrategy:
                         raise
 
                 processed += 1
-                if result.success and result.markdown:
+                if result.success and result.markdown and result.markdown.fit_markdown:
                     # Map back to original URL
                     original_url = url_mapping.get(result.url, result.url)
                     successful_results.append({
                         "url": original_url,
-                        "markdown": result.markdown,
+                        "markdown": result.markdown.fit_markdown,
                         "html": result.html,  # Use raw HTML
                     })
                 else:

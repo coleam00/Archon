@@ -74,10 +74,11 @@ class CrawlingService:
         self.url_handler = URLHandler()
         self.site_config = SiteConfig()
         self.markdown_generator = self.site_config.get_markdown_generator()
+        self.link_pruning_markdown_generator = self.site_config.get_link_pruning_markdown_generator()
 
         # Initialize strategies
-        self.batch_strategy = BatchCrawlStrategy(crawler, self.markdown_generator)
-        self.recursive_strategy = RecursiveCrawlStrategy(crawler, self.markdown_generator)
+        self.batch_strategy = BatchCrawlStrategy(crawler, self.link_pruning_markdown_generator)
+        self.recursive_strategy = RecursiveCrawlStrategy(crawler, self.link_pruning_markdown_generator)
         self.single_page_strategy = SinglePageCrawlStrategy(crawler, self.markdown_generator)
         self.sitemap_strategy = SitemapCrawlStrategy()
 
