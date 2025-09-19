@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from ..config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
 from ..services.crawler_manager import get_crawler
 from ..services.crawling import CrawlingService
+from ..services.crawling.code_extraction_service import CodeExtractionService
 from ..services.credential_service import credential_service
 from ..services.embeddings.provider_error_adapters import ProviderErrorFactory
 from ..services.knowledge import DatabaseMetricsService, KnowledgeItemService, KnowledgeSummaryService
@@ -1022,21 +1023,87 @@ async def _perform_upload_with_progress(
             source_id=source_id,
             knowledge_type=knowledge_type,
             tags=tag_list,
-            extract_code_examples=extract_code_examples,
             progress_callback=document_progress_callback,
             cancellation_check=check_upload_cancellation,
         )
 
         if success:
-            # Complete the upload with 100% progress
-            await tracker.complete({
+            doc_url = f"file://{filename}"
+            code_examples_stored = int(result.get("code_examples_stored", 0) or 0)
+
+            if extract_code_examples:
+                async def code_progress_callback(data: dict):
+                    nonlocal code_examples_stored
+                    stage_progress = data.get("progress", 0)
+                    mapped_percentage = progress_mapper.map_progress("code_extraction", stage_progress)
+                    update_payload = {
+                        "status": "code_extraction",
+                        "progress": mapped_percentage,
+                        "log": data.get("log", "Processing code examples..."),
+                    }
+
+                    for key in (
+                        "code_blocks_found",
+                        "code_examples_stored",
+                        "examples_stored",
+                        "batch_number",
+                        "total_batches",
+                    ):
+                        if key in data:
+                            update_payload[key] = data[key]
+                            if key in ("code_examples_stored", "examples_stored"):
+                                try:
+                                    code_examples_stored = max(code_examples_stored, int(data[key]))
+                                except (TypeError, ValueError):
+                                    pass
+
+                    await tracker.update(**update_payload)
+
+                code_service = CodeExtractionService(get_supabase_client())
+
+                try:
+                    code_examples_stored = await code_service.extract_and_store_code_examples(
+                        crawl_results=[
+                            {
+                                "url": doc_url,
+                                "markdown": extracted_text,
+                                "title": filename,
+                            }
+                        ],
+                        url_to_full_document={doc_url: extracted_text},
+                        source_id=result.get("source_id"),
+                        progress_callback=code_progress_callback,
+                        cancellation_check=check_upload_cancellation,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as code_error:
+                    logger.error(
+                        f"Code extraction failed for upload {filename}: {code_error}",
+                        exc_info=True,
+                    )
+                    safe_logfire_error(
+                        f"Code extraction failed | progress_id={progress_id} | filename={filename} | error={code_error}"
+                    )
+                    raise RuntimeError(f"Code extraction failed: {code_error}") from code_error
+
+            result["code_examples_stored"] = code_examples_stored
+
+            completion_payload = {
                 "log": "Document uploaded successfully!",
                 "chunks_stored": result.get("chunks_stored"),
-                "code_examples_stored": result.get("code_examples_stored", 0),
                 "sourceId": result.get("source_id"),
-            })
+            }
+            completion_payload["codeExamplesStored"] = code_examples_stored
+            completion_payload["code_examples_stored"] = code_examples_stored
+
+            await tracker.complete(completion_payload)
             safe_logfire_info(
-                f"Document uploaded successfully | progress_id={progress_id} | source_id={result.get('source_id')} | chunks_stored={result.get('chunks_stored')} | code_examples_stored={result.get('code_examples_stored', 0)}"
+                "Document uploaded successfully | "
+                f"progress_id={progress_id} | "
+                f"source_id={result.get('source_id')} | "
+                f"chunks_stored={result.get('chunks_stored')} | "
+                f"code_examples_stored={code_examples_stored}"
             )
         else:
             error_msg = result.get("error", "Unknown error")
