@@ -8,13 +8,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Core Principles
 
-- **No backwards compatibility we follow a fix forward approach** - remove deprecated code immediately
+- **No backwards compatibility; we follow a fix‑forward approach** — remove deprecated code immediately
 - **Detailed errors over graceful failures** - we want to identify and fix issues fast
 - **Break things to improve them** - beta is for rapid iteration
 - **Continuous improvement** - embrace change and learn from mistakes
 - **KISS** - keep it simple
 - **DRY** when appropriate
-- **YAGNI** dont implement features that are not needed
+- **YAGNI** — don't implement features that are not needed
 
 ### Error Handling
 
@@ -184,7 +184,7 @@ Key tables in Supabase:
 
 @PRPs/ai_docs/API_NAMING_CONVENTIONS.md
 
-Use database values directly (no mapping in the FE typesafe from BE and up):
+Use database values directly (no FE mapping; type‑safe end‑to‑end from BE upward):
 
 ## Environment Variables
 
@@ -292,7 +292,7 @@ When connected to Claude/Cursor/Windsurf, the following tools are available:
 ## Important Notes
 
 - Projects feature is optional - toggle in Settings UI
-- HTTP polling handles all updates
+- TanStack Query handles all data fetching; smart HTTP polling is used where appropriate (no WebSockets)
 - Frontend uses Vite proxy for API calls in development
 - Python backend uses `uv` for dependency management
 - Docker Compose handles service orchestration

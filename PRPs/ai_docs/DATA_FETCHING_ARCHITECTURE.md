@@ -2,7 +2,7 @@
 
 ## Overview
 
-Archon uses **TanStack Query v5** for all data fetching, caching, and synchronization. This replaces the previous polling-based architecture with a more sophisticated query-based system that handles caching, deduplication, and smart refetching automatically.
+Archon uses **TanStack Query v5** for all data fetching, caching, and synchronization. This replaces the former custom polling layer with a query‑centric design that handles caching, deduplication, and smart refetching (including visibility‑aware polling) automatically.
 
 ## Core Components
 
@@ -96,13 +96,19 @@ All mutations use nanoid-based optimistic updates:
 
 ### Smart Polling Usage
 
-Features using smart polling:
+**Implementation**: `archon-ui-main/src/features/ui/hooks/useSmartPolling.ts`
 
-- **Projects**: 20-second base interval
-- **Tasks**: 5-second base interval when project selected
-- **Knowledge**: 5-second during active operations
-- **Progress**: 1-second during active operations
-- **MCP**: 10-second for status updates
+Polling intervals are defined in each feature's query hooks. See actual implementations:
+- **Projects**: `archon-ui-main/src/features/projects/hooks/useProjectQueries.ts`
+- **Tasks**: `archon-ui-main/src/features/projects/tasks/hooks/useTaskQueries.ts`
+- **Knowledge**: `archon-ui-main/src/features/knowledge/hooks/useKnowledgeQueries.ts`
+- **Progress**: `archon-ui-main/src/features/progress/hooks/useProgressQueries.ts`
+- **MCP**: `archon-ui-main/src/features/mcp/hooks/useMcpQueries.ts`
+
+Standard intervals from `archon-ui-main/src/features/shared/queryPatterns.ts`:
+- `STALE_TIMES.instant`: 0ms (always fresh)
+- `STALE_TIMES.frequent`: 5 seconds (frequently changing data)
+- `STALE_TIMES.normal`: 30 seconds (standard cache)
 
 ### Manual Refetch
 

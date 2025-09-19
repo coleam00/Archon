@@ -12,6 +12,7 @@ Archon implements HTTP ETag caching to optimize bandwidth usage by reducing redu
 The backend generates ETags for API responses:
 - Creates MD5 hash of JSON-serialized response data
 - Returns quoted ETag string (RFC 7232 format)
+- Sets `Cache-Control: no-cache, must-revalidate` headers
 - Compares client's `If-None-Match` header with current data's ETag
 - Returns `304 Not Modified` when ETags match
 
@@ -20,9 +21,14 @@ The backend generates ETags for API responses:
 
 The frontend relies on browser-native HTTP caching:
 - Browser automatically sends `If-None-Match` headers with cached ETags
-- Browser handles 304 responses by returning cached data
+- Browser handles 304 responses by returning cached data from HTTP cache
 - No manual ETag tracking or cache management needed
 - TanStack Query manages data freshness through `staleTime` configuration
+
+#### Browser vs Non-Browser Behavior
+- **Standard Browsers**: Per the Fetch spec, a 304 response freshens the HTTP cache and returns the cached body to JavaScript
+- **Non-Browser Runtimes** (React Native, custom fetch): May surface 304 with empty body to JavaScript
+- **Client Fallback**: The `apiWithEtag.ts` implementation handles both scenarios, ensuring consistent behavior across environments
 
 ## Implementation Details
 
@@ -81,7 +87,7 @@ Cache behavior is controlled through TanStack Query's `staleTime`:
 ## Performance Benefits
 
 ### Bandwidth Reduction
-- ~70% reduction in data transfer for unchanged responses
+- ~70% reduction in data transfer for unchanged responses (based on internal measurements)
 - Especially effective for polling patterns
 - Significant improvement for mobile/slow connections
 

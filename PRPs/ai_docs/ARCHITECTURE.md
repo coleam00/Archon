@@ -13,7 +13,7 @@ Archon is a knowledge management system with AI capabilities, built as a monolit
 ## Directory Structure
 
 ### Backend (`python/src/`)
-```
+```text
 server/              # Main FastAPI application
 ├── api_routes/      # HTTP endpoints
 ├── services/        # Business logic
@@ -30,7 +30,7 @@ agents/              # AI agents (PydanticAI)
 ```
 
 ### Frontend (`archon-ui-main/src/`)
-```
+```text
 features/            # Vertical slice architecture
 ├── knowledge/       # Knowledge base feature
 ├── projects/        # Project management
@@ -98,7 +98,7 @@ Pattern: `{METHOD} /api/{resource}/{id?}/{sub-resource?}`
 
 ### Feature Organization
 Each feature follows vertical slice pattern:
-```
+```text
 features/{feature}/
 ├── components/      # UI components
 ├── hooks/           # Query hooks & keys

@@ -178,7 +178,7 @@ vi.mock("../../../shared/queryPatterns", () => ({
 
 Each feature is self-contained:
 
-```
+```text
 src/features/projects/
 ├── components/         # UI components
 ├── hooks/
@@ -191,7 +191,7 @@ src/features/projects/
 
 Sub-features (like tasks under projects) follow the same structure:
 
-```
+```text
 src/features/projects/tasks/
 ├── components/
 ├── hooks/
@@ -224,7 +224,7 @@ When refactoring to these patterns:
 
 ## Completed Improvements (Phases 1-5)
 
-- ✅ Phase 1: Removed ETag cache layer
+- ✅ Phase 1: Removed manual frontend ETag cache layer (backend ETags remain; browser-managed)
 - ✅ Phase 2: Standardized query keys with factories
 - ✅ Phase 3: Implemented UUID-based optimistic updates using nanoid
 - ✅ Phase 4: Configured request deduplication

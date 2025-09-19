@@ -127,7 +127,7 @@ Standard patterns:
 
 **Database Types**:
 - `DatabaseTaskStatus` - Exact database values
-**Location**: `archon-ui-main/src/features/projects/tasks/types/task.ts:12`
+**Location**: `archon-ui-main/src/features/projects/tasks/types/task.ts`
 Values: `"todo" | "doing" | "review" | "done"`
 
 ### Type File Organization
@@ -210,7 +210,7 @@ Database values used directly - no mapping layers:
 
 ### Service Layer
 - `{feature}Service.ts` - Service modules
-- Always lowercase with "Service" suffix
+- Use lower camelCase with "Service" suffix (e.g., `projectService.ts`)
 
 ### Hook Files
 - `use{Feature}Queries.ts` - Query hooks and keys
