@@ -199,7 +199,7 @@ class OllamaService {
         params.append('include_capabilities', options.includeCapabilities.toString());
       }
 
-      const response = await fetch(`${this.baseUrl}/api/ollama/models?${params.toString()}`, {
+      const response = await fetch(`${this.baseUrl}/ollama/models?${params.toString()}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -237,7 +237,7 @@ class OllamaService {
         params.append('include_models', 'true');
       }
 
-      const response = await fetch(`${this.baseUrl}/api/ollama/instances/health?${params.toString()}`, {
+      const response = await fetch(`${this.baseUrl}/ollama/instances/health?${params.toString()}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -267,7 +267,7 @@ class OllamaService {
         timeout_seconds: options.timeoutSeconds || 30,
       };
 
-      const response = await fetch(`${this.baseUrl}/api/ollama/validate`, {
+      const response = await fetch(`${this.baseUrl}/ollama/validate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -298,7 +298,7 @@ class OllamaService {
         text_sample: options.textSample,
       };
 
-      const response = await fetch(`${this.baseUrl}/api/ollama/embedding/route`, {
+      const response = await fetch(`${this.baseUrl}/ollama/embedding/route`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -337,7 +337,7 @@ class OllamaService {
         params.append('sort_by_performance', 'true');
       }
 
-      const response = await fetch(`${this.baseUrl}/api/ollama/embedding/routes?${params.toString()}`, {
+      const response = await fetch(`${this.baseUrl}/ollama/embedding/routes?${params.toString()}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -361,7 +361,7 @@ class OllamaService {
    */
   async clearCaches(): Promise<{ message: string }> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/ollama/cache`, {
+      const response = await fetch(`${this.baseUrl}/ollama/cache`, {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',

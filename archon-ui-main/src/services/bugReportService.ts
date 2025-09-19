@@ -4,7 +4,7 @@
  * Handles automatic context collection and GitHub issue creation for bug reports.
  */
 
-import { getApiUrl } from '../config/api';
+import { API_BASE_URL } from '../config/api';
 
 export interface BugContext {
   error: {
@@ -135,12 +135,14 @@ class BugReportService {
   private async getRecentLogs(limit: number): Promise<string[]> {
     // This is a simplified version - in a real implementation,
     // you'd want to capture console logs proactively
-    return [
+    const logs = [
       `[${new Date().toISOString()}] Browser logs not captured - consider implementing console log capture`,
       `[${new Date().toISOString()}] To get server logs, check Docker container logs`,
       `[${new Date().toISOString()}] Current URL: ${window.location.href}`,
       `[${new Date().toISOString()}] User Agent: ${navigator.userAgent}`
     ];
+    
+    return logs.slice(0, limit);
   }
 
   /**
@@ -161,7 +163,7 @@ class BugReportService {
         context: bugReport.context
       };
 
-      const response = await fetch(`${getApiUrl()}/api/bug-report/github`, {
+      const response = await fetch(`${API_BASE_URL}/bug-report/github`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
