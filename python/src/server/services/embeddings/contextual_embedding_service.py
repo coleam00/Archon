@@ -12,6 +12,7 @@ import openai
 from ...config.logfire_config import search_logger
 from ..llm_provider_service import get_llm_client
 from ..threading_service import get_threading_service
+from ..credential_service import credential_service
 
 
 async def generate_contextual_embedding(
@@ -32,8 +33,6 @@ async def generate_contextual_embedding(
     """
     # Model choice is a RAG setting, get from credential service
     try:
-        from ...services.credential_service import credential_service
-
         model_choice = await credential_service.get_credential("MODEL_CHOICE", "gpt-4.1-nano")
     except Exception as e:
         # Fallback to environment variable or default
@@ -111,7 +110,7 @@ async def process_chunk_with_context(
 
 
 async def _get_model_choice(provider: str | None = None) -> str:
-    """Get model choice from credential service."""
+    """Get model choice from credential service with centralized defaults."""
     from ..credential_service import credential_service
 
     # Get the active provider configuration
@@ -119,31 +118,36 @@ async def _get_model_choice(provider: str | None = None) -> str:
     model = provider_config.get("chat_model", "").strip()  # Strip whitespace
     provider_name = provider_config.get("provider", "openai")
 
-    # Handle empty model case - fallback to provider-specific defaults or explicit config
+    # Handle empty model case - use centralized defaults
     if not model:
-        search_logger.warning(f"chat_model is empty for provider {provider_name}, using fallback logic")
-        
+        search_logger.warning(f"chat_model is empty for provider {provider_name}, using centralized defaults")
+
+        # Special handling for Ollama to check specific credential
         if provider_name == "ollama":
-            # Try to get OLLAMA_CHAT_MODEL specifically
             try:
                 ollama_model = await credential_service.get_credential("OLLAMA_CHAT_MODEL")
                 if ollama_model and ollama_model.strip():
                     model = ollama_model.strip()
                     search_logger.info(f"Using OLLAMA_CHAT_MODEL fallback: {model}")
                 else:
-                    # Use a sensible Ollama default
+                    # Use default for Ollama
                     model = "llama3.2:latest"
-                    search_logger.info(f"Using Ollama default model: {model}")
+                    search_logger.info(f"Using Ollama default: {model}")
             except Exception as e:
                 search_logger.error(f"Error getting OLLAMA_CHAT_MODEL: {e}")
                 model = "llama3.2:latest"
-                search_logger.info(f"Using Ollama fallback model: {model}")
-        elif provider_name == "google":
-            model = "gemini-1.5-flash"
+                search_logger.info(f"Using Ollama fallback: {model}")
         else:
-            # OpenAI or other providers
-            model = "gpt-4o-mini"
-    
+            # Use provider-specific defaults
+            provider_defaults = {
+                "openai": "gpt-4o-mini",
+                "openrouter": "anthropic/claude-3.5-sonnet",
+                "google": "gemini-1.5-flash",
+                "anthropic": "claude-3-5-haiku-20241022",
+                "grok": "grok-3-mini"
+            }
+            model = provider_defaults.get(provider_name, "gpt-4o-mini")
+            search_logger.debug(f"Using default model for provider {provider_name}: {model}")
     search_logger.debug(f"Using model from credential service: {model}")
 
     return model
