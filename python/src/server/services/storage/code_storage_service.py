@@ -6,6 +6,7 @@ Handles extraction and storage of code examples from documents.
 
 import asyncio
 import json
+import time
 import os
 import re
 from collections import defaultdict, deque
@@ -19,23 +20,119 @@ from supabase import Client
 from ...config.logfire_config import search_logger
 from ..embeddings.contextual_embedding_service import generate_contextual_embeddings_batch
 from ..embeddings.embedding_service import create_embeddings_batch
+from ..llm_provider_service import get_llm_client, prepare_chat_completion_params, requires_max_completion_tokens
+from ..credential_service import credential_service
 
 
-def _get_model_choice() -> str:
-    """Get MODEL_CHOICE with direct fallback."""
+def _is_reasoning_model(model: str) -> bool:
+    """
+    Check if a model is a reasoning model that may return empty responses.
+
+    Args:
+        model: The model identifier
+
+    Returns:
+        True if the model is a reasoning model (GPT-5, o1, o3 series)
+    """
+    return requires_max_completion_tokens(model)
+
+
+def _extract_json_payload(raw_response: str) -> str:
+    """Return the best-effort JSON object from an LLM response."""
+
+    if not raw_response:
+        return raw_response
+
+    cleaned = raw_response.strip()
+
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        # Drop opening fence
+        lines = lines[1:]
+        # Drop closing fence if present
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+
+    # Trim any leading/trailing text outside the outermost JSON braces
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1 and end >= start:
+        cleaned = cleaned[start : end + 1]
+
+    return cleaned.strip()
+
+
+def _supports_response_format(provider: str, model: str) -> bool:
+    """
+    Determine if a specific provider/model combination supports response_format.
+
+    Args:
+        provider: The LLM provider name
+        model: The model identifier
+
+    Returns:
+        True if the model supports structured JSON output via response_format
+    """
+    if not provider:
+        return True  # Default to supporting it
+
+    provider = provider.lower()
+
+    if provider == "openai":
+        return True  # OpenAI models generally support response_format
+    elif provider == "openrouter":
+        # OpenRouter: "OpenAI models, Nitro models, and some others" support it
+        model_lower = model.lower()
+
+        # Known compatible model patterns on OpenRouter
+        compatible_patterns = [
+            "openai/",      # OpenAI models on OpenRouter
+            "gpt-",         # GPT models
+            "nitro/",       # Nitro models
+            "deepseek/",    # DeepSeek models often support JSON
+            "google/",      # Some Google models support it
+        ]
+
+        for pattern in compatible_patterns:
+            if pattern in model_lower:
+                search_logger.debug(f"Model {model} supports response_format (pattern: {pattern})")
+                return True
+
+        search_logger.debug(f"Model {model} may not support response_format, skipping")
+        return False
+    else:
+        # Conservative approach for other providers
+        return False
+
+
+async def _get_model_choice() -> str:
+    """Get MODEL_CHOICE with provider-aware defaults from centralized service."""
     try:
-        # Direct cache/env fallback
-        from ..credential_service import credential_service
+        # Get the active provider configuration
+        provider_config = await credential_service.get_active_provider("llm")
+        active_provider = provider_config.get("provider", "openai")
+        model = provider_config.get("chat_model")
 
-        if credential_service._cache_initialized and "MODEL_CHOICE" in credential_service._cache:
-            model = credential_service._cache["MODEL_CHOICE"]
-        else:
-            model = os.getenv("MODEL_CHOICE", "gpt-4.1-nano")
-        search_logger.debug(f"Using model choice: {model}")
+        # If no custom model is set, use provider-specific defaults
+        if not model or model.strip() == "":
+            # Provider-specific defaults
+            provider_defaults = {
+                "openai": "gpt-4o-mini",
+                "openrouter": "anthropic/claude-3.5-sonnet",
+                "google": "gemini-1.5-flash",
+                "ollama": "llama3.2:latest",
+                "anthropic": "claude-3-5-haiku-20241022",
+                "grok": "grok-3-mini"
+            }
+            model = provider_defaults.get(active_provider, "gpt-4o-mini")
+            search_logger.debug(f"Using default model for provider {active_provider}: {model}")
+
+        search_logger.debug(f"Using model for provider {active_provider}: {model}")
         return model
     except Exception as e:
         search_logger.warning(f"Error getting model choice: {e}, using default")
-        return "gpt-4.1-nano"
+        return "gpt-4o-mini"
 
 
 def _get_max_workers() -> int:
@@ -155,6 +252,7 @@ def _select_best_code_variant(similar_blocks: list[dict[str, Any]]) -> dict[str,
     return best_block
 
 
+
 def extract_code_blocks(markdown_content: str, min_length: int = None) -> list[dict[str, Any]]:
     """
     Extract code blocks from markdown content along with context.
@@ -168,8 +266,6 @@ def extract_code_blocks(markdown_content: str, min_length: int = None) -> list[d
     """
     # Load all code extraction settings with direct fallback
     try:
-        from ...services.credential_service import credential_service
-
         def _get_setting_fallback(key: str, default: str) -> str:
             if credential_service._cache_initialized and key in credential_service._cache:
                 return credential_service._cache[key]
@@ -521,7 +617,17 @@ async def _generate_code_example_summary_async(
     from ..llm_provider_service import get_llm_client
     
     # Get model choice from credential service (RAG setting)
-    model_choice = _get_model_choice()
+    model_choice = await _get_model_choice()
+
+    # If provider is not specified, get it from credential service
+    if provider is None:
+        try:
+            provider_config = await credential_service.get_active_provider("llm")
+            provider = provider_config.get("provider", "openai")
+            search_logger.debug(f"Auto-detected provider from credential service: {provider}")
+        except Exception as e:
+            search_logger.warning(f"Failed to get provider from credential service: {e}, defaulting to openai")
+            provider = "openai"
 
     # Create the prompt
     prompt = f"""<context_before>
@@ -556,24 +662,206 @@ Format your response as JSON:
                 f"Generating summary for {hash(code) & 0xffffff:06x} using model: {model_choice}"
             )
             
-            response = await client.chat.completions.create(
-                model=model_choice,
-                messages=[
+            request_params = {
+                "model": model_choice,
+                "messages": [
                     {
                         "role": "system",
                         "content": "You are a helpful assistant that analyzes code examples and provides JSON responses with example names and summaries.",
                     },
                     {"role": "user", "content": prompt},
                 ],
-                response_format={"type": "json_object"},
-                max_tokens=500,
-                temperature=0.3,
-            )
+                "max_tokens": 2000 if (_is_reasoning_model(model_choice) or provider == "grok") else 500,  # 2000 tokens for both reasoning models (GPT-5) and Grok for complex reasoning
+                "temperature": 0.3,
+            }
 
-            response_content = response.choices[0].message.content.strip()
+            # Try to use response_format, but handle gracefully if not supported
+            # Note: Grok and reasoning models (GPT-5, o1, o3) don't work well with response_format
+            supports_response_format = (
+                provider in ["openai", "google", "anthropic"] or
+                (provider == "openrouter" and model_choice.startswith("openai/"))
+            )
+            # Exclude reasoning models from using response_format
+            if supports_response_format and not _is_reasoning_model(model_choice):
+                request_params["response_format"] = {"type": "json_object"}
+
+            # Grok-specific parameter validation and filtering
+            if provider == "grok":
+                # Remove any parameters that Grok reasoning models don't support
+                # Based on xAI docs: presencePenalty, frequencyPenalty, stop are not supported
+                unsupported_params = ["presence_penalty", "frequency_penalty", "stop", "reasoning_effort"]
+                for param in unsupported_params:
+                    if param in request_params:
+                        removed_value = request_params.pop(param)
+                        search_logger.warning(f"Removed unsupported Grok parameter '{param}': {removed_value}")
+
+                # Validate that we're using supported parameters only
+                supported_params = ["model", "messages", "max_tokens", "temperature", "response_format", "stream", "tools", "tool_choice"]
+                for param in request_params:
+                    if param not in supported_params:
+                        search_logger.warning(f"Parameter '{param}' may not be supported by Grok reasoning models")
+
+            # Enhanced debugging for Grok provider
+            # Implement retry logic for Grok and reasoning models (GPT-5, o1, o3) empty responses
+            is_reasoning = _is_reasoning_model(model_choice)
+
+            start_time = time.time()  # Initialize for all models
+            if provider == "grok" or is_reasoning:
+                model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
+                search_logger.debug(f"{model_type} request params: {request_params}")
+                search_logger.debug(f"{model_type} prompt length: {len(prompt)} characters")
+                search_logger.debug(f"{model_type} prompt preview: {prompt[:200]}...")
+
+            max_retries = 3 if (provider == "grok" or is_reasoning) else 1
+            retry_delay = 1.0  # Start with 1 second delay
+            failure_reasons = []  # Track failure reasons for circuit breaker analysis
+
+            for attempt in range(max_retries):
+                try:
+                    if (provider == "grok" or is_reasoning) and attempt > 0:
+                        model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
+                        search_logger.info(f"{model_type} retry attempt {attempt + 1}/{max_retries} after {retry_delay:.1f}s delay")
+                        await asyncio.sleep(retry_delay)
+                    elif is_reasoning and attempt == 0:
+                        # Small delay for reasoning models on first attempt to help with cold start
+                        search_logger.debug(f"reasoning model ({model_choice}) first attempt - adding 0.5s delay for cold start")
+                        await asyncio.sleep(0.5)
+
+                    # Convert max_tokens to max_completion_tokens for GPT-5/reasoning models
+                    final_params = prepare_chat_completion_params(model_choice, request_params)
+                    response = await client.chat.completions.create(**final_params)
+
+                    # Check for empty response - handle Grok reasoning models
+                    message = response.choices[0].message if response.choices else None
+                    response_content = None
+
+                    # Enhanced debugging for Grok and reasoning models - log both content fields
+                    if (provider == "grok" or is_reasoning) and message:
+                        content_preview = message.content[:100] if message.content else "None"
+                        reasoning_preview = getattr(message, 'reasoning_content', 'N/A')[:100] if hasattr(message, 'reasoning_content') and message.reasoning_content else "None"
+                        model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
+
+                        # Additional debugging for first attempt failures
+                        finish_reason = getattr(response.choices[0], 'finish_reason', 'unknown') if response.choices else 'no_choices'
+                        usage_info = getattr(response, 'usage', None)
+                        if usage_info:
+                            completion_tokens = getattr(usage_info, 'completion_tokens', 0)
+                            reasoning_tokens = getattr(getattr(usage_info, 'completion_tokens_details', None), 'reasoning_tokens', 0) if hasattr(usage_info, 'completion_tokens_details') else 0
+                            search_logger.debug(f"{model_type} attempt {attempt + 1} - finish_reason: {finish_reason}, completion_tokens: {completion_tokens}, reasoning_tokens: {reasoning_tokens}")
+                        else:
+                            search_logger.debug(f"{model_type} attempt {attempt + 1} - finish_reason: {finish_reason}, no usage info")
+
+                        search_logger.debug(f"{model_type} response fields - content: '{content_preview}', reasoning_content: '{reasoning_preview}'")
+
+                    if message:
+                        # For Grok and reasoning models, check content first, then reasoning_content
+                        if provider == "grok" or is_reasoning:
+                            # First try content (where final answer should be)
+                            if message.content and message.content.strip():
+                                response_content = message.content.strip()
+                                model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
+                                search_logger.debug(f"{model_type} using content field: {len(response_content)} chars")
+                            # Fallback to reasoning_content if content is empty
+                            elif hasattr(message, 'reasoning_content') and message.reasoning_content:
+                                response_content = message.reasoning_content.strip()
+                                model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
+                                search_logger.debug(f"{model_type} fallback to reasoning_content: {len(response_content)} chars")
+                            else:
+                                search_logger.debug(f"Grok no content in either field: content='{message.content}', reasoning_content='{getattr(message, 'reasoning_content', 'N/A')}'")
+                        elif message.content:
+                            response_content = message.content
+                        else:
+                            search_logger.debug(f"No content in message: content={message.content}, reasoning_content={getattr(message, 'reasoning_content', 'N/A')}")
+
+                    if response_content and response_content.strip():
+                        # Success - break out of retry loop
+                        if (provider == "grok" or is_reasoning) and attempt > 0:
+                            model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
+                            search_logger.info(f"{model_type} request succeeded on attempt {attempt + 1}")
+                        break
+                    elif (provider == "grok" or is_reasoning) and attempt < max_retries - 1:
+                        # Empty response from Grok or reasoning models - retry with exponential backoff
+                        model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
+                        search_logger.warning(f"{model_type} empty response on attempt {attempt + 1}, retrying...")
+                        retry_delay *= 2  # Exponential backoff
+                        continue
+                    else:
+                        # Final attempt failed or not Grok/reasoning model - handle below
+                        break
+
+                except Exception as e:
+                    if (provider == "grok" or is_reasoning) and attempt < max_retries - 1:
+                        model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
+                        search_logger.error(f"{model_type} request failed on attempt {attempt + 1}: {e}, retrying...")
+                        retry_delay *= 2
+                        continue
+                    else:
+                        # Re-raise on final attempt or non-Grok/reasoning providers
+                        raise
+
+            # Log timing for Grok and reasoning model requests
+            if provider == "grok" or is_reasoning:
+                elapsed_time = time.time() - start_time
+                model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
+                search_logger.debug(f"{model_type} total response time: {elapsed_time:.2f}s")
+
+            if not response_content:
+                search_logger.error(f"Empty response from LLM for model: {model_choice} (provider: {provider})")
+                if provider == "grok":
+                    search_logger.error("Grok empty response debugging:")
+                    search_logger.error(f"  - Request took: {elapsed_time:.2f}s")
+                    search_logger.error(f"  - Response status: {getattr(response, 'status_code', 'N/A')}")
+                    search_logger.error(f"  - Response headers: {getattr(response, 'headers', 'N/A')}")
+                    search_logger.error(f"  - Full response: {response}")
+                    search_logger.error(f"  - Response choices length: {len(response.choices) if response.choices else 0}")
+                    if response.choices:
+                        search_logger.error(f"  - First choice: {response.choices[0]}")
+                        search_logger.error(f"  - Message content: '{response.choices[0].message.content}'")
+                        search_logger.error(f"  - Message role: {response.choices[0].message.role}")
+                    search_logger.error("Check: 1) API key validity, 2) rate limits, 3) model availability")
+
+                    # Implement fallback for Grok failures
+                    search_logger.warning("Attempting fallback to OpenAI due to Grok failure...")
+                    try:
+                        # Use OpenAI as fallback with similar parameters
+                        fallback_params = {
+                            "model": "gpt-4o-mini",
+                            "messages": request_params["messages"],
+                            "temperature": request_params.get("temperature", 0.1),
+                            "max_tokens": request_params.get("max_tokens", 500),
+                        }
+
+                        async with get_llm_client(provider="openai") as fallback_client:
+                            fallback_response = await fallback_client.chat.completions.create(**fallback_params)
+                            fallback_content = fallback_response.choices[0].message.content
+                            if fallback_content and fallback_content.strip():
+                                search_logger.info("gpt-4o-mini fallback succeeded")
+                                response_content = fallback_content.strip()
+                            else:
+                                search_logger.error("gpt-4o-mini fallback also returned empty response")
+                                raise ValueError(f"Both {model_choice} and gpt-4o-mini fallback failed")
+
+                    except Exception as fallback_error:
+                        search_logger.error(f"gpt-4o-mini fallback failed: {fallback_error}")
+                        raise ValueError(f"{model_choice} failed and fallback to gpt-4o-mini also failed: {fallback_error}") from fallback_error
+                else:
+                    search_logger.debug(f"Full response object: {response}")
+                    raise ValueError("Empty response from LLM")
+
+            if not response_content:
+                # This should not happen after fallback logic, but safety check
+                raise ValueError("No valid response content after all attempts")
+
+            response_content = response_content.strip()
             search_logger.debug(f"LLM API response: {repr(response_content[:200])}...")
 
-            result = json.loads(response_content)
+            payload = _extract_json_payload(response_content)
+            if payload != response_content:
+                search_logger.debug(
+                    f"Sanitized LLM response payload before parsing: {repr(payload[:200])}..."
+                )
+
+            result = json.loads(payload)
 
             # Validate the response has the required fields
             if not result.get("example_name") or not result.get("summary"):
@@ -608,7 +896,7 @@ Format your response as JSON:
 
 
 async def generate_code_summaries_batch(
-    code_blocks: list[dict[str, Any]], max_workers: int = None, progress_callback=None
+    code_blocks: list[dict[str, Any]], max_workers: int = None, progress_callback=None, provider: str = None
 ) -> list[dict[str, str]]:
     """
     Generate summaries for multiple code blocks with rate limiting and proper worker management.
@@ -617,6 +905,7 @@ async def generate_code_summaries_batch(
         code_blocks: List of code block dictionaries
         max_workers: Maximum number of concurrent API requests
         progress_callback: Optional callback for progress updates (async function)
+        provider: LLM provider to use for generation (e.g., 'grok', 'openai', 'anthropic')
 
     Returns:
         List of summary dictionaries
@@ -627,8 +916,6 @@ async def generate_code_summaries_batch(
     # Get max_workers from settings if not provided
     if max_workers is None:
         try:
-            from ...services.credential_service import credential_service
-
             if (
                 credential_service._cache_initialized
                 and "CODE_SUMMARY_MAX_WORKERS" in credential_service._cache
@@ -663,6 +950,7 @@ async def generate_code_summaries_batch(
                 block["context_before"],
                 block["context_after"],
                 block.get("language", ""),
+                provider,
             )
 
             # Update progress
@@ -757,29 +1045,17 @@ async def add_code_examples_to_supabase(
         except Exception as e:
             search_logger.error(f"Error deleting existing code examples for {url}: {e}")
 
-    # Check if contextual embeddings are enabled
+    # Check if contextual embeddings are enabled (use proper async method like document storage)
     try:
-        from ..credential_service import credential_service
-
-        use_contextual_embeddings = credential_service._cache.get("USE_CONTEXTUAL_EMBEDDINGS")
-        if isinstance(use_contextual_embeddings, str):
-            use_contextual_embeddings = use_contextual_embeddings.lower() == "true"
-        elif isinstance(use_contextual_embeddings, dict) and use_contextual_embeddings.get(
-            "is_encrypted"
-        ):
-            # Handle encrypted value
-            encrypted_value = use_contextual_embeddings.get("encrypted_value")
-            if encrypted_value:
-                try:
-                    decrypted = credential_service._decrypt_value(encrypted_value)
-                    use_contextual_embeddings = decrypted.lower() == "true"
-                except:
-                    use_contextual_embeddings = False
-            else:
-                use_contextual_embeddings = False
+        raw_value = await credential_service.get_credential(
+            "USE_CONTEXTUAL_EMBEDDINGS", "false", decrypt=True
+        )
+        if isinstance(raw_value, str):
+            use_contextual_embeddings = raw_value.lower() == "true"
         else:
-            use_contextual_embeddings = bool(use_contextual_embeddings)
-    except:
+            use_contextual_embeddings = bool(raw_value)
+    except Exception as e:
+        search_logger.error(f"DEBUG: Error reading contextual embeddings: {e}")
         # Fallback to environment variable
         use_contextual_embeddings = (
             os.getenv("USE_CONTEXTUAL_EMBEDDINGS", "false").lower() == "true"
@@ -851,7 +1127,6 @@ async def add_code_examples_to_supabase(
         
         # Get model information for tracking
         from ..llm_provider_service import get_embedding_model
-        from ..credential_service import credential_service
         
         # Get embedding model name
         embedding_model_name = await get_embedding_model(provider=provider)
@@ -868,7 +1143,7 @@ async def add_code_examples_to_supabase(
                     llm_chat_model = await credential_service.get_credential("MODEL_CHOICE", "gpt-4o-mini")
             else:
                 # For code summaries, we use MODEL_CHOICE
-                llm_chat_model = _get_model_choice()
+                llm_chat_model = await _get_model_choice()
         except Exception as e:
             search_logger.warning(f"Failed to get LLM chat model: {e}")
             llm_chat_model = "gpt-4o-mini"  # Default fallback

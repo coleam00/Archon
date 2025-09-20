@@ -351,6 +351,7 @@ class DocumentStorageOperations:
         source_id: str,
         progress_callback: Callable | None = None,
         cancellation_check: Callable[[], None] | None = None,
+        provider: str | None = None,
     ) -> int:
         """
         Extract code examples from crawled documents and store them.
@@ -361,12 +362,13 @@ class DocumentStorageOperations:
             source_id: The unique source_id for all documents
             progress_callback: Optional callback for progress updates
             cancellation_check: Optional function to check for cancellation
+            provider: Optional LLM provider to use for code summaries
 
         Returns:
             Number of code examples stored
         """
         result = await self.code_extraction_service.extract_and_store_code_examples(
-            crawl_results, url_to_full_document, source_id, progress_callback, cancellation_check
+            crawl_results, url_to_full_document, source_id, progress_callback, cancellation_check, provider
         )
 
         return result
