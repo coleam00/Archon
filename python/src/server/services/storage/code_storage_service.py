@@ -37,6 +37,32 @@ def _is_reasoning_model(model: str) -> bool:
     return requires_max_completion_tokens(model)
 
 
+def _extract_json_payload(raw_response: str) -> str:
+    """Return the best-effort JSON object from an LLM response."""
+
+    if not raw_response:
+        return raw_response
+
+    cleaned = raw_response.strip()
+
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        # Drop opening fence
+        lines = lines[1:]
+        # Drop closing fence if present
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+
+    # Trim any leading/trailing text outside the outermost JSON braces
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1 and end >= start:
+        cleaned = cleaned[start : end + 1]
+
+    return cleaned.strip()
+
+
 def _supports_response_format(provider: str, model: str) -> bool:
     """
     Determine if a specific provider/model combination supports response_format.
@@ -829,7 +855,13 @@ Format your response as JSON:
             response_content = response_content.strip()
             search_logger.debug(f"LLM API response: {repr(response_content[:200])}...")
 
-            result = json.loads(response_content)
+            payload = _extract_json_payload(response_content)
+            if payload != response_content:
+                search_logger.debug(
+                    f"Sanitized LLM response payload before parsing: {repr(payload[:200])}..."
+                )
+
+            result = json.loads(payload)
 
             # Validate the response has the required fields
             if not result.get("example_name") or not result.get("summary"):

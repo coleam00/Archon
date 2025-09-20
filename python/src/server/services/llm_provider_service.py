@@ -310,8 +310,12 @@ def get_cache_security_report() -> dict[str, Any]:
 
     return report
 @asynccontextmanager
-async def get_llm_client(provider: str | None = None, use_embedding_provider: bool = False,
-                        instance_type: str | None = None, base_url: str | None = None):
+async def get_llm_client(
+    provider: str | None = None,
+    use_embedding_provider: bool = False,
+    instance_type: str | None = None,
+    base_url: str | None = None,
+):
     """
     Create an async OpenAI-compatible client based on the configured provider.
 
@@ -329,6 +333,8 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
         openai.AsyncOpenAI: An OpenAI-compatible client configured for the selected provider
     """
     client = None
+    provider_name: str | None = None
+    api_key = None
 
     try:
         # Get provider configuration from database settings
@@ -348,7 +354,11 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
                 logger.debug("Using cached rag_strategy settings")
 
             # For Ollama, don't use the base_url from config - let _get_optimal_ollama_instance decide
-            base_url = credential_service._get_provider_base_url(provider, rag_settings) if provider != "ollama" else None
+            base_url = (
+                credential_service._get_provider_base_url(provider, rag_settings)
+                if provider != "ollama"
+                else None
+            )
         else:
             # Get configured provider from database
             service_type = "embedding" if use_embedding_provider else "llm"
@@ -383,64 +393,64 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
                 raise ValueError("API key contains invalid characters")
 
         # Sanitize provider name for logging
-        safe_provider_name = _sanitize_for_log(provider_name)
+        safe_provider_name = _sanitize_for_log(provider_name) if provider_name else "unknown"
         logger.info(f"Creating LLM client for provider: {safe_provider_name}")
 
         if provider_name == "openai":
             if not api_key:
                 # Check if Ollama fallback is explicitly enabled (fail fast principle)
                 try:
-                    enable_fallback = await credential_service.get_credential("ENABLE_OLLAMA_FALLBACK", "false")
+                    enable_fallback = await credential_service.get_credential(
+                        "ENABLE_OLLAMA_FALLBACK", "false"
+                    )
                     enable_fallback = enable_fallback.lower() == "true"
                 except Exception:
                     enable_fallback = False  # Default to false for fail-fast behavior
 
                 if enable_fallback:
-                    logger.warning("OpenAI API key not found, attempting configured Ollama fallback")
+                    logger.warning(
+                        "OpenAI API key not found, attempting configured Ollama fallback"
+                    )
                     try:
                         # Try to get an optimal Ollama instance for fallback
                         ollama_base_url = await _get_optimal_ollama_instance(
                             instance_type="embedding" if use_embedding_provider else "chat",
-                            use_embedding_provider=use_embedding_provider
+                            use_embedding_provider=use_embedding_provider,
                         )
                         if ollama_base_url:
-                            logger.info(f"Falling back to Ollama instance: {ollama_base_url}")
-                            provider_name = "ollama"
-                            api_key = "ollama"  # Ollama doesn't need a real API key
-                            base_url = ollama_base_url
-                            # Create Ollama client after fallback
+                            logger.info(
+                                f"Falling back to Ollama instance: {ollama_base_url}"
+                            )
                             client = openai.AsyncOpenAI(
                                 api_key="ollama",
                                 base_url=ollama_base_url,
                             )
-                            logger.info(f"Ollama fallback client created successfully with base URL: {ollama_base_url}")
+                            logger.info(
+                                f"Ollama fallback client created successfully with base URL: {ollama_base_url}"
+                            )
+                            provider_name = "ollama"
+                            api_key = "ollama"
+                            base_url = ollama_base_url
                         else:
-                            raise ValueError("OpenAI API key not found and no Ollama instances available for fallback")
-                    except Exception as ollama_error:
-                        logger.error(f"Configured Ollama fallback failed: {ollama_error}")
-                        raise ValueError("OpenAI API key not found and configured Ollama fallback failed") from ollama_error
+                            raise ValueError(
+                                "No suitable Ollama instance available for fallback"
+                            )
+                    except Exception as fallback_error:
+                        raise ValueError(
+                            "OpenAI API key not found and Ollama fallback failed"
+                        ) from fallback_error
                 else:
-                    # Fail fast and loud - provide clear instructions
-                    error_msg = (
-                        "OpenAI API key not found. To fix this:\n"
-                        "1. Set OPENAI_API_KEY environment variable, OR\n"
-                        "2. Configure OpenAI API key in the UI settings, OR\n"
-                        "3. Enable Ollama fallback by setting ENABLE_OLLAMA_FALLBACK=true\n"
-                        "Current provider configuration requires a valid OpenAI API key."
-                    )
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
+                    raise ValueError("OpenAI API key not found")
             else:
-                # Only create OpenAI client if we have an API key (didn't fallback to Ollama)
                 client = openai.AsyncOpenAI(api_key=api_key)
                 logger.info("OpenAI client created successfully")
 
         elif provider_name == "ollama":
-            # Enhanced Ollama client creation with multi-instance support
+            # For Ollama, get the optimal instance based on usage
             ollama_base_url = await _get_optimal_ollama_instance(
                 instance_type=instance_type,
                 use_embedding_provider=use_embedding_provider,
-                base_url_override=base_url
+                base_url_override=base_url,
             )
 
             # Ollama requires an API key in the client but doesn't actually use it
@@ -494,7 +504,9 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
             if not key_length_valid:
                 logger.warning("Grok API key validation failed - insufficient length")
 
-            logger.debug(f"Grok API key validation: format_valid={key_format_valid}, length_valid={key_length_valid}")
+            logger.debug(
+                f"Grok API key validation: format_valid={key_format_valid}, length_valid={key_length_valid}"
+            )
 
             client = openai.AsyncOpenAI(
                 api_key=api_key,
@@ -505,17 +517,17 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
         else:
             raise ValueError(f"Unsupported LLM provider: {provider_name}")
 
-        yield client
-
     except Exception as e:
         logger.error(
-            f"Error creating LLM client for provider {provider_name if 'provider_name' in locals() else 'unknown'}: {e}"
+            f"Error creating LLM client for provider {provider_name if provider_name else 'unknown'}: {e}"
         )
         raise
+
+    try:
+        yield client
     finally:
         if client is not None:
-            provider_for_log = locals().get("provider_name", "unknown")
-            safe_provider = _sanitize_for_log(str(provider_for_log))
+            safe_provider = _sanitize_for_log(provider_name) if provider_name else "unknown"
 
             try:
                 close_method = getattr(client, "aclose", None)
@@ -552,6 +564,7 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
                     f"Unexpected error while closing LLM client for provider {safe_provider}: {close_error}",
                     exc_info=True,
                 )
+
 
 
 async def _get_optimal_ollama_instance(instance_type: str | None = None,
