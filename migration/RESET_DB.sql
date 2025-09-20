@@ -63,7 +63,11 @@ BEGIN
     -- Prompts policies
     DROP POLICY IF EXISTS "Allow service role full access to archon_prompts" ON archon_prompts;
     DROP POLICY IF EXISTS "Allow authenticated users to read archon_prompts" ON archon_prompts;
-    
+
+    -- Migration tracking policies
+    DROP POLICY IF EXISTS "Allow service role full access to archon_migrations" ON archon_migrations;
+    DROP POLICY IF EXISTS "Allow authenticated users to read archon_migrations" ON archon_migrations;
+
     -- Legacy table policies (for migration from old schema)
     DROP POLICY IF EXISTS "Allow service role full access" ON settings;
     DROP POLICY IF EXISTS "Allow authenticated users to read and update" ON settings;
@@ -174,7 +178,10 @@ BEGIN
     
     -- Configuration System - new archon_ prefixed table
     DROP TABLE IF EXISTS archon_settings CASCADE;
-    
+
+    -- Migration tracking table
+    DROP TABLE IF EXISTS archon_migrations CASCADE;
+
     -- Legacy tables (without archon_ prefix) - for migration purposes
     DROP TABLE IF EXISTS document_versions CASCADE;
     DROP TABLE IF EXISTS project_sources CASCADE;
