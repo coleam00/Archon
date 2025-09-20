@@ -1018,14 +1018,10 @@ async def add_code_examples_to_supabase(
         raw_value = await credential_service.get_credential(
             "USE_CONTEXTUAL_EMBEDDINGS", "false", decrypt=True
         )
-        search_logger.info(f"DEBUG: Raw contextual embeddings value: {raw_value} (type: {type(raw_value)})")
-
         if isinstance(raw_value, str):
             use_contextual_embeddings = raw_value.lower() == "true"
         else:
             use_contextual_embeddings = bool(raw_value)
-
-        search_logger.info(f"DEBUG: Processed contextual embeddings value: {use_contextual_embeddings}")
     except Exception as e:
         search_logger.error(f"DEBUG: Error reading contextual embeddings: {e}")
         # Fallback to environment variable
@@ -1099,7 +1095,6 @@ async def add_code_examples_to_supabase(
         
         # Get model information for tracking
         from ..llm_provider_service import get_embedding_model
-        from ..credential_service import credential_service
         
         # Get embedding model name
         embedding_model_name = await get_embedding_model(provider=provider)
