@@ -187,7 +187,7 @@ async def create_embeddings_batch(
             if is_google_embedding_model(embedding_model):
                 embedding_provider = "google"
                 search_logger.info(f"Routing to Google for embedding model: {embedding_model}")
-            elif is_openai_embedding_model(embedding_model):
+            elif is_openai_embedding_model(embedding_model) or "openai/" in embedding_model.lower():
                 embedding_provider = "openai"
                 search_logger.info(f"Routing to OpenAI for embedding model: {embedding_model}")
             else:

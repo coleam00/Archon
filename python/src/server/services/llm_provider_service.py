@@ -680,12 +680,27 @@ def is_openai_embedding_model(model: str) -> bool:
     if not model:
         return False
 
-    openai_models = {
+    model_lower = model.strip().lower()
+
+    # Known OpenAI embeddings
+    base_models = {
         "text-embedding-ada-002",
         "text-embedding-3-small",
-        "text-embedding-3-large"
+        "text-embedding-3-large",
     }
-    return model.lower() in openai_models
+
+    if model_lower in base_models:
+        return True
+
+    # Strip common vendor prefixes like "openai/" or "openrouter/"
+    for separator in ("/", ":"):
+        if separator in model_lower:
+            candidate = model_lower.split(separator)[-1]
+            if candidate in base_models:
+                return True
+
+    # Fallback substring detection for custom naming conventions
+    return any(base in model_lower for base in base_models)
 
 
 def is_google_embedding_model(model: str) -> bool:
@@ -968,79 +983,3 @@ async def validate_provider_instance(provider: str, instance_url: str | None = N
             "validation_timestamp": time.time()
         }
 
-
-def requires_max_completion_tokens(model_name: str) -> bool:
-    """
-    Check if a model requires max_completion_tokens instead of max_tokens.
-
-    OpenAI changed the parameter for reasoning models (o1, o3, GPT-5 series)
-    introduced in September 2024.
-
-    Args:
-        model_name: The model name to check
-
-    Returns:
-        True if the model requires max_completion_tokens, False otherwise
-    """
-    if not model_name:
-        return False
-
-    # Normalize to lowercase for comparison
-    model_lower = model_name.lower()
-
-    # Models that require max_completion_tokens (reasoning models)
-    reasoning_model_prefixes = [
-        "o1",           # o1, o1-mini, o1-preview, etc.
-        "o3",           # o3, o3-mini, etc.
-        "gpt-5",        # gpt-5, gpt-5-nano, gpt-5-mini, etc.
-    ]
-
-    # Check for reasoning models (including OpenRouter prefixed models)
-    for prefix in reasoning_model_prefixes:
-        if model_lower.startswith(prefix):
-            return True
-        # Also check for OpenRouter format: "openai/gpt-5-nano", "openai/o1-mini", etc.
-        if f"openai/{prefix}" in model_lower:
-            return True
-
-    return False
-
-
-def prepare_chat_completion_params(model: str, params: dict) -> dict:
-    """
-    Convert parameters for compatibility with reasoning models (GPT-5, o1, o3 series).
-
-    OpenAI made several API changes for reasoning models:
-    1. max_tokens → max_completion_tokens
-    2. temperature must be 1.0 (default) - custom values not supported
-
-    This ensures compatibility with OpenAI's API changes for newer models
-    while maintaining backward compatibility for existing models.
-
-    Args:
-        model: The model name being used
-        params: Dictionary of API parameters
-
-    Returns:
-        Updated parameters dictionary with correct parameters for the model
-    """
-    if not model or not params:
-        return params
-
-    # Make a copy to avoid modifying the original
-    updated_params = params.copy()
-
-    is_reasoning_model = requires_max_completion_tokens(model)
-
-    # Convert max_tokens to max_completion_tokens for reasoning models
-    if is_reasoning_model and "max_tokens" in updated_params:
-        max_tokens_value = updated_params.pop("max_tokens")
-        updated_params["max_completion_tokens"] = max_tokens_value
-        logger.debug(f"Converted max_tokens to max_completion_tokens for model {model}")
-
-    # Remove custom temperature for reasoning models (they only support default temperature=1.0)
-    if is_reasoning_model and "temperature" in updated_params:
-        original_temp = updated_params.pop("temperature")
-        logger.debug(f"Removed custom temperature {original_temp} for reasoning model {model} (only supports default temperature=1.0)")
-
-    return updated_params
