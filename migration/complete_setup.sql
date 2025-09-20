@@ -982,9 +982,12 @@ INSERT INTO archon_migrations (version, migration_name)
 VALUES
   ('0.1.0', '001_add_source_url_display_name'),
   ('0.1.0', '002_add_hybrid_search_tsvector'),
-  ('0.1.0', '003_ollama_implementation'),
-  ('0.1.0', '004_add_priority_column_to_tasks'),
-  ('0.1.0', '005_add_migration_tracking')
+  ('0.1.0', '003_ollama_add_columns'),
+  ('0.1.0', '004_ollama_migrate_data'),
+  ('0.1.0', '005_ollama_create_functions'),
+  ('0.1.0', '006_ollama_create_indexes_optional'),
+  ('0.1.0', '007_add_priority_column_to_tasks'),
+  ('0.1.0', '008_add_migration_tracking')
 ON CONFLICT (version, migration_name) DO NOTHING;
 
 -- Enable Row Level Security on migrations table
