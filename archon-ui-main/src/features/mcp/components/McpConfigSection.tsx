@@ -19,6 +19,7 @@ const ideConfigurations: Record<
     steps: string[];
     configGenerator: (config: McpServerConfig) => string;
     supportsOneClick?: boolean;
+    platformSpecific?: boolean;
   }
 > = {
   claudecode: {
@@ -55,6 +56,43 @@ const ideConfigurations: Record<
         null,
         2,
       ),
+  },
+  codex: {
+    title: "Codex Configuration",
+    steps: [
+      "Step 1: Install mcp-remote globally using: npm install -g mcp-remote",
+      "Step 2: Add configuration to ~/.codex/config.toml",
+      "Step 3: Find your exact mcp-remote path by running: npm root -g",
+      "Step 4: Replace the path in the configuration with your actual path + /mcp-remote/dist/proxy.js",
+      "Note: On macOS with Homebrew on Apple Silicon, the path might be /opt/homebrew/lib/node_modules/mcp-remote/dist/proxy.js",
+    ],
+    configGenerator: (config) => {
+      const isWindows = navigator.platform.toLowerCase().includes("win");
+
+      if (isWindows) {
+        return `[mcp_servers.archon]
+command = 'node'
+args = [
+    'C:/Users/YOUR_USERNAME/AppData/Roaming/npm/node_modules/mcp-remote/dist/proxy.js',
+    'http://${config.host}:${config.port}/mcp'
+]
+env = {
+    APPDATA = 'C:\\Users\\YOUR_USERNAME\\AppData\\Roaming',
+    LOCALAPPDATA = 'C:\\Users\\YOUR_USERNAME\\AppData\\Local',
+    SystemRoot = 'C:\\WINDOWS',
+    COMSPEC = 'C:\\WINDOWS\\system32\\cmd.exe'
+}`;
+      } else {
+        return `[mcp_servers.archon]
+command = 'node'
+args = [
+    '/usr/local/lib/node_modules/mcp-remote/dist/proxy.js',
+    'http://${config.host}:${config.port}/mcp'
+]
+env = { }`;
+      }
+    },
+    platformSpecific: true,
   },
   cursor: {
     title: "Cursor Configuration",
@@ -144,27 +182,6 @@ const ideConfigurations: Record<
         2,
       ),
   },
-  augment: {
-    title: "Augment Configuration",
-    steps: [
-      "Open Augment settings",
-      "Navigate to Extensions > MCP",
-      "Add the configuration shown below",
-      "Reload configuration",
-    ],
-    configGenerator: (config) =>
-      JSON.stringify(
-        {
-          mcpServers: {
-            archon: {
-              url: `http://${config.host}:${config.port}/mcp`,
-            },
-          },
-        },
-        null,
-        2,
-      ),
-  },
 };
 
 export const McpConfigSection: React.FC<McpConfigSectionProps> = ({ config, status, className }) => {
@@ -240,14 +257,14 @@ export const McpConfigSection: React.FC<McpConfigSectionProps> = ({ config, stat
         value={selectedIDE}
         onValueChange={(value) => setSelectedIDE(value as SupportedIDE)}
       >
-        <TabsList className="grid grid-cols-4 lg:grid-cols-7 w-full">
+        <TabsList className="grid grid-cols-3 lg:grid-cols-7 w-full">
           <TabsTrigger value="claudecode">Claude Code</TabsTrigger>
           <TabsTrigger value="gemini">Gemini</TabsTrigger>
+          <TabsTrigger value="codex">Codex</TabsTrigger>
           <TabsTrigger value="cursor">Cursor</TabsTrigger>
           <TabsTrigger value="windsurf">Windsurf</TabsTrigger>
           <TabsTrigger value="cline">Cline</TabsTrigger>
           <TabsTrigger value="kiro">Kiro</TabsTrigger>
-          <TabsTrigger value="augment">Augment</TabsTrigger>
         </TabsList>
 
         <TabsContent value={selectedIDE} className="mt-6 space-y-4">
@@ -280,10 +297,28 @@ export const McpConfigSection: React.FC<McpConfigSectionProps> = ({ config, stat
             </div>
           )}
 
+          {/* Platform-specific note for Codex */}
+          {selectedIDE === "codex" && (
+            <div className={cn("p-3 rounded-lg", glassmorphism.background.yellow, glassmorphism.border.yellow)}>
+              <p className="text-sm text-yellow-700 dark:text-yellow-300">
+                <span className="font-semibold">Platform Note:</span> The configuration below shows{" "}
+                {navigator.platform.toLowerCase().includes("win") ? "Windows" : "Linux/macOS"} format. Adjust paths
+                according to your system.
+              </p>
+            </div>
+          )}
+
           {/* Configuration Display */}
           <div className={cn("relative rounded-lg p-4", glassmorphism.background.subtle, glassmorphism.border.default)}>
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Configuration</span>
+              <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                Configuration
+                {selectedIDE === "codex" && (
+                  <span className="ml-2 text-xs text-yellow-600 dark:text-yellow-400">
+                    ({navigator.platform.toLowerCase().includes("win") ? "Windows" : "Linux/macOS"})
+                  </span>
+                )}
+              </span>
               <Button variant="outline" size="sm" onClick={handleCopyConfig}>
                 <Copy className="w-3 h-3 mr-1" />
                 Copy
