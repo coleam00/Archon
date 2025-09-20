@@ -1,41 +1,36 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
-import { KnowledgeFilterProvider, useCurrentKnowledgeFilter } from '../KnowledgeFilterContext';
+import { KnowledgeFilterProvider, useKnowledgeFilter } from '../KnowledgeFilterContext';
 import type { KnowledgeFilter } from '../../types';
 
 // Test component that uses the context
 function TestComponent() {
-  const { currentFilter, updateFilter, isCurrentFilter } = useCurrentKnowledgeFilter();
+  const { currentFilter, searchQuery, typeFilter, setSearchQuery, setTypeFilter } = useKnowledgeFilter();
 
   return (
     <div>
       <div data-testid="current-filter">{JSON.stringify(currentFilter)}</div>
-      <div data-testid="is-default">{isCurrentFilter({ type: 'all', search: '', page: 1, per_page: 100 }).toString()}</div>
+      <div data-testid="search-query">{searchQuery}</div>
+      <div data-testid="type-filter">{typeFilter}</div>
       <button
         data-testid="update-search"
-        onClick={() => updateFilter({ search: 'test search' })}
+        onClick={() => setSearchQuery('test search')}
       >
         Update Search
       </button>
       <button
         data-testid="update-type"
-        onClick={() => updateFilter({ type: 'document' })}
+        onClick={() => setTypeFilter('technical')}
       >
         Update Type
-      </button>
-      <button
-        data-testid="update-pagination"
-        onClick={() => updateFilter({ page: 2, per_page: 50 })}
-      >
-        Update Pagination
       </button>
     </div>
   );
 }
 
 function TestComponentWithoutProvider() {
-  const hook = useCurrentKnowledgeFilter();
+  const hook = useKnowledgeFilter();
   return <div data-testid="hook-result">{JSON.stringify(hook)}</div>;
 }
 
@@ -52,34 +47,18 @@ describe('KnowledgeFilterContext', () => {
       const defaultFilter = JSON.parse(filterDisplay.textContent || '{}');
 
       expect(defaultFilter).toEqual({
-        type: 'all',
-        search: '',
         page: 1,
         per_page: 100
       });
+
+      const searchQuery = screen.getByTestId('search-query');
+      const typeFilter = screen.getByTestId('type-filter');
+
+      expect(searchQuery.textContent).toBe('');
+      expect(typeFilter.textContent).toBe('all');
     });
 
-    it('should accept custom initial filter', () => {
-      const customFilter: KnowledgeFilter = {
-        type: 'document',
-        search: 'initial search',
-        page: 2,
-        per_page: 50
-      };
-
-      render(
-        <KnowledgeFilterProvider initialFilter={customFilter}>
-          <TestComponent />
-        </KnowledgeFilterProvider>
-      );
-
-      const filterDisplay = screen.getByTestId('current-filter');
-      const currentFilter = JSON.parse(filterDisplay.textContent || '{}');
-
-      expect(currentFilter).toEqual(customFilter);
-    });
-
-    it('should update filter state when updateFilter is called', async () => {
+    it('should update search query when setSearchQuery is called', async () => {
       const user = userEvent.setup();
 
       render(
@@ -89,20 +68,51 @@ describe('KnowledgeFilterContext', () => {
       );
 
       const updateButton = screen.getByTestId('update-search');
-      await user.click(updateButton);
+
+      await act(async () => {
+        await user.click(updateButton);
+      });
 
       const filterDisplay = screen.getByTestId('current-filter');
       const updatedFilter = JSON.parse(filterDisplay.textContent || '{}');
+      const searchQuery = screen.getByTestId('search-query');
 
+      expect(searchQuery.textContent).toBe('test search');
       expect(updatedFilter).toEqual({
-        type: 'all',
         search: 'test search',
         page: 1,
         per_page: 100
       });
     });
 
-    it('should merge filter updates with existing state', async () => {
+    it('should update type filter when setTypeFilter is called', async () => {
+      const user = userEvent.setup();
+
+      render(
+        <KnowledgeFilterProvider>
+          <TestComponent />
+        </KnowledgeFilterProvider>
+      );
+
+      const updateButton = screen.getByTestId('update-type');
+
+      await act(async () => {
+        await user.click(updateButton);
+      });
+
+      const filterDisplay = screen.getByTestId('current-filter');
+      const updatedFilter = JSON.parse(filterDisplay.textContent || '{}');
+      const typeFilter = screen.getByTestId('type-filter');
+
+      expect(typeFilter.textContent).toBe('technical');
+      expect(updatedFilter).toEqual({
+        knowledge_type: 'technical',
+        page: 1,
+        per_page: 100
+      });
+    });
+
+    it('should merge search and type updates correctly', async () => {
       const user = userEvent.setup();
 
       render(
@@ -112,46 +122,28 @@ describe('KnowledgeFilterContext', () => {
       );
 
       // Update search first
-      await user.click(screen.getByTestId('update-search'));
+      await act(async () => {
+        await user.click(screen.getByTestId('update-search'));
+      });
 
       // Then update type
-      await user.click(screen.getByTestId('update-type'));
+      await act(async () => {
+        await user.click(screen.getByTestId('update-type'));
+      });
 
       const filterDisplay = screen.getByTestId('current-filter');
       const finalFilter = JSON.parse(filterDisplay.textContent || '{}');
 
       expect(finalFilter).toEqual({
-        type: 'document',
         search: 'test search',
+        knowledge_type: 'technical',
         page: 1,
         per_page: 100
       });
     });
-
-    it('should handle pagination updates correctly', async () => {
-      const user = userEvent.setup();
-
-      render(
-        <KnowledgeFilterProvider>
-          <TestComponent />
-        </KnowledgeFilterProvider>
-      );
-
-      await user.click(screen.getByTestId('update-pagination'));
-
-      const filterDisplay = screen.getByTestId('current-filter');
-      const updatedFilter = JSON.parse(filterDisplay.textContent || '{}');
-
-      expect(updatedFilter).toEqual({
-        type: 'all',
-        search: '',
-        page: 2,
-        per_page: 50
-      });
-    });
   });
 
-  describe('useCurrentKnowledgeFilter', () => {
+  describe('useKnowledgeFilter', () => {
     it('should throw error when used outside provider', () => {
       // Suppress console.error for this test
       const originalError = console.error;
@@ -159,59 +151,9 @@ describe('KnowledgeFilterContext', () => {
 
       expect(() => {
         render(<TestComponentWithoutProvider />);
-      }).toThrow('useCurrentKnowledgeFilter must be used within a KnowledgeFilterProvider');
+      }).toThrow('useKnowledgeFilter must be used within a KnowledgeFilterProvider');
 
       console.error = originalError;
-    });
-
-    it('should correctly identify current filter', () => {
-      render(
-        <KnowledgeFilterProvider>
-          <TestComponent />
-        </KnowledgeFilterProvider>
-      );
-
-      const isDefaultDisplay = screen.getByTestId('is-default');
-      expect(isDefaultDisplay.textContent).toBe('true');
-    });
-
-    it('should correctly identify non-current filter', async () => {
-      const user = userEvent.setup();
-
-      render(
-        <KnowledgeFilterProvider>
-          <TestComponent />
-        </KnowledgeFilterProvider>
-      );
-
-      // Change the filter
-      await user.click(screen.getByTestId('update-search'));
-
-      const isDefaultDisplay = screen.getByTestId('is-default');
-      expect(isDefaultDisplay.textContent).toBe('false');
-    });
-
-    it('should handle partial filter comparisons', () => {
-      const TestPartialComponent = () => {
-        const { isCurrentFilter } = useCurrentKnowledgeFilter();
-
-        // Test with partial filter matching
-        const isPartialMatch = isCurrentFilter({
-          type: 'all',
-          search: ''
-        });
-
-        return <div data-testid="partial-match">{isPartialMatch.toString()}</div>;
-      };
-
-      render(
-        <KnowledgeFilterProvider>
-          <TestPartialComponent />
-        </KnowledgeFilterProvider>
-      );
-
-      const partialMatchDisplay = screen.getByTestId('partial-match');
-      expect(partialMatchDisplay.textContent).toBe('true');
     });
 
     it('should maintain filter state across re-renders', async () => {
@@ -219,7 +161,7 @@ describe('KnowledgeFilterContext', () => {
 
       const TestRerenderComponent = () => {
         renderCount++;
-        const { currentFilter, updateFilter } = useCurrentKnowledgeFilter();
+        const { currentFilter, setSearchQuery } = useKnowledgeFilter();
 
         return (
           <div>
@@ -227,7 +169,7 @@ describe('KnowledgeFilterContext', () => {
             <div data-testid="filter-state">{JSON.stringify(currentFilter)}</div>
             <button
               data-testid="trigger-update"
-              onClick={() => updateFilter({ search: 'persistent' })}
+              onClick={() => setSearchQuery('persistent')}
             >
               Update
             </button>
@@ -244,51 +186,15 @@ describe('KnowledgeFilterContext', () => {
       );
 
       // Update the filter
-      await user.click(screen.getByTestId('trigger-update'));
+      await act(async () => {
+        await user.click(screen.getByTestId('trigger-update'));
+      });
 
       const filterState = screen.getByTestId('filter-state');
       const currentFilter = JSON.parse(filterState.textContent || '{}');
 
       expect(currentFilter.search).toBe('persistent');
       expect(renderCount).toBeGreaterThan(1);
-    });
-  });
-
-  describe('Filter Comparison Logic', () => {
-    it('should handle deep equality correctly', () => {
-      const TestDeepEqualityComponent = () => {
-        const { isCurrentFilter } = useCurrentKnowledgeFilter();
-
-        const exactMatch = isCurrentFilter({
-          type: 'all',
-          search: '',
-          page: 1,
-          per_page: 100
-        });
-
-        const differentType = isCurrentFilter({
-          type: 'document',
-          search: '',
-          page: 1,
-          per_page: 100
-        });
-
-        return (
-          <div>
-            <div data-testid="exact-match">{exactMatch.toString()}</div>
-            <div data-testid="different-type">{differentType.toString()}</div>
-          </div>
-        );
-      };
-
-      render(
-        <KnowledgeFilterProvider>
-          <TestDeepEqualityComponent />
-        </KnowledgeFilterProvider>
-      );
-
-      expect(screen.getByTestId('exact-match').textContent).toBe('true');
-      expect(screen.getByTestId('different-type').textContent).toBe('false');
     });
   });
 });
