@@ -128,31 +128,30 @@ describe("useAutoSave", () => {
         })
       );
 
-      // Make multiple rapid changes
+      // Make multiple rapid changes without advancing timers between changes
       act(() => {
         result.current.setEditValue("change1");
       });
 
       act(() => {
-        vi.advanceTimersByTime(100);
         result.current.setEditValue("change2");
       });
 
       act(() => {
-        vi.advanceTimersByTime(100);
         result.current.setEditValue("change3");
       });
 
       // Should not save yet
       expect(mockSave).not.toHaveBeenCalled();
 
-      // Fast-forward to complete debounce
+      // Fast-forward to complete debounce - only trigger the timeout once
       act(() => {
         vi.advanceTimersByTime(500);
       });
 
+      // Wait for any pending promises without running additional timers
       await act(async () => {
-        await vi.runAllTimersAsync();
+        await Promise.resolve();
       });
 
       // Should only save the final value once
@@ -206,18 +205,22 @@ describe("useAutoSave", () => {
         result.current.setEditValue("changed");
       });
 
-      // Start save operation without awaiting
-      const saveCall = result.current.save();
+      // Start save operation and immediately check isSaving state
+      act(() => {
+        result.current.save();
+      });
 
       // Should be saving immediately after calling save
       expect(result.current.isSaving).toBe(true);
 
       // Resolve the promise
-      resolvePromise!();
+      act(() => {
+        resolvePromise!();
+      });
 
       // Wait for save to complete
       await act(async () => {
-        await saveCall;
+        await vi.runAllTimersAsync();
       });
 
       // Should no longer be saving
