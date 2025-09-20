@@ -191,8 +191,8 @@ export function useCrawlUrl() {
             queryClient.setQueryData<KnowledgeItemsResponse>(currentQueryKey, {
               items: [optimisticItem],
               total: 1,
-              page: currentFilter.page ?? 1,
-              per_page: currentFilter.per_page ?? 100,
+              page: 1,
+              per_page: 100,
             });
           } else {
             queryClient.setQueryData<KnowledgeItemsResponse>(currentQueryKey, {
@@ -225,8 +225,8 @@ export function useCrawlUrl() {
           queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
             items: [optimisticItem],
             total: 1,
-            page: filter?.page ?? 1,
-            per_page: filter?.per_page ?? 100,
+            page: 1,
+            per_page: 100,
           });
         } else {
           queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
@@ -409,8 +409,8 @@ export function useUploadDocument() {
             queryClient.setQueryData<KnowledgeItemsResponse>(currentQueryKey, {
               items: [optimisticItem],
               total: 1,
-              page: currentFilter.page ?? 1,
-              per_page: currentFilter.per_page ?? 100,
+              page: 1,
+              per_page: 100,
             });
           } else {
             queryClient.setQueryData<KnowledgeItemsResponse>(currentQueryKey, {
@@ -443,8 +443,8 @@ export function useUploadDocument() {
           queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
             items: [optimisticItem],
             total: 1,
-            page: filter?.page ?? 1,
-            per_page: filter?.per_page ?? 100,
+            page: 1,
+            per_page: 100,
           });
         } else {
           queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
