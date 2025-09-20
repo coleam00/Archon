@@ -239,7 +239,7 @@ export const KnowledgeCardTags: React.FC<KnowledgeCardTagsProps> = ({ sourceId, 
                     }}
                     className="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5 hover:text-red-500"
                     aria-label={`Delete ${tag} tag`}
-                    disabled={updateMutation.isPending || isSaving}
+                    disabled={updateMutation.isPending}
                   >
                     <X className="w-2.5 h-2.5" />
                   </button>
@@ -289,9 +289,8 @@ export const KnowledgeCardTags: React.FC<KnowledgeCardTagsProps> = ({ sourceId, 
               "h-6 text-xs px-2 w-20 min-w-0",
               "border-cyan-400 dark:border-cyan-600",
               "focus:ring-1 focus:ring-cyan-400",
-              hasError && "border-red-400 dark:border-red-600",
             )}
-            disabled={updateMutation.isPending || isSaving}
+            disabled={updateMutation.isPending}
           />
           <button
             type="button"
@@ -338,7 +337,7 @@ export const KnowledgeCardTags: React.FC<KnowledgeCardTagsProps> = ({ sourceId, 
           <button
             type="button"
             onClick={handleSaveTags}
-            disabled={updateMutation.isPending || isSaving}
+            disabled={updateMutation.isPending}
             className="px-2 py-1 text-xs bg-cyan-600 text-white rounded hover:bg-cyan-700 disabled:opacity-50 transition-colors"
           >
             Save
@@ -346,7 +345,7 @@ export const KnowledgeCardTags: React.FC<KnowledgeCardTagsProps> = ({ sourceId, 
           <button
             type="button"
             onClick={handleCancelEdit}
-            disabled={updateMutation.isPending || isSaving}
+            disabled={updateMutation.isPending}
             className="px-2 py-1 text-xs bg-gray-500 text-white rounded hover:bg-gray-600 disabled:opacity-50 transition-colors"
           >
             Cancel

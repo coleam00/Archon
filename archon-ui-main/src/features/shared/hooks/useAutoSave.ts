@@ -13,8 +13,6 @@ export interface UseAutoSaveOptions<T> {
   onSave: (value: T) => Promise<void>;
   /** Delay in ms before auto-saving after value changes (default: 500ms) */
   debounceMs?: number;
-  /** Whether to save immediately on blur events (default: true) */
-  saveOnBlur?: boolean;
   /** Whether to validate before saving (default: true) */
   validate?: (value: T) => boolean;
   /** Function to transform value before saving */
@@ -49,7 +47,6 @@ export function useAutoSave<T>({
   value,
   onSave,
   debounceMs = 500,
-  saveOnBlur = true,
   validate = () => true,
   transform,
   isEditing = false,
