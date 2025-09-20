@@ -5,6 +5,7 @@ Provides a unified interface for creating OpenAI-compatible clients for differen
 Supports OpenAI, Ollama, and Google Gemini.
 """
 
+import inspect
 import time
 from contextlib import asynccontextmanager
 from typing import Any
@@ -512,8 +513,45 @@ async def get_llm_client(provider: str | None = None, use_embedding_provider: bo
         )
         raise
     finally:
-        # Cleanup if needed
-        pass
+        if client is not None:
+            provider_for_log = locals().get("provider_name", "unknown")
+            safe_provider = _sanitize_for_log(str(provider_for_log))
+
+            try:
+                close_method = getattr(client, "aclose", None)
+                if callable(close_method):
+                    if inspect.iscoroutinefunction(close_method):
+                        await close_method()
+                    else:
+                        maybe_coro = close_method()
+                        if inspect.isawaitable(maybe_coro):
+                            await maybe_coro
+                else:
+                    close_method = getattr(client, "close", None)
+                    if callable(close_method):
+                        if inspect.iscoroutinefunction(close_method):
+                            await close_method()
+                        else:
+                            close_result = close_method()
+                            if inspect.isawaitable(close_result):
+                                await close_result
+                logger.debug(f"Closed LLM client for provider: {safe_provider}")
+            except RuntimeError as close_error:
+                if "Event loop is closed" in str(close_error):
+                    logger.error(
+                        f"Failed to close LLM client cleanly for provider {safe_provider}: event loop already closed",
+                        exc_info=True,
+                    )
+                else:
+                    logger.error(
+                        f"Runtime error closing LLM client for provider {safe_provider}: {close_error}",
+                        exc_info=True,
+                    )
+            except Exception as close_error:
+                logger.error(
+                    f"Unexpected error while closing LLM client for provider {safe_provider}: {close_error}",
+                    exc_info=True,
+                )
 
 
 async def _get_optimal_ollama_instance(instance_type: str | None = None,
