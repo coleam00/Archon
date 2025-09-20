@@ -94,12 +94,30 @@ export function useCodeExamples(sourceId: string | null) {
 }
 
 /**
+ * Hook to access current filter from context (if available)
+ * Falls back to undefined if not within KnowledgeFilterProvider
+ */
+function useCurrentKnowledgeFilter(): KnowledgeItemsFilter | undefined {
+  try {
+    // Dynamically import the hook to avoid circular dependencies
+    // and handle cases where this hook is used outside the context
+    const { useKnowledgeFilter } = require("../context");
+    const { currentFilter } = useKnowledgeFilter();
+    return currentFilter;
+  } catch {
+    // If context is not available, return undefined
+    return undefined;
+  }
+}
+
+/**
  * Crawl URL mutation with optimistic updates
  * Returns the progressId that can be used to track crawl progress
  */
 export function useCrawlUrl() {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
+  const currentFilter = useCurrentKnowledgeFilter();
 
   return useMutation<
     CrawlStartResponse,
@@ -119,23 +137,9 @@ export function useCrawlUrl() {
       await queryClient.cancelQueries({ queryKey: knowledgeKeys.summariesPrefix() });
       await queryClient.cancelQueries({ queryKey: progressKeys.active() });
 
-      // TODO: Fix invisible optimistic updates
-      // ISSUE: Optimistic updates are applied to knowledgeKeys.summaries(filter) queries,
-      // but the UI component (KnowledgeView) queries with dynamic filters that we don't have access to here.
-      // This means optimistic updates only work if the filter happens to match what's being viewed.
-      //
-      // CURRENT BEHAVIOR:
-      // - We update all cached summaries queries (lines 158-179 below)
-      // - BUT if the user changes filters after mutation starts, they won't see the optimistic update
-      // - AND we have no way to know what filter the user is currently viewing
-      //
-      // PROPER FIX requires one of:
-      // 1. Pass current filter from KnowledgeView to mutation hooks (prop drilling)
-      // 2. Create KnowledgeFilterContext to share filter state
-      // 3. Restructure to have a single source of truth query key like other features
-      //
-      // IMPACT: Users don't see immediate feedback when adding knowledge items - items only
-      // appear after the server responds (usually 1-3 seconds later)
+      // FIXED: Optimistic updates now target the currently viewed filter
+      // We use KnowledgeFilterContext to access the current filter state
+      // If no context is available (hook used outside provider), fall back to updating all caches
 
       // Snapshot the previous values for rollback
       const previousSummaries = queryClient.getQueriesData<KnowledgeItemsResponse>({
@@ -172,16 +176,51 @@ export function useCrawlUrl() {
       } as Omit<KnowledgeItem, "id">);
       const tempItemId = optimisticItem.id;
 
-      // Update all summaries caches with optimistic data, respecting each cache's filter
+      // Prioritize updating the currently viewed filter for immediate user feedback
+      if (currentFilter) {
+        const currentQueryKey = knowledgeKeys.summaries(currentFilter);
+        const currentData = queryClient.getQueryData<KnowledgeItemsResponse>(currentQueryKey);
+
+        // Check if the optimistic item matches the current filter
+        const matchesType = !currentFilter.knowledge_type || optimisticItem.knowledge_type === currentFilter.knowledge_type;
+        const matchesTags = !currentFilter.tags || currentFilter.tags.every((t) => (optimisticItem.metadata?.tags ?? []).includes(t));
+        const matchesSearch = !currentFilter.search || optimisticItem.title.toLowerCase().includes(currentFilter.search.toLowerCase());
+
+        if (matchesType && matchesTags && matchesSearch) {
+          if (!currentData) {
+            queryClient.setQueryData<KnowledgeItemsResponse>(currentQueryKey, {
+              items: [optimisticItem],
+              total: 1,
+              page: 1,
+              per_page: 100,
+            });
+          } else {
+            queryClient.setQueryData<KnowledgeItemsResponse>(currentQueryKey, {
+              ...currentData,
+              items: [optimisticItem, ...currentData.items],
+              total: (currentData.total ?? currentData.items.length) + 1,
+            });
+          }
+        }
+      }
+
+      // Also update all other cached summaries for completeness
       const entries = queryClient.getQueriesData<KnowledgeItemsResponse>({
         queryKey: knowledgeKeys.summariesPrefix(),
       });
       for (const [qk, old] of entries) {
+        // Skip if this is the current query we already updated
+        if (currentFilter && JSON.stringify(qk) === JSON.stringify(knowledgeKeys.summaries(currentFilter))) {
+          continue;
+        }
+
         const filter = qk[qk.length - 1] as KnowledgeItemsFilter | undefined;
         const matchesType = !filter?.knowledge_type || optimisticItem.knowledge_type === filter.knowledge_type;
         const matchesTags =
           !filter?.tags || filter.tags.every((t) => (optimisticItem.metadata?.tags ?? []).includes(t));
-        if (!(matchesType && matchesTags)) continue;
+        const matchesSearch = !filter?.search || optimisticItem.title.toLowerCase().includes(filter.search.toLowerCase());
+
+        if (!(matchesType && matchesTags && matchesSearch)) continue;
         if (!old) {
           queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
             items: [optimisticItem],
@@ -304,6 +343,7 @@ export function useCrawlUrl() {
 export function useUploadDocument() {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
+  const currentFilter = useCurrentKnowledgeFilter();
 
   return useMutation<
     { progressId: string; message: string },
@@ -354,16 +394,51 @@ export function useUploadDocument() {
       } as Omit<KnowledgeItem, "id">);
       const tempItemId = optimisticItem.id;
 
-      // Respect each cache's filter (knowledge_type, tags, etc.)
+      // Prioritize updating the currently viewed filter for immediate user feedback
+      if (currentFilter) {
+        const currentQueryKey = knowledgeKeys.summaries(currentFilter);
+        const currentData = queryClient.getQueryData<KnowledgeItemsResponse>(currentQueryKey);
+
+        // Check if the optimistic item matches the current filter
+        const matchesType = !currentFilter.knowledge_type || optimisticItem.knowledge_type === currentFilter.knowledge_type;
+        const matchesTags = !currentFilter.tags || currentFilter.tags.every((t) => (optimisticItem.metadata?.tags ?? []).includes(t));
+        const matchesSearch = !currentFilter.search || optimisticItem.title.toLowerCase().includes(currentFilter.search.toLowerCase());
+
+        if (matchesType && matchesTags && matchesSearch) {
+          if (!currentData) {
+            queryClient.setQueryData<KnowledgeItemsResponse>(currentQueryKey, {
+              items: [optimisticItem],
+              total: 1,
+              page: 1,
+              per_page: 100,
+            });
+          } else {
+            queryClient.setQueryData<KnowledgeItemsResponse>(currentQueryKey, {
+              ...currentData,
+              items: [optimisticItem, ...currentData.items],
+              total: (currentData.total ?? currentData.items.length) + 1,
+            });
+          }
+        }
+      }
+
+      // Also update all other cached summaries for completeness
       const entries = queryClient.getQueriesData<KnowledgeItemsResponse>({
         queryKey: knowledgeKeys.summariesPrefix(),
       });
       for (const [qk, old] of entries) {
+        // Skip if this is the current query we already updated
+        if (currentFilter && JSON.stringify(qk) === JSON.stringify(knowledgeKeys.summaries(currentFilter))) {
+          continue;
+        }
+
         const filter = qk[qk.length - 1] as KnowledgeItemsFilter | undefined;
         const matchesType = !filter?.knowledge_type || optimisticItem.knowledge_type === filter.knowledge_type;
         const matchesTags =
           !filter?.tags || filter.tags.every((t) => (optimisticItem.metadata?.tags ?? []).includes(t));
-        if (!(matchesType && matchesTags)) continue;
+        const matchesSearch = !filter?.search || optimisticItem.title.toLowerCase().includes(filter.search.toLowerCase());
+
+        if (!(matchesType && matchesTags && matchesSearch)) continue;
         if (!old) {
           queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
             items: [optimisticItem],

@@ -3,48 +3,38 @@
  * Orchestrates the knowledge base UI using vertical slice architecture
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CrawlingProgress } from "../../progress/components/CrawlingProgress";
 import type { ActiveOperation } from "../../progress/types";
 import { useToast } from "../../ui/hooks/useToast";
 import { AddKnowledgeDialog } from "../components/AddKnowledgeDialog";
 import { KnowledgeHeader } from "../components/KnowledgeHeader";
 import { KnowledgeList } from "../components/KnowledgeList";
+import { useKnowledgeFilter } from "../context";
 import { useKnowledgeSummaries } from "../hooks/useKnowledgeQueries";
 import { KnowledgeInspector } from "../inspector/components/KnowledgeInspector";
-import type { KnowledgeItem, KnowledgeItemsFilter } from "../types";
+import type { KnowledgeItem } from "../types";
 
 export const KnowledgeView = () => {
+  // Get filter state from context
+  const {
+    searchQuery,
+    setSearchQuery,
+    typeFilter,
+    setTypeFilter,
+    currentFilter,
+  } = useKnowledgeFilter();
+
   // View state
   const [viewMode, setViewMode] = useState<"grid" | "table">("grid");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [typeFilter, setTypeFilter] = useState<"all" | "technical" | "business">("all");
 
   // Dialog state
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [inspectorItem, setInspectorItem] = useState<KnowledgeItem | null>(null);
   const [inspectorInitialTab, setInspectorInitialTab] = useState<"documents" | "code">("documents");
 
-  // Build filter object for API - memoize to prevent recreating on every render
-  const filter = useMemo<KnowledgeItemsFilter>(() => {
-    const f: KnowledgeItemsFilter = {
-      page: 1,
-      per_page: 100,
-    };
-
-    if (searchQuery) {
-      f.search = searchQuery;
-    }
-
-    if (typeFilter !== "all") {
-      f.knowledge_type = typeFilter;
-    }
-
-    return f;
-  }, [searchQuery, typeFilter]);
-
-  // Fetch knowledge summaries (no automatic polling!)
-  const { data, isLoading, error, refetch, setActiveCrawlIds, activeOperations } = useKnowledgeSummaries(filter);
+  // Fetch knowledge summaries using filter from context
+  const { data, isLoading, error, refetch, setActiveCrawlIds, activeOperations } = useKnowledgeSummaries(currentFilter);
 
   const knowledgeItems = data?.items || [];
   const totalItems = data?.total || 0;
