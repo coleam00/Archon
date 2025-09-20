@@ -22,8 +22,7 @@ interface ErrorWithMessage {
 
 // Type guard functions
 function hasStatusProperty(obj: unknown): obj is ErrorWithStatus {
-  return typeof obj === "object" && obj !== null &&
-    ("statusCode" in obj || "status" in obj);
+  return typeof obj === "object" && obj !== null && ("statusCode" in obj || "status" in obj);
 }
 
 function hasMessageProperty(obj: unknown): obj is ErrorWithMessage {
@@ -47,7 +46,7 @@ export function parseProviderError(error: unknown): ProviderError {
     if (hasMessageProperty(error) && error.message && error.message.includes("detail")) {
       try {
         const parsed = JSON.parse(error.message);
-        if (parsed.detail && parsed.detail.error_type) {
+        if (parsed.detail?.error_type) {
           providerError.isProviderError = true;
           providerError.provider = parsed.detail.provider || "LLM";
           providerError.errorType = parsed.detail.error_type;
