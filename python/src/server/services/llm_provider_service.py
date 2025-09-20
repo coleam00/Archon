@@ -380,7 +380,7 @@ async def get_llm_client(
 
         # Comprehensive provider validation with security checks
         if not _is_valid_provider(provider_name):
-            raise ValueError(f"Provider validation failed: invalid provider '{provider_name}'")
+            raise ValueError(f"Unsupported LLM provider: {provider_name}")
 
         # Validate API key format for security (prevent injection)
         if api_key:
@@ -397,53 +397,35 @@ async def get_llm_client(
         logger.info(f"Creating LLM client for provider: {safe_provider_name}")
 
         if provider_name == "openai":
-            if not api_key:
-                # Check if Ollama fallback is explicitly enabled (fail fast principle)
-                try:
-                    enable_fallback = await credential_service.get_credential(
-                        "ENABLE_OLLAMA_FALLBACK", "false"
-                    )
-                    enable_fallback = enable_fallback.lower() == "true"
-                except Exception:
-                    enable_fallback = False  # Default to false for fail-fast behavior
-
-                if enable_fallback:
-                    logger.warning(
-                        "OpenAI API key not found, attempting configured Ollama fallback"
-                    )
-                    try:
-                        # Try to get an optimal Ollama instance for fallback
-                        ollama_base_url = await _get_optimal_ollama_instance(
-                            instance_type="embedding" if use_embedding_provider else "chat",
-                            use_embedding_provider=use_embedding_provider,
-                        )
-                        if ollama_base_url:
-                            logger.info(
-                                f"Falling back to Ollama instance: {ollama_base_url}"
-                            )
-                            client = openai.AsyncOpenAI(
-                                api_key="ollama",
-                                base_url=ollama_base_url,
-                            )
-                            logger.info(
-                                f"Ollama fallback client created successfully with base URL: {ollama_base_url}"
-                            )
-                            provider_name = "ollama"
-                            api_key = "ollama"
-                            base_url = ollama_base_url
-                        else:
-                            raise ValueError(
-                                "No suitable Ollama instance available for fallback"
-                            )
-                    except Exception as fallback_error:
-                        raise ValueError(
-                            "OpenAI API key not found and Ollama fallback failed"
-                        ) from fallback_error
-                else:
-                    raise ValueError("OpenAI API key not found")
-            else:
+            if api_key:
                 client = openai.AsyncOpenAI(api_key=api_key)
                 logger.info("OpenAI client created successfully")
+            else:
+                logger.warning("OpenAI API key not found, attempting Ollama fallback")
+                try:
+                    ollama_base_url = await _get_optimal_ollama_instance(
+                        instance_type="embedding" if use_embedding_provider else "chat",
+                        use_embedding_provider=use_embedding_provider,
+                        base_url_override=base_url,
+                    )
+
+                    if not ollama_base_url:
+                        raise RuntimeError("No Ollama base URL resolved")
+
+                    client = openai.AsyncOpenAI(
+                        api_key="ollama",
+                        base_url=ollama_base_url,
+                    )
+                    logger.info(
+                        f"Ollama fallback client created successfully with base URL: {ollama_base_url}"
+                    )
+                    provider_name = "ollama"
+                    api_key = "ollama"
+                    base_url = ollama_base_url
+                except Exception as fallback_error:
+                    raise ValueError(
+                        "OpenAI API key not found and Ollama fallback failed"
+                    ) from fallback_error
 
         elif provider_name == "ollama":
             # For Ollama, get the optimal instance based on usage
