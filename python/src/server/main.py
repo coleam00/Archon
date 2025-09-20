@@ -26,6 +26,7 @@ from .api_routes.mcp_api import router as mcp_router
 from .api_routes.ollama_api import router as ollama_router
 from .api_routes.progress_api import router as progress_router
 from .api_routes.projects_api import router as projects_router
+from .api_routes.providers_api import router as providers_router
 
 # Import modular API routers
 from .api_routes.settings_api import router as settings_router
@@ -186,6 +187,7 @@ app.include_router(progress_router)
 app.include_router(agent_chat_router)
 app.include_router(internal_router)
 app.include_router(bug_report_router)
+app.include_router(providers_router)
 
 
 # Root endpoint
