@@ -45,6 +45,15 @@ export function UpdateBanner() {
                 <ExternalLink className="w-4 h-4" />
               </a>
             )}
+            <a
+              href="https://github.com/coleam00/Archon#upgrading"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/50 rounded-lg text-purple-400 transition-all duration-200"
+            >
+              <span className="text-sm font-medium">View Upgrade Instructions</span>
+              <ExternalLink className="w-4 h-4" />
+            </a>
             <button type="button"
               onClick={() => setIsDismissed(true)}
               className="p-2 hover:bg-gray-700/50 rounded-lg transition-colors"
