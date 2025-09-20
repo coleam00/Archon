@@ -85,6 +85,27 @@ const colorStyles: Record<ProviderKey, string> = {
   grok: 'border-yellow-500 bg-yellow-500/10',
 };
 
+const providerAlertStyles: Record<ProviderKey, string> = {
+  openai: 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 text-green-800 dark:text-green-300',
+  google: 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-300',
+  openrouter: 'bg-cyan-50 dark:bg-cyan-900/20 border-cyan-200 dark:border-cyan-800 text-cyan-800 dark:text-cyan-300',
+  ollama: 'bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800 text-purple-800 dark:text-purple-300',
+  anthropic: 'bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-800 text-orange-800 dark:text-orange-300',
+  grok: 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800 text-yellow-800 dark:text-yellow-300',
+};
+
+const providerAlertMessages: Record<ProviderKey, string> = {
+  openai: 'Configure your OpenAI API key in the credentials section to use GPT models.',
+  google: 'Configure your Google API key in the credentials section to use Gemini models.',
+  openrouter: 'Configure your OpenRouter API key in the credentials section to use models.',
+  ollama: 'Configure your Ollama instances in this panel to connect local models.',
+  anthropic: 'Configure your Anthropic API key in the credentials section to use Claude models.',
+  grok: 'Configure your Grok API key in the credentials section to use Grok models.',
+};
+
+const isProviderKey = (value: unknown): value is ProviderKey =>
+  typeof value === 'string' && ['openai', 'google', 'openrouter', 'ollama', 'anthropic', 'grok'].includes(value);
+
 interface RAGSettingsProps {
   ragSettings: {
     MODEL_CHOICE: string;
@@ -739,7 +760,21 @@ export const RAGSettings = ({
       default:
         return 'missing';
     }
-  };;
+  };
+
+  const selectedProviderKey = isProviderKey(ragSettings.LLM_PROVIDER)
+    ? (ragSettings.LLM_PROVIDER as ProviderKey)
+    : undefined;
+  const selectedProviderStatus = selectedProviderKey ? getProviderStatus(selectedProviderKey) : undefined;
+  const shouldShowProviderAlert = Boolean(
+    selectedProviderKey && selectedProviderStatus === 'missing'
+  );
+  const providerAlertClassName = shouldShowProviderAlert && selectedProviderKey
+    ? providerAlertStyles[selectedProviderKey]
+    : '';
+  const providerAlertMessage = shouldShowProviderAlert && selectedProviderKey
+    ? providerAlertMessages[selectedProviderKey]
+    : '';
   
   // Test Ollama connectivity when Settings page loads (scenario 4: page load)
   // This useEffect is placed after function definitions to ensure access to manualTestConnection
@@ -1253,19 +1288,9 @@ export const RAGSettings = ({
             </div>
           )}
 
-          {ragSettings.LLM_PROVIDER === 'anthropic' && (
-            <div className="p-4 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-lg mb-4">
-              <p className="text-sm text-orange-800 dark:text-orange-300">
-                Configure your Anthropic API key in the credentials section to use Claude models.
-              </p>
-            </div>
-          )}
-
-          {ragSettings.LLM_PROVIDER === 'groq' && (
-            <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg mb-4">
-              <p className="text-sm text-yellow-800 dark:text-yellow-300">
-                Groq provides fast inference with Llama, Mixtral, and Gemma models.
-              </p>
+          {shouldShowProviderAlert && (
+            <div className={`p-4 border rounded-lg mb-4 ${providerAlertClassName}`}>
+              <p className="text-sm">{providerAlertMessage}</p>
             </div>
           )}
           
