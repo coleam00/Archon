@@ -8,6 +8,7 @@ import { useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/primitives";
 import { cn } from "../../ui/primitives/styles";
 import { SimpleTooltip } from "../../ui/primitives/tooltip";
+import { useAutoSave } from "../../shared/hooks/useAutoSave";
 import { useUpdateKnowledgeItem } from "../hooks";
 
 interface KnowledgeCardTypeProps {
@@ -18,6 +19,22 @@ interface KnowledgeCardTypeProps {
 export const KnowledgeCardType: React.FC<KnowledgeCardTypeProps> = ({ sourceId, knowledgeType }) => {
   const [isEditing, setIsEditing] = useState(false);
   const updateMutation = useUpdateKnowledgeItem();
+
+  // Use auto-save hook for immediate type changes
+  const {
+    isSaving,
+    hasError,
+  } = useAutoSave<"technical" | "business">({
+    value: knowledgeType,
+    onSave: async (newType) => {
+      await updateMutation.mutateAsync({
+        sourceId,
+        updates: { knowledge_type: newType },
+      });
+    },
+    isEditing: false, // Type changes are immediate
+    debounceMs: 0,
+  });
 
   const isTechnical = knowledgeType === "technical";
 
@@ -64,13 +81,14 @@ export const KnowledgeCardType: React.FC<KnowledgeCardTypeProps> = ({ sourceId, 
           onOpenChange={(open) => setIsEditing(open)}
           value={knowledgeType}
           onValueChange={(value) => handleTypeChange(value as "technical" | "business")}
-          disabled={updateMutation.isPending}
+          disabled={updateMutation.isPending || isSaving}
         >
           <SelectTrigger
             className={cn(
               "w-auto h-auto text-xs font-medium px-2 py-1 rounded-md",
               "border-cyan-400 dark:border-cyan-600",
               "focus:ring-1 focus:ring-cyan-400",
+              hasError && "border-red-400 dark:border-red-600",
               isTechnical
                 ? "bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400"
                 : "bg-pink-100 text-pink-700 dark:bg-pink-500/10 dark:text-pink-400",
@@ -110,10 +128,11 @@ export const KnowledgeCardType: React.FC<KnowledgeCardTypeProps> = ({ sourceId, 
         className={cn(
           "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium cursor-pointer",
           "hover:ring-1 hover:ring-cyan-400/50 transition-all",
+          hasError && "ring-1 ring-red-400/50",
           isTechnical
             ? "bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400"
             : "bg-pink-100 text-pink-700 dark:bg-pink-500/10 dark:text-pink-400",
-          updateMutation.isPending && "opacity-50 cursor-not-allowed",
+          (updateMutation.isPending || isSaving) && "opacity-50 cursor-not-allowed",
         )}
         onClick={handleClick}
       >

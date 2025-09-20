@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { Input } from "../../ui/primitives";
 import { cn } from "../../ui/primitives/styles";
 import { SimpleTooltip, Tooltip, TooltipContent, TooltipTrigger } from "../../ui/primitives/tooltip";
+import { useAutoSaveString } from "../../shared/hooks/useAutoSave";
 import { useUpdateKnowledgeItem } from "../hooks";
 
 // Centralized color class mappings
@@ -48,20 +49,35 @@ export const KnowledgeCardTitle: React.FC<KnowledgeCardTitleProps> = ({
   accentColor,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
-  const [editValue, setEditValue] = useState(title);
   const inputRef = useRef<HTMLInputElement>(null);
   const updateMutation = useUpdateKnowledgeItem();
+
+  // Use auto-save hook for title editing
+  const {
+    editValue,
+    setEditValue,
+    isSaving,
+    save,
+    cancel,
+    hasError,
+  } = useAutoSaveString({
+    value: title,
+    onSave: async (newTitle) => {
+      await updateMutation.mutateAsync({
+        sourceId,
+        updates: { title: newTitle },
+      });
+    },
+    isEditing,
+    allowEmpty: false,
+    trimValue: true,
+    debounceMs: 0, // Save immediately for manual save actions
+  });
 
   // Simple lookups using centralized color mappings
   const getIconColorClass = () => ICON_COLOR_CLASSES[accentColor] ?? ICON_COLOR_CLASSES.default;
   const getTooltipColorClass = () => TOOLTIP_COLOR_CLASSES[accentColor] ?? TOOLTIP_COLOR_CLASSES.default;
 
-  // Update local state when props change, but only when not editing to avoid overwriting user input
-  useEffect(() => {
-    if (!isEditing) {
-      setEditValue(title);
-    }
-  }, [title, isEditing]);
 
   // Focus input when editing starts
   useEffect(() => {
@@ -72,36 +88,17 @@ export const KnowledgeCardTitle: React.FC<KnowledgeCardTitleProps> = ({
   }, [isEditing]);
 
   const handleSave = async () => {
-    const trimmedValue = editValue.trim();
-    if (trimmedValue === title) {
-      setIsEditing(false);
-      return;
-    }
-
-    if (!trimmedValue) {
-      // Don't allow empty titles, revert to original
-      setEditValue(title);
-      setIsEditing(false);
-      return;
-    }
-
     try {
-      await updateMutation.mutateAsync({
-        sourceId,
-        updates: {
-          title: trimmedValue,
-        },
-      });
+      await save();
       setIsEditing(false);
     } catch (_error) {
-      // Reset on error
-      setEditValue(title);
+      // Error handling is done by the auto-save hook
       setIsEditing(false);
     }
   };
 
   const handleCancel = () => {
-    setEditValue(title);
+    cancel();
     setIsEditing(false);
   };
 
@@ -144,10 +141,11 @@ export const KnowledgeCardTitle: React.FC<KnowledgeCardTitleProps> = ({
           onKeyUp={(e) => e.stopPropagation()}
           onInput={(e) => e.stopPropagation()}
           onFocus={(e) => e.stopPropagation()}
-          disabled={updateMutation.isPending}
+          disabled={updateMutation.isPending || isSaving}
           className={cn(
             "text-base font-semibold bg-transparent border-cyan-400 dark:border-cyan-600",
             "focus:ring-1 focus:ring-cyan-400 px-2 py-1",
+            hasError && "border-red-400 dark:border-red-600",
           )}
         />
         {description && description.trim() && (
@@ -176,7 +174,7 @@ export const KnowledgeCardTitle: React.FC<KnowledgeCardTitleProps> = ({
           className={cn(
             "text-base font-semibold text-gray-900 dark:text-white/90 line-clamp-2 cursor-pointer",
             "hover:text-gray-700 dark:hover:text-white transition-colors",
-            updateMutation.isPending && "opacity-50",
+            (updateMutation.isPending || isSaving) && "opacity-50",
           )}
           onClick={handleClick}
         >
