@@ -36,6 +36,44 @@ class CredentialItem:
     description: str | None = None
 
 
+def _detect_embedding_provider_from_model(embedding_model: str) -> str:
+    """
+    Detect the appropriate embedding provider based on model name.
+
+    Args:
+        embedding_model: The embedding model name
+
+    Returns:
+        Provider name: 'google', 'openai', or 'openai' (default)
+    """
+    if not embedding_model:
+        return "openai"  # Default
+
+    model_lower = embedding_model.lower()
+
+    # Google embedding models
+    google_patterns = [
+        "text-embedding-004",
+        "text-embedding-005",
+        "text-multilingual-embedding",
+        "gemini-embedding",
+        "multimodalembedding"
+    ]
+
+    if any(pattern in model_lower for pattern in google_patterns):
+        return "google"
+
+    # OpenAI embedding models (and default for unknown)
+    openai_patterns = [
+        "text-embedding-ada-002",
+        "text-embedding-3-small",
+        "text-embedding-3-large"
+    ]
+
+    # Default to OpenAI for OpenAI models or unknown models
+    return "openai"
+
+
 class CredentialService:
     """Service for managing application credentials and configuration."""
 
@@ -435,8 +473,33 @@ class CredentialService:
             # Get RAG strategy settings (where UI saves provider selection)
             rag_settings = await self.get_credentials_by_category("rag_strategy")
 
-            # Get the selected provider
-            provider = rag_settings.get("LLM_PROVIDER", "openai")
+            # Get the selected provider based on service type
+            if service_type == "embedding":
+                # Get the LLM provider setting to determine embedding provider
+                llm_provider = rag_settings.get("LLM_PROVIDER", "openai")
+                embedding_model = rag_settings.get("EMBEDDING_MODEL", "text-embedding-3-small")
+
+                # Determine embedding provider based on LLM provider
+                if llm_provider == "google":
+                    provider = "google"
+                elif llm_provider == "ollama":
+                    provider = "ollama"
+                elif llm_provider == "openrouter":
+                    # OpenRouter supports both OpenAI and Google embedding models
+                    provider = _detect_embedding_provider_from_model(embedding_model)
+                elif llm_provider in ["anthropic", "grok"]:
+                    # Anthropic and Grok support both OpenAI and Google embedding models
+                    provider = _detect_embedding_provider_from_model(embedding_model)
+                else:
+                    # Default case (openai, or unknown providers)
+                    provider = "openai"
+
+                logger.debug(f"Determined embedding provider '{provider}' from LLM provider '{llm_provider}' and embedding model '{embedding_model}'")
+            else:
+                provider = rag_settings.get("LLM_PROVIDER", "openai")
+                # Ensure provider is a valid string, not a boolean or other type
+                if not isinstance(provider, str) or provider.lower() in ("true", "false", "none", "null"):
+                    provider = "openai"
 
             # Get API key for this provider
             api_key = await self._get_provider_api_key(provider)

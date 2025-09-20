@@ -226,129 +226,6 @@ def _select_best_code_variant(similar_blocks: list[dict[str, Any]]) -> dict[str,
     return best_block
 
 
-def _should_attempt_fallback(provider: str, model: str, is_reasoning: bool, error_context: dict) -> bool:
-    """
-    Determine if fallback should be attempted based on error type and configuration.
-
-    Args:
-        provider: The LLM provider name
-        model: The model identifier
-        is_reasoning: Whether this is a reasoning model
-        error_context: Context about the error that occurred
-
-    Returns:
-        True if fallback should be attempted
-    """
-    # Check for environment variable to disable fallbacks (fail-fast mode)
-    if os.getenv("DISABLE_LLM_FALLBACKS", "false").lower() == "true":
-        search_logger.debug("LLM fallbacks disabled by DISABLE_LLM_FALLBACKS environment variable")
-        return False
-
-    # Only attempt fallback for specific provider/model combinations
-    fallback_eligible_providers = ["grok", "openai"]  # Providers that support fallback
-
-    if provider not in fallback_eligible_providers:
-        search_logger.debug(f"Provider {provider} not eligible for fallback")
-        return False
-
-    # Only allow fallback for empty responses, not other error types
-    if error_context.get("response_type") != "empty_content":
-        search_logger.debug(f"Error type {error_context.get('response_type')} not eligible for fallback")
-        return False
-
-    # Allow fallback for Grok and reasoning models that commonly have empty responses
-    if provider == "grok" or is_reasoning:
-        search_logger.debug(f"Fallback enabled for {provider}/{model} (reasoning: {is_reasoning})")
-        return True
-
-    return False
-
-
-async def _attempt_single_fallback(
-    original_model: str,
-    original_provider: str,
-    is_reasoning: bool,
-    original_params: dict,
-    error_context: dict
-) -> str | None:
-    """
-    Attempt a single fallback to gpt-4o-mini with structured tracking.
-
-    Args:
-        original_model: The original model that failed
-        original_provider: The original provider that failed
-        is_reasoning: Whether original was a reasoning model
-        original_params: The original request parameters
-        error_context: Context about the original error
-
-    Returns:
-        Response content if fallback succeeded, None if failed
-    """
-    fallback_start_time = time.time()
-
-    # Always fallback to reliable gpt-4o-mini
-    fallback_model = "gpt-4o-mini"
-    fallback_provider = "openai"
-
-    fallback_context = {
-        "original_model": original_model,
-        "original_provider": original_provider,
-        "fallback_model": fallback_model,
-        "fallback_provider": fallback_provider,
-        "original_error": error_context,
-        "fallback_attempt_time": time.time()
-    }
-
-    search_logger.info(f"Attempting single fallback: {original_model} → {fallback_model}")
-
-    try:
-        # Prepare fallback parameters (simplified, no JSON format to avoid issues)
-        fallback_params = {
-            "model": fallback_model,
-            "messages": original_params["messages"],
-            "max_tokens": min(original_params.get("max_tokens", 500), 500),  # Cap for reliability
-            "temperature": original_params.get("temperature", 0.3)
-        }
-
-        # No response_format for fallback to maximize reliability
-        if "response_format" in fallback_params:
-            del fallback_params["response_format"]
-
-        async with get_llm_client(provider=fallback_provider) as fallback_client:
-            fallback_response = await fallback_client.chat.completions.create(**fallback_params)
-            fallback_content = fallback_response.choices[0].message.content
-
-            if fallback_content and fallback_content.strip():
-                fallback_time = time.time() - fallback_start_time
-                fallback_success = {
-                    **fallback_context,
-                    "fallback_succeeded": True,
-                    "fallback_time": f"{fallback_time:.2f}s",
-                    "fallback_content_length": len(fallback_content.strip())
-                }
-                search_logger.info(f"Fallback success: {fallback_success}")
-                return fallback_content.strip()
-            else:
-                # Fallback returned empty - log and return None
-                fallback_failure = {
-                    **fallback_context,
-                    "fallback_succeeded": False,
-                    "fallback_error": "empty_response"
-                }
-                search_logger.error(f"Fallback returned empty response: {fallback_failure}")
-                return None
-
-    except Exception as e:
-        fallback_time = time.time() - fallback_start_time
-        fallback_error = {
-            **fallback_context,
-            "fallback_succeeded": False,
-            "fallback_error": str(e),
-            "fallback_time": f"{fallback_time:.2f}s"
-        }
-        search_logger.error(f"Fallback exception: {fallback_error}")
-        return None
-
 
 def extract_code_blocks(markdown_content: str, min_length: int = None) -> list[dict[str, Any]]:
     """
@@ -714,7 +591,17 @@ async def _generate_code_example_summary_async(
     from ..llm_provider_service import get_llm_client
     
     # Get model choice from credential service (RAG setting)
-    model_choice = _get_model_choice()
+    model_choice = await _get_model_choice()
+
+    # If provider is not specified, get it from credential service
+    if provider is None:
+        try:
+            provider_config = await credential_service.get_active_provider("llm")
+            provider = provider_config.get("provider", "openai")
+            search_logger.debug(f"Auto-detected provider from credential service: {provider}")
+        except Exception as e:
+            search_logger.warning(f"Failed to get provider from credential service: {e}, defaulting to openai")
+            provider = "openai"
 
     # Create the prompt
     prompt = f"""<context_before>
@@ -749,9 +636,9 @@ Format your response as JSON:
                 f"Generating summary for {hash(code) & 0xffffff:06x} using model: {model_choice}"
             )
             
-            response = await client.chat.completions.create(
-                model=model_choice,
-                messages=[
+            request_params = {
+                "model": model_choice,
+                "messages": [
                     {
                         "role": "system",
                         "content": "You are a helpful assistant that analyzes code examples and provides JSON responses with example names and summaries.",
@@ -892,66 +779,13 @@ Format your response as JSON:
                 model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
                 search_logger.debug(f"{model_type} total response time: {elapsed_time:.2f}s")
 
-            # Handle empty response with streamlined fallback logic
             if not response_content:
-                # Structured error analysis for debugging
-                error_context = {
-                    "model": model_choice,
-                    "provider": provider,
-                    "request_time": f"{elapsed_time:.2f}s" if 'elapsed_time' in locals() else "unknown",
-                    "response_type": "empty_content",
-                    "response_choices_count": len(response.choices) if response.choices else 0
-                }
-                search_logger.error(f"Empty response from LLM: {error_context}")
-                # Determine if fallback should be attempted based on error type and configuration
-                should_fallback = _should_attempt_fallback(provider, model_choice, is_reasoning, error_context)
-
-                if should_fallback:
-                    # Single fallback attempt with tracking
-                    fallback_result = await _attempt_single_fallback(
-                        model_choice, provider, is_reasoning, request_params, error_context
-                    )
-                    if fallback_result:
-                        response_content = fallback_result
-                        search_logger.info(f"Fallback succeeded for {model_choice}")
-                    else:
-                        # Log fallback failure analysis for circuit breaker patterns
-                        fallback_failure = {
-                            "original_model": model_choice,
-                            "original_provider": provider,
-                            "fallback_attempted": True,
-                            "fallback_succeeded": False,
-                            "error_context": error_context
-                        }
-                    elif (provider == "grok" or is_reasoning) and attempt < max_retries - 1:
-                        # Empty response from Grok or reasoning models - track failure and retry
-                        model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
-                        failure_reason = f"empty_response_attempt_{attempt + 1}"
-                        failure_reasons.append(failure_reason)
-
-                        async with get_llm_client(provider="openai") as fallback_client:
-                            search_logger.info("Using OpenAI fallback for Grok failure")
-                            # Convert max_tokens to max_completion_tokens for GPT-5/reasoning models
-                            final_fallback_params = prepare_chat_completion_params(fallback_params["model"], fallback_params)
-                            fallback_response = await fallback_client.chat.completions.create(**final_fallback_params)
-                            fallback_content = fallback_response.choices[0].message.content
-
-                            if fallback_content and fallback_content.strip():
-                                search_logger.info("OpenAI fallback succeeded")
-                                response_content = fallback_content.strip()
-                            else:
-                                search_logger.error("OpenAI fallback also returned empty response")
-                                raise ValueError("Both Grok and OpenAI fallback failed")
-
-                    except Exception as fallback_error:
-                        search_logger.error(f"OpenAI fallback failed: {fallback_error}")
-                        raise ValueError(f"Grok failed and fallback to OpenAI also failed: {fallback_error}") from fallback_error
-                elif is_reasoning:
-                    # Implement fallback for reasoning model (GPT-5, o1, o3) failures
-                    search_logger.error("Reasoning model empty response debugging:")
-                    search_logger.error(f"  - Model: {model_choice}")
-                    search_logger.error(f"  - Provider: {provider}")
+                search_logger.error(f"Empty response from LLM for model: {model_choice} (provider: {provider})")
+                if provider == "grok":
+                    search_logger.error("Grok empty response debugging:")
                     search_logger.error(f"  - Request took: {elapsed_time:.2f}s")
+                    search_logger.error(f"  - Response status: {getattr(response, 'status_code', 'N/A')}")
+                    search_logger.error(f"  - Response headers: {getattr(response, 'headers', 'N/A')}")
                     search_logger.error(f"  - Full response: {response}")
                     search_logger.error(f"  - Response choices length: {len(response.choices) if response.choices else 0}")
                     if response.choices:
@@ -960,26 +794,22 @@ Format your response as JSON:
                         search_logger.error(f"  - Message role: {response.choices[0].message.role}")
                     search_logger.error("Check: 1) API key validity, 2) rate limits, 3) model availability")
 
-                    # Implement fallback to non-reasoning model for reasoning model failures
-                    search_logger.warning(f"Attempting fallback to gpt-4o-mini due to {model_choice} failure...")
+                    # Implement fallback for Grok failures
+                    search_logger.warning("Attempting fallback to OpenAI due to Grok failure...")
                     try:
-                        # Use a reliable non-reasoning model as fallback
+                        # Use OpenAI as fallback with similar parameters
                         fallback_params = {
                             "model": "gpt-4o-mini",
                             "messages": request_params["messages"],
+                            "temperature": request_params.get("temperature", 0.1),
                             "max_tokens": request_params.get("max_tokens", 500),
-                            "temperature": request_params.get("temperature", 0.3),
-                            "response_format": {"type": "json_object"}
                         }
 
                         async with get_llm_client(provider="openai") as fallback_client:
-                            search_logger.info(f"Using gpt-4o-mini fallback for {model_choice} failure")
-                            # No parameter conversion needed for non-reasoning model
                             fallback_response = await fallback_client.chat.completions.create(**fallback_params)
                             fallback_content = fallback_response.choices[0].message.content
-
                             if fallback_content and fallback_content.strip():
-                                search_logger.info(f"gpt-4o-mini fallback succeeded for {model_choice}")
+                                search_logger.info("gpt-4o-mini fallback succeeded")
                                 response_content = fallback_content.strip()
                             else:
                                 search_logger.error("gpt-4o-mini fallback also returned empty response")
@@ -989,9 +819,8 @@ Format your response as JSON:
                         search_logger.error(f"gpt-4o-mini fallback failed: {fallback_error}")
                         raise ValueError(f"{model_choice} failed and fallback to gpt-4o-mini also failed: {fallback_error}") from fallback_error
                 else:
-                    # No fallback attempted - fail fast with detailed context
-                    search_logger.error(f"No fallback configured for {provider}/{model_choice} - failing fast")
-                    raise ValueError(f"Empty response from {model_choice} (provider: {provider}). Check: API key validity, rate limits, model availability")
+                    search_logger.debug(f"Full response object: {response}")
+                    raise ValueError("Empty response from LLM")
 
             if not response_content:
                 # This should not happen after fallback logic, but safety check
@@ -1035,7 +864,7 @@ Format your response as JSON:
 
 
 async def generate_code_summaries_batch(
-    code_blocks: list[dict[str, Any]], max_workers: int = None, progress_callback=None
+    code_blocks: list[dict[str, Any]], max_workers: int = None, progress_callback=None, provider: str = None
 ) -> list[dict[str, str]]:
     """
     Generate summaries for multiple code blocks with rate limiting and proper worker management.
@@ -1044,6 +873,7 @@ async def generate_code_summaries_batch(
         code_blocks: List of code block dictionaries
         max_workers: Maximum number of concurrent API requests
         progress_callback: Optional callback for progress updates (async function)
+        provider: LLM provider to use for generation (e.g., 'grok', 'openai', 'anthropic')
 
     Returns:
         List of summary dictionaries
@@ -1088,6 +918,7 @@ async def generate_code_summaries_batch(
                 block["context_before"],
                 block["context_after"],
                 block.get("language", ""),
+                provider,
             )
 
             # Update progress
@@ -1182,27 +1013,21 @@ async def add_code_examples_to_supabase(
         except Exception as e:
             search_logger.error(f"Error deleting existing code examples for {url}: {e}")
 
-    # Check if contextual embeddings are enabled
+    # Check if contextual embeddings are enabled (use proper async method like document storage)
     try:
-        use_contextual_embeddings = credential_service._cache.get("USE_CONTEXTUAL_EMBEDDINGS")
-        if isinstance(use_contextual_embeddings, str):
-            use_contextual_embeddings = use_contextual_embeddings.lower() == "true"
-        elif isinstance(use_contextual_embeddings, dict) and use_contextual_embeddings.get(
-            "is_encrypted"
-        ):
-            # Handle encrypted value
-            encrypted_value = use_contextual_embeddings.get("encrypted_value")
-            if encrypted_value:
-                try:
-                    decrypted = credential_service._decrypt_value(encrypted_value)
-                    use_contextual_embeddings = decrypted.lower() == "true"
-                except:
-                    use_contextual_embeddings = False
-            else:
-                use_contextual_embeddings = False
+        raw_value = await credential_service.get_credential(
+            "USE_CONTEXTUAL_EMBEDDINGS", "false", decrypt=True
+        )
+        search_logger.info(f"DEBUG: Raw contextual embeddings value: {raw_value} (type: {type(raw_value)})")
+
+        if isinstance(raw_value, str):
+            use_contextual_embeddings = raw_value.lower() == "true"
         else:
-            use_contextual_embeddings = bool(use_contextual_embeddings)
-    except:
+            use_contextual_embeddings = bool(raw_value)
+
+        search_logger.info(f"DEBUG: Processed contextual embeddings value: {use_contextual_embeddings}")
+    except Exception as e:
+        search_logger.error(f"DEBUG: Error reading contextual embeddings: {e}")
         # Fallback to environment variable
         use_contextual_embeddings = (
             os.getenv("USE_CONTEXTUAL_EMBEDDINGS", "false").lower() == "true"
@@ -1291,7 +1116,7 @@ async def add_code_examples_to_supabase(
                     llm_chat_model = await credential_service.get_credential("MODEL_CHOICE", "gpt-4o-mini")
             else:
                 # For code summaries, we use MODEL_CHOICE
-                llm_chat_model = _get_model_choice()
+                llm_chat_model = await _get_model_choice()
         except Exception as e:
             search_logger.warning(f"Failed to get LLM chat model: {e}")
             llm_chat_model = "gpt-4o-mini"  # Default fallback

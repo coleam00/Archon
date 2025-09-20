@@ -618,16 +618,19 @@ async def get_embedding_model(provider: str | None = None) -> str:
             # Ollama default embedding model
             return "nomic-embed-text"
         elif provider_name == "google":
-            # Google's embedding model
-            return "gemini-embedding-001"
+            # Google's latest embedding model
+            return "text-embedding-004"
         elif provider_name == "openrouter":
-            # OpenRouter supports OpenAI embedding models
+            # OpenRouter supports both OpenAI and Google embedding models
+            # Default to OpenAI's latest for compatibility
             return "text-embedding-3-small"
         elif provider_name == "anthropic":
-            # Anthropic doesn't have native embedding models, fallback to OpenAI
+            # Anthropic supports OpenAI and Google embedding models through their API
+            # Default to OpenAI's latest for compatibility
             return "text-embedding-3-small"
         elif provider_name == "grok":
-            # Grok doesn't have embedding models yet, fallback to OpenAI
+            # Grok supports OpenAI and Google embedding models through their API
+            # Default to OpenAI's latest for compatibility
             return "text-embedding-3-small"
         else:
             # Fallback to OpenAI's model
@@ -637,6 +640,188 @@ async def get_embedding_model(provider: str | None = None) -> str:
         logger.error(f"Error getting embedding model: {e}")
         # Fallback to OpenAI default
         return "text-embedding-3-small"
+
+
+def is_openai_embedding_model(model: str) -> bool:
+    """Check if a model is an OpenAI embedding model."""
+    if not model:
+        return False
+
+    openai_models = {
+        "text-embedding-ada-002",
+        "text-embedding-3-small",
+        "text-embedding-3-large"
+    }
+    return model.lower() in openai_models
+
+
+def is_google_embedding_model(model: str) -> bool:
+    """Check if a model is a Google embedding model."""
+    if not model:
+        return False
+
+    model_lower = model.lower()
+    google_patterns = [
+        "text-embedding-004",
+        "text-embedding-005",
+        "text-multilingual-embedding-002",
+        "gemini-embedding-001",
+        "multimodalembedding@001"
+    ]
+
+    return any(pattern in model_lower for pattern in google_patterns)
+
+
+def is_valid_embedding_model_for_provider(model: str, provider: str) -> bool:
+    """
+    Validate if an embedding model is compatible with a provider.
+
+    Args:
+        model: The embedding model name
+        provider: The provider name
+
+    Returns:
+        bool: True if the model is compatible with the provider
+    """
+    if not model or not provider:
+        return False
+
+    provider_lower = provider.lower()
+
+    if provider_lower == "openai":
+        return is_openai_embedding_model(model)
+    elif provider_lower == "google":
+        return is_google_embedding_model(model)
+    elif provider_lower in ["openrouter", "anthropic", "grok"]:
+        # These providers support both OpenAI and Google models
+        return is_openai_embedding_model(model) or is_google_embedding_model(model)
+    elif provider_lower == "ollama":
+        # Ollama has its own models, check common ones
+        model_lower = model.lower()
+        ollama_patterns = ["nomic-embed", "all-minilm", "mxbai-embed", "embed"]
+        return any(pattern in model_lower for pattern in ollama_patterns)
+    else:
+        # For unknown providers, assume OpenAI compatibility
+        return is_openai_embedding_model(model)
+
+
+def get_supported_embedding_models(provider: str) -> list[str]:
+    """
+    Get list of supported embedding models for a provider.
+
+    Args:
+        provider: The provider name
+
+    Returns:
+        List of supported embedding model names
+    """
+    if not provider:
+        return []
+
+    provider_lower = provider.lower()
+
+    openai_models = [
+        "text-embedding-ada-002",
+        "text-embedding-3-small",
+        "text-embedding-3-large"
+    ]
+
+    google_models = [
+        "text-embedding-004",
+        "text-embedding-005",
+        "text-multilingual-embedding-002",
+        "gemini-embedding-001",
+        "multimodalembedding@001"
+    ]
+
+    if provider_lower == "openai":
+        return openai_models
+    elif provider_lower == "google":
+        return google_models
+    elif provider_lower in ["openrouter", "anthropic", "grok"]:
+        # These providers support both OpenAI and Google models
+        return openai_models + google_models
+    elif provider_lower == "ollama":
+        return ["nomic-embed-text", "all-minilm", "mxbai-embed-large"]
+    else:
+        # For unknown providers, assume OpenAI compatibility
+        return openai_models
+
+
+def requires_max_completion_tokens(model_name: str) -> bool:
+    """
+    Check if a model requires max_completion_tokens instead of max_tokens.
+
+    OpenAI changed the parameter for reasoning models (o1, o3, GPT-5 series)
+    introduced in September 2024.
+
+    Args:
+        model_name: The model name to check
+
+    Returns:
+        True if the model requires max_completion_tokens, False otherwise
+    """
+    if not model_name:
+        return False
+
+    model_lower = model_name.lower()
+
+    # GPT-5 series (all variants)
+    if "gpt-5" in model_lower:
+        return True
+
+    # o1 and o3 series (reasoning models)
+    reasoning_patterns = [
+        "o1-mini", "o1-preview", "o1-pro",
+        "o3-mini", "o3-medium", "o3-large", "o3-pro",
+        "o1", "o3"  # Base patterns
+    ]
+
+    for pattern in reasoning_patterns:
+        if pattern in model_lower:
+            return True
+
+    return False
+
+
+def prepare_chat_completion_params(model: str, params: dict) -> dict:
+    """
+    Convert parameters for compatibility with reasoning models (GPT-5, o1, o3 series).
+
+    OpenAI made several API changes for reasoning models:
+    1. max_tokens → max_completion_tokens
+    2. temperature must be 1.0 (default) - custom values not supported
+
+    This ensures compatibility with OpenAI's API changes for newer models
+    while maintaining backward compatibility for existing models.
+
+    Args:
+        model: The model name being used
+        params: Dictionary of API parameters
+
+    Returns:
+        Dictionary with converted parameters for the model
+    """
+    if not model or not params:
+        return params
+
+    # Make a copy to avoid modifying the original
+    updated_params = params.copy()
+
+    is_reasoning_model = requires_max_completion_tokens(model)
+
+    # Convert max_tokens to max_completion_tokens for reasoning models
+    if is_reasoning_model and "max_tokens" in updated_params:
+        max_tokens_value = updated_params.pop("max_tokens")
+        updated_params["max_completion_tokens"] = max_tokens_value
+        logger.debug(f"Converted max_tokens to max_completion_tokens for model {model}")
+
+    # Remove custom temperature for reasoning models (they only support default temperature=1.0)
+    if is_reasoning_model and "temperature" in updated_params:
+        original_temp = updated_params.pop("temperature")
+        logger.debug(f"Removed custom temperature {original_temp} for reasoning model {model} (only supports default temperature=1.0)")
+
+    return updated_params
 
 
 async def get_embedding_model_with_routing(provider: str | None = None, instance_url: str | None = None) -> tuple[str, str]:

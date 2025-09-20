@@ -83,21 +83,67 @@ async def _validate_provider_api_key(provider: str = None) -> None:
         # Basic sanitization for logging
         safe_provider = provider[:20]  # Limit length
         logger.info(f"🔑 Testing {safe_provider.title()} API key with minimal embedding request...")
-        # Test API key with minimal embedding request - this will fail if key is invalid
-        from ..services.embeddings.embedding_service import create_embedding
-        test_result = await create_embedding(text="test")
-        
-        if not test_result:
-            logger.error(f"❌ {provider.title()} API key validation failed - no embedding returned")
-            raise HTTPException(
-                status_code=401,
-                detail={
-                    "error": f"Invalid {provider.title()} API key",
-                    "message": f"Please verify your {provider.title()} API key in Settings.",
-                    "error_type": "authentication_failed",
-                    "provider": provider
-                }
-            )
+
+        try:
+            # Test API key with minimal embedding request - this will fail if key is invalid
+            from ..services.embeddings.embedding_service import create_embedding
+            test_result = await create_embedding(text="test")
+
+            if not test_result:
+                logger.error(f"❌ {provider.title()} API key validation failed - no embedding returned")
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "error": f"Invalid {provider.title()} API key",
+                        "message": f"Please verify your {provider.title()} API key in Settings.",
+                        "error_type": "authentication_failed",
+                        "provider": provider
+                    }
+                )
+        except Exception as e:
+            # If embedding fails due to model incompatibility, try with provider-compatible model
+            error_str = str(e).lower()
+            if "does not exist" in error_str or "not found" in error_str:
+                logger.warning(f"🔄 Embedding model incompatible with {provider.title()}, retrying with provider-compatible model...")
+                try:
+                    # Force provider-compatible embedding model for validation
+                    from ..services.embeddings.embedding_service import create_embedding
+                    from ..services.llm_provider_service import get_llm_client
+
+                    # Use provider-specific compatible embedding model for validation
+                    compatible_model = "text-embedding-3-small"  # OpenAI-compatible model
+
+                    async with get_llm_client(provider=provider, use_embedding_provider=True) as client:
+                        response = await client.embeddings.create(
+                            model=compatible_model,
+                            input="test"
+                        )
+                        if not response.data[0].embedding:
+                            raise Exception("No embedding returned")
+                        logger.info(f"✅ {provider.title()} API key validation successful with compatible model")
+                except Exception as retry_error:
+                    logger.error(f"❌ {provider.title()} API key validation failed even with compatible model: {retry_error}")
+                    raise HTTPException(
+                        status_code=401,
+                        detail={
+                            "error": f"Invalid {provider.title()} API key",
+                            "message": f"Please verify your {provider.title()} API key in Settings. Original error: {str(e)[:100]}",
+                            "error_type": "authentication_failed",
+                            "provider": provider
+                        }
+                    )
+            else:
+                # Other errors (network, auth, etc.) should fail immediately
+                logger.error(f"❌ {provider.title()} API key validation failed: {e}")
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "error": f"Invalid {provider.title()} API key",
+                        "message": f"Please verify your {provider.title()} API key in Settings. Error: {str(e)[:100]}",
+                        "error_type": "authentication_failed",
+                        "provider": provider
+                    }
+                )
             
         logger.info(f"✅ {provider.title()} API key validation successful")
 

@@ -13,7 +13,7 @@ import openai
 
 from ...config.logfire_config import safe_span, search_logger
 from ..credential_service import credential_service
-from ..llm_provider_service import get_embedding_model, get_llm_client
+from ..llm_provider_service import get_embedding_model, get_llm_client, is_google_embedding_model, is_openai_embedding_model
 from ..threading_service import get_threading_service
 from .embedding_exceptions import (
     EmbeddingAPIError,
@@ -179,7 +179,23 @@ async def create_embeddings_batch(
         "create_embeddings_batch", text_count=len(texts), total_chars=sum(len(t) for t in texts)
     ) as span:
         try:
-            async with get_llm_client(provider=provider, use_embedding_provider=True) as client:
+            # Intelligent embedding provider routing based on model type
+            # Get the embedding model first to determine the correct provider
+            embedding_model = await get_embedding_model(provider=provider)
+
+            # Route to correct provider based on model type
+            if is_google_embedding_model(embedding_model):
+                embedding_provider = "google"
+                search_logger.info(f"Routing to Google for embedding model: {embedding_model}")
+            elif is_openai_embedding_model(embedding_model):
+                embedding_provider = "openai"
+                search_logger.info(f"Routing to OpenAI for embedding model: {embedding_model}")
+            else:
+                # Keep original provider for ollama and other providers
+                embedding_provider = provider
+                search_logger.info(f"Using original provider '{provider}' for embedding model: {embedding_model}")
+
+            async with get_llm_client(provider=embedding_provider, use_embedding_provider=True) as client:
                 # Load batch size and dimensions from settings
                 try:
                     rag_settings = await credential_service.get_credentials_by_category(
@@ -220,7 +236,8 @@ async def create_embeddings_batch(
                             while retry_count < max_retries:
                                 try:
                                     # Create embeddings for this batch
-                                    embedding_model = await get_embedding_model(provider=provider)
+                                    embedding_model = await get_embedding_model(provider=embedding_provider)
+
                                     response = await client.embeddings.create(
                                         model=embedding_model,
                                         input=batch,
