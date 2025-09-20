@@ -6,6 +6,7 @@
  */
 
 import { getApiUrl } from "../config/api";
+import { createRetryLogic } from "../features/shared/queryPatterns";
 
 // Type definitions for Ollama API responses
 export interface OllamaModel {
@@ -381,21 +382,21 @@ class OllamaService {
   }
 
   /**
-   * Test connectivity to a single Ollama instance (quick health check) with retry logic
+   * Test connectivity to a single Ollama instance (quick health check) with smart retry logic
    */
   async testConnection(instanceUrl: string, retryCount = 3): Promise<{ isHealthy: boolean; responseTime?: number; error?: string }> {
-    const maxRetries = retryCount;
+    const retryLogic = createRetryLogic(retryCount);
     let lastError: Error | null = null;
 
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    for (let attempt = 1; attempt <= retryCount + 1; attempt++) {
       try {
         const startTime = Date.now();
-        
+
         const healthResponse = await this.checkInstanceHealth([instanceUrl], false);
         const responseTime = Date.now() - startTime;
-        
+
         const instanceStatus = healthResponse.instance_status[instanceUrl];
-        
+
         const result = {
           isHealthy: instanceStatus?.is_healthy || false,
           responseTime: instanceStatus?.response_time_ms || responseTime,
@@ -407,17 +408,25 @@ class OllamaService {
           return result;
         }
 
-        // If not healthy but we got a valid response, store error for potential retry
+        // If not healthy but we got a valid response, this might be a 4xx error
+        // Create an error object that smart retry logic can evaluate
         lastError = new Error(result.error || 'Instance not available');
-        
+
+        // For health check failures, we can add a statusCode if we know it's a client error
+        if (result.error?.includes('404') || result.error?.includes('not found')) {
+          (lastError as any).statusCode = 404;
+        }
+
       } catch (error) {
         lastError = error instanceof Error ? error : new Error('Unknown error');
       }
 
-      // If this wasn't the last attempt, wait before retrying
-      if (attempt < maxRetries) {
+      // Use smart retry logic to determine if we should retry
+      if (attempt <= retryCount && retryLogic(attempt - 1, lastError)) {
         const delayMs = Math.pow(2, attempt - 1) * 1000; // Exponential backoff: 1s, 2s, 4s
         await new Promise(resolve => setTimeout(resolve, delayMs));
+      } else {
+        break;
       }
     }
 

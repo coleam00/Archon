@@ -34,11 +34,14 @@ function buildFullUrl(cleanEndpoint: string): string {
 }
 
 /**
- * Simple API call function for JSON APIs
+ * Simple API call function for JSON APIs and FormData uploads
  * Browser automatically handles ETags/304s through its HTTP cache
  *
- * NOTE: This wrapper is designed for JSON-only API calls.
- * For file uploads or FormData requests, use fetch() directly.
+ * Features:
+ * - Automatic FormData detection (avoids setting Content-Type header)
+ * - JSON API support with proper Content-Type headers
+ * - Built-in timeout and error handling
+ * - ETag/304 optimization through browser HTTP cache
  */
 export async function callAPIWithETag<T = unknown>(endpoint: string, options: RequestInit = {}): Promise<T> {
   try {
@@ -48,9 +51,11 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
     // Construct the full URL
     const fullUrl = buildFullUrl(cleanEndpoint);
 
-    // Build headers - only set Content-Type for requests with a body
+    // Detect FormData to avoid setting Content-Type (browser sets multipart/form-data with boundary)
+    const isFormData = options.body instanceof FormData;
+
+    // Build headers - only set Content-Type for non-FormData requests with body
     // NOTE: We do NOT add If-None-Match headers; the browser handles ETag revalidation automatically
-    //
     // Currently assumes headers are passed as plain objects (Record<string, string>)
     // which works for all our current usage. The API doesn't require Accept headers
     // since it always returns JSON, and we only set Content-Type when sending data.
@@ -59,10 +64,10 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
     };
 
     // Only set Content-Type for requests that have a body (POST, PUT, PATCH, etc.)
-    // GET and DELETE requests should not have Content-Type header
+    // and are not FormData (browser handles FormData Content-Type automatically)
     const method = options.method?.toUpperCase() || 'GET';
     const hasBody = options.body !== undefined && options.body !== null;
-    if (hasBody && !headers['Content-Type']) {
+    if (hasBody && !isFormData && !headers['Content-Type']) {
       headers['Content-Type'] = 'application/json';
     }
 
@@ -73,7 +78,7 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
     // See: DELETE FROM archon_crawled_pages WHERE source_id = '9529d5dabe8a726a' (7,073 rows)
     const response = await fetch(fullUrl, {
       ...options,
-      headers,
+      headers: headers,
       signal: options.signal ?? AbortSignal.timeout(20000), // 20 second timeout (was 10s)
     });
 

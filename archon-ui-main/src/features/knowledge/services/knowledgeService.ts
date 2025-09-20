@@ -117,27 +117,12 @@ export const knowledgeService = {
       formData.append("tags", JSON.stringify(metadata.tags));
     }
 
-    // Use fetch directly for file upload (FormData doesn't work well with our ETag wrapper)
-    // In test environment, we need absolute URLs
-    let uploadUrl = "/api/documents/upload";
-    if (typeof process !== "undefined" && process.env?.NODE_ENV === "test") {
-      const testHost = process.env?.VITE_HOST || "localhost";
-      const testPort = process.env?.ARCHON_SERVER_PORT || "8181";
-      uploadUrl = `http://${testHost}:${testPort}${uploadUrl}`;
-    }
-
-    const response = await fetch(uploadUrl, {
+    // Use improved API service with proper FormData handling and smart retry logic
+    return callAPIWithETag<{ success: boolean; progressId: string; message: string; filename: string }>("/api/documents/upload", {
       method: "POST",
       body: formData,
       signal: AbortSignal.timeout(30000), // 30 second timeout for file uploads
     });
-
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new APIServiceError(err.error || `HTTP ${response.status}`, "HTTP_ERROR", response.status);
-    }
-
-    return response.json();
   },
 
   /**
