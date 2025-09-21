@@ -573,7 +573,7 @@ class CredentialService:
         try:
             # For now, we'll update the RAG strategy settings
             return await self.set_credential(
-                "llm_provider",
+                "LLM_PROVIDER",
                 provider,
                 category="rag_strategy",
                 description=f"Active {service_type} provider",

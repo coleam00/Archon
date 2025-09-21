@@ -1193,10 +1193,12 @@ async def add_code_examples_to_supabase(
             elif embedding_dim == 3072:
                 embedding_column = "embedding_3072"
             else:
-                # Default to closest supported dimension
-                search_logger.warning(f"Unsupported embedding dimension {embedding_dim}, using embedding_1536")
-                embedding_column = "embedding_1536"
-            
+                # Skip unsupported dimensions to avoid corrupting the schema
+                search_logger.error(
+                    f"Unsupported embedding dimension {embedding_dim}; skipping record to prevent column mismatch"
+                )
+                continue
+
             batch_data.append({
                 "url": urls[idx],
                 "chunk_number": chunk_numbers[idx],
@@ -1229,9 +1231,7 @@ async def add_code_examples_to_supabase(
                         f"Error inserting batch into Supabase (attempt {retry + 1}/{max_retries}): {e}"
                     )
                     search_logger.info(f"Retrying in {retry_delay} seconds...")
-                    import time
-
-                    time.sleep(retry_delay)
+                    await asyncio.sleep(retry_delay)
                     retry_delay *= 2  # Exponential backoff
                 else:
                     # Final attempt failed

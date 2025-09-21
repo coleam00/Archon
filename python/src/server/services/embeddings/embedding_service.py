@@ -152,27 +152,49 @@ async def create_embeddings_batch(
     if not texts:
         return EmbeddingBatchResult()
 
+    result = EmbeddingBatchResult()
+
     # Validate that all items in texts are strings
     validated_texts = []
     for i, text in enumerate(texts):
-        if not isinstance(text, str):
-            search_logger.error(
-                f"Invalid text type at index {i}: {type(text)}, value: {text}", exc_info=True
-            )
-            # Try to convert to string
-            try:
-                validated_texts.append(str(text))
-            except Exception as e:
-                search_logger.error(
-                    f"Failed to convert text at index {i} to string: {e}", exc_info=True
+        if isinstance(text, str):
+            if text.strip():
+                validated_texts.append(text)
+            else:
+                result.add_failure(
+                    text,
+                    EmbeddingAPIError("Empty text not allowed"),
+                    batch_index=None,
                 )
-                validated_texts.append("")  # Use empty string as fallback
+            continue
+
+        search_logger.error(
+            f"Invalid text type at index {i}: {type(text)}, value: {text}", exc_info=True
+        )
+        try:
+            converted = str(text)
+        except Exception as conversion_error:
+            search_logger.error(
+                f"Failed to convert text at index {i} to string: {conversion_error}",
+                exc_info=True,
+            )
+            result.add_failure(
+                repr(text),
+                EmbeddingAPIError("Invalid text type", original_error=conversion_error),
+                batch_index=None,
+            )
+            continue
+
+        if converted.strip():
+            validated_texts.append(converted)
         else:
-            validated_texts.append(text)
+            result.add_failure(
+                repr(text),
+                EmbeddingAPIError("Empty text not allowed"),
+                batch_index=None,
+            )
 
     texts = validated_texts
-
-    result = EmbeddingBatchResult()
     threading_service = get_threading_service()
 
     with safe_span(

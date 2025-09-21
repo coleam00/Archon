@@ -116,8 +116,10 @@ interface RAGSettingsProps {
     USE_RERANKING: boolean;
     LLM_PROVIDER?: string;
     LLM_BASE_URL?: string;
+    LLM_INSTANCE_NAME?: string;
     EMBEDDING_MODEL?: string;
     OLLAMA_EMBEDDING_URL?: string;
+    OLLAMA_EMBEDDING_INSTANCE_NAME?: string;
     // Crawling Performance Settings
     CRAWL_BATCH_SIZE?: number;
     CRAWL_MAX_CONCURRENT?: number;

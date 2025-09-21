@@ -181,18 +181,19 @@ async def generate_contextual_embeddings_batch(
             model_choice = await _get_model_choice(provider)
 
             # Build batch prompt for ALL chunks at once
-            batch_prompt = (
-                "Process the following chunks and provide contextual information for each:\\n\\n"
-            )
+            batch_prompt = "Process the following chunks and provide contextual information for each:\n\n"
 
             for i, (doc, chunk) in enumerate(zip(full_documents, chunks, strict=False)):
                 # Use only 2000 chars of document context to save tokens
                 doc_preview = doc[:2000] if len(doc) > 2000 else doc
-                batch_prompt += f"CHUNK {i + 1}:\\n"
-                batch_prompt += f"<document_preview>\\n{doc_preview}\\n</document_preview>\\n"
-                batch_prompt += f"<chunk>\\n{chunk[:500]}\\n</chunk>\\n\\n"  # Limit chunk preview
+                batch_prompt += f"CHUNK {i + 1}:\n"
+                batch_prompt += f"<document_preview>\n{doc_preview}\n</document_preview>\n"
+                batch_prompt += f"<chunk>\n{chunk[:500]}\n</chunk>\n\n"  # Limit chunk preview
 
-            batch_prompt += "For each chunk, provide a short succinct context to situate it within the overall document for improving search retrieval. Format your response as:\\nCHUNK 1: [context]\\nCHUNK 2: [context]\\netc."
+            batch_prompt += (
+                "For each chunk, provide a short succinct context to situate it within the overall document for improving search retrieval. "
+                "Format your response as:\nCHUNK 1: [context]\nCHUNK 2: [context]\netc."
+            )
 
             # Make single API call for ALL chunks
             # Prepare parameters and convert max_tokens for GPT-5/reasoning models
@@ -215,7 +216,7 @@ async def generate_contextual_embeddings_batch(
             response_text = response.choices[0].message.content
 
             # Extract contexts from response
-            lines = response_text.strip().split("\\n")
+            lines = response_text.strip().split("\n")
             chunk_contexts = {}
 
             for line in lines:
