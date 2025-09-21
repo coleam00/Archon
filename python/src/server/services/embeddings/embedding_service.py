@@ -158,14 +158,7 @@ async def create_embeddings_batch(
     validated_texts = []
     for i, text in enumerate(texts):
         if isinstance(text, str):
-            if text.strip():
-                validated_texts.append(text)
-            else:
-                result.add_failure(
-                    text,
-                    EmbeddingAPIError("Empty text not allowed"),
-                    batch_index=None,
-                )
+            validated_texts.append(text)
             continue
 
         search_logger.error(
@@ -173,6 +166,7 @@ async def create_embeddings_batch(
         )
         try:
             converted = str(text)
+            validated_texts.append(converted)
         except Exception as conversion_error:
             search_logger.error(
                 f"Failed to convert text at index {i} to string: {conversion_error}",
@@ -181,16 +175,6 @@ async def create_embeddings_batch(
             result.add_failure(
                 repr(text),
                 EmbeddingAPIError("Invalid text type", original_error=conversion_error),
-                batch_index=None,
-            )
-            continue
-
-        if converted.strip():
-            validated_texts.append(converted)
-        else:
-            result.add_failure(
-                repr(text),
-                EmbeddingAPIError("Empty text not allowed"),
                 batch_index=None,
             )
 
