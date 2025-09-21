@@ -10,9 +10,14 @@ import os
 import openai
 
 from ...config.logfire_config import search_logger
-from ..llm_provider_service import get_llm_client, prepare_chat_completion_params, requires_max_completion_tokens
-from ..threading_service import get_threading_service
 from ..credential_service import credential_service
+from ..llm_provider_service import (
+    extract_message_text,
+    get_llm_client,
+    prepare_chat_completion_params,
+    requires_max_completion_tokens,
+)
+from ..threading_service import get_threading_service
 
 
 async def generate_contextual_embedding(
@@ -80,7 +85,9 @@ Please give a short succinct context to situate this chunk within the overall do
                 final_params = prepare_chat_completion_params(model, params)
                 response = await client.chat.completions.create(**final_params)
 
-                context = response.choices[0].message.content.strip()
+                choice = response.choices[0] if response.choices else None
+                context, _, _ = extract_message_text(choice)
+                context = context.strip()
                 contextual_text = f"{context}\n---\n{chunk}"
 
                 return contextual_text, True
@@ -213,7 +220,13 @@ async def generate_contextual_embeddings_batch(
             response = await client.chat.completions.create(**final_batch_params)
 
             # Parse response
-            response_text = response.choices[0].message.content
+            choice = response.choices[0] if response.choices else None
+            response_text, _, _ = extract_message_text(choice)
+            if not response_text:
+                search_logger.error(
+                    "Empty response from LLM when generating contextual embeddings batch"
+                )
+                return [(chunk, False) for chunk in chunks]
 
             # Extract contexts from response
             lines = response_text.strip().split("\n")

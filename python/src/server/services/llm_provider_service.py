@@ -223,7 +223,7 @@ def get_cache_stats() -> dict[str, Any]:
     }
 
     # Analyze cache entries
-    for key, (value, timestamp, checksum) in _settings_cache.items():
+    for _key, (_value, timestamp, _checksum) in _settings_cache.items():
         age = current_time - timestamp
         if age < _CACHE_TTL_SECONDS:
             stats["fresh_entries"] += 1
@@ -796,40 +796,300 @@ def get_supported_embedding_models(provider: str) -> list[str]:
         return openai_models
 
 
-def requires_max_completion_tokens(model_name: str) -> bool:
+def is_reasoning_model(model_name: str) -> bool:
     """
-    Check if a model requires max_completion_tokens instead of max_tokens.
+    Unified check for reasoning models across providers.
 
-    OpenAI changed the parameter for reasoning models (o1, o3, GPT-5 series)
-    introduced in September 2024.
-
-    Args:
-        model_name: The model name to check
-
-    Returns:
-        True if the model requires max_completion_tokens, False otherwise
+    Normalizes vendor prefixes (openai/, openrouter/, x-ai/, deepseek/) before checking
+    known reasoning families (OpenAI GPT-5, o1, o3; xAI Grok; DeepSeek-R; etc.).
     """
     if not model_name:
         return False
 
     model_lower = model_name.lower()
 
-    # GPT-5 series (all variants)
-    if "gpt-5" in model_lower:
-        return True
+    # Normalize vendor prefixes (e.g., openai/gpt-5-nano, openrouter/x-ai/grok-4)
+    if "/" in model_lower:
+        parts = model_lower.split("/")
+        # Drop known vendor prefixes while keeping the final model identifier
+        known_prefixes = {"openai", "openrouter", "x-ai", "deepseek", "anthropic"}
+        filtered_parts = [part for part in parts if part not in known_prefixes]
+        if filtered_parts:
+            model_lower = filtered_parts[-1]
+        else:
+            model_lower = parts[-1]
 
-    # o1 and o3 series (reasoning models)
-    reasoning_patterns = [
-        "o1-mini", "o1-preview", "o1-pro",
-        "o3-mini", "o3-medium", "o3-large", "o3-pro",
-        "o1", "o3"  # Base patterns
+    if ":" in model_lower:
+        model_lower = model_lower.split(":", 1)[-1]
+
+    reasoning_prefixes = (
+        "gpt-5",
+        "o1",
+        "o3",
+        "o4",
+        "grok",
+        "deepseek-r",
+        "deepseek-reasoner",
+        "deepseek-chat-r",
+    )
+
+    return model_lower.startswith(reasoning_prefixes)
+
+
+def _extract_reasoning_strings(value: Any) -> list[str]:
+    """Convert reasoning payload fragments into plain-text strings."""
+
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+
+    if isinstance(value, (list, tuple, set)):
+        collected: list[str] = []
+        for item in value:
+            collected.extend(_extract_reasoning_strings(item))
+        return collected
+
+    if isinstance(value, dict):
+        candidates = []
+        for key in ("text", "summary", "content", "message", "value"):
+            if value.get(key):
+                candidates.extend(_extract_reasoning_strings(value[key]))
+        # Some providers nest reasoning parts under "parts"
+        if value.get("parts"):
+            candidates.extend(_extract_reasoning_strings(value["parts"]))
+        return candidates
+
+    # Handle pydantic-style objects with attributes
+    for attr in ("text", "summary", "content", "value"):
+        if hasattr(value, attr):
+            attr_value = getattr(value, attr)
+            if attr_value:
+                return _extract_reasoning_strings(attr_value)
+
+    return []
+
+
+def _get_message_attr(message: Any, attribute: str) -> Any:
+    """Safely access message attributes that may be dict keys or properties."""
+
+    if hasattr(message, attribute):
+        return getattr(message, attribute)
+    if isinstance(message, dict):
+        return message.get(attribute)
+    return None
+
+
+def extract_message_text(choice: Any) -> tuple[str, str, bool]:
+    """Extract primary content and reasoning text from a chat completion choice."""
+
+    if not choice:
+        return "", "", False
+
+    message = _get_message_attr(choice, "message")
+    if message is None:
+        return "", "", False
+
+    raw_content = _get_message_attr(message, "content")
+    content_text = raw_content.strip() if isinstance(raw_content, str) else ""
+
+    reasoning_fragments: list[str] = []
+    for attr in ("reasoning", "reasoning_details", "reasoning_content"):
+        reasoning_value = _get_message_attr(message, attr)
+        if reasoning_value:
+            reasoning_fragments.extend(_extract_reasoning_strings(reasoning_value))
+
+    reasoning_text = "\n".join(fragment for fragment in reasoning_fragments if fragment)
+    reasoning_text = reasoning_text.strip()
+
+    # If content looks like reasoning text but no reasoning field, detect it
+    if content_text and not reasoning_text and _is_reasoning_text(content_text):
+        reasoning_text = content_text
+        # Try to extract structured data from reasoning text
+        extracted_json = extract_json_from_reasoning(content_text)
+        if extracted_json:
+            content_text = extracted_json
+        else:
+            content_text = ""
+
+    if not content_text and reasoning_text:
+        content_text = reasoning_text
+
+    has_reasoning = bool(reasoning_text)
+
+    return content_text, reasoning_text, has_reasoning
+
+
+def _is_reasoning_text(text: str) -> bool:
+    """Detect if text appears to be reasoning/thinking output rather than structured content."""
+    if not text or len(text) < 10:
+        return False
+
+    text_lower = text.lower().strip()
+
+    # Common reasoning text patterns
+    reasoning_indicators = [
+        "okay, let's see", "let me think", "first, i need to", "looking at this",
+        "step by step", "analyzing", "breaking this down", "considering",
+        "let me work through", "i should", "thinking about", "examining"
     ]
 
-    for pattern in reasoning_patterns:
-        if pattern in model_lower:
-            return True
+    return any(indicator in text_lower for indicator in reasoning_indicators)
 
-    return False
+
+def extract_json_from_reasoning(reasoning_text: str, context_code: str = "", language: str = "") -> str:
+    """Extract JSON content from reasoning text, with synthesis fallback."""
+    if not reasoning_text:
+        return ""
+
+    import json
+    import re
+
+    # Try to find JSON blocks in markdown
+    json_block_pattern = r'```(?:json)?\s*(\{.*?\})\s*```'
+    json_matches = re.findall(json_block_pattern, reasoning_text, re.DOTALL | re.IGNORECASE)
+
+    for match in json_matches:
+        try:
+            # Validate it's proper JSON
+            json.loads(match.strip())
+            return match.strip()
+        except json.JSONDecodeError:
+            continue
+
+    # Try to find standalone JSON objects
+    json_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
+    json_matches = re.findall(json_pattern, reasoning_text, re.DOTALL)
+
+    for match in json_matches:
+        try:
+            parsed = json.loads(match.strip())
+            # Ensure it has expected structure
+            if isinstance(parsed, dict) and any(key in parsed for key in ["example_name", "summary", "name", "title"]):
+                return match.strip()
+        except json.JSONDecodeError:
+            continue
+
+    # If no JSON found, synthesize from reasoning content
+    return synthesize_json_from_reasoning(reasoning_text, context_code, language)
+
+
+def synthesize_json_from_reasoning(reasoning_text: str, context_code: str = "", language: str = "") -> str:
+    """Generate JSON structure from reasoning text when no JSON is found."""
+    if not reasoning_text and not context_code:
+        return ""
+
+    import json
+    import re
+
+    # Extract key concepts and actions from reasoning text and code context
+    text_lower = reasoning_text.lower() if reasoning_text else ""
+    code_lower = context_code.lower() if context_code else ""
+    combined_text = f"{text_lower} {code_lower}"
+
+    # Common action patterns in reasoning text and code
+    action_patterns = [
+        (r'\b(?:parse|parsing|parsed)\b', 'Parse'),
+        (r'\b(?:create|creating|created)\b', 'Create'),
+        (r'\b(?:analyze|analyzing|analyzed)\b', 'Analyze'),
+        (r'\b(?:extract|extracting|extracted)\b', 'Extract'),
+        (r'\b(?:generate|generating|generated)\b', 'Generate'),
+        (r'\b(?:process|processing|processed)\b', 'Process'),
+        (r'\b(?:load|loading|loaded)\b', 'Load'),
+        (r'\b(?:handle|handling|handled)\b', 'Handle'),
+        (r'\b(?:manage|managing|managed)\b', 'Manage'),
+        (r'\b(?:build|building|built)\b', 'Build'),
+        (r'\b(?:define|defining|defined)\b', 'Define'),
+        (r'\b(?:implement|implementing|implemented)\b', 'Implement'),
+        (r'\b(?:fetch|fetching|fetched)\b', 'Fetch'),
+        (r'\b(?:connect|connecting|connected)\b', 'Connect'),
+        (r'\b(?:validate|validating|validated)\b', 'Validate'),
+    ]
+
+    # Technology/concept patterns
+    tech_patterns = [
+        (r'\bjson\b', 'JSON'),
+        (r'\bapi\b', 'API'),
+        (r'\bfile\b', 'File'),
+        (r'\bdata\b', 'Data'),
+        (r'\bcode\b', 'Code'),
+        (r'\btext\b', 'Text'),
+        (r'\bcontent\b', 'Content'),
+        (r'\bresponse\b', 'Response'),
+        (r'\brequest\b', 'Request'),
+        (r'\bconfig\b', 'Config'),
+        (r'\bllm\b', 'LLM'),
+        (r'\bmodel\b', 'Model'),
+        (r'\bexample\b', 'Example'),
+        (r'\bcontext\b', 'Context'),
+        (r'\basync\b', 'Async'),
+        (r'\bfunction\b', 'Function'),
+        (r'\bclass\b', 'Class'),
+        (r'\bprint\b', 'Output'),
+        (r'\breturn\b', 'Return'),
+    ]
+
+    # Extract actions and technologies from combined text
+    detected_actions = []
+    detected_techs = []
+
+    for pattern, action in action_patterns:
+        if re.search(pattern, combined_text):
+            detected_actions.append(action)
+
+    for pattern, tech in tech_patterns:
+        if re.search(pattern, combined_text):
+            detected_techs.append(tech)
+
+    # Generate example name
+    if detected_actions and detected_techs:
+        example_name = f"{detected_actions[0]} {detected_techs[0]}"
+    elif detected_actions:
+        example_name = f"{detected_actions[0]} Code"
+    elif detected_techs:
+        example_name = f"Handle {detected_techs[0]}"
+    elif language:
+        example_name = f"Process {language.title()}"
+    else:
+        example_name = "Code Processing"
+
+    # Limit to 4 words as per requirements
+    example_name_words = example_name.split()
+    if len(example_name_words) > 4:
+        example_name = " ".join(example_name_words[:4])
+
+    # Generate summary from reasoning content
+    reasoning_lines = reasoning_text.split('\n')
+    meaningful_lines = [line.strip() for line in reasoning_lines if line.strip() and len(line.strip()) > 10]
+
+    if meaningful_lines:
+        # Take first meaningful sentence for summary base
+        first_line = meaningful_lines[0]
+        if len(first_line) > 100:
+            first_line = first_line[:100] + "..."
+
+        # Create contextual summary
+        if context_code and any(tech in text_lower for tech, _ in tech_patterns):
+            summary = f"This code demonstrates {detected_techs[0].lower() if detected_techs else 'data'} processing functionality. {first_line}"
+        else:
+            summary = f"Code example showing {detected_actions[0].lower() if detected_actions else 'processing'} operations. {first_line}"
+    else:
+        # Fallback summary
+        summary = f"Code example demonstrating {example_name.lower()} functionality for {language or 'general'} development."
+
+    # Ensure summary is not too long
+    if len(summary) > 300:
+        summary = summary[:297] + "..."
+
+    # Create JSON structure
+    result = {
+        "example_name": example_name,
+        "summary": summary
+    }
+
+    return json.dumps(result)
 
 
 def prepare_chat_completion_params(model: str, params: dict) -> dict:
@@ -856,16 +1116,16 @@ def prepare_chat_completion_params(model: str, params: dict) -> dict:
     # Make a copy to avoid modifying the original
     updated_params = params.copy()
 
-    is_reasoning_model = requires_max_completion_tokens(model)
+    reasoning_model = is_reasoning_model(model)
 
     # Convert max_tokens to max_completion_tokens for reasoning models
-    if is_reasoning_model and "max_tokens" in updated_params:
+    if reasoning_model and "max_tokens" in updated_params:
         max_tokens_value = updated_params.pop("max_tokens")
         updated_params["max_completion_tokens"] = max_tokens_value
         logger.debug(f"Converted max_tokens to max_completion_tokens for model {model}")
 
     # Remove custom temperature for reasoning models (they only support default temperature=1.0)
-    if is_reasoning_model and "temperature" in updated_params:
+    if reasoning_model and "temperature" in updated_params:
         original_temp = updated_params.pop("temperature")
         logger.debug(f"Removed custom temperature {original_temp} for reasoning model {model} (only supports default temperature=1.0)")
 
@@ -983,3 +1243,8 @@ async def validate_provider_instance(provider: str, instance_url: str | None = N
             "validation_timestamp": time.time()
         }
 
+
+
+def requires_max_completion_tokens(model_name: str) -> bool:
+    """Backward compatible alias for previous API."""
+    return is_reasoning_model(model_name)

@@ -11,7 +11,7 @@ from supabase import Client
 
 from ..config.logfire_config import get_logger, search_logger
 from .client_manager import get_supabase_client
-from .llm_provider_service import get_llm_client
+from .llm_provider_service import extract_message_text, get_llm_client
 
 logger = get_logger(__name__)
 
@@ -76,12 +76,13 @@ The above content is from the documentation for '{source_id}'. Please provide a 
                 search_logger.error(f"Empty or invalid response from LLM for {source_id}")
                 return default_summary
 
-            message_content = response.choices[0].message.content
-            if message_content is None:
+            choice = response.choices[0]
+            summary_text, _, _ = extract_message_text(choice)
+            if not summary_text:
                 search_logger.error(f"LLM returned None content for {source_id}")
                 return default_summary
 
-            summary = message_content.strip()
+            summary = summary_text.strip()
 
             # Ensure the summary is not too long
             if len(summary) > max_length:
@@ -187,7 +188,9 @@ Generate only the title, nothing else."""
                     ],
                 )
 
-                generated_title = response.choices[0].message.content.strip()
+                choice = response.choices[0]
+                generated_title, _, _ = extract_message_text(choice)
+                generated_title = generated_title.strip()
                 # Clean up the title
                 generated_title = generated_title.strip("\"'")
                 if len(generated_title) < 50:  # Sanity check

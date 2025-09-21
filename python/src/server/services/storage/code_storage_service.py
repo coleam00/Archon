@@ -6,9 +6,9 @@ Handles extraction and storage of code examples from documents.
 
 import asyncio
 import json
-import time
 import os
 import re
+import time
 from collections import defaultdict, deque
 from collections.abc import Callable
 from difflib import SequenceMatcher
@@ -18,32 +18,39 @@ from urllib.parse import urlparse
 from supabase import Client
 
 from ...config.logfire_config import search_logger
+from ..credential_service import credential_service
 from ..embeddings.contextual_embedding_service import generate_contextual_embeddings_batch
 from ..embeddings.embedding_service import create_embeddings_batch
-from ..llm_provider_service import get_llm_client, prepare_chat_completion_params, requires_max_completion_tokens
-from ..credential_service import credential_service
+from ..llm_provider_service import (
+    extract_json_from_reasoning,
+    extract_message_text,
+    get_llm_client,
+    prepare_chat_completion_params,
+    synthesize_json_from_reasoning,
+)
 
 
-def _is_reasoning_model(model: str) -> bool:
-    """
-    Check if a model is a reasoning model that may return empty responses.
-
-    Args:
-        model: The model identifier
-
-    Returns:
-        True if the model is a reasoning model (GPT-5, o1, o3 series)
-    """
-    return requires_max_completion_tokens(model)
-
-
-def _extract_json_payload(raw_response: str) -> str:
+def _extract_json_payload(raw_response: str, context_code: str = "", language: str = "") -> str:
     """Return the best-effort JSON object from an LLM response."""
 
     if not raw_response:
         return raw_response
 
     cleaned = raw_response.strip()
+
+    # Check if this looks like reasoning text first
+    if _is_reasoning_text_response(cleaned):
+        # Try intelligent extraction from reasoning text with context
+        extracted = extract_json_from_reasoning(cleaned, context_code, language)
+        if extracted:
+            return extracted
+        # extract_json_from_reasoning may return nothing; synthesize a fallback JSON if so\
+        fallback_json = synthesize_json_from_reasoning("", context_code, language)
+        if fallback_json:
+            return fallback_json
+        # If all else fails, return a minimal valid JSON object to avoid downstream errors
+        return '{"example_name": "Code Example", "summary": "Code example extracted from context."}'
+
 
     if cleaned.startswith("```"):
         lines = cleaned.splitlines()
@@ -63,49 +70,25 @@ def _extract_json_payload(raw_response: str) -> str:
     return cleaned.strip()
 
 
-def _supports_response_format(provider: str, model: str) -> bool:
-    """
-    Determine if a specific provider/model combination supports response_format.
+REASONING_STARTERS = [
+    "okay, let's see", "okay, let me", "let me think", "first, i need to", "looking at this",
+    "i need to", "analyzing", "let me work through", "thinking about", "let me see"
+]
 
-    Args:
-        provider: The LLM provider name
-        model: The model identifier
-
-    Returns:
-        True if the model supports structured JSON output via response_format
-    """
-    if not provider:
-        return True  # Default to supporting it
-
-    provider = provider.lower()
-
-    if provider == "openai":
-        return True  # OpenAI models generally support response_format
-    elif provider == "openrouter":
-        # OpenRouter: "OpenAI models, Nitro models, and some others" support it
-        model_lower = model.lower()
-
-        # Known compatible model patterns on OpenRouter
-        compatible_patterns = [
-            "openai/",      # OpenAI models on OpenRouter
-            "gpt-",         # GPT models
-            "nitro/",       # Nitro models
-            "deepseek/",    # DeepSeek models often support JSON
-            "google/",      # Some Google models support it
-        ]
-
-        for pattern in compatible_patterns:
-            if pattern in model_lower:
-                search_logger.debug(f"Model {model} supports response_format (pattern: {pattern})")
-                return True
-
-        search_logger.debug(f"Model {model} may not support response_format, skipping")
-        return False
-    else:
-        # Conservative approach for other providers
+def _is_reasoning_text_response(text: str) -> bool:
+    """Detect if response is reasoning text rather than direct JSON."""
+    if not text or len(text) < 20:
         return False
 
+    text_lower = text.lower().strip()
 
+    # Check if it's clearly not JSON (starts with reasoning text)
+    starts_with_reasoning = any(text_lower.startswith(starter) for starter in REASONING_STARTERS)
+
+    # Check if it lacks immediate JSON structure
+    lacks_immediate_json = not text_lower.lstrip().startswith('{')
+
+    return starts_with_reasoning or (lacks_immediate_json and any(pattern in text_lower for pattern in REASONING_STARTERS))
 async def _get_model_choice() -> str:
     """Get MODEL_CHOICE with provider-aware defaults from centralized service."""
     try:
@@ -603,7 +586,7 @@ def generate_code_example_summary(
         A dictionary with 'summary' and 'example_name'
     """
     import asyncio
-    
+
     # Run the async version in the current thread
     return asyncio.run(_generate_code_example_summary_async(code, context_before, context_after, language, provider))
 
@@ -614,8 +597,7 @@ async def _generate_code_example_summary_async(
     """
     Async version of generate_code_example_summary using unified LLM provider service.
     """
-    from ..llm_provider_service import get_llm_client
-    
+
     # Get model choice from credential service (RAG setting)
     model_choice = await _get_model_choice()
 
@@ -629,8 +611,8 @@ async def _generate_code_example_summary_async(
             search_logger.warning(f"Failed to get provider from credential service: {e}, defaulting to openai")
             provider = "openai"
 
-    # Create the prompt
-    prompt = f"""<context_before>
+    # Create the prompt variants: base prompt, guarded prompt (JSON reminder), and strict prompt for retries
+    base_prompt = f"""<context_before>
 {context_before[-500:] if len(context_before) > 500 else context_before}
 </context_before>
 
@@ -654,6 +636,16 @@ Format your response as JSON:
   "summary": "2-3 sentence description of what the code demonstrates"
 }}
 """
+    guard_prompt = (
+        base_prompt
+        + "\n\nImportant: Respond with a valid JSON object that exactly matches the keys "
+        '{"example_name": string, "summary": string}. Do not include commentary, '
+        "markdown fences, or reasoning notes."
+    )
+    strict_prompt = (
+        guard_prompt
+        + "\n\nSecond attempt enforcement: Return JSON only with the exact schema. No additional text or reasoning content."
+    )
 
     try:
         # Use unified LLM provider service
@@ -661,153 +653,207 @@ Format your response as JSON:
             search_logger.info(
                 f"Generating summary for {hash(code) & 0xffffff:06x} using model: {model_choice}"
             )
-            
-            request_params = {
-                "model": model_choice,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "You are a helpful assistant that analyzes code examples and provides JSON responses with example names and summaries.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                "max_tokens": 2000 if (_is_reasoning_model(model_choice) or provider == "grok") else 500,  # 2000 tokens for both reasoning models (GPT-5) and Grok for complex reasoning
-                "temperature": 0.3,
-            }
 
-            # Try to use response_format, but handle gracefully if not supported
-            # Note: Grok and reasoning models (GPT-5, o1, o3) don't work well with response_format
-            supports_response_format = (
-                provider in ["openai", "google", "anthropic"] or
-                (provider == "openrouter" and model_choice.startswith("openai/"))
+            provider_lower = provider.lower()
+            is_grok_model = (provider_lower == "grok") or ("grok" in model_choice.lower())
+
+            supports_response_format_base = (
+                provider_lower in {"openai", "google", "anthropic"}
+                or (provider_lower == "openrouter" and model_choice.startswith("openai/"))
             )
-            # Exclude reasoning models from using response_format
-            if supports_response_format and not _is_reasoning_model(model_choice):
-                request_params["response_format"] = {"type": "json_object"}
 
-            # Grok-specific parameter validation and filtering
-            if provider == "grok":
-                # Remove any parameters that Grok reasoning models don't support
-                # Based on xAI docs: presencePenalty, frequencyPenalty, stop are not supported
-                unsupported_params = ["presence_penalty", "frequency_penalty", "stop", "reasoning_effort"]
-                for param in unsupported_params:
-                    if param in request_params:
-                        removed_value = request_params.pop(param)
-                        search_logger.warning(f"Removed unsupported Grok parameter '{param}': {removed_value}")
+            last_response_obj = None
+            last_elapsed_time = None
+            last_response_content = ""
+            last_json_error: json.JSONDecodeError | None = None
 
-                # Validate that we're using supported parameters only
-                supported_params = ["model", "messages", "max_tokens", "temperature", "response_format", "stream", "tools", "tool_choice"]
-                for param in request_params:
-                    if param not in supported_params:
-                        search_logger.warning(f"Parameter '{param}' may not be supported by Grok reasoning models")
+            for enforce_json, current_prompt in ((False, guard_prompt), (True, strict_prompt)):
+                request_params = {
+                    "model": model_choice,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "You are a helpful assistant that analyzes code examples and provides JSON responses with example names and summaries.",
+                        },
+                        {"role": "user", "content": current_prompt},
+                    ],
+                    "max_tokens": 2000,
+                    "temperature": 0.3,
+                }
 
-            # Enhanced debugging for Grok provider
-            # Implement retry logic for Grok and reasoning models (GPT-5, o1, o3) empty responses
-            is_reasoning = _is_reasoning_model(model_choice)
+                should_use_response_format = False
+                if enforce_json:
+                    if not is_grok_model and (supports_response_format_base or provider_lower == "openrouter"):
+                        should_use_response_format = True
+                else:
+                    if supports_response_format_base:
+                        should_use_response_format = True
 
-            start_time = time.time()  # Initialize for all models
-            if provider == "grok" or is_reasoning:
-                model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
-                search_logger.debug(f"{model_type} request params: {request_params}")
-                search_logger.debug(f"{model_type} prompt length: {len(prompt)} characters")
-                search_logger.debug(f"{model_type} prompt preview: {prompt[:200]}...")
+                if should_use_response_format:
+                    request_params["response_format"] = {"type": "json_object"}
 
-            max_retries = 3 if (provider == "grok" or is_reasoning) else 1
-            retry_delay = 1.0  # Start with 1 second delay
-            failure_reasons = []  # Track failure reasons for circuit breaker analysis
+                if is_grok_model:
+                    unsupported_params = ["presence_penalty", "frequency_penalty", "stop", "reasoning_effort"]
+                    for param in unsupported_params:
+                        if param in request_params:
+                            removed_value = request_params.pop(param)
+                            search_logger.warning(f"Removed unsupported Grok parameter '{param}': {removed_value}")
 
-            for attempt in range(max_retries):
-                try:
-                    if (provider == "grok" or is_reasoning) and attempt > 0:
-                        model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
-                        search_logger.info(f"{model_type} retry attempt {attempt + 1}/{max_retries} after {retry_delay:.1f}s delay")
-                        await asyncio.sleep(retry_delay)
-                    elif is_reasoning and attempt == 0:
-                        # Small delay for reasoning models on first attempt to help with cold start
-                        search_logger.debug(f"reasoning model ({model_choice}) first attempt - adding 0.5s delay for cold start")
-                        await asyncio.sleep(0.5)
+                    supported_params = ["model", "messages", "max_tokens", "temperature", "response_format", "stream", "tools", "tool_choice"]
+                    for param in list(request_params.keys()):
+                        if param not in supported_params:
+                            search_logger.warning(f"Parameter '{param}' may not be supported by Grok reasoning models")
 
-                    # Convert max_tokens to max_completion_tokens for GPT-5/reasoning models
-                    final_params = prepare_chat_completion_params(model_choice, request_params)
-                    response = await client.chat.completions.create(**final_params)
+                start_time = time.time()
+                max_retries = 3 if is_grok_model else 1
+                retry_delay = 1.0
+                response_content_local = ""
+                reasoning_text_local = ""
+                json_error_occurred = False
 
-                    # Check for empty response - handle Grok reasoning models
-                    message = response.choices[0].message if response.choices else None
-                    response_content = None
+                for attempt in range(max_retries):
+                    try:
+                        if is_grok_model and attempt > 0:
+                            search_logger.info(f"Grok retry attempt {attempt + 1}/{max_retries} after {retry_delay:.1f}s delay")
+                            await asyncio.sleep(retry_delay)
 
-                    # Enhanced debugging for Grok and reasoning models - log both content fields
-                    if (provider == "grok" or is_reasoning) and message:
-                        content_preview = message.content[:100] if message.content else "None"
-                        reasoning_preview = getattr(message, 'reasoning_content', 'N/A')[:100] if hasattr(message, 'reasoning_content') and message.reasoning_content else "None"
-                        model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
+                        final_params = prepare_chat_completion_params(model_choice, request_params)
+                        response = await client.chat.completions.create(**final_params)
+                        last_response_obj = response
 
-                        # Additional debugging for first attempt failures
-                        finish_reason = getattr(response.choices[0], 'finish_reason', 'unknown') if response.choices else 'no_choices'
-                        usage_info = getattr(response, 'usage', None)
-                        if usage_info:
-                            completion_tokens = getattr(usage_info, 'completion_tokens', 0)
-                            reasoning_tokens = getattr(getattr(usage_info, 'completion_tokens_details', None), 'reasoning_tokens', 0) if hasattr(usage_info, 'completion_tokens_details') else 0
-                            search_logger.debug(f"{model_type} attempt {attempt + 1} - finish_reason: {finish_reason}, completion_tokens: {completion_tokens}, reasoning_tokens: {reasoning_tokens}")
+                        choice = response.choices[0] if response.choices else None
+                        message = choice.message if choice and hasattr(choice, "message") else None
+                        response_content_local = ""
+                        reasoning_text_local = ""
+
+                        if choice:
+                            response_content_local, reasoning_text_local, _ = extract_message_text(choice)
+
+                        # Enhanced logging for response analysis
+                        if message and reasoning_text_local:
+                            content_preview = response_content_local[:100] if response_content_local else "None"
+                            reasoning_preview = reasoning_text_local[:100] if reasoning_text_local else "None"
+                            search_logger.debug(
+                                f"Response has reasoning content - content: '{content_preview}', reasoning: '{reasoning_preview}'"
+                            )
+
+                        if response_content_local:
+                            last_response_content = response_content_local.strip()
+
+                            # Pre-validate response before processing
+                            if len(last_response_content) < 20 or (len(last_response_content) < 50 and not last_response_content.strip().startswith('{')):
+                                # Very minimal response - likely "Okay\nOkay" type
+                                search_logger.debug(f"Minimal response detected: {repr(last_response_content)}")
+                                # Generate fallback directly from context
+                                fallback_json = synthesize_json_from_reasoning("", code, language)
+                                if fallback_json:
+                                    try:
+                                        result = json.loads(fallback_json)
+                                        final_result = {
+                                            "example_name": result.get("example_name", f"Code Example{f' ({language})' if language else ''}"),
+                                            "summary": result.get("summary", "Code example for demonstration purposes."),
+                                        }
+                                        search_logger.info(f"Generated fallback summary from context - Name: '{final_result['example_name']}', Summary length: {len(final_result['summary'])}")
+                                        return final_result
+                                    except json.JSONDecodeError:
+                                        pass  # Continue to normal error handling
+                                else:
+                                    # Even synthesis failed - provide hardcoded fallback for minimal responses
+                                    final_result = {
+                                        "example_name": f"Code Example{f' ({language})' if language else ''}",
+                                        "summary": "Code example extracted from development context.",
+                                    }
+                                    search_logger.info(f"Used hardcoded fallback for minimal response - Name: '{final_result['example_name']}', Summary length: {len(final_result['summary'])}")
+                                    return final_result
+
+                            payload = _extract_json_payload(last_response_content, code, language)
+                            if payload != last_response_content:
+                                search_logger.debug(
+                                    f"Sanitized LLM response payload before parsing: {repr(payload[:200])}..."
+                                )
+
+                            try:
+                                result = json.loads(payload)
+
+                                if not result.get("example_name") or not result.get("summary"):
+                                    search_logger.warning(f"Incomplete response from LLM: {result}")
+
+                                final_result = {
+                                    "example_name": result.get(
+                                        "example_name", f"Code Example{f' ({language})' if language else ''}"
+                                    ),
+                                    "summary": result.get("summary", "Code example for demonstration purposes."),
+                                }
+
+                                search_logger.info(
+                                    f"Generated code example summary - Name: '{final_result['example_name']}', Summary length: {len(final_result['summary'])}"
+                                )
+                                return final_result
+
+                            except json.JSONDecodeError as json_error:
+                                last_json_error = json_error
+                                json_error_occurred = True
+                                snippet = last_response_content[:200]
+                                if not enforce_json:
+                                    # Check if this was reasoning text that couldn't be parsed
+                                    if _is_reasoning_text_response(last_response_content):
+                                        search_logger.debug(
+                                            f"Reasoning text detected but no JSON extracted. Response snippet: {repr(snippet)}"
+                                        )
+                                    else:
+                                        search_logger.warning(
+                                            f"Failed to parse JSON response from LLM (non-strict attempt). Error: {json_error}. Response snippet: {repr(snippet)}"
+                                        )
+                                    break
+                                else:
+                                    search_logger.error(
+                                        f"Strict JSON enforcement still failed to produce valid JSON: {json_error}. Response snippet: {repr(snippet)}"
+                                    )
+                                    break
+
+                        elif is_grok_model and attempt < max_retries - 1:
+                            search_logger.warning(f"Grok empty response on attempt {attempt + 1}, retrying...")
+                            retry_delay *= 2
+                            continue
                         else:
-                            search_logger.debug(f"{model_type} attempt {attempt + 1} - finish_reason: {finish_reason}, no usage info")
+                            break
 
-                        search_logger.debug(f"{model_type} response fields - content: '{content_preview}', reasoning_content: '{reasoning_preview}'")
-
-                    if message:
-                        # For Grok and reasoning models, check content first, then reasoning_content
-                        if provider == "grok" or is_reasoning:
-                            # First try content (where final answer should be)
-                            if message.content and message.content.strip():
-                                response_content = message.content.strip()
-                                model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
-                                search_logger.debug(f"{model_type} using content field: {len(response_content)} chars")
-                            # Fallback to reasoning_content if content is empty
-                            elif hasattr(message, 'reasoning_content') and message.reasoning_content:
-                                response_content = message.reasoning_content.strip()
-                                model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
-                                search_logger.debug(f"{model_type} fallback to reasoning_content: {len(response_content)} chars")
-                            else:
-                                search_logger.debug(f"Grok no content in either field: content='{message.content}', reasoning_content='{getattr(message, 'reasoning_content', 'N/A')}'")
-                        elif message.content:
-                            response_content = message.content
+                    except Exception as e:
+                        if is_grok_model and attempt < max_retries - 1:
+                            search_logger.error(f"Grok request failed on attempt {attempt + 1}: {e}, retrying...")
+                            retry_delay *= 2
+                            continue
                         else:
-                            search_logger.debug(f"No content in message: content={message.content}, reasoning_content={getattr(message, 'reasoning_content', 'N/A')}")
+                            raise
 
-                    if response_content and response_content.strip():
-                        # Success - break out of retry loop
-                        if (provider == "grok" or is_reasoning) and attempt > 0:
-                            model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
-                            search_logger.info(f"{model_type} request succeeded on attempt {attempt + 1}")
-                        break
-                    elif (provider == "grok" or is_reasoning) and attempt < max_retries - 1:
-                        # Empty response from Grok or reasoning models - retry with exponential backoff
-                        model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
-                        search_logger.warning(f"{model_type} empty response on attempt {attempt + 1}, retrying...")
-                        retry_delay *= 2  # Exponential backoff
+                if is_grok_model:
+                    elapsed_time = time.time() - start_time
+                    last_elapsed_time = elapsed_time
+                    search_logger.debug(f"Grok total response time: {elapsed_time:.2f}s")
+
+                if json_error_occurred:
+                    if not enforce_json:
                         continue
                     else:
-                        # Final attempt failed or not Grok/reasoning model - handle below
                         break
 
-                except Exception as e:
-                    if (provider == "grok" or is_reasoning) and attempt < max_retries - 1:
-                        model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
-                        search_logger.error(f"{model_type} request failed on attempt {attempt + 1}: {e}, retrying...")
-                        retry_delay *= 2
-                        continue
-                    else:
-                        # Re-raise on final attempt or non-Grok/reasoning providers
-                        raise
+                if response_content_local:
+                    # We would have returned already on success; if we reach here, parsing failed but we are not retrying
+                    continue
 
-            # Log timing for Grok and reasoning model requests
-            if provider == "grok" or is_reasoning:
-                elapsed_time = time.time() - start_time
-                model_type = "Grok" if provider == "grok" else f"reasoning model ({model_choice})"
-                search_logger.debug(f"{model_type} total response time: {elapsed_time:.2f}s")
+            response_content = last_response_content
+            response = last_response_obj
+            elapsed_time = last_elapsed_time if last_elapsed_time is not None else 0.0
+
+            if last_json_error is not None and response_content:
+                search_logger.error(
+                    f"LLM response after strict enforcement was still not valid JSON: {last_json_error}. Clearing response to trigger error handling."
+                )
+                response_content = ""
 
             if not response_content:
                 search_logger.error(f"Empty response from LLM for model: {model_choice} (provider: {provider})")
-                if provider == "grok":
+                if is_grok_model:
                     search_logger.error("Grok empty response debugging:")
                     search_logger.error(f"  - Request took: {elapsed_time:.2f}s")
                     search_logger.error(f"  - Response status: {getattr(response, 'status_code', 'N/A')}")
@@ -855,7 +901,7 @@ Format your response as JSON:
             response_content = response_content.strip()
             search_logger.debug(f"LLM API response: {repr(response_content[:200])}...")
 
-            payload = _extract_json_payload(response_content)
+            payload = _extract_json_payload(response_content, code, language)
             if payload != response_content:
                 search_logger.debug(
                     f"Sanitized LLM response payload before parsing: {repr(payload[:200])}..."
@@ -883,12 +929,38 @@ Format your response as JSON:
         search_logger.error(
             f"Failed to parse JSON response from LLM: {e}, Response: {repr(response_content) if 'response_content' in locals() else 'No response'}"
         )
+        # Try to generate context-aware fallback
+        try:
+            fallback_json = synthesize_json_from_reasoning("", code, language)
+            if fallback_json:
+                fallback_result = json.loads(fallback_json)
+                search_logger.info(f"Generated context-aware fallback summary")
+                return {
+                    "example_name": fallback_result.get("example_name", f"Code Example{f' ({language})' if language else ''}"),
+                    "summary": fallback_result.get("summary", "Code example for demonstration purposes."),
+                }
+        except Exception:
+            pass  # Fall through to generic fallback
+
         return {
             "example_name": f"Code Example{f' ({language})' if language else ''}",
             "summary": "Code example for demonstration purposes.",
         }
     except Exception as e:
         search_logger.error(f"Error generating code summary using unified LLM provider: {e}")
+        # Try to generate context-aware fallback
+        try:
+            fallback_json = synthesize_json_from_reasoning("", code, language)
+            if fallback_json:
+                fallback_result = json.loads(fallback_json)
+                search_logger.info(f"Generated context-aware fallback summary after error")
+                return {
+                    "example_name": fallback_result.get("example_name", f"Code Example{f' ({language})' if language else ''}"),
+                    "summary": fallback_result.get("summary", "Code example for demonstration purposes."),
+                }
+        except Exception:
+            pass  # Fall through to generic fallback
+
         return {
             "example_name": f"Code Example{f' ({language})' if language else ''}",
             "summary": "Code example for demonstration purposes.",
@@ -1124,13 +1196,13 @@ async def add_code_examples_to_supabase(
         # Use only successful embeddings
         valid_embeddings = result.embeddings
         successful_texts = result.texts_processed
-        
+
         # Get model information for tracking
         from ..llm_provider_service import get_embedding_model
-        
+
         # Get embedding model name
         embedding_model_name = await get_embedding_model(provider=provider)
-        
+
         # Get LLM chat model (used for code summaries and contextual embeddings if enabled)
         llm_chat_model = None
         try:
@@ -1163,7 +1235,7 @@ async def add_code_examples_to_supabase(
             positions_by_text[text].append(original_indices[k])
 
         # Map successful texts back to their original indices
-        for embedding, text in zip(valid_embeddings, successful_texts, strict=False):
+        for embedding, text in zip(valid_embeddings, successful_texts, strict=True):
             # Get the next available index for this text (handles duplicates)
             if positions_by_text[text]:
                 orig_idx = positions_by_text[text].popleft()  # Original j index in [i, batch_end)
@@ -1183,7 +1255,7 @@ async def add_code_examples_to_supabase(
             # Determine the correct embedding column based on dimension
             embedding_dim = len(embedding) if isinstance(embedding, list) else len(embedding.tolist())
             embedding_column = None
-            
+
             if embedding_dim == 768:
                 embedding_column = "embedding_768"
             elif embedding_dim == 1024:
