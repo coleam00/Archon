@@ -383,3 +383,47 @@ async def validate_provider_instance(provider: str, instance_url: str | None = N
             "error_message": str(e),
             "validation_timestamp": time.time()
         }
+
+
+def prepare_llm_params(provider: str, model: str, **kwargs) -> dict:
+    """
+    Prepare LLM API parameters with automatic compatibility handling.
+
+    Handles:
+    - OpenAI max_tokens → max_completion_tokens deprecation
+    - Reasoning model temperature exclusion (o1, gpt-5 series)
+
+    Args:
+        provider: LLM provider name (openai, ollama, google)
+        model: Model name to check for special requirements
+        **kwargs: Original API parameters
+
+    Returns:
+        dict: Compatible parameters ready for API call
+    """
+    params = kwargs.copy()
+
+    # Handle OpenAI parameter deprecation
+    if provider == "openai" and "max_tokens" in params:
+        params["max_completion_tokens"] = params.pop("max_tokens")
+
+    # Handle reasoning model restrictions
+    if model and _is_reasoning_model(model):
+        params.pop("temperature", None)
+
+    return params
+
+
+def _is_reasoning_model(model: str) -> bool:
+    """
+    Check if model is a reasoning model that doesn't support custom temperature.
+
+    Args:
+        model: Model name to check
+
+    Returns:
+        True if model is a reasoning model, False otherwise
+    """
+    reasoning_patterns = ["o1", "o1-preview", "o1-mini", "gpt-5"]
+    model_lower = model.lower()
+    return any(pattern in model_lower for pattern in reasoning_patterns)
