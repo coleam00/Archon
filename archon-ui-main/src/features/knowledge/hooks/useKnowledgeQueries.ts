@@ -5,7 +5,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { createOptimisticEntity, createOptimisticId } from "@/features/shared/optimistic";
+import { createOptimisticEntity, createOptimisticId, replaceOptimisticEntity, removeDuplicateEntities } from "@/features/shared/optimistic";
 import { useActiveOperations } from "../../progress/hooks";
 import { progressKeys } from "../../progress/hooks/useProgressQueries";
 import type { ActiveOperation, ActiveOperationsResponse } from "../../progress/types";
@@ -93,31 +93,14 @@ export function useCodeExamples(sourceId: string | null) {
   });
 }
 
-/**
- * Hook to access current filter from context (if available)
- * Falls back to undefined if not within KnowledgeFilterProvider
- */
-function useCurrentKnowledgeFilter(): KnowledgeItemsFilter | undefined {
-  try {
-    // Dynamically import the hook to avoid circular dependencies
-    // and handle cases where this hook is used outside the context
-    const { useKnowledgeFilter } = require("../context");
-    const { currentFilter } = useKnowledgeFilter();
-    return currentFilter;
-  } catch {
-    // If context is not available, return undefined
-    return undefined;
-  }
-}
 
 /**
  * Crawl URL mutation with optimistic updates
  * Returns the progressId that can be used to track crawl progress
  */
-export function useCrawlUrl() {
+export function useCrawlUrl(currentFilter?: KnowledgeItemsFilter) {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
-  const currentFilter = useCurrentKnowledgeFilter();
 
   return useMutation<
     CrawlStartResponse,
@@ -271,22 +254,31 @@ export function useCrawlUrl() {
       return { previousSummaries, previousOperations, tempProgressId, tempItemId };
     },
     onSuccess: (response, _variables, context) => {
-      // Replace temporary IDs with real ones from the server
+      // Replace temporary IDs with real ones from the server using shared utilities
       if (context) {
-        // Update summaries cache with real progress ID
+        // Create the server entity with real progress ID
+        const serverItem: Partial<KnowledgeItem> = {
+          source_id: response.progressId,
+        };
+
+        // Update summaries cache using replaceOptimisticEntity and removeDuplicateEntities
         queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summariesPrefix() }, (old) => {
           if (!old) return old;
+
+          // Replace the optimistic entity with updated data
+          const updatedItems = old.items.map((item) => {
+            if (item.source_id === context.tempProgressId) {
+              return { ...item, source_id: response.progressId };
+            }
+            return item;
+          });
+
+          // Remove any duplicates that might have been created
+          const deduplicatedItems = removeDuplicateEntities(updatedItems);
+
           return {
             ...old,
-            items: old.items.map((item) => {
-              if (item.source_id === context.tempProgressId) {
-                return {
-                  ...item,
-                  source_id: response.progressId,
-                };
-              }
-              return item;
-            }),
+            items: deduplicatedItems,
           };
         });
 
@@ -340,10 +332,9 @@ export function useCrawlUrl() {
 /**
  * Upload document mutation with optimistic updates
  */
-export function useUploadDocument() {
+export function useUploadDocument(currentFilter?: KnowledgeItemsFilter) {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
-  const currentFilter = useCurrentKnowledgeFilter();
 
   return useMutation<
     { progressId: string; message: string },
@@ -488,22 +479,26 @@ export function useUploadDocument() {
       return { previousSummaries, previousOperations, tempProgressId, tempItemId };
     },
     onSuccess: (response, _variables, context) => {
-      // Replace temporary IDs with real ones from the server
+      // Replace temporary IDs with real ones from the server using shared utilities
       if (context && response?.progressId) {
-        // Update summaries cache with real progress ID
+        // Update summaries cache using shared utilities
         queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summariesPrefix() }, (old) => {
           if (!old) return old;
+
+          // Replace the optimistic entity with updated data
+          const updatedItems = old.items.map((item) => {
+            if (item.id === context.tempItemId) {
+              return { ...item, source_id: response.progressId };
+            }
+            return item;
+          });
+
+          // Remove any duplicates that might have been created
+          const deduplicatedItems = removeDuplicateEntities(updatedItems);
+
           return {
             ...old,
-            items: old.items.map((item) => {
-              if (item.id === context.tempItemId) {
-                return {
-                  ...item,
-                  source_id: response.progressId,
-                };
-              }
-              return item;
-            }),
+            items: deduplicatedItems,
           };
         });
 

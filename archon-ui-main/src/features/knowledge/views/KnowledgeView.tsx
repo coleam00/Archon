@@ -161,6 +161,7 @@ export const KnowledgeView = () => {
       <AddKnowledgeDialog
         open={isAddDialogOpen}
         onOpenChange={setIsAddDialogOpen}
+        currentFilter={currentFilter}
         onSuccess={() => {
           setIsAddDialogOpen(false);
           refetch();
