@@ -14,7 +14,9 @@ import type { ActiveOperation, ActiveOperationsResponse } from "../../progress/t
 import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../shared/config/queryPatterns";
 import { knowledgeService } from "../services";
 import type {
+  CrawlConfig,
   CrawlRequest,
+  CrawlRequestV2,
   CrawlStartResponse,
   KnowledgeItem,
   KnowledgeItemsFilter,
@@ -292,6 +294,189 @@ export function useCrawlUrl() {
       }
 
       const errorMessage = getProviderErrorMessage(error) || "Failed to start crawl";
+      showToast(errorMessage, "error");
+    },
+  });
+}
+
+/**
+ * Crawl URL mutation with domain filtering (v2) with optimistic updates
+ * Returns the progressId that can be used to track crawl progress
+ */
+export function useCrawlUrlV2() {
+  const queryClient = useQueryClient();
+  const { showToast } = useToast();
+
+  return useMutation<
+    CrawlStartResponse,
+    Error,
+    CrawlRequestV2,
+    {
+      previousKnowledge?: KnowledgeItem[];
+      previousSummaries?: Array<[readonly unknown[], KnowledgeItemsResponse | undefined]>;
+      previousOperations?: ActiveOperationsResponse;
+      tempProgressId: string;
+      tempItemId: string;
+    }
+  >({
+    mutationFn: (request: CrawlRequestV2) => knowledgeService.crawlUrlV2(request),
+    onMutate: async (request) => {
+      // Cancel any outgoing refetches to prevent race conditions
+      await queryClient.cancelQueries({ queryKey: knowledgeKeys.summariesPrefix() });
+      await queryClient.cancelQueries({ queryKey: progressKeys.active() });
+
+      // Snapshot the previous values for rollback
+      const previousSummaries = queryClient.getQueriesData<KnowledgeItemsResponse>({
+        queryKey: knowledgeKeys.summariesPrefix(),
+      });
+      const previousOperations = queryClient.getQueryData<ActiveOperationsResponse>(progressKeys.active());
+
+      // Generate temporary progress ID and optimistic entity
+      const tempProgressId = createOptimisticId();
+      const optimisticItem = createOptimisticEntity<KnowledgeItem>({
+        title: (() => {
+          try {
+            return new URL(request.url).hostname || "New crawl";
+          } catch {
+            return "New crawl";
+          }
+        })(),
+        url: request.url,
+        source_id: tempProgressId,
+        source_type: "url",
+        knowledge_type: request.knowledge_type || "technical",
+        status: "processing",
+        document_count: 0,
+        code_examples_count: 0,
+        metadata: {
+          knowledge_type: request.knowledge_type || "technical",
+          tags: request.tags || [],
+          source_type: "url",
+          status: "processing",
+          description: `Crawling ${request.url} with domain filters`,
+          crawl_config: request.crawl_config,
+        },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as Omit<KnowledgeItem, "id">);
+      const tempItemId = optimisticItem.id;
+
+      // Update all summaries caches with optimistic data
+      const entries = queryClient.getQueriesData<KnowledgeItemsResponse>({
+        queryKey: knowledgeKeys.summariesPrefix(),
+      });
+      for (const [qk, old] of entries) {
+        const filter = qk[qk.length - 1] as KnowledgeItemsFilter | undefined;
+        const matchesType = !filter?.knowledge_type || optimisticItem.knowledge_type === filter.knowledge_type;
+        const matchesTags =
+          !filter?.tags || filter.tags.every((t) => (optimisticItem.metadata?.tags ?? []).includes(t));
+        if (!(matchesType && matchesTags)) continue;
+        if (!old) {
+          queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
+            items: [optimisticItem],
+            total: 1,
+            page: 1,
+            per_page: 100,
+          });
+        } else {
+          queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
+            ...old,
+            items: [optimisticItem, ...old.items],
+            total: (old.total ?? old.items.length) + 1,
+          });
+        }
+      }
+
+      // Add optimistic progress entry
+      if (!previousOperations) {
+        queryClient.setQueryData<ActiveOperationsResponse>(progressKeys.active(), {
+          operations: [
+            {
+              operation_id: tempProgressId,
+              operation_type: "crawl",
+              status: "starting",
+              progress: 0,
+              message: `Starting crawl of ${request.url} with domain filtering`,
+              started_at: new Date().toISOString(),
+              progressId: tempProgressId,
+            } as ActiveOperation,
+          ],
+          count: 1,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        queryClient.setQueryData<ActiveOperationsResponse>(progressKeys.active(), {
+          operations: [
+            {
+              operation_id: tempProgressId,
+              operation_type: "crawl",
+              status: "starting",
+              progress: 0,
+              message: `Starting crawl of ${request.url} with domain filtering`,
+              started_at: new Date().toISOString(),
+              progressId: tempProgressId,
+            } as ActiveOperation,
+            ...(previousOperations.operations || []),
+          ],
+          count: (previousOperations.count || 0) + 1,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      return { previousSummaries, previousOperations, tempProgressId, tempItemId };
+    },
+    onSuccess: async (response, _variables, context) => {
+      // Show success message
+      showToast("Crawl started with domain filtering", "success");
+
+      // Update the temporary progress ID with the real one
+      if (context) {
+        const activeOps = queryClient.getQueryData<ActiveOperationsResponse>(progressKeys.active());
+        if (activeOps) {
+          const updated: ActiveOperationsResponse = {
+            ...activeOps, // Preserve count, timestamp, and any other fields
+            operations: activeOps.operations.map((op) =>
+              op.progressId === context.tempProgressId ? { ...op, progressId: response.progressId } : op,
+            ),
+          };
+          queryClient.setQueryData(progressKeys.active(), updated);
+        }
+
+        // Update item in all summaries caches
+        const entries = queryClient.getQueriesData<KnowledgeItemsResponse>({
+          queryKey: knowledgeKeys.summariesPrefix(),
+        });
+        for (const [qk, data] of entries) {
+          if (data) {
+            const updated = {
+              ...data,
+              items: data.items.map((item) =>
+                item.source_id === context.tempProgressId ? { ...item, source_id: response.progressId } : item,
+              ),
+            };
+            queryClient.setQueryData(qk, updated);
+          }
+        }
+      }
+
+      // Invalidate to get fresh data
+      queryClient.invalidateQueries({ queryKey: progressKeys.active() });
+
+      // Return the response so caller can access progressId
+      return response;
+    },
+    onError: (error, _variables, context) => {
+      // Rollback optimistic updates on error
+      if (context?.previousSummaries) {
+        for (const [queryKey, data] of context.previousSummaries) {
+          queryClient.setQueryData(queryKey, data);
+        }
+      }
+      if (context?.previousOperations) {
+        queryClient.setQueryData(progressKeys.active(), context.previousOperations);
+      }
+
+      const errorMessage = getProviderErrorMessage(error) || "Failed to start crawl with filters";
       showToast(errorMessage, "error");
     },
   });
@@ -805,5 +990,79 @@ export function useKnowledgeCodeExamples(
         : Promise.reject("No source ID"),
     enabled: options?.enabled !== false && !!sourceId,
     staleTime: STALE_TIMES.normal,
+  });
+}
+
+/**
+ * Update crawler configuration for existing knowledge item
+ * Triggers a recrawl with the new configuration
+ */
+export function useUpdateCrawlConfig() {
+  const queryClient = useQueryClient();
+  const { showToast } = useToast();
+
+  return useMutation<
+    CrawlStartResponse,
+    Error,
+    {
+      sourceId: string;
+      url: string;
+      knowledge_type: "technical" | "business";
+      max_depth: number;
+      tags?: string[];
+      crawl_config?: CrawlConfig;
+    }
+  >({
+    mutationFn: (request) => knowledgeService.updateCrawlConfig(request),
+    onMutate: async ({ sourceId }) => {
+      // Update item status to processing in all caches
+      await queryClient.cancelQueries({ queryKey: knowledgeKeys.detail(sourceId) });
+      await queryClient.cancelQueries({ queryKey: knowledgeKeys.summariesPrefix() });
+
+      const previousItem = queryClient.getQueryData<KnowledgeItem>(knowledgeKeys.detail(sourceId));
+      const previousSummaries = queryClient.getQueriesData({ queryKey: knowledgeKeys.summariesPrefix() });
+
+      // Optimistically update status to processing
+      if (previousItem) {
+        queryClient.setQueryData<KnowledgeItem>(knowledgeKeys.detail(sourceId), {
+          ...previousItem,
+          status: "processing",
+        });
+      }
+
+      // Update summaries cache
+      queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summariesPrefix() }, (old) => {
+        if (!old?.items) return old;
+        return {
+          ...old,
+          items: old.items.map((item) =>
+            item.source_id === sourceId ? { ...item, status: "processing" } : item
+          ),
+        };
+      });
+
+      return { previousItem, previousSummaries };
+    },
+    onSuccess: (response) => {
+      // Invalidate to get fresh data
+      queryClient.invalidateQueries({ queryKey: knowledgeKeys.summariesPrefix() });
+      queryClient.invalidateQueries({ queryKey: progressKeys.active() });
+
+      return response;
+    },
+    onError: (error, { sourceId }, context) => {
+      // Rollback on error
+      if (context?.previousItem) {
+        queryClient.setQueryData(knowledgeKeys.detail(sourceId), context.previousItem);
+      }
+      if (context?.previousSummaries) {
+        for (const [queryKey, data] of context.previousSummaries) {
+          queryClient.setQueryData(queryKey, data);
+        }
+      }
+
+      const errorMessage = error instanceof Error ? error.message : "Failed to update configuration";
+      showToast(errorMessage, "error");
+    },
   });
 }

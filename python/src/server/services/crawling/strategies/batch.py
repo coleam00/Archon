@@ -19,16 +19,18 @@ logger = get_logger(__name__)
 class BatchCrawlStrategy:
     """Strategy for crawling multiple URLs in batch."""
 
-    def __init__(self, crawler, markdown_generator):
+    def __init__(self, crawler, markdown_generator, domain_filter=None):
         """
         Initialize batch crawl strategy.
 
         Args:
             crawler (AsyncWebCrawler): The Crawl4AI crawler instance for web crawling operations
             markdown_generator (DefaultMarkdownGenerator): The markdown generator instance for converting HTML to markdown
+            domain_filter: Optional DomainFilter instance for URL filtering
         """
         self.crawler = crawler
         self.markdown_generator = markdown_generator
+        self.domain_filter = domain_filter
 
     async def crawl_batch_with_progress(
         self,
@@ -38,6 +40,7 @@ class BatchCrawlStrategy:
         max_concurrent: int | None = None,
         progress_callback: Callable[..., Awaitable[None]] | None = None,
         cancellation_check: Callable[[], None] | None = None,
+        crawl_config=None,
     ) -> list[dict[str, Any]]:
         """
         Batch crawl multiple URLs in parallel with progress reporting.
@@ -149,11 +152,11 @@ class BatchCrawlStrategy:
                     **kwargs
                 )
 
-        total_urls = len(urls)
+        initial_urls_count = len(urls)
         await report_progress(
             0,  # Start at 0% progress
-            f"Starting to crawl {total_urls} URLs...",
-            total_pages=total_urls,
+            f"Starting to process {initial_urls_count} URLs...",
+            total_pages=initial_urls_count,
             processed_pages=0
         )
 
@@ -162,13 +165,30 @@ class BatchCrawlStrategy:
         processed = 0
         cancelled = False
 
-        # Transform all URLs at the beginning
+        # Transform all URLs at the beginning and apply domain filtering
         url_mapping = {}  # Map transformed URLs back to original
         transformed_urls = []
+        filtered_count = 0
+
         for url in urls:
+            # Apply domain filtering if configured
+            if self.domain_filter and crawl_config:
+                # Use first URL as base for filtering (consistent with recursive strategy)
+                base_url = urls[0] if urls else url
+                if not self.domain_filter.is_url_allowed(url, base_url, crawl_config):
+                    logger.debug(f"Filtering URL based on domain rules: {url}")
+                    filtered_count += 1
+                    continue
+
             transformed = transform_url_func(url)
             transformed_urls.append(transformed)
             url_mapping[transformed] = url
+
+        if filtered_count > 0:
+            logger.info(f"Filtered {filtered_count} URLs based on domain rules")
+
+        # Update total count after filtering
+        total_urls = len(transformed_urls)
 
         for i in range(0, total_urls, batch_size):
             # Check for cancellation before processing each batch

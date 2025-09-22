@@ -21,6 +21,9 @@ export interface KnowledgeItemMetadata {
   original_url?: string;
   document_count?: number; // Number of documents in this knowledge item
   code_examples_count?: number; // Number of code examples found
+  max_depth?: number; // Crawl depth configuration
+  crawl_config?: CrawlConfig; // Advanced crawl configuration
+  [key: string]: any; // Allow additional untyped fields from backend
 }
 
 export interface KnowledgeItem {
@@ -36,6 +39,10 @@ export interface KnowledgeItem {
   metadata: KnowledgeItemMetadata;
   created_at: string;
   updated_at: string;
+  // Additional fields that might be at top level
+  max_depth?: number;
+  tags?: string[];
+  crawl_config?: CrawlConfig;
 }
 
 export interface CodeExampleMetadata {
@@ -133,6 +140,65 @@ export interface KnowledgeItemsFilter {
   per_page?: number;
 }
 
+/**
+ * Advanced crawler configuration for domain and URL pattern filtering.
+ *
+ * Precedence Rules (highest to lowest priority):
+ * 1. excluded_domains - Always blocks, takes highest priority
+ * 2. allowed_domains - If specified, only these domains are crawled
+ * 3. exclude_patterns - Blocks matching URL patterns
+ * 4. include_patterns - If specified, only matching patterns are crawled
+ *
+ * Pattern Syntax:
+ * - Domain patterns: Support wildcards ([star].example.com) and exact matches
+ * - URL patterns: Use glob syntax with fnmatch ([star], ?, [seq], [!seq])
+ *
+ * Common Examples:
+ *
+ * Example 1 - Crawl only docs subdomain, excluding API references:
+ *   allowed_domains: ["docs.example.com"]
+ *   exclude_patterns: [[star]/api-reference/[star], [star]/deprecated/[star]]
+ *
+ * Example 2 - Crawl all subdomains except blog, only documentation paths:
+ *   allowed_domains: [[star].example.com]
+ *   excluded_domains: ["blog.example.com"]
+ *   include_patterns: [[star]/docs/[star], [star]/guide/[star], [star]/tutorial/[star]]
+ *
+ * Example 3 - Block specific file types across all domains:
+ *   exclude_patterns: [[star].pdf, [star].zip, [star]/downloads/[star]]
+ */
+export interface CrawlConfig {
+  /**
+   * Whitelist of domains to crawl. Supports exact matches and wildcards.
+   * Examples: docs.example.com, [star].example.com, api.example.com
+   * If specified, ONLY these domains will be crawled (unless blocked by excluded_domains).
+   */
+  allowed_domains?: string[];
+
+  /**
+   * Blacklist of domains to never crawl. Takes precedence over allowed_domains.
+   * Examples: blog.example.com, [star].internal.example.com
+   * These domains are ALWAYS blocked, even if they match allowed_domains.
+   */
+  excluded_domains?: string[];
+
+  /**
+   * URL patterns that must match for pages to be crawled. Uses glob syntax.
+   * Examples: [star]/docs/[star], [star]/api/v2/[star], [star]tutorial[star]
+   * If specified, ONLY URLs matching at least one pattern will be crawled.
+   * Patterns are matched against the full URL.
+   */
+  include_patterns?: string[];
+
+  /**
+   * URL patterns to exclude from crawling. Uses glob syntax. Takes precedence over include_patterns.
+   * Examples: [star]/admin/[star], [star].pdf, [star]/temp/[star], [star]test[star]
+   * URLs matching these patterns are ALWAYS blocked.
+   * Patterns are matched against the full URL.
+   */
+  exclude_patterns?: string[];
+}
+
 export interface CrawlRequest {
   url: string;
   knowledge_type?: "technical" | "business";
@@ -140,6 +206,10 @@ export interface CrawlRequest {
   update_frequency?: number;
   max_depth?: number;
   extract_code_examples?: boolean;
+}
+
+export interface CrawlRequestV2 extends CrawlRequest {
+  crawl_config?: CrawlConfig;
 }
 
 export interface UploadMetadata {

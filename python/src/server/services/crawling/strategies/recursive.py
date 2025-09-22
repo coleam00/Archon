@@ -21,17 +21,19 @@ logger = get_logger(__name__)
 class RecursiveCrawlStrategy:
     """Strategy for recursive crawling of websites."""
 
-    def __init__(self, crawler, markdown_generator):
+    def __init__(self, crawler, markdown_generator, domain_filter=None):
         """
         Initialize recursive crawl strategy.
 
         Args:
             crawler (AsyncWebCrawler): The Crawl4AI crawler instance for web crawling operations
             markdown_generator (DefaultMarkdownGenerator): The markdown generator instance for converting HTML to markdown
+            domain_filter: Optional DomainFilter instance for URL filtering
         """
         self.crawler = crawler
         self.markdown_generator = markdown_generator
         self.url_handler = URLHandler()
+        self.domain_filter = domain_filter
 
     async def crawl_recursive_with_progress(
         self,
@@ -42,6 +44,7 @@ class RecursiveCrawlStrategy:
         max_concurrent: int | None = None,
         progress_callback: Callable[..., Awaitable[None]] | None = None,
         cancellation_check: Callable[[], None] | None = None,
+        crawl_config=None,
     ) -> list[dict[str, Any]]:
         """
         Recursively crawl internal links from start URLs up to a maximum depth with progress reporting.
@@ -291,6 +294,33 @@ class RecursiveCrawlStrategy:
                             # Skip binary files and already visited URLs
                             is_binary = self.url_handler.is_binary_file(next_url)
                             if next_url not in visited and not is_binary:
+                                # Apply domain filtering if configured
+                                if self.domain_filter and crawl_config:
+                                    # Use next_url's origin for domain checks, fallback to original_url
+                                    # This ensures we're checking against the appropriate domain
+                                    base_url = original_url
+                                    if len(start_urls) > 0:
+                                        # If we have start_urls, use the first one
+                                        base_url = start_urls[0]
+                                    else:
+                                        # Try to use the current page's URL as base
+                                        # This handles relative links better
+                                        try:
+                                            from urllib.parse import urljoin
+                                            base_url = urljoin(original_url, next_url)
+                                        except Exception:
+                                            base_url = original_url
+
+                                    # Wrap filter check in try/except to prevent crashes
+                                    try:
+                                        if not self.domain_filter.is_url_allowed(next_url, base_url, crawl_config):
+                                            logger.debug(f"Filtering URL based on domain rules: {next_url}")
+                                            continue
+                                    except Exception as e:
+                                        # Log error and conservatively skip the URL
+                                        logger.warning(f"Error checking domain filter for {next_url}: {str(e)}. Skipping URL.")
+                                        continue
+
                                 if next_url not in next_level_urls:
                                     next_level_urls.add(next_url)
                                     total_discovered += 1  # Increment when we discover a new URL

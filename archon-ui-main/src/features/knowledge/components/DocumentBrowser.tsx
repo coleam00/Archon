@@ -3,13 +3,14 @@
  * Shows document chunks and code examples for a knowledge item
  */
 
-import { ChevronDown, ChevronRight, Code, FileText, Search } from "lucide-react";
-import { useState } from "react";
+import { ChevronDown, ChevronRight, Code, ExternalLink, FileText, Globe, Search, X } from "lucide-react";
+import { useMemo, useState } from "react";
 import { Input } from "../../ui/primitives";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../ui/primitives/dialog";
 import { cn } from "../../ui/primitives/styles";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/primitives/tabs";
-import { useCodeExamples, useKnowledgeItemChunks } from "../hooks";
+import { useCodeExamples, useKnowledgeItem, useKnowledgeItemChunks } from "../hooks";
+import { extractDomain } from "../utils/knowledge-utils";
 
 interface DocumentBrowserProps {
   sourceId: string;
@@ -21,7 +22,9 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({ sourceId, open
   const [activeTab, setActiveTab] = useState<"documents" | "code">("documents");
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedChunks, setExpandedChunks] = useState<Set<string>>(new Set());
+  const [selectedDomains, setSelectedDomains] = useState<Set<string>>(new Set());
 
+  const { data: sourceItem } = useKnowledgeItem(sourceId);
   const {
     data: chunksData,
     isLoading: chunksLoading,
@@ -33,22 +36,46 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({ sourceId, open
   const chunks = chunksData?.chunks || [];
   const codeExamples = codeData?.code_examples || [];
 
-  // Filter chunks based on search
-  const filteredChunks = chunks.filter(
-    (chunk) =>
+  // Extract unique domains from chunks
+  const domainStats = useMemo(() => {
+    const stats = new Map<string, number>();
+    chunks.forEach((chunk) => {
+      const url = chunk.url || chunk.metadata?.url;
+      if (url) {
+        const domain = extractDomain(url);
+        stats.set(domain, (stats.get(domain) || 0) + 1);
+      }
+    });
+
+    return Array.from(stats.entries())
+      .sort((a, b) => b[1] - a[1]) // Sort by count descending
+      .map(([domain, count]) => ({ domain, count }));
+  }, [chunks]);
+
+  // Filter chunks based on search and domain
+  const filteredChunks = useMemo(() => chunks.filter((chunk) => {
+    // Search filter
+    const matchesSearch =
+      !searchQuery ||
       chunk.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      chunk.metadata?.title?.toLowerCase().includes(searchQuery.toLowerCase()),
-  );
+      chunk.metadata?.title?.toLowerCase().includes(searchQuery.toLowerCase());
+
+    // Domain filter
+    const url = chunk.url || chunk.metadata?.url;
+    const matchesDomain = selectedDomains.size === 0 || (url && selectedDomains.has(extractDomain(url)));
+
+    return matchesSearch && matchesDomain;
+  }), [chunks, searchQuery, selectedDomains]);
 
   // Filter code examples based on search
-  const filteredCode = codeExamples.filter((example) => {
+  const filteredCode = useMemo(() => codeExamples.filter((example) => {
     const codeContent = example.code || example.content || "";
     return (
       codeContent.toLowerCase().includes(searchQuery.toLowerCase()) ||
       example.summary?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       example.language?.toLowerCase().includes(searchQuery.toLowerCase())
     );
-  });
+  }), [codeExamples, searchQuery]);
 
   const toggleChunk = (chunkId: string) => {
     setExpandedChunks((prev) => {
@@ -66,9 +93,30 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({ sourceId, open
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl h-[80vh] flex flex-col">
         <DialogHeader>
-          <DialogTitle>Document Browser</DialogTitle>
-          <div className="flex items-center gap-2 mt-4">
-            <div className="relative flex-1">
+          <DialogTitle className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              Document Browser
+              {chunksData && (
+                <span className="text-sm text-gray-400 font-normal">
+                  ({chunks.length} documents from {domainStats.length} domain{domainStats.length !== 1 ? "s" : ""})
+                </span>
+              )}
+            </div>
+            {sourceItem && sourceItem.url && (
+              <a
+                href={sourceItem.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
+              >
+                <ExternalLink className="w-3 h-3" />
+                View Source
+              </a>
+            )}
+          </DialogTitle>
+          <div className="space-y-3 mt-4">
+            {/* Search Bar */}
+            <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
               <Input
                 type="text"
@@ -78,6 +126,61 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({ sourceId, open
                 className="pl-10 bg-black/30 border-white/10 focus:border-cyan-500/50"
               />
             </div>
+
+            {/* Domain Filter */}
+            {domainStats.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-sm text-gray-400 flex items-center gap-2">
+                  <Globe className="w-4 h-4" />
+                  Domain Filter
+                  {selectedDomains.size > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDomains(new Set())}
+                      className="ml-auto text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1"
+                    >
+                      <X className="w-3 h-3" />
+                      Clear filter
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {domainStats.map(({ domain, count }) => {
+                    const isSelected = selectedDomains.has(domain);
+                    return (
+                      <button
+                        key={domain}
+                        type="button"
+                        onClick={() => {
+                          const newSelection = new Set(selectedDomains);
+                          if (isSelected) {
+                            newSelection.delete(domain);
+                          } else {
+                            newSelection.add(domain);
+                          }
+                          setSelectedDomains(newSelection);
+                        }}
+                        className={cn(
+                          "px-3 py-1 text-xs rounded-full border transition-all",
+                          "flex items-center gap-2",
+                          isSelected
+                            ? "bg-cyan-500/20 border-cyan-500/50 text-cyan-400"
+                            : "bg-black/20 border-white/10 text-gray-400 hover:border-cyan-500/30 hover:text-cyan-400"
+                        )}
+                      >
+                        <span className="truncate max-w-[200px]">{domain}</span>
+                        <span className={cn(
+                          "px-1.5 py-0.5 rounded text-[10px] font-mono",
+                          isSelected ? "bg-cyan-500/30" : "bg-white/10"
+                        )}>
+                          {count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         </DialogHeader>
 
@@ -123,8 +226,9 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({ sourceId, open
                         key={chunk.id}
                         className="bg-black/30 rounded-lg border border-white/10 p-4 hover:border-cyan-500/30 transition-colors"
                       >
-                        {chunk.metadata?.title && (
-                          <h4 className="font-medium text-white/90 mb-2 flex items-center gap-2">
+                        <div className="flex items-start justify-between gap-2 mb-2">
+                          {chunk.metadata?.title && (
+                          <h4 className="font-medium text-white/90 flex items-center gap-2 flex-1">
                             {needsExpansion && (
                               <button
                                 type="button"
@@ -140,7 +244,28 @@ export const DocumentBrowser: React.FC<DocumentBrowserProps> = ({ sourceId, open
                             )}
                             {chunk.metadata.title}
                           </h4>
-                        )}
+                          )}
+                          {(() => {
+                            // Extract URL and domain once to avoid repeated computation
+                            const resolvedUrl = chunk.url || chunk.metadata?.url;
+                            if (!resolvedUrl) return null;
+
+                            const resolvedDomain = extractDomain(resolvedUrl);
+
+                            return (
+                              <a
+                                href={resolvedUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[10px] px-2 py-1 rounded bg-white/5 text-gray-500 hover:text-cyan-400 hover:bg-cyan-500/10 font-mono shrink-0 transition-colors flex items-center gap-1"
+                                title={`View on ${resolvedDomain}`}
+                              >
+                                {resolvedDomain}
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            );
+                          })()}
+                        </div>
 
                         <div className="text-sm text-gray-300 whitespace-pre-wrap">
                           {isExpanded || !needsExpansion ? (

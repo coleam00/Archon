@@ -22,6 +22,8 @@ from pydantic import BaseModel
 
 # Import unified logging
 from ..config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
+# Import crawl models for type validation
+from ..models.crawl_models import CrawlRequestV2
 from ..services.crawler_manager import get_crawler
 from ..services.crawling import CrawlingService
 from ..services.credential_service import credential_service
@@ -31,6 +33,7 @@ from ..services.search.rag_service import RAGService
 from ..services.storage import DocumentStorageService
 from ..utils import get_supabase_client
 from ..utils.document_processing import extract_text_from_document
+from ..utils.progress.progress_tracker import ProgressTracker
 
 # Get logger for this module
 logger = get_logger(__name__)
@@ -359,6 +362,32 @@ async def delete_knowledge_item(source_id: str):
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
+@router.get("/knowledge-items/{source_id}")
+async def get_knowledge_item(source_id: str):
+    """
+    Get a single knowledge item by its source ID.
+
+    Args:
+        source_id: The unique source ID of the knowledge item
+
+    Returns:
+        The knowledge item with all its metadata
+    """
+    try:
+        service = KnowledgeItemService(get_supabase_client())
+        item = await service.get_item(source_id)
+
+        if not item:
+            raise HTTPException(status_code=404, detail={"error": f"Knowledge item with source_id {source_id} not found"})
+
+        return item
+    except HTTPException:
+        raise
+    except Exception as e:
+        safe_logfire_error(f"Failed to get knowledge item | error={str(e)} | source_id={source_id}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
 @router.get("/knowledge-items/{source_id}/chunks")
 async def get_knowledge_item_chunks(
     source_id: str,
@@ -605,6 +634,92 @@ async def get_knowledge_item_code_examples(
         safe_logfire_error(
             f"Failed to fetch code examples | error={str(e)} | source_id={source_id}"
         )
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
+@router.post("/knowledge-items/{source_id}/update-config")
+async def update_crawl_config(source_id: str, request: CrawlRequestV2):
+    """
+    Update crawler configuration for an existing knowledge item and trigger a recrawl.
+
+    This endpoint allows users to edit existing crawler configuration including:
+    - URL
+    - Knowledge type
+    - Max depth
+    - Tags
+    - Advanced crawl configuration (domain filters, patterns, etc.)
+    """
+
+    # Validate API key before starting expensive operation
+    logger.info("🔍 About to validate API key for config update...")
+    provider_config = await credential_service.get_active_provider("embedding")
+    provider = provider_config.get("provider", "openai")
+    await _validate_provider_api_key(provider)
+    logger.info("✅ API key validation completed successfully for config update")
+
+    try:
+        safe_logfire_info(f"Starting knowledge item config update | source_id={source_id}")
+
+        # Get the existing knowledge item to verify it exists
+        service = KnowledgeItemService(get_supabase_client())
+        existing_item = await service.get_item(source_id)
+
+        if not existing_item:
+            raise HTTPException(
+                status_code=404, detail={"error": f"Knowledge item {source_id} not found"}
+            )
+
+        # Use the validated request directly
+        crawl_request = request
+
+        # Generate unique progress ID for the recrawl
+        progress_id = str(uuid.uuid4())
+
+        # Create progress tracker for HTTP polling
+        tracker = ProgressTracker(progress_id, operation_type="crawl")
+        await tracker.start({
+            "status": "starting",
+            "url": crawl_request.url,
+            "source_id": source_id,
+            "operation": "update_and_recrawl",
+            "has_filters": crawl_request.crawl_config is not None
+        })
+
+        # First delete the existing knowledge item and its documents
+        safe_logfire_info(f"Deleting existing knowledge item before recrawl | source_id={source_id}")
+        try:
+            from ..services.source_management_service import SourceManagementService
+            source_service = SourceManagementService(get_supabase_client())
+            success, result_data = source_service.delete_source(source_id)
+
+            if not success:
+                safe_logfire_error(f"Failed to delete existing item | error={result_data.get('error', 'Unknown error')}")
+                # Continue anyway - we'll overwrite
+            else:
+                safe_logfire_info(f"Successfully deleted existing knowledge item and documents | source_id={source_id}")
+        except Exception as e:
+            safe_logfire_error(f"Failed to delete existing item | error={str(e)}")
+            # Continue anyway - we'll overwrite
+
+        # Create async task for crawling with updated configuration
+        crawl_task = asyncio.create_task(
+            _run_crawl_v2(request_dict=crawl_request.dict(), progress_id=progress_id)
+        )
+        active_crawl_tasks[progress_id] = crawl_task
+
+        safe_logfire_info(
+            f"Config update crawl task created | progress_id={progress_id} | url={crawl_request.url}"
+        )
+
+        return {
+            "success": True,
+            "progressId": progress_id,
+            "message": "Configuration updated. Recrawl initiated.",
+            "estimatedDuration": "2-10 minutes depending on site size"
+        }
+
+    except Exception as e:
+        safe_logfire_error(f"Failed to update config and recrawl | error={str(e)}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -888,6 +1003,142 @@ async def _perform_crawl_with_progress(
                 safe_logfire_info(
                     f"Cleaned up crawl task from registry | progress_id={progress_id}"
                 )
+
+
+@router.post("/knowledge-items/crawl-v2")
+async def crawl_knowledge_item_v2(request: CrawlRequestV2):
+    """
+    Crawl a URL with advanced domain filtering configuration.
+
+    This is version 2 of the crawl endpoint that supports domain filtering.
+    """
+    # Use the validated request directly
+    crawl_request = request
+
+    # Validate API key before starting expensive operation
+    logger.info("🔍 About to validate API key for crawl-v2...")
+    provider_config = await credential_service.get_active_provider("embedding")
+    provider = provider_config.get("provider", "openai")
+    await _validate_provider_api_key(provider)
+    logger.info("✅ API key validation completed successfully")
+
+    try:
+        safe_logfire_info(
+            f"Starting knowledge item crawl v2 | url={crawl_request.url} | "
+            f"knowledge_type={crawl_request.knowledge_type} | "
+            f"has_crawl_config={crawl_request.crawl_config is not None}"
+        )
+
+        # Generate unique progress ID
+        progress_id = str(uuid.uuid4())
+
+        # Create progress tracker for HTTP polling
+        tracker = ProgressTracker(progress_id, operation_type="crawl")
+        await tracker.start({
+            "status": "starting",
+            "url": crawl_request.url,
+            "has_filters": crawl_request.crawl_config is not None
+        })
+
+        # Create async task for crawling
+        crawl_task = asyncio.create_task(_run_crawl_v2(request_dict=crawl_request.dict(), progress_id=progress_id))
+        active_crawl_tasks[progress_id] = crawl_task
+
+        safe_logfire_info(
+            f"Crawl v2 task created | progress_id={progress_id} | url={crawl_request.url}"
+        )
+
+        return {
+            "success": True,
+            "progressId": progress_id,
+            "message": "Crawl started with domain filtering",
+            "estimatedDuration": "2-10 minutes depending on site size"
+        }
+
+    except Exception as e:
+        safe_logfire_error(f"Failed to start crawl v2 | error={str(e)}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
+async def _run_crawl_v2(request_dict: dict, progress_id: str):
+    """Run the crawl v2 with domain filtering in background."""
+    tracker = ProgressTracker(progress_id, operation_type="crawl")
+
+    try:
+        safe_logfire_info(
+            f"Starting crawl v2 with progress tracking | progress_id={progress_id} | url={request_dict['url']}"
+        )
+
+        # Get crawler from CrawlerManager
+        try:
+            crawler = await get_crawler()
+            if crawler is None:
+                raise Exception("Crawler not available - initialization may have failed")
+        except Exception as e:
+            safe_logfire_error(f"Failed to get crawler | error={str(e)}")
+            await tracker.error(f"Failed to initialize crawler: {str(e)}")
+            return
+
+        supabase_client = get_supabase_client()
+
+        # Extract crawl_config if present
+        crawl_config_dict = request_dict.get("crawl_config")
+        crawl_config = None
+        if crawl_config_dict:
+            from ..models.crawl_models import CrawlConfig
+            crawl_config = CrawlConfig(**crawl_config_dict)
+
+        # Create orchestration service with crawl_config
+        orchestration_service = CrawlingService(
+            crawler,
+            supabase_client,
+            crawl_config=crawl_config
+        )
+        orchestration_service.set_progress_id(progress_id)
+
+        # Add important fields to metadata for storage and later retrieval
+        request_dict["metadata"] = request_dict.get("metadata", {})
+
+        # Always store these fields in metadata
+        request_dict["metadata"]["knowledge_type"] = request_dict.get("knowledge_type", "technical")
+        request_dict["metadata"]["max_depth"] = request_dict.get("max_depth", 2)
+        request_dict["metadata"]["tags"] = request_dict.get("tags", [])
+
+        # Store the original URL for later reference
+        request_dict["metadata"]["original_url"] = request_dict.get("url", "")
+
+        # Add crawl_config to metadata if present
+        if crawl_config:
+            request_dict["metadata"]["crawl_config"] = crawl_config.dict()
+
+        # Orchestrate the crawl - this returns immediately with task info
+        result = await orchestration_service.orchestrate_crawl(request_dict)
+
+        # Store the actual crawl task for proper cancellation
+        crawl_task = result.get("task")
+        if crawl_task:
+            active_crawl_tasks[progress_id] = crawl_task
+            safe_logfire_info(
+                f"Stored actual crawl v2 task in active_crawl_tasks | progress_id={progress_id}"
+            )
+        else:
+            safe_logfire_error(f"No task returned from orchestrate_crawl v2 | progress_id={progress_id}")
+
+        safe_logfire_info(
+            f"Crawl v2 task started | progress_id={progress_id} | task_id={result.get('task_id')}"
+        )
+
+    except asyncio.CancelledError:
+        safe_logfire_info(f"Crawl v2 cancelled | progress_id={progress_id}")
+        raise
+    except Exception as e:
+        safe_logfire_error(f"Crawl v2 task failed | progress_id={progress_id} | error={str(e)}")
+        await tracker.error(str(e))
+    finally:
+        # Clean up task from registry when done
+        if progress_id in active_crawl_tasks:
+            del active_crawl_tasks[progress_id]
+            safe_logfire_info(f"Cleaned up crawl v2 task from registry | progress_id={progress_id}")
 
 
 @router.post("/documents/upload")
