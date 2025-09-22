@@ -14,18 +14,31 @@ import { useKnowledgeSummaries } from "../hooks/useKnowledgeQueries";
 import { KnowledgeInspector } from "../inspector/components/KnowledgeInspector";
 import type { KnowledgeItem, KnowledgeItemsFilter } from "../types";
 
+const PAGE_SIZE = 100;
+const SEARCH_DEBOUNCE_MS = 300;
+
 export const KnowledgeView = () => {
   // Local filter state (following Tasks/Projects pattern)
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<"technical" | "business" | undefined>(undefined);
+
+  // Debounce search query to avoid excessive API calls
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   // Compute current filter from local state
   const currentFilter: KnowledgeItemsFilter = useMemo(() => ({
     page: 1,
-    per_page: 100,
-    ...(searchQuery && { search: searchQuery }),
+    per_page: PAGE_SIZE,
+    ...(debouncedSearchQuery && { search: debouncedSearchQuery }),
     ...(typeFilter && { knowledge_type: typeFilter }),
-  }), [searchQuery, typeFilter]);
+  }), [debouncedSearchQuery, typeFilter]);
 
   // View state
   const [viewMode, setViewMode] = useState<"grid" | "table">("grid");
@@ -35,7 +48,7 @@ export const KnowledgeView = () => {
   const [inspectorItem, setInspectorItem] = useState<KnowledgeItem | null>(null);
   const [inspectorInitialTab, setInspectorInitialTab] = useState<"documents" | "code">("documents");
 
-  // Fetch knowledge summaries using filter from context
+  // Fetch knowledge summaries using current filter
   const { data, isLoading, error, refetch, setActiveCrawlIds, activeOperations } = useKnowledgeSummaries(currentFilter);
 
   const knowledgeItems = data?.items || [];
@@ -67,10 +80,11 @@ export const KnowledgeView = () => {
         // Show error message with details
         const errorMessage = op.message || op.error || "Operation failed";
         showToast(`❌ ${errorMessage}`, "error", 7000);
-      } else if (op.status === "completed") {
-        // Show success message
-        const message = op.message || "Operation completed";
-        showToast(`✅ ${message}`, "success", 5000);
+      } else {
+        // Show success message for any completed operation (not just "completed" status)
+        const operationType = op.operation_type || "Operation";
+        const successMessage = op.message || `${operationType} completed successfully`;
+        showToast(`✅ ${successMessage}`, "success", 5000);
       }
 
       // Remove from active crawl IDs
