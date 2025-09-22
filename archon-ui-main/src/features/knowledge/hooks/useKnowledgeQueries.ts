@@ -170,7 +170,6 @@ export function useCrawlUrl() {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       } as Omit<KnowledgeItem, "id">);
-      const tempItemId = optimisticItem.id;
 
       // Update all summaries caches with optimistic data, respecting each cache's filter
       const entries = queryClient.getQueriesData<KnowledgeItemsResponse>({
@@ -229,7 +228,7 @@ export function useCrawlUrl() {
       });
 
       // Return context for rollback and replacement
-      return { previousSummaries, previousOperations, tempProgressId, tempItemId };
+      return { previousSummaries, previousOperations, tempProgressId };
     },
     onSuccess: (response, _variables, context) => {
       // Replace temporary IDs with real ones from the server
@@ -313,7 +312,6 @@ export function useUploadDocument() {
       previousSummaries?: Array<[readonly unknown[], KnowledgeItemsResponse | undefined]>;
       previousOperations?: ActiveOperationsResponse;
       tempProgressId: string;
-      tempItemId: string;
     }
   >({
     mutationFn: ({ file, metadata }: { file: File; metadata: UploadMetadata }) =>
@@ -352,7 +350,6 @@ export function useUploadDocument() {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       } as Omit<KnowledgeItem, "id">);
-      const tempItemId = optimisticItem.id;
 
       // Respect each cache's filter (knowledge_type, tags, etc.)
       const entries = queryClient.getQueriesData<KnowledgeItemsResponse>({
@@ -410,7 +407,7 @@ export function useUploadDocument() {
         };
       });
 
-      return { previousSummaries, previousOperations, tempProgressId, tempItemId };
+      return { previousSummaries, previousOperations, tempProgressId };
     },
     onSuccess: (response, _variables, context) => {
       // Replace temporary IDs with real ones from the server
@@ -421,7 +418,7 @@ export function useUploadDocument() {
           return {
             ...old,
             items: old.items.map((item) => {
-              if (item.id === context.tempItemId) {
+              if (item.source_id === context.tempProgressId) {
                 return {
                   ...item,
                   source_id: response.progressId,
