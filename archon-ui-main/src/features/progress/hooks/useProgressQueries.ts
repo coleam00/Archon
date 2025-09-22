@@ -7,7 +7,7 @@ import { type UseQueryResult, useQueries, useQuery, useQueryClient } from "@tans
 import { useEffect, useMemo, useRef } from "react";
 import { APIServiceError } from "../../shared/errors";
 import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../shared/queryPatterns";
-import { useSmartPolling } from "../../ui/hooks";
+import { useSmartPolling } from "../../shared/hooks";
 import { progressService } from "../services";
 import type { ActiveOperationsResponse, ProgressResponse, ProgressStatus } from "../types";
 

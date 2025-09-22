@@ -6,8 +6,8 @@ import {
   type OptimisticEntity,
 } from "@/features/shared/optimistic";
 import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../../shared/queryPatterns";
-import { useSmartPolling } from "../../../ui/hooks";
-import { useToast } from "../../../ui/hooks/useToast";
+import { useSmartPolling } from "../../../shared/hooks";
+import { useToast } from "../../../shared/hooks/useToast";
 import { taskService } from "../services";
 import type { CreateTaskRequest, Task, UpdateTaskRequest } from "../types";
 

@@ -5,7 +5,7 @@
 
 import { Globe, Loader2, Upload } from "lucide-react";
 import { useId, useState } from "react";
-import { useToast } from "../../ui/hooks/useToast";
+import { useToast } from "@/features/shared/hooks/useToast";
 import { Button, Input, Label } from "../../ui/primitives";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/primitives/dialog";
 import { cn } from "../../ui/primitives/styles";

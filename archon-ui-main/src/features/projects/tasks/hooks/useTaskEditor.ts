@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { useToast } from "../../../ui/hooks/useToast";
+import { useToast } from "@/features/shared/hooks/useToast";
 import { useProjectFeatures } from "../../hooks/useProjectQueries";
 import type { Assignee, CreateTaskRequest, Task, UpdateTaskRequest, UseTaskEditorReturn } from "../types";
 import { useCreateTask, useUpdateTask } from "./useTaskQueries";

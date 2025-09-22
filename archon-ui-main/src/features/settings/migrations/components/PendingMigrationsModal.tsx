@@ -6,7 +6,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { CheckCircle, Copy, Database, ExternalLink, X } from "lucide-react";
 import React from "react";
 import { copyToClipboard } from "@/features/shared/utils/clipboard";
-import { useToast } from "@/features/ui/hooks/useToast";
+import { useToast } from "@/features/shared/hooks/useToast";
 import type { PendingMigration } from "../types";
 
 interface PendingMigrationsModalProps {

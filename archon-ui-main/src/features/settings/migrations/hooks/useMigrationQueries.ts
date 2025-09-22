@@ -4,7 +4,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { STALE_TIMES } from "@/features/shared/queryPatterns";
-import { useSmartPolling } from "@/features/ui/hooks/useSmartPolling";
+import { useSmartPolling } from "@/features/shared/hooks/useSmartPolling";
 import { migrationService } from "../services/migrationService";
 import type { MigrationHistoryResponse, MigrationStatusResponse, PendingMigration } from "../types";
 

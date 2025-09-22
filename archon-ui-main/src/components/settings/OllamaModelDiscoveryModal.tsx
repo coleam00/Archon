@@ -13,7 +13,7 @@ import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { Badge } from '../ui/Badge';
 import { Card } from '../ui/Card';
-import { useToast } from '../../features/ui/hooks/useToast';
+import { useToast } from '../../features/shared/hooks/useToast';
 import { ollamaService, type OllamaModel, type ModelDiscoveryResponse } from '../../services/ollamaService';
 import type { OllamaInstance, ModelSelectionState } from './types/OllamaTypes';
 

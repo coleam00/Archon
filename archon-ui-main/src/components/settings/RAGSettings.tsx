@@ -4,7 +4,7 @@ import { Card } from '../ui/Card';
 import { Input } from '../ui/Input';
 import { Select } from '../ui/Select';
 import { Button } from '../ui/Button';
-import { useToast } from '../../features/ui/hooks/useToast';
+import { useToast } from '../../features/shared/hooks/useToast';
 import { credentialsService } from '../../services/credentialsService';
 import OllamaModelDiscoveryModal from './OllamaModelDiscoveryModal';
 import OllamaModelSelectionModal from './OllamaModelSelectionModal';
