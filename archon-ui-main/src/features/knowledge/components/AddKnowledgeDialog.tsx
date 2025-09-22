@@ -85,7 +85,6 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
       showToast("Crawl started successfully", "success");
       resetForm();
       onSuccess();
-      onOpenChange(false);
     } catch (error) {
       // Display the actual error message from backend
       const message = error instanceof Error ? error.message : "Failed to start crawl";
@@ -200,7 +199,7 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
               </Label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Globe className="h-5 w-5" style={{ color: "#0891b2" }} />
+                  <Globe className="h-5 w-5 text-cyan-600" />
                 </div>
                 <Input
                   id={urlId}

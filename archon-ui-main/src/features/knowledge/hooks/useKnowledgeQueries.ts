@@ -111,7 +111,7 @@ export function useCrawlUrl(currentFilter?: KnowledgeItemsFilter) {
       previousSummaries?: Array<[readonly unknown[], KnowledgeItemsResponse | undefined]>;
       previousOperations?: ActiveOperationsResponse;
       tempProgressId: string;
-      tempItemId: string;
+      optimisticId: string;
     }
   >({
     mutationFn: (request: CrawlRequest) => knowledgeService.crawlUrl(request),
@@ -121,8 +121,8 @@ export function useCrawlUrl(currentFilter?: KnowledgeItemsFilter) {
       await queryClient.cancelQueries({ queryKey: progressKeys.active() });
 
       // FIXED: Optimistic updates now target the currently viewed filter
-      // We use KnowledgeFilterContext to access the current filter state
-      // If no context is available (hook used outside provider), fall back to updating all caches
+      // Optimistic updates target the currently viewed filter by
+      // checking if the new item matches the filter passed to the hook.
 
       // Snapshot the previous values for rollback
       const previousSummaries = queryClient.getQueriesData<KnowledgeItemsResponse>({
@@ -192,7 +192,22 @@ export function useCrawlUrl(currentFilter?: KnowledgeItemsFilter) {
       });
       for (const [qk, old] of entries) {
         // Skip if this is the current query we already updated
-        if (currentFilter && JSON.stringify(qk) === JSON.stringify(knowledgeKeys.summaries(currentFilter))) {
+        const currentQueryKey = currentFilter ? knowledgeKeys.summaries(currentFilter) : null;
+        if (currentQueryKey && qk.length === currentQueryKey.length &&
+            qk.every((part, index) => {
+              if (index < qk.length - 1) return part === currentQueryKey[index];
+              // For the filter object, do a deep comparison
+              const qkFilter = part as KnowledgeItemsFilter | undefined;
+              const currentFilterPart = currentQueryKey[index] as KnowledgeItemsFilter | undefined;
+              if (!qkFilter && !currentFilterPart) return true;
+              if (!qkFilter || !currentFilterPart) return false;
+              return (
+                qkFilter.page === currentFilterPart.page &&
+                qkFilter.per_page === currentFilterPart.per_page &&
+                qkFilter.search === currentFilterPart.search &&
+                qkFilter.knowledge_type === currentFilterPart.knowledge_type
+              );
+            })) {
           continue;
         }
 
@@ -250,7 +265,7 @@ export function useCrawlUrl(currentFilter?: KnowledgeItemsFilter) {
       });
 
       // Return context for rollback and replacement
-      return { previousSummaries, previousOperations, tempProgressId };
+      return { previousSummaries, previousOperations, tempProgressId, optimisticId: optimisticItem._localId };
     },
     onSuccess: (response, _variables, context) => {
       // Replace temporary IDs with real ones from the server using shared utilities
@@ -264,16 +279,21 @@ export function useCrawlUrl(currentFilter?: KnowledgeItemsFilter) {
         queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summariesPrefix() }, (old) => {
           if (!old) return old;
 
-          // Replace the optimistic entity with updated data
-          const updatedItems = old.items.map((item) => {
-            if (item.source_id === context.tempProgressId) {
-              return { ...item, source_id: response.progressId };
-            }
-            return item;
-          });
+          // Find the optimistic item to create server entity with updated data
+          const optimisticItem = old.items.find(item => item._localId === context.optimisticId);
+          if (!optimisticItem) return old;
 
+          const serverItem: KnowledgeItem = {
+            ...optimisticItem,
+            source_id: response.progressId,
+            _optimistic: false,
+            _localId: undefined,
+          } as KnowledgeItem;
+
+          // Replace the optimistic entity with server data
+          const replacedItems = replaceOptimisticEntity(old.items, context.optimisticId, serverItem);
           // Remove any duplicates that might have been created
-          const deduplicatedItems = removeDuplicateEntities(updatedItems);
+          const deduplicatedItems = removeDuplicateEntities(replacedItems);
 
           return {
             ...old,
@@ -343,6 +363,7 @@ export function useUploadDocument(currentFilter?: KnowledgeItemsFilter) {
       previousSummaries?: Array<[readonly unknown[], KnowledgeItemsResponse | undefined]>;
       previousOperations?: ActiveOperationsResponse;
       tempProgressId: string;
+      optimisticId: string;
     }
   >({
     mutationFn: ({ file, metadata }: { file: File; metadata: UploadMetadata }) =>
@@ -416,7 +437,22 @@ export function useUploadDocument(currentFilter?: KnowledgeItemsFilter) {
       });
       for (const [qk, old] of entries) {
         // Skip if this is the current query we already updated
-        if (currentFilter && JSON.stringify(qk) === JSON.stringify(knowledgeKeys.summaries(currentFilter))) {
+        const currentQueryKey = currentFilter ? knowledgeKeys.summaries(currentFilter) : null;
+        if (currentQueryKey && qk.length === currentQueryKey.length &&
+            qk.every((part, index) => {
+              if (index < qk.length - 1) return part === currentQueryKey[index];
+              // For the filter object, do a deep comparison
+              const qkFilter = part as KnowledgeItemsFilter | undefined;
+              const currentFilterPart = currentQueryKey[index] as KnowledgeItemsFilter | undefined;
+              if (!qkFilter && !currentFilterPart) return true;
+              if (!qkFilter || !currentFilterPart) return false;
+              return (
+                qkFilter.page === currentFilterPart.page &&
+                qkFilter.per_page === currentFilterPart.per_page &&
+                qkFilter.search === currentFilterPart.search &&
+                qkFilter.knowledge_type === currentFilterPart.knowledge_type
+              );
+            })) {
           continue;
         }
 
@@ -473,7 +509,7 @@ export function useUploadDocument(currentFilter?: KnowledgeItemsFilter) {
         };
       });
 
-      return { previousSummaries, previousOperations, tempProgressId };
+      return { previousSummaries, previousOperations, tempProgressId, optimisticId: optimisticItem._localId };
     },
     onSuccess: (response, _variables, context) => {
       // Replace temporary IDs with real ones from the server using shared utilities
@@ -482,16 +518,21 @@ export function useUploadDocument(currentFilter?: KnowledgeItemsFilter) {
         queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summariesPrefix() }, (old) => {
           if (!old) return old;
 
-          // Replace the optimistic entity with updated data
-          const updatedItems = old.items.map((item) => {
-            if (item.id === context.tempItemId) {
-              return { ...item, source_id: response.progressId };
-            }
-            return item;
-          });
+          // Find the optimistic item to create server entity with updated data
+          const optimisticItem = old.items.find(item => item._localId === context.optimisticId);
+          if (!optimisticItem) return old;
 
+          const serverItem: KnowledgeItem = {
+            ...optimisticItem,
+            source_id: response.progressId,
+            _optimistic: false,
+            _localId: undefined,
+          } as KnowledgeItem;
+
+          // Replace the optimistic entity with server data
+          const replacedItems = replaceOptimisticEntity(old.items, context.optimisticId, serverItem);
           // Remove any duplicates that might have been created
-          const deduplicatedItems = removeDuplicateEntities(updatedItems);
+          const deduplicatedItems = removeDuplicateEntities(replacedItems);
 
           return {
             ...old,
