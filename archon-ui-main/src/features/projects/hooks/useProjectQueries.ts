@@ -206,6 +206,8 @@ export function useDeleteProject() {
       // Don't refetch on success - trust optimistic update
       // Only remove the specific project's detail data (including nested keys)
       queryClient.removeQueries({ queryKey: projectKeys.detail(projectId), exact: false });
+      // Also remove the project's feature queries
+      queryClient.removeQueries({ queryKey: projectKeys.features(projectId), exact: false });
       showToast("Project deleted successfully", "success");
     },
   });

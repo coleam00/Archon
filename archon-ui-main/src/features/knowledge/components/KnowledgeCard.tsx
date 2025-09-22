@@ -1,6 +1,6 @@
 /**
- * Enhanced Knowledge Card Component
- * Individual knowledge item card with excellent UX and inline progress
+ * Knowledge Card component
+ * Displays a knowledge item with inline progress and status UI
  * Following the pattern from ProjectCard
  */
 
@@ -144,6 +144,7 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
   };
 
   return (
+    // biome-ignore lint/a11y/useSemanticElements: Card contains nested interactive elements (buttons, links) - using div to avoid invalid HTML nesting
     <motion.div
       className="relative group cursor-pointer"
       role="button"
