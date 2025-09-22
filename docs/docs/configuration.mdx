@@ -102,12 +102,50 @@ LOGFIRE_ENABLED=false              # true=Logfire logging, false=standard loggin
 
 # Service Discovery (automatically set for Docker)
 # SERVICE_DISCOVERY_MODE=docker_compose
+
+# Custom Domain Configuration (Optional)
+VITE_ALLOWED_HOSTS=archon.lan                    # For custom domains
+# VITE_ALLOWED_HOSTS=archon.lan,archon.local     # Multiple domains
 ```
 
 <Admonition type="tip" title="Configuration Options">
 - **API Keys**: Set through the Settings page UI instead of environment variables
 - **Logging**: Use `LOGFIRE_ENABLED=true/false` to toggle between standard and enhanced logging
 - **Zero Setup**: Standard logging works perfectly without any additional configuration
+- **Custom Domains**: Use `VITE_ALLOWED_HOSTS` for local network access or reverse proxy setups
+</Admonition>
+
+### 2. Custom Domain Configuration
+
+For accessing Archon via custom domains (useful for local network access or reverse proxy setups):
+
+```bash
+# Single custom domain
+VITE_ALLOWED_HOSTS=archon.lan
+
+# Multiple domains (comma-separated)
+VITE_ALLOWED_HOSTS=archon.lan,archon.local,myserver.lan
+```
+
+<Admonition type="info" title="Common Use Cases">
+- **Local Network Access**: Access from other devices using `archon.lan` or similar
+- **Reverse Proxy**: Using Caddy, nginx, or similar with custom domains
+- **mDNS/Bonjour**: Setting up `.local` hostnames for easy discovery
+</Admonition>
+
+**Example Caddy Configuration:**
+```caddyfile
+archon.lan {
+    tls internal
+    reverse_proxy 192.168.1.100:3737
+}
+```
+
+<Admonition type="warning" title="Restart Required">
+After adding `VITE_ALLOWED_HOSTS`, restart the frontend container:
+```bash
+docker compose restart archon-frontend
+```
 </Admonition>
 
 ### Unified Logging Architecture

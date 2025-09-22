@@ -356,6 +356,36 @@ After changing hostname or ports:
 2. Access the UI at: `http://${HOST}:${ARCHON_UI_PORT}`
 3. Update your AI client configuration with the new hostname and MCP port
 
+### Custom Domain Access
+
+To access Archon via custom domains (useful for reverse proxy setups or local network access):
+
+```bash
+# Add to your .env file
+VITE_ALLOWED_HOSTS=archon.lan
+
+# Multiple domains (comma-separated)
+VITE_ALLOWED_HOSTS=archon.lan,archon.local,myserver.lan
+```
+
+**Common Use Cases:**
+- **Local Network Access**: Access from other devices using `archon.lan` or similar
+- **Reverse Proxy**: Using Caddy, nginx with custom domains
+- **mDNS/Bonjour**: Setting up `.local` hostnames
+
+**Example Caddy Configuration:**
+```caddyfile
+archon.lan {
+    tls internal
+    reverse_proxy 192.168.1.100:3737
+}
+```
+
+**Important**: After adding `VITE_ALLOWED_HOSTS`, restart the frontend:
+```bash
+docker compose restart archon-frontend
+```
+
 ## 🔧 Development
 
 ### Quick Start
