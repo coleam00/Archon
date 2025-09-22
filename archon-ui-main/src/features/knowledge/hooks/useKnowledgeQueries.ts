@@ -23,6 +23,20 @@ import type {
 } from "../types";
 import { getProviderErrorMessage } from "../utils/providerErrorHandler";
 
+/**
+ * Helper function to check if a knowledge item matches the given filter
+ */
+function itemMatchesFilter(item: KnowledgeItem & Partial<{ metadata: { tags?: string[] } }>, filter?: KnowledgeItemsFilter) {
+  if (!filter) return true;
+  const tags = item.metadata?.tags ?? [];
+  return (
+    (!filter.knowledge_type || item.knowledge_type === filter.knowledge_type) &&
+    (!filter.source_type || item.source_type === filter.source_type) &&
+    (!filter.tags || filter.tags.every((t) => tags.includes(t))) &&
+    (!filter.search || item.title.toLowerCase().includes(filter.search.toLowerCase()))
+  );
+}
+
 // Query keys factory for better organization and type safety
 export const knowledgeKeys = {
   all: ["knowledge"] as const,
@@ -107,7 +121,6 @@ export function useCrawlUrl(currentFilter?: KnowledgeItemsFilter) {
     Error,
     CrawlRequest,
     {
-      previousKnowledge?: KnowledgeItem[];
       previousSummaries?: Array<[readonly unknown[], KnowledgeItemsResponse | undefined]>;
       previousOperations?: ActiveOperationsResponse;
       tempProgressId: string;
@@ -164,17 +177,13 @@ export function useCrawlUrl(currentFilter?: KnowledgeItemsFilter) {
         const currentData = queryClient.getQueryData<KnowledgeItemsResponse>(currentQueryKey);
 
         // Check if the optimistic item matches the current filter
-        const matchesType = !currentFilter.knowledge_type || optimisticItem.knowledge_type === currentFilter.knowledge_type;
-        const matchesTags = !currentFilter.tags || currentFilter.tags.every((t) => (optimisticItem.metadata?.tags ?? []).includes(t));
-        const matchesSearch = !currentFilter.search || optimisticItem.title.toLowerCase().includes(currentFilter.search.toLowerCase());
-
-        if (matchesType && matchesTags && matchesSearch) {
+        if (itemMatchesFilter(optimisticItem, currentFilter)) {
           if (!currentData) {
             queryClient.setQueryData<KnowledgeItemsResponse>(currentQueryKey, {
               items: [optimisticItem],
               total: 1,
               page: 1,
-              per_page: 100,
+              per_page: currentFilter?.per_page ?? 100,
             });
           } else {
             queryClient.setQueryData<KnowledgeItemsResponse>(currentQueryKey, {
@@ -212,18 +221,13 @@ export function useCrawlUrl(currentFilter?: KnowledgeItemsFilter) {
         }
 
         const filter = qk[qk.length - 1] as KnowledgeItemsFilter | undefined;
-        const matchesType = !filter?.knowledge_type || optimisticItem.knowledge_type === filter.knowledge_type;
-        const matchesTags =
-          !filter?.tags || filter.tags.every((t) => (optimisticItem.metadata?.tags ?? []).includes(t));
-        const matchesSearch = !filter?.search || optimisticItem.title.toLowerCase().includes(filter.search.toLowerCase());
-
-        if (!(matchesType && matchesTags && matchesSearch)) continue;
+        if (!itemMatchesFilter(optimisticItem, filter)) continue;
         if (!old) {
           queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
             items: [optimisticItem],
             total: 1,
             page: 1,
-            per_page: 100,
+            per_page: filter?.per_page ?? 100,
           });
         } else {
           queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
@@ -270,11 +274,6 @@ export function useCrawlUrl(currentFilter?: KnowledgeItemsFilter) {
     onSuccess: (response, _variables, context) => {
       // Replace temporary IDs with real ones from the server using shared utilities
       if (context) {
-        // Create the server entity with real progress ID
-        const serverItem: Partial<KnowledgeItem> = {
-          source_id: response.progressId,
-        };
-
         // Update summaries cache using replaceOptimisticEntity and removeDuplicateEntities
         queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summariesPrefix() }, (old) => {
           if (!old) return old;
@@ -409,17 +408,13 @@ export function useUploadDocument(currentFilter?: KnowledgeItemsFilter) {
         const currentData = queryClient.getQueryData<KnowledgeItemsResponse>(currentQueryKey);
 
         // Check if the optimistic item matches the current filter
-        const matchesType = !currentFilter.knowledge_type || optimisticItem.knowledge_type === currentFilter.knowledge_type;
-        const matchesTags = !currentFilter.tags || currentFilter.tags.every((t) => (optimisticItem.metadata?.tags ?? []).includes(t));
-        const matchesSearch = !currentFilter.search || optimisticItem.title.toLowerCase().includes(currentFilter.search.toLowerCase());
-
-        if (matchesType && matchesTags && matchesSearch) {
+        if (itemMatchesFilter(optimisticItem, currentFilter)) {
           if (!currentData) {
             queryClient.setQueryData<KnowledgeItemsResponse>(currentQueryKey, {
               items: [optimisticItem],
               total: 1,
               page: 1,
-              per_page: 100,
+              per_page: currentFilter?.per_page ?? 100,
             });
           } else {
             queryClient.setQueryData<KnowledgeItemsResponse>(currentQueryKey, {
@@ -457,18 +452,13 @@ export function useUploadDocument(currentFilter?: KnowledgeItemsFilter) {
         }
 
         const filter = qk[qk.length - 1] as KnowledgeItemsFilter | undefined;
-        const matchesType = !filter?.knowledge_type || optimisticItem.knowledge_type === filter.knowledge_type;
-        const matchesTags =
-          !filter?.tags || filter.tags.every((t) => (optimisticItem.metadata?.tags ?? []).includes(t));
-        const matchesSearch = !filter?.search || optimisticItem.title.toLowerCase().includes(filter.search.toLowerCase());
-
-        if (!(matchesType && matchesTags && matchesSearch)) continue;
+        if (!itemMatchesFilter(optimisticItem, filter)) continue;
         if (!old) {
           queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
             items: [optimisticItem],
             total: 1,
             page: 1,
-            per_page: 100,
+            per_page: filter?.per_page ?? 100,
           });
         } else {
           queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
