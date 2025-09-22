@@ -1,6 +1,6 @@
 /**
- * Enhanced Knowledge Card Component
- * Individual knowledge item card with excellent UX and inline progress
+ * Knowledge Card component
+ * Displays a knowledge item with inline progress and status UI
  * Following the pattern from ProjectCard
  */
 
@@ -10,7 +10,7 @@ import { Clock, Code, ExternalLink, File, FileText, Globe } from "lucide-react";
 import { useState } from "react";
 import { KnowledgeCardProgress } from "../../progress/components/KnowledgeCardProgress";
 import type { ActiveOperation } from "../../progress/types";
-import { isOptimistic } from "../../shared/optimistic";
+import { isOptimistic } from "@/features/shared/utils/optimistic";
 import { StatPill } from "../../ui/primitives";
 import { OptimisticIndicator } from "../../ui/primitives/OptimisticIndicator";
 import { cn } from "../../ui/primitives/styles";
@@ -144,6 +144,7 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
   };
 
   return (
+    // biome-ignore lint/a11y/useSemanticElements: Card contains nested interactive elements (buttons, links) - using div to avoid invalid HTML nesting
     <motion.div
       className="relative group cursor-pointer"
       role="button"

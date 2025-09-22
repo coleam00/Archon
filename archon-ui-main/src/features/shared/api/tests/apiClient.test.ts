@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { callAPIWithETag } from "./apiWithEtag";
-import { APIServiceError } from "./errors";
+import { APIServiceError } from "../../types/errors";
+import { callAPIWithETag } from "../apiClient";
 
 // Preserve original globals to restore after tests
 const originalAbortSignal = global.AbortSignal as any;
 const originalFetch = global.fetch;
 
-describe("apiWithEtag", () => {
+describe("apiClient (callAPIWithETag)", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     // Reset fetch to undefined to ensure clean state
@@ -258,16 +258,16 @@ describe("apiWithEtag", () => {
     });
 
     it("should work seamlessly with TanStack Query's caching strategy", async () => {
-      // This test documents how our simplified approach works with TanStack Query:
+      // This test documents how the API client integrates with TanStack Query:
       // 1. TanStack Query calls our function when data is stale
-      // 2. We make a simple fetch request
+      // 2. We make a fetch request
       // 3. Browser adds If-None-Match if it has cached data
       // 4. Server returns 200 (new data) or 304 (not modified)
       // 5. Browser returns data to us (either new or cached)
       // 6. We return data to TanStack Query
       // 7. TanStack Query updates its cache
 
-      const mockData = { workflow: "simplified" };
+      const mockData = { workflow: "standard" };
       const mockResponse = {
         ok: true,
         status: 200,
@@ -285,8 +285,8 @@ describe("apiWithEtag", () => {
     });
 
     it("should allow browser to optimize bandwidth automatically", async () => {
-      // This test verifies that even though we removed explicit ETag handling,
-      // bandwidth optimization still works through browser's HTTP cache
+      // This test verifies that ETag negotiation is handled by the browser
+      // and bandwidth optimization works through the browser's HTTP cache
 
       const mockData = { size: "large", benefit: "bandwidth saved" };
       const mockResponse = {
@@ -310,7 +310,7 @@ describe("apiWithEtag", () => {
     });
 
     it("should handle server errors regardless of caching", async () => {
-      // Verify error handling still works in simplified version
+      // Verify error handling works with standard fetch approach
       const errorResponse = {
         ok: false,
         status: 500,

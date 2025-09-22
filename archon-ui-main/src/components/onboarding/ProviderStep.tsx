@@ -3,7 +3,7 @@ import { Key, ExternalLink, Save, Loader } from "lucide-react";
 import { Input } from "../ui/Input";
 import { Button } from "../ui/Button";
 import { Select } from "../ui/Select";
-import { useToast } from "../../features/ui/hooks/useToast";
+import { useToast } from "../../features/shared/hooks/useToast";
 import { credentialsService } from "../../services/credentialsService";
 
 interface ProviderStepProps {

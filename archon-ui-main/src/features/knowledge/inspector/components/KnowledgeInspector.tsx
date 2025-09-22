@@ -4,13 +4,13 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { copyToClipboard } from "../../../shared/utils/clipboard";
 import { InspectorDialog, InspectorDialogContent, InspectorDialogTitle } from "../../../ui/primitives";
 import type { CodeExample, DocumentChunk, InspectorSelectedItem, KnowledgeItem } from "../../types";
 import { useInspectorPagination } from "../hooks/useInspectorPagination";
 import { ContentViewer } from "./ContentViewer";
 import { InspectorHeader } from "./InspectorHeader";
 import { InspectorSidebar } from "./InspectorSidebar";
-import { copyToClipboard } from "../../../shared/utils/clipboard";
 
 interface KnowledgeInspectorProps {
   item: KnowledgeItem;

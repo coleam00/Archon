@@ -3,8 +3,8 @@
  * Handles all knowledge-related API operations using TanStack Query patterns
  */
 
-import { callAPIWithETag } from "../../shared/apiWithEtag";
-import { APIServiceError } from "../../shared/errors";
+import { callAPIWithETag } from "../../shared/api/apiClient";
+import { APIServiceError } from "../../shared/types/errors";
 import type {
   ChunksResponse,
   CodeExamplesResponse,

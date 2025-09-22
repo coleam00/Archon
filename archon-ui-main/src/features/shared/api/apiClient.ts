@@ -11,8 +11,8 @@
  * For cache control, configure TanStack Query's staleTime/gcTime instead of manual HTTP caching.
  */
 
-import { API_BASE_URL } from "../../config/api";
-import { APIServiceError } from "./errors";
+import { API_BASE_URL } from "../../../config/api";
+import { APIServiceError } from "../types/errors";
 
 /**
  * Build full URL with test environment handling
@@ -48,16 +48,23 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
     // Construct the full URL
     const fullUrl = buildFullUrl(cleanEndpoint);
 
-    // Build headers - merge default Content-Type with provided headers
+    // Build headers - only set Content-Type for requests with a body
     // NOTE: We do NOT add If-None-Match headers; the browser handles ETag revalidation automatically
-    // Also note: Currently assumes headers are passed as plain objects (Record<string, string>)
-    // If we ever need to support Headers instances or [string, string][] tuples,
-    // we should normalize with: new Headers(options.headers), set defaults, then
-    // convert back with Object.fromEntries(headers.entries())
+    //
+    // Currently assumes headers are passed as plain objects (Record<string, string>)
+    // which works for all our current usage. The API doesn't require Accept headers
+    // since it always returns JSON, and we only set Content-Type when sending data.
     const headers: Record<string, string> = {
-      "Content-Type": "application/json",
       ...((options.headers as Record<string, string>) || {}),
     };
+
+    // Only set Content-Type for requests that have a body (POST, PUT, PATCH, etc.)
+    // GET and DELETE requests should not have Content-Type header
+    const method = options.method?.toUpperCase() || 'GET';
+    const hasBody = options.body !== undefined && options.body !== null;
+    if (hasBody && !headers['Content-Type']) {
+      headers['Content-Type'] = 'application/json';
+    }
 
     // Make the request with timeout
     // NOTE: Increased to 20s due to database performance issues with large DELETE operations

@@ -19,7 +19,7 @@ vi.mock("../../services", () => ({
 }));
 
 // Mock shared query patterns
-vi.mock("../../../shared/queryPatterns", () => ({
+vi.mock("../../../shared/config/queryPatterns", () => ({
   DISABLED_QUERY_KEY: ["disabled"] as const,
   STALE_TIMES: {
     instant: 0,

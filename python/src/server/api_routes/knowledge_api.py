@@ -18,6 +18,8 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
+# Basic validation - simplified inline version
+
 # Import unified logging
 from ..config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
 from ..services.crawler_manager import get_crawler
@@ -62,25 +64,58 @@ async def _validate_provider_api_key(provider: str = None) -> None:
     logger.info("🔑 Starting API key validation...")
     
     try:
+        # Basic provider validation
         if not provider:
             provider = "openai"
+        else:
+            # Simple provider validation
+            allowed_providers = {"openai", "ollama", "google", "openrouter", "anthropic", "grok"}
+            if provider not in allowed_providers:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Invalid provider name",
+                        "message": f"Provider '{provider}' not supported",
+                        "error_type": "validation_error"
+                    }
+                )
 
-        logger.info(f"🔑 Testing {provider.title()} API key with minimal embedding request...")
-        
-        # Test API key with minimal embedding request - this will fail if key is invalid
-        from ..services.embeddings.embedding_service import create_embedding
-        test_result = await create_embedding(text="test")
-        
-        if not test_result:
-            logger.error(f"❌ {provider.title()} API key validation failed - no embedding returned")
+        # Basic sanitization for logging
+        safe_provider = provider[:20]  # Limit length
+        logger.info(f"🔑 Testing {safe_provider.title()} API key with minimal embedding request...")
+
+        try:
+            # Test API key with minimal embedding request using provider-scoped configuration
+            from ..services.embeddings.embedding_service import create_embedding
+
+            test_result = await create_embedding(text="test", provider=provider)
+
+            if not test_result:
+                logger.error(
+                    f"❌ {provider.title()} API key validation failed - no embedding returned"
+                )
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "error": f"Invalid {provider.title()} API key",
+                        "message": f"Please verify your {provider.title()} API key in Settings.",
+                        "error_type": "authentication_failed",
+                        "provider": provider,
+                    },
+                )
+        except Exception as e:
+            logger.error(
+                f"❌ {provider.title()} API key validation failed: {e}",
+                exc_info=True,
+            )
             raise HTTPException(
                 status_code=401,
                 detail={
                     "error": f"Invalid {provider.title()} API key",
-                    "message": f"Please verify your {provider.title()} API key in Settings.",
+                    "message": f"Please verify your {provider.title()} API key in Settings. Error: {str(e)[:100]}",
                     "error_type": "authentication_failed",
-                    "provider": provider
-                }
+                    "provider": provider,
+                },
             )
             
         logger.info(f"✅ {provider.title()} API key validation successful")

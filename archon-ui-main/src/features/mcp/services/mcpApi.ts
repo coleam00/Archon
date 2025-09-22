@@ -1,4 +1,4 @@
-import { callAPIWithETag } from "../../shared/apiWithEtag";
+import { callAPIWithETag } from "../../shared/api/apiClient";
 import type { McpClient, McpServerConfig, McpServerStatus, McpSessionInfo } from "../types";
 
 export const mcpApi = {

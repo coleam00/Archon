@@ -1,7 +1,7 @@
 import { motion } from "framer-motion";
 import { Activity, CheckCircle2, ListTodo } from "lucide-react";
 import type React from "react";
-import { isOptimistic } from "../../shared/optimistic";
+import { isOptimistic } from "@/features/shared/utils/optimistic";
 import { OptimisticIndicator } from "../../ui/primitives/OptimisticIndicator";
 import { cn } from "../../ui/primitives/styles";
 import type { Project } from "../types";

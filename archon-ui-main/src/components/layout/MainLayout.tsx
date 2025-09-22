@@ -2,7 +2,7 @@ import { AlertCircle, WifiOff } from "lucide-react";
 import type React from "react";
 import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { useToast } from "../../features/ui/hooks/useToast";
+import { useToast } from "../../features/shared/hooks/useToast";
 import { cn } from "../../lib/utils";
 import { credentialsService } from "../../services/credentialsService";
 import { isLmConfigured } from "../../utils/onboarding";

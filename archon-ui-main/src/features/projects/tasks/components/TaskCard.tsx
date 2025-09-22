@@ -2,7 +2,7 @@ import { Tag } from "lucide-react";
 import type React from "react";
 import { useCallback } from "react";
 import { useDrag, useDrop } from "react-dnd";
-import { isOptimistic } from "../../../shared/optimistic";
+import { isOptimistic } from "@/features/shared/utils/optimistic";
 import { OptimisticIndicator } from "../../../ui/primitives/OptimisticIndicator";
 import { useTaskActions } from "../hooks";
 import type { Assignee, Task, TaskPriority } from "../types";

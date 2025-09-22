@@ -10,31 +10,62 @@ export interface ProviderError extends Error {
   isProviderError?: boolean;
 }
 
+// Type guards for error object properties
+interface ErrorWithStatus {
+  statusCode?: number;
+  status?: number;
+}
+
+interface ErrorWithMessage {
+  message?: string;
+}
+
+// Type guard functions
+function hasStatusProperty(obj: unknown): obj is ErrorWithStatus {
+  return typeof obj === "object" && obj !== null && ("statusCode" in obj || "status" in obj);
+}
+
+function hasMessageProperty(obj: unknown): obj is ErrorWithMessage {
+  return typeof obj === "object" && obj !== null && "message" in obj;
+}
+
 /**
  * Parse backend error responses into provider-aware error objects
  */
 export function parseProviderError(error: unknown): ProviderError {
-  const providerError = error as ProviderError;
+  // Handle null, undefined, and non-object types
+  if (!error || typeof error !== "object") {
+    const result: ProviderError = {
+      name: "Error",
+    } as ProviderError;
 
-  // Check if this is a structured provider error from backend
-  if (error && typeof error === "object") {
-    if (error.statusCode || error.status) {
-      providerError.statusCode = error.statusCode || error.status;
+    // Only set message for non-null/undefined values
+    if (error) {
+      result.message = String(error);
     }
 
-    // Parse backend error structure
-    if (error.message && error.message.includes("detail")) {
-      try {
-        const parsed = JSON.parse(error.message);
-        if (parsed.detail && parsed.detail.error_type) {
-          providerError.isProviderError = true;
-          providerError.provider = parsed.detail.provider || "LLM";
-          providerError.errorType = parsed.detail.error_type;
-          providerError.message = parsed.detail.message || error.message;
-        }
-      } catch {
-        // If parsing fails, use message as-is
+    return result;
+  }
+
+  const providerError = error as ProviderError;
+
+  // Type-safe status code extraction
+  if (hasStatusProperty(error)) {
+    providerError.statusCode = error.statusCode || error.status;
+  }
+
+  // Parse backend error structure with type safety
+  if (hasMessageProperty(error) && error.message && error.message.includes("detail")) {
+    try {
+      const parsed = JSON.parse(error.message);
+      if (parsed.detail?.error_type) {
+        providerError.isProviderError = true;
+        providerError.provider = parsed.detail.provider || "LLM";
+        providerError.errorType = parsed.detail.error_type;
+        providerError.message = parsed.detail.message || error.message;
       }
+    } catch {
+      // If parsing fails, use message as-is
     }
   }
 

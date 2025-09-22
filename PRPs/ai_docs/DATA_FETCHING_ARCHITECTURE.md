@@ -8,7 +8,7 @@ Archon uses **TanStack Query v5** for all data fetching, caching, and synchroniz
 
 ### 1. Query Client Configuration
 
-**Location**: `archon-ui-main/src/features/shared/queryClient.ts`
+**Location**: `archon-ui-main/src/features/shared/config/queryClient.ts`
 
 Centralized QueryClient with:
 
@@ -30,7 +30,7 @@ Visibility-aware polling that:
 
 ### 3. Query Patterns
 
-**Location**: `archon-ui-main/src/features/shared/queryPatterns.ts`
+**Location**: `archon-ui-main/src/features/shared/config/queryPatterns.ts`
 
 Shared constants:
 
@@ -64,7 +64,7 @@ Standard pattern across all features:
 
 ### ETag Support
 
-**Location**: `archon-ui-main/src/features/shared/apiWithEtag.ts`
+**Location**: `archon-ui-main/src/features/shared/api/apiClient.ts`
 
 ETag implementation:
 
@@ -83,7 +83,7 @@ Backend endpoints follow RESTful patterns:
 
 ## Optimistic Updates
 
-**Utilities**: `archon-ui-main/src/features/shared/optimistic.ts`
+**Utilities**: `archon-ui-main/src/features/shared/utils/optimistic.ts`
 
 All mutations use nanoid-based optimistic updates:
 
@@ -105,7 +105,7 @@ Polling intervals are defined in each feature's query hooks. See actual implemen
 - **Progress**: `archon-ui-main/src/features/progress/hooks/useProgressQueries.ts`
 - **MCP**: `archon-ui-main/src/features/mcp/hooks/useMcpQueries.ts`
 
-Standard intervals from `archon-ui-main/src/features/shared/queryPatterns.ts`:
+Standard intervals from `archon-ui-main/src/features/shared/config/queryPatterns.ts`:
 - `STALE_TIMES.instant`: 0ms (always fresh)
 - `STALE_TIMES.frequent`: 5 seconds (frequently changing data)
 - `STALE_TIMES.normal`: 30 seconds (standard cache)

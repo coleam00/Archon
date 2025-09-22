@@ -139,6 +139,7 @@ class CodeExtractionService:
         source_id: str,
         progress_callback: Callable | None = None,
         cancellation_check: Callable[[], None] | None = None,
+        provider: str | None = None,
     ) -> int:
         """
         Extract code examples from crawled documents and store them.
@@ -204,7 +205,7 @@ class CodeExtractionService:
 
         # Generate summaries for code blocks
         summary_results = await self._generate_code_summaries(
-            all_code_blocks, summary_callback, cancellation_check
+            all_code_blocks, summary_callback, cancellation_check, provider
         )
 
         # Prepare code examples for storage
@@ -223,7 +224,7 @@ class CodeExtractionService:
 
         # Store code examples in database
         return await self._store_code_examples(
-            storage_data, url_to_full_document, storage_callback
+            storage_data, url_to_full_document, storage_callback, provider
         )
 
     async def _extract_code_blocks_from_documents(
@@ -1523,6 +1524,7 @@ class CodeExtractionService:
         all_code_blocks: list[dict[str, Any]],
         progress_callback: Callable | None = None,
         cancellation_check: Callable[[], None] | None = None,
+        provider: str | None = None,
     ) -> list[dict[str, str]]:
         """
         Generate summaries for all code blocks.
@@ -1587,7 +1589,7 @@ class CodeExtractionService:
 
         try:
             results = await generate_code_summaries_batch(
-                code_blocks_for_summaries, max_workers, progress_callback=summary_progress_callback
+                code_blocks_for_summaries, max_workers, progress_callback=summary_progress_callback, provider=provider
             )
 
             # Ensure all results are valid dicts
@@ -1667,6 +1669,7 @@ class CodeExtractionService:
         storage_data: dict[str, list[Any]],
         url_to_full_document: dict[str, str],
         progress_callback: Callable | None = None,
+        provider: str | None = None,
     ) -> int:
         """
         Store code examples in the database.
@@ -1709,7 +1712,7 @@ class CodeExtractionService:
                 batch_size=20,
                 url_to_full_document=url_to_full_document,
                 progress_callback=storage_progress_callback,
-                provider=None,  # Use configured provider
+                provider=provider,
             )
 
             # Report completion of code extraction/storage phase

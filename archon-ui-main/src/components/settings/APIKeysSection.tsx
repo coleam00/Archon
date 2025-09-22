@@ -4,7 +4,7 @@ import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { credentialsService, Credential } from '../../services/credentialsService';
-import { useToast } from '../../features/ui/hooks/useToast';
+import { useToast } from '../../features/shared/hooks/useToast';
 
 interface CustomCredential {
   key: string;

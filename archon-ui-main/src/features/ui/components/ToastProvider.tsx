@@ -1,5 +1,5 @@
 import type React from "react";
-import { createToastContext, getToastIcon, ToastContext } from "../hooks/useToast";
+import { createToastContext, getToastIcon, ToastContext } from "../../shared/hooks/useToast";
 import {
   ToastProvider as RadixToastProvider,
   Toast,

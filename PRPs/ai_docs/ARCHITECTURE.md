@@ -88,8 +88,8 @@ Pattern: `{METHOD} /api/{resource}/{id?}/{sub-resource?}`
 
 ### Data Fetching
 **Core**: TanStack Query v5
-**Configuration**: `archon-ui-main/src/features/shared/queryClient.ts`
-**Patterns**: `archon-ui-main/src/features/shared/queryPatterns.ts`
+**Configuration**: `archon-ui-main/src/features/shared/config/queryClient.ts`
+**Patterns**: `archon-ui-main/src/features/shared/config/queryPatterns.ts`
 
 ### State Management
 - **Server State**: TanStack Query
@@ -139,7 +139,7 @@ TanStack Query is the single source of truth. No separate state management neede
 No translation layers. Database values (e.g., `"todo"`, `"doing"`) used directly in UI.
 
 ### Browser-Native Caching
-ETags handled by browser, not JavaScript. See `archon-ui-main/src/features/shared/apiWithEtag.ts`.
+ETags handled by browser, not JavaScript. See `archon-ui-main/src/features/shared/api/apiClient.ts`.
 
 ## Deployment
 

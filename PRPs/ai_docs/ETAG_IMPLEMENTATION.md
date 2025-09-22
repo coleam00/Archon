@@ -17,7 +17,7 @@ The backend generates ETags for API responses:
 - Returns `304 Not Modified` when ETags match
 
 ### Frontend Handling
-**Location**: `archon-ui-main/src/features/shared/apiWithEtag.ts`
+**Location**: `archon-ui-main/src/features/shared/api/apiClient.ts`
 
 The frontend relies on browser-native HTTP caching:
 - Browser automatically sends `If-None-Match` headers with cached ETags
@@ -28,7 +28,7 @@ The frontend relies on browser-native HTTP caching:
 #### Browser vs Non-Browser Behavior
 - **Standard Browsers**: Per the Fetch spec, a 304 response freshens the HTTP cache and returns the cached body to JavaScript
 - **Non-Browser Runtimes** (React Native, custom fetch): May surface 304 with empty body to JavaScript
-- **Client Fallback**: The `apiWithEtag.ts` implementation handles both scenarios, ensuring consistent behavior across environments
+- **Client Fallback**: The `apiClient.ts` implementation handles both scenarios, ensuring consistent behavior across environments
 
 ## Implementation Details
 
@@ -81,8 +81,8 @@ Unlike previous implementations, the current approach:
 
 ### Configuration
 Cache behavior is controlled through TanStack Query's `staleTime`:
-- See `archon-ui-main/src/features/shared/queryPatterns.ts` for standard times
-- See `archon-ui-main/src/features/shared/queryClient.ts` for global configuration
+- See `archon-ui-main/src/features/shared/config/queryPatterns.ts` for standard times
+- See `archon-ui-main/src/features/shared/config/queryClient.ts` for global configuration
 
 ## Performance Benefits
 
@@ -100,7 +100,7 @@ Cache behavior is controlled through TanStack Query's `staleTime`:
 
 ### Core Implementation
 - **Backend Utilities**: `python/src/server/utils/etag_utils.py`
-- **Frontend Client**: `archon-ui-main/src/features/shared/apiWithEtag.ts`
+- **Frontend Client**: `archon-ui-main/src/features/shared/api/apiClient.ts`
 - **Tests**: `python/tests/server/utils/test_etag_utils.py`
 
 ### Usage Examples

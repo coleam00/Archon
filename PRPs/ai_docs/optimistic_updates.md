@@ -3,7 +3,7 @@
 ## Core Architecture
 
 ### Shared Utilities Module
-**Location**: `src/features/shared/optimistic.ts`
+**Location**: `src/features/shared/utils/optimistic.ts`
 
 Provides type-safe utilities for managing optimistic state across all features:
 - `createOptimisticId()` - Generates stable UUIDs using nanoid
@@ -73,13 +73,13 @@ Reusable component showing:
 - Uses `createOptimisticId()` directly for progress tracking
 
 ### Toasts
-- **Location**: `src/features/ui/hooks/useToast.ts:43`
+- **Location**: `src/features/shared/hooks/useToast.ts:43`
 - Uses `createOptimisticId()` for unique toast IDs
 
 ## Testing
 
 ### Unit Tests
-**Location**: `src/features/shared/optimistic.test.ts`
+**Location**: `src/features/shared/utils/tests/optimistic.test.ts`
 
 Covers all utility functions with 8 test cases:
 - ID uniqueness and format validation

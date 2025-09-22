@@ -13,7 +13,7 @@ import openai
 
 from ...config.logfire_config import safe_span, search_logger
 from ..credential_service import credential_service
-from ..llm_provider_service import get_embedding_model, get_llm_client
+from ..llm_provider_service import get_embedding_model, get_llm_client, is_google_embedding_model, is_openai_embedding_model
 from ..threading_service import get_threading_service
 from .embedding_exceptions import (
     EmbeddingAPIError,
@@ -152,34 +152,56 @@ async def create_embeddings_batch(
     if not texts:
         return EmbeddingBatchResult()
 
+    result = EmbeddingBatchResult()
+
     # Validate that all items in texts are strings
     validated_texts = []
     for i, text in enumerate(texts):
-        if not isinstance(text, str):
-            search_logger.error(
-                f"Invalid text type at index {i}: {type(text)}, value: {text}", exc_info=True
-            )
-            # Try to convert to string
-            try:
-                validated_texts.append(str(text))
-            except Exception as e:
-                search_logger.error(
-                    f"Failed to convert text at index {i} to string: {e}", exc_info=True
-                )
-                validated_texts.append("")  # Use empty string as fallback
-        else:
+        if isinstance(text, str):
             validated_texts.append(text)
+            continue
+
+        search_logger.error(
+            f"Invalid text type at index {i}: {type(text)}, value: {text}", exc_info=True
+        )
+        try:
+            converted = str(text)
+            validated_texts.append(converted)
+        except Exception as conversion_error:
+            search_logger.error(
+                f"Failed to convert text at index {i} to string: {conversion_error}",
+                exc_info=True,
+            )
+            result.add_failure(
+                repr(text),
+                EmbeddingAPIError("Invalid text type", original_error=conversion_error),
+                batch_index=None,
+            )
 
     texts = validated_texts
-
-    result = EmbeddingBatchResult()
     threading_service = get_threading_service()
 
     with safe_span(
         "create_embeddings_batch", text_count=len(texts), total_chars=sum(len(t) for t in texts)
     ) as span:
         try:
-            async with get_llm_client(provider=provider, use_embedding_provider=True) as client:
+            # Intelligent embedding provider routing based on model type
+            # Get the embedding model first to determine the correct provider
+            embedding_model = await get_embedding_model(provider=provider)
+
+            # Route to correct provider based on model type
+            if is_google_embedding_model(embedding_model):
+                embedding_provider = "google"
+                search_logger.info(f"Routing to Google for embedding model: {embedding_model}")
+            elif is_openai_embedding_model(embedding_model) or "openai/" in embedding_model.lower():
+                embedding_provider = "openai"
+                search_logger.info(f"Routing to OpenAI for embedding model: {embedding_model}")
+            else:
+                # Keep original provider for ollama and other providers
+                embedding_provider = provider
+                search_logger.info(f"Using original provider '{provider}' for embedding model: {embedding_model}")
+
+            async with get_llm_client(provider=embedding_provider, use_embedding_provider=True) as client:
                 # Load batch size and dimensions from settings
                 try:
                     rag_settings = await credential_service.get_credentials_by_category(
@@ -220,7 +242,8 @@ async def create_embeddings_batch(
                             while retry_count < max_retries:
                                 try:
                                     # Create embeddings for this batch
-                                    embedding_model = await get_embedding_model(provider=provider)
+                                    embedding_model = await get_embedding_model(provider=embedding_provider)
+
                                     response = await client.embeddings.create(
                                         model=embedding_model,
                                         input=batch,

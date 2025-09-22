@@ -475,12 +475,24 @@ class CrawlingService:
                         )
 
                 try:
+                    # Extract provider from request or use credential service default
+                    provider = request.get("provider")
+                    if not provider:
+                        try:
+                            from ..credential_service import credential_service
+                            provider_config = await credential_service.get_active_provider("llm")
+                            provider = provider_config.get("provider", "openai")
+                        except Exception as e:
+                            logger.warning(f"Failed to get provider from credential service: {e}, defaulting to openai")
+                            provider = "openai"
+
                     code_examples_count = await self.doc_storage_ops.extract_and_store_code_examples(
                         crawl_results,
                         storage_results["url_to_full_document"],
                         storage_results["source_id"],
                         code_progress_callback,
                         self._check_cancellation,
+                        provider,
                     )
                 except RuntimeError as e:
                     # Code extraction failed, continue crawl with warning

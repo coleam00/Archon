@@ -1,13 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSmartPolling } from "@/features/shared/hooks";
+import { useToast } from "@/features/shared/hooks/useToast";
 import {
   createOptimisticEntity,
   type OptimisticEntity,
   removeDuplicateEntities,
   replaceOptimisticEntity,
-} from "@/features/shared/optimistic";
-import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../shared/queryPatterns";
-import { useSmartPolling } from "../../ui/hooks";
-import { useToast } from "../../ui/hooks/useToast";
+} from "@/features/shared/utils/optimistic";
+import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../shared/config/queryPatterns";
 import { projectService } from "../services";
 import type { CreateProjectRequest, Project, UpdateProjectRequest } from "../types";
 
@@ -36,9 +36,7 @@ export function useProjects() {
 
 // Fetch project features
 export function useProjectFeatures(projectId: string | undefined) {
-  // TODO: Phase 4 - Add explicit typing: useQuery<Awaited<ReturnType<typeof projectService.getProjectFeatures>>>
-  // See PRPs/local/frontend-state-management-refactor.md Phase 4: Configure Request Deduplication
-  return useQuery({
+  return useQuery<Awaited<ReturnType<typeof projectService.getProjectFeatures>>>({
     queryKey: projectId ? projectKeys.features(projectId) : DISABLED_QUERY_KEY,
     queryFn: () => (projectId ? projectService.getProjectFeatures(projectId) : Promise.reject("No project ID")),
     enabled: !!projectId,
@@ -208,6 +206,8 @@ export function useDeleteProject() {
       // Don't refetch on success - trust optimistic update
       // Only remove the specific project's detail data (including nested keys)
       queryClient.removeQueries({ queryKey: projectKeys.detail(projectId), exact: false });
+      // Also remove the project's feature queries
+      queryClient.removeQueries({ queryKey: projectKeys.features(projectId), exact: false });
       showToast("Project deleted successfully", "success");
     },
   });

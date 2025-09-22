@@ -4,10 +4,107 @@ import { Card } from '../ui/Card';
 import { Input } from '../ui/Input';
 import { Select } from '../ui/Select';
 import { Button } from '../ui/Button';
-import { useToast } from '../../features/ui/hooks/useToast';
+import { useToast } from '../../features/shared/hooks/useToast';
 import { credentialsService } from '../../services/credentialsService';
 import OllamaModelDiscoveryModal from './OllamaModelDiscoveryModal';
 import OllamaModelSelectionModal from './OllamaModelSelectionModal';
+
+type ProviderKey = 'openai' | 'google' | 'ollama' | 'anthropic' | 'grok' | 'openrouter';
+
+interface ProviderModels {
+  chatModel: string;
+  embeddingModel: string;
+}
+
+type ProviderModelMap = Record<ProviderKey, ProviderModels>;
+
+// Provider model persistence helpers
+const PROVIDER_MODELS_KEY = 'archon_provider_models';
+
+const getDefaultModels = (provider: ProviderKey): ProviderModels => {
+  const chatDefaults: Record<ProviderKey, string> = {
+    openai: 'gpt-4o-mini',
+    anthropic: 'claude-3-5-sonnet-20241022',
+    google: 'gemini-1.5-flash',
+    grok: 'grok-3-mini', // Updated to use grok-3-mini as default
+    openrouter: 'openai/gpt-4o-mini',
+    ollama: 'llama3:8b'
+  };
+
+  const embeddingDefaults: Record<ProviderKey, string> = {
+    openai: 'text-embedding-3-small',
+    anthropic: 'text-embedding-3-small', // Fallback to OpenAI
+    google: 'text-embedding-004',
+    grok: 'text-embedding-3-small', // Fallback to OpenAI
+    openrouter: 'text-embedding-3-small',
+    ollama: 'nomic-embed-text'
+  };
+
+  return {
+    chatModel: chatDefaults[provider],
+    embeddingModel: embeddingDefaults[provider]
+  };
+};
+
+const saveProviderModels = (providerModels: ProviderModelMap): void => {
+  try {
+    localStorage.setItem(PROVIDER_MODELS_KEY, JSON.stringify(providerModels));
+  } catch (error) {
+    console.error('Failed to save provider models:', error);
+  }
+};
+
+const loadProviderModels = (): ProviderModelMap => {
+  try {
+    const saved = localStorage.getItem(PROVIDER_MODELS_KEY);
+    if (saved) {
+      return JSON.parse(saved);
+    }
+  } catch (error) {
+    console.error('Failed to load provider models:', error);
+  }
+
+  // Return defaults for all providers if nothing saved
+  const providers: ProviderKey[] = ['openai', 'google', 'openrouter', 'ollama', 'anthropic', 'grok'];
+  const defaultModels: ProviderModelMap = {} as ProviderModelMap;
+
+  providers.forEach(provider => {
+    defaultModels[provider] = getDefaultModels(provider);
+  });
+
+  return defaultModels;
+};
+
+// Static color styles mapping (prevents Tailwind JIT purging)
+const colorStyles: Record<ProviderKey, string> = {
+  openai: 'border-green-500 bg-green-500/10',
+  google: 'border-blue-500 bg-blue-500/10',
+  openrouter: 'border-cyan-500 bg-cyan-500/10',
+  ollama: 'border-purple-500 bg-purple-500/10',
+  anthropic: 'border-orange-500 bg-orange-500/10',
+  grok: 'border-yellow-500 bg-yellow-500/10',
+};
+
+const providerAlertStyles: Record<ProviderKey, string> = {
+  openai: 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 text-green-800 dark:text-green-300',
+  google: 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-300',
+  openrouter: 'bg-cyan-50 dark:bg-cyan-900/20 border-cyan-200 dark:border-cyan-800 text-cyan-800 dark:text-cyan-300',
+  ollama: 'bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800 text-purple-800 dark:text-purple-300',
+  anthropic: 'bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-800 text-orange-800 dark:text-orange-300',
+  grok: 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800 text-yellow-800 dark:text-yellow-300',
+};
+
+const providerAlertMessages: Record<ProviderKey, string> = {
+  openai: 'Configure your OpenAI API key in the credentials section to use GPT models.',
+  google: 'Configure your Google API key in the credentials section to use Gemini models.',
+  openrouter: 'Configure your OpenRouter API key in the credentials section to use models.',
+  ollama: 'Configure your Ollama instances in this panel to connect local models.',
+  anthropic: 'Configure your Anthropic API key in the credentials section to use Claude models.',
+  grok: 'Configure your Grok API key in the credentials section to use Grok models.',
+};
+
+const isProviderKey = (value: unknown): value is ProviderKey =>
+  typeof value === 'string' && ['openai', 'google', 'openrouter', 'ollama', 'anthropic', 'grok'].includes(value);
 
 interface RAGSettingsProps {
   ragSettings: {
@@ -19,8 +116,10 @@ interface RAGSettingsProps {
     USE_RERANKING: boolean;
     LLM_PROVIDER?: string;
     LLM_BASE_URL?: string;
+    LLM_INSTANCE_NAME?: string;
     EMBEDDING_MODEL?: string;
     OLLAMA_EMBEDDING_URL?: string;
+    OLLAMA_EMBEDDING_INSTANCE_NAME?: string;
     // Crawling Performance Settings
     CRAWL_BATCH_SIZE?: number;
     CRAWL_MAX_CONCURRENT?: number;
@@ -57,7 +156,10 @@ export const RAGSettings = ({
   // Model selection modals state
   const [showLLMModelSelectionModal, setShowLLMModelSelectionModal] = useState(false);
   const [showEmbeddingModelSelectionModal, setShowEmbeddingModelSelectionModal] = useState(false);
-  
+
+  // Provider-specific model persistence state
+  const [providerModels, setProviderModels] = useState<ProviderModelMap>(() => loadProviderModels());
+
   // Instance configurations
   const [llmInstanceConfig, setLLMInstanceConfig] = useState({
     name: '',
@@ -112,6 +214,25 @@ export const RAGSettings = ({
       });
     }
   }, [ragSettings.OLLAMA_EMBEDDING_URL, ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME]);
+
+  // Provider model persistence effects
+  useEffect(() => {
+    // Update provider models when current models change
+    const currentProvider = ragSettings.LLM_PROVIDER as ProviderKey;
+    if (currentProvider && ragSettings.MODEL_CHOICE && ragSettings.EMBEDDING_MODEL) {
+      setProviderModels(prev => {
+        const updated = {
+          ...prev,
+          [currentProvider]: {
+            chatModel: ragSettings.MODEL_CHOICE,
+            embeddingModel: ragSettings.EMBEDDING_MODEL
+          }
+        };
+        saveProviderModels(updated);
+        return updated;
+      });
+    }
+  }, [ragSettings.MODEL_CHOICE, ragSettings.EMBEDDING_MODEL, ragSettings.LLM_PROVIDER]);
 
   // Load API credentials for status checking
   useEffect(() => {
@@ -197,58 +318,27 @@ export const RAGSettings = ({
   }>({});
 
   // Test connection to external providers
-  const testProviderConnection = async (provider: string, apiKey: string): Promise<boolean> => {
+  const testProviderConnection = async (provider: string): Promise<boolean> => {
     setProviderConnectionStatus(prev => ({
       ...prev,
       [provider]: { ...prev[provider], checking: true }
     }));
 
     try {
-      switch (provider) {
-        case 'openai':
-          // Test OpenAI connection with a simple completion request
-          const openaiResponse = await fetch('https://api.openai.com/v1/models', {
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${apiKey}`,
-              'Content-Type': 'application/json'
-            }
-          });
-          
-          if (openaiResponse.ok) {
-            setProviderConnectionStatus(prev => ({
-              ...prev,
-              openai: { connected: true, checking: false, lastChecked: new Date() }
-            }));
-            return true;
-          } else {
-            throw new Error(`OpenAI API returned ${openaiResponse.status}`);
-          }
+      // Use server-side API endpoint for secure connectivity testing
+      const response = await fetch(`/api/providers/${provider}/status`);
+      const result = await response.json();
 
-        case 'google':
-          // Test Google Gemini connection 
-          const googleResponse = await fetch(`https://generativelanguage.googleapis.com/v1/models?key=${apiKey}`, {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json'
-            }
-          });
-          
-          if (googleResponse.ok) {
-            setProviderConnectionStatus(prev => ({
-              ...prev,
-              google: { connected: true, checking: false, lastChecked: new Date() }
-            }));
-            return true;
-          } else {
-            throw new Error(`Google API returned ${googleResponse.status}`);
-          }
+      const isConnected = result.ok && result.reason === 'connected';
 
-        default:
-          return false;
-      }
+      setProviderConnectionStatus(prev => ({
+        ...prev,
+        [provider]: { connected: isConnected, checking: false, lastChecked: new Date() }
+      }));
+
+      return isConnected;
     } catch (error) {
-      console.error(`Failed to test ${provider} connection:`, error);
+      console.error(`Error testing ${provider} connection:`, error);
       setProviderConnectionStatus(prev => ({
         ...prev,
         [provider]: { connected: false, checking: false, lastChecked: new Date() }
@@ -260,37 +350,27 @@ export const RAGSettings = ({
   // Test provider connections when API credentials change
   useEffect(() => {
     const testConnections = async () => {
-      const providers = ['openai', 'google'];
-      
+      // Test all supported providers
+      const providers = ['openai', 'google', 'anthropic', 'openrouter', 'grok'];
+
       for (const provider of providers) {
-        const keyName = provider === 'openai' ? 'OPENAI_API_KEY' : 'GOOGLE_API_KEY';
-        const apiKey = Object.keys(apiCredentials).find(key => key.toUpperCase() === keyName);
-        const keyValue = apiKey ? apiCredentials[apiKey] : undefined;
-        
-        if (keyValue && keyValue.trim().length > 0) {
-          // Don't test if we've already checked recently (within last 30 seconds)
-          const lastChecked = providerConnectionStatus[provider]?.lastChecked;
-          const now = new Date();
-          const timeSinceLastCheck = lastChecked ? now.getTime() - lastChecked.getTime() : Infinity;
-          
-          if (timeSinceLastCheck > 30000) { // 30 seconds
-            console.log(`🔄 Testing ${provider} connection...`);
-            await testProviderConnection(provider, keyValue);
-          }
-        } else {
-          // No API key, mark as disconnected
-          setProviderConnectionStatus(prev => ({
-            ...prev,
-            [provider]: { connected: false, checking: false, lastChecked: new Date() }
-          }));
+        // Don't test if we've already checked recently (within last 30 seconds)
+        const lastChecked = providerConnectionStatus[provider]?.lastChecked;
+        const now = new Date();
+        const timeSinceLastCheck = lastChecked ? now.getTime() - lastChecked.getTime() : Infinity;
+
+        if (timeSinceLastCheck > 30000) { // 30 seconds
+          console.log(`🔄 Testing ${provider} connection...`);
+          await testProviderConnection(provider);
         }
       }
     };
 
-    // Only test if we have credentials loaded
-    if (Object.keys(apiCredentials).length > 0) {
-      testConnections();
-    }
+    // Test connections periodically (every 60 seconds)
+    testConnections();
+    const interval = setInterval(testConnections, 60000);
+
+    return () => clearInterval(interval);
   }, [apiCredentials]); // Test when credentials change
 
   // Ref to track if initial test has been run (will be used after function definitions)
@@ -662,24 +742,41 @@ export const RAGSettings = ({
         if (llmStatus.online || embeddingStatus.online) return 'partial';
         return 'missing';
       case 'anthropic':
-        // Check if Anthropic API key is configured (case insensitive)
-        const anthropicKey = Object.keys(apiCredentials).find(key => key.toUpperCase() === 'ANTHROPIC_API_KEY');
-        const hasAnthropicKey = anthropicKey && apiCredentials[anthropicKey] && apiCredentials[anthropicKey].trim().length > 0;
-        return hasAnthropicKey ? 'configured' : 'missing';
+        // Use server-side connection status
+        const anthropicConnected = providerConnectionStatus['anthropic']?.connected || false;
+        const anthropicChecking = providerConnectionStatus['anthropic']?.checking || false;
+        if (anthropicChecking) return 'partial';
+        return anthropicConnected ? 'configured' : 'missing';
       case 'grok':
-        // Check if Grok API key is configured (case insensitive)
-        const grokKey = Object.keys(apiCredentials).find(key => key.toUpperCase() === 'GROK_API_KEY');
-        const hasGrokKey = grokKey && apiCredentials[grokKey] && apiCredentials[grokKey].trim().length > 0;
-        return hasGrokKey ? 'configured' : 'missing';
+        // Use server-side connection status
+        const grokConnected = providerConnectionStatus['grok']?.connected || false;
+        const grokChecking = providerConnectionStatus['grok']?.checking || false;
+        if (grokChecking) return 'partial';
+        return grokConnected ? 'configured' : 'missing';
       case 'openrouter':
-        // Check if OpenRouter API key is configured (case insensitive)
-        const openRouterKey = Object.keys(apiCredentials).find(key => key.toUpperCase() === 'OPENROUTER_API_KEY');
-        const hasOpenRouterKey = openRouterKey && apiCredentials[openRouterKey] && apiCredentials[openRouterKey].trim().length > 0;
-        return hasOpenRouterKey ? 'configured' : 'missing';
+        // Use server-side connection status
+        const openRouterConnected = providerConnectionStatus['openrouter']?.connected || false;
+        const openRouterChecking = providerConnectionStatus['openrouter']?.checking || false;
+        if (openRouterChecking) return 'partial';
+        return openRouterConnected ? 'configured' : 'missing';
       default:
         return 'missing';
     }
-  };;
+  };
+
+  const selectedProviderKey = isProviderKey(ragSettings.LLM_PROVIDER)
+    ? (ragSettings.LLM_PROVIDER as ProviderKey)
+    : undefined;
+  const selectedProviderStatus = selectedProviderKey ? getProviderStatus(selectedProviderKey) : undefined;
+  const shouldShowProviderAlert = Boolean(
+    selectedProviderKey && selectedProviderStatus === 'missing'
+  );
+  const providerAlertClassName = shouldShowProviderAlert && selectedProviderKey
+    ? providerAlertStyles[selectedProviderKey]
+    : '';
+  const providerAlertMessage = shouldShowProviderAlert && selectedProviderKey
+    ? providerAlertMessages[selectedProviderKey]
+    : '';
   
   // Test Ollama connectivity when Settings page loads (scenario 4: page load)
   // This useEffect is placed after function definitions to ensure access to manualTestConnection
@@ -750,55 +847,32 @@ export const RAGSettings = ({
             {[
               { key: 'openai', name: 'OpenAI', logo: '/img/OpenAI.png', color: 'green' },
               { key: 'google', name: 'Google', logo: '/img/google-logo.svg', color: 'blue' },
+              { key: 'openrouter', name: 'OpenRouter', logo: '/img/OpenRouter.png', color: 'cyan' },
               { key: 'ollama', name: 'Ollama', logo: '/img/Ollama.png', color: 'purple' },
               { key: 'anthropic', name: 'Anthropic', logo: '/img/claude-logo.svg', color: 'orange' },
-              { key: 'grok', name: 'Grok', logo: '/img/Grok.png', color: 'yellow' },
-              { key: 'openrouter', name: 'OpenRouter', logo: '/img/OpenRouter.png', color: 'cyan' }
+              { key: 'grok', name: 'Grok', logo: '/img/Grok.png', color: 'yellow' }
             ].map(provider => (
               <button
                 key={provider.key}
                 type="button"
                 onClick={() => {
+                  // Get saved models for this provider, or use defaults
+                  const providerKey = provider.key as ProviderKey;
+                  const savedModels = providerModels[providerKey] || getDefaultModels(providerKey);
+
                   const updatedSettings = {
                     ...ragSettings,
-                    LLM_PROVIDER: provider.key
+                    LLM_PROVIDER: providerKey,
+                    MODEL_CHOICE: savedModels.chatModel,
+                    EMBEDDING_MODEL: savedModels.embeddingModel
                   };
-                  
-                  // Set models to provider-appropriate defaults when switching providers
-                  // This ensures both LLM and embedding models switch when provider changes
-                  const getDefaultChatModel = (provider: string): string => {
-                    switch (provider) {
-                      case 'openai': return 'gpt-4o-mini';
-                      case 'anthropic': return 'claude-3-5-sonnet-20241022';
-                      case 'google': return 'gemini-1.5-flash';
-                      case 'grok': return 'grok-2-latest';
-                      case 'ollama': return '';
-                      case 'openrouter': return 'anthropic/claude-3.5-sonnet';
-                      default: return 'gpt-4o-mini';
-                    }
-                  };
-                  
-                  const getDefaultEmbeddingModel = (provider: string): string => {
-                    switch (provider) {
-                      case 'openai': return 'text-embedding-3-small';
-                      case 'google': return 'text-embedding-004';
-                      case 'ollama': return '';
-                      case 'openrouter': return 'text-embedding-3-small';
-                      case 'anthropic': 
-                      case 'grok': 
-                      default: return 'text-embedding-3-small';
-                    }
-                  };
-                  
-                  updatedSettings.MODEL_CHOICE = getDefaultChatModel(provider.key);
-                  updatedSettings.EMBEDDING_MODEL = getDefaultEmbeddingModel(provider.key);
-                  
+
                   setRagSettings(updatedSettings);
                 }}
                 className={`
                   relative p-3 rounded-lg border-2 transition-all duration-200 text-center
                   ${ragSettings.LLM_PROVIDER === provider.key
-                    ? `border-${provider.color}-500 bg-${provider.color}-500/10 shadow-[0_0_15px_rgba(34,197,94,0.3)]`
+                    ? `${colorStyles[provider.key as ProviderKey]} shadow-[0_0_15px_rgba(34,197,94,0.3)]`
                     : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
                   }
                   hover:scale-105 active:scale-95
@@ -813,8 +887,8 @@ export const RAGSettings = ({
                       : ''
                   }`}
                 />
-                <div className={`text-sm font-medium text-gray-700 dark:text-gray-300 ${
-                  provider.key === 'openrouter' ? 'text-center' : ''
+                <div className={`font-medium text-gray-700 dark:text-gray-300 text-center ${
+                  provider.key === 'openrouter' ? 'text-xs' : 'text-sm'
                 }`}>
                   {provider.name}
                 </div>
@@ -842,13 +916,6 @@ export const RAGSettings = ({
                     );
                   }
                 })()}
-                {(provider.key === 'anthropic' || provider.key === 'grok' || provider.key === 'openrouter') && (
-                  <div className="absolute inset-0 bg-black/20 rounded-lg flex items-center justify-center">
-                    <div className="bg-yellow-500/80 text-black text-xs font-bold px-2 py-1 rounded transform -rotate-12">
-                      Coming Soon
-                    </div>
-                  </div>
-                )}
               </button>
             ))}
           </div>
@@ -1223,19 +1290,9 @@ export const RAGSettings = ({
             </div>
           )}
 
-          {ragSettings.LLM_PROVIDER === 'anthropic' && (
-            <div className="p-4 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-lg mb-4">
-              <p className="text-sm text-orange-800 dark:text-orange-300">
-                Configure your Anthropic API key in the credentials section to use Claude models.
-              </p>
-            </div>
-          )}
-
-          {ragSettings.LLM_PROVIDER === 'groq' && (
-            <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg mb-4">
-              <p className="text-sm text-yellow-800 dark:text-yellow-300">
-                Groq provides fast inference with Llama, Mixtral, and Gemma models.
-              </p>
+          {shouldShowProviderAlert && (
+            <div className={`p-4 border rounded-lg mb-4 ${providerAlertClassName}`}>
+              <p className="text-sm">{providerAlertMessage}</p>
             </div>
           )}
           
@@ -1853,94 +1910,56 @@ export const RAGSettings = ({
 function getDisplayedChatModel(ragSettings: any): string {
   const provider = ragSettings.LLM_PROVIDER || 'openai';
   const modelChoice = ragSettings.MODEL_CHOICE;
-  
-  // Check if the stored model is appropriate for the current provider
-  const isModelAppropriate = (model: string, provider: string): boolean => {
-    if (!model) return false;
-    
-    switch (provider) {
-      case 'openai':
-        return model.startsWith('gpt-') || model.startsWith('o1-') || model.includes('text-davinci') || model.includes('text-embedding');
-      case 'anthropic':
-        return model.startsWith('claude-');
-      case 'google':
-        return model.startsWith('gemini-') || model.startsWith('text-embedding-');
-      case 'grok':
-        return model.startsWith('grok-');
-      case 'ollama':
-        return !model.startsWith('gpt-') && !model.startsWith('claude-') && !model.startsWith('gemini-') && !model.startsWith('grok-');
-      case 'openrouter':
-        return model.includes('/') || model.startsWith('anthropic/') || model.startsWith('openai/');
-      default:
-        return false;
-    }
-  };
-  
-  // Use stored model if it's appropriate for the provider, otherwise use default
-  const useStoredModel = modelChoice && isModelAppropriate(modelChoice, provider);
-  
+
+  // Always prioritize user input to allow editing
+  if (modelChoice !== undefined && modelChoice !== null) {
+    return modelChoice;
+  }
+
+  // Only use defaults when there's no stored value
   switch (provider) {
     case 'openai':
-      return useStoredModel ? modelChoice : 'gpt-4o-mini';
+      return 'gpt-4o-mini';
     case 'anthropic':
-      return useStoredModel ? modelChoice : 'claude-3-5-sonnet-20241022';
+      return 'claude-3-5-sonnet-20241022';
     case 'google':
-      return useStoredModel ? modelChoice : 'gemini-1.5-flash';
+      return 'gemini-1.5-flash';
     case 'grok':
-      return useStoredModel ? modelChoice : 'grok-2-latest';
+      return 'grok-3-mini';
     case 'ollama':
-      return useStoredModel ? modelChoice : '';
+      return '';
     case 'openrouter':
-      return useStoredModel ? modelChoice : 'anthropic/claude-3.5-sonnet';
+      return 'anthropic/claude-3.5-sonnet';
     default:
-      return useStoredModel ? modelChoice : 'gpt-4o-mini';
+      return 'gpt-4o-mini';
   }
 }
 
 function getDisplayedEmbeddingModel(ragSettings: any): string {
   const provider = ragSettings.LLM_PROVIDER || 'openai';
   const embeddingModel = ragSettings.EMBEDDING_MODEL;
-  
-  // Check if the stored embedding model is appropriate for the current provider
-  const isEmbeddingModelAppropriate = (model: string, provider: string): boolean => {
-    if (!model) return false;
-    
-    switch (provider) {
-      case 'openai':
-        return model.startsWith('text-embedding-') || model.includes('ada-');
-      case 'anthropic':
-        return false; // Claude doesn't provide embedding models
-      case 'google':
-        return model.startsWith('text-embedding-') || model.startsWith('textembedding-') || model.includes('embedding');
-      case 'grok':
-        return false; // Grok doesn't provide embedding models
-      case 'ollama':
-        return !model.startsWith('text-embedding-') || model.includes('embed') || model.includes('arctic');
-      case 'openrouter':
-        return model.startsWith('text-embedding-') || model.includes('/');
-      default:
-        return false;
-    }
-  };
-  
-  // Use stored model if it's appropriate for the provider, otherwise use default
-  const useStoredModel = embeddingModel && isEmbeddingModelAppropriate(embeddingModel, provider);
-  
+
+  // Always prioritize user input to allow editing
+  if (embeddingModel !== undefined && embeddingModel !== null && embeddingModel !== '') {
+    return embeddingModel;
+  }
+
+  // Provide appropriate defaults based on LLM provider
   switch (provider) {
     case 'openai':
-      return useStoredModel ? embeddingModel : 'text-embedding-3-small';
-    case 'anthropic':
-      return 'Not available - Claude does not provide embedding models';
+      return 'text-embedding-3-small';
     case 'google':
-      return useStoredModel ? embeddingModel : 'text-embedding-004';
-    case 'grok':
-      return 'Not available - Grok does not provide embedding models';
+      return 'text-embedding-004';
     case 'ollama':
-      return useStoredModel ? embeddingModel : '';
+      return '';
     case 'openrouter':
-      return useStoredModel ? embeddingModel : 'text-embedding-3-small';
+      return 'text-embedding-3-small';  // Default to OpenAI embedding for OpenRouter
+    case 'anthropic':
+      return 'text-embedding-3-small';  // Use OpenAI embeddings with Claude
+    case 'grok':
+      return 'text-embedding-3-small';  // Use OpenAI embeddings with Grok
     default:
-      return useStoredModel ? embeddingModel : 'text-embedding-3-small';
+      return 'text-embedding-3-small';
   }
 }
 

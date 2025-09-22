@@ -3,8 +3,8 @@
  * Focused service for project CRUD operations only
  */
 
-import { callAPIWithETag } from "../../shared/apiWithEtag";
-import { formatZodErrors, ValidationError } from "../../shared/errors";
+import { callAPIWithETag } from "../../shared/api/apiClient";
+import { formatZodErrors, ValidationError } from "../../shared/types/errors";
 import { validateCreateProject, validateUpdateProject } from "../schemas";
 import { formatRelativeTime } from "../shared/api";
 import type { CreateProjectRequest, Project, ProjectFeatures, UpdateProjectRequest } from "../types";

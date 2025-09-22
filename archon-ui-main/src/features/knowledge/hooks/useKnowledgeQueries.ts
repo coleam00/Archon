@@ -5,13 +5,13 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { createOptimisticEntity, createOptimisticId, replaceOptimisticEntity, removeDuplicateEntities } from "@/features/shared/optimistic";
+import { useSmartPolling } from "@/features/shared/hooks";
+import { useToast } from "@/features/shared/hooks/useToast";
+import { createOptimisticEntity, createOptimisticId, replaceOptimisticEntity, removeDuplicateEntities } from "@/features/shared/utils/optimistic";
 import { useActiveOperations } from "../../progress/hooks";
 import { progressKeys } from "../../progress/hooks/useProgressQueries";
 import type { ActiveOperation, ActiveOperationsResponse } from "../../progress/types";
-import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../shared/queryPatterns";
-import { useSmartPolling } from "../../ui/hooks";
-import { useToast } from "../../ui/hooks/useToast";
+import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../shared/config/queryPatterns";
 import { knowledgeService } from "../services";
 import type {
   CrawlRequest,
@@ -157,7 +157,6 @@ export function useCrawlUrl(currentFilter?: KnowledgeItemsFilter) {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       } as Omit<KnowledgeItem, "id">);
-      const tempItemId = optimisticItem.id;
 
       // Prioritize updating the currently viewed filter for immediate user feedback
       if (currentFilter) {
@@ -251,7 +250,7 @@ export function useCrawlUrl(currentFilter?: KnowledgeItemsFilter) {
       });
 
       // Return context for rollback and replacement
-      return { previousSummaries, previousOperations, tempProgressId, tempItemId };
+      return { previousSummaries, previousOperations, tempProgressId };
     },
     onSuccess: (response, _variables, context) => {
       // Replace temporary IDs with real ones from the server using shared utilities
@@ -344,7 +343,6 @@ export function useUploadDocument(currentFilter?: KnowledgeItemsFilter) {
       previousSummaries?: Array<[readonly unknown[], KnowledgeItemsResponse | undefined]>;
       previousOperations?: ActiveOperationsResponse;
       tempProgressId: string;
-      tempItemId: string;
     }
   >({
     mutationFn: ({ file, metadata }: { file: File; metadata: UploadMetadata }) =>
@@ -383,7 +381,6 @@ export function useUploadDocument(currentFilter?: KnowledgeItemsFilter) {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       } as Omit<KnowledgeItem, "id">);
-      const tempItemId = optimisticItem.id;
 
       // Prioritize updating the currently viewed filter for immediate user feedback
       if (currentFilter) {
@@ -476,7 +473,7 @@ export function useUploadDocument(currentFilter?: KnowledgeItemsFilter) {
         };
       });
 
-      return { previousSummaries, previousOperations, tempProgressId, tempItemId };
+      return { previousSummaries, previousOperations, tempProgressId };
     },
     onSuccess: (response, _variables, context) => {
       // Replace temporary IDs with real ones from the server using shared utilities

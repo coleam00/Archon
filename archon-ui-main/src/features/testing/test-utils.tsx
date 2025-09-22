@@ -1,7 +1,7 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { render as rtlRender } from "@testing-library/react";
 import type React from "react";
-import { createTestQueryClient } from "../shared/queryClient";
+import { createTestQueryClient } from "../shared/config/queryClient";
 import { ToastProvider } from "../ui/components/ToastProvider";
 import { TooltipProvider } from "../ui/primitives/tooltip";
 

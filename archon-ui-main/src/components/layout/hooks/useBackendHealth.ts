@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { callAPIWithETag } from "../../../features/shared/apiWithEtag";
-import { createRetryLogic, STALE_TIMES } from "../../../features/shared/queryPatterns";
+import { callAPIWithETag } from "../../../features/shared/api/apiClient";
+import { createRetryLogic, STALE_TIMES } from "../../../features/shared/config/queryPatterns";
 import type { HealthResponse } from "../types";
 
 /**
