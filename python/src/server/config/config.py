@@ -26,6 +26,10 @@ class EnvironmentConfig:
     openai_api_key: str | None = None
     host: str = "0.0.0.0"
     transport: str = "sse"
+    # Phase 1 parameterization variables
+    bind_ip: str = "127.0.0.1"
+    cors_origins: str = "http://localhost:3737"
+    api_base_url: str = "http://localhost:8181"
 
 
 @dataclass
@@ -196,6 +200,11 @@ def load_environment_config() -> EnvironmentConfig:
             )
     transport = os.getenv("TRANSPORT", "sse")
 
+    # Phase 1 parameterization variables with localhost defaults
+    bind_ip = os.getenv("BIND_IP", "127.0.0.1")
+    cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3737")
+    api_base_url = os.getenv("API_BASE_URL", "http://localhost:8181")
+
     # Validate and convert port
     try:
         port = int(port_str)
@@ -209,6 +218,9 @@ def load_environment_config() -> EnvironmentConfig:
         host=host,
         port=port,
         transport=transport,
+        bind_ip=bind_ip,
+        cors_origins=cors_origins,
+        api_base_url=api_base_url,
     )
 
 
