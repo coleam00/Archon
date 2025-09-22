@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createOptimisticEntity,
-  replaceOptimisticEntity,
-  removeDuplicateEntities,
   type OptimisticEntity,
-} from "@/features/shared/optimistic";
-import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../../shared/queryPatterns";
+  removeDuplicateEntities,
+  replaceOptimisticEntity,
+} from "@/features/shared/utils/optimistic";
+import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../../shared/config/queryPatterns";
 import { useSmartPolling } from "../../../shared/hooks";
 import { useToast } from "../../../shared/hooks/useToast";
 import { taskService } from "../services";

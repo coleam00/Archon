@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { callAPIWithETag } from "../../../../shared/apiWithEtag";
+import { callAPIWithETag } from "../../../../shared/api/apiClient";
 import type { CreateTaskRequest, DatabaseTaskStatus, Task, UpdateTaskRequest } from "../../types";
 import { taskService } from "../taskService";
 
 // Mock the API call
-vi.mock("../../../../shared/apiWithEtag", () => ({
+vi.mock("../../../../shared/api/apiClient", () => ({
   callAPIWithETag: vi.fn(),
 }));
 

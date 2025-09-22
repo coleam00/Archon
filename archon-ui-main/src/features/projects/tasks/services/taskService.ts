@@ -3,8 +3,8 @@
  * Focused service for task CRUD operations only
  */
 
-import { callAPIWithETag } from "../../../shared/apiWithEtag";
-import { formatZodErrors, ValidationError } from "../../../shared/errors";
+import { callAPIWithETag } from "../../../shared/api/apiClient";
+import { formatZodErrors, ValidationError } from "../../../shared/types/errors";
 
 import { validateCreateTask, validateUpdateTask, validateUpdateTaskStatus } from "../schemas";
 import type { CreateTaskRequest, DatabaseTaskStatus, Task, TaskCounts, UpdateTaskRequest } from "../types";

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { STALE_TIMES } from "../../shared/queryPatterns";
 import { useSmartPolling } from "@/features/shared/hooks";
+import { STALE_TIMES } from "../../shared/config/queryPatterns";
 import { mcpApi } from "../services";
 
 // Query keys factory

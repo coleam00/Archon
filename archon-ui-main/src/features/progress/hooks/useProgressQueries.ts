@@ -5,9 +5,9 @@
 
 import { type UseQueryResult, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
-import { APIServiceError } from "../../shared/errors";
-import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../shared/queryPatterns";
+import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../shared/config/queryPatterns";
 import { useSmartPolling } from "../../shared/hooks";
+import { APIServiceError } from "../../shared/types/errors";
 import { progressService } from "../services";
 import type { ActiveOperationsResponse, ProgressResponse, ProgressStatus } from "../types";
 

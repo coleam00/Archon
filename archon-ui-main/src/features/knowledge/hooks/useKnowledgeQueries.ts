@@ -5,13 +5,13 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { createOptimisticEntity, createOptimisticId } from "@/features/shared/optimistic";
+import { useSmartPolling } from "@/features/shared/hooks";
+import { useToast } from "@/features/shared/hooks/useToast";
+import { createOptimisticEntity, createOptimisticId } from "@/features/shared/utils/optimistic";
 import { useActiveOperations } from "../../progress/hooks";
 import { progressKeys } from "../../progress/hooks/useProgressQueries";
 import type { ActiveOperation, ActiveOperationsResponse } from "../../progress/types";
-import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../shared/queryPatterns";
-import { useSmartPolling } from "@/features/shared/hooks";
-import { useToast } from "@/features/shared/hooks/useToast";
+import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../shared/config/queryPatterns";
 import { knowledgeService } from "../services";
 import type {
   CrawlRequest,

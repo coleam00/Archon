@@ -5,8 +5,8 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { CheckCircle, Copy, Database, ExternalLink, X } from "lucide-react";
 import React from "react";
-import { copyToClipboard } from "@/features/shared/utils/clipboard";
 import { useToast } from "@/features/shared/hooks/useToast";
+import { copyToClipboard } from "@/features/shared/utils/clipboard";
 import type { PendingMigration } from "../types";
 
 interface PendingMigrationsModalProps {
@@ -93,7 +93,8 @@ export function PendingMigrationsModal({
               <li>Click "Refresh Status" below to verify migrations were applied</li>
             </ol>
             {migrations.length > 1 && (
-              <button type="button"
+              <button
+                type="button"
                 onClick={handleCopyAll}
                 className="mt-3 px-3 py-1.5 bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/50 rounded text-blue-400 text-sm font-medium transition-colors"
               >
@@ -125,7 +126,8 @@ export function PendingMigrationsModal({
                           </p>
                         </div>
                         <div className="flex items-center gap-2">
-                          <button type="button"
+                          <button
+                            type="button"
                             onClick={() => handleCopy(migration.sql_content, index)}
                             className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm font-medium text-gray-300 flex items-center gap-2 transition-colors"
                           >
@@ -141,7 +143,8 @@ export function PendingMigrationsModal({
                               </>
                             )}
                           </button>
-                          <button type="button"
+                          <button
+                            type="button"
                             onClick={() => setExpandedIndex(expandedIndex === index ? null : index)}
                             className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm font-medium text-gray-300 transition-colors"
                           >
@@ -175,13 +178,15 @@ export function PendingMigrationsModal({
 
           {/* Footer */}
           <div className="p-6 border-t border-gray-700 flex justify-between">
-            <button type="button"
+            <button
+              type="button"
               onClick={onClose}
               className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-gray-300 font-medium transition-colors"
             >
               Close
             </button>
-            <button type="button"
+            <button
+              type="button"
               onClick={onMigrationsApplied}
               className="px-4 py-2 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/50 rounded-lg text-purple-400 font-medium transition-colors"
             >

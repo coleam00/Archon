@@ -2,9 +2,9 @@ import { Copy, ExternalLink } from "lucide-react";
 import type React from "react";
 import { useState } from "react";
 import { useToast } from "@/features/shared/hooks";
+import { copyToClipboard } from "../../shared/utils/clipboard";
 import { Button, cn, glassmorphism, Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/primitives";
 import type { McpServerConfig, McpServerStatus, SupportedIDE } from "../types";
-import { copyToClipboard } from "../../shared/utils/clipboard";
 
 interface McpConfigSectionProps {
   config?: McpServerConfig;
@@ -324,7 +324,8 @@ export const McpConfigSection: React.FC<McpConfigSectionProps> = ({ config, stat
               <p className="text-sm text-yellow-700 dark:text-yellow-300">
                 <span className="font-semibold">Platform Note:</span> The configuration below shows{" "}
                 {navigator.platform.toLowerCase().includes("win") ? "Windows" : "Linux/macOS"} format. Adjust paths
-                according to your system. This setup is complex right now because Codex has some bugs with MCP currently.
+                according to your system. This setup is complex right now because Codex has some bugs with MCP
+                currently.
               </p>
             </div>
           )}

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { callAPIWithETag } from "./apiWithEtag";
-import { APIServiceError } from "./errors";
+import { APIServiceError } from "../../types/errors";
+import { callAPIWithETag } from "../apiClient";
 
 // Preserve original globals to restore after tests
 const originalAbortSignal = global.AbortSignal as any;

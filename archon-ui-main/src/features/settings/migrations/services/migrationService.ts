@@ -2,7 +2,7 @@
  * Service for database migration tracking and management
  */
 
-import { callAPIWithETag } from "@/features/shared/apiWithEtag";
+import { callAPIWithETag } from "@/features/shared/api/apiClient";
 import type { MigrationHistoryResponse, MigrationStatusResponse, PendingMigration } from "../types";
 
 export const migrationService = {

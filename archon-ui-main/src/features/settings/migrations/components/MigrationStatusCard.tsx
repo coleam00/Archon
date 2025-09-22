@@ -29,7 +29,8 @@ export function MigrationStatusCard() {
             <Database className="w-5 h-5 text-purple-400" />
             <h3 className="text-white font-semibold">Database Migrations</h3>
           </div>
-          <button type="button"
+          <button
+            type="button"
             onClick={handleRefresh}
             disabled={isLoading}
             className="p-2 hover:bg-gray-700/50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -100,7 +101,8 @@ export function MigrationStatusCard() {
                 ? "Initial database setup is required."
                 : `${data.pending_count} migration${data.pending_count > 1 ? "s" : ""} need to be applied.`}
             </p>
-            <button type="button"
+            <button
+              type="button"
               onClick={() => setIsModalOpen(true)}
               className="px-3 py-1.5 bg-yellow-500/20 hover:bg-yellow-500/30 border border-yellow-500/50 rounded text-yellow-400 text-sm font-medium transition-colors"
             >

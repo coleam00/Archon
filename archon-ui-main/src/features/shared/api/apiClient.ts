@@ -11,8 +11,8 @@
  * For cache control, configure TanStack Query's staleTime/gcTime instead of manual HTTP caching.
  */
 
-import { API_BASE_URL } from "../../config/api";
-import { APIServiceError } from "./errors";
+import { API_BASE_URL } from "../../../config/api";
+import { APIServiceError } from "../types/errors";
 
 /**
  * Build full URL with test environment handling

@@ -2,7 +2,7 @@
  * Service for version checking and update management
  */
 
-import { callAPIWithETag } from "@/features/shared/apiWithEtag";
+import { callAPIWithETag } from "@/features/shared/api/apiClient";
 import type { CurrentVersionResponse, VersionCheckResponse } from "../types";
 
 export const versionService = {

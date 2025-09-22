@@ -54,7 +54,8 @@ export function UpdateBanner() {
               <span className="text-sm font-medium">View Upgrade Instructions</span>
               <ExternalLink className="w-4 h-4" />
             </a>
-            <button type="button"
+            <button
+              type="button"
               onClick={() => setIsDismissed(true)}
               className="p-2 hover:bg-gray-700/50 rounded-lg transition-colors"
               aria-label="Dismiss update banner"

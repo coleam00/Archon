@@ -28,7 +28,8 @@ export function VersionStatusCard() {
           <Info className="w-5 h-5 text-blue-400" />
           <h3 className="text-white font-semibold">Version Information</h3>
         </div>
-        <button type="button"
+        <button
+          type="button"
           onClick={handleRefreshClick}
           disabled={isLoading || clearCache.isPending}
           className="p-2 hover:bg-gray-700/50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"

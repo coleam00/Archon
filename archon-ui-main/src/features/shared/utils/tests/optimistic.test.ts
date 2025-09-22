@@ -1,12 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  createOptimisticId,
-  createOptimisticEntity,
-  isOptimistic,
-  replaceOptimisticEntity,
-  removeDuplicateEntities,
   cleanOptimisticMetadata,
-} from "./optimistic";
+  createOptimisticEntity,
+  createOptimisticId,
+  isOptimistic,
+  removeDuplicateEntities,
+  replaceOptimisticEntity,
+} from "../optimistic";
 
 describe("Optimistic Update Utilities", () => {
   describe("createOptimisticId", () => {

@@ -13,9 +13,9 @@ import {
 } from "lucide-react";
 import type React from "react";
 import { memo, useCallback, useState } from "react";
+import { copyToClipboard } from "../../../shared/utils/clipboard";
 import { Button } from "../../../ui/primitives";
 import type { DocumentCardProps, DocumentType } from "../types";
-import { copyToClipboard } from "../../../shared/utils/clipboard";
 
 const getDocumentIcon = (type?: DocumentType) => {
   switch (type) {

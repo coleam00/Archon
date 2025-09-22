@@ -5,7 +5,7 @@ This guide documents the standardized patterns for using TanStack Query v5 in th
 ## Core Principles
 
 1. **Feature Ownership**: Each feature owns its query keys in `{feature}/hooks/use{Feature}Queries.ts`
-2. **Consistent Patterns**: Always use shared patterns from `shared/queryPatterns.ts`
+2. **Consistent Patterns**: Always use shared patterns from `shared/config/queryPatterns.ts`
 3. **No Hardcoded Values**: Never hardcode stale times or disabled keys
 4. **Mirror Backend API**: Query keys should exactly match backend API structure
 
@@ -49,7 +49,7 @@ export const taskKeys = {
 ### Import Required Patterns
 
 ```typescript
-import { DISABLED_QUERY_KEY, STALE_TIMES } from "@/features/shared/queryPatterns";
+import { DISABLED_QUERY_KEY, STALE_TIMES } from "@/features/shared/config/queryPatterns";
 ```
 
 ### Disabled Queries
@@ -106,7 +106,7 @@ export function useFeatureDetail(id: string | undefined) {
 ## Mutations with Optimistic Updates
 
 ```typescript
-import { createOptimisticEntity, replaceOptimisticEntity } from "@/features/shared/optimistic";
+import { createOptimisticEntity, replaceOptimisticEntity } from "@/features/shared/utils/optimistic";
 
 export function useCreateFeature() {
   const queryClient = useQueryClient();
@@ -161,7 +161,7 @@ vi.mock("../../services", () => ({
 }));
 
 // Mock shared patterns with ALL values
-vi.mock("../../../shared/queryPatterns", () => ({
+vi.mock("../../../shared/config/queryPatterns", () => ({
   DISABLED_QUERY_KEY: ["disabled"] as const,
   STALE_TIMES: {
     instant: 0,

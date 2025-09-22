@@ -10,7 +10,7 @@ import { Clock, Code, ExternalLink, File, FileText, Globe } from "lucide-react";
 import { useState } from "react";
 import { KnowledgeCardProgress } from "../../progress/components/KnowledgeCardProgress";
 import type { ActiveOperation } from "../../progress/types";
-import { isOptimistic } from "../../shared/optimistic";
+import { isOptimistic } from "../../shared/utils/optimistic";
 import { StatPill } from "../../ui/primitives";
 import { OptimisticIndicator } from "../../ui/primitives/OptimisticIndicator";
 import { cn } from "../../ui/primitives/styles";

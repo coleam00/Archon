@@ -1,6 +1,6 @@
 import { AlertCircle, CheckCircle, Info, XCircle } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { createOptimisticId } from "../optimistic";
+import { createOptimisticId } from "../utils/optimistic";
 
 // Toast types
 interface Toast {

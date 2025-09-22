@@ -4,9 +4,9 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useToast } from "@/features/shared/hooks/useToast";
 import { CrawlingProgress } from "../../progress/components/CrawlingProgress";
 import type { ActiveOperation } from "../../progress/types";
-import { useToast } from "@/features/shared/hooks/useToast";
 import { AddKnowledgeDialog } from "../components/AddKnowledgeDialog";
 import { KnowledgeHeader } from "../components/KnowledgeHeader";
 import { KnowledgeList } from "../components/KnowledgeList";

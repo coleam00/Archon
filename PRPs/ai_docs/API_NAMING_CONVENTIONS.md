@@ -198,7 +198,7 @@ Database values used directly - no mapping layers:
 - Operation statuses: `"pending"`, `"processing"`, `"completed"`, `"failed"`
 
 ### Time Constants
-**Location**: `archon-ui-main/src/features/shared/queryPatterns.ts`
+**Location**: `archon-ui-main/src/features/shared/config/queryPatterns.ts`
 - `STALE_TIMES.instant` - 0ms
 - `STALE_TIMES.realtime` - 3 seconds
 - `STALE_TIMES.frequent` - 5 seconds

@@ -3,7 +3,7 @@
  * Uses ETag support for efficient polling
  */
 
-import { callAPIWithETag } from "../../shared/apiWithEtag";
+import { callAPIWithETag } from "../../shared/api/apiClient";
 import type { ActiveOperationsResponse, ProgressResponse } from "../types";
 
 export const progressService = {
