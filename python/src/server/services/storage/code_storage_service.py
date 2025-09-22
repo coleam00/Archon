@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import re
+import time
 from collections import defaultdict, deque
 from collections.abc import Callable
 from difflib import SequenceMatcher
@@ -17,25 +18,104 @@ from urllib.parse import urlparse
 from supabase import Client
 
 from ...config.logfire_config import search_logger
+from ..credential_service import credential_service
 from ..embeddings.contextual_embedding_service import generate_contextual_embeddings_batch
 from ..embeddings.embedding_service import create_embeddings_batch
+from ..llm_provider_service import (
+    extract_json_from_reasoning,
+    extract_message_text,
+    get_llm_client,
+    prepare_chat_completion_params,
+    synthesize_json_from_reasoning,
+)
 
 
-def _get_model_choice() -> str:
-    """Get MODEL_CHOICE with direct fallback."""
+def _extract_json_payload(raw_response: str, context_code: str = "", language: str = "") -> str:
+    """Return the best-effort JSON object from an LLM response."""
+
+    if not raw_response:
+        return raw_response
+
+    cleaned = raw_response.strip()
+
+    # Check if this looks like reasoning text first
+    if _is_reasoning_text_response(cleaned):
+        # Try intelligent extraction from reasoning text with context
+        extracted = extract_json_from_reasoning(cleaned, context_code, language)
+        if extracted:
+            return extracted
+        # extract_json_from_reasoning may return nothing; synthesize a fallback JSON if so\
+        fallback_json = synthesize_json_from_reasoning("", context_code, language)
+        if fallback_json:
+            return fallback_json
+        # If all else fails, return a minimal valid JSON object to avoid downstream errors
+        return '{"example_name": "Code Example", "summary": "Code example extracted from context."}'
+
+
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        # Drop opening fence
+        lines = lines[1:]
+        # Drop closing fence if present
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+
+    # Trim any leading/trailing text outside the outermost JSON braces
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1 and end >= start:
+        cleaned = cleaned[start : end + 1]
+
+    return cleaned.strip()
+
+
+REASONING_STARTERS = [
+    "okay, let's see", "okay, let me", "let me think", "first, i need to", "looking at this",
+    "i need to", "analyzing", "let me work through", "thinking about", "let me see"
+]
+
+def _is_reasoning_text_response(text: str) -> bool:
+    """Detect if response is reasoning text rather than direct JSON."""
+    if not text or len(text) < 20:
+        return False
+
+    text_lower = text.lower().strip()
+
+    # Check if it's clearly not JSON (starts with reasoning text)
+    starts_with_reasoning = any(text_lower.startswith(starter) for starter in REASONING_STARTERS)
+
+    # Check if it lacks immediate JSON structure
+    lacks_immediate_json = not text_lower.lstrip().startswith('{')
+
+    return starts_with_reasoning or (lacks_immediate_json and any(pattern in text_lower for pattern in REASONING_STARTERS))
+async def _get_model_choice() -> str:
+    """Get MODEL_CHOICE with provider-aware defaults from centralized service."""
     try:
-        # Direct cache/env fallback
-        from ..credential_service import credential_service
+        # Get the active provider configuration
+        provider_config = await credential_service.get_active_provider("llm")
+        active_provider = provider_config.get("provider", "openai")
+        model = provider_config.get("chat_model")
 
-        if credential_service._cache_initialized and "MODEL_CHOICE" in credential_service._cache:
-            model = credential_service._cache["MODEL_CHOICE"]
-        else:
-            model = os.getenv("MODEL_CHOICE", "gpt-4.1-nano")
-        search_logger.debug(f"Using model choice: {model}")
+        # If no custom model is set, use provider-specific defaults
+        if not model or model.strip() == "":
+            # Provider-specific defaults
+            provider_defaults = {
+                "openai": "gpt-4o-mini",
+                "openrouter": "anthropic/claude-3.5-sonnet",
+                "google": "gemini-1.5-flash",
+                "ollama": "llama3.2:latest",
+                "anthropic": "claude-3-5-haiku-20241022",
+                "grok": "grok-3-mini"
+            }
+            model = provider_defaults.get(active_provider, "gpt-4o-mini")
+            search_logger.debug(f"Using default model for provider {active_provider}: {model}")
+
+        search_logger.debug(f"Using model for provider {active_provider}: {model}")
         return model
     except Exception as e:
         search_logger.warning(f"Error getting model choice: {e}, using default")
-        return "gpt-4.1-nano"
+        return "gpt-4o-mini"
 
 
 def _get_max_workers() -> int:
@@ -155,6 +235,7 @@ def _select_best_code_variant(similar_blocks: list[dict[str, Any]]) -> dict[str,
     return best_block
 
 
+
 def extract_code_blocks(markdown_content: str, min_length: int = None) -> list[dict[str, Any]]:
     """
     Extract code blocks from markdown content along with context.
@@ -168,8 +249,6 @@ def extract_code_blocks(markdown_content: str, min_length: int = None) -> list[d
     """
     # Load all code extraction settings with direct fallback
     try:
-        from ...services.credential_service import credential_service
-
         def _get_setting_fallback(key: str, default: str) -> str:
             if credential_service._cache_initialized and key in credential_service._cache:
                 return credential_service._cache[key]
@@ -507,7 +586,7 @@ def generate_code_example_summary(
         A dictionary with 'summary' and 'example_name'
     """
     import asyncio
-    
+
     # Run the async version in the current thread
     return asyncio.run(_generate_code_example_summary_async(code, context_before, context_after, language, provider))
 
@@ -518,13 +597,22 @@ async def _generate_code_example_summary_async(
     """
     Async version of generate_code_example_summary using unified LLM provider service.
     """
-    from ..llm_provider_service import get_llm_client
-    
-    # Get model choice from credential service (RAG setting)
-    model_choice = _get_model_choice()
 
-    # Create the prompt
-    prompt = f"""<context_before>
+    # Get model choice from credential service (RAG setting)
+    model_choice = await _get_model_choice()
+
+    # If provider is not specified, get it from credential service
+    if provider is None:
+        try:
+            provider_config = await credential_service.get_active_provider("llm")
+            provider = provider_config.get("provider", "openai")
+            search_logger.debug(f"Auto-detected provider from credential service: {provider}")
+        except Exception as e:
+            search_logger.warning(f"Failed to get provider from credential service: {e}, defaulting to openai")
+            provider = "openai"
+
+    # Create the prompt variants: base prompt, guarded prompt (JSON reminder), and strict prompt for retries
+    base_prompt = f"""<context_before>
 {context_before[-500:] if len(context_before) > 500 else context_before}
 </context_before>
 
@@ -548,6 +636,16 @@ Format your response as JSON:
   "summary": "2-3 sentence description of what the code demonstrates"
 }}
 """
+    guard_prompt = (
+        base_prompt
+        + "\n\nImportant: Respond with a valid JSON object that exactly matches the keys "
+        '{"example_name": string, "summary": string}. Do not include commentary, '
+        "markdown fences, or reasoning notes."
+    )
+    strict_prompt = (
+        guard_prompt
+        + "\n\nSecond attempt enforcement: Return JSON only with the exact schema. No additional text or reasoning content."
+    )
 
     try:
         # Use unified LLM provider service
@@ -555,25 +653,261 @@ Format your response as JSON:
             search_logger.info(
                 f"Generating summary for {hash(code) & 0xffffff:06x} using model: {model_choice}"
             )
-            
-            response = await client.chat.completions.create(
-                model=model_choice,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a helpful assistant that analyzes code examples and provides JSON responses with example names and summaries.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                response_format={"type": "json_object"},
-                max_tokens=500,
-                temperature=0.3,
+
+            provider_lower = provider.lower()
+            is_grok_model = (provider_lower == "grok") or ("grok" in model_choice.lower())
+
+            supports_response_format_base = (
+                provider_lower in {"openai", "google", "anthropic"}
+                or (provider_lower == "openrouter" and model_choice.startswith("openai/"))
             )
 
-            response_content = response.choices[0].message.content.strip()
+            last_response_obj = None
+            last_elapsed_time = None
+            last_response_content = ""
+            last_json_error: json.JSONDecodeError | None = None
+
+            for enforce_json, current_prompt in ((False, guard_prompt), (True, strict_prompt)):
+                request_params = {
+                    "model": model_choice,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "You are a helpful assistant that analyzes code examples and provides JSON responses with example names and summaries.",
+                        },
+                        {"role": "user", "content": current_prompt},
+                    ],
+                    "max_tokens": 2000,
+                    "temperature": 0.3,
+                }
+
+                should_use_response_format = False
+                if enforce_json:
+                    if not is_grok_model and (supports_response_format_base or provider_lower == "openrouter"):
+                        should_use_response_format = True
+                else:
+                    if supports_response_format_base:
+                        should_use_response_format = True
+
+                if should_use_response_format:
+                    request_params["response_format"] = {"type": "json_object"}
+
+                if is_grok_model:
+                    unsupported_params = ["presence_penalty", "frequency_penalty", "stop", "reasoning_effort"]
+                    for param in unsupported_params:
+                        if param in request_params:
+                            removed_value = request_params.pop(param)
+                            search_logger.warning(f"Removed unsupported Grok parameter '{param}': {removed_value}")
+
+                    supported_params = ["model", "messages", "max_tokens", "temperature", "response_format", "stream", "tools", "tool_choice"]
+                    for param in list(request_params.keys()):
+                        if param not in supported_params:
+                            search_logger.warning(f"Parameter '{param}' may not be supported by Grok reasoning models")
+
+                start_time = time.time()
+                max_retries = 3 if is_grok_model else 1
+                retry_delay = 1.0
+                response_content_local = ""
+                reasoning_text_local = ""
+                json_error_occurred = False
+
+                for attempt in range(max_retries):
+                    try:
+                        if is_grok_model and attempt > 0:
+                            search_logger.info(f"Grok retry attempt {attempt + 1}/{max_retries} after {retry_delay:.1f}s delay")
+                            await asyncio.sleep(retry_delay)
+
+                        final_params = prepare_chat_completion_params(model_choice, request_params)
+                        response = await client.chat.completions.create(**final_params)
+                        last_response_obj = response
+
+                        choice = response.choices[0] if response.choices else None
+                        message = choice.message if choice and hasattr(choice, "message") else None
+                        response_content_local = ""
+                        reasoning_text_local = ""
+
+                        if choice:
+                            response_content_local, reasoning_text_local, _ = extract_message_text(choice)
+
+                        # Enhanced logging for response analysis
+                        if message and reasoning_text_local:
+                            content_preview = response_content_local[:100] if response_content_local else "None"
+                            reasoning_preview = reasoning_text_local[:100] if reasoning_text_local else "None"
+                            search_logger.debug(
+                                f"Response has reasoning content - content: '{content_preview}', reasoning: '{reasoning_preview}'"
+                            )
+
+                        if response_content_local:
+                            last_response_content = response_content_local.strip()
+
+                            # Pre-validate response before processing
+                            if len(last_response_content) < 20 or (len(last_response_content) < 50 and not last_response_content.strip().startswith('{')):
+                                # Very minimal response - likely "Okay\nOkay" type
+                                search_logger.debug(f"Minimal response detected: {repr(last_response_content)}")
+                                # Generate fallback directly from context
+                                fallback_json = synthesize_json_from_reasoning("", code, language)
+                                if fallback_json:
+                                    try:
+                                        result = json.loads(fallback_json)
+                                        final_result = {
+                                            "example_name": result.get("example_name", f"Code Example{f' ({language})' if language else ''}"),
+                                            "summary": result.get("summary", "Code example for demonstration purposes."),
+                                        }
+                                        search_logger.info(f"Generated fallback summary from context - Name: '{final_result['example_name']}', Summary length: {len(final_result['summary'])}")
+                                        return final_result
+                                    except json.JSONDecodeError:
+                                        pass  # Continue to normal error handling
+                                else:
+                                    # Even synthesis failed - provide hardcoded fallback for minimal responses
+                                    final_result = {
+                                        "example_name": f"Code Example{f' ({language})' if language else ''}",
+                                        "summary": "Code example extracted from development context.",
+                                    }
+                                    search_logger.info(f"Used hardcoded fallback for minimal response - Name: '{final_result['example_name']}', Summary length: {len(final_result['summary'])}")
+                                    return final_result
+
+                            payload = _extract_json_payload(last_response_content, code, language)
+                            if payload != last_response_content:
+                                search_logger.debug(
+                                    f"Sanitized LLM response payload before parsing: {repr(payload[:200])}..."
+                                )
+
+                            try:
+                                result = json.loads(payload)
+
+                                if not result.get("example_name") or not result.get("summary"):
+                                    search_logger.warning(f"Incomplete response from LLM: {result}")
+
+                                final_result = {
+                                    "example_name": result.get(
+                                        "example_name", f"Code Example{f' ({language})' if language else ''}"
+                                    ),
+                                    "summary": result.get("summary", "Code example for demonstration purposes."),
+                                }
+
+                                search_logger.info(
+                                    f"Generated code example summary - Name: '{final_result['example_name']}', Summary length: {len(final_result['summary'])}"
+                                )
+                                return final_result
+
+                            except json.JSONDecodeError as json_error:
+                                last_json_error = json_error
+                                json_error_occurred = True
+                                snippet = last_response_content[:200]
+                                if not enforce_json:
+                                    # Check if this was reasoning text that couldn't be parsed
+                                    if _is_reasoning_text_response(last_response_content):
+                                        search_logger.debug(
+                                            f"Reasoning text detected but no JSON extracted. Response snippet: {repr(snippet)}"
+                                        )
+                                    else:
+                                        search_logger.warning(
+                                            f"Failed to parse JSON response from LLM (non-strict attempt). Error: {json_error}. Response snippet: {repr(snippet)}"
+                                        )
+                                    break
+                                else:
+                                    search_logger.error(
+                                        f"Strict JSON enforcement still failed to produce valid JSON: {json_error}. Response snippet: {repr(snippet)}"
+                                    )
+                                    break
+
+                        elif is_grok_model and attempt < max_retries - 1:
+                            search_logger.warning(f"Grok empty response on attempt {attempt + 1}, retrying...")
+                            retry_delay *= 2
+                            continue
+                        else:
+                            break
+
+                    except Exception as e:
+                        if is_grok_model and attempt < max_retries - 1:
+                            search_logger.error(f"Grok request failed on attempt {attempt + 1}: {e}, retrying...")
+                            retry_delay *= 2
+                            continue
+                        else:
+                            raise
+
+                if is_grok_model:
+                    elapsed_time = time.time() - start_time
+                    last_elapsed_time = elapsed_time
+                    search_logger.debug(f"Grok total response time: {elapsed_time:.2f}s")
+
+                if json_error_occurred:
+                    if not enforce_json:
+                        continue
+                    else:
+                        break
+
+                if response_content_local:
+                    # We would have returned already on success; if we reach here, parsing failed but we are not retrying
+                    continue
+
+            response_content = last_response_content
+            response = last_response_obj
+            elapsed_time = last_elapsed_time if last_elapsed_time is not None else 0.0
+
+            if last_json_error is not None and response_content:
+                search_logger.error(
+                    f"LLM response after strict enforcement was still not valid JSON: {last_json_error}. Clearing response to trigger error handling."
+                )
+                response_content = ""
+
+            if not response_content:
+                search_logger.error(f"Empty response from LLM for model: {model_choice} (provider: {provider})")
+                if is_grok_model:
+                    search_logger.error("Grok empty response debugging:")
+                    search_logger.error(f"  - Request took: {elapsed_time:.2f}s")
+                    search_logger.error(f"  - Response status: {getattr(response, 'status_code', 'N/A')}")
+                    search_logger.error(f"  - Response headers: {getattr(response, 'headers', 'N/A')}")
+                    search_logger.error(f"  - Full response: {response}")
+                    search_logger.error(f"  - Response choices length: {len(response.choices) if response.choices else 0}")
+                    if response.choices:
+                        search_logger.error(f"  - First choice: {response.choices[0]}")
+                        search_logger.error(f"  - Message content: '{response.choices[0].message.content}'")
+                        search_logger.error(f"  - Message role: {response.choices[0].message.role}")
+                    search_logger.error("Check: 1) API key validity, 2) rate limits, 3) model availability")
+
+                    # Implement fallback for Grok failures
+                    search_logger.warning("Attempting fallback to OpenAI due to Grok failure...")
+                    try:
+                        # Use OpenAI as fallback with similar parameters
+                        fallback_params = {
+                            "model": "gpt-4o-mini",
+                            "messages": request_params["messages"],
+                            "temperature": request_params.get("temperature", 0.1),
+                            "max_tokens": request_params.get("max_tokens", 500),
+                        }
+
+                        async with get_llm_client(provider="openai") as fallback_client:
+                            fallback_response = await fallback_client.chat.completions.create(**fallback_params)
+                            fallback_content = fallback_response.choices[0].message.content
+                            if fallback_content and fallback_content.strip():
+                                search_logger.info("gpt-4o-mini fallback succeeded")
+                                response_content = fallback_content.strip()
+                            else:
+                                search_logger.error("gpt-4o-mini fallback also returned empty response")
+                                raise ValueError(f"Both {model_choice} and gpt-4o-mini fallback failed")
+
+                    except Exception as fallback_error:
+                        search_logger.error(f"gpt-4o-mini fallback failed: {fallback_error}")
+                        raise ValueError(f"{model_choice} failed and fallback to gpt-4o-mini also failed: {fallback_error}") from fallback_error
+                else:
+                    search_logger.debug(f"Full response object: {response}")
+                    raise ValueError("Empty response from LLM")
+
+            if not response_content:
+                # This should not happen after fallback logic, but safety check
+                raise ValueError("No valid response content after all attempts")
+
+            response_content = response_content.strip()
             search_logger.debug(f"LLM API response: {repr(response_content[:200])}...")
 
-            result = json.loads(response_content)
+            payload = _extract_json_payload(response_content, code, language)
+            if payload != response_content:
+                search_logger.debug(
+                    f"Sanitized LLM response payload before parsing: {repr(payload[:200])}..."
+                )
+
+            result = json.loads(payload)
 
             # Validate the response has the required fields
             if not result.get("example_name") or not result.get("summary"):
@@ -595,12 +929,38 @@ Format your response as JSON:
         search_logger.error(
             f"Failed to parse JSON response from LLM: {e}, Response: {repr(response_content) if 'response_content' in locals() else 'No response'}"
         )
+        # Try to generate context-aware fallback
+        try:
+            fallback_json = synthesize_json_from_reasoning("", code, language)
+            if fallback_json:
+                fallback_result = json.loads(fallback_json)
+                search_logger.info(f"Generated context-aware fallback summary")
+                return {
+                    "example_name": fallback_result.get("example_name", f"Code Example{f' ({language})' if language else ''}"),
+                    "summary": fallback_result.get("summary", "Code example for demonstration purposes."),
+                }
+        except Exception:
+            pass  # Fall through to generic fallback
+
         return {
             "example_name": f"Code Example{f' ({language})' if language else ''}",
             "summary": "Code example for demonstration purposes.",
         }
     except Exception as e:
         search_logger.error(f"Error generating code summary using unified LLM provider: {e}")
+        # Try to generate context-aware fallback
+        try:
+            fallback_json = synthesize_json_from_reasoning("", code, language)
+            if fallback_json:
+                fallback_result = json.loads(fallback_json)
+                search_logger.info(f"Generated context-aware fallback summary after error")
+                return {
+                    "example_name": fallback_result.get("example_name", f"Code Example{f' ({language})' if language else ''}"),
+                    "summary": fallback_result.get("summary", "Code example for demonstration purposes."),
+                }
+        except Exception:
+            pass  # Fall through to generic fallback
+
         return {
             "example_name": f"Code Example{f' ({language})' if language else ''}",
             "summary": "Code example for demonstration purposes.",
@@ -608,7 +968,7 @@ Format your response as JSON:
 
 
 async def generate_code_summaries_batch(
-    code_blocks: list[dict[str, Any]], max_workers: int = None, progress_callback=None
+    code_blocks: list[dict[str, Any]], max_workers: int = None, progress_callback=None, provider: str = None
 ) -> list[dict[str, str]]:
     """
     Generate summaries for multiple code blocks with rate limiting and proper worker management.
@@ -617,6 +977,7 @@ async def generate_code_summaries_batch(
         code_blocks: List of code block dictionaries
         max_workers: Maximum number of concurrent API requests
         progress_callback: Optional callback for progress updates (async function)
+        provider: LLM provider to use for generation (e.g., 'grok', 'openai', 'anthropic')
 
     Returns:
         List of summary dictionaries
@@ -627,8 +988,6 @@ async def generate_code_summaries_batch(
     # Get max_workers from settings if not provided
     if max_workers is None:
         try:
-            from ...services.credential_service import credential_service
-
             if (
                 credential_service._cache_initialized
                 and "CODE_SUMMARY_MAX_WORKERS" in credential_service._cache
@@ -663,6 +1022,7 @@ async def generate_code_summaries_batch(
                 block["context_before"],
                 block["context_after"],
                 block.get("language", ""),
+                provider,
             )
 
             # Update progress
@@ -757,29 +1117,17 @@ async def add_code_examples_to_supabase(
         except Exception as e:
             search_logger.error(f"Error deleting existing code examples for {url}: {e}")
 
-    # Check if contextual embeddings are enabled
+    # Check if contextual embeddings are enabled (use proper async method like document storage)
     try:
-        from ..credential_service import credential_service
-
-        use_contextual_embeddings = credential_service._cache.get("USE_CONTEXTUAL_EMBEDDINGS")
-        if isinstance(use_contextual_embeddings, str):
-            use_contextual_embeddings = use_contextual_embeddings.lower() == "true"
-        elif isinstance(use_contextual_embeddings, dict) and use_contextual_embeddings.get(
-            "is_encrypted"
-        ):
-            # Handle encrypted value
-            encrypted_value = use_contextual_embeddings.get("encrypted_value")
-            if encrypted_value:
-                try:
-                    decrypted = credential_service._decrypt_value(encrypted_value)
-                    use_contextual_embeddings = decrypted.lower() == "true"
-                except:
-                    use_contextual_embeddings = False
-            else:
-                use_contextual_embeddings = False
+        raw_value = await credential_service.get_credential(
+            "USE_CONTEXTUAL_EMBEDDINGS", "false", decrypt=True
+        )
+        if isinstance(raw_value, str):
+            use_contextual_embeddings = raw_value.lower() == "true"
         else:
-            use_contextual_embeddings = bool(use_contextual_embeddings)
-    except:
+            use_contextual_embeddings = bool(raw_value)
+    except Exception as e:
+        search_logger.error(f"DEBUG: Error reading contextual embeddings: {e}")
         # Fallback to environment variable
         use_contextual_embeddings = (
             os.getenv("USE_CONTEXTUAL_EMBEDDINGS", "false").lower() == "true"
@@ -848,14 +1196,13 @@ async def add_code_examples_to_supabase(
         # Use only successful embeddings
         valid_embeddings = result.embeddings
         successful_texts = result.texts_processed
-        
+
         # Get model information for tracking
         from ..llm_provider_service import get_embedding_model
-        from ..credential_service import credential_service
-        
+
         # Get embedding model name
         embedding_model_name = await get_embedding_model(provider=provider)
-        
+
         # Get LLM chat model (used for code summaries and contextual embeddings if enabled)
         llm_chat_model = None
         try:
@@ -868,7 +1215,7 @@ async def add_code_examples_to_supabase(
                     llm_chat_model = await credential_service.get_credential("MODEL_CHOICE", "gpt-4o-mini")
             else:
                 # For code summaries, we use MODEL_CHOICE
-                llm_chat_model = _get_model_choice()
+                llm_chat_model = await _get_model_choice()
         except Exception as e:
             search_logger.warning(f"Failed to get LLM chat model: {e}")
             llm_chat_model = "gpt-4o-mini"  # Default fallback
@@ -888,7 +1235,7 @@ async def add_code_examples_to_supabase(
             positions_by_text[text].append(original_indices[k])
 
         # Map successful texts back to their original indices
-        for embedding, text in zip(valid_embeddings, successful_texts, strict=False):
+        for embedding, text in zip(valid_embeddings, successful_texts, strict=True):
             # Get the next available index for this text (handles duplicates)
             if positions_by_text[text]:
                 orig_idx = positions_by_text[text].popleft()  # Original j index in [i, batch_end)
@@ -908,7 +1255,7 @@ async def add_code_examples_to_supabase(
             # Determine the correct embedding column based on dimension
             embedding_dim = len(embedding) if isinstance(embedding, list) else len(embedding.tolist())
             embedding_column = None
-            
+
             if embedding_dim == 768:
                 embedding_column = "embedding_768"
             elif embedding_dim == 1024:
@@ -918,10 +1265,12 @@ async def add_code_examples_to_supabase(
             elif embedding_dim == 3072:
                 embedding_column = "embedding_3072"
             else:
-                # Default to closest supported dimension
-                search_logger.warning(f"Unsupported embedding dimension {embedding_dim}, using embedding_1536")
-                embedding_column = "embedding_1536"
-            
+                # Skip unsupported dimensions to avoid corrupting the schema
+                search_logger.error(
+                    f"Unsupported embedding dimension {embedding_dim}; skipping record to prevent column mismatch"
+                )
+                continue
+
             batch_data.append({
                 "url": urls[idx],
                 "chunk_number": chunk_numbers[idx],
@@ -954,9 +1303,7 @@ async def add_code_examples_to_supabase(
                         f"Error inserting batch into Supabase (attempt {retry + 1}/{max_retries}): {e}"
                     )
                     search_logger.info(f"Retrying in {retry_delay} seconds...")
-                    import time
-
-                    time.sleep(retry_delay)
+                    await asyncio.sleep(retry_delay)
                     retry_delay *= 2  # Exponential backoff
                 else:
                     # Final attempt failed
