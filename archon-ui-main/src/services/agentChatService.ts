@@ -59,7 +59,7 @@ class AgentChatService {
    */
   private async checkServerStatus(): Promise<'online' | 'offline'> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/agent-chat/status`, {
+      const response = await fetch(`${this.baseUrl}/agent-chat/status`, {
         method: 'GET',
       });
       
@@ -82,7 +82,7 @@ class AgentChatService {
    */
   async validateSession(sessionId: string): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/agent-chat/sessions/${sessionId}`, {
+      const response = await fetch(`${this.baseUrl}/agent-chat/sessions/${sessionId}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -101,7 +101,7 @@ class AgentChatService {
    */
   async createSession(agentType: string, projectId?: string): Promise<ChatSession> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/agent-chat/sessions`, {
+      const response = await fetch(`${this.baseUrl}/agent-chat/sessions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -137,7 +137,7 @@ class AgentChatService {
    */
   async sendMessage(sessionId: string, request: ChatRequest): Promise<ChatMessage> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/agent-chat/sessions/${sessionId}/send`, {
+      const response = await fetch(`${this.baseUrl}/agent-chat/sessions/${sessionId}/send`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -176,7 +176,7 @@ class AgentChatService {
     
     const pollInterval = setInterval(async () => {
       try {
-        const response = await fetch(`${this.baseUrl}/api/agent-chat/sessions/${sessionId}/messages${lastMessageId ? `?after=${lastMessageId}` : ''}`, {
+        const response = await fetch(`${this.baseUrl}/agent-chat/sessions/${sessionId}/messages${lastMessageId ? `?after=${lastMessageId}` : ''}`, {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
@@ -235,7 +235,7 @@ class AgentChatService {
    */
   async getChatHistory(sessionId: string): Promise<ChatMessage[]> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/agent-chat/sessions/${sessionId}/messages`, {
+      const response = await fetch(`${this.baseUrl}/agent-chat/sessions/${sessionId}/messages`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -262,7 +262,7 @@ class AgentChatService {
       // Clean up any active connections first
       this.cleanupConnection(sessionId);
 
-      const response = await fetch(`${this.baseUrl}/api/agent-chat/sessions/${sessionId}`, {
+      const response = await fetch(`${this.baseUrl}/agent-chat/sessions/${sessionId}`, {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',

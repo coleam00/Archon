@@ -70,10 +70,10 @@ export interface OllamaInstance {
   lastHealthCheck?: string;
 }
 
-import { getApiUrl } from "../config/api";
+import { getApiBasePath } from "../config/api";
 
 class CredentialsService {
-  private baseUrl = getApiUrl();
+  private baseUrl = getApiBasePath();
 
   private handleCredentialError(error: any, context: string): Error {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -95,7 +95,7 @@ class CredentialsService {
   }
 
   async getAllCredentials(): Promise<Credential[]> {
-    const response = await fetch(`${this.baseUrl}/api/credentials`);
+    const response = await fetch(`${this.baseUrl}/credentials`);
     if (!response.ok) {
       throw new Error("Failed to fetch credentials");
     }
@@ -104,7 +104,7 @@ class CredentialsService {
 
   async getCredentialsByCategory(category: string): Promise<Credential[]> {
     const response = await fetch(
-      `${this.baseUrl}/api/credentials/categories/${category}`,
+      `${this.baseUrl}/credentials/categories/${category}`,
     );
     if (!response.ok) {
       throw new Error(`Failed to fetch credentials for category: ${category}`);
@@ -145,7 +145,7 @@ class CredentialsService {
   async getCredential(
     key: string,
   ): Promise<{ key: string; value?: string; is_encrypted?: boolean }> {
-    const response = await fetch(`${this.baseUrl}/api/credentials/${key}`);
+    const response = await fetch(`${this.baseUrl}/credentials/${key}`);
     if (!response.ok) {
       if (response.status === 404) {
         // Return empty object if credential not found
@@ -159,7 +159,7 @@ class CredentialsService {
   async checkCredentialStatus(
     keys: string[]
   ): Promise<{ [key: string]: { key: string; value?: string; has_value: boolean; error?: string } }> {
-    const response = await fetch(`${this.baseUrl}/api/credentials/status-check`, {
+    const response = await fetch(`${this.baseUrl}/credentials/status-check`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -263,7 +263,7 @@ class CredentialsService {
   async updateCredential(credential: Credential): Promise<Credential> {
     try {
       const response = await fetch(
-        `${this.baseUrl}/api/credentials/${credential.key}`,
+        `${this.baseUrl}/credentials/${credential.key}`,
         {
           method: "PUT",
           headers: {
@@ -289,7 +289,7 @@ class CredentialsService {
 
   async createCredential(credential: Credential): Promise<Credential> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/credentials`, {
+      const response = await fetch(`${this.baseUrl}/credentials`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -313,7 +313,7 @@ class CredentialsService {
 
   async deleteCredential(key: string): Promise<void> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/credentials/${key}`, {
+      const response = await fetch(`${this.baseUrl}/credentials/${key}`, {
         method: "DELETE",
       });
 
@@ -370,17 +370,19 @@ class CredentialsService {
     codeExtractionCredentials.forEach((cred) => {
       if (cred.key in settings) {
         const key = cred.key as keyof CodeExtractionSettings;
-        if (typeof settings[key] === "number") {
+        const currentValue = settings[key];
+        
+        if (typeof currentValue === "number") {
           if (key === "MAX_PROSE_RATIO") {
-            settings[key] = parseFloat(cred.value || "0.15");
+            (settings as any)[key] = parseFloat(cred.value || "0.15");
           } else {
-            settings[key] = parseInt(
-              cred.value || settings[key].toString(),
+            (settings as any)[key] = parseInt(
+              cred.value || currentValue.toString(),
               10,
             );
           }
-        } else if (typeof settings[key] === "boolean") {
-          settings[key] = cred.value === "true";
+        } else if (typeof currentValue === "boolean") {
+          (settings as any)[key] = cred.value === "true";
         }
       }
     });
