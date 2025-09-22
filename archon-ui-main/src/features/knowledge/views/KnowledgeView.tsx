@@ -10,20 +10,22 @@ import type { ActiveOperation } from "../../progress/types";
 import { AddKnowledgeDialog } from "../components/AddKnowledgeDialog";
 import { KnowledgeHeader } from "../components/KnowledgeHeader";
 import { KnowledgeList } from "../components/KnowledgeList";
-import { useKnowledgeFilter } from "../context";
 import { useKnowledgeSummaries } from "../hooks/useKnowledgeQueries";
 import { KnowledgeInspector } from "../inspector/components/KnowledgeInspector";
-import type { KnowledgeItem } from "../types";
+import type { KnowledgeItem, KnowledgeItemsFilter } from "../types";
 
 export const KnowledgeView = () => {
-  // Get filter state from context
-  const {
-    searchQuery,
-    setSearchQuery,
-    typeFilter,
-    setTypeFilter,
-    currentFilter,
-  } = useKnowledgeFilter();
+  // Local filter state (following Tasks/Projects pattern)
+  const [searchQuery, setSearchQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState<"technical" | "business" | undefined>(undefined);
+
+  // Compute current filter from local state
+  const currentFilter: KnowledgeItemsFilter = useMemo(() => ({
+    page: 1,
+    per_page: 100,
+    ...(searchQuery && { search: searchQuery }),
+    ...(typeFilter && { knowledge_type: typeFilter }),
+  }), [searchQuery, typeFilter]);
 
   // View state
   const [viewMode, setViewMode] = useState<"grid" | "table">("grid");
