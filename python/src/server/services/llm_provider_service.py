@@ -203,7 +203,7 @@ async def _get_optimal_ollama_instance(instance_type: str | None = None,
                 return embedding_url if embedding_url.endswith('/v1') else f"{embedding_url}/v1"
 
         # Default to LLM base URL for chat operations
-        fallback_url = rag_settings.get("LLM_BASE_URL", "http://localhost:11434")
+        fallback_url = rag_settings.get("LLM_BASE_URL", "http://host.docker.internal:11434")
         return fallback_url if fallback_url.endswith('/v1') else f"{fallback_url}/v1"
 
     except Exception as e:
@@ -211,11 +211,11 @@ async def _get_optimal_ollama_instance(instance_type: str | None = None,
         # Final fallback to localhost only if we can't get RAG settings
         try:
             rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
-            fallback_url = rag_settings.get("LLM_BASE_URL", "http://localhost:11434")
+            fallback_url = rag_settings.get("LLM_BASE_URL", "http://host.docker.internal:11434")
             return fallback_url if fallback_url.endswith('/v1') else f"{fallback_url}/v1"
         except Exception as fallback_error:
             logger.error(f"Could not retrieve fallback configuration: {fallback_error}")
-            return "http://localhost:11434/v1"
+            return "http://host.docker.internal:11434/v1"
 
 
 async def get_embedding_model(provider: str | None = None) -> str:

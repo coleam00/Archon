@@ -10,8 +10,8 @@ from typing import Any
 from urllib.parse import urljoin
 
 import httpx
-
 from mcp.server.fastmcp import Context, FastMCP
+
 from src.mcp_server.utils.error_handling import MCPErrorFormatter
 from src.mcp_server.utils.timeout_config import get_default_timeout
 from src.server.config.service_discovery import get_api_url
@@ -31,20 +31,20 @@ def truncate_text(text: str, max_length: int = MAX_DESCRIPTION_LENGTH) -> str:
 def optimize_task_response(task: dict) -> dict:
     """Optimize task object for MCP response."""
     task = task.copy()  # Don't modify original
-    
+
     # Truncate description if present
     if "description" in task and task["description"]:
         task["description"] = truncate_text(task["description"])
-    
+
     # Replace arrays with counts
     if "sources" in task and isinstance(task["sources"], list):
         task["sources_count"] = len(task["sources"])
         del task["sources"]
-    
+
     if "code_examples" in task and isinstance(task["code_examples"], list):
         task["code_examples_count"] = len(task["code_examples"])
         del task["code_examples"]
-    
+
     return task
 
 
@@ -88,12 +88,12 @@ def register_task_tools(mcp: FastMCP):
         try:
             api_url = get_api_url()
             timeout = get_default_timeout()
-            
+
             # Single task get mode
             if task_id:
                 async with httpx.AsyncClient(timeout=timeout) as client:
                     response = await client.get(urljoin(api_url, f"/api/tasks/{task_id}"))
-                    
+
                     if response.status_code == 200:
                         task = response.json()
                         # Don't optimize single task get - return full details
@@ -107,18 +107,18 @@ def register_task_tools(mcp: FastMCP):
                         )
                     else:
                         return MCPErrorFormatter.from_http_error(response, "get task")
-            
+
             # List mode with search and filters
             params: dict[str, Any] = {
                 "page": page,
                 "per_page": per_page,
                 "exclude_large_fields": True,  # Always exclude large fields in MCP responses
             }
-            
+
             # Add search query if provided
             if query:
                 params["q"] = query
-            
+
             if filter_by == "project" and filter_value:
                 # Use project-specific endpoint for project filtering
                 url = urljoin(api_url, f"/api/projects/{filter_value}/tasks")
@@ -146,13 +146,13 @@ def register_task_tools(mcp: FastMCP):
                 # No specific filters - get all tasks
                 url = urljoin(api_url, "/api/tasks")
                 params["include_closed"] = include_closed
-            
+
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.get(url, params=params)
                 response.raise_for_status()
-                
+
                 result = response.json()
-                
+
                 # Normalize response format
                 if isinstance(result, list):
                     tasks = result
@@ -176,10 +176,10 @@ def register_task_tools(mcp: FastMCP):
                         message="Invalid response type from API",
                         details={"response_type": type(result).__name__},
                     )
-                
+
                 # Optimize task responses
                 optimized_tasks = [optimize_task_response(task) for task in tasks]
-                
+
                 return json.dumps({
                     "success": True,
                     "tasks": optimized_tasks,
@@ -187,7 +187,7 @@ def register_task_tools(mcp: FastMCP):
                     "count": len(optimized_tasks),
                     "query": query,  # Include search query in response
                 })
-                
+
         except httpx.RequestError as e:
             return MCPErrorFormatter.from_exception(
                 e, "list tasks", {"filter_by": filter_by, "filter_value": filter_value}
@@ -211,13 +211,19 @@ def register_task_tools(mcp: FastMCP):
     ) -> str:
         """
         Manage tasks (consolidated: create/update/delete).
-        
+
+        TASK GRANULARITY GUIDANCE:
+        - For feature-specific projects: Create detailed implementation tasks (setup, implement, test, document)
+        - For codebase-wide projects: Create feature-level tasks
+        - Default to more granular tasks when project scope is unclear
+        - Each task should represent 30 minutes to 4 hours of work
+
         Args:
             action: "create" | "update" | "delete"
             task_id: Task UUID for update/delete
             project_id: Project UUID for create
             title: Task title text
-            description: Detailed task description
+            description: Detailed task description with clear completion criteria
             status: "todo" | "doing" | "review" | "done"
             assignee: String name of the assignee. Can be any agent name,
                      "User" for human assignment, or custom agent identifiers
@@ -228,16 +234,17 @@ def register_task_tools(mcp: FastMCP):
             feature: Feature label for grouping
 
         Examples:
-          manage_task("create", project_id="p-1", title="Fix auth bug", assignee="CodeAnalyzer-v2")
+          manage_task("create", project_id="p-1", title="Research existing patterns", description="Study codebase for similar implementations")
+          manage_task("create", project_id="p-1", title="Write unit tests", description="Cover all edge cases with 80% coverage")
           manage_task("update", task_id="t-1", status="doing", assignee="User")
           manage_task("delete", task_id="t-1")
-        
+
         Returns: {success: bool, task?: object, message: string}
         """
         try:
             api_url = get_api_url()
             timeout = get_default_timeout()
-            
+
             async with httpx.AsyncClient(timeout=timeout) as client:
                 if action == "create":
                     if not project_id or not title:
@@ -246,7 +253,7 @@ def register_task_tools(mcp: FastMCP):
                             "project_id and title required for create",
                             suggestion="Provide both project_id and title"
                         )
-                    
+
                     response = await client.post(
                         urljoin(api_url, "/api/tasks"),
                         json={
@@ -260,15 +267,15 @@ def register_task_tools(mcp: FastMCP):
                             "code_examples": [],
                         },
                     )
-                    
+
                     if response.status_code == 200:
                         result = response.json()
                         task = result.get("task")
-                        
+
                         # Optimize task response
                         if task:
                             task = optimize_task_response(task)
-                        
+
                         return json.dumps({
                             "success": True,
                             "task": task,
@@ -277,7 +284,7 @@ def register_task_tools(mcp: FastMCP):
                         })
                     else:
                         return MCPErrorFormatter.from_http_error(response, "create task")
-                        
+
                 elif action == "update":
                     if not task_id:
                         return MCPErrorFormatter.format_error(
@@ -285,7 +292,7 @@ def register_task_tools(mcp: FastMCP):
                             "task_id required for update",
                             suggestion="Provide task_id to update"
                         )
-                    
+
                     # Build update fields
                     update_fields = {}
                     if title is not None:
@@ -300,27 +307,27 @@ def register_task_tools(mcp: FastMCP):
                         update_fields["task_order"] = task_order
                     if feature is not None:
                         update_fields["feature"] = feature
-                    
+
                     if not update_fields:
                         return MCPErrorFormatter.format_error(
                             error_type="validation_error",
                             message="No fields to update",
                             suggestion="Provide at least one field to update",
                         )
-                    
+
                     response = await client.put(
                         urljoin(api_url, f"/api/tasks/{task_id}"),
                         json=update_fields
                     )
-                    
+
                     if response.status_code == 200:
                         result = response.json()
                         task = result.get("task")
-                        
+
                         # Optimize task response
                         if task:
                             task = optimize_task_response(task)
-                        
+
                         return json.dumps({
                             "success": True,
                             "task": task,
@@ -328,7 +335,7 @@ def register_task_tools(mcp: FastMCP):
                         })
                     else:
                         return MCPErrorFormatter.from_http_error(response, "update task")
-                        
+
                 elif action == "delete":
                     if not task_id:
                         return MCPErrorFormatter.format_error(
@@ -336,11 +343,11 @@ def register_task_tools(mcp: FastMCP):
                             "task_id required for delete",
                             suggestion="Provide task_id to delete"
                         )
-                    
+
                     response = await client.delete(
                         urljoin(api_url, f"/api/tasks/{task_id}")
                     )
-                    
+
                     if response.status_code == 200:
                         result = response.json()
                         return json.dumps({
@@ -349,14 +356,14 @@ def register_task_tools(mcp: FastMCP):
                         })
                     else:
                         return MCPErrorFormatter.from_http_error(response, "delete task")
-                        
+
                 else:
                     return MCPErrorFormatter.format_error(
                         "invalid_action",
                         f"Unknown action: {action}",
                         suggestion="Use 'create', 'update', or 'delete'"
                     )
-                    
+
         except httpx.RequestError as e:
             return MCPErrorFormatter.from_exception(
                 e, f"{action} task", {"task_id": task_id, "project_id": project_id}

@@ -61,11 +61,11 @@ export const RAGSettings = ({
   // Instance configurations
   const [llmInstanceConfig, setLLMInstanceConfig] = useState({
     name: '',
-    url: ragSettings.LLM_BASE_URL || 'http://localhost:11434/v1'
+    url: ragSettings.LLM_BASE_URL || 'http://host.docker.internal:11434/v1'
   });
   const [embeddingInstanceConfig, setEmbeddingInstanceConfig] = useState({
     name: '', 
-    url: ragSettings.OLLAMA_EMBEDDING_URL || 'http://localhost:11434/v1'
+    url: ragSettings.OLLAMA_EMBEDDING_URL || 'http://host.docker.internal:11434/v1'
   });
 
   // Update instance configs when ragSettings change (after loading from database)
@@ -932,7 +932,7 @@ export const RAGSettings = ({
                               className="text-green-400 border-green-400 mb-1"
                               onClick={() => {
                                 // Quick setup: configure both instances with default values
-                                const defaultUrl = 'http://localhost:11434/v1';
+                                const defaultUrl = 'http://host.docker.internal:11434/v1';
                                 const defaultName = 'Default Ollama';
                                 setLLMInstanceConfig({ name: defaultName, url: defaultUrl });
                                 setEmbeddingInstanceConfig({ name: defaultName, url: defaultUrl });
@@ -1680,7 +1680,7 @@ export const RAGSettings = ({
                       });
                     }
                   }}
-                  placeholder="http://localhost:11434/v1"
+                  placeholder="http://host.docker.internal:11434/v1"
                 />
                 
                 {/* Convenience checkbox for single host setup */}
@@ -1753,7 +1753,7 @@ export const RAGSettings = ({
                   label="Instance URL"
                   value={embeddingInstanceConfig.url}
                   onChange={(e) => setEmbeddingInstanceConfig({...embeddingInstanceConfig, url: e.target.value})}
-                  placeholder="http://localhost:11434/v1"
+                  placeholder="http://host.docker.internal:11434/v1"
                 />
               </div>
               
