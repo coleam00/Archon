@@ -1,7 +1,7 @@
 import { Copy, ExternalLink } from "lucide-react";
 import type React from "react";
 import { useState } from "react";
-import { useToast } from "@/features/shared/hooks";
+import { useToast } from "../../shared/hooks";
 import { copyToClipboard } from "../../shared/utils/clipboard";
 import { Button, cn, glassmorphism, Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/primitives";
 import type { McpServerConfig, McpServerStatus, SupportedIDE } from "../types";
