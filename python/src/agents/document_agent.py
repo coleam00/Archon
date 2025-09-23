@@ -19,6 +19,7 @@ from pydantic_ai import Agent, RunContext
 
 from .base_agent import ArchonDependencies, BaseAgent
 from .mcp_client import get_mcp_client
+from src.server.utils import get_supabase_client
 
 logger = logging.getLogger(__name__)
 

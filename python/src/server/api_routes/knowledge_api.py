@@ -29,6 +29,7 @@ from ..services.search.rag_service import RAGService
 from ..services.storage import DocumentStorageService
 from ..utils import get_supabase_client
 from ..utils.document_processing import extract_text_from_document
+from ..utils.progress.progress_tracker import ProgressTracker
 
 # Get logger for this module
 logger = get_logger(__name__)
@@ -57,7 +58,9 @@ active_crawl_tasks: dict[str, asyncio.Task] = {}
 
 
 
-async def _validate_provider_api_key(provider: str = None) -> None:
+from typing import Optional
+
+async def _validate_provider_api_key(provider: Optional[str] = None) -> None:
     """Validate LLM provider API key before starting operations."""
     logger.info("🔑 Starting API key validation...")
     
@@ -406,9 +409,13 @@ async def get_knowledge_item_chunks(
             if metadata.get("filename"):
                 title = metadata.get("filename")
             elif metadata.get("headers"):
-                title = metadata.get("headers").split(";")[0].strip("# ")
-            elif metadata.get("title") and metadata.get("title").strip():
-                title = metadata.get("title").strip()
+                headers = metadata.get("headers")
+                if headers:
+                    title = headers.split(";")[0].strip("# ")
+            elif metadata.get("title"):
+                title_value = metadata.get("title")
+                if title_value and title_value.strip():
+                    title = title_value.strip()
             else:
                 # Try to extract from content first for more specific titles
                 if chunk.get("content"):
@@ -757,9 +764,9 @@ async def crawl_knowledge_item(request: KnowledgeItemRequest):
 
         response = CrawlStartResponse(
             success=True,
-            progress_id=progress_id,
+            progressId=progress_id,
             message="Crawling started",
-            estimated_duration="3-5 minutes"
+            estimatedDuration="3-5 minutes"
         )
 
         return response.model_dump(by_alias=True)
@@ -943,7 +950,7 @@ async def _perform_upload_with_progress(
     tag_list: list[str],
     knowledge_type: str,
     extract_code_examples: bool,
-    tracker: "ProgressTracker",
+    tracker: ProgressTracker,
 ):
     """Perform document upload with progress tracking using service layer."""
     # Create cancellation check function for document uploads
@@ -999,7 +1006,7 @@ async def _perform_upload_with_progress(
 
         # Create progress callback for tracking document processing
         async def document_progress_callback(
-            message: str, percentage: int, batch_info: dict = None
+            message: str, percentage: int, batch_info: Optional[dict] = None
         ):
             """Progress callback for tracking document processing"""
             # Map the document storage progress to overall progress range
@@ -1084,7 +1091,7 @@ async def perform_rag_query(request: RagQueryRequest):
         # Use RAGService for RAG query
         search_service = RAGService(get_supabase_client())
         success, result = await search_service.perform_rag_query(
-            query=request.query, source=request.source, match_count=request.match_count
+            query=request.query, source=request.source or "", match_count=request.match_count
         )
 
         if success:
