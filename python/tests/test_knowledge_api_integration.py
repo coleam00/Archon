@@ -14,6 +14,27 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 
+class FakePostgrestResponse:
+    """Lightweight stub that mimics PostgREST response structure."""
+
+    def __init__(self, data=None, count=None, error=None):
+        self.data = data
+        self.count = count
+        self.error = error
+
+    # Optional tuple-unpacking support if code ever uses: data, count = resp
+    def __iter__(self):
+        yield self.data
+        yield self.count
+
+    # Lenient dict-like access if needed
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+
 class TestKnowledgeAPIIntegration:
     """Integration tests for knowledge API endpoints with proper table-specific mocking."""
 
@@ -72,10 +93,10 @@ class TestKnowledgeAPIIntegration:
                     if table_name == "archon_sources":
                         if count == "exact" and head:
                             # Count query for sources
-                            return MagicMock(error=None, count=20, data=None)
+                            return FakePostgrestResponse(error=None, count=20, data=None)
                         else:
                             # Data query for sources
-                            return MagicMock(error=None, count=None, data=[
+                            return FakePostgrestResponse(error=None, count=None, data=[
                                 {
                                     "source_id": f"source-{i}",
                                     "title": f"Source {i}",
@@ -91,10 +112,10 @@ class TestKnowledgeAPIIntegration:
                     elif table_name == "archon_crawled_pages":
                         if count == "exact" and head:
                             # Count query for pages/chunks
-                            return MagicMock(error=None, count=5, data=None)
+                            return FakePostgrestResponse(error=None, count=5, data=None)
                         else:
                             # Data query for pages/chunks
-                            return MagicMock(error=None, count=None, data=[
+                            return FakePostgrestResponse(error=None, count=None, data=[
                                 {
                                     "id": f"chunk-{i}",
                                     "source_id": "test-source",
@@ -108,10 +129,10 @@ class TestKnowledgeAPIIntegration:
                     elif table_name == "archon_code_examples":
                         if count == "exact" and head:
                             # Count query for code examples
-                            return MagicMock(error=None, count=3, data=None)
+                            return FakePostgrestResponse(error=None, count=3, data=None)
                         else:
                             # Data query for code examples
-                            return MagicMock(error=None, count=None, data=[
+                            return FakePostgrestResponse(error=None, count=None, data=[
                                 {
                                     "id": f"code-{i}",
                                     "source_id": "test-source",
@@ -123,7 +144,7 @@ class TestKnowledgeAPIIntegration:
                             ])
 
                     # Default fallback
-                    return MagicMock(error=None, count=0, data=[])
+                    return FakePostgrestResponse(error=None, count=0, data=[])
 
                 # Set up method chaining
                 mock_query.execute = mock_execute
@@ -134,6 +155,8 @@ class TestKnowledgeAPIIntegration:
                 mock_query.contains = lambda field, value: mock_query
                 mock_query.in_ = lambda field, values: mock_query
                 mock_query.ilike = lambda field, pattern: mock_query
+                mock_query.limit = lambda n: mock_query
+                mock_query.offset = lambda n: mock_query
 
                 return mock_query
 
