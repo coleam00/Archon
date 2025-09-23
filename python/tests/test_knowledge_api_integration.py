@@ -9,8 +9,9 @@ Fixed to properly handle table-specific database calls by:
 5. Using test-specific client fixture to bypass global autouse fixtures
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
 from fastapi.testclient import TestClient
 
 
