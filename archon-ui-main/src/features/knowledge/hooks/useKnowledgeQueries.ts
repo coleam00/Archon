@@ -29,11 +29,47 @@ import { getProviderErrorMessage } from "../utils/providerErrorHandler";
 function itemMatchesFilter(item: KnowledgeItem & Partial<{ metadata: { tags?: string[] } }>, filter?: KnowledgeItemsFilter) {
   if (!filter) return true;
   const tags = item.metadata?.tags ?? [];
-  return (
+
+  // Check basic filter criteria
+  const basicMatch = (
     (!filter.knowledge_type || item.knowledge_type === filter.knowledge_type) &&
     (!filter.source_type || item.source_type === filter.source_type) &&
-    (!filter.tags || filter.tags.every((t) => tags.includes(t))) &&
-    (!filter.search || item.title.toLowerCase().includes(filter.search.toLowerCase()))
+    (!filter.tags || filter.tags.every((t) => tags.some(tag => tag.toLowerCase().includes(t.toLowerCase()))))
+  );
+
+  // Enhanced search across title, URL, description, and metadata
+  if (filter.search && basicMatch) {
+    const searchTerm = filter.search.toLowerCase();
+    const title = item.title?.toLowerCase() || '';
+    const url = item.url?.toLowerCase() || '';
+    const description = item.metadata?.description?.toLowerCase() || '';
+
+    return title.includes(searchTerm) ||
+           url.includes(searchTerm) ||
+           description.includes(searchTerm);
+  }
+
+  return basicMatch;
+}
+
+/**
+ * Helper function to check filter equality for cache skip logic
+ */
+function filtersEqual(filter1?: KnowledgeItemsFilter, filter2?: KnowledgeItemsFilter): boolean {
+  if (!filter1 && !filter2) return true;
+  if (!filter1 || !filter2) return false;
+
+  // Compare tags arrays
+  const tagsEqual = (filter1.tags?.length || 0) === (filter2.tags?.length || 0) &&
+    (filter1.tags || []).every((tag, index) => tag === (filter2.tags || [])[index]);
+
+  return (
+    filter1.page === filter2.page &&
+    filter1.per_page === filter2.per_page &&
+    filter1.search === filter2.search &&
+    filter1.knowledge_type === filter2.knowledge_type &&
+    filter1.source_type === filter2.source_type &&
+    tagsEqual
   );
 }
 
@@ -133,7 +169,6 @@ export function useCrawlUrl(currentFilter?: KnowledgeItemsFilter) {
       await queryClient.cancelQueries({ queryKey: knowledgeKeys.summariesPrefix() });
       await queryClient.cancelQueries({ queryKey: progressKeys.active() });
 
-      // FIXED: Optimistic updates now target the currently viewed filter
       // Optimistic updates target the currently viewed filter by
       // checking if the new item matches the filter passed to the hook.
 
@@ -205,17 +240,10 @@ export function useCrawlUrl(currentFilter?: KnowledgeItemsFilter) {
         if (currentQueryKey && qk.length === currentQueryKey.length &&
             qk.every((part, index) => {
               if (index < qk.length - 1) return part === currentQueryKey[index];
-              // For the filter object, do a deep comparison
+              // For the filter object, use the helper for deep comparison
               const qkFilter = part as KnowledgeItemsFilter | undefined;
               const currentFilterPart = currentQueryKey[index] as KnowledgeItemsFilter | undefined;
-              if (!qkFilter && !currentFilterPart) return true;
-              if (!qkFilter || !currentFilterPart) return false;
-              return (
-                qkFilter.page === currentFilterPart.page &&
-                qkFilter.per_page === currentFilterPart.per_page &&
-                qkFilter.search === currentFilterPart.search &&
-                qkFilter.knowledge_type === currentFilterPart.knowledge_type
-              );
+              return filtersEqual(qkFilter, currentFilterPart);
             })) {
           continue;
         }
@@ -436,17 +464,10 @@ export function useUploadDocument(currentFilter?: KnowledgeItemsFilter) {
         if (currentQueryKey && qk.length === currentQueryKey.length &&
             qk.every((part, index) => {
               if (index < qk.length - 1) return part === currentQueryKey[index];
-              // For the filter object, do a deep comparison
+              // For the filter object, use the helper for deep comparison
               const qkFilter = part as KnowledgeItemsFilter | undefined;
               const currentFilterPart = currentQueryKey[index] as KnowledgeItemsFilter | undefined;
-              if (!qkFilter && !currentFilterPart) return true;
-              if (!qkFilter || !currentFilterPart) return false;
-              return (
-                qkFilter.page === currentFilterPart.page &&
-                qkFilter.per_page === currentFilterPart.per_page &&
-                qkFilter.search === currentFilterPart.search &&
-                qkFilter.knowledge_type === currentFilterPart.knowledge_type
-              );
+              return filtersEqual(qkFilter, currentFilterPart);
             })) {
           continue;
         }
