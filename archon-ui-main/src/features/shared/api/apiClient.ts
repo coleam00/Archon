@@ -54,25 +54,21 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
     // Detect FormData to avoid setting Content-Type (browser sets multipart/form-data with boundary)
     const isFormData = options.body instanceof FormData;
 
-    // Build headers - only set Content-Type for non-FormData requests with body
+    // Build headers - normalize and handle Content-Type properly for FormData
     // NOTE: We do NOT add If-None-Match headers; the browser handles ETag revalidation automatically
-    // Currently assumes headers are passed as plain objects (Record<string, string>)
-    // which works for all our current usage. The API doesn't require Accept headers
-    // since it always returns JSON, and we only set Content-Type when sending data.
-    // If we ever need to support Headers instances or [string, string][] tuples,
-    // we should normalize with: new Headers(options.headers), set defaults, then
-    // convert back with Object.fromEntries(headers.entries())
-    const headers: Record<string, string> = {
-      ...((options.headers as Record<string, string>) || {}),
-    };
+    // Normalize headers to support Headers instances, [string, string][] tuples, and plain objects
+    const headersObj = new Headers(options.headers as HeadersInit | undefined);
+    headersObj.set("Accept", "application/json");
 
-    // Only set Content-Type for requests that have a body (POST, PUT, PATCH, etc.)
-    // and are not FormData (browser handles FormData Content-Type automatically)
-    const method = options.method?.toUpperCase() || 'GET';
-    const hasBody = options.body !== undefined && options.body !== null;
-    if (hasBody && !isFormData && !headers['Content-Type']) {
-      headers['Content-Type'] = 'application/json';
+    if (isFormData) {
+      // For FormData, remove any Content-Type header to let browser set multipart/form-data with boundary
+      headersObj.delete("Content-Type");
+    } else if (!headersObj.has("Content-Type")) {
+      // Only set Content-Type if not already provided
+      headersObj.set("Content-Type", "application/json");
     }
+
+    const headers: Record<string, string> = Object.fromEntries(headersObj.entries());
 
     // Make the request with timeout
     // NOTE: Increased to 20s due to database performance issues with large DELETE operations

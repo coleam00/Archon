@@ -56,7 +56,8 @@ describe("apiClient (callAPIWithETag)", () => {
         expect.stringContaining("/test-endpoint"),
         expect.objectContaining({
           headers: expect.objectContaining({
-            "Content-Type": "application/json",
+            "content-type": "application/json",
+            "accept": "application/json",
           }),
         }),
       );
@@ -168,9 +169,10 @@ describe("apiClient (callAPIWithETag)", () => {
         expect.any(String),
         expect.objectContaining({
           headers: expect.objectContaining({
-            "Content-Type": "application/json",
-            Authorization: "Bearer token123",
-            "Custom-Header": "custom-value",
+            "content-type": "application/json",
+            "accept": "application/json",
+            "authorization": "Bearer token123",
+            "custom-header": "custom-value",
           }),
         }),
       );
@@ -438,7 +440,7 @@ describe("apiClient (callAPIWithETag)", () => {
           method: "POST",
           body: formData,
           headers: expect.objectContaining({
-            Accept: "application/json",
+            "accept": "application/json",
             // Content-Type should NOT be present for FormData
           }),
         }),
@@ -446,7 +448,7 @@ describe("apiClient (callAPIWithETag)", () => {
 
       // Verify Content-Type is NOT set (browser sets multipart/form-data with boundary)
       const [, options] = (global.fetch as any).mock.calls[0];
-      expect(options.headers).not.toHaveProperty("Content-Type");
+      expect(options.headers).not.toHaveProperty("content-type");
     });
 
     it("should still set Content-Type for JSON requests", async () => {
@@ -472,8 +474,8 @@ describe("apiClient (callAPIWithETag)", () => {
         expect.stringContaining("/create"),
         expect.objectContaining({
           headers: expect.objectContaining({
-            "Content-Type": "application/json",
-            Accept: "application/json",
+            "content-type": "application/json",
+            "accept": "application/json",
           }),
         }),
       );
@@ -525,9 +527,9 @@ describe("apiClient (callAPIWithETag)", () => {
         expect.any(String),
         expect.objectContaining({
           headers: expect.objectContaining({
-            Accept: "application/json",
-            Authorization: "Bearer token123",
-            "X-Custom-Header": "custom-value",
+            "accept": "application/json",
+            "authorization": "Bearer token123",
+            "x-custom-header": "custom-value",
             // Content-Type should NOT be present
           }),
         }),
@@ -571,6 +573,28 @@ describe("apiClient (callAPIWithETag)", () => {
           }),
         }),
       );
+    });
+
+    it("should remove user-provided Content-Type for FormData", async () => {
+      const mockResponse = {
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ ok: true }),
+        headers: new Headers(),
+      };
+      global.fetch = vi.fn().mockResolvedValue(mockResponse);
+
+      const fd = new FormData();
+      fd.append("file", new File(["x"], "x.txt"));
+
+      await callAPIWithETag("/api/upload", {
+        method: "POST",
+        body: fd,
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+
+      const [, options] = (global.fetch as any).mock.calls[0];
+      expect(options.headers).not.toHaveProperty("content-type");
     });
   });
 });
