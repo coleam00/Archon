@@ -1,11 +1,11 @@
 """
 Integration tests for Knowledge API endpoints.
 
-Rewritten to eliminate mock contamination by:
-1. Using proper fixture-based mocking with complete isolation
-2. Resetting mock state at the beginning of each test
-3. Using simple, stateless mock responses
-4. Each test completely isolated and self-contained
+Fixed to properly handle table-specific database calls by:
+1. Creating table-aware mocks for archon_sources, archon_crawled_pages, archon_code_examples
+2. Handling count vs data queries correctly (count=exact, head=True vs regular data)
+3. Supporting method chaining for .eq(), .ilike(), .range(), .order(), etc.
+4. Returning realistic data structures that match service expectations
 """
 
 import pytest
@@ -13,52 +13,98 @@ from unittest.mock import MagicMock
 
 
 class TestKnowledgeAPIIntegration:
-    """Integration tests for knowledge API endpoints with proper test isolation."""
+    """Integration tests for knowledge API endpoints with proper table-specific mocking."""
+
+    def _create_table_aware_mock(self, mock_supabase_client):
+        """Create table-aware mock that handles different database tables properly."""
+
+        def mock_from_table(table_name):
+            """Return table-specific mock behavior."""
+            mock_table = MagicMock()
+
+            def mock_select(fields="*", count=None, head=False):
+                mock_query = MagicMock()
+
+                def mock_execute():
+                    # Handle different table queries
+                    if table_name == "archon_sources":
+                        if count == "exact" and head:
+                            # Count query for sources
+                            return MagicMock(error=None, count=20, data=None)
+                        else:
+                            # Data query for sources
+                            return MagicMock(error=None, count=None, data=[
+                                {
+                                    "source_id": f"source-{i}",
+                                    "title": f"Source {i}",
+                                    "summary": f"Summary {i}",
+                                    "metadata": {"knowledge_type": "technical", "tags": ["test"]},
+                                    "source_url": f"https://example.com/source{i}",
+                                    "created_at": "2024-01-01T00:00:00",
+                                    "updated_at": "2024-01-01T00:00:00"
+                                }
+                                for i in range(10)
+                            ])
+
+                    elif table_name == "archon_crawled_pages":
+                        if count == "exact" and head:
+                            # Count query for pages/chunks
+                            return MagicMock(error=None, count=5, data=None)
+                        else:
+                            # Data query for pages/chunks
+                            return MagicMock(error=None, count=None, data=[
+                                {
+                                    "id": f"chunk-{i}",
+                                    "source_id": "test-source",
+                                    "content": f"Content {i}",
+                                    "url": f"https://example.com/page{i}",
+                                    "metadata": {"title": f"Page {i}"}
+                                }
+                                for i in range(5)
+                            ])
+
+                    elif table_name == "archon_code_examples":
+                        if count == "exact" and head:
+                            # Count query for code examples
+                            return MagicMock(error=None, count=3, data=None)
+                        else:
+                            # Data query for code examples
+                            return MagicMock(error=None, count=None, data=[
+                                {
+                                    "id": f"code-{i}",
+                                    "source_id": "test-source",
+                                    "content": f"def example_{i}():\n    return {i}",
+                                    "summary": f"Code example {i}",
+                                    "metadata": {"language": "python", "title": f"Example {i}"}
+                                }
+                                for i in range(3)
+                            ])
+
+                    # Default fallback
+                    return MagicMock(error=None, count=0, data=[])
+
+                # Set up method chaining
+                mock_query.execute = mock_execute
+                mock_query.eq = lambda field, value: mock_query
+                mock_query.or_ = lambda condition: mock_query
+                mock_query.range = lambda start, end: mock_query
+                mock_query.order = lambda field, desc=False: mock_query
+                mock_query.contains = lambda field, value: mock_query
+                mock_query.in_ = lambda field, values: mock_query
+                mock_query.ilike = lambda field, pattern: mock_query
+
+                return mock_query
+
+            mock_table.select = mock_select
+            return mock_table
+
+        mock_supabase_client.from_ = mock_from_table
+        return mock_supabase_client
 
     def test_summary_endpoint_performance(self, client, mock_supabase_client):
         """Test that summary endpoint minimizes database queries."""
-        # Completely reset mock state for this test
-        mock_supabase_client.reset_mock()
-
-        # Set up response sequence for this specific test
-        responses = [
-            # First call: count query for sources
-            MagicMock(error=None, count=20, data=None),
-            # Second call: sources data
-            MagicMock(error=None, count=None, data=[
-                {
-                    "source_id": f"source-{i}",
-                    "title": f"Source {i}",
-                    "summary": f"Summary {i}",
-                    "metadata": {"knowledge_type": "technical", "tags": ["test"]},
-                    "created_at": "2024-01-01T00:00:00",
-                    "updated_at": "2024-01-01T00:00:00"
-                }
-                for i in range(10)
-            ]),
-            # Third call: URLs batch query
-            MagicMock(error=None, count=None, data=[
-                {"source_id": f"source-{i}", "url": f"https://example.com/doc{i}"}
-                for i in range(10)
-            ]),
-            # Fourth call: document counts
-            MagicMock(error=None, count=5, data=None),
-            # Fifth call: code example counts
-            MagicMock(error=None, count=3, data=None),
-        ]
-
-        mock_select = MagicMock()
-        mock_select.execute.side_effect = responses
-        mock_select.eq.return_value = mock_select
-        mock_select.or_.return_value = mock_select
-        mock_select.range.return_value = mock_select
-        mock_select.order.return_value = mock_select
-        mock_select.contains.return_value = mock_select
-        mock_select.in_.return_value = mock_select
-
-        mock_from = MagicMock()
-        mock_from.select.return_value = mock_select
-        mock_supabase_client.from_.return_value = mock_from
+        # Set up table-aware mocking
+        self._create_table_aware_mock(mock_supabase_client)
 
         # Test the endpoint
         response = client.get("/api/knowledge-items/summary?page=1&per_page=10")
@@ -82,125 +128,88 @@ class TestKnowledgeAPIIntegration:
 
     def test_progressive_loading_flow(self, client, mock_supabase_client):
         """Test progressive loading: summary -> chunks -> more chunks."""
-        # Completely reset mock state for this test
-        mock_supabase_client.reset_mock()
+        # Set up table-aware mocking
+        self._create_table_aware_mock(mock_supabase_client)
 
-        # Create simple, always-available responses
-        def mock_execute():
-            result = MagicMock()
-            result.error = None
-            # Just return a reasonable default - the test will work with any valid response
-            result.count = 1
-            result.data = []
-            return result
-
-        # Override for specific data when needed
-        mock_source_result = MagicMock(error=None, count=None, data=[{
-            "source_id": "test-source",
-            "title": "Test Source",
-            "summary": "Test",
-            "metadata": {"knowledge_type": "technical"},
-            "created_at": "2024-01-01T00:00:00",
-            "updated_at": "2024-01-01T00:00:00"
-        }])
-
-        mock_chunk_result = MagicMock(error=None, count=None, data=[
-            {"id": f"chunk-{i}", "source_id": "test-source", "content": f"Content {i}", "url": f"https://example.com/page{i}"}
-            for i in range(20)
-        ])
-
-        mock_select = MagicMock()
-        mock_select.execute.side_effect = mock_execute
-        mock_select.eq.return_value = mock_select
-        mock_select.or_.return_value = mock_select
-        mock_select.range.return_value = mock_select
-        mock_select.order.return_value = mock_select
-        mock_select.contains.return_value = mock_select
-        mock_select.in_.return_value = mock_select
-
-        mock_from = MagicMock()
-        mock_from.select.return_value = mock_select
-        mock_supabase_client.from_.return_value = mock_from
-
-        # Test that the endpoints return successful responses
-        # The exact data doesn't matter as much as ensuring no server errors
+        # Test progressive loading flow
         response1 = client.get("/api/knowledge-items/summary")
         assert response1.status_code == 200
+        data1 = response1.json()
+        assert "items" in data1
 
         response2 = client.get("/api/knowledge-items/test-source/chunks?limit=20&offset=0")
         assert response2.status_code == 200
+        data2 = response2.json()
+        assert "chunks" in data2
+        assert data2["limit"] == 20
+        assert data2["offset"] == 0
 
         response3 = client.get("/api/knowledge-items/test-source/chunks?limit=20&offset=20")
         assert response3.status_code == 200
+        data3 = response3.json()
+        assert "chunks" in data3
+        assert data3["limit"] == 20
+        assert data3["offset"] == 20
 
     def test_parallel_requests_handling(self, client, mock_supabase_client):
         """Test that parallel requests to different endpoints work correctly."""
-        # Completely reset mock state for this test
-        mock_supabase_client.reset_mock()
-
-        # Simple mock that always returns valid data
-        def mock_execute():
-            result = MagicMock()
-            result.error = None
-            result.count = 10
-            result.data = []
-            return result
-
-        mock_select = MagicMock()
-        mock_select.execute.side_effect = mock_execute
-        mock_select.eq.return_value = mock_select
-        mock_select.or_.return_value = mock_select
-        mock_select.range.return_value = mock_select
-        mock_select.order.return_value = mock_select
-        mock_select.ilike.return_value = mock_select
-        mock_select.contains.return_value = mock_select
-        mock_select.in_.return_value = mock_select
-
-        mock_from = MagicMock()
-        mock_from.select.return_value = mock_select
-        mock_supabase_client.from_.return_value = mock_from
+        # Set up table-aware mocking
+        self._create_table_aware_mock(mock_supabase_client)
 
         # Test that all requests succeed without server errors
         response1 = client.get("/api/knowledge-items/summary")
         assert response1.status_code == 200
+        data1 = response1.json()
+        assert "items" in data1
 
         response2 = client.get("/api/knowledge-items/test1/chunks?limit=10")
         assert response2.status_code == 200
+        data2 = response2.json()
+        assert "chunks" in data2
 
         response3 = client.get("/api/knowledge-items/test2/code-examples?limit=5")
         assert response3.status_code == 200
+        data3 = response3.json()
+        assert "code_examples" in data3
 
     def test_domain_filter_with_pagination(self, client, mock_supabase_client):
         """Test domain filtering works correctly with pagination."""
-        # Completely reset mock state for this test
-        mock_supabase_client.reset_mock()
+        # Set up table-aware mocking with specific data for domain filtering
+        def mock_from_table(table_name):
+            mock_table = MagicMock()
 
-        # Simple mock that always returns valid data
-        def mock_execute():
-            result = MagicMock()
-            result.error = None
-            result.count = 15
-            result.data = [
-                {
-                    "id": f"chunk-{i}",
-                    "source_id": "test-source",
-                    "content": f"Docs content {i}",
-                    "url": f"https://docs.example.com/api/page{i}"
-                }
-                for i in range(5)
-            ]
-            return result
+            def mock_select(fields="*", count=None, head=False):
+                mock_query = MagicMock()
 
-        mock_select = MagicMock()
-        mock_select.execute.side_effect = mock_execute
-        mock_select.eq.return_value = mock_select
-        mock_select.ilike.return_value = mock_select
-        mock_select.order.return_value = mock_select
-        mock_select.range.return_value = mock_select
+                def mock_execute():
+                    if table_name == "archon_crawled_pages":
+                        if count == "exact" and head:
+                            return MagicMock(error=None, count=15, data=None)
+                        else:
+                            return MagicMock(error=None, count=None, data=[
+                                {
+                                    "id": f"chunk-{i}",
+                                    "source_id": "test-source",
+                                    "content": f"Docs content {i}",
+                                    "url": f"https://docs.example.com/api/page{i}",
+                                    "metadata": {"title": f"API Doc {i}"}
+                                }
+                                for i in range(5)
+                            ])
+                    return MagicMock(error=None, count=0, data=[])
 
-        mock_from = MagicMock()
-        mock_from.select.return_value = mock_select
-        mock_supabase_client.from_.return_value = mock_from
+                mock_query.execute = mock_execute
+                mock_query.eq = lambda field, value: mock_query
+                mock_query.ilike = lambda field, pattern: mock_query
+                mock_query.order = lambda field, desc=False: mock_query
+                mock_query.range = lambda start, end: mock_query
+
+                return mock_query
+
+            mock_table.select = mock_select
+            return mock_table
+
+        mock_supabase_client.from_ = mock_from_table
 
         # Test with domain filter
         response = client.get(
@@ -211,22 +220,27 @@ class TestKnowledgeAPIIntegration:
         assert response.status_code == 200
         data = response.json()
         assert data["domain_filter"] == "docs.example.com"
+        assert "chunks" in data
+        assert data["total"] == 15
 
     def test_error_handling_in_pagination(self, client, mock_supabase_client):
         """Test error handling in paginated endpoints."""
-        # Completely reset mock state for this test
-        mock_supabase_client.reset_mock()
-
         # Setup mock to raise exception
-        mock_select = MagicMock()
-        mock_select.execute.side_effect = Exception("Database connection error")
-        mock_select.eq.return_value = mock_select
-        mock_select.range.return_value = mock_select
-        mock_select.order.return_value = mock_select
+        def mock_from_table(table_name):
+            mock_table = MagicMock()
 
-        mock_from = MagicMock()
-        mock_from.select.return_value = mock_select
-        mock_supabase_client.from_.return_value = mock_from
+            def mock_select(fields="*", count=None, head=False):
+                mock_query = MagicMock()
+                mock_query.execute.side_effect = Exception("Database connection error")
+                mock_query.eq = lambda field, value: mock_query
+                mock_query.range = lambda start, end: mock_query
+                mock_query.order = lambda field, desc=False: mock_query
+                return mock_query
+
+            mock_table.select = mock_select
+            return mock_table
+
+        mock_supabase_client.from_ = mock_from_table
 
         # Test error handling
         response = client.get("/api/knowledge-items/test-source/chunks?limit=10")
@@ -237,29 +251,41 @@ class TestKnowledgeAPIIntegration:
 
     def test_default_pagination_params(self, client, mock_supabase_client):
         """Test that endpoints work with default pagination parameters."""
-        # Completely reset mock state for this test
-        mock_supabase_client.reset_mock()
+        # Set up table-aware mocking with specific data for pagination defaults
+        def mock_from_table(table_name):
+            mock_table = MagicMock()
 
-        # Simple mock that always returns valid data
-        def mock_execute():
-            result = MagicMock()
-            result.error = None
-            result.count = 50
-            result.data = [
-                {"id": f"chunk-{i}", "content": f"Content {i}"}
-                for i in range(20)
-            ]
-            return result
+            def mock_select(fields="*", count=None, head=False):
+                mock_query = MagicMock()
 
-        mock_select = MagicMock()
-        mock_select.execute.side_effect = mock_execute
-        mock_select.eq.return_value = mock_select
-        mock_select.order.return_value = mock_select
-        mock_select.range.return_value = mock_select
+                def mock_execute():
+                    if table_name == "archon_crawled_pages":
+                        if count == "exact" and head:
+                            return MagicMock(error=None, count=50, data=None)
+                        else:
+                            return MagicMock(error=None, count=None, data=[
+                                {
+                                    "id": f"chunk-{i}",
+                                    "source_id": "test-source",
+                                    "content": f"Content {i}",
+                                    "url": f"https://example.com/page{i}",
+                                    "metadata": {"title": f"Page {i}"}
+                                }
+                                for i in range(20)
+                            ])
+                    return MagicMock(error=None, count=0, data=[])
 
-        mock_from = MagicMock()
-        mock_from.select.return_value = mock_select
-        mock_supabase_client.from_.return_value = mock_from
+                mock_query.execute = mock_execute
+                mock_query.eq = lambda field, value: mock_query
+                mock_query.order = lambda field, desc=False: mock_query
+                mock_query.range = lambda start, end: mock_query
+
+                return mock_query
+
+            mock_table.select = mock_select
+            return mock_table
+
+        mock_supabase_client.from_ = mock_from_table
 
         # Call without pagination params
         response = client.get("/api/knowledge-items/test-source/chunks")
@@ -270,3 +296,4 @@ class TestKnowledgeAPIIntegration:
         assert data["offset"] == 0  # Default
         assert "chunks" in data
         assert "has_more" in data
+        assert data["total"] == 50
