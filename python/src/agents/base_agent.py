@@ -9,7 +9,7 @@ import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Optional, TypeVar
 
 from pydantic import BaseModel
 from pydantic_ai import Agent
@@ -46,7 +46,7 @@ class RateLimitHandler:
     def __init__(self, max_retries: int = 5, base_delay: float = 1.0):
         self.max_retries = max_retries
         self.base_delay = base_delay
-        self.last_request_time = 0
+        self.last_request_time = 0.0
         self.min_request_interval = 0.1  # Minimum 100ms between requests
 
     async def execute_with_rate_limit(self, func, *args, progress_callback=None, **kwargs):
@@ -153,7 +153,7 @@ class BaseAgent(ABC, Generic[DepsT, OutputT]):
     def __init__(
         self,
         model: str = "openai:gpt-4o",
-        name: str = None,
+        name: Optional[str] = None,
         retries: int = 3,
         enable_rate_limiting: bool = True,
         **agent_kwargs,
@@ -162,6 +162,7 @@ class BaseAgent(ABC, Generic[DepsT, OutputT]):
         self.name = name or self.__class__.__name__
         self.retries = retries
         self.enable_rate_limiting = enable_rate_limiting
+        self.rate_limiter: Optional[RateLimitHandler] = None
 
         # Initialize rate limiting
         if self.enable_rate_limiting:

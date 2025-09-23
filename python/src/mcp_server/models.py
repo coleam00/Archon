@@ -197,6 +197,7 @@ def create_default_prd(project_title: str) -> ProjectRequirementsDocument:
                 description="As a project manager, I want to define the project scope so that the team understands the objectives",
                 acceptance_criteria=["PRD is created", "Stakeholders review and approve"],
                 priority=Priority.HIGH,
+                estimated_effort=None,
             )
         ],
         technical_requirements=[
@@ -226,9 +227,13 @@ def create_default_document(
         content = create_default_prd(project_title).dict()
 
     return GeneralDocument(
+        id=None,
         project_id=project_id,
         document_type=document_type,
         title=title,
         content=content,
+        author=None,
+        created_at=None,
+        updated_at=None,
         tags=["default", document_type.value],
     )
