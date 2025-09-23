@@ -19,7 +19,6 @@ from pydantic_ai import Agent, RunContext
 
 from .base_agent import ArchonDependencies, BaseAgent
 from .mcp_client import get_mcp_client
-from src.server.utils import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -148,18 +147,17 @@ class DocumentAgent(BaseAgent[DocumentDependencies, DocumentOperation]):
                 if not ctx.deps.project_id:
                     return "No project is currently selected. Please specify a project or create one first to manage documents."
 
-                supabase = get_supabase_client()
-                response = (
-                    supabase.table("archon_projects")
-                    .select("docs")
-                    .eq("id", ctx.deps.project_id)
-                    .execute()
-                )
+                # Use MCP client to list documents
+                mcp = await get_mcp_client()
+                result = await mcp.manage_document("list", ctx.deps.project_id)
 
-                if not response.data:
-                    return "No project found with the given ID."
+                # Parse the MCP response
+                response_data = json.loads(result) if isinstance(result, str) else result
 
-                docs = response.data[0].get("docs", [])
+                if not response_data.get("success", False):
+                    return f"Error retrieving documents: {response_data.get('message', 'Unknown error')}"
+
+                docs = response_data.get("documents", [])
                 if not docs:
                     return "No documents found in this project."
 
@@ -179,18 +177,20 @@ class DocumentAgent(BaseAgent[DocumentDependencies, DocumentOperation]):
         async def get_document(ctx: RunContext[DocumentDependencies], document_title: str) -> str:
             """Get the content of a specific document by title."""
             try:
-                supabase = get_supabase_client()
-                response = (
-                    supabase.table("archon_projects")
-                    .select("docs")
-                    .eq("id", ctx.deps.project_id)
-                    .execute()
-                )
+                # Use MCP client to list documents and find the matching one
+                mcp = await get_mcp_client()
+                result = await mcp.manage_document("list", ctx.deps.project_id)
 
-                if not response.data:
-                    return "No project found."
+                # Parse the MCP response
+                response_data = json.loads(result) if isinstance(result, str) else result
 
-                docs = response.data[0].get("docs", [])
+                if not response_data.get("success", False):
+                    return f"Error retrieving documents: {response_data.get('message', 'Unknown error')}"
+
+                docs = response_data.get("documents", [])
+                if not docs:
+                    return "No documents found in this project."
+
                 matching_docs = [
                     doc for doc in docs if document_title.lower() in doc.get("title", "").lower()
                 ]
