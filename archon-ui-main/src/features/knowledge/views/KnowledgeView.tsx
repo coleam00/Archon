@@ -14,37 +14,42 @@ import { useKnowledgeSummaries } from "../hooks/useKnowledgeQueries";
 import { KnowledgeInspector } from "../inspector/components/KnowledgeInspector";
 import type { KnowledgeItem, KnowledgeItemsFilter } from "../types";
 
+const PAGE_SIZE = 100;
+const SEARCH_DEBOUNCE_MS = 300;
+
 export const KnowledgeView = () => {
+  // Local filter state (following Tasks/Projects pattern)
+  const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState<"technical" | "business" | undefined>(undefined);
+
+  // Debounce search query to avoid excessive API calls
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // Compute current filter from local state
+  const currentFilter: KnowledgeItemsFilter = useMemo(() => ({
+    page: 1,
+    per_page: PAGE_SIZE,
+    ...(debouncedSearchQuery && { search: debouncedSearchQuery }),
+    ...(typeFilter && { knowledge_type: typeFilter }),
+  }), [debouncedSearchQuery, typeFilter]);
+
   // View state
   const [viewMode, setViewMode] = useState<"grid" | "table">("grid");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [typeFilter, setTypeFilter] = useState<"all" | "technical" | "business">("all");
 
   // Dialog state
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [inspectorItem, setInspectorItem] = useState<KnowledgeItem | null>(null);
   const [inspectorInitialTab, setInspectorInitialTab] = useState<"documents" | "code">("documents");
 
-  // Build filter object for API - memoize to prevent recreating on every render
-  const filter = useMemo<KnowledgeItemsFilter>(() => {
-    const f: KnowledgeItemsFilter = {
-      page: 1,
-      per_page: 100,
-    };
-
-    if (searchQuery) {
-      f.search = searchQuery;
-    }
-
-    if (typeFilter !== "all") {
-      f.knowledge_type = typeFilter;
-    }
-
-    return f;
-  }, [searchQuery, typeFilter]);
-
-  // Fetch knowledge summaries (no automatic polling!)
-  const { data, isLoading, error, refetch, setActiveCrawlIds, activeOperations } = useKnowledgeSummaries(filter);
+  // Fetch knowledge summaries using current filter
+  const { data, isLoading, error, refetch, setActiveCrawlIds, activeOperations } = useKnowledgeSummaries(currentFilter);
 
   const knowledgeItems = data?.items || [];
   const totalItems = data?.total || 0;
@@ -75,10 +80,11 @@ export const KnowledgeView = () => {
         // Show error message with details
         const errorMessage = op.message || op.error || "Operation failed";
         showToast(`❌ ${errorMessage}`, "error", 7000);
-      } else if (op.status === "completed") {
-        // Show success message
-        const message = op.message || "Operation completed";
-        showToast(`✅ ${message}`, "success", 5000);
+      } else {
+        // Show success message for any completed operation (not just "completed" status)
+        const operationType = op.operation_type || "Operation";
+        const successMessage = op.message || `${operationType} completed successfully`;
+        showToast(`✅ ${successMessage}`, "success", 5000);
       }
 
       // Remove from active crawl IDs
@@ -171,6 +177,7 @@ export const KnowledgeView = () => {
       <AddKnowledgeDialog
         open={isAddDialogOpen}
         onOpenChange={setIsAddDialogOpen}
+        currentFilter={currentFilter}
         onSuccess={() => {
           setIsAddDialogOpen(false);
           refetch();

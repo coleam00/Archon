@@ -37,6 +37,14 @@ vi.mock("@/features/shared/hooks", () => ({
   }),
 }));
 
+// Test filter for use in tests that require a current filter
+const testCurrentFilter = {
+  knowledge_type: 'technical' as const,
+  search: '',
+  page: 1,
+  per_page: 100
+};
+
 // Test wrapper with QueryClient
 const createWrapper = () => {
   const queryClient = new QueryClient({
@@ -163,6 +171,10 @@ describe("useKnowledgeQueries", () => {
   });
 
   describe("useCrawlUrl", () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
     it("should start crawl and return progress ID", async () => {
       const crawlRequest = {
         url: "https://example.com",
@@ -203,9 +215,142 @@ describe("useKnowledgeQueries", () => {
         }),
       ).rejects.toThrow("Invalid URL");
     });
+
+    it("should perform optimistic updates using provided current filter", async () => {
+      const crawlRequest = {
+        url: "https://example.com",
+        knowledge_type: "technical" as const,
+        tags: ["docs"],
+        max_depth: 2,
+      };
+
+      const mockResponse = {
+        success: true,
+        progressId: "progress-123",
+        message: "Crawling started",
+        estimatedDuration: "3-5 minutes",
+      };
+
+      const { knowledgeService } = await import("../../services");
+      vi.mocked(knowledgeService.crawlUrl).mockResolvedValue(mockResponse);
+
+      // Set up initial cache data
+      const initialData: KnowledgeItemsResponse = {
+        items: [],
+        total: 0,
+        page: 1,
+        per_page: 100,
+      };
+
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
+
+      // Set up cache with test filter
+      queryClient.setQueryData(knowledgeKeys.summaries(testCurrentFilter), initialData);
+
+      const wrapper = ({ children }: { children: React.ReactNode }) =>
+        React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+      const { result } = renderHook(() => useCrawlUrl(testCurrentFilter), { wrapper });
+
+      // Execute mutation
+      await result.current.mutateAsync(crawlRequest);
+
+      // Verify optimistic update was applied to current filter cache
+      const updatedData = queryClient.getQueryData<KnowledgeItemsResponse>(
+        knowledgeKeys.summaries(testCurrentFilter)
+      );
+
+      expect(updatedData).toBeDefined();
+      expect(updatedData?.items).toHaveLength(1);
+      expect(updatedData?.items[0]).toMatchObject({
+        url: crawlRequest.url,
+        knowledge_type: crawlRequest.knowledge_type,
+        status: "processing",
+      });
+    });
+
+    it("should update cache for matching filters during optimistic updates", async () => {
+      const crawlRequest = {
+        url: "https://example.com",
+        knowledge_type: "technical" as const, // Matches testCurrentFilter.knowledge_type
+      };
+
+      const mockResponse = {
+        success: true,
+        progressId: "progress-123",
+        message: "Crawling started",
+      };
+
+      const { knowledgeService } = await import("../../services");
+      vi.mocked(knowledgeService.crawlUrl).mockResolvedValue(mockResponse);
+
+      const initialData: KnowledgeItemsResponse = {
+        items: [],
+        total: 0,
+        page: 1,
+        per_page: 100,
+      };
+
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
+
+      // Pre-populate cache with current filter
+      queryClient.setQueryData(knowledgeKeys.summaries(testCurrentFilter), initialData);
+
+      const wrapper = ({ children }: { children: React.ReactNode }) =>
+        React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+      const { result } = renderHook(() => useCrawlUrl(testCurrentFilter), { wrapper });
+
+      await result.current.mutateAsync(crawlRequest);
+
+      // Verify optimistic update was applied
+      const updatedData = queryClient.getQueryData<KnowledgeItemsResponse>(
+        knowledgeKeys.summaries(testCurrentFilter)
+      );
+
+      expect(updatedData?.items).toHaveLength(1);
+      expect(updatedData?.total).toBe(1);
+    });
+
+    it("should work without currentFilter parameter", async () => {
+      const crawlRequest = {
+        url: "https://example.com",
+        knowledge_type: "technical" as const,
+      };
+
+      const mockResponse = {
+        success: true,
+        progressId: "progress-123",
+        message: "Crawling started",
+      };
+
+      const { knowledgeService } = await import("../../services");
+      vi.mocked(knowledgeService.crawlUrl).mockResolvedValue(mockResponse);
+
+      const wrapper = createWrapper();
+      const { result } = renderHook(() => useCrawlUrl(), { wrapper });
+
+      // Should work without currentFilter parameter
+      const response = await result.current.mutateAsync(crawlRequest);
+      expect(response).toEqual(mockResponse);
+    });
   });
 
   describe("useUploadDocument", () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
     it("should upload document with metadata", async () => {
       const file = new File(["test content"], "test.pdf", { type: "application/pdf" });
       const metadata = {
@@ -241,6 +386,170 @@ describe("useKnowledgeQueries", () => {
       const { result } = renderHook(() => useUploadDocument(), { wrapper });
 
       await expect(result.current.mutateAsync({ file, metadata: {} })).rejects.toThrow("File too large");
+    });
+
+    it("should perform filter-aware optimistic updates for document uploads", async () => {
+      const file = new File(["test content"], "test.pdf", { type: "application/pdf" });
+      const metadata = {
+        knowledge_type: "technical" as const, // Matches testCurrentFilter.knowledge_type
+      };
+
+      const mockResponse = {
+        success: true,
+        progressId: "upload-456",
+        message: "Upload started",
+        filename: "test.pdf",
+      };
+
+      const { knowledgeService } = await import("../../services");
+      vi.mocked(knowledgeService.uploadDocument).mockResolvedValue(mockResponse);
+
+      const initialData: KnowledgeItemsResponse = {
+        items: [],
+        total: 0,
+        page: 1,
+        per_page: 100,
+      };
+
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
+
+      queryClient.setQueryData(knowledgeKeys.summaries(testCurrentFilter), initialData);
+
+      const wrapper = ({ children }: { children: React.ReactNode }) =>
+        React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+      const { result } = renderHook(() => useUploadDocument(testCurrentFilter), { wrapper });
+
+      await result.current.mutateAsync({ file, metadata });
+
+      // Verify optimistic update was applied to the cache
+      const updatedData = queryClient.getQueryData<KnowledgeItemsResponse>(
+        knowledgeKeys.summaries(testCurrentFilter)
+      );
+
+      expect(updatedData?.items).toHaveLength(1);
+      expect(updatedData?.items[0]).toMatchObject({
+        title: "test.pdf",
+        knowledge_type: metadata.knowledge_type,
+        status: "processing",
+      });
+    });
+
+    it("should use provided current filter for optimistic updates", async () => {
+      const file = new File(["content"], "doc.pdf", { type: "application/pdf" });
+      const metadata = {
+        knowledge_type: "technical" as const, // Matches test filter
+      };
+
+      const mockResponse = {
+        success: true,
+        progressId: "upload-789",
+        message: "Upload started",
+        filename: "doc.pdf",
+      };
+
+      const { knowledgeService } = await import("../../services");
+      vi.mocked(knowledgeService.uploadDocument).mockResolvedValue(mockResponse);
+
+      const initialData: KnowledgeItemsResponse = {
+        items: [],
+        total: 0,
+        page: 1,
+        per_page: 100,
+      };
+
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
+
+      queryClient.setQueryData(knowledgeKeys.summaries(testCurrentFilter), initialData);
+
+      const wrapper = ({ children }: { children: React.ReactNode }) =>
+        React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+      const { result } = renderHook(() => useUploadDocument(testCurrentFilter), { wrapper });
+
+      await result.current.mutateAsync({ file, metadata });
+
+      // Verify the cache was updated
+      const updatedData = queryClient.getQueryData<KnowledgeItemsResponse>(
+        knowledgeKeys.summaries(testCurrentFilter)
+      );
+
+      expect(updatedData?.items).toHaveLength(1);
+    });
+  });
+
+  describe("Filter Parameter Integration", () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
+    it("should prioritize provided current filter updates over other cache keys", async () => {
+      // This test verifies the core enhancement: prioritizing provided current filter updates
+      const crawlRequest = {
+        url: "https://example.com",
+        knowledge_type: "technical" as const, // Matches testCurrentFilter.knowledge_type
+      };
+
+      const mockResponse = {
+        success: true,
+        progressId: "priority-test",
+        message: "Crawling started",
+      };
+
+      // Set up multiple cached filters
+      const otherFilter = { knowledge_type: 'business' as const, search: '', page: 1, per_page: 100 };
+
+      const { knowledgeService } = await import("../../services");
+      vi.mocked(knowledgeService.crawlUrl).mockResolvedValue(mockResponse);
+
+      const initialData: KnowledgeItemsResponse = {
+        items: [],
+        total: 0,
+        page: 1,
+        per_page: 100,
+      };
+
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
+
+      // Set up both caches
+      queryClient.setQueryData(knowledgeKeys.summaries(testCurrentFilter), initialData);
+      queryClient.setQueryData(knowledgeKeys.summaries(otherFilter), initialData);
+
+      const wrapper = ({ children }: { children: React.ReactNode }) =>
+        React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+      const { result } = renderHook(() => useCrawlUrl(testCurrentFilter), { wrapper });
+
+      await result.current.mutateAsync(crawlRequest);
+
+      // Verify current filter cache was updated first (gets priority)
+      const currentFilterData = queryClient.getQueryData<KnowledgeItemsResponse>(
+        knowledgeKeys.summaries(testCurrentFilter)
+      );
+      const otherFilterData = queryClient.getQueryData<KnowledgeItemsResponse>(
+        knowledgeKeys.summaries(otherFilter)
+      );
+
+      // Current filter should be updated since knowledge_type matches
+      expect(currentFilterData?.items).toHaveLength(1);
+
+      // Other filter should remain unchanged (no knowledge_type match)
+      expect(otherFilterData?.items).toHaveLength(0);
     });
   });
 });
