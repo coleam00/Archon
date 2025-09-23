@@ -117,7 +117,7 @@ export const knowledgeService = {
       formData.append("tags", JSON.stringify(metadata.tags));
     }
 
-    // Use improved API service with proper FormData handling and smart retry logic
+    // Use API service with proper FormData handling and timeout
     return callAPIWithETag<{ success: boolean; progressId: string; message: string; filename: string }>("/api/documents/upload", {
       method: "POST",
       body: formData,

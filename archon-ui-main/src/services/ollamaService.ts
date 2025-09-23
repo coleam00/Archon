@@ -222,7 +222,7 @@ class OllamaService {
   /**
    * Check health status of multiple Ollama instances
    */
-  async checkInstanceHealth(instanceUrls: string[], includeModels: boolean = false): Promise<InstanceHealthResponse> {
+  async checkInstanceHealth(instanceUrls: string[], includeModels: boolean = false, signal?: AbortSignal): Promise<InstanceHealthResponse> {
     try {
       if (!instanceUrls || instanceUrls.length === 0) {
         throw new Error("At least one instance URL is required for health checking");
@@ -243,6 +243,7 @@ class OllamaService {
         headers: {
           'Content-Type': 'application/json',
         },
+        signal,
       });
 
       if (!response.ok) {
@@ -392,7 +393,7 @@ class OllamaService {
       try {
         const startTime = Date.now();
 
-        const healthResponse = await this.checkInstanceHealth([instanceUrl], false);
+        const healthResponse = await this.checkInstanceHealth([instanceUrl], false, AbortSignal.timeout(5000));
         const responseTime = Date.now() - startTime;
 
         const instanceStatus = healthResponse.instance_status[instanceUrl];
