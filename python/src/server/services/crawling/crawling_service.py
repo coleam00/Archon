@@ -17,6 +17,7 @@ from ...utils.progress.progress_tracker import ProgressTracker
 
 # Import strategies
 # Import operations
+from .discovery_service import DiscoveryService
 from .document_storage_operations import DocumentStorageOperations
 from .helpers.site_config import SiteConfig
 
@@ -84,6 +85,7 @@ class CrawlingService:
 
         # Initialize operations
         self.doc_storage_ops = DocumentStorageOperations(self.supabase_client)
+        self.discovery_service = DiscoveryService()
 
         # Track progress state across all stages to prevent UI resets
         self.progress_state = {"progressId": self.progress_id} if self.progress_id else {}
@@ -180,13 +182,16 @@ class CrawlingService:
         )
 
     async def crawl_markdown_file(
-        self, url: str, progress_callback: Callable[[str, int, str], Awaitable[None]] | None = None
+        self, url: str, progress_callback: Callable[[str, int, str], Awaitable[None]] | None = None,
+        start_progress: int = 10, end_progress: int = 20
     ) -> list[dict[str, Any]]:
         """Crawl a .txt or markdown file."""
         return await self.single_page_strategy.crawl_markdown_file(
             url,
             self.url_handler.transform_github_url,
             progress_callback,
+            start_progress,
+            end_progress,
         )
 
     def parse_sitemap(self, sitemap_url: str) -> list[str]:
@@ -333,15 +338,87 @@ class CrawlingService:
             # Check for cancellation before proceeding
             self._check_cancellation()
 
-            # Analyzing stage - report initial page count (at least 1)
-            await update_mapped_progress(
-                "analyzing", 50, f"Analyzing URL type for {url}",
-                total_pages=1,  # We know we have at least the start URL
-                processed_pages=0
+            # Discovery phase - find the single best related file
+            discovered_urls = []
+            # Skip discovery if the URL itself is already a discovery target (sitemap, llms file, etc.)
+            is_already_discovery_target = (
+                self.url_handler.is_sitemap(url) or
+                self.url_handler.is_llms_variant(url) or
+                self.url_handler.is_robots_txt(url) or
+                self.url_handler.is_well_known_file(url) or
+                self.url_handler.is_txt(url)  # Also skip for any .txt file that user provides directly
             )
 
-            # Detect URL type and perform crawl
-            crawl_results, crawl_type = await self._crawl_by_url_type(url, request)
+            if is_already_discovery_target:
+                safe_logfire_info(f"Skipping discovery - URL is already a discovery target file: {url}")
+
+            if request.get("auto_discovery", True) and not is_already_discovery_target:  # Default enabled, but skip if already a discovery file
+                await update_mapped_progress(
+                    "discovery", 25, f"Discovering best related file for {url}", current_url=url
+                )
+                try:
+                    # Offload potential sync I/O to avoid blocking the event loop
+                    discovered_file = await asyncio.to_thread(self.discovery_service.discover_files, url)
+
+                    # Add the single best discovered file to crawl list
+                    if discovered_file:
+                        safe_logfire_info(f"Discovery found file: {discovered_file}")
+                        # Filter through is_binary_file() check like existing code
+                        if not self.url_handler.is_binary_file(discovered_file):
+                            discovered_urls.append(discovered_file)
+                            safe_logfire_info(f"Adding discovered file to crawl: {discovered_file}")
+                        else:
+                            safe_logfire_info(f"Skipping binary file: {discovered_file}")
+                    else:
+                        safe_logfire_info(f"Discovery found no files for {url}")
+
+                    file_count = len(discovered_urls)
+                    safe_logfire_info(f"Discovery selected {file_count} best file to crawl")
+
+                    await update_mapped_progress(
+                        "discovery", 100, f"Discovery completed: selected {file_count} best file", current_url=url
+                    )
+
+                except Exception as e:
+                    safe_logfire_error(f"Discovery phase failed: {e}")
+                    # Continue with regular crawl even if discovery fails
+                    await update_mapped_progress(
+                        "discovery", 100, "Discovery phase failed, continuing with regular crawl", current_url=url
+                    )
+
+            # Analyzing stage - determine what to crawl
+            if discovered_urls:
+                # Discovery found a file - crawl ONLY the discovered file, not the main URL
+                total_urls_to_crawl = len(discovered_urls)
+                await update_mapped_progress(
+                    "analyzing", 50, f"Analyzing discovered file: {discovered_urls[0]}",
+                    total_pages=total_urls_to_crawl,
+                    processed_pages=0
+                )
+                
+                # Crawl only the discovered file with discovery context
+                discovered_url = discovered_urls[0]
+                safe_logfire_info(f"Crawling discovered file instead of main URL: {discovered_url}")
+                
+                # Mark this as a discovery target for domain filtering
+                discovery_request = request.copy()
+                discovery_request["is_discovery_target"] = True
+                discovery_request["original_domain"] = self.url_handler.get_base_url(url)
+                
+                crawl_results, crawl_type = await self._crawl_by_url_type(discovered_url, discovery_request)
+                
+            else:
+                # No discovery - crawl the main URL normally
+                total_urls_to_crawl = 1
+                await update_mapped_progress(
+                    "analyzing", 50, f"Analyzing URL type for {url}",
+                    total_pages=total_urls_to_crawl,
+                    processed_pages=0
+                )
+                
+                # Crawl the main URL
+                safe_logfire_info(f"No discovery file found, crawling main URL: {url}")
+                crawl_results, crawl_type = await self._crawl_by_url_type(url, request)
 
             # Update progress tracker with crawl type
             if self.progress_tracker and crawl_type:
@@ -596,6 +673,27 @@ class CrawlingService:
                     f"Unregistered orchestration service on error | progress_id={self.progress_id}"
                 )
 
+    def _is_same_domain(self, url: str, base_domain: str) -> bool:
+        """
+        Check if a URL belongs to the same domain as the base domain.
+        
+        Args:
+            url: URL to check
+            base_domain: Base domain URL to compare against
+            
+        Returns:
+            True if the URL is from the same domain
+        """
+        try:
+            from urllib.parse import urlparse
+            u, b = urlparse(url), urlparse(base_domain)
+            url_host = (u.hostname or "").lower()
+            base_host = (b.hostname or "").lower()
+            return bool(url_host) and url_host == base_host
+        except Exception:
+            # If parsing fails, be conservative and exclude the URL
+            return False
+
     def _is_self_link(self, link: str, base_url: str) -> bool:
         """
         Check if a link is a self-referential link to the base URL.
@@ -668,7 +766,14 @@ class CrawlingService:
             if crawl_results and len(crawl_results) > 0:
                 content = crawl_results[0].get('markdown', '')
                 if self.url_handler.is_link_collection_file(url, content):
-                    # Extract links from the content
+                    # If this file was selected by discovery, skip link extraction (single-file mode)
+                    if request.get("is_discovery_target"):
+                        logger.info(f"Discovery single-file mode: skipping link extraction for {url}")
+                        crawl_type = "discovery_single_file"
+                        logger.info(f"Discovery file crawling completed: {len(crawl_results)} result")
+                        return crawl_results, crawl_type
+
+                    # Extract links from the content for non-discovery files
                     extracted_links = self.url_handler.extract_markdown_links(content, url)
 
                     # Filter out self-referential links to avoid redundant crawling
@@ -682,6 +787,19 @@ class CrawlingService:
                         if self_filtered_count > 0:
                             logger.info(f"Filtered out {self_filtered_count} self-referential links from {original_count} extracted links")
 
+                    # For discovery targets, only follow same-domain links
+                    if extracted_links and request.get("is_discovery_target"):
+                        original_domain = request.get("original_domain")
+                        if original_domain:
+                            original_count = len(extracted_links)
+                            extracted_links = [
+                                link for link in extracted_links
+                                if self._is_same_domain(link, original_domain)
+                            ]
+                            domain_filtered_count = original_count - len(extracted_links)
+                            if domain_filtered_count > 0:
+                                safe_logfire_info(f"Discovery mode: filtered out {domain_filtered_count} external links, keeping {len(extracted_links)} same-domain links")
+
                     # Filter out binary files (PDFs, images, archives, etc.) to avoid wasteful crawling
                     if extracted_links:
                         original_count = len(extracted_links)
@@ -690,8 +808,32 @@ class CrawlingService:
                         if filtered_count > 0:
                             logger.info(f"Filtered out {filtered_count} binary files from {original_count} extracted links")
 
+                        # Deduplicate to reduce redundant work
+                        extracted_links = list(dict.fromkeys(extracted_links))
+
                     if extracted_links:
-                        # Crawl the extracted links using batch crawling
+                        # For discovery targets, respect max_depth for same-domain links
+                        max_depth = request.get('max_depth', 2) if request.get("is_discovery_target") else request.get('max_depth', 1)
+
+                        if max_depth > 1 and request.get("is_discovery_target"):
+                            # Use recursive crawling to respect depth limit for same-domain links
+                            logger.info(f"Crawling {len(extracted_links)} same-domain links with max_depth={max_depth-1}")
+                            batch_results = await self.crawl_recursive_with_progress(
+                                extracted_links,
+                                max_depth=max_depth - 1,  # Reduce depth since we're already 1 level deep
+                                max_concurrent=request.get('max_concurrent'),
+                                progress_callback=await self._create_crawl_progress_callback("crawling"),
+                            )
+                        else:
+                            # Depth limit reached, just crawl the immediate links without following further
+                            logger.info(f"Max depth reached, crawling {len(extracted_links)} links without further recursion")
+                            batch_results = await self.crawl_batch_with_progress(
+                                extracted_links,
+                                max_concurrent=request.get('max_concurrent'),
+                                progress_callback=await self._create_crawl_progress_callback("crawling"),
+                            )
+                    else:
+                        # Use normal batch crawling for non-discovery targets
                         logger.info(f"Crawling {len(extracted_links)} extracted links from {url}")
                         batch_results = await self.crawl_batch_with_progress(
                             extracted_links,
@@ -699,14 +841,14 @@ class CrawlingService:
                             progress_callback=await self._create_crawl_progress_callback("crawling"),
                         )
 
-                        # Combine original text file results with batch results
-                        crawl_results.extend(batch_results)
-                        crawl_type = "link_collection_with_crawled_links"
+                    # Combine original text file results with batch results
+                    crawl_results.extend(batch_results)
+                    crawl_type = "link_collection_with_crawled_links"
 
-                        logger.info(f"Link collection crawling completed: {len(crawl_results)} total results (1 text file + {len(batch_results)} extracted links)")
-                    else:
-                        logger.info(f"No valid links found in link collection file: {url}")
-                        logger.info(f"Text file crawling completed: {len(crawl_results)} results")
+                    logger.info(f"Link collection crawling completed: {len(crawl_results)} total results (1 text file + {len(batch_results)} extracted links)")
+                else:
+                    logger.info(f"No valid links found in link collection file: {url}")
+                    logger.info(f"Text file crawling completed: {len(crawl_results)} results")
 
         elif self.url_handler.is_sitemap(url):
             # Handle sitemaps
@@ -716,6 +858,20 @@ class CrawlingService:
                 "Detected sitemap, parsing URLs...",
                 crawl_type=crawl_type
             )
+
+            # If this sitemap was selected by discovery, just return the sitemap itself (single-file mode)
+            if request.get("is_discovery_target"):
+                logger.info(f"Discovery single-file mode: returning sitemap itself without crawling URLs from {url}")
+                crawl_type = "discovery_sitemap"
+                # Return the sitemap file as the result
+                crawl_results = [{
+                    'url': url,
+                    'markdown': f"# Sitemap: {url}\n\nThis is a sitemap file discovered and returned in single-file mode.",
+                    'title': f"Sitemap - {self.url_handler.extract_display_name(url)}",
+                    'crawl_type': crawl_type
+                }]
+                return crawl_results, crawl_type
+
             sitemap_urls = self.parse_sitemap(url)
 
             if sitemap_urls:
