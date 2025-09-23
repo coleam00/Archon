@@ -59,6 +59,9 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
     // Currently assumes headers are passed as plain objects (Record<string, string>)
     // which works for all our current usage. The API doesn't require Accept headers
     // since it always returns JSON, and we only set Content-Type when sending data.
+    // If we ever need to support Headers instances or [string, string][] tuples,
+    // we should normalize with: new Headers(options.headers), set defaults, then
+    // convert back with Object.fromEntries(headers.entries())
     const headers: Record<string, string> = {
       ...((options.headers as Record<string, string>) || {}),
     };
@@ -78,7 +81,7 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
     // See: DELETE FROM archon_crawled_pages WHERE source_id = '9529d5dabe8a726a' (7,073 rows)
     const response = await fetch(fullUrl, {
       ...options,
-      headers: headers,
+      headers,
       signal: options.signal ?? AbortSignal.timeout(20000), // 20 second timeout (was 10s)
     });
 
