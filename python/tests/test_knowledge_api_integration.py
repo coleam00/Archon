@@ -35,137 +35,131 @@ class FakePostgrestResponse:
         return getattr(self, key)
 
 
+@pytest.fixture(scope="function")
+def table_aware_mock():
+    """Create table-aware mock that handles different database tables properly."""
+    mock_client = MagicMock()
+
+    def mock_from_table(table_name):
+        """Return table-specific mock behavior."""
+        mock_table = MagicMock()
+
+        def mock_select(fields="*", count=None, head=False):
+            mock_query = MagicMock()
+
+            def mock_execute():
+                # Handle different table queries
+                if table_name == "archon_sources":
+                    if count == "exact" and head:
+                        # Count query for sources
+                        return FakePostgrestResponse(error=None, count=20, data=None)
+                    else:
+                        # Data query for sources
+                        return FakePostgrestResponse(error=None, count=None, data=[
+                            {
+                                "source_id": f"source-{i}",
+                                "title": f"Source {i}",
+                                "summary": f"Summary {i}",
+                                "metadata": {"knowledge_type": "technical", "tags": ["test"]},
+                                "source_url": f"https://example.com/source{i}",
+                                "created_at": "2024-01-01T00:00:00",
+                                "updated_at": "2024-01-01T00:00:00"
+                            }
+                            for i in range(10)
+                        ])
+
+                elif table_name == "archon_crawled_pages":
+                    if count == "exact" and head:
+                        # Count query for pages/chunks
+                        return FakePostgrestResponse(error=None, count=5, data=None)
+                    else:
+                        # Data query for pages/chunks
+                        return FakePostgrestResponse(error=None, count=None, data=[
+                            {
+                                "id": f"chunk-{i}",
+                                "source_id": "test-source",
+                                "content": f"Content {i}",
+                                "url": f"https://example.com/page{i}",
+                                "metadata": {"title": f"Page {i}"}
+                            }
+                            for i in range(5)
+                        ])
+
+                elif table_name == "archon_code_examples":
+                    if count == "exact" and head:
+                        # Count query for code examples
+                        return FakePostgrestResponse(error=None, count=3, data=None)
+                    else:
+                        # Data query for code examples
+                        return FakePostgrestResponse(error=None, count=None, data=[
+                            {
+                                "id": f"code-{i}",
+                                "source_id": "test-source",
+                                "content": f"def example_{i}():\n    return {i}",
+                                "summary": f"Code example {i}",
+                                "metadata": {"language": "python", "title": f"Example {i}"}
+                            }
+                            for i in range(3)
+                        ])
+
+                # Default fallback
+                return FakePostgrestResponse(error=None, count=0, data=[])
+
+            # Set up method chaining
+            mock_query.execute = mock_execute
+            mock_query.eq = lambda field, value: mock_query
+            mock_query.or_ = lambda condition: mock_query
+            mock_query.range = lambda start, end: mock_query
+            mock_query.order = lambda field, desc=False: mock_query
+            mock_query.contains = lambda field, value: mock_query
+            mock_query.in_ = lambda field, values: mock_query
+            mock_query.ilike = lambda field, pattern: mock_query
+            mock_query.limit = lambda n: mock_query
+            mock_query.offset = lambda n: mock_query
+
+            return mock_query
+
+        mock_table.select = mock_select
+        return mock_table
+
+    # Set up the from_() method correctly
+    def mock_from_method(table_name):
+        return mock_from_table(table_name)
+
+    mock_client.from_ = mock_from_method
+    # Also support the .table() method that might be used
+    mock_client.table = mock_from_method
+    return mock_client
+
+
+@pytest.fixture(scope="function")
+def knowledge_client(table_aware_mock):
+    """Custom client fixture for knowledge API tests that bypasses global fixtures."""
+    # Import here to avoid circular imports and ensure clean state
+    from unittest.mock import AsyncMock
+
+    with patch("src.server.services.client_manager.get_supabase_client", return_value=table_aware_mock), \
+         patch("src.server.utils.get_supabase_client", return_value=table_aware_mock), \
+         patch("src.server.services.credential_service.create_client", return_value=table_aware_mock), \
+         patch("supabase.create_client", return_value=table_aware_mock), \
+         patch("src.server.api_routes.knowledge_api.get_supabase_client", return_value=table_aware_mock):
+
+        # Import after patches are applied
+        import src.server.main as server_main
+
+        # Mark initialization as complete for testing
+        server_main._initialization_complete = True
+        app = server_main.app
+
+        # Mock the schema check to always return valid
+        mock_schema_check = AsyncMock(return_value={"valid": True, "message": "Schema is up to date"})
+        with patch("src.server.main._check_database_schema", new=mock_schema_check):
+            yield TestClient(app)
+
+
 class TestKnowledgeAPIIntegration:
     """Integration tests for knowledge API endpoints with proper table-specific mocking."""
 
-    @pytest.fixture
-    def knowledge_client(self):
-        """Custom client fixture for knowledge API tests that bypasses global fixtures."""
-        # Create our table-aware mock
-        table_aware_mock = self._create_table_aware_mock()
-
-        # Patch all possible ways to get Supabase client with our table-aware mock
-        patches = [
-            patch("src.server.services.client_manager.get_supabase_client", return_value=table_aware_mock),
-            patch("src.server.utils.get_supabase_client", return_value=table_aware_mock),
-            patch("src.server.services.credential_service.create_client", return_value=table_aware_mock),
-            patch("supabase.create_client", return_value=table_aware_mock),
-            # Patch the direct imports that might be used in the knowledge API
-            patch("src.server.api_routes.knowledge_api.get_supabase_client", return_value=table_aware_mock),
-        ]
-
-        # Apply all patches simultaneously
-        with patches[0]:
-            with patches[1]:
-                with patches[2]:
-                    with patches[3]:
-                        with patches[4]:
-                            from unittest.mock import AsyncMock
-                            import src.server.main as server_main
-
-                            # Mark initialization as complete for testing (before accessing app)
-                            server_main._initialization_complete = True
-                            app = server_main.app
-
-                            # Mock the schema check to always return valid
-                            mock_schema_check = AsyncMock(return_value={"valid": True, "message": "Schema is up to date"})
-                            with patch("src.server.main._check_database_schema", new=mock_schema_check):
-                                return TestClient(app)
-
-    def _create_table_aware_mock(self):
-        """Create table-aware mock that handles different database tables properly."""
-        mock_client = MagicMock()
-
-        def mock_from_table(table_name):
-            """Return table-specific mock behavior."""
-            mock_table = MagicMock()
-
-            def mock_select(fields="*", count=None, head=False):
-                mock_query = MagicMock()
-
-                def mock_execute():
-                    # Handle different table queries
-                    if table_name == "archon_sources":
-                        if count == "exact" and head:
-                            # Count query for sources
-                            return FakePostgrestResponse(error=None, count=20, data=None)
-                        else:
-                            # Data query for sources
-                            return FakePostgrestResponse(error=None, count=None, data=[
-                                {
-                                    "source_id": f"source-{i}",
-                                    "title": f"Source {i}",
-                                    "summary": f"Summary {i}",
-                                    "metadata": {"knowledge_type": "technical", "tags": ["test"]},
-                                    "source_url": f"https://example.com/source{i}",
-                                    "created_at": "2024-01-01T00:00:00",
-                                    "updated_at": "2024-01-01T00:00:00"
-                                }
-                                for i in range(10)
-                            ])
-
-                    elif table_name == "archon_crawled_pages":
-                        if count == "exact" and head:
-                            # Count query for pages/chunks
-                            return FakePostgrestResponse(error=None, count=5, data=None)
-                        else:
-                            # Data query for pages/chunks
-                            return FakePostgrestResponse(error=None, count=None, data=[
-                                {
-                                    "id": f"chunk-{i}",
-                                    "source_id": "test-source",
-                                    "content": f"Content {i}",
-                                    "url": f"https://example.com/page{i}",
-                                    "metadata": {"title": f"Page {i}"}
-                                }
-                                for i in range(5)
-                            ])
-
-                    elif table_name == "archon_code_examples":
-                        if count == "exact" and head:
-                            # Count query for code examples
-                            return FakePostgrestResponse(error=None, count=3, data=None)
-                        else:
-                            # Data query for code examples
-                            return FakePostgrestResponse(error=None, count=None, data=[
-                                {
-                                    "id": f"code-{i}",
-                                    "source_id": "test-source",
-                                    "content": f"def example_{i}():\n    return {i}",
-                                    "summary": f"Code example {i}",
-                                    "metadata": {"language": "python", "title": f"Example {i}"}
-                                }
-                                for i in range(3)
-                            ])
-
-                    # Default fallback
-                    return FakePostgrestResponse(error=None, count=0, data=[])
-
-                # Set up method chaining
-                mock_query.execute = mock_execute
-                mock_query.eq = lambda field, value: mock_query
-                mock_query.or_ = lambda condition: mock_query
-                mock_query.range = lambda start, end: mock_query
-                mock_query.order = lambda field, desc=False: mock_query
-                mock_query.contains = lambda field, value: mock_query
-                mock_query.in_ = lambda field, values: mock_query
-                mock_query.ilike = lambda field, pattern: mock_query
-                mock_query.limit = lambda n: mock_query
-                mock_query.offset = lambda n: mock_query
-
-                return mock_query
-
-            mock_table.select = mock_select
-            return mock_table
-
-        # Set up the from_() method correctly
-        def mock_from_method(table_name):
-            return mock_from_table(table_name)
-
-        mock_client.from_ = mock_from_method
-        # Also support the .table() method that might be used
-        mock_client.table = mock_from_method
-        return mock_client
 
     def test_summary_endpoint_performance(self, knowledge_client):
         """Test that summary endpoint minimizes database queries."""
