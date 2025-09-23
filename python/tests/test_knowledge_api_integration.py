@@ -52,9 +52,6 @@ class TestKnowledgeAPIIntegration:
             patch("supabase.create_client", return_value=table_aware_mock),
             # Patch the direct imports that might be used in the knowledge API
             patch("src.server.api_routes.knowledge_api.get_supabase_client", return_value=table_aware_mock),
-            # Also patch any nested service imports
-            patch("src.server.services.knowledge.knowledge_summary_service.get_supabase_client", return_value=table_aware_mock),
-            patch("src.server.services.knowledge.knowledge_item_service.get_supabase_client", return_value=table_aware_mock),
         ]
 
         # Apply all patches simultaneously
@@ -63,19 +60,17 @@ class TestKnowledgeAPIIntegration:
                 with patches[2]:
                     with patches[3]:
                         with patches[4]:
-                            with patches[5]:
-                                with patches[6]:
-                                    from unittest.mock import AsyncMock
-                                    import src.server.main as server_main
+                            from unittest.mock import AsyncMock
+                            import src.server.main as server_main
 
-                                    # Mark initialization as complete for testing (before accessing app)
-                                    server_main._initialization_complete = True
-                                    app = server_main.app
+                            # Mark initialization as complete for testing (before accessing app)
+                            server_main._initialization_complete = True
+                            app = server_main.app
 
-                                    # Mock the schema check to always return valid
-                                    mock_schema_check = AsyncMock(return_value={"valid": True, "message": "Schema is up to date"})
-                                    with patch("src.server.main._check_database_schema", new=mock_schema_check):
-                                        return TestClient(app)
+                            # Mock the schema check to always return valid
+                            mock_schema_check = AsyncMock(return_value={"valid": True, "message": "Schema is up to date"})
+                            with patch("src.server.main._check_database_schema", new=mock_schema_check):
+                                return TestClient(app)
 
     def _create_table_aware_mock(self):
         """Create table-aware mock that handles different database tables properly."""
