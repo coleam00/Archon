@@ -5,10 +5,10 @@
 
 import { Briefcase, Terminal } from "lucide-react";
 import { useState } from "react";
+import { useAutoSave } from "../../shared/hooks/useAutoSave";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/primitives";
 import { cn } from "../../ui/primitives/styles";
 import { SimpleTooltip } from "../../ui/primitives/tooltip";
-import { useAutoSave } from "../../shared/hooks/useAutoSave";
 import { useUpdateKnowledgeItem } from "../hooks";
 
 interface KnowledgeCardTypeProps {
@@ -21,10 +21,7 @@ export const KnowledgeCardType: React.FC<KnowledgeCardTypeProps> = ({ sourceId, 
   const updateMutation = useUpdateKnowledgeItem();
 
   // Use auto-save hook for immediate type changes
-  const {
-    isSaving,
-    hasError,
-  } = useAutoSave<"technical" | "business">({
+  const { isSaving, hasError, save } = useAutoSave<"technical" | "business">({
     value: knowledgeType,
     onSave: async (newType) => {
       await updateMutation.mutateAsync({
@@ -45,15 +42,11 @@ export const KnowledgeCardType: React.FC<KnowledgeCardTypeProps> = ({ sourceId, 
     }
 
     try {
-      await updateMutation.mutateAsync({
-        sourceId,
-        updates: {
-          knowledge_type: newType,
-        },
-      });
+      // Use the hook's save function instead of calling mutation directly
+      await save(newType);
     } finally {
       // Always exit editing mode regardless of success or failure
-      // The mutation's onError handler will show error toasts if needed
+      // The hook's onSave handler will show error toasts if needed
       setIsEditing(false);
     }
   };

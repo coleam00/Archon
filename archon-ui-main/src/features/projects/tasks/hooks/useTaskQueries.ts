@@ -4,10 +4,9 @@ import {
   type OptimisticEntity,
   removeDuplicateEntities,
   replaceOptimisticEntity,
-} from "@/features/shared/utils/optimistic";
-import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../../shared/config/queryPatterns";
-import { useSmartPolling } from "../../../shared/hooks";
-import { useToast } from "../../../shared/hooks/useToast";
+} from "../../../shared/optimistic";
+import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../../shared/queryPatterns";
+import { useSmartPolling, useToast } from "../../../shared/hooks";
 import { taskService } from "../services";
 import type { CreateTaskRequest, Task, UpdateTaskRequest } from "../types";
 

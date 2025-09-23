@@ -5,10 +5,10 @@
 
 import { Info } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useAutoSaveString } from "../../shared/hooks/useAutoSave";
 import { Input } from "../../ui/primitives";
 import { cn } from "../../ui/primitives/styles";
 import { SimpleTooltip, Tooltip, TooltipContent, TooltipTrigger } from "../../ui/primitives/tooltip";
-import { useAutoSaveString } from "../../shared/hooks/useAutoSave";
 import { useUpdateKnowledgeItem } from "../hooks";
 
 // Centralized color class mappings
@@ -53,14 +53,7 @@ export const KnowledgeCardTitle: React.FC<KnowledgeCardTitleProps> = ({
   const updateMutation = useUpdateKnowledgeItem();
 
   // Use auto-save hook for title editing
-  const {
-    editValue,
-    setEditValue,
-    isSaving,
-    save,
-    cancel,
-    hasError,
-  } = useAutoSaveString({
+  const { editValue, setEditValue, isSaving, save, cancel, hasError } = useAutoSaveString({
     value: title,
     onSave: async (newTitle) => {
       await updateMutation.mutateAsync({
@@ -77,7 +70,6 @@ export const KnowledgeCardTitle: React.FC<KnowledgeCardTitleProps> = ({
   // Simple lookups using centralized color mappings
   const getIconColorClass = () => ICON_COLOR_CLASSES[accentColor] ?? ICON_COLOR_CLASSES.default;
   const getTooltipColorClass = () => TOOLTIP_COLOR_CLASSES[accentColor] ?? TOOLTIP_COLOR_CLASSES.default;
-
 
   // Focus input when editing starts
   useEffect(() => {

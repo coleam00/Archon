@@ -21,7 +21,7 @@ describe("useAutoSave", () => {
         useAutoSave({
           value: "initial value",
           onSave: mockSave,
-        })
+        }),
       );
 
       expect(result.current.editValue).toBe("initial value");
@@ -36,7 +36,7 @@ describe("useAutoSave", () => {
         useAutoSave({
           value: "original",
           onSave: mockSave,
-        })
+        }),
       );
 
       act(() => {
@@ -53,7 +53,7 @@ describe("useAutoSave", () => {
         useAutoSave({
           value: "original",
           onSave: mockSave,
-        })
+        }),
       );
 
       act(() => {
@@ -74,7 +74,7 @@ describe("useAutoSave", () => {
         useAutoSave({
           value: "same value",
           onSave: mockSave,
-        })
+        }),
       );
 
       await act(async () => {
@@ -94,7 +94,7 @@ describe("useAutoSave", () => {
           onSave: mockSave,
           debounceMs: 500,
           isEditing: true,
-        })
+        }),
       );
 
       act(() => {
@@ -125,7 +125,7 @@ describe("useAutoSave", () => {
           onSave: mockSave,
           debounceMs: 500,
           isEditing: true,
-        })
+        }),
       );
 
       // Make multiple rapid changes without advancing timers between changes
@@ -167,7 +167,7 @@ describe("useAutoSave", () => {
           onSave: mockSave,
           debounceMs: 500,
           isEditing: false,
-        })
+        }),
       );
 
       act(() => {
@@ -198,7 +198,7 @@ describe("useAutoSave", () => {
         useAutoSave({
           value: "original",
           onSave: mockSave,
-        })
+        }),
       );
 
       act(() => {
@@ -235,7 +235,7 @@ describe("useAutoSave", () => {
         useAutoSave({
           value: "original",
           onSave: mockSave,
-        })
+        }),
       );
 
       act(() => {
@@ -265,7 +265,7 @@ describe("useAutoSave", () => {
             onSave: mockSave,
             isEditing,
           }),
-        { initialProps: { isEditing: false } }
+        { initialProps: { isEditing: false } },
       );
 
       // Simulate error state by manually setting it (this is internal state)
@@ -291,7 +291,7 @@ describe("useAutoSave", () => {
           value: "original",
           onSave: mockSave,
           validate: mockValidate,
-        })
+        }),
       );
 
       act(() => {
@@ -315,7 +315,7 @@ describe("useAutoSave", () => {
           value: "original",
           onSave: mockSave,
           validate: mockValidate,
-        })
+        }),
       );
 
       act(() => {
@@ -341,7 +341,7 @@ describe("useAutoSave", () => {
           value: "original",
           onSave: mockSave,
           transform: mockTransform,
-        })
+        }),
       );
 
       act(() => {
@@ -364,7 +364,7 @@ describe("useAutoSave", () => {
         useAutoSave({
           value: "original",
           onSave: mockSave,
-        })
+        }),
       );
 
       act(() => {
@@ -388,7 +388,7 @@ describe("useAutoSave", () => {
         useAutoSave({
           value: "updated prop",
           onSave: mockSave,
-        })
+        }),
       );
 
       act(() => {
@@ -414,7 +414,7 @@ describe("useAutoSave", () => {
             onSave: mockSave,
             isEditing,
           }),
-        { initialProps: { value: "initial", isEditing: false } }
+        { initialProps: { value: "initial", isEditing: false } },
       );
 
       expect(result.current.editValue).toBe("initial");
@@ -433,7 +433,7 @@ describe("useAutoSave", () => {
             onSave: mockSave,
             isEditing,
           }),
-        { initialProps: { value: "initial", isEditing: true } }
+        { initialProps: { value: "initial", isEditing: true } },
       );
 
       act(() => {
@@ -454,7 +454,7 @@ describe("useAutoSave", () => {
         useAutoSave({
           value: "original",
           onSave: mockSave,
-        })
+        }),
       );
 
       act(() => {
@@ -476,7 +476,7 @@ describe("useAutoSave", () => {
           onSave: mockSave,
           debounceMs: 500,
           isEditing: true,
-        })
+        }),
       );
 
       act(() => {
@@ -502,7 +502,7 @@ describe("useAutoSave", () => {
         useAutoSave({
           value: "string value",
           onSave: mockSave,
-        })
+        }),
       );
 
       // TypeScript should enforce string type
@@ -519,7 +519,7 @@ describe("useAutoSave", () => {
         useAutoSave({
           value: 42,
           onSave: mockSave,
-        })
+        }),
       );
 
       act(() => {
@@ -543,7 +543,7 @@ describe("useAutoSave", () => {
         useAutoSave({
           value: initialValue,
           onSave: mockSave,
-        })
+        }),
       );
 
       act(() => {
@@ -573,7 +573,7 @@ describe("useAutoSaveString", () => {
         useAutoSaveString({
           value: "original",
           onSave: mockSave,
-        })
+        }),
       );
 
       act(() => {
@@ -593,7 +593,7 @@ describe("useAutoSaveString", () => {
         useAutoSaveString({
           value: "original",
           onSave: mockSave,
-        })
+        }),
       );
 
       act(() => {
@@ -614,7 +614,7 @@ describe("useAutoSaveString", () => {
           value: "original",
           onSave: mockSave,
           allowEmpty: true,
-        })
+        }),
       );
 
       act(() => {
@@ -635,7 +635,7 @@ describe("useAutoSaveString", () => {
           value: "original",
           onSave: mockSave,
           trimValue: false,
-        })
+        }),
       );
 
       act(() => {

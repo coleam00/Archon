@@ -76,35 +76,38 @@ export function useAutoSave<T>({
 
   const hasUnsavedChanges = editValue !== value;
 
-  const performSave = useCallback(async (valueToSave: T): Promise<void> => {
-    // Don't save if value hasn't changed
-    if (valueToSave === value) {
-      return;
-    }
+  const performSave = useCallback(
+    async (valueToSave: T): Promise<void> => {
+      // Don't save if value hasn't changed
+      if (valueToSave === value) {
+        return;
+      }
 
-    // Validate before saving
-    if (!validate(valueToSave)) {
-      return;
-    }
+      // Validate before saving
+      if (!validate(valueToSave)) {
+        return;
+      }
 
-    // Transform value if needed
-    const finalValue = transform ? transform(valueToSave) : valueToSave;
+      // Transform value if needed
+      const finalValue = transform ? transform(valueToSave) : valueToSave;
 
-    setIsSaving(true);
-    setHasError(false);
+      setIsSaving(true);
+      setHasError(false);
 
-    try {
-      await onSave(finalValue);
-    } catch (error) {
-      console.error('Save failed:', error);
-      setHasError(true);
-      // Reset to original value on error
-      setEditValue(value);
-      throw error;
-    } finally {
-      setIsSaving(false);
-    }
-  }, [value, onSave, validate, transform]);
+      try {
+        await onSave(finalValue);
+      } catch (error) {
+        console.error("Save failed:", error);
+        setHasError(true);
+        // Reset to original value on error
+        setEditValue(value);
+        throw error;
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [value, onSave, validate, transform],
+  );
 
   const save = useCallback(async (): Promise<void> => {
     // Clear any pending debounced save
@@ -182,12 +185,14 @@ export function useAutoSave<T>({
 /**
  * Specialized hook for string values with trimming and empty validation
  */
-export function useAutoSaveString(options: Omit<UseAutoSaveOptions<string>, 'validate' | 'transform'> & {
-  /** Whether to allow empty strings (default: false) */
-  allowEmpty?: boolean;
-  /** Whether to trim whitespace before saving (default: true) */
-  trimValue?: boolean;
-}): UseAutoSaveReturn<string> {
+export function useAutoSaveString(
+  options: Omit<UseAutoSaveOptions<string>, "validate" | "transform"> & {
+    /** Whether to allow empty strings (default: false) */
+    allowEmpty?: boolean;
+    /** Whether to trim whitespace before saving (default: true) */
+    trimValue?: boolean;
+  },
+): UseAutoSaveReturn<string> {
   const { allowEmpty = false, trimValue = true, ...restOptions } = options;
 
   return useAutoSave({

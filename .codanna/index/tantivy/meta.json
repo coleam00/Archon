@@ -1,0 +1,342 @@
+{
+  "index_settings": {
+    "docstore_compression": "lz4",
+    "docstore_blocksize": 16384
+  },
+  "segments": [],
+  "schema": [
+    {
+      "name": "doc_type",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "basic",
+          "fieldnorms": true,
+          "tokenizer": "raw"
+        },
+        "stored": true,
+        "fast": true
+      }
+    },
+    {
+      "name": "symbol_id",
+      "type": "u64",
+      "options": {
+        "indexed": true,
+        "fieldnorms": false,
+        "fast": true,
+        "stored": true
+      }
+    },
+    {
+      "name": "file_path",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "basic",
+          "fieldnorms": true,
+          "tokenizer": "raw"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "line_number",
+      "type": "u64",
+      "options": {
+        "indexed": false,
+        "fieldnorms": false,
+        "fast": true,
+        "stored": true
+      }
+    },
+    {
+      "name": "column",
+      "type": "u64",
+      "options": {
+        "indexed": false,
+        "fieldnorms": false,
+        "fast": false,
+        "stored": true
+      }
+    },
+    {
+      "name": "name",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "position",
+          "fieldnorms": true,
+          "tokenizer": "default"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "doc_comment",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "position",
+          "fieldnorms": true,
+          "tokenizer": "default"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "signature",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "position",
+          "fieldnorms": true,
+          "tokenizer": "default"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "context",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "position",
+          "fieldnorms": true,
+          "tokenizer": "default"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "module_path",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "basic",
+          "fieldnorms": true,
+          "tokenizer": "raw"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "kind",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "basic",
+          "fieldnorms": true,
+          "tokenizer": "raw"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "visibility",
+      "type": "u64",
+      "options": {
+        "indexed": false,
+        "fieldnorms": false,
+        "fast": false,
+        "stored": true
+      }
+    },
+    {
+      "name": "scope_context",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "basic",
+          "fieldnorms": true,
+          "tokenizer": "raw"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "language",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "basic",
+          "fieldnorms": true,
+          "tokenizer": "raw"
+        },
+        "stored": true,
+        "fast": true
+      }
+    },
+    {
+      "name": "from_symbol_id",
+      "type": "u64",
+      "options": {
+        "indexed": true,
+        "fieldnorms": false,
+        "fast": true,
+        "stored": true
+      }
+    },
+    {
+      "name": "to_symbol_id",
+      "type": "u64",
+      "options": {
+        "indexed": true,
+        "fieldnorms": false,
+        "fast": true,
+        "stored": true
+      }
+    },
+    {
+      "name": "relation_kind",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "basic",
+          "fieldnorms": true,
+          "tokenizer": "raw"
+        },
+        "stored": true,
+        "fast": true
+      }
+    },
+    {
+      "name": "relation_weight",
+      "type": "f64",
+      "options": {
+        "indexed": false,
+        "fieldnorms": false,
+        "fast": false,
+        "stored": true
+      }
+    },
+    {
+      "name": "relation_line",
+      "type": "u64",
+      "options": {
+        "indexed": false,
+        "fieldnorms": false,
+        "fast": false,
+        "stored": true
+      }
+    },
+    {
+      "name": "relation_column",
+      "type": "u64",
+      "options": {
+        "indexed": false,
+        "fieldnorms": false,
+        "fast": false,
+        "stored": true
+      }
+    },
+    {
+      "name": "relation_context",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "position",
+          "fieldnorms": true,
+          "tokenizer": "default"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "file_id",
+      "type": "u64",
+      "options": {
+        "indexed": true,
+        "fieldnorms": false,
+        "fast": true,
+        "stored": true
+      }
+    },
+    {
+      "name": "file_hash",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "basic",
+          "fieldnorms": true,
+          "tokenizer": "raw"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "file_timestamp",
+      "type": "u64",
+      "options": {
+        "indexed": false,
+        "fieldnorms": false,
+        "fast": true,
+        "stored": true
+      }
+    },
+    {
+      "name": "meta_key",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "basic",
+          "fieldnorms": true,
+          "tokenizer": "raw"
+        },
+        "stored": true,
+        "fast": true
+      }
+    },
+    {
+      "name": "meta_value",
+      "type": "u64",
+      "options": {
+        "indexed": false,
+        "fieldnorms": false,
+        "fast": true,
+        "stored": true
+      }
+    },
+    {
+      "name": "cluster_id",
+      "type": "u64",
+      "options": {
+        "indexed": false,
+        "fieldnorms": false,
+        "fast": true,
+        "stored": true
+      }
+    },
+    {
+      "name": "vector_id",
+      "type": "u64",
+      "options": {
+        "indexed": false,
+        "fieldnorms": false,
+        "fast": true,
+        "stored": true
+      }
+    },
+    {
+      "name": "has_vector",
+      "type": "u64",
+      "options": {
+        "indexed": false,
+        "fieldnorms": false,
+        "fast": true,
+        "stored": true
+      }
+    }
+  ],
+  "opstamp": 0
+}
