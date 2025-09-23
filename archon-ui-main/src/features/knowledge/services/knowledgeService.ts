@@ -118,11 +118,14 @@ export const knowledgeService = {
     }
 
     // Use API service with proper FormData handling and timeout
-    return callAPIWithETag<{ success: boolean; progressId: string; message: string; filename: string }>("/api/documents/upload", {
-      method: "POST",
-      body: formData,
-      signal: AbortSignal.timeout(30000), // 30 second timeout for file uploads
-    });
+    return callAPIWithETag<{ success: boolean; progressId: string; message: string; filename: string }>(
+      "/api/documents/upload",
+      {
+        method: "POST",
+        body: formData,
+        signal: AbortSignal.timeout(30000), // 30 second timeout for file uploads
+      },
+    );
   },
 
   /**
