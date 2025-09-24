@@ -14,6 +14,18 @@
   <a href="#troubleshooting">Troubleshooting</a>
 </p>
 
+<p align="center">
+  <!-- Keep these links. Translations will automatically update with the README. -->
+  <a href="https://zdoc.app/de/coleam00/Archon">Deutsch</a> | 
+  <a href="https://zdoc.app/es/coleam00/Archon">Español</a> | 
+  <a href="https://zdoc.app/fr/coleam00/Archon">français</a> | 
+  <a href="https://zdoc.app/ja/coleam00/Archon">日本語</a> | 
+  <a href="https://zdoc.app/ko/coleam00/Archon">한국어</a> | 
+  <a href="https://zdoc.app/pt/coleam00/Archon">Português</a> | 
+  <a href="https://zdoc.app/ru/coleam00/Archon">Русский</a> | 
+  <a href="https://zdoc.app/zh/coleam00/Archon">中文</a>
+</p>
+
 ---
 
 ## 🎯 What is Archon?
