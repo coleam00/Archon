@@ -402,7 +402,10 @@ class OllamaService {
         const healthResponse = await this.checkInstanceHealth([instanceUrl], false, AbortSignal.timeout(5000));
         const responseTime = Date.now() - startTime;
 
-        const instanceStatus = healthResponse.instance_status[instanceUrl];
+        const normalizedUrl = instanceUrl.replace(/\/+$/, "");
+        const instanceStatus =
+          healthResponse.instance_status[normalizedUrl] ??
+          healthResponse.instance_status[instanceUrl];
 
         const result = {
           isHealthy: instanceStatus?.is_healthy || false,

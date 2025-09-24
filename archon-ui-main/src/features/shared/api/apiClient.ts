@@ -73,7 +73,8 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
       headersObj.set("Content-Type", "application/json");
     }
 
-    const headers: Record<string, string> = Object.fromEntries(headersObj.entries());
+    // Preserve Headers instance instead of converting to Record
+    const headers = headersObj;
 
     // Make the request with timeout
     // NOTE: Increased to 20s due to database performance issues with large DELETE operations
@@ -122,6 +123,18 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
         throw new APIServiceError(result.error as string, "API_ERROR", response.status);
       }
       return result as T;
+    }
+
+    // Handle binary responses (PDFs, images, octet-stream)
+    if (
+      contentType.includes("application/octet-stream") ||
+      contentType.includes("application/pdf") ||
+      contentType.startsWith("image/") ||
+      contentType.includes("video/") ||
+      contentType.includes("audio/")
+    ) {
+      const blob = await response.blob();
+      return blob as unknown as T;
     }
 
     // Handle non-JSON or empty body responses

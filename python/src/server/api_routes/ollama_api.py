@@ -31,7 +31,7 @@ router = APIRouter(prefix="/api/ollama", tags=["ollama"])
 
 def _is_private_host(host: str) -> bool:
     """
-    Check if a hostname resolves to private, loopback, link-local, or reserved IP addresses.
+    Check if a hostname resolves to private, loopback, link-local, reserved, or unspecified IP addresses.
 
     Returns True if the host is considered unsafe for server-side requests to prevent SSRF attacks.
     """
@@ -39,7 +39,7 @@ def _is_private_host(host: str) -> bool:
         infos = socket.getaddrinfo(host, None)
         for _, _, _, _, sockaddr in infos:
             ip = ipaddress.ip_address(sockaddr[0])
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
                 return True
     except Exception:
         # If resolution fails, treat as unsafe or log/deny explicitly
@@ -107,7 +107,7 @@ async def discover_models_endpoint(
     instance_urls: list[str] = Query(..., description="Ollama instance URLs"),
     include_capabilities: bool = Query(True, description="Include capability detection"),
     fetch_details: bool = Query(False, description="Fetch comprehensive model details via /api/show"),
-    background_tasks: BackgroundTasks = None
+    background_tasks: BackgroundTasks | None = None
 ) -> ModelDiscoveryResponse:
     """
     Discover models from multiple Ollama instances with capability detection.
@@ -122,14 +122,14 @@ async def discover_models_endpoint(
         valid_urls = []
         for url in instance_urls:
             try:
-                # Basic URL validation
+                # Basic URL validation - require http/https schemes
                 if not url.startswith(('http://', 'https://')):
                     logger.warning(f"Invalid URL format: {url}")
                     continue
 
                 # SSRF protection - check if URL targets private/internal addresses
                 parsed = urlparse(url)
-                if not parsed.scheme or not parsed.hostname or _is_private_host(parsed.hostname):
+                if parsed.scheme not in ('http', 'https') or not parsed.hostname or _is_private_host(parsed.hostname):
                     logger.warning(f"Blocked private/invalid URL: {url}")
                     continue
 
@@ -192,7 +192,7 @@ async def health_check_endpoint(
 
                 # SSRF protection - check if URL targets private/internal addresses
                 parsed = urlparse(url)
-                if not parsed.scheme or not parsed.hostname or _is_private_host(parsed.hostname):
+                if parsed.scheme not in ('http', 'https') or not parsed.hostname or _is_private_host(parsed.hostname):
                     logger.warning(f"Blocked private/invalid URL in health check: {url}")
                     health_results[url] = {
                         "is_healthy": False,
@@ -263,7 +263,7 @@ async def validate_instance_endpoint(request: InstanceValidationRequest) -> Inst
 
         # SSRF protection - check if URL targets private/internal addresses
         parsed = urlparse(instance_url)
-        if not parsed.scheme or not parsed.hostname or _is_private_host(parsed.hostname):
+        if parsed.scheme not in ('http', 'https') or not parsed.hostname or _is_private_host(parsed.hostname):
             logger.warning(f"Blocked private/invalid URL in validate_instance: {instance_url}")
             raise HTTPException(status_code=400, detail="URL blocked for security reasons")
 
@@ -483,7 +483,7 @@ async def discover_and_store_models_endpoint(request: ModelDiscoveryAndStoreRequ
 
                 # SSRF protection - check if URL targets private/internal addresses
                 parsed = urlparse(base_url)
-                if not parsed.scheme or not parsed.hostname or _is_private_host(parsed.hostname):
+                if parsed.scheme not in ('http', 'https') or not parsed.hostname or _is_private_host(parsed.hostname):
                     logger.warning(f"Blocked private/invalid URL in model discovery: {base_url}")
                     continue
 
@@ -625,7 +625,7 @@ async def get_stored_models_endpoint() -> ModelListResponse:
                         limitations=model.get('limitations', []),
                         performance_rating=model.get('performance_rating'),
                         description=model.get('description'),
-                        last_updated=model.get('last_updated', datetime.utcnow().isoformat()),
+                        last_updated=model.get('last_updated', datetime.now(UTC).isoformat()),
                         embedding_dimensions=model.get('embedding_dimensions')
                     )
                     stored_models.append(stored_model)
@@ -655,7 +655,7 @@ async def _warm_model_cache(instance_urls: list[str]) -> None:
             try:
                 # SSRF protection - check if URL targets private/internal addresses
                 parsed = urlparse(url)
-                if not parsed.scheme or not parsed.hostname or _is_private_host(parsed.hostname):
+                if parsed.scheme not in ('http', 'https') or not parsed.hostname or _is_private_host(parsed.hostname):
                     logger.warning(f"Blocked private/invalid URL in cache warming: {url}")
                     continue
 
@@ -1047,7 +1047,7 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
 
                 # SSRF protection - check if URL targets private/internal addresses
                 parsed = urlparse(base_url)
-                if not parsed.scheme or not parsed.hostname or _is_private_host(parsed.hostname):
+                if parsed.scheme not in ('http', 'https') or not parsed.hostname or _is_private_host(parsed.hostname):
                     logger.warning(f"Blocked private/invalid URL in detailed discovery: {base_url}")
                     continue
 
@@ -1301,7 +1301,7 @@ async def test_model_capabilities_endpoint(request: ModelCapabilityTestRequest) 
 
         # SSRF protection - check if URL targets private/internal addresses
         parsed = urlparse(request.instance_url)
-        if not parsed.scheme or not parsed.hostname or _is_private_host(parsed.hostname):
+        if parsed.scheme not in ('http', 'https') or not parsed.hostname or _is_private_host(parsed.hostname):
             logger.warning(f"Blocked private/invalid URL in capability testing: {request.instance_url}")
             raise HTTPException(status_code=400, detail="URL blocked for security reasons")
 

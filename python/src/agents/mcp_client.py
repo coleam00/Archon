@@ -93,11 +93,23 @@ class MCPClient:
             request_id = str(uuid.uuid4())
             request_data = {"jsonrpc": "2.0", "method": tool_name, "params": kwargs, "id": request_id}
 
+            # Add X-Request-ID header for cross-service correlation
+            headers = {"X-Request-ID": request_id}
+
             # Make HTTP request to MCP server (httpx sets Content-Type for json=)
-            response = await self.client.post(f"{self.mcp_url}/rpc", json=request_data)
+            response = await self.client.post(f"{self.mcp_url}/rpc", json=request_data, headers=headers)
+
+            # Treat 3xx redirects as transport errors for JSON-RPC
+            if 300 <= response.status_code < 400:
+                raise MCPTransportError(f"JSON-RPC does not support redirects (got {response.status_code})", status_code=response.status_code)
 
             response.raise_for_status()
-            result = response.json()
+
+            # Handle invalid JSON responses explicitly
+            try:
+                result = response.json()
+            except json.JSONDecodeError as e:
+                raise MCPTransportError(f"Invalid JSON response from MCP server: {str(e)}", status_code=response.status_code) from e
 
             if "error" in result:
                 error = result["error"]
@@ -123,6 +135,9 @@ class MCPClient:
             )
             raise MCPTransportError(f"HTTP error calling MCP tool {tool_name}", status_code=status_code) from e
 
+        except MCPError:
+            # Preserve MCPError subclasses without re-wrapping
+            raise
         except Exception as e:
             logger.exception(f"Unexpected error calling MCP tool {tool_name} | request_id={request_id}")
             raise MCPError(f"Failed to call MCP tool {tool_name}: {str(e)}") from e
@@ -209,9 +224,12 @@ async def shutdown_mcp_client() -> None:
     This should be called during application shutdown to properly
     close HTTP connections and clean up resources.
     """
-    global _mcp_client
+    global _mcp_client, _mcp_client_lock
 
     if _mcp_client is not None:
         await _mcp_client.close()
         _mcp_client = None
-        logger.info("Global MCP client shutdown completed")
+
+    # Reset global lock on shutdown for test safety
+    _mcp_client_lock = None
+    logger.info("Global MCP client shutdown completed")
