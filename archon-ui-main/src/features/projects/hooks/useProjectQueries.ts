@@ -6,8 +6,8 @@ import {
   replaceOptimisticEntity,
 } from "@/features/shared/optimistic";
 import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../shared/queryPatterns";
-import { useSmartPolling } from "../../ui/hooks";
-import { useToast } from "../../ui/hooks/useToast";
+import { useSmartPolling } from "@/features/shared/hooks";
+import { useToast } from "@/features/shared/hooks/useToast";
 import { projectService } from "../services";
 import type { CreateProjectRequest, Project, UpdateProjectRequest } from "../types";
 

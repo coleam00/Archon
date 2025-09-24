@@ -28,7 +28,7 @@ export interface McpSessionInfo {
 }
 
 // we actually support all ides and mcp clients
-export type SupportedIDE = "windsurf" | "cursor" | "claudecode" | "cline" | "kiro" | "augment" | "gemini";
+export type SupportedIDE = "windsurf" | "cursor" | "claudecode" | "cline" | "kiro" | "codex" | "gemini";
 
 export interface IdeConfiguration {
   ide: SupportedIDE;

@@ -3,7 +3,7 @@ import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { cn } from '../../lib/utils';
-import { useToast } from '../../features/ui/hooks/useToast';
+import { useToast } from '../../features/shared/hooks/useToast';
 import { ollamaService } from '../../services/ollamaService';
 import type { HealthIndicatorProps } from './types/OllamaTypes';
 

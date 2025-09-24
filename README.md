@@ -206,14 +206,18 @@ To upgrade Archon to the latest version:
    git pull
    ```
 
-2. **Check for migrations**: Look in the `migration/` folder for any SQL files newer than your last update. Check the file created dates to determine if you need to run them. You can run these in the SQL editor just like you did when you first set up Archon. We are also working on a way to make handling these migrations automatic!
-
-3. **Rebuild and restart**:
+2. **Rebuild and restart containers**:
    ```bash
    docker compose up -d --build
    ```
+   This rebuilds containers with the latest code and restarts all services.
 
-This is the same command used for initial setup - it rebuilds containers with the latest code and restarts services.
+3. **Check for database migrations**:
+   - Open the Archon settings in your browser: [http://localhost:3737/settings](http://localhost:3737/settings)
+   - Navigate to the **Database Migrations** section
+   - If there are pending migrations, the UI will display them with clear instructions
+   - Click on each migration to view and copy the SQL
+   - Run the SQL scripts in your Supabase SQL editor in the order shown
 
 ## What's Included
 

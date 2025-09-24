@@ -75,7 +75,7 @@ class TestAsyncLLMProviderService:
         return {
             "provider": "ollama",
             "api_key": "ollama",
-            "base_url": "http://localhost:11434/v1",
+            "base_url": "http://host.docker.internal:11434/v1",
             "chat_model": "llama2",
             "embedding_model": "nomic-embed-text",
         }
@@ -133,7 +133,7 @@ class TestAsyncLLMProviderService:
                 async with get_llm_client() as client:
                     assert client == mock_client
                     mock_openai.assert_called_once_with(
-                        api_key="ollama", base_url="http://localhost:11434/v1"
+                        api_key="ollama", base_url="http://host.docker.internal:11434/v1"
                     )
 
     @pytest.mark.asyncio
@@ -222,7 +222,7 @@ class TestAsyncLLMProviderService:
         }
         mock_credential_service.get_active_provider.return_value = config_without_key
         mock_credential_service.get_credentials_by_category = AsyncMock(return_value={
-            "LLM_BASE_URL": "http://localhost:11434"
+            "LLM_BASE_URL": "http://host.docker.internal:11434"
         })
 
         with patch(
@@ -240,7 +240,7 @@ class TestAsyncLLMProviderService:
                     # Verify it created an Ollama client with correct params
                     mock_openai.assert_called_once_with(
                         api_key="ollama",
-                        base_url="http://localhost:11434/v1"
+                        base_url="http://host.docker.internal:11434/v1"
                     )
 
     @pytest.mark.asyncio
@@ -487,7 +487,7 @@ class TestAsyncLLMProviderService:
         """Test creating clients for different providers in sequence"""
         configs = [
             {"provider": "openai", "api_key": "openai-key", "base_url": None},
-            {"provider": "ollama", "api_key": "ollama", "base_url": "http://localhost:11434/v1"},
+            {"provider": "ollama", "api_key": "ollama", "base_url": "http://host.docker.internal:11434/v1"},
             {
                 "provider": "google",
                 "api_key": "google-key",

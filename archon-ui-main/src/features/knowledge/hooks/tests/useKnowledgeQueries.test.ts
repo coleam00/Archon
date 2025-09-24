@@ -23,14 +23,14 @@ vi.mock("../../services", () => ({
 }));
 
 // Mock the toast hook
-vi.mock("../../../ui/hooks/useToast", () => ({
+vi.mock("@/features/shared/hooks/useToast", () => ({
   useToast: () => ({
     showToast: vi.fn(),
   }),
 }));
 
 // Mock smart polling
-vi.mock("../../../ui/hooks", () => ({
+vi.mock("@/features/shared/hooks", () => ({
   useSmartPolling: () => ({
     refetchInterval: 30000,
     isPaused: false,

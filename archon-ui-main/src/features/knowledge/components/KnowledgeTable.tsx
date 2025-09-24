@@ -6,7 +6,7 @@
 import { formatDistanceToNowStrict } from "date-fns";
 import { Code, ExternalLink, Eye, FileText, MoreHorizontal, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { useToast } from "../../ui/hooks/useToast";
+import { useToast } from "@/features/shared/hooks/useToast";
 import { Button } from "../../ui/primitives";
 import {
   DropdownMenu,

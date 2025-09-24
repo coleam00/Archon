@@ -10,9 +10,11 @@ import {
   Code,
   FileCode,
   Bug,
+  Info,
+  Database,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useToast } from "../features/ui/hooks/useToast";
+import { useToast } from "../features/shared/hooks/useToast";
 import { useSettings } from "../contexts/SettingsContext";
 import { useStaggeredEntrance } from "../hooks/useStaggeredEntrance";
 import { FeaturesSection } from "../components/settings/FeaturesSection";
@@ -28,6 +30,9 @@ import {
   RagSettings,
   CodeExtractionSettings as CodeExtractionSettingsType,
 } from "../services/credentialsService";
+import { UpdateBanner } from "../features/settings/version/components/UpdateBanner";
+import { VersionStatusCard } from "../features/settings/version/components/VersionStatusCard";
+import { MigrationStatusCard } from "../features/settings/migrations/components/MigrationStatusCard";
 
 export const SettingsPage = () => {
   const [ragSettings, setRagSettings] = useState<RagSettings>({
@@ -106,6 +111,9 @@ export const SettingsPage = () => {
       variants={containerVariants}
       className="w-full"
     >
+      {/* Update Banner */}
+      <UpdateBanner />
+
       {/* Header */}
       <motion.div
         className="flex justify-between items-center mb-8"
@@ -136,6 +144,33 @@ export const SettingsPage = () => {
               <FeaturesSection />
             </CollapsibleSettingsCard>
           </motion.div>
+
+          {/* Version Status */}
+          <motion.div variants={itemVariants}>
+            <CollapsibleSettingsCard
+              title="Version & Updates"
+              icon={Info}
+              accentColor="blue"
+              storageKey="version-status"
+              defaultExpanded={true}
+            >
+              <VersionStatusCard />
+            </CollapsibleSettingsCard>
+          </motion.div>
+
+          {/* Migration Status */}
+          <motion.div variants={itemVariants}>
+            <CollapsibleSettingsCard
+              title="Database Migrations"
+              icon={Database}
+              accentColor="purple"
+              storageKey="migration-status"
+              defaultExpanded={false}
+            >
+              <MigrationStatusCard />
+            </CollapsibleSettingsCard>
+          </motion.div>
+
           {projectsEnabled && (
             <motion.div variants={itemVariants}>
               <CollapsibleSettingsCard

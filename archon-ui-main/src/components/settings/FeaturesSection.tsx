@@ -4,7 +4,7 @@ import { Toggle } from '../ui/Toggle';
 import { Card } from '../ui/Card';
 import { useTheme } from '../../contexts/ThemeContext';
 import { credentialsService } from '../../services/credentialsService';
-import { useToast } from '../../features/ui/hooks/useToast';
+import { useToast } from '../../features/shared/hooks/useToast';
 import { serverHealthService } from '../../services/serverHealthService';
 
 export const FeaturesSection = () => {

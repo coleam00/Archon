@@ -14,7 +14,7 @@ from ...config.logfire_config import get_logger, safe_span
 logger = get_logger(__name__)
 
 # Fixed similarity threshold for vector results
-SIMILARITY_THRESHOLD = 0.15
+SIMILARITY_THRESHOLD = 0.05
 
 
 class BaseSearchStrategy:

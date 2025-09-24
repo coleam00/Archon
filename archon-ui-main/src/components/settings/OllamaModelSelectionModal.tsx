@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom';
 import { X, Search, RotateCcw, Zap, Server, Eye, Settings, Download, Box } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
-import { useToast } from '../../features/ui/hooks/useToast';
+import { useToast } from '../../features/shared/hooks/useToast';
 
 interface ContextInfo {
   current?: number;
