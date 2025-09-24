@@ -8,7 +8,6 @@ Provides comprehensive REST endpoints for interacting with Ollama instances:
 - Embedding routing and dimension analysis
 """
 
-import asyncio
 import ipaddress
 import json
 import socket
@@ -39,7 +38,14 @@ def _is_private_host(host: str) -> bool:
         infos = socket.getaddrinfo(host, None)
         for _, _, _, _, sockaddr in infos:
             ip = ipaddress.ip_address(sockaddr[0])
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+            if (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_reserved
+                or ip.is_multicast
+                or ip.is_unspecified
+            ):
                 return True
     except Exception:
         # If resolution fails, treat as unsafe or log/deny explicitly
@@ -135,7 +141,7 @@ async def discover_models_endpoint(
 
                 valid_urls.append(url.rstrip('/'))
             except Exception as e:
-                logger.warning(f"Error validating URL {url}: {e}")
+                logger.warning(f"Error validating URL {url}: {e}", exc_info=True)
 
         if not valid_urls:
             raise HTTPException(status_code=400, detail="No valid instance URLs provided")
@@ -213,7 +219,7 @@ async def health_check_endpoint(
                 }
 
             except Exception as e:
-                logger.warning(f"Health check failed for {instance_url}: {e}")
+                logger.warning(f"Health check failed for {instance_url}: {e}", exc_info=True)
                 health_results[url] = {
                     "is_healthy": False,
                     "response_time_ms": None,
@@ -280,8 +286,8 @@ async def validate_instance_endpoint(request: InstanceValidationRequest) -> Inst
                     "total_models": len(models),
                     "chat_models": [m.name for m in models if "chat" in m.capabilities],
                     "embedding_models": [m.name for m in models if "embedding" in m.capabilities],
-                    "supported_dimensions": list(set(m.embedding_dimensions for m in models
-                                                   if m.embedding_dimensions))
+                    "supported_dimensions": list({m.embedding_dimensions for m in models
+                                                   if m.embedding_dimensions})
                 }
 
             except Exception as e:
@@ -328,7 +334,7 @@ async def analyze_embedding_route_endpoint(request: EmbeddingRouteRequest) -> Em
         )
 
         # Calculate performance score
-        performance_score = embedding_router._calculate_performance_score(routing_decision.dimensions)
+        performance_score = embedding_router.calculate_performance_score(routing_decision.dimensions)
 
         return EmbeddingRouteResponse(
             target_column=routing_decision.target_column,
@@ -370,13 +376,17 @@ async def get_available_embedding_routes_endpoint(
                     continue
                 valid_urls.append(url.rstrip('/'))
             except Exception as e:
-                logger.warning(f"Error validating URL {url}: {e}")
+                logger.warning(f"Error validating URL {url}: {e}", exc_info=True)
                 continue
         if not valid_urls:
             raise HTTPException(status_code=400, detail="No valid instance URLs provided")
 
         # Get available routes for validated URLs only
         routes = await embedding_router.get_available_embedding_routes(valid_urls)
+
+        # If not sorting by performance, provide a stable alternative ordering
+        if not sort_by_performance:
+            routes.sort(key=lambda r: (r.model_name, r.instance_url))
 
         # Convert to response format
         route_data = []
@@ -448,7 +458,6 @@ async def clear_ollama_cache_endpoint() -> dict[str, str]:
 class ModelDiscoveryAndStoreRequest(BaseModel):
     """Request for discovering and storing models from Ollama instances."""
     instance_urls: list[str] = Field(..., description="List of Ollama instance URLs")
-    force_refresh: bool = Field(False, description="Force refresh even if cached data exists")
 
 
 class StoredModelInfo(BaseModel):
@@ -538,7 +547,7 @@ async def discover_and_store_models_endpoint(request: ModelDiscoveryAndStoreRequ
                 logger.debug(f"Discovered {len(models)} models from {base_url}")
 
             except Exception as e:
-                logger.warning(f"Failed to discover models from {instance_url}: {e}")
+                logger.warning(f"Failed to discover models from {instance_url}: {e}", exc_info=True)
                 continue
 
         # Store models in archon_settings
@@ -651,7 +660,7 @@ async def get_stored_models_endpoint() -> ModelListResponse:
                     )
                     stored_models.append(stored_model)
             except Exception as model_error:
-                logger.warning(f"Failed to parse stored model {model}: {model_error}")
+                logger.warning(f"Failed to parse stored model {model}: {model_error}", exc_info=True)
 
         return ModelListResponse(
             models=stored_models,
@@ -694,7 +703,6 @@ async def _warm_model_cache(instance_urls: list[str]) -> None:
 # Helper functions for model assessment and analysis
 async def _assess_archon_compatibility_with_testing(model, instance_url: str) -> dict[str, Any]:
     """Assess Archon compatibility for a given model using actual capability testing."""
-    model_name = model.name.lower()
     capabilities = getattr(model, 'capabilities', [])
 
     # Test actual model capabilities
@@ -1171,14 +1179,14 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
                             logger.debug(f"Processed model {model_name} with real data")
 
                         except Exception as e:
-                            logger.warning(f"Failed to get details for model {model_name}: {e}")
+                            logger.warning(f"Failed to get details for model {model_name}: {e}", exc_info=True)
                             continue
 
                 instances_checked += 1
                 logger.debug(f"Completed processing {base_url}")
 
             except Exception as e:
-                logger.warning(f"Failed to process instance {instance_url}: {e}")
+                logger.warning(f"Failed to process instance {instance_url}: {e}", exc_info=True)
                 continue
 
         # Store models with real data only
@@ -1194,7 +1202,7 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
         logger.info(f"Storing {len(embedding_models_with_dims)} embedding models with dimensions: {[(m['name'], m.get('embedding_dimensions')) for m in embedding_models_with_dims]}")
 
         # Upsert the stored models
-        result = supabase.table("archon_settings").upsert({
+        supabase.table("archon_settings").upsert({
             "key": "ollama_discovered_models",
             "value": json.dumps(models_data),
             "description": "Real Ollama model data from API endpoints",
