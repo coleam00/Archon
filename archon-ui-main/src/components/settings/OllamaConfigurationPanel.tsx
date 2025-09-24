@@ -6,6 +6,7 @@ import { Badge } from '../ui/Badge';
 import { useToast } from '../../features/shared/hooks/useToast';
 import { cn } from '../../lib/utils';
 import { credentialsService, OllamaInstance } from '../../services/credentialsService';
+import { ollamaService } from '../../services/ollamaService';
 import { OllamaModelDiscoveryModal } from './OllamaModelDiscoveryModal';
 import type { OllamaInstance as OllamaInstanceType } from './types/OllamaTypes';
 
@@ -104,61 +105,23 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
     }
   };
 
-  // Test connection to an Ollama instance with retry logic
+  // Test connection to an Ollama instance using ollamaService with smart retry logic
   const testConnection = async (baseUrl: string, retryCount = 3): Promise<ConnectionTestResult> => {
-    const maxRetries = retryCount;
-    let lastError: Error | null = null;
+    try {
+      const result = await ollamaService.testConnection(baseUrl, retryCount);
 
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        const response = await fetch('/api/providers/validate', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            provider: 'ollama',
-            base_url: baseUrl
-          })
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        
-        const result = {
-          isHealthy: data.health_status?.is_available || false,
-          responseTimeMs: data.health_status?.response_time_ms,
-          modelsAvailable: data.health_status?.models_available,
-          error: data.health_status?.error_message
-        };
-
-        // If successful, return immediately
-        if (result.isHealthy) {
-          return result;
-        }
-
-        // If not healthy but we got a valid response, still return (but might retry)
-        lastError = new Error(result.error || 'Instance not available');
-        
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error('Unknown error');
-      }
-
-      // If this wasn't the last attempt, wait before retrying
-      if (attempt < maxRetries) {
-        const delayMs = Math.pow(2, attempt - 1) * 1000; // Exponential backoff: 1s, 2s, 4s
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-      }
+      return {
+        isHealthy: result.isHealthy,
+        responseTimeMs: result.responseTime,
+        modelsAvailable: undefined, // Not available from the simple health check
+        error: result.error
+      };
+    } catch (error) {
+      return {
+        isHealthy: false,
+        error: error instanceof Error ? error.message : 'Connection test failed'
+      };
     }
-
-    // All retries failed, return error result
-    return {
-      isHealthy: false,
-      error: lastError?.message || 'Connection failed after retries'
-    };
   };
 
   // Handle connection test for a specific instance
