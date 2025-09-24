@@ -52,12 +52,15 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
     const fullUrl = buildFullUrl(cleanEndpoint);
 
     // Detect FormData to avoid setting Content-Type (browser sets multipart/form-data with boundary)
-    const isFormData = options.body instanceof FormData;
+    // Guard against environments where FormData is undefined (Node.js, Jest, iframes)
+    const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
 
     // Build headers - normalize and handle Content-Type properly for FormData
     // NOTE: We do NOT add If-None-Match headers; the browser handles ETag revalidation automatically
     // Normalize headers to support Headers instances, [string, string][] tuples, and plain objects
     const headersObj = new Headers(options.headers as HeadersInit | undefined);
+
+    // Only set Accept header if not already provided by caller (preserves caller-provided Accept headers)
     if (!headersObj.has("Accept")) {
       headersObj.set("Accept", "application/json");
     }
@@ -65,8 +68,8 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
     if (isFormData) {
       // For FormData, remove any Content-Type header to let browser set multipart/form-data with boundary
       headersObj.delete("Content-Type");
-    } else if (!headersObj.has("Content-Type")) {
-      // Only set Content-Type if not already provided
+    } else if (!headersObj.has("Content-Type") && options.body != null) {
+      // Only set Content-Type if not already provided and body is present
       headersObj.set("Content-Type", "application/json");
     }
 
@@ -115,15 +118,15 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
     if (contentType.includes("application/json") || contentType.includes("+json")) {
       // Parse JSON response
       const result = await response.json();
-      if (result && typeof result === "object" && "error" in result && (result as any).error) {
-        throw new APIServiceError((result as any).error as string, "API_ERROR", response.status);
+      if (result && typeof result === "object" && "error" in result && result.error) {
+        throw new APIServiceError(result.error as string, "API_ERROR", response.status);
       }
       return result as T;
     }
 
     // Handle non-JSON or empty body responses
     const text = await response.text().catch(() => "");
-    return (text ? (text as unknown as T) : (undefined as T));
+    return text ? (text as unknown as T) : (undefined as T);
   } catch (error) {
     if (error instanceof APIServiceError) {
       throw error;

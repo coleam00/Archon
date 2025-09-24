@@ -6,6 +6,7 @@ Agents use this client to access all data operations through the MCP protocol
 instead of direct database access or service imports.
 """
 
+import asyncio
 import json
 import logging
 import uuid
@@ -105,7 +106,10 @@ class MCPClient:
                 data = error.get("data")
                 raise MCPToolError(error_msg, code=code, data=data)
 
-            return result.get("result", {})
+            if "result" not in result:
+                raise MCPError(f"Malformed JSON-RPC response: missing 'result' field in response: {result}")
+
+            return result["result"]
 
         except httpx.HTTPError as e:
             # Extract response details for comprehensive logging
@@ -125,7 +129,7 @@ class MCPClient:
 
     # Convenience methods for common MCP tools
 
-    async def perform_rag_query(self, query: str, source: str = None, match_count: int = 5) -> str:
+    async def perform_rag_query(self, query: str, source: str | None = None, match_count: int = 5) -> str:
         """Perform a RAG query through MCP."""
         result = await self.call_tool(
             "perform_rag_query", query=query, source=source, match_count=match_count
@@ -138,7 +142,7 @@ class MCPClient:
         return json.dumps(result) if isinstance(result, dict) else str(result)
 
     async def search_code_examples(
-        self, query: str, source_id: str = None, match_count: int = 5
+        self, query: str, source_id: str | None = None, match_count: int = 5
     ) -> str:
         """Search code examples through MCP."""
         result = await self.call_tool(
@@ -166,21 +170,36 @@ class MCPClient:
 
 # Global MCP client instance (created on first use)
 _mcp_client: MCPClient | None = None
+_mcp_client_lock: asyncio.Lock | None = None
 
 
 async def get_mcp_client() -> MCPClient:
     """
     Get or create the global MCP client instance.
 
+    Thread-safe implementation using double-checked locking pattern.
+
     Returns:
         MCPClient instance
     """
-    global _mcp_client
+    global _mcp_client, _mcp_client_lock
 
-    if _mcp_client is None:
-        _mcp_client = MCPClient()
+    # First check without lock for performance
+    if _mcp_client is not None:
+        return _mcp_client
 
-    return _mcp_client
+    # Initialize lock if needed
+    if _mcp_client_lock is None:
+        _mcp_client_lock = asyncio.Lock()
+
+    # Double-checked locking pattern
+    async with _mcp_client_lock:
+        # Check again in case another coroutine created the client
+        if _mcp_client is None:
+            _mcp_client = MCPClient()
+            logger.info("Created new global MCP client instance")
+
+        return _mcp_client
 
 
 async def shutdown_mcp_client() -> None:

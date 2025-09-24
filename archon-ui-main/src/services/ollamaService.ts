@@ -157,6 +157,7 @@ class OllamaService {
 
   private handleApiError(error: unknown, context: string): Error {
     const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorName = error instanceof Error ? error.name : '';
 
     // Check for network errors
     if (
@@ -171,7 +172,7 @@ class OllamaService {
     }
 
     // Check for timeout errors
-    if (errorMessage.includes("timeout") || errorMessage.includes("AbortError")) {
+    if (errorMessage.includes("timeout") || errorMessage.includes("AbortError") || errorName === "AbortError") {
       return new Error(
         `Timeout error while ${context.toLowerCase()}: The Ollama instance may be slow to respond or unavailable.`
       );
@@ -203,7 +204,7 @@ class OllamaService {
       const response = await fetch(`${this.baseUrl}/api/ollama/models?${params.toString()}`, {
         method: 'GET',
         headers: {
-          'Content-Type': 'application/json',
+          'Accept': 'application/json',
         },
         signal: AbortSignal.timeout(30000), // 30 second timeout
       });
@@ -242,9 +243,9 @@ class OllamaService {
       const response = await fetch(`${this.baseUrl}/api/ollama/instances/health?${params.toString()}`, {
         method: 'GET',
         headers: {
-          'Content-Type': 'application/json',
+          'Accept': 'application/json',
         },
-        signal,
+        signal: signal ?? AbortSignal.timeout(30000),
       });
 
       if (!response.ok) {
@@ -345,7 +346,7 @@ class OllamaService {
       const response = await fetch(`${this.baseUrl}/api/ollama/embedding/routes?${params.toString()}`, {
         method: 'GET',
         headers: {
-          'Content-Type': 'application/json',
+          'Accept': 'application/json',
         },
         signal: AbortSignal.timeout(30000), // 30 second timeout
       });
@@ -405,7 +406,7 @@ class OllamaService {
 
         const result = {
           isHealthy: instanceStatus?.is_healthy || false,
-          responseTime: instanceStatus?.response_time_ms || responseTime,
+          responseTime: instanceStatus?.response_time_ms ?? responseTime,
           error: instanceStatus?.error_message,
         };
 
@@ -452,7 +453,9 @@ class OllamaService {
 
       // Use smart retry logic to determine if we should retry
       if (attempt <= retryCount && retryLogic(attempt - 1, lastError)) {
-        const delayMs = Math.pow(2, attempt - 1) * 1000; // Exponential backoff: 1s, 2s, 4s
+        const baseDelay = Math.pow(2, attempt - 1) * 1000; // Exponential backoff: 1s, 2s, 4s
+        const jitter = Math.random() * 0.5; // Add 0-50% jitter
+        const delayMs = baseDelay * (1 + jitter);
         await new Promise(resolve => setTimeout(resolve, delayMs));
       } else {
         break;

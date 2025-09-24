@@ -8,10 +8,11 @@ Provides comprehensive REST endpoints for interacting with Ollama instances:
 - Embedding routing and dimension analysis
 """
 
+import asyncio
+import ipaddress
 import json
 import socket
-import ipaddress
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -116,7 +117,7 @@ async def discover_models_endpoint(
     """
     try:
         logger.info(f"Starting model discovery for {len(instance_urls)} instances with fetch_details={fetch_details}")
-        
+
         # Validate instance URLs and check for SSRF risks
         valid_urls = []
         for url in instance_urls:
@@ -141,7 +142,7 @@ async def discover_models_endpoint(
 
         # Perform model discovery with optional detailed fetching
         discovery_result = await model_discovery_service.discover_models_from_multiple_instances(
-            valid_urls, 
+            valid_urls,
             fetch_details=fetch_details
         )
 
@@ -149,7 +150,8 @@ async def discover_models_endpoint(
 
         # If background tasks available, schedule cache warming
         if background_tasks:
-            background_tasks.add_task(_warm_model_cache, valid_urls)
+            # Use asyncio.create_task for async function execution
+            asyncio.create_task(_warm_model_cache(valid_urls))
 
         return ModelDiscoveryResponse(
             total_models=discovery_result["total_models"],
@@ -192,12 +194,12 @@ async def health_check_endpoint(
                 parsed = urlparse(url)
                 if not parsed.scheme or not parsed.hostname or _is_private_host(parsed.hostname):
                     logger.warning(f"Blocked private/invalid URL in health check: {url}")
-                    health_results[instance_url] = {
+                    health_results[url] = {
                         "is_healthy": False,
                         "error_message": "URL blocked for security reasons",
                         "response_time_ms": None,
                         "models_available": 0,
-                        "last_checked": datetime.utcnow().isoformat()
+                        "last_checked": datetime.now(UTC).isoformat()
                     }
                     continue
                 health_status = await model_discovery_service.check_instance_health(url)
@@ -212,7 +214,7 @@ async def health_check_endpoint(
 
             except Exception as e:
                 logger.warning(f"Health check failed for {instance_url}: {e}")
-                health_results[instance_url] = {
+                health_results[url] = {
                     "is_healthy": False,
                     "response_time_ms": None,
                     "models_available": None,
@@ -237,7 +239,7 @@ async def health_check_endpoint(
                 "average_response_time_ms": avg_response_time
             },
             "instance_status": health_results,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(UTC).isoformat()
         }
 
     except Exception as e:
@@ -258,6 +260,12 @@ async def validate_instance_endpoint(request: InstanceValidationRequest) -> Inst
 
         # Clean up URL
         instance_url = request.instance_url.rstrip('/')
+
+        # SSRF protection - check if URL targets private/internal addresses
+        parsed = urlparse(instance_url)
+        if not parsed.scheme or not parsed.hostname or _is_private_host(parsed.hostname):
+            logger.warning(f"Blocked private/invalid URL in validate_instance: {instance_url}")
+            raise HTTPException(status_code=400, detail="URL blocked for security reasons")
 
         # Perform basic validation using the provider service
         validation_result = await validate_provider_instance("ollama", instance_url)
@@ -502,7 +510,7 @@ async def discover_and_store_models_endpoint(request: ModelDiscoveryAndStoreRequ
                         limitations=compatibility_info['limitations'],
                         performance_rating=_assess_performance_rating(model),
                         description=_generate_model_description(model),
-                        last_updated=datetime.now().isoformat()
+                        last_updated=datetime.now(UTC).isoformat()
                     )
                     stored_models.append(stored_model)
 
@@ -515,7 +523,7 @@ async def discover_and_store_models_endpoint(request: ModelDiscoveryAndStoreRequ
         # Store models in archon_settings
         models_data = {
             "models": [model.dict() for model in stored_models],
-            "last_discovery": datetime.now().isoformat(),
+            "last_discovery": datetime.now(UTC).isoformat(),
             "instances_checked": instances_checked,
             "total_count": len(stored_models)
         }
@@ -526,7 +534,7 @@ async def discover_and_store_models_endpoint(request: ModelDiscoveryAndStoreRequ
             "value": json.dumps(models_data),
             "category": "ollama",
             "description": "Discovered Ollama models with compatibility information",
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now(UTC).isoformat()
         }).execute()
 
         logger.info(f"Stored {len(stored_models)} models from {instances_checked} instances")
@@ -584,8 +592,6 @@ async def get_stored_models_endpoint() -> ModelListResponse:
             logger.error(f"Unexpected type for models_setting: {type(models_setting).__name__}", exc_info=True)
             raise HTTPException(status_code=500, detail="Invalid stored models format")
 
-        from datetime import datetime
-        
         # Handle both old format (direct list) and new format (object with models key)
         if isinstance(models_data, list):
             # Old format - direct list of models
@@ -599,7 +605,7 @@ async def get_stored_models_endpoint() -> ModelListResponse:
             total_count = models_data.get("total_count", len(models_list))
             instances_checked = models_data.get("instances_checked", 0)
             last_discovery = models_data.get("last_discovery")
-        
+
         # Convert to StoredModelInfo objects, handling missing fields
         stored_models = []
         for model in models_list:
@@ -669,27 +675,27 @@ async def _assess_archon_compatibility_with_testing(model, instance_url: str) ->
     """Assess Archon compatibility for a given model using actual capability testing."""
     model_name = model.name.lower()
     capabilities = getattr(model, 'capabilities', [])
-    
+
     # Test actual model capabilities
     function_calling_supported = await _test_function_calling_capability(model.name, instance_url)
     structured_output_supported = await _test_structured_output_capability(model.name, instance_url)
-    
+
     # Determine compatibility level based on actual test results
     compatibility_level = 'limited'
     features = ['Local Processing']  # All Ollama models support local processing
     limitations = []
-    
+
     # Check for chat capability
     if 'chat' in capabilities:
         features.append('Text Generation')
         features.append('MCP Integration')  # All chat models can integrate with MCP
         features.append('Streaming')  # All Ollama models support streaming
-        
+
         # Add advanced features based on actual testing
         if function_calling_supported:
             features.append('Function Calls')
             compatibility_level = 'full'  # Function calling indicates full support
-        
+
         if structured_output_supported:
             features.append('Structured Output')
             if compatibility_level != 'full':
@@ -697,18 +703,18 @@ async def _assess_archon_compatibility_with_testing(model, instance_url: str) ->
         else:
             if compatibility_level != 'full':  # Only add limitation if not already full support
                 limitations.append('Limited structured output support')
-    
+
     # Add embedding capability
     if 'embedding' in capabilities:
         features.append('High-quality embeddings')
         if compatibility_level == 'limited':
             compatibility_level = 'full'  # Embedding models are considered full support for their purpose
-    
+
     # If no advanced features detected, remain limited
     if not function_calling_supported and not structured_output_supported and 'embedding' not in capabilities:
         compatibility_level = 'limited'
         limitations.append('Compatibility not fully tested')
-    
+
     return {
         'level': compatibility_level,
         'features': features,
@@ -919,12 +925,12 @@ async def _test_function_calling_capability(model_name: str, instance_url: str) 
     try:
         # Import here to avoid circular imports
         from ..services.llm_provider_service import get_llm_client
-        
+
         # Use OpenAI-compatible client for function calling test
         async with get_llm_client(provider="ollama") as client:
             # Set base_url for this specific instance
             client.base_url = f"{instance_url.rstrip('/')}/v1"
-            
+
             # Define a simple test function
             test_function = {
                 "name": "get_weather",
@@ -940,7 +946,7 @@ async def _test_function_calling_capability(model_name: str, instance_url: str) 
                     "required": ["location"]
                 }
             }
-            
+
             # Try to make a function calling request
             response = await client.chat.completions.create(
                 model=model_name,
@@ -949,16 +955,16 @@ async def _test_function_calling_capability(model_name: str, instance_url: str) 
                 max_tokens=50,
                 timeout=10
             )
-            
+
             # Check if the model attempted to use the function
             if response.choices and len(response.choices) > 0:
                 choice = response.choices[0]
                 if hasattr(choice.message, 'tool_calls') and choice.message.tool_calls:
                     logger.info(f"Model {model_name} supports function calling")
                     return True
-            
+
         return False
-        
+
     except Exception as e:
         logger.debug(f"Function calling test failed for {model_name}: {e}")
         return False
@@ -978,24 +984,24 @@ async def _test_structured_output_capability(model_name: str, instance_url: str)
     try:
         # Import here to avoid circular imports
         from ..services.llm_provider_service import get_llm_client
-        
+
         # Use OpenAI-compatible client for structured output test
         async with get_llm_client(provider="ollama") as client:
             # Set base_url for this specific instance
             client.base_url = f"{instance_url.rstrip('/')}/v1"
-            
+
             # Test structured output with JSON format
             response = await client.chat.completions.create(
                 model=model_name,
                 messages=[{
-                    "role": "user", 
+                    "role": "user",
                     "content": "Return a JSON object with the structure: {\"city\": \"Paris\", \"country\": \"France\", \"population\": 2140000}. Only return the JSON, no other text."
                 }],
                 max_tokens=100,
                 timeout=10,
                 temperature=0.1  # Low temperature for more consistent output
             )
-            
+
             if response.choices and len(response.choices) > 0:
                 content = response.choices[0].message.content
                 if content:
@@ -1008,13 +1014,11 @@ async def _test_structured_output_capability(model_name: str, instance_url: str)
                             logger.info(f"Model {model_name} supports structured output")
                             return True
                     except json.JSONDecodeError:
-                        # Try to find JSON-like patterns in the response
-                        if '{' in content and '}' in content and '"' in content:
-                            logger.info(f"Model {model_name} has partial structured output support")
-                            return True
-            
+                        # Only accept valid JSON - no partial support heuristics
+                        pass
+
         return False
-        
+
     except Exception as e:
         logger.debug(f"Structured output test failed for {model_name}: {e}")
         return False
@@ -1023,13 +1027,11 @@ async def _test_structured_output_capability(model_name: str, instance_url: str)
 @router.post("/models/discover-with-details", response_model=ModelDiscoveryResponse)
 async def discover_models_with_real_details(request: ModelDiscoveryAndStoreRequest) -> ModelDiscoveryResponse:
     """
-    Discover models from Ollama instances with complete real details from both /api/tags and /api/show.
+    Discover models from Ollama instances using /api/tags endpoint for fast discovery.
     Only stores actual data from Ollama API endpoints - no fabricated information.
     """
     try:
         logger.info(f"Starting detailed model discovery for {len(request.instance_urls)} instances")
-
-        from datetime import datetime
 
         import httpx
 
@@ -1101,16 +1103,7 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
 
                             # Set default embedding dimensions based on common model patterns
                             embedding_dimensions = None
-                            if model_type == 'embedding':
-                                # Use common defaults based on model name
-                                if "nomic-embed" in model_name.lower():
-                                    embedding_dimensions = 768
-                                elif "bge" in model_name.lower():
-                                    embedding_dimensions = 768
-                                elif "e5" in model_name.lower():
-                                    embedding_dimensions = 1024
-                                else:
-                                    embedding_dimensions = 768  # Common default
+                            # Don't fabricate embedding dimensions - leave as None for unknown values
 
                             # Extract real parameter info
                             parameters = details.get("parameter_size")
@@ -1124,22 +1117,12 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
                                 param_parts.append(quantization)
                             param_string = " ".join(param_parts) if param_parts else None
 
-                            # Create model with only real data
-                            # Skip capability testing for fast discovery - assume basic capabilities
-                            if model_type == 'chat':
-                                # Skip testing, assume basic chat capabilities for fast discovery
-                                features = ['Local Processing', 'Text Generation', 'Chat Support']
-                                limitations = []
-                                compatibility_level = 'full'  # Assume full for now
-                                
-                                compatibility = {
-                                    'level': compatibility_level,
-                                    'features': features,
-                                    'limitations': limitations
-                                }
-                            else:
-                                # Embedding models are all considered full compatibility for embedding tasks
-                                compatibility = {'level': 'full', 'features': ['High-quality embeddings', 'Local processing'], 'limitations': []}
+                            # Create model with only real data - don't fabricate compatibility
+                            compatibility = {
+                                'level': 'unknown',
+                                'features': [],
+                                'limitations': ['Requires capability testing for accurate assessment']
+                            }
 
                             stored_model = StoredModelInfo(
                                 name=model_name,
@@ -1154,7 +1137,7 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
                                 limitations=compatibility['limitations'],
                                 performance_rating=None,
                                 description=None,
-                                last_updated=datetime.now().isoformat(),
+                                last_updated=datetime.now(UTC).isoformat(),
                                 embedding_dimensions=embedding_dimensions
                             )
 
@@ -1180,21 +1163,22 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
         # Store models with real data only
         models_data = {
             "models": stored_models,  # Already converted to dicts above
-            "last_discovery": datetime.now().isoformat(),
+            "last_discovery": datetime.now(UTC).isoformat(),
             "instances_checked": instances_checked,
             "total_count": len(stored_models)
         }
-        
+
         # Debug log to check what's in stored_models
         embedding_models_with_dims = [m for m in stored_models if m.get('model_type') == 'embedding' and m.get('embedding_dimensions')]
         logger.info(f"Storing {len(embedding_models_with_dims)} embedding models with dimensions: {[(m['name'], m.get('embedding_dimensions')) for m in embedding_models_with_dims]}")
 
-        # Update the stored models
-        result = supabase.table("archon_settings").update({
+        # Upsert the stored models
+        result = supabase.table("archon_settings").upsert({
+            "key": "ollama_discovered_models",
             "value": json.dumps(models_data),
             "description": "Real Ollama model data from API endpoints",
-            "updated_at": datetime.now().isoformat()
-        }).eq("key", "ollama_discovered_models").execute()
+            "updated_at": datetime.now(UTC).isoformat()
+        }).execute()
 
         logger.info(f"Stored {len(stored_models)} models with real data from {instances_checked} instances")
 
@@ -1211,10 +1195,10 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
         embedding_models = []
         host_status = {}
         unique_model_names = set()
-        
+
         for model in stored_models:
             unique_model_names.add(model['name'])
-            
+
             # Build host status
             host = model['host'].replace('/v1', '').rstrip('/')
             if host not in host_status:
@@ -1224,7 +1208,7 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
                     "instance_url": model['host']
                 }
             host_status[host]["models_count"] += 1
-            
+
             # Categorize models
             if model['model_type'] == 'embedding':
                 embedding_models.append({
@@ -1239,7 +1223,7 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
                     "instance_url": model['host'],
                     "size": model.get('size_mb', 0) * 1024 * 1024 if model.get('size_mb') else 0
                 })
-        
+
         return ModelDiscoveryResponse(
             total_models=len(stored_models),
             chat_models=chat_models,
@@ -1311,13 +1295,19 @@ async def test_model_capabilities_endpoint(request: ModelCapabilityTestRequest) 
     """
     import time
     start_time = time.time()
-    
+
     try:
         logger.info(f"Testing capabilities for model {request.model_name} on {request.instance_url}")
-        
+
+        # SSRF protection - check if URL targets private/internal addresses
+        parsed = urlparse(request.instance_url)
+        if not parsed.scheme or not parsed.hostname or _is_private_host(parsed.hostname):
+            logger.warning(f"Blocked private/invalid URL in capability testing: {request.instance_url}")
+            raise HTTPException(status_code=400, detail="URL blocked for security reasons")
+
         test_results = {}
         errors = []
-        
+
         # Test function calling if requested
         if request.test_function_calling:
             try:
@@ -1333,7 +1323,7 @@ async def test_model_capabilities_endpoint(request: ModelCapabilityTestRequest) 
                 error_msg = f"Function calling test failed: {str(e)}"
                 errors.append(error_msg)
                 test_results["function_calling"] = {"supported": False, "error": error_msg}
-        
+
         # Test structured output if requested
         if request.test_structured_output:
             try:
@@ -1349,34 +1339,34 @@ async def test_model_capabilities_endpoint(request: ModelCapabilityTestRequest) 
                 error_msg = f"Structured output test failed: {str(e)}"
                 errors.append(error_msg)
                 test_results["structured_output"] = {"supported": False, "error": error_msg}
-        
+
         # Assess compatibility based on test results
         compatibility_level = 'limited'
         features = ['Local Processing', 'Text Generation', 'MCP Integration', 'Streaming']
         limitations = []
-        
+
         # Determine compatibility level based on test results
         function_calling_works = test_results.get("function_calling", {}).get("supported", False)
         structured_output_works = test_results.get("structured_output", {}).get("supported", False)
-        
+
         if function_calling_works:
             features.append('Function Calls')
             compatibility_level = 'full'
-        
+
         if structured_output_works:
             features.append('Structured Output')
             if compatibility_level == 'limited':
                 compatibility_level = 'partial'
-        
+
         # Add limitations based on what doesn't work
         if not function_calling_works:
             limitations.append('No function calling support detected')
         if not structured_output_works:
             limitations.append('Limited structured output support')
-        
+
         if compatibility_level == 'limited':
             limitations.append('Basic text generation only')
-        
+
         compatibility_assessment = {
             'level': compatibility_level,
             'features': features,
@@ -1384,11 +1374,11 @@ async def test_model_capabilities_endpoint(request: ModelCapabilityTestRequest) 
             'testing_method': 'Real-time API testing',
             'confidence': 'High' if not errors else 'Medium'
         }
-        
+
         duration = time.time() - start_time
-        
+
         logger.info(f"Capability testing complete for {request.model_name}: {compatibility_level} support detected in {duration:.2f}s")
-        
+
         return ModelCapabilityTestResponse(
             model_name=request.model_name,
             instance_url=request.instance_url,
@@ -1397,7 +1387,7 @@ async def test_model_capabilities_endpoint(request: ModelCapabilityTestRequest) 
             test_duration_seconds=duration,
             errors=errors
         )
-        
+
     except Exception as e:
         duration = time.time() - start_time
         logger.error(f"Error testing model capabilities: {e}", exc_info=True)
