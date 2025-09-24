@@ -85,7 +85,8 @@ class MCPClient:
 
             if "error" in result:
                 error = result["error"]
-                raise Exception(f"MCP tool error: {error.get('message', 'Unknown error')}")
+                error_msg = error.get("error") or error.get("message", "Unknown error")
+                raise Exception(f"MCP tool error: {error_msg}")
 
             return result.get("result", {})
 

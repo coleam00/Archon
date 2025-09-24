@@ -523,7 +523,7 @@ async def get_stored_models_endpoint() -> ModelListResponse:
                 cache_status="empty"
             )
 
-        models_data = json.loads(models_setting) if isinstance(models_setting, str) else models_setting
+        models_data = json.loads(models_setting)
         from datetime import datetime
         
         # Handle both old format (direct list) and new format (object with models key)
