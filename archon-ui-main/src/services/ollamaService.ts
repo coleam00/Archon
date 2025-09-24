@@ -420,13 +420,17 @@ class OllamaService {
 
         // For health check failures, we can add a statusCode if we know it's a client error
         if (result.error?.includes('404') || result.error?.includes('not found')) {
-          (lastError as unknown as { statusCode: number }).statusCode = 404;
+          (lastError as unknown as { statusCode: number; status: number }).statusCode = 404;
+          (lastError as unknown as { statusCode: number; status: number }).status = 404;
         } else if (result.error?.includes('401') || result.error?.includes('unauthorized')) {
-          (lastError as unknown as { statusCode: number }).statusCode = 401;
+          (lastError as unknown as { statusCode: number; status: number }).statusCode = 401;
+          (lastError as unknown as { statusCode: number; status: number }).status = 401;
         } else if (result.error?.includes('403') || result.error?.includes('forbidden')) {
-          (lastError as unknown as { statusCode: number }).statusCode = 403;
+          (lastError as unknown as { statusCode: number; status: number }).statusCode = 403;
+          (lastError as unknown as { statusCode: number; status: number }).status = 403;
         } else if (result.error?.includes('500') || result.error?.includes('internal server')) {
-          (lastError as unknown as { statusCode: number }).statusCode = 500;
+          (lastError as unknown as { statusCode: number; status: number }).statusCode = 500;
+          (lastError as unknown as { statusCode: number; status: number }).status = 500;
         }
 
       } catch (error) {
@@ -434,11 +438,14 @@ class OllamaService {
 
         // Add status code annotation for HTTP errors that the smart retry logic can use
         if (error && typeof error === 'object' && 'status' in error) {
-          (lastError as unknown as { statusCode: number }).statusCode = (error as { status: number }).status;
+          (lastError as unknown as { statusCode: number; status: number }).statusCode = (error as { status: number }).status;
+          (lastError as unknown as { statusCode: number; status: number }).status = (error as { status: number }).status;
         } else if (lastError.message.includes('HTTP ')) {
           const statusMatch = lastError.message.match(/HTTP (\d+)/);
           if (statusMatch) {
-            (lastError as unknown as { statusCode: number }).statusCode = parseInt(statusMatch[1], 10);
+            const statusCode = parseInt(statusMatch[1], 10);
+            (lastError as unknown as { statusCode: number; status: number }).statusCode = statusCode;
+            (lastError as unknown as { statusCode: number; status: number }).status = statusCode;
           }
         }
       }

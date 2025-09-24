@@ -58,7 +58,9 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
     // NOTE: We do NOT add If-None-Match headers; the browser handles ETag revalidation automatically
     // Normalize headers to support Headers instances, [string, string][] tuples, and plain objects
     const headersObj = new Headers(options.headers as HeadersInit | undefined);
-    headersObj.set("Accept", "application/json");
+    if (!headersObj.has("Accept")) {
+      headersObj.set("Accept", "application/json");
+    }
 
     if (isFormData) {
       // For FormData, remove any Content-Type header to let browser set multipart/form-data with boundary
@@ -110,25 +112,18 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
 
     // Check content type before parsing as JSON
     const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-    if (!contentType.includes("application/json") && !contentType.includes("+json")) {
-      // Handle non-JSON responses (e.g., plain text, HTML error pages)
-      const textContent = await response.text();
-      throw new APIServiceError(
-        `Unexpected response type: ${contentType}. Response: ${textContent.slice(0, 200)}...`,
-        "API_ERROR",
-        response.status,
-      );
+    if (contentType.includes("application/json") || contentType.includes("+json")) {
+      // Parse JSON response
+      const result = await response.json();
+      if (result && typeof result === "object" && "error" in result && (result as any).error) {
+        throw new APIServiceError((result as any).error as string, "API_ERROR", response.status);
+      }
+      return result as T;
     }
 
-    // Parse response data
-    const result = await response.json();
-
-    // Check for API errors
-    if (result.error) {
-      throw new APIServiceError(result.error, "API_ERROR", response.status);
-    }
-
-    return result as T;
+    // Handle non-JSON or empty body responses
+    const text = await response.text().catch(() => "");
+    return (text ? (text as unknown as T) : (undefined as T));
   } catch (error) {
     if (error instanceof APIServiceError) {
       throw error;

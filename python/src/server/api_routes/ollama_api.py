@@ -9,8 +9,11 @@ Provides comprehensive REST endpoints for interacting with Ollama instances:
 """
 
 import json
+import socket
+import ipaddress
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -23,6 +26,24 @@ from ..services.ollama.model_discovery_service import model_discovery_service
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/ollama", tags=["ollama"])
+
+
+def _is_private_host(host: str) -> bool:
+    """
+    Check if a hostname resolves to private, loopback, link-local, or reserved IP addresses.
+
+    Returns True if the host is considered unsafe for server-side requests to prevent SSRF attacks.
+    """
+    try:
+        infos = socket.getaddrinfo(host, None)
+        for _, _, _, _, sockaddr in infos:
+            ip = ipaddress.ip_address(sockaddr[0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+                return True
+    except Exception:
+        # If resolution fails, treat as unsafe or log/deny explicitly
+        return True
+    return False
 
 
 # Pydantic models for API requests/responses
@@ -96,7 +117,7 @@ async def discover_models_endpoint(
     try:
         logger.info(f"Starting model discovery for {len(instance_urls)} instances with fetch_details={fetch_details}")
         
-        # Validate instance URLs
+        # Validate instance URLs and check for SSRF risks
         valid_urls = []
         for url in instance_urls:
             try:
@@ -104,6 +125,13 @@ async def discover_models_endpoint(
                 if not url.startswith(('http://', 'https://')):
                     logger.warning(f"Invalid URL format: {url}")
                     continue
+
+                # SSRF protection - check if URL targets private/internal addresses
+                parsed = urlparse(url)
+                if not parsed.scheme or not parsed.hostname or _is_private_host(parsed.hostname):
+                    logger.warning(f"Blocked private/invalid URL: {url}")
+                    continue
+
                 valid_urls.append(url.rstrip('/'))
             except Exception as e:
                 logger.warning(f"Error validating URL {url}: {e}")
@@ -135,7 +163,7 @@ async def discover_models_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in model discovery: {e}")
+        logger.error(f"Error in model discovery: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Model discovery failed: {str(e)}")
 
 
@@ -155,10 +183,23 @@ async def health_check_endpoint(
 
         health_results = {}
 
-        # Check health for each instance
+        # Check health for each instance (with SSRF protection)
         for instance_url in instance_urls:
             try:
                 url = instance_url.rstrip('/')
+
+                # SSRF protection - check if URL targets private/internal addresses
+                parsed = urlparse(url)
+                if not parsed.scheme or not parsed.hostname or _is_private_host(parsed.hostname):
+                    logger.warning(f"Blocked private/invalid URL in health check: {url}")
+                    health_results[instance_url] = {
+                        "is_healthy": False,
+                        "error_message": "URL blocked for security reasons",
+                        "response_time_ms": None,
+                        "models_available": 0,
+                        "last_checked": datetime.utcnow().isoformat()
+                    }
+                    continue
                 health_status = await model_discovery_service.check_instance_health(url)
 
                 health_results[url] = {
@@ -196,11 +237,11 @@ async def health_check_endpoint(
                 "average_response_time_ms": avg_response_time
             },
             "instance_status": health_results,
-            "timestamp": model_discovery_service.check_instance_health.__module__  # Use current timestamp
+            "timestamp": datetime.utcnow().isoformat()
         }
 
     except Exception as e:
-        logger.error(f"Error in health check: {e}")
+        logger.error(f"Error in health check: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Health check failed: {str(e)}")
 
 
@@ -250,7 +291,7 @@ async def validate_instance_endpoint(request: InstanceValidationRequest) -> Inst
         )
 
     except Exception as e:
-        logger.error(f"Error validating instance {request.instance_url}: {e}")
+        logger.error(f"Error validating instance {request.instance_url}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Instance validation failed: {str(e)}")
 
 
@@ -287,7 +328,7 @@ async def analyze_embedding_route_endpoint(request: EmbeddingRouteRequest) -> Em
         )
 
     except Exception as e:
-        logger.error(f"Error analyzing embedding route: {e}")
+        logger.error(f"Error analyzing embedding route: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Embedding route analysis failed: {str(e)}")
 
 
@@ -343,7 +384,7 @@ async def get_available_embedding_routes_endpoint(
         }
 
     except Exception as e:
-        logger.error(f"Error getting embedding routes: {e}")
+        logger.error(f"Error getting embedding routes: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get embedding routes: {str(e)}")
 
 
@@ -371,7 +412,7 @@ async def clear_ollama_cache_endpoint() -> dict[str, str]:
         return {"message": "All Ollama caches cleared successfully"}
 
     except Exception as e:
-        logger.error(f"Error clearing caches: {e}")
+        logger.error(f"Error clearing caches: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to clear caches: {str(e)}")
 
 
@@ -431,6 +472,13 @@ async def discover_and_store_models_endpoint(request: ModelDiscoveryAndStoreRequ
         for instance_url in request.instance_urls:
             try:
                 base_url = instance_url.replace('/v1', '').rstrip('/')
+
+                # SSRF protection - check if URL targets private/internal addresses
+                parsed = urlparse(base_url)
+                if not parsed.scheme or not parsed.hostname or _is_private_host(parsed.hostname):
+                    logger.warning(f"Blocked private/invalid URL in model discovery: {base_url}")
+                    continue
+
                 logger.debug(f"Discovering models from {base_url}")
 
                 # Get detailed model information
@@ -492,7 +540,7 @@ async def discover_and_store_models_endpoint(request: ModelDiscoveryAndStoreRequ
         )
 
     except Exception as e:
-        logger.error(f"Error in model discovery and storage: {e}")
+        logger.error(f"Error in model discovery and storage: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Model discovery failed: {str(e)}")
 
 
@@ -523,7 +571,19 @@ async def get_stored_models_endpoint() -> ModelListResponse:
                 cache_status="empty"
             )
 
-        models_data = json.loads(models_setting)
+        # Handle both JSON string and native dict from DB driver
+        if isinstance(models_setting, str):
+            try:
+                models_data = json.loads(models_setting)
+            except json.JSONDecodeError:
+                logger.error("Corrupted 'ollama_discovered_models' JSON in archon_settings", exc_info=True)
+                raise HTTPException(status_code=500, detail="Stored models are corrupted")
+        elif isinstance(models_setting, dict):
+            models_data = models_setting
+        else:
+            logger.error(f"Unexpected type for models_setting: {type(models_setting).__name__}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Invalid stored models format")
+
         from datetime import datetime
         
         # Handle both old format (direct list) and new format (object with models key)
@@ -575,7 +635,7 @@ async def get_stored_models_endpoint() -> ModelListResponse:
         )
 
     except Exception as e:
-        logger.error(f"Error retrieving stored models: {e}")
+        logger.error(f"Error retrieving stored models: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to retrieve models: {str(e)}")
 
 
@@ -587,6 +647,12 @@ async def _warm_model_cache(instance_urls: list[str]) -> None:
 
         for url in instance_urls:
             try:
+                # SSRF protection - check if URL targets private/internal addresses
+                parsed = urlparse(url)
+                if not parsed.scheme or not parsed.hostname or _is_private_host(parsed.hostname):
+                    logger.warning(f"Blocked private/invalid URL in cache warming: {url}")
+                    continue
+
                 await model_discovery_service.discover_models(url)
                 logger.debug(f"Cache warmed for {url}")
             except Exception as e:
@@ -595,7 +661,7 @@ async def _warm_model_cache(instance_urls: list[str]) -> None:
         logger.info("Model cache warming completed")
 
     except Exception as e:
-        logger.error(f"Error warming model cache: {e}")
+        logger.error(f"Error warming model cache: {e}", exc_info=True)
 
 
 # Helper functions for model assessment and analysis
@@ -976,6 +1042,13 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
         for instance_url in request.instance_urls:
             try:
                 base_url = instance_url.replace('/v1', '').rstrip('/')
+
+                # SSRF protection - check if URL targets private/internal addresses
+                parsed = urlparse(base_url)
+                if not parsed.scheme or not parsed.hostname or _is_private_host(parsed.hostname):
+                    logger.warning(f"Blocked private/invalid URL in detailed discovery: {base_url}")
+                    continue
+
                 logger.debug(f"Fetching real model data from {base_url}")
 
                 async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
@@ -1177,7 +1250,7 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
         )
 
     except Exception as e:
-        logger.error(f"Error in detailed model discovery: {e}")
+        logger.error(f"Error in detailed model discovery: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Model discovery failed: {str(e)}")
 
 
@@ -1327,5 +1400,5 @@ async def test_model_capabilities_endpoint(request: ModelCapabilityTestRequest) 
         
     except Exception as e:
         duration = time.time() - start_time
-        logger.error(f"Error testing model capabilities: {e}")
+        logger.error(f"Error testing model capabilities: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Capability testing failed: {str(e)}")
