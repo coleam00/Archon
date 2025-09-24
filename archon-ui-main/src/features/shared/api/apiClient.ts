@@ -108,6 +108,18 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
       return undefined as T;
     }
 
+    // Check content type before parsing as JSON
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    if (!contentType.includes("application/json") && !contentType.includes("+json")) {
+      // Handle non-JSON responses (e.g., plain text, HTML error pages)
+      const textContent = await response.text();
+      throw new APIServiceError(
+        `Unexpected response type: ${contentType}. Response: ${textContent.slice(0, 200)}...`,
+        "API_ERROR",
+        response.status,
+      );
+    }
+
     // Parse response data
     const result = await response.json();
 

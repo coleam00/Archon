@@ -6,7 +6,7 @@
  */
 
 import { getApiUrl } from "../config/api";
-import { createRetryLogic } from "../features/shared/queryPatterns";
+import { createRetryLogic } from "../features/shared/config/queryPatterns";
 
 // Type definitions for Ollama API responses
 export interface OllamaModel {
@@ -40,7 +40,7 @@ export interface ModelDiscoveryResponse {
     name: string;
     instance_url: string;
     size: number;
-    parameters?: any;
+    parameters?: unknown;
     // Real API data from /api/show
     context_window?: number;
     architecture?: string;
@@ -55,7 +55,7 @@ export interface ModelDiscoveryResponse {
     instance_url: string;
     dimensions?: number;
     size: number;
-    parameters?: any;
+    parameters?: unknown;
     // Real API data from /api/show
     architecture?: string;
     format?: string;
@@ -155,7 +155,7 @@ export interface EmbeddingRouteOptions {
 class OllamaService {
   private baseUrl = getApiUrl();
 
-  private handleApiError(error: any, context: string): Error {
+  private handleApiError(error: unknown, context: string): Error {
     const errorMessage = error instanceof Error ? error.message : String(error);
 
     // Check for network errors
@@ -205,6 +205,7 @@ class OllamaService {
         headers: {
           'Content-Type': 'application/json',
         },
+        signal: AbortSignal.timeout(30000), // 30 second timeout
       });
 
       if (!response.ok) {
@@ -275,6 +276,7 @@ class OllamaService {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(30000), // 30 second timeout
       });
 
       if (!response.ok) {
@@ -306,6 +308,7 @@ class OllamaService {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(30000), // 30 second timeout
       });
 
       if (!response.ok) {
@@ -344,6 +347,7 @@ class OllamaService {
         headers: {
           'Content-Type': 'application/json',
         },
+        signal: AbortSignal.timeout(30000), // 30 second timeout
       });
 
       if (!response.ok) {
@@ -368,6 +372,7 @@ class OllamaService {
         headers: {
           'Content-Type': 'application/json',
         },
+        signal: AbortSignal.timeout(30000), // 30 second timeout
       });
 
       if (!response.ok) {
@@ -415,11 +420,27 @@ class OllamaService {
 
         // For health check failures, we can add a statusCode if we know it's a client error
         if (result.error?.includes('404') || result.error?.includes('not found')) {
-          (lastError as any).statusCode = 404;
+          (lastError as unknown as { statusCode: number }).statusCode = 404;
+        } else if (result.error?.includes('401') || result.error?.includes('unauthorized')) {
+          (lastError as unknown as { statusCode: number }).statusCode = 401;
+        } else if (result.error?.includes('403') || result.error?.includes('forbidden')) {
+          (lastError as unknown as { statusCode: number }).statusCode = 403;
+        } else if (result.error?.includes('500') || result.error?.includes('internal server')) {
+          (lastError as unknown as { statusCode: number }).statusCode = 500;
         }
 
       } catch (error) {
         lastError = error instanceof Error ? error : new Error('Unknown error');
+
+        // Add status code annotation for HTTP errors that the smart retry logic can use
+        if (error && typeof error === 'object' && 'status' in error) {
+          (lastError as unknown as { statusCode: number }).statusCode = (error as { status: number }).status;
+        } else if (lastError.message.includes('HTTP ')) {
+          const statusMatch = lastError.message.match(/HTTP (\d+)/);
+          if (statusMatch) {
+            (lastError as unknown as { statusCode: number }).statusCode = parseInt(statusMatch[1], 10);
+          }
+        }
       }
 
       // Use smart retry logic to determine if we should retry
