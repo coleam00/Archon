@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Settings, Check, Save, Loader, ChevronDown, ChevronUp, Zap, Database, Trash2 } from 'lucide-react';
+import { Check, Save, Loader, ChevronDown, ChevronUp, Zap, Database, Trash2, MessageSquare } from 'lucide-react';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '../../features/ui/primitives/tabs';
 import { Card } from '../ui/Card';
 import { Input } from '../ui/Input';
 import { Select } from '../ui/Select';
@@ -15,6 +16,8 @@ interface ProviderModels {
   chatModel: string;
   embeddingModel: string;
 }
+
+type ModelTab = 'chat' | 'embedding';
 
 type ProviderModelMap = Record<ProviderKey, ProviderModels>;
 
@@ -118,6 +121,7 @@ interface RAGSettingsProps {
     LLM_BASE_URL?: string;
     LLM_INSTANCE_NAME?: string;
     EMBEDDING_MODEL?: string;
+    EMBEDDING_PROVIDER?: string;
     OLLAMA_EMBEDDING_URL?: string;
     OLLAMA_EMBEDDING_INSTANCE_NAME?: string;
     // Crawling Performance Settings
@@ -159,6 +163,21 @@ export const RAGSettings = ({
 
   // Provider-specific model persistence state
   const [providerModels, setProviderModels] = useState<ProviderModelMap>(() => loadProviderModels());
+
+  // Tab state for split provider selection
+  const [activeTab, setActiveTab] = useState<ModelTab>('chat');
+
+  // Track embedding provider separately (defaults to LLM_PROVIDER for backward compatibility)
+  const [embeddingProvider, setEmbeddingProvider] = useState<ProviderKey>(() => {
+    return (ragSettings.EMBEDDING_PROVIDER as ProviderKey) || (ragSettings.LLM_PROVIDER as ProviderKey) || 'openai';
+  });
+
+  // Backward compatibility: ensure EMBEDDING_PROVIDER defaults to LLM_PROVIDER
+  useEffect(() => {
+    if (!ragSettings.EMBEDDING_PROVIDER && ragSettings.LLM_PROVIDER) {
+      setEmbeddingProvider(ragSettings.LLM_PROVIDER as ProviderKey);
+    }
+  }, [ragSettings.EMBEDDING_PROVIDER, ragSettings.LLM_PROVIDER]);
 
   // Instance configurations
   const [llmInstanceConfig, setLLMInstanceConfig] = useState({
@@ -764,18 +783,20 @@ export const RAGSettings = ({
     }
   };
 
-  const selectedProviderKey = isProviderKey(ragSettings.LLM_PROVIDER)
-    ? (ragSettings.LLM_PROVIDER as ProviderKey)
-    : undefined;
-  const selectedProviderStatus = selectedProviderKey ? getProviderStatus(selectedProviderKey) : undefined;
+  // Get the current provider based on active tab
+  const currentProviderKey = activeTab === 'chat'
+    ? (isProviderKey(ragSettings.LLM_PROVIDER) ? ragSettings.LLM_PROVIDER as ProviderKey : undefined)
+    : embeddingProvider;
+
+  const selectedProviderStatus = currentProviderKey ? getProviderStatus(currentProviderKey) : undefined;
   const shouldShowProviderAlert = Boolean(
-    selectedProviderKey && selectedProviderStatus === 'missing'
+    currentProviderKey && selectedProviderStatus === 'missing'
   );
-  const providerAlertClassName = shouldShowProviderAlert && selectedProviderKey
-    ? providerAlertStyles[selectedProviderKey]
+  const providerAlertClassName = shouldShowProviderAlert && currentProviderKey
+    ? providerAlertStyles[currentProviderKey]
     : '';
-  const providerAlertMessage = shouldShowProviderAlert && selectedProviderKey
-    ? providerAlertMessages[selectedProviderKey]
+  const providerAlertMessage = shouldShowProviderAlert && currentProviderKey
+    ? providerAlertMessages[currentProviderKey]
     : '';
   
   // Test Ollama connectivity when Settings page loads (scenario 4: page load)
@@ -828,100 +849,230 @@ export const RAGSettings = ({
       }, 2000);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ragSettings.LLM_PROVIDER, llmInstanceConfig.url, llmInstanceConfig.name, 
+  }, [ragSettings.LLM_PROVIDER, llmInstanceConfig.url, llmInstanceConfig.name,
       embeddingInstanceConfig.url, embeddingInstanceConfig.name]); // Don't include function deps to avoid re-runs
-  
+
+  // Helper function to render provider grid for both tabs
+  const renderProviderGrid = (isForChat: boolean) => {
+    const currentProvider = isForChat ? (ragSettings.LLM_PROVIDER as ProviderKey) : embeddingProvider;
+
+    // Providers that support embedding models
+    const embeddingProviders = ['openai', 'google', 'ollama'];
+
+    const allProviders = [
+      { key: 'openai', name: 'OpenAI', logo: '/img/OpenAI.png', color: 'green' },
+      { key: 'google', name: 'Google', logo: '/img/google-logo.svg', color: 'blue' },
+      { key: 'openrouter', name: 'OpenRouter', logo: '/img/OpenRouter.png', color: 'cyan' },
+      { key: 'ollama', name: 'Ollama', logo: '/img/Ollama.png', color: 'purple' },
+      { key: 'anthropic', name: 'Anthropic', logo: '/img/claude-logo.svg', color: 'orange' },
+      { key: 'grok', name: 'Grok', logo: '/img/Grok.png', color: 'yellow' }
+    ];
+
+    // Filter providers based on tab
+    const providers = isForChat
+      ? allProviders
+      : allProviders.filter(p => embeddingProviders.includes(p.key));
+
+    return (
+      <div className={`grid ${isForChat ? 'grid-cols-6' : 'grid-cols-3'} gap-3 mb-4`}>
+        {providers.map(provider => (
+          <button
+            key={provider.key}
+            type="button"
+            onClick={() => {
+              const providerKey = provider.key as ProviderKey;
+              const savedModels = providerModels[providerKey] || getDefaultModels(providerKey);
+
+              if (isForChat) {
+                // Update chat provider and model
+                const updatedSettings = {
+                  ...ragSettings,
+                  LLM_PROVIDER: providerKey,
+                  MODEL_CHOICE: savedModels.chatModel
+                };
+                setRagSettings(updatedSettings);
+              } else {
+                // Update embedding provider and model
+                setEmbeddingProvider(providerKey);
+                const updatedSettings = {
+                  ...ragSettings,
+                  EMBEDDING_PROVIDER: providerKey,
+                  EMBEDDING_MODEL: savedModels.embeddingModel
+                };
+                setRagSettings(updatedSettings);
+              }
+            }}
+            className={`
+              relative p-3 rounded-lg border-2 transition-all duration-200 text-center
+              ${currentProvider === provider.key
+                ? `${colorStyles[provider.key as ProviderKey]} shadow-[0_0_15px_rgba(34,197,94,0.3)]`
+                : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
+              }
+              hover:scale-105 active:scale-95
+            `}
+          >
+            <img
+              src={provider.logo}
+              alt={`${provider.name} logo`}
+              className={`w-8 h-8 mb-1 mx-auto ${
+                provider.key === 'openai' || provider.key === 'grok'
+                  ? 'bg-white rounded p-1'
+                  : ''
+              }`}
+            />
+            <div className={`font-medium text-gray-700 dark:text-gray-300 text-center ${
+              provider.key === 'openrouter' ? 'text-xs' : 'text-sm'
+            }`}>
+              {provider.name}
+            </div>
+            {(() => {
+              const status = getProviderStatus(provider.key);
+
+              if (status === 'configured') {
+                return (
+                  <div className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center">
+                    <Check className="w-2.5 h-2.5 text-white" />
+                  </div>
+                );
+              } else if (status === 'partial') {
+                return (
+                  <div className="absolute -top-1 -right-1 w-4 h-4 bg-yellow-500 rounded-full flex items-center justify-center">
+                    <div className="w-2 h-2 bg-white rounded-full" />
+                  </div>
+                );
+              } else {
+                return (
+                  <div className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center">
+                    <div className="w-1.5 h-1.5 bg-white rounded-full" />
+                  </div>
+                );
+              }
+            })()}
+          </button>
+        ))}
+      </div>
+    );
+  };
+
   return <Card accentColor="green" className="overflow-hidden p-8">
         {/* Description */}
-        <p className="text-sm text-gray-600 dark:text-zinc-400 mb-6">
+        <p className="text-sm text-gray-600 dark:text-zinc-400 mb-4">
           Configure Retrieval-Augmented Generation (RAG) strategies for optimal
           knowledge retrieval.
         </p>
+
+        {/* Current Configuration Summary */}
+        {(ragSettings.LLM_PROVIDER || embeddingProvider) && (
+          <div className="flex gap-4 mb-6">
+            {ragSettings.LLM_PROVIDER && (
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-cyan-500/10 border border-cyan-500/30 rounded-lg">
+                <MessageSquare className="w-3 h-3 text-cyan-400" />
+                <span className="text-xs text-cyan-400">Chat: {ragSettings.LLM_PROVIDER}</span>
+              </div>
+            )}
+            {embeddingProvider && (
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-purple-500/10 border border-purple-500/30 rounded-lg">
+                <Database className="w-3 h-3 text-purple-400" />
+                <span className="text-xs text-purple-400">Embedding: {embeddingProvider}</span>
+              </div>
+            )}
+          </div>
+        )}
         
-        {/* Provider Selection - 6 Button Layout */}
+        {/* Tabbed Provider Selection */}
         <div className="mb-6">
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
-            LLM Provider
-          </label>
-          <div className="grid grid-cols-6 gap-3 mb-4">
-            {[
-              { key: 'openai', name: 'OpenAI', logo: '/img/OpenAI.png', color: 'green' },
-              { key: 'google', name: 'Google', logo: '/img/google-logo.svg', color: 'blue' },
-              { key: 'openrouter', name: 'OpenRouter', logo: '/img/OpenRouter.png', color: 'cyan' },
-              { key: 'ollama', name: 'Ollama', logo: '/img/Ollama.png', color: 'purple' },
-              { key: 'anthropic', name: 'Anthropic', logo: '/img/claude-logo.svg', color: 'orange' },
-              { key: 'grok', name: 'Grok', logo: '/img/Grok.png', color: 'yellow' }
-            ].map(provider => (
+          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as ModelTab)} className="w-full">
+            <div className="grid grid-cols-2 gap-2 mb-6">
               <button
-                key={provider.key}
-                type="button"
-                onClick={() => {
-                  // Get saved models for this provider, or use defaults
-                  const providerKey = provider.key as ProviderKey;
-                  const savedModels = providerModels[providerKey] || getDefaultModels(providerKey);
-
-                  const updatedSettings = {
-                    ...ragSettings,
-                    LLM_PROVIDER: providerKey,
-                    MODEL_CHOICE: savedModels.chatModel,
-                    EMBEDDING_MODEL: savedModels.embeddingModel
-                  };
-
-                  setRagSettings(updatedSettings);
-                }}
+                onClick={() => setActiveTab('chat')}
                 className={`
-                  relative p-3 rounded-lg border-2 transition-all duration-200 text-center
-                  ${ragSettings.LLM_PROVIDER === provider.key
-                    ? `${colorStyles[provider.key as ProviderKey]} shadow-[0_0_15px_rgba(34,197,94,0.3)]`
-                    : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
+                  relative px-4 py-3 rounded-lg border transition-all duration-200
+                  flex items-center justify-center font-medium text-sm
+                  ${activeTab === 'chat'
+                    ? 'border-cyan-500 bg-cyan-500/10 text-cyan-400 shadow-[0_0_20px_rgba(6,182,212,0.3)]'
+                    : 'border-gray-600 bg-gray-800/50 text-gray-400 hover:border-gray-500 hover:bg-gray-800/70'
                   }
-                  hover:scale-105 active:scale-95
                 `}
               >
-                <img 
-                  src={provider.logo} 
-                  alt={`${provider.name} logo`}
-                  className={`w-8 h-8 mb-1 mx-auto ${
-                    provider.key === 'openai' || provider.key === 'grok' 
-                      ? 'bg-white rounded p-1' 
-                      : ''
-                  }`}
-                />
-                <div className={`font-medium text-gray-700 dark:text-gray-300 text-center ${
-                  provider.key === 'openrouter' ? 'text-xs' : 'text-sm'
-                }`}>
-                  {provider.name}
-                </div>
-{(() => {
-                  const status = getProviderStatus(provider.key);
-                  const isSelected = ragSettings.LLM_PROVIDER === provider.key;
-                  
-                  if (status === 'configured') {
-                    return (
-                      <div className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center">
-                        <Check className="w-2.5 h-2.5 text-white" />
-                      </div>
-                    );
-                  } else if (status === 'partial') {
-                    return (
-                      <div className="absolute -top-1 -right-1 w-4 h-4 bg-yellow-500 rounded-full flex items-center justify-center">
-                        <div className="w-2 h-2 bg-white rounded-full" />
-                      </div>
-                    );
-                  } else {
-                    return (
-                      <div className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center">
-                        <div className="w-1.5 h-1.5 bg-white rounded-full" />
-                      </div>
-                    );
-                  }
-                })()}
+                <MessageSquare className="w-4 h-4 mr-2" />
+                Chat Model
+                {activeTab === 'chat' && (
+                  <div className="absolute inset-x-0 bottom-0 h-[2px] bg-cyan-500 rounded-full shadow-[0_0_10px_rgba(6,182,212,0.7)]" />
+                )}
               </button>
-            ))}
-          </div>
+              <button
+                onClick={() => setActiveTab('embedding')}
+                className={`
+                  relative px-4 py-3 rounded-lg border transition-all duration-200
+                  flex items-center justify-center font-medium text-sm
+                  ${activeTab === 'embedding'
+                    ? 'border-purple-500 bg-purple-500/10 text-purple-400 shadow-[0_0_20px_rgba(168,85,247,0.3)]'
+                    : 'border-gray-600 bg-gray-800/50 text-gray-400 hover:border-gray-500 hover:bg-gray-800/70'
+                  }
+                `}
+              >
+                <Database className="w-4 h-4 mr-2" />
+                Embedding Model
+                {activeTab === 'embedding' && (
+                  <div className="absolute inset-x-0 bottom-0 h-[2px] bg-purple-500 rounded-full shadow-[0_0_10px_rgba(168,85,247,0.7)]" />
+                )}
+              </button>
+            </div>
+
+            <TabsContent value="chat" className="space-y-4 animate-in fade-in-50 duration-300">
+              <div className="space-y-4">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Select Chat Provider
+                </label>
+                {renderProviderGrid(true)}
+
+                {/* Chat Model Input - Only show for non-Ollama providers */}
+                {ragSettings.LLM_PROVIDER !== 'ollama' && (
+                  <div>
+                    <Input
+                      label="Chat Model"
+                      value={getDisplayedChatModel(ragSettings)}
+                      onChange={e => setRagSettings({
+                        ...ragSettings,
+                        MODEL_CHOICE: e.target.value
+                      })}
+                      placeholder={getModelPlaceholder(ragSettings.LLM_PROVIDER || 'openai')}
+                      accentColor="green"
+                    />
+                  </div>
+                )}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="embedding" className="space-y-4 animate-in fade-in-50 duration-300">
+              <div className="space-y-4">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Select Embedding Provider
+                </label>
+                {renderProviderGrid(false)}
+
+                {/* Embedding Model Input - Only show for non-Ollama providers */}
+                {embeddingProvider !== 'ollama' && (
+                  <div>
+                    <Input
+                      label="Embedding Model"
+                      value={getDisplayedEmbeddingModel(ragSettings)}
+                      onChange={e => setRagSettings({
+                        ...ragSettings,
+                        EMBEDDING_MODEL: e.target.value
+                      })}
+                      placeholder={getEmbeddingPlaceholder(embeddingProvider || 'openai')}
+                      accentColor="green"
+                    />
+                  </div>
+                )}
+              </div>
+            </TabsContent>
+          </Tabs>
           
           {/* Provider-specific configuration */}
-          {ragSettings.LLM_PROVIDER === 'ollama' && (
+          {((activeTab === 'chat' && ragSettings.LLM_PROVIDER === 'ollama') ||
+            (activeTab === 'embedding' && embeddingProvider === 'ollama')) && (
             <div className="bg-gray-800 rounded-lg p-6 mb-6">
               <div className="flex items-center justify-between mb-4">
                 <div>
@@ -1313,7 +1464,8 @@ export const RAGSettings = ({
                     LLM_BASE_URL: llmInstanceConfig.url,
                     LLM_INSTANCE_NAME: llmInstanceConfig.name,
                     OLLAMA_EMBEDDING_URL: embeddingInstanceConfig.url,
-                    OLLAMA_EMBEDDING_INSTANCE_NAME: embeddingInstanceConfig.name
+                    OLLAMA_EMBEDDING_INSTANCE_NAME: embeddingInstanceConfig.name,
+                    EMBEDDING_PROVIDER: embeddingProvider
                   };
                   
                   await credentialsService.updateRagSettings(updatedSettings);
@@ -1336,36 +1488,6 @@ export const RAGSettings = ({
           </div>
         </div>
 
-        {/* Model Settings Row - Only show for non-Ollama providers */}
-        {ragSettings.LLM_PROVIDER !== 'ollama' && (
-          <div className="grid grid-cols-2 gap-4 mb-6">
-            <div>
-              <Input 
-                label="Chat Model" 
-                value={getDisplayedChatModel(ragSettings)} 
-                onChange={e => setRagSettings({
-                  ...ragSettings,
-                  MODEL_CHOICE: e.target.value
-                })} 
-                placeholder={getModelPlaceholder(ragSettings.LLM_PROVIDER || 'openai')}
-                accentColor="green" 
-              />
-            </div>
-            <div>
-              <Input
-                label="Embedding Model"
-                value={getDisplayedEmbeddingModel(ragSettings)}
-                onChange={e => setRagSettings({
-                  ...ragSettings,
-                  EMBEDDING_MODEL: e.target.value
-                })}
-                placeholder={getEmbeddingPlaceholder(ragSettings.LLM_PROVIDER || 'openai')}
-                accentColor="green"
-              />
-            </div>
-          </div>
-        )}
-        
         {/* Second row: Contextual Embeddings, Max Workers, and description */}
         <div className="grid grid-cols-8 gap-4 mb-4 p-4 rounded-lg border border-green-500/20 shadow-[0_2px_8px_rgba(34,197,94,0.1)]">
           <div className="col-span-4">
