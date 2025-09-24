@@ -149,9 +149,9 @@ async def discover_models_endpoint(
         logger.info(f"Discovery complete: {discovery_result['total_models']} models found")
 
         # If background tasks available, schedule cache warming
-        if background_tasks:
-            # Use asyncio.create_task for async function execution
-            asyncio.create_task(_warm_model_cache(valid_urls))
+        if background_tasks is not None:
+            # Schedule cache warming as a FastAPI background task (runs after response)
+            background_tasks.add_task(_warm_model_cache, valid_urls)
 
         return ModelDiscoveryResponse(
             total_models=discovery_result["total_models"],
@@ -314,6 +314,12 @@ async def analyze_embedding_route_endpoint(request: EmbeddingRouteRequest) -> Em
     try:
         logger.info(f"Analyzing embedding route for {request.model_name} on {request.instance_url}")
 
+        # SSRF protection - require http(s) and block private/internal targets
+        parsed = urlparse(request.instance_url)
+        if parsed.scheme not in ('http', 'https') or not parsed.hostname or _is_private_host(parsed.hostname):
+            logger.warning(f"Blocked private/invalid URL in embedding route analysis: {request.instance_url}")
+            raise HTTPException(status_code=400, detail="URL blocked for security reasons")
+
         # Get routing decision from the embedding router
         routing_decision = await embedding_router.route_embedding(
             model_name=request.model_name,
@@ -354,8 +360,23 @@ async def get_available_embedding_routes_endpoint(
     try:
         logger.info(f"Getting embedding routes for {len(instance_urls)} instances")
 
-        # Get available routes
-        routes = await embedding_router.get_available_embedding_routes(instance_urls)
+        # Validate instance URLs and check for SSRF risks
+        valid_urls: list[str] = []
+        for url in instance_urls:
+            try:
+                parsed = urlparse(url.rstrip('/'))
+                if parsed.scheme not in ('http', 'https') or not parsed.hostname or _is_private_host(parsed.hostname):
+                    logger.warning(f"Blocked private/invalid URL in embedding routes: {url}")
+                    continue
+                valid_urls.append(url.rstrip('/'))
+            except Exception as e:
+                logger.warning(f"Error validating URL {url}: {e}")
+                continue
+        if not valid_urls:
+            raise HTTPException(status_code=400, detail="No valid instance URLs provided")
+
+        # Get available routes for validated URLs only
+        routes = await embedding_router.get_available_embedding_routes(valid_urls)
 
         # Convert to response format
         route_data = []
