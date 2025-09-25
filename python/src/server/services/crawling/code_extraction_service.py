@@ -140,6 +140,7 @@ class CodeExtractionService:
         progress_callback: Callable | None = None,
         cancellation_check: Callable[[], None] | None = None,
         provider: str | None = None,
+        embedding_provider: str | None = None,
     ) -> int:
         """
         Extract code examples from crawled documents and store them.
@@ -150,6 +151,8 @@ class CodeExtractionService:
             source_id: The unique source_id for all documents
             progress_callback: Optional async callback for progress updates
             cancellation_check: Optional function to check for cancellation
+            provider: Optional LLM provider identifier for summary generation
+            embedding_provider: Optional embedding provider override for vector creation
 
         Returns:
             Number of code examples stored
@@ -238,7 +241,11 @@ class CodeExtractionService:
 
         # Store code examples in database
         return await self._store_code_examples(
-            storage_data, url_to_full_document, storage_callback, provider
+            storage_data,
+            url_to_full_document,
+            storage_callback,
+            provider,
+            embedding_provider,
         )
 
     async def _extract_code_blocks_from_documents(
@@ -1684,12 +1691,20 @@ class CodeExtractionService:
         url_to_full_document: dict[str, str],
         progress_callback: Callable | None = None,
         provider: str | None = None,
+        embedding_provider: str | None = None,
     ) -> int:
         """
         Store code examples in the database.
 
         Returns:
             Number of code examples stored
+
+        Args:
+            storage_data: Prepared code example payloads
+            url_to_full_document: Mapping of URLs to their full document content
+            progress_callback: Optional callback for progress updates
+            provider: Optional LLM provider identifier for summaries
+            embedding_provider: Optional embedding provider override for vector storage
         """
         # Create progress callback for storage phase
         storage_progress_callback = None
@@ -1727,6 +1742,7 @@ class CodeExtractionService:
                 url_to_full_document=url_to_full_document,
                 progress_callback=storage_progress_callback,
                 provider=provider,
+                embedding_provider=embedding_provider,
             )
 
             # Report completion of code extraction/storage phase

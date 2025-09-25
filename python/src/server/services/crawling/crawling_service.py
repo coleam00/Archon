@@ -14,6 +14,7 @@ from typing import Any, Optional
 from ...config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
 from ...utils import get_supabase_client
 from ...utils.progress.progress_tracker import ProgressTracker
+from ..credential_service import credential_service
 
 # Import strategies
 # Import operations
@@ -477,14 +478,26 @@ class CrawlingService:
                 try:
                     # Extract provider from request or use credential service default
                     provider = request.get("provider")
+                    embedding_provider = None
+
                     if not provider:
                         try:
-                            from ..credential_service import credential_service
                             provider_config = await credential_service.get_active_provider("llm")
                             provider = provider_config.get("provider", "openai")
                         except Exception as e:
-                            logger.warning(f"Failed to get provider from credential service: {e}, defaulting to openai")
+                            logger.warning(
+                                f"Failed to get provider from credential service: {e}, defaulting to openai"
+                            )
                             provider = "openai"
+
+                    try:
+                        embedding_config = await credential_service.get_active_provider("embedding")
+                        embedding_provider = embedding_config.get("provider")
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to get embedding provider from credential service: {e}. Using configured default."
+                        )
+                        embedding_provider = None
 
                     code_examples_count = await self.doc_storage_ops.extract_and_store_code_examples(
                         crawl_results,
@@ -493,6 +506,7 @@ class CrawlingService:
                         code_progress_callback,
                         self._check_cancellation,
                         provider,
+                        embedding_provider,
                     )
                 except RuntimeError as e:
                     # Code extraction failed, continue crawl with warning
