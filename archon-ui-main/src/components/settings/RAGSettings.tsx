@@ -100,7 +100,10 @@ const providerAlertStyles: Record<ProviderKey, string> = {
   grok: 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800 text-yellow-800 dark:text-yellow-300',
 };
 
-const providerAlertMessages: Record<ProviderKey, string> = {
+const providerWarningAlertStyle = 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800 text-yellow-800 dark:text-yellow-300';
+const providerErrorAlertStyle = 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-red-800 dark:text-red-300';
+
+const defaultProviderAlertMessages: Record<ProviderKey, string> = {
   openai: 'Configure your OpenAI API key in the credentials section to use GPT models.',
   google: 'Configure your Google API key in the credentials section to use Gemini models.',
   openrouter: 'Configure your OpenRouter API key in the credentials section to use models.',
@@ -343,6 +346,55 @@ export const RAGSettings = ({
     return () => clearInterval(interval);
   }, [ragSettings.LLM_PROVIDER]); // Only restart interval if provider changes
 
+  useEffect(() => {
+    const needsDetection = chatProvider === 'ollama' || embeddingProvider === 'ollama';
+
+    if (!needsDetection) {
+      setOllamaServerStatus('unknown');
+      return;
+    }
+
+    const baseUrl = (
+      ragSettings.LLM_BASE_URL?.trim() ||
+      llmInstanceConfig.url?.trim() ||
+      ragSettings.OLLAMA_EMBEDDING_URL?.trim() ||
+      embeddingInstanceConfig.url?.trim() ||
+      DEFAULT_OLLAMA_URL
+    );
+
+    const normalizedUrl = baseUrl.replace('/v1', '').replace(/\/$/, '');
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const response = await fetch(
+          `/api/ollama/instances/health?instance_urls=${encodeURIComponent(normalizedUrl)}`,
+          { method: 'GET', headers: { Accept: 'application/json' } }
+        );
+
+        if (cancelled) return;
+
+        if (!response.ok) {
+          setOllamaServerStatus('offline');
+          return;
+        }
+
+        const data = await response.json();
+        const instanceStatus = data.instance_status?.[normalizedUrl];
+        setOllamaServerStatus(instanceStatus?.is_healthy ? 'online' : 'offline');
+      } catch (error) {
+        if (!cancelled) {
+          setOllamaServerStatus('offline');
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [chatProvider, embeddingProvider, ragSettings.LLM_BASE_URL, ragSettings.OLLAMA_EMBEDDING_URL, llmInstanceConfig.url, embeddingInstanceConfig.url]);
+
   // Sync independent provider states with ragSettings (one-way: ragSettings -> local state)
   useEffect(() => {
     if (ragSettings.LLM_PROVIDER && ragSettings.LLM_PROVIDER !== chatProvider) {
@@ -355,6 +407,11 @@ export const RAGSettings = ({
       setEmbeddingProvider(ragSettings.EMBEDDING_PROVIDER as ProviderKey);
     }
   }, [ragSettings.EMBEDDING_PROVIDER]); // Remove embeddingProvider dependency to avoid loops
+
+  useEffect(() => {
+    setOllamaManualConfirmed(false);
+    setOllamaServerStatus('unknown');
+  }, [ragSettings.LLM_BASE_URL, ragSettings.OLLAMA_EMBEDDING_URL, chatProvider, embeddingProvider]);
 
   // Update ragSettings when independent providers change (one-way: local state -> ragSettings)
   // Split the “first‐run” guard into two refs so chat and embedding effects don’t interfere.
@@ -396,6 +453,8 @@ export const RAGSettings = ({
   const [providerConnectionStatus, setProviderConnectionStatus] = useState<{
     [key: string]: { connected: boolean; checking: boolean; lastChecked?: Date }
   }>({});
+  const [ollamaServerStatus, setOllamaServerStatus] = useState<'unknown' | 'online' | 'offline'>('unknown');
+  const [ollamaManualConfirmed, setOllamaManualConfirmed] = useState(false);
 
   useEffect(() => {
     return () => {
@@ -537,12 +596,14 @@ export const RAGSettings = ({
   };
 
   // Manual test function with user feedback using backend proxy
-  const manualTestConnection = async (
+const manualTestConnection = async (
     url: string,
     setStatus: React.Dispatch<React.SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean }>>,
     instanceName: string,
-    context?: 'chat' | 'embedding'
+    context?: 'chat' | 'embedding',
+    options?: { suppressToast?: boolean }
   ): Promise<boolean> => {
+    const suppressToast = options?.suppressToast ?? false;
     setStatus(prev => ({ ...prev, checking: true }));
     const startTime = Date.now();
     
@@ -582,7 +643,9 @@ export const RAGSettings = ({
             modelType = 'embedding models';
           }
 
-          showToast(`${instanceName} connection successful: ${modelCount} ${modelType} available (${responseTime}ms)`, 'success');
+          if (!suppressToast) {
+            showToast(`${instanceName} connection successful: ${modelCount} ${modelType} available (${responseTime}ms)`, 'success');
+          }
 
           // Scenario 2: Manual "Test Connection" button - refresh Ollama metrics if Ollama provider is selected
           if (ragSettings.LLM_PROVIDER === 'ollama') {
@@ -593,21 +656,27 @@ export const RAGSettings = ({
           return true;
         } else {
           setStatus({ online: false, responseTime: null, checking: false });
-          showToast(`${instanceName} connection failed: ${instanceStatus?.error_message || 'Instance is not healthy'}`, 'error');
+          if (!suppressToast) {
+            showToast(`${instanceName} connection failed: ${instanceStatus?.error_message || 'Instance is not healthy'}`, 'error');
+          }
           return false;
         }
       } else {
         setStatus({ online: false, responseTime: null, checking: false });
-        showToast(`${instanceName} connection failed: Backend proxy error (HTTP ${response.status})`, 'error');
+        if (!suppressToast) {
+          showToast(`${instanceName} connection failed: Backend proxy error (HTTP ${response.status})`, 'error');
+        }
         return false;
       }
     } catch (error: any) {
       setStatus({ online: false, responseTime: null, checking: false });
 
-      if (error.name === 'AbortError') {
-        showToast(`${instanceName} connection failed: Request timeout (>15s)`, 'error');
-      } else {
-        showToast(`${instanceName} connection failed: ${error.message || 'Unknown error'}`, 'error');
+      if (!suppressToast) {
+        if (error.name === 'AbortError') {
+          showToast(`${instanceName} connection failed: Request timeout (>15s)`, 'error');
+        } else {
+          showToast(`${instanceName} connection failed: ${error.message || 'Unknown error'}`, 'error');
+        }
       }
 
       return false;
@@ -854,10 +923,21 @@ export const RAGSettings = ({
         return googleConnected ? 'configured' : 'missing';
         
       case 'ollama':
-        if (llmStatus.checking || embeddingStatus.checking) return 'partial';
-        if (llmStatus.online && embeddingStatus.online) return 'configured';
-        if (llmStatus.online || embeddingStatus.online) return 'partial';
-        return 'missing';
+        {
+          if (ollamaManualConfirmed || llmStatus.online || embeddingStatus.online) {
+            return 'configured';
+          }
+
+          if (ollamaServerStatus === 'online') {
+            return 'partial';
+          }
+
+          if (ollamaServerStatus === 'offline') {
+            return 'missing';
+          }
+
+          return 'missing';
+        }
       case 'anthropic':
         // Use server-side connection status
         const anthropicConnected = providerConnectionStatus['anthropic']?.connected || false;
@@ -885,18 +965,29 @@ export const RAGSettings = ({
     ? (ragSettings.LLM_PROVIDER as ProviderKey)
     : undefined;
   const selectedProviderStatus = selectedProviderKey ? getProviderStatus(selectedProviderKey) : undefined;
-  const shouldShowProviderAlert = Boolean(
-    selectedProviderKey && selectedProviderStatus === 'missing'
-  );
-  const providerAlertClassName = shouldShowProviderAlert && selectedProviderKey
-    ? providerAlertStyles[selectedProviderKey]
-    : '';
-  const providerAlertMessage = shouldShowProviderAlert && selectedProviderKey
-    ? providerAlertMessages[selectedProviderKey]
-    : '';
+
+  let providerAlertMessage: string | null = null;
+  let providerAlertClassName = '';
+
+  if (selectedProviderKey === 'ollama') {
+    if (selectedProviderStatus === 'missing' || ollamaServerStatus === 'offline' || ollamaServerStatus === 'unknown') {
+      providerAlertMessage = 'Local Ollama service is not running. Start the Ollama server and ensure it is reachable at the configured URL.';
+      providerAlertClassName = providerErrorAlertStyle;
+    } else if (selectedProviderStatus === 'partial') {
+      providerAlertMessage = 'Local Ollama service detected. Click "Test Connection" to confirm model availability.';
+      providerAlertClassName = providerWarningAlertStyle;
+    }
+  } else if (selectedProviderKey && selectedProviderStatus === 'missing') {
+    providerAlertMessage = defaultProviderAlertMessages[selectedProviderKey] ?? null;
+    providerAlertClassName = providerAlertStyles[selectedProviderKey] ?? '';
+  }
+
+  const shouldShowProviderAlert = Boolean(providerAlertMessage);
   
+  const initialChatOllamaTestRef = useRef(false);
   useEffect(() => {
     if (chatProvider !== 'ollama') {
+      initialChatOllamaTestRef.current = false;
       return;
     }
 
@@ -918,7 +1009,13 @@ export const RAGSettings = ({
     }
 
     const runTest = async () => {
-      const success = await manualTestConnection(baseUrl, setLLMStatus, instanceName, 'chat');
+      const success = await manualTestConnection(
+        baseUrl,
+        setLLMStatus,
+        instanceName,
+        'chat',
+        { suppressToast: true }
+      );
 
       if (!success && chatProvider === 'ollama') {
         llmRetryTimeoutRef.current = window.setTimeout(runTest, 5000);
@@ -938,7 +1035,43 @@ export const RAGSettings = ({
   }, [chatProvider, ragSettings.LLM_BASE_URL, ragSettings.LLM_INSTANCE_NAME]);
 
   useEffect(() => {
+    if (chatProvider !== 'ollama') {
+      initialChatOllamaTestRef.current = false;
+      return;
+    }
+
+    if (initialChatOllamaTestRef.current) {
+      return;
+    }
+
+    initialChatOllamaTestRef.current = true;
+
+    const baseUrl = (ragSettings.LLM_BASE_URL && ragSettings.LLM_BASE_URL.trim().length > 0)
+      ? ragSettings.LLM_BASE_URL.trim()
+      : (llmInstanceConfig.url && llmInstanceConfig.url.trim().length > 0)
+        ? llmInstanceConfig.url.trim()
+        : DEFAULT_OLLAMA_URL;
+
+    const instanceName = llmInstanceConfig.name?.trim().length
+      ? llmInstanceConfig.name
+      : 'LLM Instance';
+
+    setLLMStatus(prev => ({ ...prev, checking: true }));
+    setTimeout(() => {
+      manualTestConnection(
+        baseUrl,
+        setLLMStatus,
+        instanceName,
+        'chat',
+        { suppressToast: true }
+      );
+    }, 200);
+  }, [chatProvider, ragSettings.LLM_BASE_URL, llmInstanceConfig.url, llmInstanceConfig.name]);
+
+  const initialEmbeddingOllamaTestRef = useRef(false);
+  useEffect(() => {
     if (embeddingProvider !== 'ollama') {
+      initialEmbeddingOllamaTestRef.current = false;
       return;
     }
 
@@ -960,7 +1093,13 @@ export const RAGSettings = ({
     }
 
     const runTest = async () => {
-      const success = await manualTestConnection(baseUrl, setEmbeddingStatus, instanceName, 'embedding');
+      const success = await manualTestConnection(
+        baseUrl,
+        setEmbeddingStatus,
+        instanceName,
+        'embedding',
+        { suppressToast: true }
+      );
 
       if (!success && embeddingProvider === 'ollama') {
         embeddingRetryTimeoutRef.current = window.setTimeout(runTest, 5000);
@@ -979,6 +1118,40 @@ export const RAGSettings = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [embeddingProvider, ragSettings.OLLAMA_EMBEDDING_URL, ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME]);
 
+  useEffect(() => {
+    if (embeddingProvider !== 'ollama') {
+      initialEmbeddingOllamaTestRef.current = false;
+      return;
+    }
+
+    if (initialEmbeddingOllamaTestRef.current) {
+      return;
+    }
+
+    initialEmbeddingOllamaTestRef.current = true;
+
+    const baseUrl = (ragSettings.OLLAMA_EMBEDDING_URL && ragSettings.OLLAMA_EMBEDDING_URL.trim().length > 0)
+      ? ragSettings.OLLAMA_EMBEDDING_URL.trim()
+      : (embeddingInstanceConfig.url && embeddingInstanceConfig.url.trim().length > 0)
+        ? embeddingInstanceConfig.url.trim()
+        : DEFAULT_OLLAMA_URL;
+
+    const instanceName = embeddingInstanceConfig.name?.trim().length
+      ? embeddingInstanceConfig.name
+      : 'Embedding Instance';
+
+    setEmbeddingStatus(prev => ({ ...prev, checking: true }));
+    setTimeout(() => {
+      manualTestConnection(
+        baseUrl,
+        setEmbeddingStatus,
+        instanceName,
+        'embedding',
+        { suppressToast: true }
+      );
+    }, 250);
+  }, [embeddingProvider, ragSettings.OLLAMA_EMBEDDING_URL, embeddingInstanceConfig.url, embeddingInstanceConfig.name]);
+
   // Test Ollama connectivity when Settings page loads (scenario 4: page load)
   // This useEffect is placed after function definitions to ensure access to manualTestConnection
   useEffect(() => {
@@ -995,33 +1168,70 @@ export const RAGSettings = ({
     // Only run once when data is properly loaded and not run before
     if (!hasRunInitialTestRef.current && 
         ragSettings.LLM_PROVIDER === 'ollama' && 
-        Object.keys(ragSettings).length > 0 && 
-        (llmInstanceConfig.url || embeddingInstanceConfig.url)) {
+        Object.keys(ragSettings).length > 0) {
       
       hasRunInitialTestRef.current = true;
       console.log('🔄 Settings page loaded with Ollama - Testing connectivity');
-      
-      // Test LLM instance if configured (use URL presence as the key indicator)
-      // Only test if URL is explicitly set in ragSettings, not just using the default
-      if (llmInstanceConfig.url && ragSettings.LLM_BASE_URL) {
+
+      // Test LLM instance if a URL is available (either saved or default)
+      if (llmInstanceConfig.url) {
         setTimeout(() => {
           const instanceName = llmInstanceConfig.name || 'LLM Instance';
           console.log('🔍 Testing LLM instance on page load:', instanceName, llmInstanceConfig.url);
-          manualTestConnection(llmInstanceConfig.url, setLLMStatus, instanceName, 'chat');
+          manualTestConnection(
+            llmInstanceConfig.url,
+            setLLMStatus,
+            instanceName,
+            'chat',
+            { suppressToast: true }
+          );
         }, 1000); // Increased delay to ensure component is fully ready
       }
-      
+      // If no saved URL, run tests against default endpoint
+      else {
+        setTimeout(() => {
+          const defaultInstanceName = 'Local Ollama (Default)';
+          console.log('🔍 Testing default Ollama chat instance on page load:', DEFAULT_OLLAMA_URL);
+          manualTestConnection(
+            DEFAULT_OLLAMA_URL,
+            setLLMStatus,
+            defaultInstanceName,
+            'chat',
+            { suppressToast: true }
+          );
+        }, 1000);
+      }
+
       // Test Embedding instance if configured and different from LLM instance
-      // Only test if URL is explicitly set in ragSettings, not just using the default
-      if (embeddingInstanceConfig.url && ragSettings.OLLAMA_EMBEDDING_URL &&
+      if (embeddingInstanceConfig.url &&
           embeddingInstanceConfig.url !== llmInstanceConfig.url) {
         setTimeout(() => {
           const instanceName = embeddingInstanceConfig.name || 'Embedding Instance';
           console.log('🔍 Testing Embedding instance on page load:', instanceName, embeddingInstanceConfig.url);
-          manualTestConnection(embeddingInstanceConfig.url, setEmbeddingStatus, instanceName, 'embedding');
+          manualTestConnection(
+            embeddingInstanceConfig.url,
+            setEmbeddingStatus,
+            instanceName,
+            'embedding',
+            { suppressToast: true }
+          );
         }, 1500); // Stagger the tests
       }
-      
+      // If embedding provider is also Ollama but no specific URL is set, test default as fallback
+      else if (embeddingProvider === 'ollama' && !embeddingInstanceConfig.url) {
+        setTimeout(() => {
+          const defaultEmbeddingName = 'Local Ollama (Default)';
+          console.log('🔍 Testing default Ollama embedding instance on page load:', DEFAULT_OLLAMA_URL);
+          manualTestConnection(
+            DEFAULT_OLLAMA_URL,
+            setEmbeddingStatus,
+            defaultEmbeddingName,
+            'embedding',
+            { suppressToast: true }
+          );
+        }, 1500);
+      }
+
       // Fetch Ollama metrics after testing connections
       setTimeout(() => {
         console.log('📊 Fetching Ollama metrics on page load');
@@ -1188,10 +1398,14 @@ export const RAGSettings = ({
             const embeddingStatus = getProviderStatus(embeddingProvider);
             const missingProviders = [];
 
-            if (chatStatus === 'missing') {
+            if (chatStatus === 'missing' && chatProvider !== selectedProviderKey) {
               missingProviders.push({ name: chatProvider, type: 'Chat', color: 'green' });
             }
-            if (embeddingStatus === 'missing' && embeddingProvider !== chatProvider) {
+            if (
+              embeddingStatus === 'missing' &&
+              embeddingProvider !== chatProvider &&
+              embeddingProvider !== selectedProviderKey
+            ) {
               missingProviders.push({ name: embeddingProvider, type: 'Embedding', color: 'purple' });
             }
 
@@ -1394,7 +1608,17 @@ export const RAGSettings = ({
                             size="sm"
                             accentColor="green"
                             className="text-white border-emerald-400 hover:bg-emerald-500/10"
-                            onClick={() => manualTestConnection(llmInstanceConfig.url, setLLMStatus, llmInstanceConfig.name, 'chat')}
+                            onClick={async () => {
+                              const success = await manualTestConnection(
+                                llmInstanceConfig.url,
+                                setLLMStatus,
+                                llmInstanceConfig.name,
+                                'chat'
+                              );
+
+                              setOllamaManualConfirmed(success);
+                              setOllamaServerStatus(success ? 'online' : 'offline');
+                            }}
                             disabled={llmStatus.checking}
                           >
                             {llmStatus.checking ? 'Testing...' : 'Test Connection'}
@@ -1460,7 +1684,17 @@ export const RAGSettings = ({
                             variant="outline"
                             size="sm"
                             className="text-purple-300 border-purple-400 hover:bg-purple-500/10"
-                            onClick={() => manualTestConnection(embeddingInstanceConfig.url, setEmbeddingStatus, embeddingInstanceConfig.name, 'embedding')}
+                            onClick={async () => {
+                              const success = await manualTestConnection(
+                                embeddingInstanceConfig.url,
+                                setEmbeddingStatus,
+                                embeddingInstanceConfig.name,
+                                'embedding'
+                              );
+
+                              setOllamaManualConfirmed(success);
+                              setOllamaServerStatus(success ? 'online' : 'offline');
+                            }}
                             disabled={embeddingStatus.checking}
                           >
                             {embeddingStatus.checking ? 'Testing...' : 'Test Connection'}
@@ -2028,7 +2262,16 @@ export const RAGSettings = ({
                     showToast('LLM instance updated successfully', 'success');
                     // Wait 1 second then automatically test connection and refresh models
                     setTimeout(() => {
-                      manualTestConnection(llmInstanceConfig.url, setLLMStatus, llmInstanceConfig.name, 'chat');
+                      manualTestConnection(
+                        llmInstanceConfig.url,
+                        setLLMStatus,
+                        llmInstanceConfig.name,
+                        'chat',
+                        { suppressToast: true }
+                      ).then((success) => {
+                        setOllamaManualConfirmed(success);
+                        setOllamaServerStatus(success ? 'online' : 'offline');
+                      });
                       fetchOllamaMetrics(); // Refresh model metrics after saving
                     }, 1000);
                   }}
@@ -2079,7 +2322,16 @@ export const RAGSettings = ({
                     showToast('Embedding instance updated successfully', 'success');
                     // Wait 1 second then automatically test connection and refresh models
                     setTimeout(() => {
-                      manualTestConnection(embeddingInstanceConfig.url, setEmbeddingStatus, embeddingInstanceConfig.name, 'embedding');
+                      manualTestConnection(
+                        embeddingInstanceConfig.url,
+                        setEmbeddingStatus,
+                        embeddingInstanceConfig.name,
+                        'embedding',
+                        { suppressToast: true }
+                      ).then((success) => {
+                        setOllamaManualConfirmed(success);
+                        setOllamaServerStatus(success ? 'online' : 'offline');
+                      });
                       fetchOllamaMetrics(); // Refresh model metrics after saving
                     }, 1000);
                   }}
