@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Settings, Check, Save, Loader, ChevronDown, ChevronUp, Zap, Database, Trash2, Cog } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Input } from '../ui/Input';
@@ -117,6 +117,24 @@ const isProviderKey = (value: unknown): value is ProviderKey =>
 
 // Default base URL for Ollama instances when not explicitly configured
 const DEFAULT_OLLAMA_URL = 'http://host.docker.internal:11434/v1';
+
+const PROVIDER_CREDENTIAL_KEYS = [
+  'OPENAI_API_KEY',
+  'GOOGLE_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'OPENROUTER_API_KEY',
+  'GROK_API_KEY',
+] as const;
+
+type ProviderCredentialKey = typeof PROVIDER_CREDENTIAL_KEYS[number];
+
+const CREDENTIAL_PROVIDER_MAP: Record<ProviderCredentialKey, ProviderKey> = {
+  OPENAI_API_KEY: 'openai',
+  GOOGLE_API_KEY: 'google',
+  ANTHROPIC_API_KEY: 'anthropic',
+  OPENROUTER_API_KEY: 'openrouter',
+  GROK_API_KEY: 'grok',
+};
 
 const normalizeBaseUrl = (url?: string | null): string | null => {
   if (!url) return null;
@@ -284,73 +302,53 @@ export const RAGSettings = ({
     }
   }, [ragSettings.EMBEDDING_MODEL, embeddingProvider]);
 
-  // Load API credentials for status checking
-  useEffect(() => {
-    const loadApiCredentials = async () => {
-      try {
-        // Get decrypted values for the API keys we need for status checking
-        const keyNames = ['OPENAI_API_KEY', 'GOOGLE_API_KEY', 'ANTHROPIC_API_KEY'];
-        const statusResults = await credentialsService.checkCredentialStatus(keyNames);
-        
-        const credentials: {[key: string]: boolean} = {};
-
-        for (const [key, result] of Object.entries(statusResults)) {
-          credentials[key] = !!result.has_value;
-        }
-        
-        console.log('🔑 Loaded API credentials for status checking:', Object.keys(credentials));
-        setApiCredentials(credentials);
-      } catch (error) {
-        console.error('Failed to load API credentials for status checking:', error);
-      }
-    };
-
-    loadApiCredentials();
-  }, []);
-
-  // Reload API credentials when ragSettings change (e.g., after saving)
-  // Use a ref to track if we've loaded credentials to prevent infinite loops
   const hasLoadedCredentialsRef = useRef(false);
-  
-  // Manual reload function for external calls
-  const reloadApiCredentials = async () => {
-    try {
-      // Get decrypted values for the API keys we need for status checking
-      const keyNames = ['OPENAI_API_KEY', 'GOOGLE_API_KEY', 'ANTHROPIC_API_KEY'];
-      const statusResults = await credentialsService.checkCredentialStatus(keyNames);
-      
-      const credentials: {[key: string]: boolean} = {};
 
-      for (const [key, result] of Object.entries(statusResults)) {
-        credentials[key] = !!result.has_value;
+  const reloadApiCredentials = useCallback(async () => {
+    try {
+      const statusResults = await credentialsService.checkCredentialStatus(
+        Array.from(PROVIDER_CREDENTIAL_KEYS),
+      );
+
+      const credentials: { [key: string]: boolean } = {};
+
+      for (const key of PROVIDER_CREDENTIAL_KEYS) {
+        const result = statusResults[key];
+        credentials[key] = !!result?.has_value;
       }
-      
-      console.log('🔄 Reloaded API credentials for status checking:', Object.keys(credentials));
+
+      console.log(
+        '🔑 Updated API credential status snapshot:',
+        Object.keys(credentials),
+      );
       setApiCredentials(credentials);
       hasLoadedCredentialsRef.current = true;
     } catch (error) {
-      console.error('Failed to reload API credentials:', error);
+      console.error('Failed to load API credentials for status checking:', error);
     }
-  };
-  
+  }, []);
+
   useEffect(() => {
-    // Only reload if we have ragSettings and haven't loaded yet, or if LLM_PROVIDER changed
-    if (Object.keys(ragSettings).length > 0 && (!hasLoadedCredentialsRef.current || ragSettings.LLM_PROVIDER)) {
-      reloadApiCredentials();
+    void reloadApiCredentials();
+  }, [reloadApiCredentials]);
+
+  useEffect(() => {
+    if (!hasLoadedCredentialsRef.current) {
+      return;
     }
-  }, [ragSettings.LLM_PROVIDER]); // Only depend on LLM_PROVIDER changes
-  
-  // Reload credentials periodically to catch updates from other components (like onboarding)
+
+    void reloadApiCredentials();
+  }, [ragSettings.LLM_PROVIDER, reloadApiCredentials]);
+
   useEffect(() => {
-    // Set up periodic reload every 30 seconds when component is active (reduced from 2s)
     const interval = setInterval(() => {
       if (Object.keys(ragSettings).length > 0) {
-        reloadApiCredentials();
+        void reloadApiCredentials();
       }
-    }, 30000); // Changed from 2000ms to 30000ms (30 seconds)
+    }, 30000);
 
     return () => clearInterval(interval);
-  }, [ragSettings.LLM_PROVIDER]); // Only restart interval if provider changes
+  }, [ragSettings.LLM_PROVIDER, reloadApiCredentials]);
 
   useEffect(() => {
     const needsDetection = chatProvider === 'ollama' || embeddingProvider === 'ollama';
@@ -476,7 +474,7 @@ export const RAGSettings = ({
   }, []);
 
   // Test connection to external providers
-  const testProviderConnection = async (provider: string): Promise<boolean> => {
+  const testProviderConnection = useCallback(async (provider: string): Promise<boolean> => {
     setProviderConnectionStatus(prev => ({
       ...prev,
       [provider]: { ...prev[provider], checking: true }
@@ -503,7 +501,7 @@ export const RAGSettings = ({
       }));
       return false;
     }
-  };
+  }, []);
 
   // Test provider connections when API credentials change
   useEffect(() => {
@@ -529,7 +527,39 @@ export const RAGSettings = ({
     const interval = setInterval(testConnections, 60000);
 
     return () => clearInterval(interval);
-  }, [apiCredentials]); // Test when credentials change
+  }, [apiCredentials, testProviderConnection]); // Test when credentials change
+
+  useEffect(() => {
+    const handleCredentialUpdate = (event: Event) => {
+      const detail = (event as CustomEvent<{ keys?: string[] }>).detail;
+      const updatedKeys = (detail?.keys ?? []).map(key => key.toUpperCase());
+
+      if (updatedKeys.length === 0) {
+        void reloadApiCredentials();
+        return;
+      }
+
+      const touchedProviderKeys = updatedKeys.filter(key => key in CREDENTIAL_PROVIDER_MAP);
+      if (touchedProviderKeys.length === 0) {
+        return;
+      }
+
+      void reloadApiCredentials();
+
+      touchedProviderKeys.forEach(key => {
+        const provider = CREDENTIAL_PROVIDER_MAP[key as ProviderCredentialKey];
+        if (provider) {
+          void testProviderConnection(provider);
+        }
+      });
+    };
+
+    window.addEventListener('archon:credentials-updated', handleCredentialUpdate);
+
+    return () => {
+      window.removeEventListener('archon:credentials-updated', handleCredentialUpdate);
+    };
+  }, [reloadApiCredentials, testProviderConnection]);
 
   // Ref to track if initial test has been run (will be used after function definitions)
   const hasRunInitialTestRef = useRef(false);
@@ -893,33 +923,41 @@ const manualTestConnection = async (
     }
   }, [ragSettings.LLM_PROVIDER, embeddingProvider, llmStatus.online, embeddingStatus.online]);
 
+  const hasApiCredential = (credentialKey: ProviderCredentialKey): boolean => {
+    if (credentialKey in apiCredentials) {
+      return Boolean(apiCredentials[credentialKey]);
+    }
+
+    const fallbackKey = Object.keys(apiCredentials).find(
+      key => key.toUpperCase() === credentialKey,
+    );
+
+    return fallbackKey ? Boolean(apiCredentials[fallbackKey]) : false;
+  };
+
   // Function to check if a provider is properly configured
   const getProviderStatus = (providerKey: string): 'configured' | 'missing' | 'partial' => {
     switch (providerKey) {
       case 'openai':
-        // Check if OpenAI API key is configured (case insensitive)
-        const openAIKey = Object.keys(apiCredentials).find(key => key.toUpperCase() === 'OPENAI_API_KEY');
-        const hasOpenAIKey = openAIKey ? !!apiCredentials[openAIKey] : false;
-        
+        const hasOpenAIKey = hasApiCredential('OPENAI_API_KEY');
+
         // Only show configured if we have both API key AND confirmed connection
         const openAIConnected = providerConnectionStatus['openai']?.connected || false;
         const isChecking = providerConnectionStatus['openai']?.checking || false;
-        
+
         // Intentionally avoid logging API key material.
-        
+
         if (!hasOpenAIKey) return 'missing';
         if (isChecking) return 'partial';
         return openAIConnected ? 'configured' : 'missing';
         
       case 'google':
-        // Check if Google API key is configured (case insensitive)
-        const googleKey = Object.keys(apiCredentials).find(key => key.toUpperCase() === 'GOOGLE_API_KEY');
-        const hasGoogleKey = googleKey ? !!apiCredentials[googleKey] : false;
+        const hasGoogleKey = hasApiCredential('GOOGLE_API_KEY');
         
         // Only show configured if we have both API key AND confirmed connection
         const googleConnected = providerConnectionStatus['google']?.connected || false;
         const googleChecking = providerConnectionStatus['google']?.checking || false;
-        
+
         if (!hasGoogleKey) return 'missing';
         if (googleChecking) return 'partial';
         return googleConnected ? 'configured' : 'missing';
@@ -941,21 +979,24 @@ const manualTestConnection = async (
           return 'missing';
         }
       case 'anthropic':
-        // Use server-side connection status
+        const hasAnthropicKey = hasApiCredential('ANTHROPIC_API_KEY');
         const anthropicConnected = providerConnectionStatus['anthropic']?.connected || false;
         const anthropicChecking = providerConnectionStatus['anthropic']?.checking || false;
+        if (!hasAnthropicKey) return 'missing';
         if (anthropicChecking) return 'partial';
         return anthropicConnected ? 'configured' : 'missing';
       case 'grok':
-        // Use server-side connection status
+        const hasGrokKey = hasApiCredential('GROK_API_KEY');
         const grokConnected = providerConnectionStatus['grok']?.connected || false;
         const grokChecking = providerConnectionStatus['grok']?.checking || false;
+        if (!hasGrokKey) return 'missing';
         if (grokChecking) return 'partial';
         return grokConnected ? 'configured' : 'missing';
       case 'openrouter':
-        // Use server-side connection status
+        const hasOpenRouterKey = hasApiCredential('OPENROUTER_API_KEY');
         const openRouterConnected = providerConnectionStatus['openrouter']?.connected || false;
         const openRouterChecking = providerConnectionStatus['openrouter']?.checking || false;
+        if (!hasOpenRouterKey) return 'missing';
         if (openRouterChecking) return 'partial';
         return openRouterConnected ? 'configured' : 'missing';
       default:
