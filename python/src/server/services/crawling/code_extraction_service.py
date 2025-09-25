@@ -159,7 +159,7 @@ class CodeExtractionService:
         if progress_callback:
             async def extraction_progress(data: dict):
                 # Scale progress to 0-20% range
-                raw_progress = data.get("progress", 0)
+                raw_progress = data.get("progress", data.get("percentage", 0))
                 scaled_progress = int(raw_progress * 0.2)  # 0-20%
                 data["progress"] = scaled_progress
                 await progress_callback(data)
@@ -197,7 +197,7 @@ class CodeExtractionService:
         if progress_callback:
             async def summary_progress(data: dict):
                 # Scale progress to 20-90% range
-                raw_progress = data.get("progress", 0)
+                raw_progress = data.get("progress", data.get("percentage", 0))
                 scaled_progress = 20 + int(raw_progress * 0.7)  # 20-90%
                 data["progress"] = scaled_progress
                 await progress_callback(data)
@@ -216,7 +216,7 @@ class CodeExtractionService:
         if progress_callback:
             async def storage_progress(data: dict):
                 # Scale progress to 90-100% range
-                raw_progress = data.get("progress", 0)
+                raw_progress = data.get("progress", data.get("percentage", 0))
                 scaled_progress = 90 + int(raw_progress * 0.1)  # 90-100%
                 data["progress"] = scaled_progress
                 await progress_callback(data)

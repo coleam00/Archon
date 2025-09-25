@@ -6,14 +6,16 @@ Handles all OpenAI embedding operations with proper rate limiting and error hand
 
 import asyncio
 import os
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
 import openai
 
 from ...config.logfire_config import safe_span, search_logger
 from ..credential_service import credential_service
-from ..llm_provider_service import get_embedding_model, get_llm_client, is_google_embedding_model, is_openai_embedding_model
+from ..llm_provider_service import get_embedding_model, get_llm_client
 from ..threading_service import get_threading_service
 from .embedding_exceptions import (
     EmbeddingAPIError,
@@ -63,6 +65,120 @@ class EmbeddingBatchResult:
     def total_requested(self) -> int:
         return self.success_count + self.failure_count
 
+
+class EmbeddingProviderAdapter(ABC):
+    """Adapter interface for embedding providers."""
+
+    @abstractmethod
+    async def create_embeddings(
+        self,
+        texts: list[str],
+        model: str,
+        dimensions: int | None = None,
+    ) -> list[list[float]]:
+        """Create embeddings for the given texts."""
+
+
+class OpenAICompatibleEmbeddingAdapter(EmbeddingProviderAdapter):
+    """Adapter for providers using the OpenAI embeddings API shape."""
+
+    def __init__(self, client: Any):
+        self._client = client
+
+    async def create_embeddings(
+        self,
+        texts: list[str],
+        model: str,
+        dimensions: int | None = None,
+    ) -> list[list[float]]:
+        request_args: dict[str, Any] = {
+            "model": model,
+            "input": texts,
+        }
+        if dimensions is not None:
+            request_args["dimensions"] = dimensions
+
+        response = await self._client.embeddings.create(**request_args)
+        return [item.embedding for item in response.data]
+
+
+class GoogleEmbeddingAdapter(EmbeddingProviderAdapter):
+    """Adapter for Google's native embedding endpoint."""
+
+    async def create_embeddings(
+        self,
+        texts: list[str],
+        model: str,
+        dimensions: int | None = None,
+    ) -> list[list[float]]:
+        try:
+            if dimensions is not None:
+                _ = dimensions  # Maintains adapter signature; Google controls dimensions server-side.
+
+            google_api_key = await credential_service.get_credential("GOOGLE_API_KEY")
+            if not google_api_key:
+                raise EmbeddingAPIError("Google API key not found")
+
+            async with httpx.AsyncClient(timeout=30.0) as http_client:
+                embeddings = await asyncio.gather(
+                    *(
+                        self._fetch_single_embedding(http_client, google_api_key, model, text)
+                        for text in texts
+                    )
+                )
+
+            return embeddings
+
+        except httpx.HTTPStatusError as error:
+            error_content = error.response.text
+            search_logger.error(
+                f"Google embedding API returned {error.response.status_code} - {error_content}",
+                exc_info=True,
+            )
+            raise EmbeddingAPIError(
+                f"Google embedding API error: {error.response.status_code} - {error_content}",
+                original_error=error,
+            ) from error
+        except Exception as error:
+            search_logger.error(f"Error calling Google embedding API: {error}", exc_info=True)
+            raise EmbeddingAPIError(
+                f"Google embedding error: {str(error)}", original_error=error
+            ) from error
+
+    async def _fetch_single_embedding(
+        self,
+        http_client: httpx.AsyncClient,
+        api_key: str,
+        model: str,
+        text: str,
+    ) -> list[float]:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent"
+        headers = {
+            "x-goog-api-key": api_key,
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": f"models/{model}",
+            "content": {"parts": [{"text": text}]},
+        }
+
+        response = await http_client.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+
+        result = response.json()
+        embedding = result.get("embedding", {})
+        values = embedding.get("values") if isinstance(embedding, dict) else None
+        if not isinstance(values, list):
+            raise EmbeddingAPIError(f"Invalid embedding payload from Google: {result}")
+
+        return values
+
+
+def _get_embedding_adapter(provider: str, client: Any) -> EmbeddingProviderAdapter:
+    provider_name = (provider or "").lower()
+    if provider_name == "google":
+        return GoogleEmbeddingAdapter()
+    return OpenAICompatibleEmbeddingAdapter(client)
 
 # Provider-aware client factory
 get_openai_client = get_llm_client
@@ -185,22 +301,14 @@ async def create_embeddings_batch(
         "create_embeddings_batch", text_count=len(texts), total_chars=sum(len(t) for t in texts)
     ) as span:
         try:
-            # Intelligent embedding provider routing based on model type
-            # Get the embedding model first to determine the correct provider
-            embedding_model = await get_embedding_model(provider=provider)
+            embedding_config = await credential_service.get_active_provider(service_type="embedding")
+            embedding_provider = embedding_config.get("provider")
 
-            # Route to correct provider based on model type
-            if is_google_embedding_model(embedding_model):
-                embedding_provider = "google"
-                search_logger.info(f"Routing to Google for embedding model: {embedding_model}")
-            elif is_openai_embedding_model(embedding_model) or "openai/" in embedding_model.lower():
-                embedding_provider = "openai"
-                search_logger.info(f"Routing to OpenAI for embedding model: {embedding_model}")
-            else:
-                # Keep original provider for ollama and other providers
-                embedding_provider = provider
-                search_logger.info(f"Using original provider '{provider}' for embedding model: {embedding_model}")
+            if not embedding_provider:
+                search_logger.error("No embedding provider configured")
+                raise ValueError("No embedding provider configured. Please set EMBEDDING_PROVIDER environment variable.")
 
+            search_logger.info(f"Using embedding provider: '{embedding_provider}' (from EMBEDDING_PROVIDER setting)")
             async with get_llm_client(provider=embedding_provider, use_embedding_provider=True) as client:
                 # Load batch size and dimensions from settings
                 try:
@@ -215,6 +323,8 @@ async def create_embeddings_batch(
                     embedding_dimensions = 1536
 
                 total_tokens_used = 0
+                adapter = _get_embedding_adapter(embedding_provider, client)
+                dimensions_to_use = embedding_dimensions if embedding_dimensions > 0 else None
 
                 for i in range(0, len(texts), batch_size):
                     batch = texts[i : i + batch_size]
@@ -243,16 +353,14 @@ async def create_embeddings_batch(
                                 try:
                                     # Create embeddings for this batch
                                     embedding_model = await get_embedding_model(provider=embedding_provider)
-
-                                    response = await client.embeddings.create(
-                                        model=embedding_model,
-                                        input=batch,
-                                        dimensions=embedding_dimensions,
+                                    embeddings = await adapter.create_embeddings(
+                                        batch,
+                                        embedding_model,
+                                        dimensions=dimensions_to_use,
                                     )
 
-                                    # Add successful embeddings
-                                    for text, item in zip(batch, response.data, strict=False):
-                                        result.add_success(item.embedding, text)
+                                    for text, vector in zip(batch, embeddings, strict=False):
+                                        result.add_success(vector, text)
 
                                     break  # Success, exit retry loop
 
