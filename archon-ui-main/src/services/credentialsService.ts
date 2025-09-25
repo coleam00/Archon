@@ -195,7 +195,7 @@ class CredentialsService {
       USE_HYBRID_SEARCH: true,
   USE_AGENTIC_RAG: true,
   USE_RERANKING: true,
-  MODEL_CHOICE: "gpt-4.1-nano",
+  MODEL_CHOICE: "gpt-4o-mini",
   LLM_PROVIDER: "openai",
   LLM_BASE_URL: "",
   LLM_INSTANCE_NAME: "",

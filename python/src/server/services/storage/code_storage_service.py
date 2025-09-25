@@ -1183,8 +1183,8 @@ async def add_code_examples_to_supabase(
             # Use original combined texts
             batch_texts = combined_texts
 
-        # Create embeddings for the batch
-        result = await create_embeddings_batch(batch_texts, provider=provider)
+        # Create embeddings for the batch (let credential service determine provider)
+        result = await create_embeddings_batch(batch_texts)
 
         # Log any failures
         if result.has_failures:

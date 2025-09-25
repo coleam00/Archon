@@ -860,12 +860,14 @@ const manualTestConnection = async (
 
   // Fetch Ollama metrics only when Ollama provider is initially selected (not on URL changes during typing)
   React.useEffect(() => {
-    if (ragSettings.LLM_PROVIDER === 'ollama') {
+    if (
+      ragSettings.LLM_PROVIDER === 'ollama' || embeddingProvider === 'ollama'
+    ) {
       const currentProvider = ragSettings.LLM_PROVIDER;
       const lastProvider = lastMetricsFetchRef.current.provider;
-      
+
       // Only fetch if provider changed to Ollama (scenario 1: user clicks on Ollama Provider)
-      if (currentProvider !== lastProvider) {
+      if (currentProvider !== lastProvider || embeddingProvider === 'ollama') {
         lastMetricsFetchRef.current = {
           provider: currentProvider,
           llmUrl: llmInstanceConfig.url,
@@ -877,7 +879,8 @@ const manualTestConnection = async (
         fetchOllamaMetrics();
       }
     }
-  }, [ragSettings.LLM_PROVIDER]); // Only watch provider changes, not URL changes
+  }, [ragSettings.LLM_PROVIDER, embeddingProvider, llmInstanceConfig.url, llmInstanceConfig.name,
+      embeddingInstanceConfig.url, embeddingInstanceConfig.name]); // Include embeddingProvider in deps
 
   // Function to check if a provider is properly configured
   const getProviderStatus = (providerKey: string): 'configured' | 'missing' | 'partial' => {
@@ -893,15 +896,7 @@ const manualTestConnection = async (
         const openAIConnected = providerConnectionStatus['openai']?.connected || false;
         const isChecking = providerConnectionStatus['openai']?.checking || false;
         
-        console.log('🔍 OpenAI status check:', { 
-          openAIKey, 
-          keyValue: keyValue ? `${keyValue.substring(0, 10)}...` : keyValue, 
-          hasValue: !!keyValue, 
-          hasOpenAIKey,
-          openAIConnected,
-          isChecking,
-          allCredentials: Object.keys(apiCredentials)
-        });
+        // Intentionally avoid logging API key material.
         
         if (!hasOpenAIKey) return 'missing';
         if (isChecking) return 'partial';
@@ -2386,7 +2381,7 @@ function getDisplayedChatModel(ragSettings: any): string {
 }
 
 function getDisplayedEmbeddingModel(ragSettings: any): string {
-  const provider = ragSettings.LLM_PROVIDER || 'openai';
+  const provider = ragSettings.EMBEDDING_PROVIDER || ragSettings.LLM_PROVIDER || 'openai';
   const embeddingModel = ragSettings.EMBEDDING_MODEL;
 
   // Always prioritize user input to allow editing

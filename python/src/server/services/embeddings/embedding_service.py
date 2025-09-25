@@ -153,13 +153,19 @@ class GoogleEmbeddingAdapter(EmbeddingProviderAdapter):
         model: str,
         text: str,
     ) -> list[float]:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent"
+        if model.startswith("models/"):
+            url_model = model[len("models/") :]
+            payload_model = model
+        else:
+            url_model = model
+            payload_model = f"models/{model}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{url_model}:embedContent"
         headers = {
             "x-goog-api-key": api_key,
             "Content-Type": "application/json",
         }
         payload = {
-            "model": f"models/{model}",
+            "model": payload_model,
             "content": {"parts": [{"text": text}]},
         }
 

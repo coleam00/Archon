@@ -197,8 +197,15 @@ class CodeExtractionService:
         if progress_callback:
             async def summary_progress(data: dict):
                 # Scale progress to 20-90% range
-                raw_progress = data.get("progress", data.get("percentage", 0))
-                scaled_progress = 20 + int(raw_progress * 0.7)  # 20-90%
+                raw = data.get("progress", data.get("percentage", 0))
+                try:
+                    raw_num = float(raw)
+                except (TypeError, ValueError):
+                    raw_num = 0.0
+                if 0.0 <= raw_num <= 1.0:
+                    raw_num *= 100.0
+                # 20-90% with clamping
+                scaled_progress = min(90, max(20, 20 + int(raw_num * 0.7)))
                 data["progress"] = scaled_progress
                 await progress_callback(data)
             summary_callback = summary_progress
@@ -216,8 +223,15 @@ class CodeExtractionService:
         if progress_callback:
             async def storage_progress(data: dict):
                 # Scale progress to 90-100% range
-                raw_progress = data.get("progress", data.get("percentage", 0))
-                scaled_progress = 90 + int(raw_progress * 0.1)  # 90-100%
+                raw = data.get("progress", data.get("percentage", 0))
+                try:
+                    raw_num = float(raw)
+                except (TypeError, ValueError):
+                    raw_num = 0.0
+                if 0.0 <= raw_num <= 1.0:
+                    raw_num *= 100.0
+                # 90-100% with clamping
+                scaled_progress = min(100, max(90, 90 + int(raw_num * 0.1)))
                 data["progress"] = scaled_progress
                 await progress_callback(data)
             storage_callback = storage_progress

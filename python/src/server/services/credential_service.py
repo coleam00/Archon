@@ -442,12 +442,19 @@ class CredentialService:
                 # First check for explicit EMBEDDING_PROVIDER setting (new split provider approach)
                 explicit_embedding_provider = rag_settings.get("EMBEDDING_PROVIDER")
 
-                if explicit_embedding_provider and explicit_embedding_provider != "":
+                # Validate that embedding provider actually supports embeddings
+                embedding_capable_providers = {"openai", "google", "ollama"}
+
+                if (explicit_embedding_provider and
+                    explicit_embedding_provider != "" and
+                    explicit_embedding_provider in embedding_capable_providers):
                     # Use the explicitly set embedding provider
                     provider = explicit_embedding_provider
                     logger.debug(f"Using explicit embedding provider: '{provider}'")
                 else:
                     # Fall back to OpenAI as default embedding provider for backward compatibility
+                    if explicit_embedding_provider and explicit_embedding_provider not in embedding_capable_providers:
+                        logger.warning(f"Invalid embedding provider '{explicit_embedding_provider}' doesn't support embeddings, defaulting to OpenAI")
                     provider = "openai"
                     logger.debug(f"No explicit embedding provider set, defaulting to OpenAI for backward compatibility")
             else:
