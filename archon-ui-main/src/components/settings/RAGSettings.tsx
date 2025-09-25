@@ -118,6 +118,16 @@ const isProviderKey = (value: unknown): value is ProviderKey =>
 // Default base URL for Ollama instances when not explicitly configured
 const DEFAULT_OLLAMA_URL = 'http://host.docker.internal:11434/v1';
 
+const normalizeBaseUrl = (url?: string | null): string | null => {
+  if (!url) return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+
+  let normalized = trimmed.replace(/\/+$/, '');
+  normalized = normalized.replace(/\/v1$/i, '');
+  return normalized || null;
+};
+
 interface RAGSettingsProps {
   ragSettings: {
     MODEL_CHOICE: string;
@@ -282,12 +292,10 @@ export const RAGSettings = ({
         const keyNames = ['OPENAI_API_KEY', 'GOOGLE_API_KEY', 'ANTHROPIC_API_KEY'];
         const statusResults = await credentialsService.checkCredentialStatus(keyNames);
         
-        const credentials: {[key: string]: string} = {};
-        
+        const credentials: {[key: string]: boolean} = {};
+
         for (const [key, result] of Object.entries(statusResults)) {
-          if (result.has_value && result.value && result.value.trim().length > 0) {
-            credentials[key] = result.value;
-          }
+          credentials[key] = !!result.has_value;
         }
         
         console.log('🔑 Loaded API credentials for status checking:', Object.keys(credentials));
@@ -311,12 +319,10 @@ export const RAGSettings = ({
       const keyNames = ['OPENAI_API_KEY', 'GOOGLE_API_KEY', 'ANTHROPIC_API_KEY'];
       const statusResults = await credentialsService.checkCredentialStatus(keyNames);
       
-      const credentials: {[key: string]: string} = {};
-      
+      const credentials: {[key: string]: boolean} = {};
+
       for (const [key, result] of Object.entries(statusResults)) {
-        if (result.has_value && result.value && result.value.trim().length > 0) {
-          credentials[key] = result.value;
-        }
+        credentials[key] = !!result.has_value;
       }
       
       console.log('🔄 Reloaded API credentials for status checking:', Object.keys(credentials));
@@ -448,7 +454,7 @@ export const RAGSettings = ({
   const embeddingRetryTimeoutRef = useRef<number | null>(null);
   
   // API key credentials for status checking
-  const [apiCredentials, setApiCredentials] = useState<{[key: string]: string}>({});
+  const [apiCredentials, setApiCredentials] = useState<{[key: string]: boolean}>({});
   // Provider connection status tracking
   const [providerConnectionStatus, setProviderConnectionStatus] = useState<{
     [key: string]: { connected: boolean; checking: boolean; lastChecked?: Date }
@@ -732,11 +738,14 @@ const manualTestConnection = async (
     try {
       setOllamaMetrics(prev => ({ ...prev, loading: true }));
 
-      // Prepare instance URLs for the API call
-      const instanceUrls = [];
-      if (llmInstanceConfig.url) instanceUrls.push(llmInstanceConfig.url);
-      if (embeddingInstanceConfig.url && embeddingInstanceConfig.url !== llmInstanceConfig.url) {
-        instanceUrls.push(embeddingInstanceConfig.url);
+      // Prepare normalized instance URLs for the API call
+      const instanceUrls: string[] = [];
+      const llmUrlBase = normalizeBaseUrl(llmInstanceConfig.url);
+      const embUrlBase = normalizeBaseUrl(embeddingInstanceConfig.url);
+
+      if (llmUrlBase) instanceUrls.push(llmUrlBase);
+      if (embUrlBase && embUrlBase !== llmUrlBase) {
+        instanceUrls.push(embUrlBase);
       }
 
       if (instanceUrls.length === 0) {
@@ -760,18 +769,18 @@ const manualTestConnection = async (
         
         // Count models for LLM instance
         const llmChatModels = allChatModels.filter((model: any) => 
-          model.instance_url === llmInstanceConfig.url
+          normalizeBaseUrl(model.instance_url) === llmUrlBase
         );
         const llmEmbeddingModels = allEmbeddingModels.filter((model: any) => 
-          model.instance_url === llmInstanceConfig.url
+          normalizeBaseUrl(model.instance_url) === llmUrlBase
         );
-        
+
         // Count models for Embedding instance
         const embChatModels = allChatModels.filter((model: any) => 
-          model.instance_url === embeddingInstanceConfig.url
+          normalizeBaseUrl(model.instance_url) === embUrlBase
         );
         const embEmbeddingModels = allEmbeddingModels.filter((model: any) => 
-          model.instance_url === embeddingInstanceConfig.url
+          normalizeBaseUrl(model.instance_url) === embUrlBase
         );
         
         // Calculate totals
@@ -810,7 +819,7 @@ const manualTestConnection = async (
   // Use refs to prevent infinite connection testing
   const lastTestedLLMConfigRef = useRef({ url: '', name: '', provider: '' });
   const lastTestedEmbeddingConfigRef = useRef({ url: '', name: '', provider: '' });
-  const lastMetricsFetchRef = useRef({ provider: '', llmUrl: '', embUrl: '', llmOnline: false, embOnline: false });
+  const lastMetricsFetchRef = useRef({ provider: '', embProvider: '', llmUrl: '', embUrl: '', llmOnline: false, embOnline: false });
   
   // Auto-testing disabled to prevent API calls on every keystroke per user request
   // Connection testing should only happen on manual "Test Connection" or "Save Changes" button clicks
@@ -858,29 +867,31 @@ const manualTestConnection = async (
   //   }
   // }, [embeddingInstanceConfig.url, embeddingInstanceConfig.name, ragSettings.LLM_PROVIDER]);
 
-  // Fetch Ollama metrics only when Ollama provider is initially selected (not on URL changes during typing)
   React.useEffect(() => {
-    if (
-      ragSettings.LLM_PROVIDER === 'ollama' || embeddingProvider === 'ollama'
-    ) {
-      const currentProvider = ragSettings.LLM_PROVIDER;
-      const lastProvider = lastMetricsFetchRef.current.provider;
+    const current = {
+      provider: ragSettings.LLM_PROVIDER,
+      embProvider: embeddingProvider,
+      llmUrl: normalizeBaseUrl(llmInstanceConfig.url) ?? '',
+      embUrl: normalizeBaseUrl(embeddingInstanceConfig.url) ?? '',
+      llmOnline: llmStatus.online,
+      embOnline: embeddingStatus.online,
+    };
+    const last = lastMetricsFetchRef.current;
 
-      // Only fetch if provider changed to Ollama (scenario 1: user clicks on Ollama Provider)
-      if (currentProvider !== lastProvider || embeddingProvider === 'ollama') {
-        lastMetricsFetchRef.current = {
-          provider: currentProvider,
-          llmUrl: llmInstanceConfig.url,
-          embUrl: embeddingInstanceConfig.url,
-          llmOnline: llmStatus.online,
-          embOnline: embeddingStatus.online
-        };
-        console.log('🔄 Fetching Ollama metrics - Provider selected');
-        fetchOllamaMetrics();
-      }
+    const meaningfulChange =
+      current.provider !== last.provider ||
+      current.embProvider !== last.embProvider ||
+      current.llmUrl !== last.llmUrl ||
+      current.embUrl !== last.embUrl ||
+      current.llmOnline !== last.llmOnline ||
+      current.embOnline !== last.embOnline;
+
+    if ((current.provider === 'ollama' || current.embProvider === 'ollama') && meaningfulChange) {
+      lastMetricsFetchRef.current = current;
+      console.log('🔄 Fetching Ollama metrics - state changed');
+      fetchOllamaMetrics();
     }
-  }, [ragSettings.LLM_PROVIDER, embeddingProvider, llmInstanceConfig.url, llmInstanceConfig.name,
-      embeddingInstanceConfig.url, embeddingInstanceConfig.name]); // Include embeddingProvider in deps
+  }, [ragSettings.LLM_PROVIDER, embeddingProvider, llmStatus.online, embeddingStatus.online]);
 
   // Function to check if a provider is properly configured
   const getProviderStatus = (providerKey: string): 'configured' | 'missing' | 'partial' => {
@@ -888,9 +899,7 @@ const manualTestConnection = async (
       case 'openai':
         // Check if OpenAI API key is configured (case insensitive)
         const openAIKey = Object.keys(apiCredentials).find(key => key.toUpperCase() === 'OPENAI_API_KEY');
-        const keyValue = openAIKey ? apiCredentials[openAIKey] : undefined;
-        // Don't consider encrypted placeholders as valid API keys for connection testing
-        const hasOpenAIKey = openAIKey && keyValue && keyValue.trim().length > 0 && !keyValue.includes('[ENCRYPTED]');
+        const hasOpenAIKey = openAIKey ? !!apiCredentials[openAIKey] : false;
         
         // Only show configured if we have both API key AND confirmed connection
         const openAIConnected = providerConnectionStatus['openai']?.connected || false;
@@ -905,9 +914,7 @@ const manualTestConnection = async (
       case 'google':
         // Check if Google API key is configured (case insensitive)
         const googleKey = Object.keys(apiCredentials).find(key => key.toUpperCase() === 'GOOGLE_API_KEY');
-        const googleKeyValue = googleKey ? apiCredentials[googleKey] : undefined;
-        // Don't consider encrypted placeholders as valid API keys for connection testing
-        const hasGoogleKey = googleKey && googleKeyValue && googleKeyValue.trim().length > 0 && !googleKeyValue.includes('[ENCRYPTED]');
+        const hasGoogleKey = googleKey ? !!apiCredentials[googleKey] : false;
         
         // Only show configured if we have both API key AND confirmed connection
         const googleConnected = providerConnectionStatus['google']?.connected || false;

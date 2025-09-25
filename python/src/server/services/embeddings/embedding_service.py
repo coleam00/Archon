@@ -424,6 +424,17 @@ async def create_embeddings_batch(
                                             await asyncio.sleep(wait_time)
                                         else:
                                             raise  # Will be caught by outer try
+                                except EmbeddingRateLimitError as e:
+                                    retry_count += 1
+                                    if retry_count < max_retries:
+                                        wait_time = 2**retry_count
+                                        search_logger.warning(
+                                            f"Embedding rate limit for batch {batch_index}: {e}. "
+                                            f"Waiting {wait_time}s before retry {retry_count}/{max_retries}"
+                                        )
+                                        await asyncio.sleep(wait_time)
+                                    else:
+                                        raise
 
                     except Exception as e:
                         # This batch failed - track failures but continue with next batch

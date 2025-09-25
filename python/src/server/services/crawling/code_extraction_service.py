@@ -161,9 +161,16 @@ class CodeExtractionService:
         extraction_callback = None
         if progress_callback:
             async def extraction_progress(data: dict):
-                # Scale progress to 0-20% range
-                raw_progress = data.get("progress", data.get("percentage", 0))
-                scaled_progress = int(raw_progress * 0.2)  # 0-20%
+                # Scale progress to 0-20% range with normalization similar to later phases
+                raw = data.get("progress", data.get("percentage", 0))
+                try:
+                    raw_num = float(raw)
+                except (TypeError, ValueError):
+                    raw_num = 0.0
+                if 0.0 <= raw_num <= 1.0:
+                    raw_num *= 100.0
+                # 0-20% with clamping
+                scaled_progress = min(20, max(0, int(raw_num * 0.2)))
                 data["progress"] = scaled_progress
                 await progress_callback(data)
             extraction_callback = extraction_progress
@@ -901,9 +908,20 @@ class CodeExtractionService:
                         current_indent = indent
                         block_start_idx = i
                     current_block.append(line)
-                elif current_block and len("\n".join(current_block)) >= min_length:
+                elif current_block:
+                    block_text = "\n".join(current_block)
+                    threshold = (
+                        min_length
+                        if min_length is not None
+                        else await self._get_min_code_length()
+                    )
+                    if len(block_text) < threshold:
+                        current_block = []
+                        current_indent = None
+                        continue
+
                     # End of indented block, check if it's code
-                    code_content = "\n".join(current_block)
+                    code_content = block_text
 
                     # Try to detect language from content
                     language = self._detect_language_from_content(code_content)

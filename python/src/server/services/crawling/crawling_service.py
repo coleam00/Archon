@@ -33,22 +33,25 @@ logger = get_logger(__name__)
 
 # Global registry to track active orchestration services for cancellation support
 _active_orchestrations: dict[str, "CrawlingService"] = {}
+_orchestration_lock = asyncio.Lock()
 
 
-def get_active_orchestration(progress_id: str) -> Optional["CrawlingService"]:
+async def get_active_orchestration(progress_id: str) -> Optional["CrawlingService"]:
     """Get an active orchestration service by progress ID."""
-    return _active_orchestrations.get(progress_id)
+    async with _orchestration_lock:
+        return _active_orchestrations.get(progress_id)
 
 
-def register_orchestration(progress_id: str, orchestration: "CrawlingService"):
+async def register_orchestration(progress_id: str, orchestration: "CrawlingService"):
     """Register an active orchestration service."""
-    _active_orchestrations[progress_id] = orchestration
+    async with _orchestration_lock:
+        _active_orchestrations[progress_id] = orchestration
 
 
-def unregister_orchestration(progress_id: str):
+async def unregister_orchestration(progress_id: str):
     """Unregister an orchestration service."""
-    if progress_id in _active_orchestrations:
-        del _active_orchestrations[progress_id]
+    async with _orchestration_lock:
+        _active_orchestrations.pop(progress_id, None)
 
 
 class CrawlingService:
@@ -247,7 +250,7 @@ class CrawlingService:
 
         # Register this orchestration service for cancellation support
         if self.progress_id:
-            register_orchestration(self.progress_id, self)
+            await register_orchestration(self.progress_id, self)
 
         # Start the crawl as an async task in the main event loop
         # Store the task reference for proper cancellation
@@ -562,7 +565,7 @@ class CrawlingService:
 
             # Unregister after successful completion
             if self.progress_id:
-                unregister_orchestration(self.progress_id)
+                await unregister_orchestration(self.progress_id)
                 safe_logfire_info(
                     f"Unregistered orchestration service after completion | progress_id={self.progress_id}"
                 )
@@ -581,7 +584,7 @@ class CrawlingService:
             )
             # Unregister on cancellation
             if self.progress_id:
-                unregister_orchestration(self.progress_id)
+                await unregister_orchestration(self.progress_id)
                 safe_logfire_info(
                     f"Unregistered orchestration service on cancellation | progress_id={self.progress_id}"
                 )
@@ -605,7 +608,7 @@ class CrawlingService:
                 await self.progress_tracker.error(error_message)
             # Unregister on error
             if self.progress_id:
-                unregister_orchestration(self.progress_id)
+                await unregister_orchestration(self.progress_id)
                 safe_logfire_info(
                     f"Unregistered orchestration service on error | progress_id={self.progress_id}"
                 )
