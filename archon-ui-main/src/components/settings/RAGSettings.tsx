@@ -970,10 +970,10 @@ const manualTestConnection = async (
   let providerAlertClassName = '';
 
   if (selectedProviderKey === 'ollama') {
-    if (selectedProviderStatus === 'missing' || ollamaServerStatus === 'offline' || ollamaServerStatus === 'unknown') {
+    if (ollamaServerStatus === 'offline') {
       providerAlertMessage = 'Local Ollama service is not running. Start the Ollama server and ensure it is reachable at the configured URL.';
       providerAlertClassName = providerErrorAlertStyle;
-    } else if (selectedProviderStatus === 'partial') {
+    } else if (selectedProviderStatus === 'partial' && ollamaServerStatus === 'online') {
       providerAlertMessage = 'Local Ollama service detected. Click "Test Connection" to confirm model availability.';
       providerAlertClassName = providerWarningAlertStyle;
     }
@@ -984,173 +984,121 @@ const manualTestConnection = async (
 
   const shouldShowProviderAlert = Boolean(providerAlertMessage);
   
-  const initialChatOllamaTestRef = useRef(false);
   useEffect(() => {
     if (chatProvider !== 'ollama') {
-      initialChatOllamaTestRef.current = false;
+      if (llmRetryTimeoutRef.current) {
+        clearTimeout(llmRetryTimeoutRef.current);
+        llmRetryTimeoutRef.current = null;
+      }
       return;
     }
 
-    const baseUrl = (ragSettings.LLM_BASE_URL && ragSettings.LLM_BASE_URL.trim().length > 0)
-      ? ragSettings.LLM_BASE_URL.trim()
-      : DEFAULT_OLLAMA_URL;
+    const baseUrl = (
+      ragSettings.LLM_BASE_URL?.trim() ||
+      llmInstanceConfig.url?.trim() ||
+      DEFAULT_OLLAMA_URL
+    );
 
     if (!baseUrl) {
       return;
     }
 
-    const instanceName = (ragSettings.LLM_INSTANCE_NAME && ragSettings.LLM_INSTANCE_NAME.trim().length > 0)
-      ? ragSettings.LLM_INSTANCE_NAME.trim()
+    const instanceName = llmInstanceConfig.name?.trim().length
+      ? llmInstanceConfig.name
       : 'LLM Instance';
+
+    let cancelled = false;
+
+    const runTest = async () => {
+      if (cancelled) return;
+
+      const success = await manualTestConnection(
+        baseUrl,
+        setLLMStatus,
+        instanceName,
+        'chat',
+        { suppressToast: true }
+      );
+
+      if (!success && chatProvider === 'ollama' && !cancelled) {
+        llmRetryTimeoutRef.current = window.setTimeout(runTest, 5000);
+      }
+    };
 
     if (llmRetryTimeoutRef.current) {
       clearTimeout(llmRetryTimeoutRef.current);
       llmRetryTimeoutRef.current = null;
     }
 
-    const runTest = async () => {
-      const success = await manualTestConnection(
-        baseUrl,
-        setLLMStatus,
-        instanceName,
-        'chat',
-        { suppressToast: true }
-      );
-
-      if (!success && chatProvider === 'ollama') {
-        llmRetryTimeoutRef.current = window.setTimeout(runTest, 5000);
-      }
-    };
-
     setLLMStatus(prev => ({ ...prev, checking: true }));
-    llmRetryTimeoutRef.current = window.setTimeout(runTest, 100);
+    runTest();
 
     return () => {
+      cancelled = true;
       if (llmRetryTimeoutRef.current) {
         clearTimeout(llmRetryTimeoutRef.current);
         llmRetryTimeoutRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatProvider, ragSettings.LLM_BASE_URL, ragSettings.LLM_INSTANCE_NAME]);
+  }, [chatProvider, ragSettings.LLM_BASE_URL, ragSettings.LLM_INSTANCE_NAME, llmInstanceConfig.url, llmInstanceConfig.name]);
 
-  useEffect(() => {
-    if (chatProvider !== 'ollama') {
-      initialChatOllamaTestRef.current = false;
-      return;
-    }
-
-    if (initialChatOllamaTestRef.current) {
-      return;
-    }
-
-    initialChatOllamaTestRef.current = true;
-
-    const baseUrl = (ragSettings.LLM_BASE_URL && ragSettings.LLM_BASE_URL.trim().length > 0)
-      ? ragSettings.LLM_BASE_URL.trim()
-      : (llmInstanceConfig.url && llmInstanceConfig.url.trim().length > 0)
-        ? llmInstanceConfig.url.trim()
-        : DEFAULT_OLLAMA_URL;
-
-    const instanceName = llmInstanceConfig.name?.trim().length
-      ? llmInstanceConfig.name
-      : 'LLM Instance';
-
-    setLLMStatus(prev => ({ ...prev, checking: true }));
-    setTimeout(() => {
-      manualTestConnection(
-        baseUrl,
-        setLLMStatus,
-        instanceName,
-        'chat',
-        { suppressToast: true }
-      );
-    }, 200);
-  }, [chatProvider, ragSettings.LLM_BASE_URL, llmInstanceConfig.url, llmInstanceConfig.name]);
-
-  const initialEmbeddingOllamaTestRef = useRef(false);
   useEffect(() => {
     if (embeddingProvider !== 'ollama') {
-      initialEmbeddingOllamaTestRef.current = false;
+      if (embeddingRetryTimeoutRef.current) {
+        clearTimeout(embeddingRetryTimeoutRef.current);
+        embeddingRetryTimeoutRef.current = null;
+      }
       return;
     }
 
-    const baseUrl = (ragSettings.OLLAMA_EMBEDDING_URL && ragSettings.OLLAMA_EMBEDDING_URL.trim().length > 0)
-      ? ragSettings.OLLAMA_EMBEDDING_URL.trim()
-      : DEFAULT_OLLAMA_URL;
+    const baseUrl = (
+      ragSettings.OLLAMA_EMBEDDING_URL?.trim() ||
+      embeddingInstanceConfig.url?.trim() ||
+      DEFAULT_OLLAMA_URL
+    );
 
     if (!baseUrl) {
       return;
     }
 
-    const instanceName = (ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME && ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME.trim().length > 0)
-      ? ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME.trim()
+    const instanceName = embeddingInstanceConfig.name?.trim().length
+      ? embeddingInstanceConfig.name
       : 'Embedding Instance';
+
+    let cancelled = false;
+
+    const runTest = async () => {
+      if (cancelled) return;
+
+      const success = await manualTestConnection(
+        baseUrl,
+        setEmbeddingStatus,
+        instanceName,
+        'embedding',
+        { suppressToast: true }
+      );
+
+      if (!success && embeddingProvider === 'ollama' && !cancelled) {
+        embeddingRetryTimeoutRef.current = window.setTimeout(runTest, 5000);
+      }
+    };
 
     if (embeddingRetryTimeoutRef.current) {
       clearTimeout(embeddingRetryTimeoutRef.current);
       embeddingRetryTimeoutRef.current = null;
     }
 
-    const runTest = async () => {
-      const success = await manualTestConnection(
-        baseUrl,
-        setEmbeddingStatus,
-        instanceName,
-        'embedding',
-        { suppressToast: true }
-      );
-
-      if (!success && embeddingProvider === 'ollama') {
-        embeddingRetryTimeoutRef.current = window.setTimeout(runTest, 5000);
-      }
-    };
-
     setEmbeddingStatus(prev => ({ ...prev, checking: true }));
-    embeddingRetryTimeoutRef.current = window.setTimeout(runTest, 100);
+    runTest();
 
     return () => {
+      cancelled = true;
       if (embeddingRetryTimeoutRef.current) {
         clearTimeout(embeddingRetryTimeoutRef.current);
         embeddingRetryTimeoutRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [embeddingProvider, ragSettings.OLLAMA_EMBEDDING_URL, ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME]);
-
-  useEffect(() => {
-    if (embeddingProvider !== 'ollama') {
-      initialEmbeddingOllamaTestRef.current = false;
-      return;
-    }
-
-    if (initialEmbeddingOllamaTestRef.current) {
-      return;
-    }
-
-    initialEmbeddingOllamaTestRef.current = true;
-
-    const baseUrl = (ragSettings.OLLAMA_EMBEDDING_URL && ragSettings.OLLAMA_EMBEDDING_URL.trim().length > 0)
-      ? ragSettings.OLLAMA_EMBEDDING_URL.trim()
-      : (embeddingInstanceConfig.url && embeddingInstanceConfig.url.trim().length > 0)
-        ? embeddingInstanceConfig.url.trim()
-        : DEFAULT_OLLAMA_URL;
-
-    const instanceName = embeddingInstanceConfig.name?.trim().length
-      ? embeddingInstanceConfig.name
-      : 'Embedding Instance';
-
-    setEmbeddingStatus(prev => ({ ...prev, checking: true }));
-    setTimeout(() => {
-      manualTestConnection(
-        baseUrl,
-        setEmbeddingStatus,
-        instanceName,
-        'embedding',
-        { suppressToast: true }
-      );
-    }, 250);
-  }, [embeddingProvider, ragSettings.OLLAMA_EMBEDDING_URL, embeddingInstanceConfig.url, embeddingInstanceConfig.name]);
+  }, [embeddingProvider, ragSettings.OLLAMA_EMBEDDING_URL, ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME, embeddingInstanceConfig.url, embeddingInstanceConfig.name]);
 
   // Test Ollama connectivity when Settings page loads (scenario 4: page load)
   // This useEffect is placed after function definitions to ensure access to manualTestConnection
