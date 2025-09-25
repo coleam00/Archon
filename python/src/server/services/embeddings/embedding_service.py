@@ -5,6 +5,7 @@ Handles all OpenAI embedding operations with proper rate limiting and error hand
 """
 
 import asyncio
+import inspect
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -180,6 +181,12 @@ def _get_embedding_adapter(provider: str, client: Any) -> EmbeddingProviderAdapt
         return GoogleEmbeddingAdapter()
     return OpenAICompatibleEmbeddingAdapter(client)
 
+
+async def _maybe_await(value: Any) -> Any:
+    """Await the value if it is awaitable, otherwise return as-is."""
+
+    return await value if inspect.isawaitable(value) else value
+
 # Provider-aware client factory
 get_openai_client = get_llm_client
 
@@ -301,8 +308,14 @@ async def create_embeddings_batch(
         "create_embeddings_batch", text_count=len(texts), total_chars=sum(len(t) for t in texts)
     ) as span:
         try:
-            embedding_config = await credential_service.get_active_provider(service_type="embedding")
-            embedding_provider = embedding_config.get("provider")
+            embedding_config = await _maybe_await(
+                credential_service.get_active_provider(service_type="embedding")
+            )
+
+            embedding_provider = provider or embedding_config.get("provider")
+
+            if not isinstance(embedding_provider, str) or not embedding_provider.strip():
+                embedding_provider = "openai"
 
             if not embedding_provider:
                 search_logger.error("No embedding provider configured")
@@ -312,8 +325,8 @@ async def create_embeddings_batch(
             async with get_llm_client(provider=embedding_provider, use_embedding_provider=True) as client:
                 # Load batch size and dimensions from settings
                 try:
-                    rag_settings = await credential_service.get_credentials_by_category(
-                        "rag_strategy"
+                    rag_settings = await _maybe_await(
+                        credential_service.get_credentials_by_category("rag_strategy")
                     )
                     batch_size = int(rag_settings.get("EMBEDDING_BATCH_SIZE", "100"))
                     embedding_dimensions = int(rag_settings.get("EMBEDDING_DIMENSIONS", "1536"))
