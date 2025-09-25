@@ -91,25 +91,17 @@ const colorStyles: Record<ProviderKey, string> = {
   grok: 'border-yellow-500 bg-yellow-500/10',
 };
 
-const providerAlertStyles: Record<ProviderKey, string> = {
-  openai: 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 text-green-800 dark:text-green-300',
-  google: 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-300',
-  openrouter: 'bg-cyan-50 dark:bg-cyan-900/20 border-cyan-200 dark:border-cyan-800 text-cyan-800 dark:text-cyan-300',
-  ollama: 'bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800 text-purple-800 dark:text-purple-300',
-  anthropic: 'bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-800 text-orange-800 dark:text-orange-300',
-  grok: 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800 text-yellow-800 dark:text-yellow-300',
-};
-
 const providerWarningAlertStyle = 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800 text-yellow-800 dark:text-yellow-300';
 const providerErrorAlertStyle = 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-red-800 dark:text-red-300';
+const providerMissingAlertStyle = providerErrorAlertStyle;
 
-const defaultProviderAlertMessages: Record<ProviderKey, string> = {
-  openai: 'Configure your OpenAI API key in the credentials section to use GPT models.',
-  google: 'Configure your Google API key in the credentials section to use Gemini models.',
-  openrouter: 'Configure your OpenRouter API key in the credentials section to use models.',
-  ollama: 'Configure your Ollama instances in this panel to connect local models.',
-  anthropic: 'Configure your Anthropic API key in the credentials section to use Claude models.',
-  grok: 'Configure your Grok API key in the credentials section to use Grok models.',
+const providerDisplayNames: Record<ProviderKey, string> = {
+  openai: 'OpenAI',
+  google: 'Google',
+  openrouter: 'OpenRouter',
+  ollama: 'Ollama',
+  anthropic: 'Anthropic',
+  grok: 'Grok',
 };
 
 const isProviderKey = (value: unknown): value is ProviderKey =>
@@ -1022,8 +1014,9 @@ const manualTestConnection = async (
       providerAlertClassName = providerWarningAlertStyle;
     }
   } else if (activeProviderKey && selectedProviderStatus === 'missing') {
-    providerAlertMessage = defaultProviderAlertMessages[activeProviderKey] ?? null;
-    providerAlertClassName = providerAlertStyles[activeProviderKey] ?? '';
+    const providerName = providerDisplayNames[activeProviderKey] ?? activeProviderKey;
+    providerAlertMessage = `${providerName} API key is not configured. Add it in Settings > API Keys.`;
+    providerAlertClassName = providerMissingAlertStyle;
   }
 
   const shouldShowProviderAlert = Boolean(providerAlertMessage);
@@ -1385,46 +1378,6 @@ const manualTestConnection = async (
               </button>
             ))}
           </div>
-
-          {/* API Key Validation Warnings */}
-          {(() => {
-            const chatStatus = getProviderStatus(chatProvider);
-            const embeddingStatus = getProviderStatus(embeddingProvider);
-            const missingProviders = [];
-            const providerToIgnore = activeProviderKey;
-
-            if (chatStatus === 'missing' && (!providerToIgnore || chatProvider !== providerToIgnore)) {
-              missingProviders.push({ name: chatProvider, type: 'Chat', color: 'green' });
-            }
-            if (
-              embeddingStatus === 'missing' &&
-              embeddingProvider !== chatProvider &&
-              (!providerToIgnore || embeddingProvider !== providerToIgnore)
-            ) {
-              missingProviders.push({ name: embeddingProvider, type: 'Embedding', color: 'purple' });
-            }
-
-            if (missingProviders.length > 0) {
-              return (
-                <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-                  <div className="flex items-center gap-2 text-red-800 dark:text-red-300">
-                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                    </svg>
-                    <span className="text-sm font-medium">
-                      Missing API Key Configuration
-                    </span>
-                  </div>
-                  <p className="text-sm text-red-700 dark:text-red-400 mt-1">
-                    Please configure API keys for: {missingProviders.map(p => `${p.name} (${p.type})`).join(', ')}
-                  </p>
-                </div>
-              );
-            }
-            return null;
-          })()}
-
-
           {shouldShowProviderAlert && (
             <div className={`p-4 border rounded-lg mb-4 ${providerAlertClassName}`}>
               <p className="text-sm">{providerAlertMessage}</p>
