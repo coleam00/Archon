@@ -1199,10 +1199,10 @@ const manualTestConnection = async (
           knowledge retrieval.
         </p>
         
-        {/* LLM Settings Header */}
+        {/* LLM Provider Settings Header */}
         <div className="mb-4">
           <h2 className="text-lg font-semibold text-gray-800 dark:text-white">
-            LLM Settings
+            LLM Provider Settings
           </h2>
         </div>
 
