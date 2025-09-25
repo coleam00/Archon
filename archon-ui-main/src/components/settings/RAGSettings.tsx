@@ -376,7 +376,7 @@ export const RAGSettings = ({
       try {
         const response = await fetch(
           `/api/ollama/instances/health?instance_urls=${encodeURIComponent(normalizedUrl)}`,
-          { method: 'GET', headers: { Accept: 'application/json' } }
+          { method: 'GET', headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) }
         );
 
         if (cancelled) return;
@@ -421,8 +421,8 @@ export const RAGSettings = ({
 
   // Update ragSettings when independent providers change (one-way: local state -> ragSettings)
   // Split the “first‐run” guard into two refs so chat and embedding effects don’t interfere.
-  const updateChatRagSettingsRef = useRef(false);
-  const updateEmbeddingRagSettingsRef = useRef(false);
+  const updateChatRagSettingsRef = useRef(true);
+  const updateEmbeddingRagSettingsRef = useRef(true);
 
   useEffect(() => {
     // Only update if this is a user‐initiated change, not a sync from ragSettings
@@ -654,7 +654,7 @@ const manualTestConnection = async (
           }
 
           // Scenario 2: Manual "Test Connection" button - refresh Ollama metrics if Ollama provider is selected
-          if (ragSettings.LLM_PROVIDER === 'ollama') {
+          if (ragSettings.LLM_PROVIDER === 'ollama' || embeddingProvider === 'ollama' || context === 'embedding') {
             console.log('🔄 Fetching Ollama metrics - Test Connection button clicked');
             fetchOllamaMetrics();
           }
@@ -963,15 +963,16 @@ const manualTestConnection = async (
     }
   };
 
-  const selectedProviderKey = isProviderKey(ragSettings.LLM_PROVIDER)
-    ? (ragSettings.LLM_PROVIDER as ProviderKey)
+  const resolvedProviderForAlert = activeSelection === 'chat' ? chatProvider : embeddingProvider;
+  const activeProviderKey = isProviderKey(resolvedProviderForAlert)
+    ? (resolvedProviderForAlert as ProviderKey)
     : undefined;
-  const selectedProviderStatus = selectedProviderKey ? getProviderStatus(selectedProviderKey) : undefined;
+  const selectedProviderStatus = activeProviderKey ? getProviderStatus(activeProviderKey) : undefined;
 
   let providerAlertMessage: string | null = null;
   let providerAlertClassName = '';
 
-  if (selectedProviderKey === 'ollama') {
+  if (activeProviderKey === 'ollama') {
     if (ollamaServerStatus === 'offline') {
       providerAlertMessage = 'Local Ollama service is not running. Start the Ollama server and ensure it is reachable at the configured URL.';
       providerAlertClassName = providerErrorAlertStyle;
@@ -979,9 +980,9 @@ const manualTestConnection = async (
       providerAlertMessage = 'Local Ollama service detected. Click "Test Connection" to confirm model availability.';
       providerAlertClassName = providerWarningAlertStyle;
     }
-  } else if (selectedProviderKey && selectedProviderStatus === 'missing') {
-    providerAlertMessage = defaultProviderAlertMessages[selectedProviderKey] ?? null;
-    providerAlertClassName = providerAlertStyles[selectedProviderKey] ?? '';
+  } else if (activeProviderKey && selectedProviderStatus === 'missing') {
+    providerAlertMessage = defaultProviderAlertMessages[activeProviderKey] ?? null;
+    providerAlertClassName = providerAlertStyles[activeProviderKey] ?? '';
   }
 
   const shouldShowProviderAlert = Boolean(providerAlertMessage);
@@ -1116,9 +1117,11 @@ const manualTestConnection = async (
     });
     
     // Only run once when data is properly loaded and not run before
-    if (!hasRunInitialTestRef.current && 
-        ragSettings.LLM_PROVIDER === 'ollama' && 
-        Object.keys(ragSettings).length > 0) {
+    if (
+      !hasRunInitialTestRef.current &&
+      (ragSettings.LLM_PROVIDER === 'ollama' || embeddingProvider === 'ollama') &&
+      Object.keys(ragSettings).length > 0
+    ) {
       
       hasRunInitialTestRef.current = true;
       console.log('🔄 Settings page loaded with Ollama - Testing connectivity');
@@ -1199,10 +1202,10 @@ const manualTestConnection = async (
           knowledge retrieval.
         </p>
         
-        {/* LLM Settings Header */}
+        {/* LLM Provider Settings Header */}
         <div className="mb-4">
           <h2 className="text-lg font-semibold text-gray-800 dark:text-white">
-            LLM Settings
+            LLM Provider Settings
           </h2>
         </div>
 
@@ -1347,14 +1350,15 @@ const manualTestConnection = async (
             const chatStatus = getProviderStatus(chatProvider);
             const embeddingStatus = getProviderStatus(embeddingProvider);
             const missingProviders = [];
+            const providerToIgnore = activeProviderKey;
 
-            if (chatStatus === 'missing' && chatProvider !== selectedProviderKey) {
+            if (chatStatus === 'missing' && (!providerToIgnore || chatProvider !== providerToIgnore)) {
               missingProviders.push({ name: chatProvider, type: 'Chat', color: 'green' });
             }
             if (
               embeddingStatus === 'missing' &&
               embeddingProvider !== chatProvider &&
-              embeddingProvider !== selectedProviderKey
+              (!providerToIgnore || embeddingProvider !== providerToIgnore)
             ) {
               missingProviders.push({ name: embeddingProvider, type: 'Embedding', color: 'purple' });
             }
@@ -2306,7 +2310,7 @@ const manualTestConnection = async (
             ]}
             currentModel={ragSettings.MODEL_CHOICE}
             modelType="chat"
-            selectedInstanceUrl={llmInstanceConfig.url.replace('/v1', '')}
+            selectedInstanceUrl={normalizeBaseUrl(llmInstanceConfig.url) ?? ''}
             onSelectModel={(modelName: string) => {
               setRagSettings({ ...ragSettings, MODEL_CHOICE: modelName });
               showToast(`Selected LLM model: ${modelName}`, 'success');
@@ -2325,7 +2329,7 @@ const manualTestConnection = async (
             ]}
             currentModel={ragSettings.EMBEDDING_MODEL}
             modelType="embedding"
-            selectedInstanceUrl={embeddingInstanceConfig.url.replace('/v1', '')}
+            selectedInstanceUrl={normalizeBaseUrl(embeddingInstanceConfig.url) ?? ''}
             onSelectModel={(modelName: string) => {
               setRagSettings({ ...ragSettings, EMBEDDING_MODEL: modelName });
               showToast(`Selected embedding model: ${modelName}`, 'success');
@@ -2359,7 +2363,7 @@ const manualTestConnection = async (
 };
 
 // Helper functions to get provider-specific model display
-function getDisplayedChatModel(ragSettings: any): string {
+function getDisplayedChatModel(ragSettings: RAGSettingsProps["ragSettings"]): string {
   const provider = ragSettings.LLM_PROVIDER || 'openai';
   const modelChoice = ragSettings.MODEL_CHOICE;
 
@@ -2387,7 +2391,7 @@ function getDisplayedChatModel(ragSettings: any): string {
   }
 }
 
-function getDisplayedEmbeddingModel(ragSettings: any): string {
+function getDisplayedEmbeddingModel(ragSettings: RAGSettingsProps["ragSettings"]): string {
   const provider = ragSettings.EMBEDDING_PROVIDER || ragSettings.LLM_PROVIDER || 'openai';
   const embeddingModel = ragSettings.EMBEDDING_MODEL;
 
@@ -2416,7 +2420,7 @@ function getDisplayedEmbeddingModel(ragSettings: any): string {
 }
 
 // Helper functions for model placeholders
-function getModelPlaceholder(provider: string): string {
+function getModelPlaceholder(provider: ProviderKey): string {
   switch (provider) {
     case 'openai':
       return 'e.g., gpt-4o-mini';
@@ -2435,7 +2439,7 @@ function getModelPlaceholder(provider: string): string {
   }
 }
 
-function getEmbeddingPlaceholder(provider: string): string {
+function getEmbeddingPlaceholder(provider: ProviderKey): string {
   switch (provider) {
     case 'openai':
       return 'Default: text-embedding-3-small';

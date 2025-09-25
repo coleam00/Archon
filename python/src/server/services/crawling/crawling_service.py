@@ -33,24 +33,34 @@ logger = get_logger(__name__)
 
 # Global registry to track active orchestration services for cancellation support
 _active_orchestrations: dict[str, "CrawlingService"] = {}
-_orchestration_lock = asyncio.Lock()
+_orchestration_lock: asyncio.Lock | None = None
+
+
+def _ensure_orchestration_lock() -> asyncio.Lock:
+    global _orchestration_lock
+    if _orchestration_lock is None:
+        _orchestration_lock = asyncio.Lock()
+    return _orchestration_lock
 
 
 async def get_active_orchestration(progress_id: str) -> Optional["CrawlingService"]:
     """Get an active orchestration service by progress ID."""
-    async with _orchestration_lock:
+    lock = _ensure_orchestration_lock()
+    async with lock:
         return _active_orchestrations.get(progress_id)
 
 
 async def register_orchestration(progress_id: str, orchestration: "CrawlingService"):
     """Register an active orchestration service."""
-    async with _orchestration_lock:
+    lock = _ensure_orchestration_lock()
+    async with lock:
         _active_orchestrations[progress_id] = orchestration
 
 
 async def unregister_orchestration(progress_id: str):
     """Unregister an orchestration service."""
-    async with _orchestration_lock:
+    lock = _ensure_orchestration_lock()
+    async with lock:
         _active_orchestrations.pop(progress_id, None)
 
 
