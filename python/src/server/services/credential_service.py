@@ -36,42 +36,6 @@ class CredentialItem:
     description: str | None = None
 
 
-def _detect_embedding_provider_from_model(embedding_model: str) -> str:
-    """
-    Detect the appropriate embedding provider based on model name.
-
-    Args:
-        embedding_model: The embedding model name
-
-    Returns:
-        Provider name: 'google', 'openai', or 'openai' (default)
-    """
-    if not embedding_model:
-        return "openai"  # Default
-
-    model_lower = embedding_model.lower()
-
-    # Google embedding models
-    google_patterns = [
-        "text-embedding-004",
-        "text-embedding-005",
-        "text-multilingual-embedding",
-        "gemini-embedding",
-        "multimodalembedding"
-    ]
-
-    if any(pattern in model_lower for pattern in google_patterns):
-        return "google"
-
-    # OpenAI embedding models (and default for unknown)
-    openai_patterns = [
-        "text-embedding-ada-002",
-        "text-embedding-3-small",
-        "text-embedding-3-large"
-    ]
-
-    # Default to OpenAI for OpenAI models or unknown models
-    return "openai"
 
 
 class CredentialService:
@@ -475,26 +439,24 @@ class CredentialService:
 
             # Get the selected provider based on service type
             if service_type == "embedding":
-                # Get the LLM provider setting to determine embedding provider
-                llm_provider = rag_settings.get("LLM_PROVIDER", "openai")
-                embedding_model = rag_settings.get("EMBEDDING_MODEL", "text-embedding-3-small")
+                # First check for explicit EMBEDDING_PROVIDER setting (new split provider approach)
+                explicit_embedding_provider = rag_settings.get("EMBEDDING_PROVIDER")
 
-                # Determine embedding provider based on LLM provider
-                if llm_provider == "google":
-                    provider = "google"
-                elif llm_provider == "ollama":
-                    provider = "ollama"
-                elif llm_provider == "openrouter":
-                    # OpenRouter supports both OpenAI and Google embedding models
-                    provider = _detect_embedding_provider_from_model(embedding_model)
-                elif llm_provider in ["anthropic", "grok"]:
-                    # Anthropic and Grok support both OpenAI and Google embedding models
-                    provider = _detect_embedding_provider_from_model(embedding_model)
+                # Validate that embedding provider actually supports embeddings
+                embedding_capable_providers = {"openai", "google", "ollama"}
+
+                if (explicit_embedding_provider and
+                    explicit_embedding_provider != "" and
+                    explicit_embedding_provider in embedding_capable_providers):
+                    # Use the explicitly set embedding provider
+                    provider = explicit_embedding_provider
+                    logger.debug(f"Using explicit embedding provider: '{provider}'")
                 else:
-                    # Default case (openai, or unknown providers)
+                    # Fall back to OpenAI as default embedding provider for backward compatibility
+                    if explicit_embedding_provider and explicit_embedding_provider not in embedding_capable_providers:
+                        logger.warning(f"Invalid embedding provider '{explicit_embedding_provider}' doesn't support embeddings, defaulting to OpenAI")
                     provider = "openai"
-
-                logger.debug(f"Determined embedding provider '{provider}' from LLM provider '{llm_provider}' and embedding model '{embedding_model}'")
+                    logger.debug(f"No explicit embedding provider set, defaulting to OpenAI for backward compatibility")
             else:
                 provider = rag_settings.get("LLM_PROVIDER", "openai")
                 # Ensure provider is a valid string, not a boolean or other type

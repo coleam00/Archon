@@ -100,7 +100,10 @@ ON CONFLICT (key) DO NOTHING;
 
 -- Add provider API key placeholders
 INSERT INTO archon_settings (key, encrypted_value, is_encrypted, category, description) VALUES
-('GOOGLE_API_KEY', NULL, true, 'api_keys', 'Google API Key for Gemini models. Get from: https://aistudio.google.com/apikey')
+('GOOGLE_API_KEY', NULL, true, 'api_keys', 'Google API key for Gemini models. Get from: https://aistudio.google.com/apikey'),
+('OPENROUTER_API_KEY', NULL, true, 'api_keys', 'OpenRouter API key for hosted community models. Get from: https://openrouter.ai/keys'),
+('ANTHROPIC_API_KEY', NULL, true, 'api_keys', 'Anthropic API key for Claude models. Get from: https://console.anthropic.com/account/keys'),
+('GROK_API_KEY', NULL, true, 'api_keys', 'Grok API key for xAI models. Get from: https://console.x.ai/')
 ON CONFLICT (key) DO NOTHING;
 
 -- Code Extraction Settings Migration

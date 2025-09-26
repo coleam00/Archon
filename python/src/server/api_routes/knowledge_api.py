@@ -1288,7 +1288,7 @@ async def stop_crawl_task(progress_id: str):
 
         found = False
         # Step 1: Cancel the orchestration service
-        orchestration = get_active_orchestration(progress_id)
+        orchestration = await get_active_orchestration(progress_id)
         if orchestration:
             orchestration.cancel()
             found = True
@@ -1306,7 +1306,7 @@ async def stop_crawl_task(progress_id: str):
             found = True
 
         # Step 3: Remove from active orchestrations registry
-        unregister_orchestration(progress_id)
+        await unregister_orchestration(progress_id)
 
         # Step 4: Update progress tracker to reflect cancellation (only if we found and cancelled something)
         if found:

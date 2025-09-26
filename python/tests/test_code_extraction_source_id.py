@@ -111,8 +111,8 @@ class TestCodeExtractionSourceId:
         assert args[2] == source_id
         assert args[3] is None
         assert args[4] is None
-        if len(args) > 5:
-            assert args[5] is None
+        assert args[5] is None
+        assert args[6] is None
         assert result == 5
 
     @pytest.mark.asyncio

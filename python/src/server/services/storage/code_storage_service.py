@@ -1091,6 +1091,7 @@ async def add_code_examples_to_supabase(
     url_to_full_document: dict[str, str] | None = None,
     progress_callback: Callable | None = None,
     provider: str | None = None,
+    embedding_provider: str | None = None,
 ):
     """
     Add code examples to the Supabase code_examples table in batches.
@@ -1105,6 +1106,8 @@ async def add_code_examples_to_supabase(
         batch_size: Size of each batch for insertion
         url_to_full_document: Optional mapping of URLs to full document content
         progress_callback: Optional async callback for progress updates
+        provider: Optional LLM provider used for summary generation tracking
+        embedding_provider: Optional embedding provider override for vector generation
     """
     if not urls:
         return
@@ -1183,8 +1186,8 @@ async def add_code_examples_to_supabase(
             # Use original combined texts
             batch_texts = combined_texts
 
-        # Create embeddings for the batch
-        result = await create_embeddings_batch(batch_texts, provider=provider)
+        # Create embeddings for the batch (optionally overriding the embedding provider)
+        result = await create_embeddings_batch(batch_texts, provider=embedding_provider)
 
         # Log any failures
         if result.has_failures:
@@ -1201,7 +1204,7 @@ async def add_code_examples_to_supabase(
         from ..llm_provider_service import get_embedding_model
 
         # Get embedding model name
-        embedding_model_name = await get_embedding_model(provider=provider)
+        embedding_model_name = await get_embedding_model(provider=embedding_provider)
 
         # Get LLM chat model (used for code summaries and contextual embeddings if enabled)
         llm_chat_model = None
