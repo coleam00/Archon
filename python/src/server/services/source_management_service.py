@@ -400,7 +400,10 @@ class SourceManagementService:
 
     def delete_source(self, source_id: str) -> tuple[bool, dict[str, Any]]:
         """
-        Delete a source and all associated crawled pages and code examples from the database.
+        Delete a source from the database.
+
+        With CASCADE DELETE constraints in place (migration 009), deleting the source
+        will automatically delete all associated crawled_pages and code_examples.
 
         Args:
             source_id: The source ID to delete
@@ -411,61 +414,31 @@ class SourceManagementService:
         try:
             logger.info(f"Starting delete_source for source_id: {source_id}")
 
-            # Delete from crawled_pages table
-            try:
-                logger.info(f"Deleting from crawled_pages table for source_id: {source_id}")
-                pages_response = (
-                    self.supabase_client.table("archon_crawled_pages")
-                    .delete()
-                    .eq("source_id", source_id)
-                    .execute()
-                )
-                pages_deleted = len(pages_response.data) if pages_response.data else 0
-                logger.info(f"Deleted {pages_deleted} pages from crawled_pages")
-            except Exception as pages_error:
-                logger.error(f"Failed to delete from crawled_pages: {pages_error}")
-                return False, {"error": f"Failed to delete crawled pages: {str(pages_error)}"}
+            # With CASCADE DELETE, we only need to delete from the sources table
+            # The database will automatically handle deleting related records
+            logger.info(f"Deleting source {source_id} (CASCADE will handle related records)")
 
-            # Delete from code_examples table
-            try:
-                logger.info(f"Deleting from code_examples table for source_id: {source_id}")
-                code_response = (
-                    self.supabase_client.table("archon_code_examples")
-                    .delete()
-                    .eq("source_id", source_id)
-                    .execute()
-                )
-                code_deleted = len(code_response.data) if code_response.data else 0
-                logger.info(f"Deleted {code_deleted} code examples")
-            except Exception as code_error:
-                logger.error(f"Failed to delete from code_examples: {code_error}")
-                return False, {"error": f"Failed to delete code examples: {str(code_error)}"}
+            source_response = (
+                self.supabase_client.table("archon_sources")
+                .delete()
+                .eq("source_id", source_id)
+                .execute()
+            )
 
-            # Delete from sources table
-            try:
-                logger.info(f"Deleting from sources table for source_id: {source_id}")
-                source_response = (
-                    self.supabase_client.table("archon_sources")
-                    .delete()
-                    .eq("source_id", source_id)
-                    .execute()
-                )
-                source_deleted = len(source_response.data) if source_response.data else 0
-                logger.info(f"Deleted {source_deleted} source records")
-            except Exception as source_error:
-                logger.error(f"Failed to delete from sources: {source_error}")
-                return False, {"error": f"Failed to delete source: {str(source_error)}"}
+            source_deleted = len(source_response.data) if source_response.data else 0
 
-            logger.info("Delete operation completed successfully")
-            return True, {
-                "source_id": source_id,
-                "pages_deleted": pages_deleted,
-                "code_examples_deleted": code_deleted,
-                "source_records_deleted": source_deleted,
-            }
+            if source_deleted > 0:
+                logger.info(f"Successfully deleted source {source_id} and all related data via CASCADE")
+                return True, {
+                    "source_id": source_id,
+                    "message": "Source and all related data deleted successfully via CASCADE DELETE"
+                }
+            else:
+                logger.warning(f"No source found with ID {source_id}")
+                return False, {"error": f"Source {source_id} not found"}
 
         except Exception as e:
-            logger.error(f"Unexpected error in delete_source: {e}")
+            logger.error(f"Error deleting source {source_id}: {e}")
             return False, {"error": f"Error deleting source: {str(e)}"}
 
     def update_source_metadata(
