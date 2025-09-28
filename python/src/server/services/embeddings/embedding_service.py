@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+import numpy as np
 import openai
 
 from ...config.logfire_config import safe_span, search_logger
@@ -113,9 +114,6 @@ class GoogleEmbeddingAdapter(EmbeddingProviderAdapter):
         dimensions: int | None = None,
     ) -> list[list[float]]:
         try:
-            if dimensions is not None:
-                _ = dimensions  # Maintains adapter signature; Google controls dimensions server-side.
-
             google_api_key = await credential_service.get_credential("GOOGLE_API_KEY")
             if not google_api_key:
                 raise EmbeddingAPIError("Google API key not found")
@@ -123,7 +121,7 @@ class GoogleEmbeddingAdapter(EmbeddingProviderAdapter):
             async with httpx.AsyncClient(timeout=30.0) as http_client:
                 embeddings = await asyncio.gather(
                     *(
-                        self._fetch_single_embedding(http_client, google_api_key, model, text)
+                        self._fetch_single_embedding(http_client, google_api_key, model, text, dimensions)
                         for text in texts
                     )
                 )
@@ -152,6 +150,7 @@ class GoogleEmbeddingAdapter(EmbeddingProviderAdapter):
         api_key: str,
         model: str,
         text: str,
+        dimensions: int | None = None,
     ) -> list[float]:
         if model.startswith("models/"):
             url_model = model[len("models/") :]
@@ -169,6 +168,16 @@ class GoogleEmbeddingAdapter(EmbeddingProviderAdapter):
             "content": {"parts": [{"text": text}]},
         }
 
+        # Add output_dimensionality parameter if dimensions are specified
+        if dimensions is not None and dimensions > 0:
+            # Validate that the requested dimension is supported by Google
+            if dimensions not in [128, 256, 512, 768, 1024, 1536, 2048, 3072]:
+                search_logger.warning(
+                    f"Requested dimension {dimensions} may not be supported by Google. "
+                    f"Supported dimensions: 128, 256, 512, 768, 1024, 1536, 2048, 3072"
+                )
+            payload["outputDimensionality"] = dimensions
+
         response = await http_client.post(url, headers=headers, json=payload)
         response.raise_for_status()
 
@@ -178,7 +187,27 @@ class GoogleEmbeddingAdapter(EmbeddingProviderAdapter):
         if not isinstance(values, list):
             raise EmbeddingAPIError(f"Invalid embedding payload from Google: {result}")
 
+        # Normalize embeddings for dimensions < 3072 as per Google's documentation
+        if dimensions is not None and dimensions < 3072 and len(values) > 0:
+            values = self._normalize_embedding(values)
+
         return values
+
+    def _normalize_embedding(self, embedding: list[float]) -> list[float]:
+        """Normalize embedding vector for dimensions < 3072."""
+        try:
+            embedding_array = np.array(embedding, dtype=np.float32)
+            norm = np.linalg.norm(embedding_array)
+            if norm > 0:
+                normalized = embedding_array / norm
+                return normalized.tolist()
+            else:
+                search_logger.warning("Zero-norm embedding detected, returning unnormalized")
+                return embedding
+        except Exception as e:
+            search_logger.error(f"Failed to normalize embedding: {e}")
+            # Return original embedding if normalization fails
+            return embedding
 
 
 def _get_embedding_adapter(provider: str, client: Any) -> EmbeddingProviderAdapter:
