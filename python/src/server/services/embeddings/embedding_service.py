@@ -83,10 +83,10 @@ class EmbeddingProviderAdapter(ABC):
 
 class OpenAICompatibleEmbeddingAdapter(EmbeddingProviderAdapter):
     """Adapter for providers using the OpenAI embeddings API shape."""
-
+    
     def __init__(self, client: Any):
         self._client = client
-
+    
     async def create_embeddings(
         self,
         texts: list[str],
@@ -99,7 +99,7 @@ class OpenAICompatibleEmbeddingAdapter(EmbeddingProviderAdapter):
         }
         if dimensions is not None:
             request_args["dimensions"] = dimensions
-
+            
         response = await self._client.embeddings.create(**request_args)
         return [item.embedding for item in response.data]
 
@@ -168,15 +168,21 @@ class GoogleEmbeddingAdapter(EmbeddingProviderAdapter):
             "content": {"parts": [{"text": text}]},
         }
 
-        # Add output_dimensionality parameter if dimensions are specified
+        # Add output_dimensionality parameter if dimensions are specified and supported
         if dimensions is not None and dimensions > 0:
-            # Validate that the requested dimension is supported by Google
-            if dimensions not in [128, 256, 512, 768, 1024, 1536, 2048, 3072]:
+            model_name = payload_model.removeprefix("models/")
+            if model_name.startswith("textembedding-gecko"):
+                supported_dimensions = {128, 256, 512, 768}
+            else:
+                supported_dimensions = {128, 256, 512, 768, 1024, 1536, 2048, 3072}
+
+            if dimensions in supported_dimensions:
+                payload["outputDimensionality"] = dimensions
+            else:
                 search_logger.warning(
-                    f"Requested dimension {dimensions} may not be supported by Google. "
-                    f"Supported dimensions: 128, 256, 512, 768, 1024, 1536, 2048, 3072"
+                    f"Requested dimension {dimensions} is not supported by Google model '{model_name}'. "
+                    "Falling back to the provider default."
                 )
-            payload["outputDimensionality"] = dimensions
 
         response = await http_client.post(url, headers=headers, json=payload)
         response.raise_for_status()
@@ -188,7 +194,8 @@ class GoogleEmbeddingAdapter(EmbeddingProviderAdapter):
             raise EmbeddingAPIError(f"Invalid embedding payload from Google: {result}")
 
         # Normalize embeddings for dimensions < 3072 as per Google's documentation
-        if dimensions is not None and dimensions < 3072 and len(values) > 0:
+        actual_dimension = len(values)
+        if actual_dimension > 0 and actual_dimension < 3072:
             values = self._normalize_embedding(values)
 
         return values
