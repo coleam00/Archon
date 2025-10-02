@@ -23,14 +23,14 @@ vi.mock("../../services", () => ({
 }));
 
 // Mock the toast hook
-vi.mock("../../../ui/hooks/useToast", () => ({
+vi.mock("@/features/shared/hooks/useToast", () => ({
   useToast: () => ({
     showToast: vi.fn(),
   }),
 }));
 
 // Mock smart polling
-vi.mock("../../../ui/hooks", () => ({
+vi.mock("@/features/shared/hooks", () => ({
   useSmartPolling: () => ({
     refetchInterval: 30000,
     isPaused: false,
@@ -60,21 +60,25 @@ describe("useKnowledgeQueries", () => {
       expect(knowledgeKeys.all).toEqual(["knowledge"]);
       expect(knowledgeKeys.lists()).toEqual(["knowledge", "list"]);
       expect(knowledgeKeys.detail("source-123")).toEqual(["knowledge", "detail", "source-123"]);
-      expect(knowledgeKeys.chunks("source-123", "example.com")).toEqual([
+      expect(knowledgeKeys.chunks("source-123", { domain: "example.com" })).toEqual([
         "knowledge",
-        "detail",
         "source-123",
         "chunks",
-        "example.com",
+        { domain: "example.com", limit: undefined, offset: undefined },
       ]);
-      expect(knowledgeKeys.codeExamples("source-123")).toEqual(["knowledge", "detail", "source-123", "code-examples"]);
+      expect(knowledgeKeys.codeExamples("source-123")).toEqual([
+        "knowledge",
+        "source-123",
+        "code-examples",
+        { limit: undefined, offset: undefined },
+      ]);
       expect(knowledgeKeys.search("test query")).toEqual(["knowledge", "search", "test query"]);
       expect(knowledgeKeys.sources()).toEqual(["knowledge", "sources"]);
     });
 
-    it("should handle filter in list key", () => {
+    it("should handle filter in summaries key", () => {
       const filter = { knowledge_type: "technical" as const, page: 2 };
-      expect(knowledgeKeys.list(filter)).toEqual(["knowledge", "list", filter]);
+      expect(knowledgeKeys.summaries(filter)).toEqual(["knowledge", "summaries", filter]);
     });
   });
 
@@ -122,12 +126,22 @@ describe("useKnowledgeQueries", () => {
         message: "Item deleted",
       });
 
-      const wrapper = createWrapper();
-      const { result } = renderHook(() => useDeleteKnowledgeItem(), { wrapper });
+      // Create QueryClient instance that will be used by the test
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
 
-      // Pre-populate cache
-      const queryClient = new QueryClient();
-      queryClient.setQueryData(knowledgeKeys.list(), initialData);
+      // Pre-populate cache with the same client instance
+      queryClient.setQueryData(knowledgeKeys.lists(), initialData);
+
+      // Create wrapper with the pre-populated QueryClient
+      const wrapper = ({ children }: { children: React.ReactNode }) =>
+        React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+      const { result } = renderHook(() => useDeleteKnowledgeItem(), { wrapper });
 
       await result.current.mutateAsync("source-1");
 

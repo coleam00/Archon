@@ -8,9 +8,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Core Principles
 
-- **No backwards compatibility** - remove deprecated code immediately
+- **No backwards compatibility; we follow a fix‑forward approach** — remove deprecated code immediately
 - **Detailed errors over graceful failures** - we want to identify and fix issues fast
 - **Break things to improve them** - beta is for rapid iteration
+- **Continuous improvement** - embrace change and learn from mistakes
+- **KISS** - keep it simple
+- **DRY** when appropriate
+- **YAGNI** — don't implement features that are not needed
 
 ### Error Handling
 
@@ -40,51 +44,7 @@ These operations should continue but track and report failures clearly:
 
 #### Critical Nuance: Never Accept Corrupted Data
 
-When a process should continue despite failures, it must **skip the failed item entirely** rather than storing corrupted data:
-
-**❌ WRONG - Silent Corruption:**
-
-```python
-try:
-    embedding = create_embedding(text)
-except Exception as e:
-    embedding = [0.0] * 1536  # NEVER DO THIS - corrupts database
-    store_document(doc, embedding)
-```
-
-**✅ CORRECT - Skip Failed Items:**
-
-```python
-try:
-    embedding = create_embedding(text)
-    store_document(doc, embedding)  # Only store on success
-except Exception as e:
-    failed_items.append({'doc': doc, 'error': str(e)})
-    logger.error(f"Skipping document {doc.id}: {e}")
-    # Continue with next document, don't store anything
-```
-
-**✅ CORRECT - Batch Processing with Failure Tracking:**
-
-```python
-def process_batch(items):
-    results = {'succeeded': [], 'failed': []}
-
-    for item in items:
-        try:
-            result = process_item(item)
-            results['succeeded'].append(result)
-        except Exception as e:
-            results['failed'].append({
-                'item': item,
-                'error': str(e),
-                'traceback': traceback.format_exc()
-            })
-            logger.error(f"Failed to process {item.id}: {e}")
-
-    # Always return both successes and failures
-    return results
-```
+When a process should continue despite failures, it must **skip the failed item entirely** rather than storing corrupted data
 
 #### Error Message Guidelines
 
@@ -98,9 +58,10 @@ def process_batch(items):
 ### Code Quality
 
 - Remove dead code immediately rather than maintaining it - no backward compatibility or legacy functions
-- Prioritize functionality over production-ready patterns
+- Avoid backward compatibility mappings or legacy function wrappers
+- Fix forward
 - Focus on user experience and feature completeness
-- When updating code, don't reference what is changing (avoid keywords like LEGACY, CHANGED, REMOVED), instead focus on comments that document just the functionality of the code
+- When updating code, don't reference what is changing (avoid keywords like SIMPLIFIED, ENHANCED, LEGACY, CHANGED, REMOVED), instead focus on comments that document just the functionality of the code
 - When commenting on code in the codebase, only comment on the functionality and reasoning behind the code. Refrain from speaking to Archon being in "beta" or referencing anything else that comes from these global rules.
 
 ## Development Commands
@@ -175,139 +136,35 @@ make test-be             # Backend tests only
 
 ## Architecture Overview
 
-Archon Beta is a microservices-based knowledge management system with MCP (Model Context Protocol) integration:
+@PRPs/ai_docs/ARCHITECTURE.md
 
-### Service Architecture
+#### TanStack Query Implementation
 
-- **Frontend (port 3737)**: React + TypeScript + Vite + TailwindCSS
-  - **Dual UI Strategy**:
-    - `/features` - Modern vertical slice with Radix UI primitives + TanStack Query
-    - `/components` - Legacy custom components (being migrated)
-  - **State Management**: TanStack Query for all data fetching (no prop drilling)
-  - **Styling**: Tron-inspired glassmorphism with Tailwind CSS
-  - **Linting**: Biome for `/features`, ESLint for legacy code
+For architecture and file references:
+@PRPs/ai_docs/DATA_FETCHING_ARCHITECTURE.md
 
-- **Main Server (port 8181)**: FastAPI with HTTP polling for updates
-  - Handles all business logic, database operations, and external API calls
-  - WebSocket support removed in favor of HTTP polling with ETag caching
-
-- **MCP Server (port 8051)**: Lightweight HTTP-based MCP protocol server
-  - Provides tools for AI assistants (Claude, Cursor, Windsurf)
-  - Exposes knowledge search, task management, and project operations
-
-- **Agents Service (port 8052)**: PydanticAI agents for AI/ML operations
-  - Handles complex AI workflows and document processing
-
-- **Database**: Supabase (PostgreSQL + pgvector for embeddings)
-  - Cloud or local Supabase both supported
-  - pgvector for semantic search capabilities
-
-### Frontend Architecture Details
-
-#### Vertical Slice Architecture (/features)
-
-Features are organized by domain hierarchy with self-contained modules:
-
-```
-src/features/
-├── ui/
-│   ├── primitives/    # Radix UI base components
-│   ├── hooks/         # Shared UI hooks (useSmartPolling, etc)
-│   └── types/         # UI type definitions
-├── projects/
-│   ├── components/    # Project UI components
-│   ├── hooks/         # Project hooks (useProjectQueries, etc)
-│   ├── services/      # Project API services
-│   ├── types/         # Project type definitions
-│   ├── tasks/         # Tasks sub-feature (nested under projects)
-│   │   ├── components/
-│   │   ├── hooks/     # Task-specific hooks
-│   │   ├── services/  # Task API services
-│   │   └── types/
-│   └── documents/     # Documents sub-feature
-│       ├── components/
-│       ├── services/
-│       └── types/
-```
-
-#### TanStack Query Patterns
-
-All data fetching uses TanStack Query with consistent patterns:
-
-```typescript
-// Query keys factory pattern
-export const projectKeys = {
-  all: ["projects"] as const,
-  lists: () => [...projectKeys.all, "list"] as const,
-  detail: (id: string) => [...projectKeys.all, "detail", id] as const,
-};
-
-// Smart polling with visibility awareness
-const { refetchInterval } = useSmartPolling(10000); // Pauses when tab inactive
-
-// Optimistic updates with rollback
-useMutation({
-  onMutate: async (data) => {
-    await queryClient.cancelQueries(key);
-    const previous = queryClient.getQueryData(key);
-    queryClient.setQueryData(key, optimisticData);
-    return { previous };
-  },
-  onError: (err, vars, context) => {
-    if (context?.previous) {
-      queryClient.setQueryData(key, context.previous);
-    }
-  },
-});
-```
-
-### Backend Architecture Details
+For code patterns and examples:
+@PRPs/ai_docs/QUERY_PATTERNS.md
 
 #### Service Layer Pattern
 
-```python
-# API Route -> Service -> Database
-# src/server/api_routes/projects.py
-@router.get("/{project_id}")
-async def get_project(project_id: str):
-    return await project_service.get_project(project_id)
+See implementation examples:
 
-# src/server/services/project_service.py
-async def get_project(project_id: str):
-    # Business logic here
-    return await db.fetch_project(project_id)
-```
+- API routes: `python/src/server/api_routes/projects_api.py`
+- Service layer: `python/src/server/services/project_service.py`
+- Pattern: API Route → Service → Database
 
 #### Error Handling Patterns
 
-```python
-# Use specific exceptions
-class ProjectNotFoundError(Exception): pass
-class ValidationError(Exception): pass
+See implementation examples:
 
-# Rich error responses
-@app.exception_handler(ProjectNotFoundError)
-async def handle_not_found(request, exc):
-    return JSONResponse(
-        status_code=404,
-        content={"detail": str(exc), "type": "not_found"}
-    )
-```
+- Custom exceptions: `python/src/server/exceptions.py`
+- Exception handlers: `python/src/server/main.py` (search for @app.exception_handler)
+- Service error handling: `python/src/server/services/` (various services)
 
-## Polling Architecture
+## ETag Implementation
 
-### HTTP Polling (replaced Socket.IO)
-
-- **Polling intervals**: 1-2s for active operations, 5-10s for background data
-- **ETag caching**: Reduces bandwidth by ~70% via 304 Not Modified responses
-- **Smart pausing**: Stops polling when browser tab is inactive
-- **Progress endpoints**: `/api/progress/{id}` for operation tracking
-
-### Key Polling Hooks
-
-- `useSmartPolling` - Adjusts interval based on page visibility/focus
-- `useCrawlProgressPolling` - Specialized for crawl progress with auto-cleanup
-- `useProjectTasks` - Smart polling for task lists
+@PRPs/ai_docs/ETAG_IMPLEMENTATION.md
 
 ## Database Schema
 
@@ -327,25 +184,9 @@ Key tables in Supabase:
 
 ## API Naming Conventions
 
-### Task Status Values
+@PRPs/ai_docs/API_NAMING_CONVENTIONS.md
 
-Use database values directly (no UI mapping):
-
-- `todo`, `doing`, `review`, `done`
-
-### Service Method Patterns
-
-- `get[Resource]sByProject(projectId)` - Scoped queries
-- `get[Resource](id)` - Single resource
-- `create[Resource](data)` - Create operations
-- `update[Resource](id, updates)` - Updates
-- `delete[Resource](id)` - Soft deletes
-
-### State Naming
-
-- `is[Action]ing` - Loading states (e.g., `isSwitchingProject`)
-- `[resource]Error` - Error messages
-- `selected[Resource]` - Current selection
+Use database values directly (no mapping in the FE typesafe from BE and up):
 
 ## Environment Variables
 
@@ -356,15 +197,8 @@ SUPABASE_URL=https://your-project.supabase.co  # Or http://host.docker.internal:
 SUPABASE_SERVICE_KEY=your-service-key-here      # Use legacy key format for cloud Supabase
 ```
 
-Optional:
-
-```bash
-LOGFIRE_TOKEN=your-logfire-token      # For observability
-LOG_LEVEL=INFO                         # DEBUG, INFO, WARNING, ERROR
-ARCHON_SERVER_PORT=8181               # Server port
-ARCHON_MCP_PORT=8051                 # MCP server port
-ARCHON_UI_PORT=3737                  # Frontend port
-```
+Optional variables and full configuration:
+See `python/.env.example` for complete list
 
 ## Common Development Tasks
 
@@ -382,6 +216,14 @@ ARCHON_UI_PORT=3737                  # Frontend port
 3. Define types in `src/features/[feature]/types/`
 4. Use TanStack Query hook from `src/features/[feature]/hooks/`
 5. Apply Tron-inspired glassmorphism styling with Tailwind
+
+### Add or modify MCP tools
+
+1. MCP tools are in `python/src/mcp_server/features/[feature]/[feature]_tools.py`
+2. Follow the pattern:
+   - `find_[resource]` - Handles list, search, and get single item operations
+   - `manage_[resource]` - Handles create, update, delete with an "action" parameter
+3. Register tools in the feature's `__init__.py` file
 
 ### Debug MCP connection issues
 
@@ -421,21 +263,37 @@ npm run lint:files src/components/SomeComponent.tsx
 
 ## MCP Tools Available
 
-When connected to Client/Cursor/Windsurf:
+When connected to Claude/Cursor/Windsurf, the following tools are available:
 
-- `archon:perform_rag_query` - Search knowledge base
-- `archon:search_code_examples` - Find code snippets
-- `archon:create_project` - Create new project
-- `archon:list_projects` - List all projects
-- `archon:create_task` - Create task in project
-- `archon:list_tasks` - List and filter tasks
-- `archon:update_task` - Update task status/details
-- `archon:get_available_sources` - List knowledge sources
+### Knowledge Base Tools
+
+- `archon:rag_search_knowledge_base` - Search knowledge base for relevant content
+- `archon:rag_search_code_examples` - Find code snippets in the knowledge base
+- `archon:rag_get_available_sources` - List available knowledge sources
+
+### Project Management
+
+- `archon:find_projects` - Find all projects, search, or get specific project (by project_id)
+- `archon:manage_project` - Manage projects with actions: "create", "update", "delete"
+
+### Task Management
+
+- `archon:find_tasks` - Find tasks with search, filters, or get specific task (by task_id)
+- `archon:manage_task` - Manage tasks with actions: "create", "update", "delete"
+
+### Document Management
+
+- `archon:find_documents` - Find documents, search, or get specific document (by document_id)
+- `archon:manage_document` - Manage documents with actions: "create", "update", "delete"
+
+### Version Control
+
+- `archon:find_versions` - Find version history or get specific version
+- `archon:manage_version` - Manage versions with actions: "create", "restore"
 
 ## Important Notes
 
 - Projects feature is optional - toggle in Settings UI
-- All services communicate via HTTP, not gRPC
 - HTTP polling handles all updates
 - Frontend uses Vite proxy for API calls in development
 - Python backend uses `uv` for dependency management

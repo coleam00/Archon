@@ -33,6 +33,12 @@ class AsyncContextManager:
 class TestAsyncLLMProviderService:
     """Test suite for async LLM provider service functions"""
 
+    @staticmethod
+    def _make_mock_client():
+        client = MagicMock()
+        client.aclose = AsyncMock()
+        return client
+
     @pytest.fixture(autouse=True)
     def clear_cache(self):
         """Clear cache before each test"""
@@ -69,7 +75,7 @@ class TestAsyncLLMProviderService:
         return {
             "provider": "ollama",
             "api_key": "ollama",
-            "base_url": "http://localhost:11434/v1",
+            "base_url": "http://host.docker.internal:11434/v1",
             "chat_model": "llama2",
             "embedding_model": "nomic-embed-text",
         }
@@ -98,7 +104,7 @@ class TestAsyncLLMProviderService:
             with patch(
                 "src.server.services.llm_provider_service.openai.AsyncOpenAI"
             ) as mock_openai:
-                mock_client = MagicMock()
+                mock_client = self._make_mock_client()
                 mock_openai.return_value = mock_client
 
                 async with get_llm_client() as client:
@@ -121,13 +127,13 @@ class TestAsyncLLMProviderService:
             with patch(
                 "src.server.services.llm_provider_service.openai.AsyncOpenAI"
             ) as mock_openai:
-                mock_client = MagicMock()
+                mock_client = self._make_mock_client()
                 mock_openai.return_value = mock_client
 
                 async with get_llm_client() as client:
                     assert client == mock_client
                     mock_openai.assert_called_once_with(
-                        api_key="ollama", base_url="http://localhost:11434/v1"
+                        api_key="ollama", base_url="http://host.docker.internal:11434/v1"
                     )
 
     @pytest.mark.asyncio
@@ -143,7 +149,7 @@ class TestAsyncLLMProviderService:
             with patch(
                 "src.server.services.llm_provider_service.openai.AsyncOpenAI"
             ) as mock_openai:
-                mock_client = MagicMock()
+                mock_client = self._make_mock_client()
                 mock_openai.return_value = mock_client
 
                 async with get_llm_client() as client:
@@ -166,7 +172,7 @@ class TestAsyncLLMProviderService:
             with patch(
                 "src.server.services.llm_provider_service.openai.AsyncOpenAI"
             ) as mock_openai:
-                mock_client = MagicMock()
+                mock_client = self._make_mock_client()
                 mock_openai.return_value = mock_client
 
                 async with get_llm_client(provider="openai") as client:
@@ -194,7 +200,7 @@ class TestAsyncLLMProviderService:
             with patch(
                 "src.server.services.llm_provider_service.openai.AsyncOpenAI"
             ) as mock_openai:
-                mock_client = MagicMock()
+                mock_client = self._make_mock_client()
                 mock_openai.return_value = mock_client
 
                 async with get_llm_client(use_embedding_provider=True) as client:
@@ -216,7 +222,7 @@ class TestAsyncLLMProviderService:
         }
         mock_credential_service.get_active_provider.return_value = config_without_key
         mock_credential_service.get_credentials_by_category = AsyncMock(return_value={
-            "LLM_BASE_URL": "http://localhost:11434"
+            "LLM_BASE_URL": "http://host.docker.internal:11434"
         })
 
         with patch(
@@ -225,7 +231,7 @@ class TestAsyncLLMProviderService:
             with patch(
                 "src.server.services.llm_provider_service.openai.AsyncOpenAI"
             ) as mock_openai:
-                mock_client = MagicMock()
+                mock_client = self._make_mock_client()
                 mock_openai.return_value = mock_client
 
                 # Should fallback to Ollama instead of raising an error
@@ -234,7 +240,7 @@ class TestAsyncLLMProviderService:
                     # Verify it created an Ollama client with correct params
                     mock_openai.assert_called_once_with(
                         api_key="ollama",
-                        base_url="http://localhost:11434/v1"
+                        base_url="http://host.docker.internal:11434/v1"
                     )
 
     @pytest.mark.asyncio
@@ -426,7 +432,7 @@ class TestAsyncLLMProviderService:
             with patch(
                 "src.server.services.llm_provider_service.openai.AsyncOpenAI"
             ) as mock_openai:
-                mock_client = MagicMock()
+                mock_client = self._make_mock_client()
                 mock_openai.return_value = mock_client
 
                 # First call should hit the credential service
@@ -464,7 +470,7 @@ class TestAsyncLLMProviderService:
             with patch(
                 "src.server.services.llm_provider_service.openai.AsyncOpenAI"
             ) as mock_openai:
-                mock_client = MagicMock()
+                mock_client = self._make_mock_client()
                 mock_openai.return_value = mock_client
 
                 client_ref = None
@@ -474,13 +480,14 @@ class TestAsyncLLMProviderService:
 
                 # After context manager exits, should still have reference to client
                 assert client_ref == mock_client
+                mock_client.aclose.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_multiple_providers_in_sequence(self, mock_credential_service):
         """Test creating clients for different providers in sequence"""
         configs = [
             {"provider": "openai", "api_key": "openai-key", "base_url": None},
-            {"provider": "ollama", "api_key": "ollama", "base_url": "http://localhost:11434/v1"},
+            {"provider": "ollama", "api_key": "ollama", "base_url": "http://host.docker.internal:11434/v1"},
             {
                 "provider": "google",
                 "api_key": "google-key",
@@ -494,7 +501,7 @@ class TestAsyncLLMProviderService:
             with patch(
                 "src.server.services.llm_provider_service.openai.AsyncOpenAI"
             ) as mock_openai:
-                mock_client = MagicMock()
+                mock_client = self._make_mock_client()
                 mock_openai.return_value = mock_client
 
                 for config in configs:

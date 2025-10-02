@@ -28,12 +28,14 @@ services:
       - ARCHON_MCP_PORT=${ARCHON_MCP_PORT:-8051}
       - ARCHON_AGENTS_PORT=${ARCHON_AGENTS_PORT:-8052}
       - AGENTS_ENABLED=${AGENTS_ENABLED:-false}
+      - ARCHON_HOST=${HOST:-localhost}
     networks:
       - app-network
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock # Docker socket for MCP container control
       - ./python/src:/app/src # Mount source code for hot reload
       - ./python/tests:/app/tests # Mount tests for UI test execution
+      - ./migration:/app/migration # Mount migration files for version tracking
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command:

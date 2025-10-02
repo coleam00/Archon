@@ -20,8 +20,10 @@ const TYPES = [
     description: "Code, APIs, dev docs",
     icon: Terminal,
     gradient: {
-      selected: "from-cyan-100/60 via-cyan-50/30 to-white/70 dark:from-cyan-900/30 dark:via-cyan-900/15 dark:to-black/40",
-      unselected: "from-gray-50/50 via-gray-25/25 to-white/60 dark:from-gray-800/20 dark:via-gray-800/10 dark:to-black/30",
+      selected:
+        "from-cyan-100/60 via-cyan-50/30 to-white/70 dark:from-cyan-900/30 dark:via-cyan-900/15 dark:to-black/40",
+      unselected:
+        "from-gray-50/50 via-gray-25/25 to-white/60 dark:from-gray-800/20 dark:via-gray-800/10 dark:to-black/30",
     },
     border: {
       selected: "border-cyan-500/60",
@@ -45,8 +47,10 @@ const TYPES = [
     description: "Guides, policies, general",
     icon: Briefcase,
     gradient: {
-      selected: "from-pink-100/60 via-pink-50/30 to-white/70 dark:from-pink-900/30 dark:via-pink-900/15 dark:to-black/40",
-      unselected: "from-gray-50/50 via-gray-25/25 to-white/60 dark:from-gray-800/20 dark:via-gray-800/10 dark:to-black/30",
+      selected:
+        "from-pink-100/60 via-pink-50/30 to-white/70 dark:from-pink-900/30 dark:via-pink-900/15 dark:to-black/40",
+      unselected:
+        "from-gray-50/50 via-gray-25/25 to-white/60 dark:from-gray-800/20 dark:via-gray-800/10 dark:to-black/30",
     },
     border: {
       selected: "border-pink-500/60",
@@ -73,9 +77,7 @@ export const KnowledgeTypeSelector: React.FC<KnowledgeTypeSelectorProps> = ({
 }) => {
   return (
     <div className="space-y-3">
-      <div className="text-sm font-medium text-gray-900 dark:text-white/90">
-        Knowledge Type
-      </div>
+      <div className="text-sm font-medium text-gray-900 dark:text-white/90">Knowledge Type</div>
       <div className="grid grid-cols-2 gap-4">
         {TYPES.map((type) => {
           const isSelected = value === type.value;
@@ -99,9 +101,11 @@ export const KnowledgeTypeSelector: React.FC<KnowledgeTypeSelectorProps> = ({
                     ? `${type.border.selected} bg-gradient-to-b ${type.gradient.selected}`
                     : `${type.border.unselected} bg-gradient-to-b ${type.gradient.unselected}`,
                   !disabled && !isSelected && type.border.hover,
-                  !disabled && !isSelected && "hover:shadow-[0_0_15px_rgba(0,0,0,0.05)] dark:hover:shadow-[0_0_15px_rgba(255,255,255,0.05)]",
+                  !disabled &&
+                    !isSelected &&
+                    "hover:shadow-[0_0_15px_rgba(0,0,0,0.05)] dark:hover:shadow-[0_0_15px_rgba(255,255,255,0.05)]",
                   isSelected && "shadow-[0_0_20px_rgba(6,182,212,0.15)]",
-                  disabled && "opacity-50 cursor-not-allowed"
+                  disabled && "opacity-50 cursor-not-allowed",
                 )}
                 aria-label={`Select ${type.label}: ${type.description}`}
               >
@@ -115,36 +119,33 @@ export const KnowledgeTypeSelector: React.FC<KnowledgeTypeSelectorProps> = ({
 
                 {/* Selection indicator */}
                 {isSelected && (
-                  <div className={cn("absolute -top-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center", type.accent)}>
+                  <div
+                    className={cn(
+                      "absolute -top-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center",
+                      type.accent,
+                    )}
+                  >
                     <Check className="w-3 h-3 text-white" />
                   </div>
                 )}
 
                 {/* Icon */}
-                <Icon className={cn(
-                  "w-6 h-6",
-                  isSelected
-                    ? type.colors.selected
-                    : type.colors.unselected
-                )} />
+                <Icon className={cn("w-6 h-6", isSelected ? type.colors.selected : type.colors.unselected)} />
 
                 {/* Label */}
-                <div className={cn(
-                  "text-sm font-semibold",
-                  isSelected
-                    ? type.colors.selected
-                    : type.colors.unselected
-                )}>
+                <div
+                  className={cn("text-sm font-semibold", isSelected ? type.colors.selected : type.colors.unselected)}
+                >
                   {type.label}
                 </div>
 
                 {/* Description */}
-                <div className={cn(
-                  "text-xs text-center leading-tight",
-                  isSelected
-                    ? type.colors.description.selected
-                    : type.colors.description.unselected
-                )}>
+                <div
+                  className={cn(
+                    "text-xs text-center leading-tight",
+                    isSelected ? type.colors.description.selected : type.colors.description.unselected,
+                  )}
+                >
                   {type.description}
                 </div>
               </button>

@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { useToast } from "../../../ui/hooks/useToast";
+import { useToast } from "@/features/shared/hooks/useToast";
 import { useProjectFeatures } from "../../hooks/useProjectQueries";
 import type { Assignee, CreateTaskRequest, Task, UpdateTaskRequest, UseTaskEditorReturn } from "../types";
 import { useCreateTask, useUpdateTask } from "./useTaskQueries";
@@ -37,6 +37,7 @@ export const useTaskEditor = (projectId: string): UseTaskEditorReturn => {
     if (localTask.status !== editingTask.status) updates.status = localTask.status;
     if (localTask.assignee !== editingTask.assignee) updates.assignee = localTask.assignee || "User";
     if (localTask.task_order !== editingTask.task_order) updates.task_order = localTask.task_order;
+    if (localTask.priority !== editingTask.priority) updates.priority = localTask.priority;
     if (localTask.feature !== editingTask.feature) updates.feature = localTask.feature || "";
 
     return updates;
@@ -51,6 +52,7 @@ export const useTaskEditor = (projectId: string): UseTaskEditorReturn => {
         description: localTask.description || "",
         status: (localTask.status as Task["status"]) || "todo",
         assignee: (localTask.assignee as Assignee) || "User",
+        priority: localTask.priority || "medium",
         feature: localTask.feature || "",
         task_order: localTask.task_order || getDefaultTaskOrder((localTask.status as Task["status"]) || "todo"),
       };

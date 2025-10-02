@@ -104,13 +104,15 @@ class TestCodeExtractionSourceId:
         )
         
         # Verify the correct source_id was passed (now with cancellation_check parameter)
-        mock_extract.assert_called_once_with(
-            crawl_results,
-            url_to_full_document,
-            source_id,  # This should be the third argument
-            None,
-            None  # cancellation_check parameter
-        )
+        mock_extract.assert_called_once()
+        args, kwargs = mock_extract.call_args
+        assert args[0] == crawl_results
+        assert args[1] == url_to_full_document
+        assert args[2] == source_id
+        assert args[3] is None
+        assert args[4] is None
+        if len(args) > 5:
+            assert args[5] is None
         assert result == 5
 
     @pytest.mark.asyncio

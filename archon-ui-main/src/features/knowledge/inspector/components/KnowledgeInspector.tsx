@@ -4,6 +4,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { copyToClipboard } from "../../../shared/utils/clipboard";
 import { InspectorDialog, InspectorDialogContent, InspectorDialogTitle } from "../../../ui/primitives";
 import type { CodeExample, DocumentChunk, InspectorSelectedItem, KnowledgeItem } from "../../types";
 import { useInspectorPagination } from "../hooks/useInspectorPagination";
@@ -24,7 +25,7 @@ export const KnowledgeInspector: React.FC<KnowledgeInspectorProps> = ({
   item,
   open,
   onOpenChange,
-  initialTab = "documents"
+  initialTab = "documents",
 }) => {
   const [viewMode, setViewMode] = useState<ViewMode>(initialTab);
   const [searchQuery, setSearchQuery] = useState("");
@@ -92,12 +93,12 @@ export const KnowledgeInspector: React.FC<KnowledgeInspectorProps> = ({
   }, [viewMode, currentItems, selectedItem]);
 
   const handleCopy = useCallback(async (text: string, id: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
+    const result = await copyToClipboard(text);
+    if (result.success) {
       setCopiedId(id);
       setTimeout(() => setCopiedId((v) => (v === id ? null : v)), 2000);
-    } catch (error) {
-      console.error("Failed to copy to clipboard:", error);
+    } else {
+      console.error("Failed to copy to clipboard:", result.error);
     }
   }, []);
 

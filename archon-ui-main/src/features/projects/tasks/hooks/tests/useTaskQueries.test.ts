@@ -3,12 +3,13 @@ import { renderHook, waitFor } from "@testing-library/react";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Task } from "../../types";
-import { taskKeys, useCreateTask, useProjectTasks } from "../useTaskQueries";
+import { taskKeys, useCreateTask, useProjectTasks, useTaskCounts } from "../useTaskQueries";
 
 // Mock the services
 vi.mock("../../services", () => ({
   taskService: {
     getTasksByProject: vi.fn(),
+    getTaskCountsForAllProjects: vi.fn(),
     createTask: vi.fn(),
     updateTask: vi.fn(),
     deleteTask: vi.fn(),
@@ -19,14 +20,14 @@ vi.mock("../../services", () => ({
 const showToastMock = vi.fn();
 
 // Mock the toast hook
-vi.mock("../../../../ui/hooks/useToast", () => ({
+vi.mock("../../../../shared/hooks/useToast", () => ({
   useToast: () => ({
     showToast: showToastMock,
   }),
 }));
 
 // Mock smart polling
-vi.mock("../../../../ui/hooks", () => ({
+vi.mock("../../../../shared/hooks", () => ({
   useSmartPolling: () => ({
     refetchInterval: 5000,
     isPaused: false,
@@ -54,7 +55,11 @@ describe("useTaskQueries", () => {
 
   describe("taskKeys", () => {
     it("should generate correct query keys", () => {
-      expect(taskKeys.all("project-123")).toEqual(["projects", "project-123", "tasks"]);
+      expect(taskKeys.all).toEqual(["tasks"]);
+      expect(taskKeys.lists()).toEqual(["tasks", "list"]);
+      expect(taskKeys.detail("task-123")).toEqual(["tasks", "detail", "task-123"]);
+      expect(taskKeys.byProject("project-123")).toEqual(["projects", "project-123", "tasks"]);
+      expect(taskKeys.counts()).toEqual(["tasks", "counts"]);
     });
   });
 
@@ -69,6 +74,7 @@ describe("useTaskQueries", () => {
           status: "todo",
           assignee: "User",
           task_order: 100,
+          priority: "medium",
           created_at: "2024-01-01T00:00:00Z",
           updated_at: "2024-01-01T00:00:00Z",
         },
@@ -120,6 +126,7 @@ describe("useTaskQueries", () => {
         status: "todo",
         assignee: "User",
         task_order: 100,
+        priority: "medium",
         created_at: "2024-01-01T00:00:00Z",
         updated_at: "2024-01-01T00:00:00Z",
       };
@@ -159,6 +166,7 @@ describe("useTaskQueries", () => {
         status: "todo",
         assignee: "User",
         task_order: 100,
+        priority: "medium",
         created_at: "2024-01-01T00:00:00Z",
         updated_at: "2024-01-01T00:00:00Z",
       };

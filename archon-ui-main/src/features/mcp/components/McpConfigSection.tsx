@@ -1,7 +1,8 @@
 import { Copy, ExternalLink } from "lucide-react";
 import type React from "react";
 import { useState } from "react";
-import { useToast } from "../../ui/hooks";
+import { useToast } from "@/features/shared/hooks";
+import { copyToClipboard } from "../../shared/utils/clipboard";
 import { Button, cn, glassmorphism, Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/primitives";
 import type { McpServerConfig, McpServerStatus, SupportedIDE } from "../types";
 
@@ -18,6 +19,7 @@ const ideConfigurations: Record<
     steps: string[];
     configGenerator: (config: McpServerConfig) => string;
     supportsOneClick?: boolean;
+    platformSpecific?: boolean;
   }
 > = {
   claudecode: {
@@ -54,6 +56,42 @@ const ideConfigurations: Record<
         null,
         2,
       ),
+  },
+  codex: {
+    title: "Codex Configuration",
+    steps: [
+      "Step 1: Install mcp-remote globally: npm install -g mcp-remote",
+      "Step 2: Add configuration to ~/.codex/config.toml",
+      "Step 3: Find your exact mcp-remote path by running: npm root -g",
+      "Step 4: Replace the path in the configuration with your actual path + /mcp-remote/dist/proxy.js",
+    ],
+    configGenerator: (config) => {
+      const isWindows = navigator.platform.toLowerCase().includes("win");
+
+      if (isWindows) {
+        return `[mcp_servers.archon]
+command = 'node'
+args = [
+    'C:/Users/YOUR_USERNAME/AppData/Roaming/npm/node_modules/mcp-remote/dist/proxy.js',
+    'http://${config.host}:${config.port}/mcp'
+]
+env = {
+    APPDATA = 'C:\\Users\\YOUR_USERNAME\\AppData\\Roaming',
+    LOCALAPPDATA = 'C:\\Users\\YOUR_USERNAME\\AppData\\Local',
+    SystemRoot = 'C:\\WINDOWS',
+    COMSPEC = 'C:\\WINDOWS\\system32\\cmd.exe'
+}`;
+      } else {
+        return `[mcp_servers.archon]
+command = 'node'
+args = [
+    '/usr/local/lib/node_modules/mcp-remote/dist/proxy.js',
+    'http://${config.host}:${config.port}/mcp'
+]
+env = { }`;
+      }
+    },
+    platformSpecific: true,
   },
   cursor: {
     title: "Cursor Configuration",
@@ -143,27 +181,6 @@ const ideConfigurations: Record<
         2,
       ),
   },
-  augment: {
-    title: "Augment Configuration",
-    steps: [
-      "Open Augment settings",
-      "Navigate to Extensions > MCP",
-      "Add the configuration shown below",
-      "Reload configuration",
-    ],
-    configGenerator: (config) =>
-      JSON.stringify(
-        {
-          mcpServers: {
-            archon: {
-              url: `http://${config.host}:${config.port}/mcp`,
-            },
-          },
-        },
-        null,
-        2,
-      ),
-  },
 };
 
 export const McpConfigSection: React.FC<McpConfigSectionProps> = ({ config, status, className }) => {
@@ -185,10 +202,16 @@ export const McpConfigSection: React.FC<McpConfigSectionProps> = ({ config, stat
     );
   }
 
-  const handleCopyConfig = () => {
+  const handleCopyConfig = async () => {
     const configText = ideConfigurations[selectedIDE].configGenerator(config);
-    navigator.clipboard.writeText(configText);
-    showToast("Configuration copied to clipboard", "success");
+    const result = await copyToClipboard(configText);
+
+    if (result.success) {
+      showToast("Configuration copied to clipboard", "success");
+    } else {
+      console.error("Failed to copy config:", result.error);
+      showToast("Failed to copy configuration", "error");
+    }
   };
 
   const handleCursorOneClick = () => {
@@ -202,10 +225,16 @@ export const McpConfigSection: React.FC<McpConfigSectionProps> = ({ config, stat
     showToast("Opening Cursor with Archon MCP configuration...", "info");
   };
 
-  const handleClaudeCodeCommand = () => {
+  const handleClaudeCodeCommand = async () => {
     const command = `claude mcp add --transport http archon http://${config.host}:${config.port}/mcp`;
-    navigator.clipboard.writeText(command);
-    showToast("Command copied to clipboard", "success");
+    const result = await copyToClipboard(command);
+
+    if (result.success) {
+      showToast("Command copied to clipboard", "success");
+    } else {
+      console.error("Failed to copy command:", result.error);
+      showToast("Failed to copy command", "error");
+    }
   };
 
   const selectedConfig = ideConfigurations[selectedIDE];
@@ -227,14 +256,14 @@ export const McpConfigSection: React.FC<McpConfigSectionProps> = ({ config, stat
         value={selectedIDE}
         onValueChange={(value) => setSelectedIDE(value as SupportedIDE)}
       >
-        <TabsList className="grid grid-cols-4 lg:grid-cols-7 w-full">
+        <TabsList className="grid grid-cols-3 lg:grid-cols-7 w-full">
           <TabsTrigger value="claudecode">Claude Code</TabsTrigger>
           <TabsTrigger value="gemini">Gemini</TabsTrigger>
+          <TabsTrigger value="codex">Codex</TabsTrigger>
           <TabsTrigger value="cursor">Cursor</TabsTrigger>
           <TabsTrigger value="windsurf">Windsurf</TabsTrigger>
           <TabsTrigger value="cline">Cline</TabsTrigger>
           <TabsTrigger value="kiro">Kiro</TabsTrigger>
-          <TabsTrigger value="augment">Augment</TabsTrigger>
         </TabsList>
 
         <TabsContent value={selectedIDE} className="mt-6 space-y-4">
@@ -242,10 +271,32 @@ export const McpConfigSection: React.FC<McpConfigSectionProps> = ({ config, stat
           <div>
             <h4 className="text-lg font-semibold text-gray-800 dark:text-white mb-3">{selectedConfig.title}</h4>
             <ol className="list-decimal list-inside space-y-2 text-sm text-gray-600 dark:text-zinc-400">
-              {selectedConfig.steps.map((step) => (
-                <li key={step}>{step}</li>
-              ))}
+              {selectedConfig.steps.map((step) => {
+                // Highlight npm install command for Codex
+                if (selectedIDE === "codex" && step.includes("npm install -g mcp-remote")) {
+                  const parts = step.split("npm install -g mcp-remote");
+                  return (
+                    <li key={step}>
+                      {parts[0]}
+                      <code className="font-mono font-semibold bg-zinc-800 text-cyan-400 px-1.5 py-0.5 rounded">
+                        npm install -g mcp-remote
+                      </code>
+                      {parts[1]}
+                    </li>
+                  );
+                }
+                return <li key={step}>{step}</li>;
+              })}
             </ol>
+            {/* macOS note for Codex */}
+            {selectedIDE === "codex" && (
+              <p className="mt-2 text-sm text-gray-600 dark:text-zinc-400 italic">
+                Note: On macOS with Homebrew on Apple Silicon, the path might be{" "}
+                <code className="text-xs font-mono bg-zinc-800 px-1 rounded">
+                  /opt/homebrew/lib/node_modules/mcp-remote/dist/proxy.js
+                </code>
+              </p>
+            )}
           </div>
 
           {/* Special Commands for Claude Code */}
@@ -267,10 +318,29 @@ export const McpConfigSection: React.FC<McpConfigSectionProps> = ({ config, stat
             </div>
           )}
 
+          {/* Platform-specific note for Codex */}
+          {selectedIDE === "codex" && (
+            <div className={cn("p-3 rounded-lg", glassmorphism.background.yellow, glassmorphism.border.yellow)}>
+              <p className="text-sm text-yellow-700 dark:text-yellow-300">
+                <span className="font-semibold">Platform Note:</span> The configuration below shows{" "}
+                {navigator.platform.toLowerCase().includes("win") ? "Windows" : "Linux/macOS"} format. Adjust paths
+                according to your system. This setup is complex right now because Codex has some bugs with MCP
+                currently.
+              </p>
+            </div>
+          )}
+
           {/* Configuration Display */}
           <div className={cn("relative rounded-lg p-4", glassmorphism.background.subtle, glassmorphism.border.default)}>
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Configuration</span>
+              <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                Configuration
+                {selectedIDE === "codex" && (
+                  <span className="ml-2 text-xs text-yellow-600 dark:text-yellow-400">
+                    ({navigator.platform.toLowerCase().includes("win") ? "Windows" : "Linux/macOS"})
+                  </span>
+                )}
+              </span>
               <Button variant="outline" size="sm" onClick={handleCopyConfig}>
                 <Copy className="w-3 h-3 mr-1" />
                 Copy

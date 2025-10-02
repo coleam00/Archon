@@ -7,7 +7,7 @@ import { Info } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Input } from "../../ui/primitives";
 import { cn } from "../../ui/primitives/styles";
-import { SimpleTooltip, Tooltip, TooltipTrigger, TooltipContent } from "../../ui/primitives/tooltip";
+import { SimpleTooltip, Tooltip, TooltipContent, TooltipTrigger } from "../../ui/primitives/tooltip";
 import { useUpdateKnowledgeItem } from "../hooks";
 
 // Centralized color class mappings
@@ -23,12 +23,15 @@ const ICON_COLOR_CLASSES: Record<string, string> = {
 
 const TOOLTIP_COLOR_CLASSES: Record<string, string> = {
   cyan: "border-cyan-500/50 shadow-[0_0_15px_rgba(34,211,238,0.5)] dark:border-cyan-400/50 dark:shadow-[0_0_15px_rgba(34,211,238,0.7)]",
-  purple: "border-purple-500/50 shadow-[0_0_15px_rgba(168,85,247,0.5)] dark:border-purple-400/50 dark:shadow-[0_0_15px_rgba(168,85,247,0.7)]",
+  purple:
+    "border-purple-500/50 shadow-[0_0_15px_rgba(168,85,247,0.5)] dark:border-purple-400/50 dark:shadow-[0_0_15px_rgba(168,85,247,0.7)]",
   blue: "border-blue-500/50 shadow-[0_0_15px_rgba(59,130,246,0.5)] dark:border-blue-400/50 dark:shadow-[0_0_15px_rgba(59,130,246,0.7)]",
   pink: "border-pink-500/50 shadow-[0_0_15px_rgba(236,72,153,0.5)] dark:border-pink-400/50 dark:shadow-[0_0_15px_rgba(236,72,153,0.7)]",
   red: "border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.5)] dark:border-red-400/50 dark:shadow-[0_0_15px_rgba(239,68,68,0.7)]",
-  yellow: "border-yellow-500/50 shadow-[0_0_15px_rgba(234,179,8,0.5)] dark:border-yellow-400/50 dark:shadow-[0_0_15px_rgba(234,179,8,0.7)]",
-  default: "border-cyan-500/50 shadow-[0_0_15px_rgba(34,211,238,0.5)] dark:border-cyan-400/50 dark:shadow-[0_0_15px_rgba(34,211,238,0.7)]",
+  yellow:
+    "border-yellow-500/50 shadow-[0_0_15px_rgba(234,179,8,0.5)] dark:border-yellow-400/50 dark:shadow-[0_0_15px_rgba(234,179,8,0.7)]",
+  default:
+    "border-cyan-500/50 shadow-[0_0_15px_rgba(34,211,238,0.5)] dark:border-cyan-400/50 dark:shadow-[0_0_15px_rgba(34,211,238,0.7)]",
 };
 
 interface KnowledgeCardTitleProps {
@@ -144,16 +147,16 @@ export const KnowledgeCardTitle: React.FC<KnowledgeCardTitleProps> = ({
           disabled={updateMutation.isPending}
           className={cn(
             "text-base font-semibold bg-transparent border-cyan-400 dark:border-cyan-600",
-            "focus:ring-1 focus:ring-cyan-400 px-2 py-1"
+            "focus:ring-1 focus:ring-cyan-400 px-2 py-1",
           )}
         />
-        {(description && description.trim()) && (
+        {description && description.trim() && (
           <Tooltip delayDuration={200}>
             <TooltipTrigger asChild>
               <Info
                 className={cn(
                   "w-3.5 h-3.5 transition-colors flex-shrink-0 opacity-70 hover:opacity-100 cursor-help",
-                  getIconColorClass()
+                  getIconColorClass(),
                 )}
               />
             </TooltipTrigger>
@@ -173,20 +176,20 @@ export const KnowledgeCardTitle: React.FC<KnowledgeCardTitleProps> = ({
           className={cn(
             "text-base font-semibold text-gray-900 dark:text-white/90 line-clamp-2 cursor-pointer",
             "hover:text-gray-700 dark:hover:text-white transition-colors",
-            updateMutation.isPending && "opacity-50"
+            updateMutation.isPending && "opacity-50",
           )}
           onClick={handleClick}
         >
           {title}
         </h3>
       </SimpleTooltip>
-      {(description && description.trim()) && (
+      {description && description.trim() && (
         <Tooltip delayDuration={200}>
           <TooltipTrigger asChild>
             <Info
               className={cn(
                 "w-3.5 h-3.5 transition-colors flex-shrink-0 opacity-70 hover:opacity-100 cursor-help",
-                getIconColorClass()
+                getIconColorClass(),
               )}
             />
           </TooltipTrigger>

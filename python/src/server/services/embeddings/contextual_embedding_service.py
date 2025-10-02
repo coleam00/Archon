@@ -10,7 +10,13 @@ import os
 import openai
 
 from ...config.logfire_config import search_logger
-from ..llm_provider_service import get_llm_client
+from ..credential_service import credential_service
+from ..llm_provider_service import (
+    extract_message_text,
+    get_llm_client,
+    prepare_chat_completion_params,
+    requires_max_completion_tokens,
+)
 from ..threading_service import get_threading_service
 
 
@@ -32,8 +38,6 @@ async def generate_contextual_embedding(
     """
     # Model choice is a RAG setting, get from credential service
     try:
-        from ...services.credential_service import credential_service
-
         model_choice = await credential_service.get_credential("MODEL_CHOICE", "gpt-4.1-nano")
     except Exception as e:
         # Fallback to environment variable or default
@@ -65,20 +69,25 @@ Please give a short succinct context to situate this chunk within the overall do
                 # Get model from provider configuration
                 model = await _get_model_choice(provider)
 
-                response = await client.chat.completions.create(
-                    model=model,
-                    messages=[
+                # Prepare parameters and convert max_tokens for GPT-5/reasoning models
+                params = {
+                    "model": model,
+                    "messages": [
                         {
                             "role": "system",
                             "content": "You are a helpful assistant that provides concise contextual information.",
                         },
                         {"role": "user", "content": prompt},
                     ],
-                    temperature=0.3,
-                    max_tokens=200,
-                )
+                    "temperature": 0.3,
+                    "max_tokens": 1200 if requires_max_completion_tokens(model) else 200,  # Much more tokens for reasoning models (GPT-5 needs extra for reasoning process)
+                }
+                final_params = prepare_chat_completion_params(model, params)
+                response = await client.chat.completions.create(**final_params)
 
-                context = response.choices[0].message.content.strip()
+                choice = response.choices[0] if response.choices else None
+                context, _, _ = extract_message_text(choice)
+                context = context.strip()
                 contextual_text = f"{context}\n---\n{chunk}"
 
                 return contextual_text, True
@@ -111,7 +120,7 @@ async def process_chunk_with_context(
 
 
 async def _get_model_choice(provider: str | None = None) -> str:
-    """Get model choice from credential service."""
+    """Get model choice from credential service with centralized defaults."""
     from ..credential_service import credential_service
 
     # Get the active provider configuration
@@ -119,31 +128,36 @@ async def _get_model_choice(provider: str | None = None) -> str:
     model = provider_config.get("chat_model", "").strip()  # Strip whitespace
     provider_name = provider_config.get("provider", "openai")
 
-    # Handle empty model case - fallback to provider-specific defaults or explicit config
+    # Handle empty model case - use centralized defaults
     if not model:
-        search_logger.warning(f"chat_model is empty for provider {provider_name}, using fallback logic")
-        
+        search_logger.warning(f"chat_model is empty for provider {provider_name}, using centralized defaults")
+
+        # Special handling for Ollama to check specific credential
         if provider_name == "ollama":
-            # Try to get OLLAMA_CHAT_MODEL specifically
             try:
                 ollama_model = await credential_service.get_credential("OLLAMA_CHAT_MODEL")
                 if ollama_model and ollama_model.strip():
                     model = ollama_model.strip()
                     search_logger.info(f"Using OLLAMA_CHAT_MODEL fallback: {model}")
                 else:
-                    # Use a sensible Ollama default
+                    # Use default for Ollama
                     model = "llama3.2:latest"
-                    search_logger.info(f"Using Ollama default model: {model}")
+                    search_logger.info(f"Using Ollama default: {model}")
             except Exception as e:
                 search_logger.error(f"Error getting OLLAMA_CHAT_MODEL: {e}")
                 model = "llama3.2:latest"
-                search_logger.info(f"Using Ollama fallback model: {model}")
-        elif provider_name == "google":
-            model = "gemini-1.5-flash"
+                search_logger.info(f"Using Ollama fallback: {model}")
         else:
-            # OpenAI or other providers
-            model = "gpt-4o-mini"
-    
+            # Use provider-specific defaults
+            provider_defaults = {
+                "openai": "gpt-4o-mini",
+                "openrouter": "anthropic/claude-3.5-sonnet",
+                "google": "gemini-1.5-flash",
+                "anthropic": "claude-3-5-haiku-20241022",
+                "grok": "grok-3-mini"
+            }
+            model = provider_defaults.get(provider_name, "gpt-4o-mini")
+            search_logger.debug(f"Using default model for provider {provider_name}: {model}")
     search_logger.debug(f"Using model from credential service: {model}")
 
     return model
@@ -174,38 +188,48 @@ async def generate_contextual_embeddings_batch(
             model_choice = await _get_model_choice(provider)
 
             # Build batch prompt for ALL chunks at once
-            batch_prompt = (
-                "Process the following chunks and provide contextual information for each:\\n\\n"
-            )
+            batch_prompt = "Process the following chunks and provide contextual information for each:\n\n"
 
             for i, (doc, chunk) in enumerate(zip(full_documents, chunks, strict=False)):
                 # Use only 2000 chars of document context to save tokens
                 doc_preview = doc[:2000] if len(doc) > 2000 else doc
-                batch_prompt += f"CHUNK {i + 1}:\\n"
-                batch_prompt += f"<document_preview>\\n{doc_preview}\\n</document_preview>\\n"
-                batch_prompt += f"<chunk>\\n{chunk[:500]}\\n</chunk>\\n\\n"  # Limit chunk preview
+                batch_prompt += f"CHUNK {i + 1}:\n"
+                batch_prompt += f"<document_preview>\n{doc_preview}\n</document_preview>\n"
+                batch_prompt += f"<chunk>\n{chunk[:500]}\n</chunk>\n\n"  # Limit chunk preview
 
-            batch_prompt += "For each chunk, provide a short succinct context to situate it within the overall document for improving search retrieval. Format your response as:\\nCHUNK 1: [context]\\nCHUNK 2: [context]\\netc."
+            batch_prompt += (
+                "For each chunk, provide a short succinct context to situate it within the overall document for improving search retrieval. "
+                "Format your response as:\nCHUNK 1: [context]\nCHUNK 2: [context]\netc."
+            )
 
             # Make single API call for ALL chunks
-            response = await client.chat.completions.create(
-                model=model_choice,
-                messages=[
+            # Prepare parameters and convert max_tokens for GPT-5/reasoning models
+            batch_params = {
+                "model": model_choice,
+                "messages": [
                     {
                         "role": "system",
                         "content": "You are a helpful assistant that generates contextual information for document chunks.",
                     },
                     {"role": "user", "content": batch_prompt},
                 ],
-                temperature=0,
-                max_tokens=100 * len(chunks),  # Limit response size
-            )
+                "temperature": 0,
+                "max_tokens": (600 if requires_max_completion_tokens(model_choice) else 100) * len(chunks),  # Much more tokens for reasoning models (GPT-5 needs extra reasoning space)
+            }
+            final_batch_params = prepare_chat_completion_params(model_choice, batch_params)
+            response = await client.chat.completions.create(**final_batch_params)
 
             # Parse response
-            response_text = response.choices[0].message.content
+            choice = response.choices[0] if response.choices else None
+            response_text, _, _ = extract_message_text(choice)
+            if not response_text:
+                search_logger.error(
+                    "Empty response from LLM when generating contextual embeddings batch"
+                )
+                return [(chunk, False) for chunk in chunks]
 
             # Extract contexts from response
-            lines = response_text.strip().split("\\n")
+            lines = response_text.strip().split("\n")
             chunk_contexts = {}
 
             for line in lines:

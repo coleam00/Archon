@@ -20,14 +20,14 @@ vi.mock("../../services", () => ({
 }));
 
 // Mock the toast hook
-vi.mock("../../../ui/hooks/useToast", () => ({
+vi.mock("@/features/shared/hooks/useToast", () => ({
   useToast: () => ({
     showToast: vi.fn(),
   }),
 }));
 
 // Mock smart polling
-vi.mock("../../../ui/hooks", () => ({
+vi.mock("@/features/shared/hooks", () => ({
   useSmartPolling: () => ({
     refetchInterval: 5000,
     isPaused: false,
@@ -57,9 +57,7 @@ describe("useProjectQueries", () => {
       expect(projectKeys.all).toEqual(["projects"]);
       expect(projectKeys.lists()).toEqual(["projects", "list"]);
       expect(projectKeys.detail("123")).toEqual(["projects", "detail", "123"]);
-      expect(projectKeys.tasks("123")).toEqual(["projects", "detail", "123", "tasks"]);
-      expect(projectKeys.features("123")).toEqual(["projects", "detail", "123", "features"]);
-      expect(projectKeys.documents("123")).toEqual(["projects", "detail", "123", "documents"]);
+      expect(projectKeys.features("123")).toEqual(["projects", "123", "features"]);
     });
   });
 
