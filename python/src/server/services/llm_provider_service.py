@@ -2,7 +2,7 @@
 LLM Provider Service
 
 Provides a unified interface for creating OpenAI-compatible clients for different LLM providers.
-Supports OpenAI, Ollama, and Google Gemini.
+Supports OpenAI, Ollama, Google Gemini, Anthropic, Grok, OpenRouter, and OpenAI-compatible endpoints.
 """
 
 import inspect
@@ -23,7 +23,7 @@ def _is_valid_provider(provider: str) -> bool:
     """Basic provider validation."""
     if not provider or not isinstance(provider, str):
         return False
-    return provider.lower() in {"openai", "ollama", "google", "openrouter", "anthropic", "grok"}
+    return provider.lower() in {"openai", "ollama", "google", "openrouter", "anthropic", "grok", "openai_compatible"}
 
 
 def _sanitize_for_log(text: str) -> str:
@@ -496,6 +496,20 @@ async def get_llm_client(
             )
             logger.info("Grok client created successfully")
 
+        elif provider_name == "openai_compatible":
+            # OpenAI-compatible endpoint (LM Studio, vLLM, LocalAI, text-generation-webui, etc.)
+            if not base_url:
+                raise ValueError("OpenAI Compatible provider requires a base URL - set OPENAI_COMPATIBLE_BASE_URL")
+
+            # API key is optional for local services
+            client_api_key = api_key if api_key else "not-needed"
+
+            client = openai.AsyncOpenAI(
+                api_key=client_api_key,
+                base_url=base_url,
+            )
+            logger.info(f"OpenAI Compatible client created successfully with base URL: {base_url}")
+
         else:
             raise ValueError(f"Unsupported LLM provider: {provider_name}")
 
@@ -665,6 +679,10 @@ async def get_embedding_model(provider: str | None = None) -> str:
             # Grok supports OpenAI and Google embedding models through their API
             # Default to OpenAI's latest for compatibility
             return "text-embedding-3-small"
+        elif provider_name == "openai_compatible":
+            # OpenAI-compatible endpoints - use a common default
+            # Users should configure their specific model in settings
+            return "text-embedding-3-small"
         else:
             # Fallback to OpenAI's model
             return "text-embedding-3-small"
@@ -743,6 +761,10 @@ def is_valid_embedding_model_for_provider(model: str, provider: str) -> bool:
     elif provider_lower in ["openrouter", "anthropic", "grok"]:
         # These providers support both OpenAI and Google models
         return is_openai_embedding_model(model) or is_google_embedding_model(model)
+    elif provider_lower == "openai_compatible":
+        # OpenAI-compatible endpoints can use any model name
+        # Accept any non-empty string as valid
+        return bool(model and model.strip())
     elif provider_lower == "ollama":
         # Ollama has its own models, check common ones
         model_lower = model.lower()
@@ -789,6 +811,10 @@ def get_supported_embedding_models(provider: str) -> list[str]:
     elif provider_lower in ["openrouter", "anthropic", "grok"]:
         # These providers support both OpenAI and Google models
         return openai_models + google_models
+    elif provider_lower == "openai_compatible":
+        # OpenAI-compatible endpoints can use any model name
+        # Return OpenAI models as suggestions, but users can enter custom names
+        return openai_models
     elif provider_lower == "ollama":
         return ["nomic-embed-text", "all-minilm", "mxbai-embed-large"]
     else:
