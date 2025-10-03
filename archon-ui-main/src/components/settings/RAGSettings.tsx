@@ -9,7 +9,7 @@ import { credentialsService } from '../../services/credentialsService';
 import OllamaModelDiscoveryModal from './OllamaModelDiscoveryModal';
 import OllamaModelSelectionModal from './OllamaModelSelectionModal';
 
-type ProviderKey = 'openai' | 'google' | 'ollama' | 'anthropic' | 'grok' | 'openrouter';
+type ProviderKey = 'openai' | 'google' | 'ollama' | 'anthropic' | 'grok' | 'openrouter' | 'openai_compatible';
 
 interface ProviderModels {
   chatModel: string;
@@ -28,7 +28,8 @@ const getDefaultModels = (provider: ProviderKey): ProviderModels => {
     google: 'gemini-1.5-flash',
     grok: 'grok-3-mini', // Updated to use grok-3-mini as default
     openrouter: 'openai/gpt-4o-mini',
-    ollama: 'llama3:8b'
+    ollama: 'llama3:8b',
+    openai_compatible: 'gpt-4o-mini' // Default, user should configure
   };
 
   const embeddingDefaults: Record<ProviderKey, string> = {
@@ -37,7 +38,8 @@ const getDefaultModels = (provider: ProviderKey): ProviderModels => {
     google: 'text-embedding-004',
     grok: 'text-embedding-3-small', // Fallback to OpenAI
     openrouter: 'text-embedding-3-small',
-    ollama: 'nomic-embed-text'
+    ollama: 'nomic-embed-text',
+    openai_compatible: 'text-embedding-3-small' // Default, user should configure
   };
 
   return {
@@ -65,7 +67,7 @@ const loadProviderModels = (): ProviderModelMap => {
   }
 
   // Return defaults for all providers if nothing saved
-  const providers: ProviderKey[] = ['openai', 'google', 'openrouter', 'ollama', 'anthropic', 'grok'];
+  const providers: ProviderKey[] = ['openai', 'google', 'openrouter', 'ollama', 'anthropic', 'grok', 'openai_compatible'];
   const defaultModels: ProviderModelMap = {} as ProviderModelMap;
 
   providers.forEach(provider => {
@@ -83,6 +85,7 @@ const colorStyles: Record<ProviderKey, string> = {
   ollama: 'border-purple-500 bg-purple-500/10',
   anthropic: 'border-orange-500 bg-orange-500/10',
   grok: 'border-yellow-500 bg-yellow-500/10',
+  openai_compatible: 'border-teal-500 bg-teal-500/10',
 };
 
 const providerAlertStyles: Record<ProviderKey, string> = {
@@ -92,6 +95,7 @@ const providerAlertStyles: Record<ProviderKey, string> = {
   ollama: 'bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800 text-purple-800 dark:text-purple-300',
   anthropic: 'bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-800 text-orange-800 dark:text-orange-300',
   grok: 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800 text-yellow-800 dark:text-yellow-300',
+  openai_compatible: 'bg-teal-50 dark:bg-teal-900/20 border-teal-200 dark:border-teal-800 text-teal-800 dark:text-teal-300',
 };
 
 const providerAlertMessages: Record<ProviderKey, string> = {
@@ -101,10 +105,11 @@ const providerAlertMessages: Record<ProviderKey, string> = {
   ollama: 'Configure your Ollama instances in this panel to connect local models.',
   anthropic: 'Configure your Anthropic API key in the credentials section to use Claude models.',
   grok: 'Configure your Grok API key in the credentials section to use Grok models.',
+  openai_compatible: 'Configure your custom OpenAI-compatible endpoint (LM Studio, vLLM, LocalAI, etc.) below.',
 };
 
 const isProviderKey = (value: unknown): value is ProviderKey =>
-  typeof value === 'string' && ['openai', 'google', 'openrouter', 'ollama', 'anthropic', 'grok'].includes(value);
+  typeof value === 'string' && ['openai', 'google', 'openrouter', 'ollama', 'anthropic', 'grok', 'openai_compatible'].includes(value);
 
 interface RAGSettingsProps {
   ragSettings: {
@@ -120,6 +125,9 @@ interface RAGSettingsProps {
     EMBEDDING_MODEL?: string;
     OLLAMA_EMBEDDING_URL?: string;
     OLLAMA_EMBEDDING_INSTANCE_NAME?: string;
+    // OpenAI Compatible Settings
+    OPENAI_COMPATIBLE_BASE_URL?: string;
+    OPENAI_COMPATIBLE_API_KEY?: string;
     // Crawling Performance Settings
     CRAWL_BATCH_SIZE?: number;
     CRAWL_MAX_CONCURRENT?: number;
@@ -838,19 +846,20 @@ export const RAGSettings = ({
           knowledge retrieval.
         </p>
         
-        {/* Provider Selection - 6 Button Layout */}
+        {/* Provider Selection - 7 Button Layout */}
         <div className="mb-6">
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
             LLM Provider
           </label>
-          <div className="grid grid-cols-6 gap-3 mb-4">
+          <div className="grid grid-cols-7 gap-3 mb-4">
             {[
               { key: 'openai', name: 'OpenAI', logo: '/img/OpenAI.png', color: 'green' },
               { key: 'google', name: 'Google', logo: '/img/google-logo.svg', color: 'blue' },
               { key: 'openrouter', name: 'OpenRouter', logo: '/img/OpenRouter.png', color: 'cyan' },
               { key: 'ollama', name: 'Ollama', logo: '/img/Ollama.png', color: 'purple' },
               { key: 'anthropic', name: 'Anthropic', logo: '/img/claude-logo.svg', color: 'orange' },
-              { key: 'grok', name: 'Grok', logo: '/img/Grok.png', color: 'yellow' }
+              { key: 'grok', name: 'Grok', logo: '/img/Grok.png', color: 'yellow' },
+              { key: 'openai_compatible', name: 'Custom', logo: '/img/OpenAI.png', color: 'teal' }
             ].map(provider => (
               <button
                 key={provider.key}
@@ -1283,6 +1292,98 @@ export const RAGSettings = ({
                           )}
                         </span>
                       </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* OpenAI Compatible Configuration */}
+          {ragSettings.LLM_PROVIDER === 'openai_compatible' && (
+            <div className="bg-gray-800 rounded-lg p-6 mb-6">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-white text-lg font-semibold">OpenAI Compatible Configuration</h3>
+                  <p className="text-gray-400 text-sm">Configure custom OpenAI-compatible endpoint (LM Studio, vLLM, LocalAI, etc.)</p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                {/* Base URL Configuration */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Base URL <span className="text-red-400">*</span>
+                  </label>
+                  <Input
+                    value={ragSettings.OPENAI_COMPATIBLE_BASE_URL || 'http://localhost:1234/v1'}
+                    onChange={(e) => setRagSettings({ ...ragSettings, OPENAI_COMPATIBLE_BASE_URL: e.target.value })}
+                    placeholder="http://localhost:1234/v1"
+                    className="font-mono text-sm"
+                  />
+                  <p className="text-gray-500 text-xs mt-1">
+                    The base URL of your OpenAI-compatible API endpoint (must end with /v1)
+                  </p>
+                </div>
+
+                {/* API Key Configuration (Optional) */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    API Key <span className="text-gray-500">(Optional)</span>
+                  </label>
+                  <Input
+                    type="password"
+                    value={ragSettings.OPENAI_COMPATIBLE_API_KEY || ''}
+                    onChange={(e) => setRagSettings({ ...ragSettings, OPENAI_COMPATIBLE_API_KEY: e.target.value })}
+                    placeholder="Leave empty if not required"
+                    className="font-mono text-sm"
+                  />
+                  <p className="text-gray-500 text-xs mt-1">
+                    Some local services don't require an API key
+                  </p>
+                </div>
+
+                {/* Model Names */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                      Chat Model Name
+                    </label>
+                    <Input
+                      value={ragSettings.MODEL_CHOICE || 'gpt-4o-mini'}
+                      onChange={(e) => setRagSettings({ ...ragSettings, MODEL_CHOICE: e.target.value })}
+                      placeholder="gpt-4o-mini"
+                      className="font-mono text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                      Embedding Model Name
+                    </label>
+                    <Input
+                      value={ragSettings.EMBEDDING_MODEL || 'text-embedding-3-small'}
+                      onChange={(e) => setRagSettings({ ...ragSettings, EMBEDDING_MODEL: e.target.value })}
+                      placeholder="text-embedding-3-small"
+                      className="font-mono text-sm"
+                    />
+                  </div>
+                </div>
+
+                {/* Info Box */}
+                <div className="bg-teal-900/30 border border-teal-500/30 rounded-lg p-4">
+                  <div className="flex items-start gap-3">
+                    <svg className="w-5 h-5 text-teal-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    <div className="text-sm text-teal-200">
+                      <p className="font-medium mb-1">Compatible Services:</p>
+                      <ul className="list-disc list-inside space-y-1 text-teal-300/80">
+                        <li>LM Studio (http://localhost:1234/v1)</li>
+                        <li>vLLM (http://localhost:8000/v1)</li>
+                        <li>LocalAI (http://localhost:8080/v1)</li>
+                        <li>text-generation-webui (with OpenAI extension)</li>
+                        <li>Any service implementing OpenAI's API format</li>
+                      </ul>
                     </div>
                   </div>
                 </div>
