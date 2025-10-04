@@ -30,7 +30,7 @@ from ..services.knowledge import DatabaseMetricsService, KnowledgeItemService, K
 from ..services.search.rag_service import RAGService
 from ..services.storage import DocumentStorageService
 from ..utils import get_supabase_client
-from ..utils.document_processing import extract_text_from_document
+from ..utils.document_processing import extract_text_from_document, extract_and_chunk_for_rag
 
 # Get logger for this module
 logger = get_logger(__name__)
@@ -1010,23 +1010,7 @@ async def _perform_upload_with_progress(
             log=f"Extracting text from {filename}"
         )
 
-        try:
-            extracted_text = extract_text_from_document(file_content, filename, content_type)
-            safe_logfire_info(
-                f"Document text extracted | filename={filename} | extracted_length={len(extracted_text)} | content_type={content_type}"
-            )
-        except ValueError as ex:
-            # ValueError indicates unsupported format or empty file - user error
-            logger.warning(f"Document validation failed: {filename} - {str(ex)}")
-            await tracker.error(str(ex))
-            return
-        except Exception as ex:
-            # Other exceptions are system errors - log with full traceback
-            logger.error(f"Failed to extract text from document: {filename}", exc_info=True)
-            await tracker.error(f"Failed to extract text from document: {str(ex)}")
-            return
-
-        # Use DocumentStorageService to handle the upload
+        # Use DocumentStorageService to handle the upload with enhanced processing
         doc_storage_service = DocumentStorageService(get_supabase_client())
 
         # Generate source_id from filename with UUID to prevent collisions
@@ -1049,29 +1033,85 @@ async def _perform_upload_with_progress(
                 **(batch_info or {})
             )
 
-
-        # Call the service's upload_document method
-        success, result = await doc_storage_service.upload_document(
-            file_content=extracted_text,
-            filename=filename,
-            source_id=source_id,
-            knowledge_type=knowledge_type,
-            tags=tag_list,
-            extract_code_examples=extract_code_examples,
-            progress_callback=document_progress_callback,
-            cancellation_check=check_upload_cancellation,
-        )
+        # Try enhanced document processing with Docling first
+        try:
+            success, result = await doc_storage_service.upload_document_with_enhanced_chunking(
+                file_content=file_content,  # Pass raw bytes to Docling processor
+                filename=filename,
+                content_type=content_type,
+                source_id=source_id,
+                knowledge_type=knowledge_type,
+                tags=tag_list,
+                extract_code_examples=extract_code_examples,
+                progress_callback=document_progress_callback,
+                cancellation_check=check_upload_cancellation,
+            )
+            
+            # Log the processing method used
+            processing_method = result.get("processing_method", "unknown")
+            safe_logfire_info(
+                f"Enhanced document processing completed | filename={filename} | method={processing_method} | chunks_stored={result.get('chunks_stored', 0)}"
+            )
+            
+        except Exception as enhanced_error:
+            # If enhanced processing fails, fall back to legacy processing
+            logger.warning(f"Enhanced processing failed for {filename}: {enhanced_error}. Falling back to legacy processing.")
+            
+            try:
+                # Extract text using legacy method
+                extracted_text = extract_text_from_document(file_content, filename, content_type)
+                safe_logfire_info(
+                    f"Legacy document text extracted | filename={filename} | extracted_length={len(extracted_text)} | content_type={content_type}"
+                )
+                
+                # Use legacy upload method
+                success, result = await doc_storage_service.upload_document(
+                    file_content=extracted_text,
+                    filename=filename,
+                    source_id=source_id,
+                    knowledge_type=knowledge_type,
+                    tags=tag_list,
+                    extract_code_examples=extract_code_examples,
+                    progress_callback=document_progress_callback,
+                    cancellation_check=check_upload_cancellation,
+                )
+                
+                # Add processing method to result for tracking
+                result["processing_method"] = "legacy_fallback"
+                result["fallback_reason"] = str(enhanced_error)
+                
+            except ValueError as ex:
+                # ValueError indicates unsupported format or empty file - user error
+                logger.warning(f"Document validation failed: {filename} - {str(ex)}")
+                await tracker.error(str(ex))
+                return
+            except Exception as ex:
+                # Other exceptions are system errors - log with full traceback
+                logger.error(f"Failed to extract text from document: {filename}", exc_info=True)
+                await tracker.error(f"Failed to extract text from document: {str(ex)}")
+                return
 
         if success:
             # Complete the upload with 100% progress
+            processing_method = result.get("processing_method", "unknown")
+            extraction_method = result.get("extraction_method", "unknown")
+            chunking_method = result.get("chunking_method", "unknown")
+            
+            completion_log = f"Document uploaded successfully using {processing_method} processing!"
+            if processing_method == "docling_enhanced":
+                completion_log += f" (extraction: {extraction_method}, chunking: {chunking_method})"
+            
             await tracker.complete({
-                "log": "Document uploaded successfully!",
+                "log": completion_log,
                 "chunks_stored": result.get("chunks_stored"),
                 "code_examples_stored": result.get("code_examples_stored", 0),
                 "sourceId": result.get("source_id"),
+                "processing_method": processing_method,
+                "extraction_method": extraction_method,
+                "chunking_method": chunking_method,
             })
             safe_logfire_info(
-                f"Document uploaded successfully | progress_id={progress_id} | source_id={result.get('source_id')} | chunks_stored={result.get('chunks_stored')} | code_examples_stored={result.get('code_examples_stored', 0)}"
+                f"Document uploaded successfully | progress_id={progress_id} | source_id={result.get('source_id')} | chunks_stored={result.get('chunks_stored')} | code_examples_stored={result.get('code_examples_stored', 0)} | processing_method={processing_method}"
             )
         else:
             error_msg = result.get("error", "Unknown error")
