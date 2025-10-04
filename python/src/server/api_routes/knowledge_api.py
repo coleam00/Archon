@@ -69,7 +69,7 @@ async def _validate_provider_api_key(provider: str = None) -> None:
             provider = "openai"
         else:
             # Simple provider validation
-            allowed_providers = {"openai", "ollama", "google", "openrouter", "anthropic", "grok", "openai_compatible"}
+            allowed_providers = {"openai", "ollama", "google", "openrouter", "anthropic", "grok"}
             if provider not in allowed_providers:
                 raise HTTPException(
                     status_code=400,

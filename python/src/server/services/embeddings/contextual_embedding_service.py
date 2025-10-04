@@ -154,8 +154,7 @@ async def _get_model_choice(provider: str | None = None) -> str:
                 "openrouter": "anthropic/claude-3.5-sonnet",
                 "google": "gemini-1.5-flash",
                 "anthropic": "claude-3-5-haiku-20241022",
-                "grok": "grok-3-mini",
-                "openai_compatible": "gpt-4o-mini"  # Default for OpenAI-compatible endpoints
+                "grok": "grok-3-mini"
             }
             model = provider_defaults.get(provider_name, "gpt-4o-mini")
             search_logger.debug(f"Using default model for provider {provider_name}: {model}")

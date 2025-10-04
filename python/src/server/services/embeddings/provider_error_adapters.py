@@ -1,7 +1,7 @@
 """
 Provider-agnostic error handling for LLM embedding services.
 
-Supports OpenAI, Google AI, Anthropic, Ollama, OpenAI-compatible endpoints, and future providers
+Supports OpenAI, Google AI, Anthropic, Ollama, and future providers
 with unified error handling and sanitization patterns.
 """
 
@@ -125,7 +125,6 @@ class ProviderErrorFactory:
         "openai": OpenAIErrorAdapter(),
         "google": GoogleAIErrorAdapter(),
         "anthropic": AnthropicErrorAdapter(),
-        "openai_compatible": OpenAIErrorAdapter(),  # Use OpenAI adapter for compatible endpoints
     }
 
     @classmethod

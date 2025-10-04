@@ -23,9 +23,6 @@ export interface RagSettings {
   OLLAMA_EMBEDDING_URL?: string;
   OLLAMA_EMBEDDING_INSTANCE_NAME?: string;
   EMBEDDING_MODEL?: string;
-  // OpenAI Compatible Settings
-  OPENAI_COMPATIBLE_BASE_URL?: string;
-  OPENAI_COMPATIBLE_API_KEY?: string;
   // Crawling Performance Settings
   CRAWL_BATCH_SIZE?: number;
   CRAWL_MAX_CONCURRENT?: number;
@@ -226,8 +223,6 @@ class CredentialsService {
             "OLLAMA_EMBEDDING_INSTANCE_NAME",
             "EMBEDDING_MODEL",
             "CRAWL_WAIT_STRATEGY",
-            "OPENAI_COMPATIBLE_BASE_URL",
-            "OPENAI_COMPATIBLE_API_KEY",
           ].includes(cred.key)
         ) {
           (settings as any)[cred.key] = cred.value || "";
