@@ -87,36 +87,12 @@ async def test_grok_connection(api_key: str) -> bool:
         return False
 
 
-async def test_openai_compatible_connection(api_key: str, base_url: str) -> bool:
-    """Test OpenAI-compatible API connectivity"""
-    try:
-        # Ensure base_url ends with /v1
-        if not base_url.endswith('/v1'):
-            base_url = f"{base_url.rstrip('/')}/v1"
-
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            # Try to get models list - standard OpenAI API endpoint
-            headers = {}
-            if api_key and api_key != "not-needed":
-                headers["Authorization"] = f"Bearer {api_key}"
-
-            response = await client.get(
-                f"{base_url}/models",
-                headers=headers
-            )
-            return response.status_code == 200
-    except Exception as e:
-        logfire.warning(f"OpenAI Compatible connectivity test failed: {e}")
-        return False
-
-
 PROVIDER_TESTERS = {
     "openai": test_openai_connection,
     "google": test_google_connection,
     "anthropic": test_anthropic_connection,
     "openrouter": test_openrouter_connection,
     "grok": test_grok_connection,
-    "openai_compatible": test_openai_compatible_connection,
 }
 
 
@@ -126,13 +102,13 @@ async def get_provider_status(
         ...,
         description="Provider name to test connectivity for",
         regex="^[a-z0-9_]+$",
-        max_length=25
+        max_length=20
     )
 ):
     """Test provider connectivity using server-side API key (secure)"""
     try:
         # Basic provider validation
-        allowed_providers = {"openai", "ollama", "google", "openrouter", "anthropic", "grok", "openai_compatible"}
+        allowed_providers = {"openai", "ollama", "google", "openrouter", "anthropic", "grok"}
         if provider not in allowed_providers:
             raise HTTPException(
                 status_code=400,
@@ -140,7 +116,7 @@ async def get_provider_status(
             )
 
         # Basic sanitization for logging
-        safe_provider = provider[:25]  # Limit length
+        safe_provider = provider[:20]  # Limit length
         logfire.info(f"Testing {safe_provider} connectivity server-side")
 
         if provider not in PROVIDER_TESTERS:
@@ -153,29 +129,13 @@ async def get_provider_status(
         key_name = f"{provider.upper()}_API_KEY"
         api_key = await credential_service.get_credential(key_name, decrypt=True)
 
-        # For openai_compatible, also need base URL
-        if provider == "openai_compatible":
-            base_url = await credential_service.get_credential("OPENAI_COMPATIBLE_BASE_URL", decrypt=False)
-            if not base_url or not isinstance(base_url, str) or not base_url.strip():
-                logfire.info(f"No base URL configured for {safe_provider}")
-                return {"ok": False, "reason": "no_base_url"}
+        if not api_key or not isinstance(api_key, str) or not api_key.strip():
+            logfire.info(f"No API key configured for {safe_provider}")
+            return {"ok": False, "reason": "no_key"}
 
-            # API key is optional for openai_compatible
-            if not api_key:
-                api_key = "not-needed"
-
-            # Test connectivity with base URL
-            tester = PROVIDER_TESTERS[provider]
-            is_connected = await tester(api_key, base_url)
-        else:
-            # Standard providers require API key
-            if not api_key or not isinstance(api_key, str) or not api_key.strip():
-                logfire.info(f"No API key configured for {safe_provider}")
-                return {"ok": False, "reason": "no_key"}
-
-            # Test connectivity using server-side key
-            tester = PROVIDER_TESTERS[provider]
-            is_connected = await tester(api_key)
+        # Test connectivity using server-side key
+        tester = PROVIDER_TESTERS[provider]
+        is_connected = await tester(api_key)
 
         logfire.info(f"{safe_provider} connectivity test result: {is_connected}")
         return {

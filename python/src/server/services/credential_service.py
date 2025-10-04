@@ -484,9 +484,6 @@ class CredentialService:
                     provider = "google"
                 elif llm_provider == "ollama":
                     provider = "ollama"
-                elif llm_provider == "openai_compatible":
-                    # OpenAI-compatible endpoints use their own provider
-                    provider = "openai_compatible"
                 elif llm_provider == "openrouter":
                     # OpenRouter supports both OpenAI and Google embedding models
                     provider = _detect_embedding_provider_from_model(embedding_model)
@@ -550,7 +547,6 @@ class CredentialService:
             "anthropic": "ANTHROPIC_API_KEY",
             "grok": "GROK_API_KEY",
             "ollama": None,  # No API key needed
-            "openai_compatible": "OPENAI_COMPATIBLE_API_KEY",  # Custom OpenAI-compatible endpoint
         }
 
         key_name = key_mapping.get(provider)
@@ -570,9 +566,6 @@ class CredentialService:
             return "https://api.anthropic.com/v1"
         elif provider == "grok":
             return "https://api.x.ai/v1"
-        elif provider == "openai_compatible":
-            # Custom OpenAI-compatible endpoint (e.g., LM Studio, vLLM, LocalAI)
-            return rag_settings.get("OPENAI_COMPATIBLE_BASE_URL", "http://localhost:1234/v1")
         return None  # Use default for OpenAI
 
     async def set_active_provider(self, provider: str, service_type: str = "llm") -> bool:

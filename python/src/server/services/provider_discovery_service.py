@@ -2,7 +2,7 @@
 Provider Discovery Service
 
 Discovers available models, checks provider health, and provides model specifications
-for OpenAI, Google Gemini, Ollama, Anthropic, Grok, and OpenAI-compatible providers.
+for OpenAI, Google Gemini, Ollama, Anthropic, and Grok providers.
 """
 
 import time
@@ -174,20 +174,16 @@ class ProviderDiscoveryService:
             if 'client' in locals():
                 await client.close()
 
-    async def discover_openai_models(self, api_key: str, base_url: str | None = None) -> list[ModelSpec]:
-        """Discover available OpenAI models or OpenAI-compatible models."""
-        cache_key = f"openai_models_{hash(api_key)}_{hash(base_url) if base_url else 'default'}"
+    async def discover_openai_models(self, api_key: str) -> list[ModelSpec]:
+        """Discover available OpenAI models."""
+        cache_key = f"openai_models_{hash(api_key)}"
         cached = self._get_cached_result(cache_key)
         if cached:
             return cached
 
         models = []
         try:
-            # Create client with optional base URL for OpenAI-compatible endpoints
-            if base_url:
-                client = openai.AsyncOpenAI(api_key=api_key or "not-needed", base_url=base_url)
-            else:
-                client = openai.AsyncOpenAI(api_key=api_key)
+            client = openai.AsyncOpenAI(api_key=api_key)
             response = await client.models.list()
 
             # OpenAI model specifications
@@ -507,34 +503,6 @@ class ProviderDiscoveryService:
                     last_checked=time.time()
                 )
 
-            elif provider == "openai_compatible":
-                base_url = config.get("base_url")
-                if not base_url:
-                    return ProviderStatus(provider, False, None, "Base URL not configured")
-
-                api_key = config.get("api_key", "not-needed")
-
-                try:
-                    # Ensure base_url ends with /v1
-                    if not base_url.endswith('/v1'):
-                        base_url = f"{base_url.rstrip('/')}/v1"
-
-                    client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
-                    models = await client.models.list()
-                    response_time = (time.time() - start_time) * 1000
-
-                    return ProviderStatus(
-                        provider="openai_compatible",
-                        is_available=True,
-                        response_time_ms=response_time,
-                        models_available=len(models.data) if hasattr(models, 'data') else 0,
-                        base_url=base_url,
-                        last_checked=time.time()
-                    )
-                except Exception as e:
-                    response_time = (time.time() - start_time) * 1000
-                    return ProviderStatus(provider, False, response_time, f"Connection failed: {str(e)[:100]}")
-
             else:
                 return ProviderStatus(provider, False, None, f"Unknown provider: {provider}")
 
@@ -579,16 +547,6 @@ class ProviderDiscoveryService:
             grok_key = await credential_service.get_credential("GROK_API_KEY")
             if grok_key:
                 providers["grok"] = await self.discover_grok_models(grok_key)
-
-            # OpenAI Compatible
-            openai_compatible_base_url = await credential_service.get_credential("OPENAI_COMPATIBLE_BASE_URL")
-            if openai_compatible_base_url:
-                openai_compatible_key = await credential_service.get_credential("OPENAI_COMPATIBLE_API_KEY")
-                # Use the OpenAI discovery method with custom base URL
-                providers["openai_compatible"] = await self.discover_openai_models(
-                    openai_compatible_key or "not-needed",
-                    base_url=openai_compatible_base_url
-                )
 
         except Exception as e:
             logger.error(f"Error getting all available models: {e}")
