@@ -1,12 +1,7 @@
-# Docker Compose profiles:
-# - Default (no profile): Starts archon-server, archon-mcp, and archon-frontend
-# - Agents are opt-in: archon-agents starts only with the "agents" profile
-# Usage:
-#   docker compose up                        # Starts server, mcp, frontend (agents disabled)
-#   docker compose --profile agents up -d    # Also starts archon-agents
+version: '3.8'
 
 services:
-  # Server Service (FastAPI + Socket.IO + Crawling)
+  # Main API Server
   archon-server:
     build:
       context: ./python
@@ -16,31 +11,35 @@ services:
         ARCHON_SERVER_PORT: ${ARCHON_SERVER_PORT:-8181}
     container_name: archon-server
     ports:
-      - "${BIND_IP:-127.0.0.1}:${ARCHON_SERVER_PORT:-8181}:${ARCHON_SERVER_PORT:-8181}"
+      - "${BIND_IP:-127.0.0.1}:${ARCHON_SERVER_PORT:-8181}:8181"
     environment:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LOGFIRE_TOKEN=${LOGFIRE_TOKEN:-}
-      - SERVICE_DISCOVERY_MODE=docker_compose
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
+      - ARCHON_UI_PORT=${ARCHON_UI_PORT:-3737}
       - ARCHON_MCP_PORT=${ARCHON_MCP_PORT:-8051}
       - ARCHON_AGENTS_PORT=${ARCHON_AGENTS_PORT:-8052}
       - AGENTS_ENABLED=${AGENTS_ENABLED:-false}
-      # Phase 1 parameterization variables
+      - MCP_SERVICE_URL=http://archon-mcp:8051
+      - MCP_HOST=archon-mcp
+      - MCP_PORT=8051
       - HOST=${HOST:-localhost}
-      - ARCHON_HOST=${HOST:-localhost}
       - BIND_IP=${BIND_IP:-127.0.0.1}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3737}
       - API_BASE_URL=${API_BASE_URL:-http://localhost:8181}
+      # MCP Configuration for backend
+      - VITE_MCP_PROTOCOL=${VITE_MCP_PROTOCOL:-http}
+      - VITE_MCP_USE_PROXY=${VITE_MCP_USE_PROXY:-false}
     networks:
       - app-network
+      - proxy
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock # Docker socket for MCP container control
-      - ./python/src:/app/src # Mount source code for hot reload
-      - ./python/tests:/app/tests # Mount tests for UI test execution
-      - ./migration:/app/migration # Mount migration files for version tracking
+      - ./python/src:/app/src
+      - ./python/tests:/app/tests
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command:
@@ -61,14 +60,14 @@ services:
           "CMD",
           "sh",
           "-c",
-          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:${ARCHON_SERVER_PORT:-8181}/health'')"',
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:${ARCHON_SERVER_PORT:-8181}/api/health'')"',
         ]
       interval: 15s
       timeout: 15s
-      retries: 5
-      start_period: 240s
+      retries: 10
+      start_period: 120s
 
-  # Lightweight MCP Server Service (HTTP-based)
+  # MCP Server
   archon-mcp:
     build:
       context: ./python
@@ -78,7 +77,7 @@ services:
         ARCHON_MCP_PORT: ${ARCHON_MCP_PORT:-8051}
     container_name: archon-mcp
     ports:
-      - "${BIND_IP:-127.0.0.1}:${ARCHON_MCP_PORT:-8051}:${ARCHON_MCP_PORT:-8051}"
+      - "${BIND_IP:-127.0.0.1}:${ARCHON_MCP_PORT:-8051}:8051"
     environment:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
@@ -86,24 +85,22 @@ services:
       - SERVICE_DISCOVERY_MODE=docker_compose
       - TRANSPORT=sse
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      # MCP needs to know where to find other services
-      - API_SERVICE_URL=http://archon-server:${ARCHON_SERVER_PORT:-8181}
+      - API_SERVICE_URL=http://archon-server:8181
       - AGENTS_ENABLED=${AGENTS_ENABLED:-false}
-      - AGENTS_SERVICE_URL=${AGENTS_SERVICE_URL:-http://archon-agents:${ARCHON_AGENTS_PORT:-8052}}
+      - AGENTS_SERVICE_URL=http://archon-agents:8052
       - ARCHON_MCP_PORT=${ARCHON_MCP_PORT:-8051}
       - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
       - ARCHON_AGENTS_PORT=${ARCHON_AGENTS_PORT:-8052}
-      # Phase 1 parameterization variables
       - HOST=${HOST:-localhost}
       - BIND_IP=${BIND_IP:-127.0.0.1}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3737}
       - API_BASE_URL=${API_BASE_URL:-http://localhost:8181}
     networks:
       - app-network
+      - proxy
     depends_on:
       archon-server:
         condition: service_healthy
-      
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -112,17 +109,17 @@ services:
           "CMD",
           "sh",
           "-c",
-          'python -c "import socket; s=socket.socket(); s.connect((''localhost'', ${ARCHON_MCP_PORT:-8051})); s.close()"',
+          'python -c "import socket; s=socket.socket(); s.connect((''localhost'', 8051)); s.close()"',
         ]
       interval: 15s
       timeout: 15s
       retries: 5
-      start_period: 300s # Give archon-server time to start (4 min + buffer)
+      start_period: 300s
 
   # AI Agents Service (ML/Reranking)
   archon-agents:
     profiles:
-      - agents  # Only starts when explicitly using --profile agents
+      - agents
     build:
       context: ./python
       dockerfile: Dockerfile.agents
@@ -131,61 +128,67 @@ services:
         ARCHON_AGENTS_PORT: ${ARCHON_AGENTS_PORT:-8052}
     container_name: archon-agents
     ports:
-      - "${BIND_IP:-127.0.0.1}:${ARCHON_AGENTS_PORT:-8052}:${ARCHON_AGENTS_PORT:-8052}"
+      - "${BIND_IP:-127.0.0.1}:${ARCHON_AGENTS_PORT:-8052}:8052"
     environment:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LOGFIRE_TOKEN=${LOGFIRE_TOKEN:-}
-      - SERVICE_DISCOVERY_MODE=docker_compose
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - ARCHON_AGENTS_PORT=${ARCHON_AGENTS_PORT:-8052}
-      - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
-      # Phase 1 parameterization variables
       - HOST=${HOST:-localhost}
       - BIND_IP=${BIND_IP:-127.0.0.1}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3737}
       - API_BASE_URL=${API_BASE_URL:-http://localhost:8181}
     networks:
       - app-network
+      - proxy
+    depends_on:
+      archon-server:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test:
         [
           "CMD",
-          "sh",
+          "python",
           "-c",
-          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:${ARCHON_AGENTS_PORT:-8052}/health'')"',
+          "import urllib.request; urllib.request.urlopen('http://localhost:8052/health').read()",
         ]
       interval: 15s
       timeout: 15s
       retries: 5
       start_period: 120s
 
-  # Frontend
-  archon-frontend:
+  # Frontend - Development Version
+  archon-frontend-dev:
+    profiles: ["dev"]
     build:
       context: ./archon-ui-main
+      dockerfile: Dockerfile
       target: development
     container_name: archon-ui
     ports:
       - "${BIND_IP:-127.0.0.1}:${ARCHON_UI_PORT:-3737}:3737"
     environment:
-      # Don't set VITE_API_URL so frontend uses relative URLs through proxy
-      # - VITE_API_URL=http://${HOST:-localhost}:${ARCHON_SERVER_PORT:-8181}
-      - VITE_ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
+      - VITE_API_URL=${VITE_API_URL:-http://localhost:8181}
+      - VITE_ARCHON_SERVER_PORT=${VITE_ARCHON_SERVER_PORT:-8181}
       - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
       - HOST=${HOST:-localhost}
       - PROD=${PROD:-false}
+      - NODE_ENV=development
       - VITE_ALLOWED_HOSTS=${VITE_ALLOWED_HOSTS:-}
-      # MCP Configuration for local development
+      - VITE_SUPABASE_URL=${SUPABASE_URL}
+      - VITE_SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY:-}
+      # MCP Configuration
       - VITE_MCP_HOST=${VITE_MCP_HOST:-localhost}
       - VITE_MCP_PROTOCOL=${VITE_MCP_PROTOCOL:-http}
       - VITE_MCP_USE_PROXY=${VITE_MCP_USE_PROXY:-false}
       - VITE_MCP_PORT=${VITE_MCP_PORT:-8051}
-      - VITE_SHOW_DEVTOOLS=${VITE_SHOW_DEVTOOLS:-false}
-      - DOCKER_ENV=true
     networks:
       - app-network
+      - proxy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3737"]
       interval: 15s
@@ -193,8 +196,56 @@ services:
       retries: 5
       start_period: 60s
     volumes:
+      # Development volumes for live editing
       - ./archon-ui-main/src:/app/src
       - ./archon-ui-main/public:/app/public
+    depends_on:
+      archon-server:
+        condition: service_healthy
+
+  # Frontend - Production Version
+  archon-frontend-prod:
+    profiles: ["prod"]
+    build:
+      context: ./archon-ui-main
+      dockerfile: Dockerfile
+      target: production
+      args:
+        # Pass environment variables as build args for Vite
+        VITE_MCP_HOST: ${VITE_MCP_HOST:-localhost}
+        VITE_MCP_PROTOCOL: ${VITE_MCP_PROTOCOL:-http}
+        VITE_MCP_USE_PROXY: ${VITE_MCP_USE_PROXY:-false}
+        VITE_MCP_PORT: ${VITE_MCP_PORT:-8051}
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8181}
+        VITE_ARCHON_SERVER_PORT: ${VITE_ARCHON_SERVER_PORT:-}
+    container_name: archon-ui
+    ports:
+      - "${BIND_IP:-127.0.0.1}:${ARCHON_UI_PORT:-3737}:3737"
+    environment:
+      - VITE_API_URL=${VITE_API_URL:-http://localhost:8181}
+      - VITE_ARCHON_SERVER_PORT=${VITE_ARCHON_SERVER_PORT:-}
+      - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
+      - HOST=${HOST:-localhost}
+      - PROD=${PROD:-true}
+      - NODE_ENV=production
+      - VITE_ALLOWED_HOSTS=${VITE_ALLOWED_HOSTS:-}
+      - VITE_SUPABASE_URL=${SUPABASE_URL}
+      - VITE_SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY:-}
+      # MCP Configuration
+      - VITE_MCP_HOST=${VITE_MCP_HOST:-localhost}
+      - VITE_MCP_PROTOCOL=${VITE_MCP_PROTOCOL:-http}
+      - VITE_MCP_USE_PROXY=${VITE_MCP_USE_PROXY:-false}
+      - VITE_MCP_PORT=${VITE_MCP_PORT:-8051}
+    networks:
+      - app-network
+      - proxy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3737"]
+      interval: 15s
+      timeout: 15s
+      retries: 5
+      start_period: 60s
+    # No volumes in production
     depends_on:
       archon-server:
         condition: service_healthy
@@ -202,3 +253,8 @@ services:
 networks:
   app-network:
     driver: bridge
+  # Proxy network - only used in LAN mode with Traefik
+  proxy:
+    # If PROXY_NETWORK is set, use external network, otherwise create internal one
+    external: ${PROXY_EXTERNAL:-false}
+    name: ${PROXY_NETWORK:-proxy-internal}

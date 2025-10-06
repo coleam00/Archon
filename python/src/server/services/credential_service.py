@@ -569,8 +569,8 @@ async def initialize_credentials() -> None:
     # RAG settings will be looked up on-demand from the credential service
     infrastructure_credentials = [
         "OPENAI_API_KEY",  # Required for API client initialization
-        "HOST",  # Server binding configuration
-        "PORT",  # Server binding configuration
+        # "HOST",  # Should come from environment, not database
+        # "PORT",  # Should come from environment, not database
         "MCP_TRANSPORT",  # Server transport mode
         "LOGFIRE_ENABLED",  # Logging infrastructure setup
         "PROJECTS_ENABLED",  # Feature flag for module loading

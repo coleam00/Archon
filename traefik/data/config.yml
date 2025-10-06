@@ -1,0 +1,102 @@
+http:
+  #region routers  
+  routers:
+    # Frontend router - catches all requests to the domain
+    archon-frontend:
+      entryPoints:
+        - "https"
+      rule: "Host(`archon.mcdonaldhomelab.com`)"
+      priority: 1
+      middlewares:
+        - default-headers
+        - https-redirectscheme
+      tls: {}
+      service: archon-frontend
+    
+    # API router - catches /api/* requests
+    archon-api:
+      entryPoints:
+        - "https"
+      rule: "Host(`archon.mcdonaldhomelab.com`) && PathPrefix(`/api`)"
+      priority: 2
+      middlewares:
+        - default-headers
+        - https-redirectscheme
+      tls: {}
+      service: archon-api
+    
+    # MCP router - catches /mcp/* requests
+    archon-mcp:
+      entryPoints:
+        - "https"
+      rule: "Host(`archon.mcdonaldhomelab.com`) && PathPrefix(`/mcp`)"
+      priority: 3
+      middlewares:
+        - default-headers
+        - https-redirectscheme
+      tls: {}
+      service: archon-mcp
+
+#endregion
+#region services
+  services:
+    archon-frontend:
+      loadBalancer:
+        servers:
+          - url: "http://archon-ui:3737"
+        passHostHeader: true
+    
+    archon-api:
+      loadBalancer:
+        servers:
+          - url: "http://archon-server:8181"
+        passHostHeader: true
+    
+    archon-mcp:
+      loadBalancer:
+        servers:
+          - url: "http://archon-mcp:8051"
+        passHostHeader: true
+
+
+# Proxmox Server transports
+  serversTransports:
+    proxmox-transport:
+      insecureSkipVerify: true
+      # Optional: Add timeout settings
+      forwardingTimeouts:
+        dialTimeout: "30s"
+        responseHeaderTimeout: "30s"
+
+
+  #endregion
+  middlewares:
+    https-redirectscheme:
+      redirectScheme:
+        scheme: https
+        permanent: true
+    default-headers:
+      headers:
+        frameDeny: true
+        browserXssFilter: true
+        contentTypeNosniff: true
+        forceSTSHeader: true
+        stsIncludeSubdomains: true
+        stsPreload: true
+        stsSeconds: 15552000
+        customFrameOptionsValue: SAMEORIGIN
+        customRequestHeaders:
+          X-Forwarded-Proto: https
+
+    default-whitelist:
+      ipAllowList:
+        sourceRange:
+        - "10.0.0.0/8"
+        - "192.168.0.0/16"
+        - "172.16.0.0/12"
+
+    secured:
+      chain:
+        middlewares:
+        - default-whitelist
+        - default-headers
