@@ -5,13 +5,16 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  # Allow manual runs from the fork (useful for testing CI changes).
+  workflow_dispatch:
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Use the secret when available; fall back to a safe default for fork/manual runs.
     env:
-      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD || 'postgres' }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY || '' }}
 
     services:
       postgres:
