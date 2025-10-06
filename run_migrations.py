@@ -12,6 +12,7 @@ Features:
 from __future__ import annotations
 
 import argparse
+import glob
 import os
 import subprocess
 import sys
@@ -71,11 +72,21 @@ def parse_args():
 def main() -> int:
     args = parse_args()
 
-    # Default migrations (keep repository ordering)
-    migrations = args.migrations or [
-        "migration/complete_setup.sql",
-        "migration/add_embedding_provider_setting.sql",
-    ]
+    # Default migrations: if user supplied a list, use it. Otherwise, discover
+    # SQL files in the migration/ directory and run them in sorted order. This
+    # avoids hard-coding filenames that might be added/removed across branches.
+    if args.migrations:
+        migrations = args.migrations
+    else:
+        # Find all .sql files under migration/ and sort for deterministic order
+        found = sorted(glob.glob(os.path.join("migration", "*.sql")))
+        if not found:
+            # Fallback to the legacy defaults if the migration directory is empty
+            migrations = [
+                "migration/complete_setup.sql",
+            ]
+        else:
+            migrations = found
 
     print("Connecting to database for migrations...")
 
