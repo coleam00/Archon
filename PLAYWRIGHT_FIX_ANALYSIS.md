@@ -60,7 +60,7 @@ Set `PLAYWRIGHT_BROWSERS_PATH` as a persistent environment variable:
 # Install Playwright browsers
 ENV PATH=/venv/bin:$PATH
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN playwright install --with-deps chromium
+RUN playwright install chromium
 ```
 
 ### Why This Works
@@ -70,9 +70,13 @@ RUN playwright install --with-deps chromium
 3. **Runtime**: Playwright looks for browsers in `/ms-playwright` (same location!)
 4. **Persistence**: The ENV variable persists into the running container
 
-### Additional Improvement: `--with-deps` Flag
+### Why We Don't Use `--with-deps`
 
-The `--with-deps` flag ensures all system dependencies are installed alongside the browser, making the installation more robust.
+The Dockerfile already manually installs all required Playwright system dependencies (lines 26-49). Using `--with-deps` would attempt to reinstall these packages, which can:
+- Cause package conflicts
+- Fail on certain platforms (especially Windows/WSL)
+- Significantly increase build time
+- Lead to build failures
 
 ## Affected Branches
 
