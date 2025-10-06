@@ -53,7 +53,8 @@ COPY --from=builder /venv /venv
 
 # Install Playwright browsers
 ENV PATH=/venv/bin:$PATH
-RUN playwright install chromium
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN playwright install --with-deps chromium
 
 # Copy server code and tests
 COPY src/server/ src/server/
