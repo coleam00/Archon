@@ -18,9 +18,12 @@ jobs:
         image: postgis/postgis:15-3.3
         env:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d postgres -h 127.0.0.1 -p 5432"
-          --health-interval 10s --health-timeout 5s --health-retries 5
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 30
 
     steps:
       - name: Checkout repository
