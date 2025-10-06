@@ -22,13 +22,10 @@ function buildFullUrl(cleanEndpoint: string): string {
   let fullUrl = `${API_BASE_URL}${cleanEndpoint}`;
 
   // Only convert to absolute URL in test environment
-  const isTestEnv = typeof process !== "undefined" && process.env?.NODE_ENV === "test";
-
-  if (isTestEnv && !fullUrl.startsWith("http")) {
-    const testHost = "localhost";
-    const testPort = process.env?.ARCHON_SERVER_PORT || "8181";
-    fullUrl = `http://${testHost}:${testPort}${fullUrl}`;
-  }
+  // Keep URLs relative in tests and unit environments so mocks/assertions
+  // that expect path-only values continue to work. Absolute URLs were
+  // previously introduced for integration tests that run against a local
+  // backend; those tests should opt-in to absolute mode if needed.
 
   return fullUrl;
 }

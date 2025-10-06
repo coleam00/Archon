@@ -86,10 +86,10 @@ def validate_supabase_key(supabase_key: str) -> tuple[bool, str]:
         else:
             return False, f"UNKNOWN_KEY_TYPE:{role}"
 
-    except Exception:
-        # If we can't decode the JWT, we'll allow it to proceed
-        # This handles new key formats or non-JWT keys
-        return True, "UNABLE_TO_VALIDATE"
+    except Exception as e:
+        # If the key is not a valid JWT, it cannot be a service key.
+        # Fail validation immediately.
+        return False, f"JWT_DECODE_ERROR:{e}"
 
 
 def validate_supabase_url(url: str) -> bool:
@@ -107,7 +107,8 @@ def validate_supabase_url(url: str) -> bool:
         hostname = parsed.hostname or ""
 
         # Check for exact localhost and Docker internal hosts (security: prevent subdomain bypass)
-        local_hosts = ["localhost", "127.0.0.1", "host.docker.internal"]
+        # We add 'kong' here to support the default service name in Docker Compose setups.
+        local_hosts = ["localhost", "127.0.0.1", "host.docker.internal", "kong"]
         if hostname in local_hosts or hostname.endswith(".localhost"):
             return True
 
@@ -180,7 +181,14 @@ def load_environment_config() -> EnvironmentConfig:
                 f"This key type is not supported and will likely cause failures.\n\n"
                 f"Please use a valid service_role key from your Supabase dashboard."
             )
-        # For UNABLE_TO_VALIDATE, we continue silently
+        elif key_message.startswith("JWT_DECODE_ERROR:"):
+            error = key_message.split(":", 1)[1]
+            raise ConfigurationError(
+                f"CRITICAL: The SUPABASE_SERVICE_KEY appears to be invalid.\n\n"
+                f"It could not be decoded as a JWT (JSON Web Token).\n"
+                f"Error: {error}\n\n"
+                f"Please verify the key in your .env file is a valid service_role key from your Supabase dashboard."
+            )
 
     # Optional environment variables with defaults
     host = os.getenv("HOST", "0.0.0.0")

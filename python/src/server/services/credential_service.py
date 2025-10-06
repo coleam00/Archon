@@ -8,8 +8,10 @@ Credentials include API keys, service credentials, and application configuration
 import base64
 import os
 import re
+import socket
 import time
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 # Removed direct logging import - using unified config
 from typing import Any
@@ -18,6 +20,7 @@ from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from supabase import Client, create_client
+from supabase.lib.client_options import ClientOptions
 
 from ..config.logfire_config import get_logger
 
@@ -49,35 +52,69 @@ class CredentialService:
 
     def _get_supabase_client(self) -> Client:
         """
-        Get or create a properly configured Supabase client using environment variables.
-        Uses the standard Supabase client initialization.
+        Get or create a properly configured Supabase client with DNS and connectivity retries.
+        On failure, it performs exponential backoff and retries indefinitely.
         """
-        if self._supabase is None:
-            url = os.getenv("SUPABASE_URL")
-            key = os.getenv("SUPABASE_SERVICE_KEY")
+        if self._supabase:
+            return self._supabase
 
-            if not url or not key:
-                raise ValueError(
-                    "SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in environment variables"
-                )
+        url = os.getenv("SUPABASE_URL")
+        key = os.getenv("SUPABASE_SERVICE_KEY")
+
+        if not url or not key:
+            logger.critical("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set.")
+            raise ValueError("Supabase URL and service key are not configured.")
+
+        max_retries = 10  # Limit for logging purposes, but will retry indefinitely
+        base_delay = 5  # seconds
+        max_delay = 300  # 5 minutes
+
+        parsed_url = urlparse(url)
+        hostname = parsed_url.hostname
+        if not hostname:
+            logger.critical(f"Could not parse hostname from SUPABASE_URL: {url}")
+            raise ValueError("Invalid SUPABASE_URL provided.")
+
+        attempt = 0
+        while True:
+            attempt += 1
+            delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
 
             try:
-                # Initialize with standard Supabase client - no need for custom headers
+                # 1. DNS Resolution Check
+                logger.info(f"Attempt {attempt}: Resolving DNS for {hostname}...")
+                socket.gethostbyname(hostname)
+                logger.info(f"DNS for {hostname} resolved successfully.")
+
+                # 2. Supabase Client Initialization (Connectivity Check)
+                logger.info("Initializing Supabase client...")
                 self._supabase = create_client(url, key)
 
-                # Extract project ID from URL for logging purposes only
-                match = re.match(r"https://([^.]+)\.supabase\.co", url)
-                if match:
-                    project_id = match.group(1)
-                    logger.debug(f"Supabase client initialized for project: {project_id}")
-                else:
-                    logger.debug("Supabase client initialized successfully")
+                # Perform a simple test query to verify connectivity and credentials
+                self._supabase.table("archon_settings").select("key").limit(1).execute()
 
+                logger.info("Supabase client initialized and connection verified successfully.")
+                return self._supabase
+
+            except socket.gaierror as e:
+                logger.error(
+                    f"DNS resolution failed for {hostname}: {e}. "
+                    f"Retrying in {delay} seconds..."
+                )
             except Exception as e:
-                logger.error(f"Error initializing Supabase client: {e}")
-                raise
+                # This catches PostgrestError, APIError, etc.
+                log_message = (
+                    f"Failed to initialize or verify Supabase client: {e}. "
+                    f"This could be due to networking issues, incorrect credentials, or Supabase being down. "
+                    f"Retrying in {delay} seconds..."
+                )
+                # Reduce log level for subsequent retries to avoid spamming
+                if attempt > 1:
+                    logger.warning(log_message)
+                else:
+                    logger.error(log_message)
 
-        return self._supabase
+            time.sleep(delay)
 
     def _get_encryption_key(self) -> bytes:
         """Generate encryption key from environment variables."""
@@ -495,8 +532,72 @@ class CredentialService:
             return False
 
 
+async def verify_supabase_connection():
+    """
+    Verifies Supabase connectivity by checking DNS and authenticating.
+    Retries with exponential backoff indefinitely until successful.
+    """
+    log = get_logger(__name__)
+    log.info("Starting Supabase connectivity verification...")
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_SERVICE_KEY")
+
+    if not url or not key:
+        log.error("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set.")
+        # Use sys.exit(1) for command-line tools, or raise for library code
+        raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set.")
+
+    base_delay = 5  # seconds
+    max_delay = 120  # 2 minutes
+    attempt = 0
+
+    parsed_url = urlparse(url)
+    hostname = parsed_url.hostname
+    if not hostname:
+        log.error(f"Could not parse hostname from SUPABASE_URL: {url}")
+        raise ValueError(f"Invalid SUPABASE_URL: {url}")
+
+    while True:
+        attempt += 1
+        # Use a slightly less aggressive backoff than pure exponential
+        delay = min(base_delay * (1.5 ** (attempt - 1)), max_delay)
+
+        try:
+            # 1. DNS Resolution Check
+            log.info(f"Attempt {attempt}: Resolving DNS for {hostname}...")
+            socket.gethostbyname(hostname)
+            log.info(f"DNS for {hostname} resolved successfully.")
+
+            # 2. Supabase Client Initialization (Connectivity & Auth Check)
+            log.info("Initializing Supabase client to verify connection...")
+
+            # Explicitly set the Authorization header to use the service key.
+            # This is more robust than relying on the client's automatic detection.
+            headers = {"Authorization": f"Bearer {key}"}
+            options = ClientOptions(headers=headers, postgrest_client_timeout=15)
+
+            # The key is also passed as the `supabase_key` argument, which sets the `apikey` header.
+            # The Authorization header will take precedence for PostgREST requests.
+            client = create_client(url, key, options)
+
+            # Perform a simple, lightweight query to ensure connectivity and authentication
+            client.table("archon_settings").select("key").limit(1).execute()
+
+            log.info("✅ Supabase connection verified successfully.")
+            return  # Success
+
+        except socket.gaierror as e:
+            log.warning(f"DNS resolution failed for {hostname}: {e}.")
+        except Exception as e:
+            log.warning(f"Supabase connection failed: {e}.")
+
+        log.info(f"Retrying in {int(delay)} seconds...")
+        time.sleep(delay)
+
+
 # Global instance
 credential_service = CredentialService()
+
 
 
 async def get_credential(key: str, default: Any = None) -> Any:

@@ -31,6 +31,7 @@ services:
       - ARCHON_HOST=${HOST:-localhost}
     networks:
       - app-network
+      - supabase_network_archon
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock # Docker socket for MCP container control
       - ./python/src:/app/src # Mount source code for hot reload
@@ -58,9 +59,9 @@ services:
           'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:${ARCHON_SERVER_PORT:-8181}/health'')"',
         ]
       interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      timeout: 15s
+      retries: 5
+      start_period: 120s
 
   # Lightweight MCP Server Service (HTTP-based)
   archon-mcp:
@@ -69,8 +70,22 @@ services:
       dockerfile: Dockerfile.mcp
       args:
         BUILDKIT_INLINE_CACHE: 1
+        BUILDKIT_PROGRESS: plain
+        DOCKER_BUILDKIT: 1
+        # Add these new options:
+        network: host  # Allow network access during build for dependency downloads
+        target: ""     # Ensure we're building the final stage
         ARCHON_MCP_PORT: ${ARCHON_MCP_PORT:-8051}
     container_name: archon-mcp
+    restart: unless-stopped
+    labels:
+      - "com.archon.service=mcp"
+      - "com.archon.version=0.1.0"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "${ARCHON_MCP_PORT:-8051}:${ARCHON_MCP_PORT:-8051}"
     environment:
@@ -178,3 +193,5 @@ services:
 networks:
   app-network:
     driver: bridge
+  supabase_network_archon:
+    external: true

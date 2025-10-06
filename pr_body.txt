@@ -1,0 +1,3 @@
+Adds CI workflow that starts Postgres, installs Python deps via uv, runs migrations with scripts/run_migrations.sh, then runs pytest and frontend tests.
+
+Required secrets: POSTGRES_PASSWORD, SUPABASE_SERVICE_KEY.

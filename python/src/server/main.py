@@ -35,7 +35,7 @@ from .config.logfire_config import api_logger, setup_logfire
 from .services.crawler_manager import cleanup_crawler, initialize_crawler
 
 # Import utilities and core classes
-from .services.credential_service import initialize_credentials
+from .services.credential_service import initialize_credentials, verify_supabase_connection
 
 # Import missing dependencies that the modular APIs need
 try:
@@ -74,6 +74,9 @@ async def lifespan(app: FastAPI):
         from .config.config import get_config
 
         get_config()  # This will raise ConfigurationError if anon key detected
+
+        # Verify Supabase connectivity before proceeding
+        await verify_supabase_connection()
 
         # Initialize credentials from database FIRST - this is the foundation for everything else
         await initialize_credentials()

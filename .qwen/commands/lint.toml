@@ -1,0 +1,9 @@
+description = "Run linters for backend and frontend"
+prompt = '''
+Task: Run repository linters (backend and frontend).
+
+Commands:
+!{cd python && uv run ruff check --fix}
+!{cd python && uv run mypy src/ || true}
+!{cd archon-ui-main && npm ci && npm run lint}
+'''

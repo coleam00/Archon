@@ -1,0 +1,14 @@
+description = "Start hybrid development: backend (Docker) + frontend (npm run dev)"
+prompt = '''
+Task: Start development environment for Archon.
+
+Steps:
+1. Start backend in Docker (backend profile) so services like Supabase and server are available.
+2. Start frontend (archon-ui-main) with hot reload.
+
+Run the shell commands below using run_shell_command. If docker is not present, instruct the user to run `make dev`.
+
+Commands:
+!{docker compose --profile backend up -d}
+!{cd archon-ui-main && npm ci && npm run dev}
+'''

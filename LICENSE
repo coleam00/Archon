@@ -1,39 +1,21 @@
-Archon Community License (ACL) v1.2
+MIT License
 
-Copyright © 2025 The Archon Project Community
-Maintained by the [Dynamous community](https://dynamous.ai)
+Copyright (c) 2021 Supabase, Inc. and contributors
 
-Archon is **free, open, and hackable.** Run it, fork it, and share it — no strings attached — except one: **don’t sell it as‑a‑service without talking to us first.**
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
----
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-### 1  You Can
-
-* **Run** Archon anywhere, for anything, for free.
-* **Study & tweak** the code, add features, change the UI—go wild.
-* **Share** your changes or forks publicly (must keep this license in place).
-
-### 2  Please Do
-
-* Keep this license notice and a link back to the main repo.
-* Mark clearly if you’ve modified Archon.
-
-### 3  You Can’t (Without Permission)
-
-* Charge money for Archon itself—e.g. paid downloads, paywalled builds, or subscriptions.
-* Offer Archon (original or modified) as a hosted or managed service that others can sign up for.
-* Bundle Archon into another paid product.
-
-> **Consulting/support is totally fine.** Get paid to install, customise, or teach Archon as long as your clients don’t get a hosted Archon instance run by you.
-
-### 4  No Warranty
-
-Archon comes **as‑is** with **no warranty** of any kind.
-
-### 5  Limitation of Liability
-
-We’re **not liable** for any damages resulting from using Archon.
-
-### 6  Breaking the Rules
-
-If you violate these terms and don’t fix it within **30 days** after we let you know, your rights under this license end.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

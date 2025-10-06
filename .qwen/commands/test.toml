@@ -1,0 +1,8 @@
+description = "Run backend and frontend tests"
+prompt = '''
+Task: Run backend pytest and frontend vitest tests and fail on any non-zero exit.
+
+Commands:
+!{cd python && uv run pytest --maxfail=1 -q}
+!{cd archon-ui-main && npm ci && npm run test -- --run}
+'''

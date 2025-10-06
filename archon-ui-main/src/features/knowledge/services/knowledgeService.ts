@@ -118,13 +118,10 @@ export const knowledgeService = {
     }
 
     // Use fetch directly for file upload (FormData doesn't work well with our ETag wrapper)
-    // In test environment, we need absolute URLs
-    let uploadUrl = "/api/documents/upload";
-    if (typeof process !== "undefined" && process.env?.NODE_ENV === "test") {
-      const testHost = process.env?.VITE_HOST || "localhost";
-      const testPort = process.env?.ARCHON_SERVER_PORT || "8181";
-      uploadUrl = `http://${testHost}:${testPort}${uploadUrl}`;
-    }
+    // Keep the upload URL relative so unit tests can mock fetch and assert
+    // on the request path. Integration tests that need absolute URLs should
+    // construct them explicitly.
+    const uploadUrl = "/api/documents/upload";
 
     const response = await fetch(uploadUrl, {
       method: "POST",

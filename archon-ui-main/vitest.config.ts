@@ -25,7 +25,7 @@ export default defineConfig({
       'test/components/settings/OllamaInstanceHealthIndicator.test.tsx',
       'test/components/settings/OllamaModelDiscoveryModal.test.tsx'
     ],
-    exclude: ['node_modules', 'dist', '.git', '.cache', 'test.backup', '*.backup/**', 'test-backups'],
+  exclude: ['node_modules', 'dist', '.git', '.cache', 'test.backup', '*.backup/**', 'test-backups', 'tests/integration/**'],
     reporters: ['dot', 'json'],
     outputFile: { 
       json: './public/test-results/test-results.json' 

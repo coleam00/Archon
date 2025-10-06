@@ -1,0 +1,12 @@
+description = "Add changelog entry"
+prompt = '''
+Task: Add a new changelog entry to CHANGELOG.md using the raw arguments appended to the command.
+
+The command is invoked as: `/changelog <version> <type> <message>` where type is one of: added, changed, fixed, removed.
+
+Behavior:
+1. Read CHANGELOG.md
+2. Insert the message under the appropriate version and type, creating sections if necessary.
+
+Use file write tools to modify files.
+'''

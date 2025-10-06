@@ -1,0 +1,8 @@
+description = "Build frontend and docker images"
+prompt = '''
+Task: Build frontend production artifacts and optionally docker images.
+
+Commands:
+!{cd archon-ui-main && npm ci && npm run build}
+!{docker compose -f docker-compose.yml -f docker-compose.yml build}
+'''

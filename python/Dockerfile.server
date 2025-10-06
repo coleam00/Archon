@@ -55,10 +55,15 @@ COPY --from=builder /venv /venv
 ENV PATH=/venv/bin:$PATH
 RUN playwright install chromium
 
-# Copy server code and tests
+# Copy server code, tests, and entrypoint scripts
 COPY src/server/ src/server/
 COPY src/__init__.py src/
 COPY tests/ tests/
+COPY verify_network_connectivity.py . 
+COPY docker-entrypoint.sh .
+
+# Make the entrypoint script executable
+RUN chmod +x /app/docker-entrypoint.sh
 
 # Set environment variables
 ENV PYTHONPATH="/app:$PYTHONPATH"
@@ -70,9 +75,12 @@ ARG ARCHON_SERVER_PORT=8181
 ENV ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT}
 EXPOSE ${ARCHON_SERVER_PORT}
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+# Health check - timings adjusted for entrypoint script
+HEALTHCHECK --interval=30s --timeout=15s --start-period=120s --retries=5 \
     CMD sh -c "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:${ARCHON_SERVER_PORT}/health')\""
 
-# Run the Server service
+# Set the entrypoint
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+
+# Run the Server service - this command is passed to the entrypoint
 CMD sh -c "python -m uvicorn src.server.main:socket_app --host 0.0.0.0 --port ${ARCHON_SERVER_PORT} --workers 1"

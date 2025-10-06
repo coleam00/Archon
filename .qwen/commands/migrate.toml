@@ -1,0 +1,11 @@
+description = "Run DB migrations for local Supabase/Postgres"
+prompt = '''
+Task: Run SQL migrations for this repository non-interactively.
+
+Behavior:
+- Prefer running migrations via the repository script `run_migrations.py`.
+- If psql is not available but a Docker supabase container exists, use docker exec to apply migrations inside container.
+
+Commands:
+!{python run_migrations.py}
+'''

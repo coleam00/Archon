@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { progressService } from '../../../src/features/knowledge/progress/services';
+import { progressService } from '../../../src/features/progress/services';
 import { knowledgeService } from '../../../src/features/knowledge/services';
 import type { ProgressResponse } from '../../../src/features/knowledge/progress/types';
 

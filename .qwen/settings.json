@@ -1,0 +1,11 @@
+{
+  "sandbox": "docker",
+  "excludedProjectEnvVars": ["DEBUG", "DEBUG_MODE", "NODE_ENV", "SUPABASE_SERVICE_KEY"],
+  "includeDirectories": ["python/src", "archon-ui-main/src", "migration"],
+  "summarizeToolOutput": {
+    "run_shell_command": {
+      "tokenBudget": 1000
+    }
+  },
+  "coreTools": ["run_shell_command(git)", "run_shell_command(npm)", "run_shell_command(python)"]
+}
