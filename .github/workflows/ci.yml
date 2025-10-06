@@ -1,300 +1,77 @@
-name: Continuous Integration
+name: CI
 
 on:
   push:
-    branches: [ main, unit-testing-ci ]
+    branches: [ main ]
   pull_request:
     branches: [ main ]
-  workflow_dispatch: # Allow manual triggering
-
-env:
-  # Test database credentials (using properly formatted fake values for CI)
-  # These are fake but properly formatted values that will pass validation
-  SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://xyzcompanytest.supabase.co' }}
-  SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU' }}
-  NODE_VERSION: '18'
-  PYTHON_VERSION: '3.12'
 
 jobs:
-  # Job 1: Frontend Testing (React/TypeScript/Vitest)
-  # Will enable this after overhaul of frontend for linting
-  frontend-tests:
-    name: Frontend Tests (React + Vitest)
+  test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./archon-ui-main
+    env:
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
+    services:
+      postgres:
+        image: postgis/postgis:15-3.3
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres -h 127.0.0.1 -p 5432"
+          --health-interval 10s --health-timeout 5s --health-retries 5
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node 20
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: archon-ui-main/package-lock.json
+          node-version: '20'
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Install system packages (postgres client)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y postgresql-client
 
-      # - name: Run ESLint
-      #   run: npm run lint
-# 
-      # - name: Run TypeScript type check
-      #   run: npx tsc --noEmit
-# 
-      # - name: Run Vitest tests with coverage
-      #   run: npm run test:coverage:run
-# 
-      # - name: Generate test summary
-      #   if: always()
-      #   run: npm run test:coverage:summary
-# 
-      # - name: Upload frontend test results
-      #   if: always()
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: frontend-test-results
-      #     path: |
-      #       archon-ui-main/coverage/test-results.json
-      #       archon-ui-main/public/test-results/
-      #     retention-days: 30
-# 
-      # - name: Upload frontend coverage to Codecov
-      #   if: always()
-      #   uses: codecov/codecov-action@v4
-      #   with:
-      #     files: ./archon-ui-main/public/test-results/coverage/lcov.info
-      #     flags: frontend
-      #     name: frontend-coverage
-      #     token: ${{ secrets.CODECOV_TOKEN }}
-
-  # Job 2: Backend Testing (Python/pytest)
-  backend-tests:
-    name: Backend Tests (Python + pytest)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
+      - name: Install Python dependencies (uv)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install uv
+          uv sync --group all
         working-directory: ./python
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: ./archon-ui-main
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-        with:
-          version: "latest"
-
-      - name: Set up Python
-        run: uv python install ${{ env.PYTHON_VERSION }}
-
-      - name: Install dependencies
+      - name: Wait for Postgres to become available
         run: |
-          uv sync --group all --group dev
-          uv add pytest-cov
+          for i in {1..30}; do
+            pg_isready -h 127.0.0.1 -p 5432 -U postgres && break
+            echo "Waiting for Postgres... ($i)"
+            sleep 2
+          done
 
-      - name: Run linting with ruff (if available)
-        continue-on-error: true
+      - name: Run DB migrations
+        env:
+          PGPASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: |
-          if uv run which ruff > /dev/null 2>&1; then
-            echo "Running ruff linting..."
-            uv run ruff check src/ tests/ || true
-          else
-            echo "Ruff not found, skipping linting"
-          fi
+          bash scripts/run_migrations.sh 127.0.0.1 5432 postgres "$PGPASSWORD" postgres
 
-      - name: Run type checking with mypy (if available)
-        continue-on-error: true
+      - name: Run backend tests
         run: |
-          if uv run which mypy > /dev/null 2>&1; then
-            echo "Running mypy type checking..."
-            uv run mypy src/ || true
-          else
-            echo "MyPy not found, skipping type checking"
-          fi
+          uv run pytest -q
+        working-directory: ./python
 
-      - name: Run all tests
+      - name: Run frontend tests
         run: |
-          echo "Running all unit tests..."
-          uv run pytest tests/ --verbose --tb=short \
-            --cov=src --cov-report=xml --cov-report=html \
-            --cov-report=term-missing \
-            --junitxml=test-results.xml
-
-      - name: Upload backend test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-test-results
-          path: |
-            python/test-results.xml
-            python/htmlcov/
-            python/coverage.xml
-          retention-days: 30
-
-      - name: Upload backend coverage to Codecov
-        if: always()
-        uses: codecov/codecov-action@v4
-        with:
-          files: ./python/coverage.xml
-          flags: backend
-          name: backend-coverage
-          token: ${{ secrets.CODECOV_TOKEN }}
-
-  # Job 3: Docker Build Test
-  docker-build-test:
-    name: Docker Build Tests
-    runs-on: ubuntu-latest
-    
-    strategy:
-      matrix:
-        service: [server, mcp, agents, frontend]
-        
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build server service
-        if: matrix.service == 'server'
-        run: |
-          docker build \
-            --file python/Dockerfile.server \
-            --tag archon-server:test \
-            --build-arg BUILDKIT_INLINE_CACHE=1 \
-            --build-arg ARCHON_SERVER_PORT=8181 \
-            python/
-
-      - name: Build MCP service
-        if: matrix.service == 'mcp'
-        run: |
-          docker build \
-            --file python/Dockerfile.mcp \
-            --tag archon-mcp:test \
-            --build-arg BUILDKIT_INLINE_CACHE=1 \
-            --build-arg ARCHON_MCP_PORT=8051 \
-            python/
-
-      - name: Build agents service
-        if: matrix.service == 'agents'
-        run: |
-          docker build \
-            --file python/Dockerfile.agents \
-            --tag archon-agents:test \
-            --build-arg BUILDKIT_INLINE_CACHE=1 \
-            --build-arg ARCHON_AGENTS_PORT=8052 \
-            python/
-
-      - name: Build frontend service
-        if: matrix.service == 'frontend'
-        run: |
-          docker build \
-            --tag archon-frontend:test \
-            archon-ui-main/
-
-      - name: Test container health check (for the containers that can run without proper env vars)
-        if: matrix.service != 'frontend' && matrix.service != 'server'
-        run: |
-          # Only test MCP and agents services (they don't require real Supabase connection)
-          # Skip server and frontend as they need real database
-          case "${{ matrix.service }}" in
-            "mcp")
-              docker run -d --name test-${{ matrix.service }} \
-                -e SUPABASE_URL=${{ env.SUPABASE_URL }} \
-                -e SUPABASE_SERVICE_KEY=${{ env.SUPABASE_SERVICE_KEY }} \
-                -e ARCHON_MCP_PORT=8051 \
-                -e API_SERVICE_URL=http://localhost:8181 \
-                -e AGENTS_SERVICE_URL=http://localhost:8052 \
-                -p 8051:8051 \
-                archon-${{ matrix.service }}:test
-              ;;
-            "agents")
-              docker run -d --name test-${{ matrix.service }} \
-                -e SUPABASE_URL=${{ env.SUPABASE_URL }} \
-                -e SUPABASE_SERVICE_KEY=${{ env.SUPABASE_SERVICE_KEY }} \
-                -e ARCHON_AGENTS_PORT=8052 \
-                -p 8052:8052 \
-                archon-${{ matrix.service }}:test
-              ;;
-          esac
-          
-          # Wait for container to start
-          sleep 30
-          
-          # Check if container is still running
-          if docker ps | grep -q test-${{ matrix.service }}; then
-            echo "✅ Container test-${{ matrix.service }} is running"
-          else
-            echo "❌ Container test-${{ matrix.service }} failed to start"
-            docker logs test-${{ matrix.service }}
-            exit 1
-          fi
-
-      - name: Cleanup test containers
-        if: always()
-        run: |
-          docker stop test-${{ matrix.service }} || true
-          docker rm test-${{ matrix.service }} || true
-
-  # Job 4: Test Results Summary
-  test-summary:
-    name: Test Results Summary
-    runs-on: ubuntu-latest
-    needs: [frontend-tests, backend-tests, docker-build-test]
-    if: always()
-
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        
-      - name: Create test summary
-        run: |
-          echo "# 🧪 Archon V2 Beta - CI Test Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Frontend Results
-          echo "## 🎨 Frontend Tests (React + Vitest)" >> $GITHUB_STEP_SUMMARY
-          if [ -f "frontend-test-results/coverage/test-results.json" ]; then
-            echo "✅ Frontend tests completed" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ Frontend tests failed or incomplete" >> $GITHUB_STEP_SUMMARY
-          fi
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Backend Results
-          echo "## 🐍 Backend Tests (Python + pytest)" >> $GITHUB_STEP_SUMMARY
-          if [ -d "backend-test-results-unit" ]; then
-            echo "✅ Unit tests completed" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ Unit tests failed or incomplete" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          if [ -d "backend-test-results-integration" ]; then
-            echo "✅ Integration tests completed" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ Integration tests failed or incomplete" >> $GITHUB_STEP_SUMMARY
-          fi
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Docker Build Results
-          echo "## 🐳 Docker Build Tests" >> $GITHUB_STEP_SUMMARY
-          echo "Docker build tests completed - check individual job results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Coverage Information
-          echo "## 📊 Coverage Reports" >> $GITHUB_STEP_SUMMARY
-          echo "Coverage reports have been uploaded to Codecov and are available as artifacts." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Architecture Context
-          echo "## 🏗️ Architecture Tested" >> $GITHUB_STEP_SUMMARY
-          echo "- **Frontend**: React + TypeScript + Vite (Port 3737)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Server**: FastAPI + Socket.IO + Python (Port 8181)" >> $GITHUB_STEP_SUMMARY
-          echo "- **MCP Service**: MCP protocol server (Port 8051)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Agents Service**: PydanticAI agents (Port 8052)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Database**: Supabase (PostgreSQL + pgvector)" >> $GITHUB_STEP_SUMMARY
+          npm test -- --coverage=false --runInBand
+        working-directory: ./archon-ui-main
