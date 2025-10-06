@@ -93,5 +93,6 @@ jobs:
 
       - name: Run frontend tests
         run: |
-          npm test -- --coverage=false --runInBand
+          # Use the repository's vitest run script. Avoid unsupported jest flags like --runInBand.
+          npm run test:run
         working-directory: ./archon-ui-main
