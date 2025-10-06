@@ -15,7 +15,9 @@ jobs:
 
     services:
       postgres:
-        image: postgis/postgis:15-3.3
+        # Use Supabase's Postgres image which includes common extensions (vector,
+        # pg_trgm, etc.) and the 'auth' schema/roles used by migrations.
+        image: supabase/postgres:15.3.0
         env:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           POSTGRES_DB: postgres
@@ -71,6 +73,35 @@ jobs:
           psql -h 127.0.0.1 -p 5432 -U postgres -c '\l' || {
             echo "psql test failed; show pg_isready output:";
             pg_isready -h 127.0.0.1 -p 5432 -U postgres -d postgres || true;
+            exit 1;
+          }
+
+          # Supabase images initialize extra roles/schemas (auth, authenticated,
+          # service_role) asynchronously. Wait until the 'auth' schema exists so
+          # migrations that rely on it can run without failing.
+          for i in {1..30}; do
+            psql -h 127.0.0.1 -p 5432 -U postgres -d postgres -c "SELECT schema_name FROM information_schema.schemata WHERE schema_name='auth';" | grep -q auth && echo "supabase auth schema ready" && break
+            echo "Waiting for Supabase schema 'auth'... ($i)"
+            sleep 2
+          done
+
+          # Wait for the 'vector' extension to be available. Many migrations
+          # depend on the 'vector' type and operators; if the extension isn't
+          # installed the SQL will fail with confusing errors. Fail early with a
+          # clear message so CI is easier to diagnose.
+          for i in {1..30}; do
+            psql -h 127.0.0.1 -p 5432 -U postgres -d postgres -tAc "SELECT 1 FROM pg_extension WHERE extname='vector';" | grep -q 1 && echo "vector extension available" && break
+            echo "Waiting for 'vector' extension to be installed... ($i)"
+            sleep 2
+          done
+
+          # Final explicit check so we error out with a helpful message instead of
+          # letting downstream migrations produce opaque PostgreSQL errors.
+          psql -h 127.0.0.1 -p 5432 -U postgres -d postgres -tAc "SELECT 1 FROM pg_extension WHERE extname='vector';" | grep -q 1 || {
+            echo "ERROR: required extension 'vector' not found in Postgres."
+            echo "Use a Supabase Postgres image that ships the vector extension,"
+            echo "or install the extension in your CI image before running migrations.";
+            echo "For local debugging, run: psql -h 127.0.0.1 -p 5432 -U postgres -d postgres -c \"CREATE EXTENSION IF NOT EXISTS vector;\"";
             exit 1;
           }
 
