@@ -63,8 +63,14 @@ jobs:
       - name: Run DB migrations
         env:
           PGPASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        # ensure we run from the repository root and surface helpful debug info if the
+        # migration wrapper is missing in the checked-out commit
+        working-directory: ./
         run: |
-          bash scripts/run_migrations.sh 127.0.0.1 5432 postgres "$PGPASSWORD" postgres
+          echo "Debug: working dir = $(pwd)"
+          echo "Debug: list repo root:"; ls -la
+          echo "Debug: list scripts dir (if present):"; ls -la scripts || true
+          bash ./scripts/run_migrations.sh 127.0.0.1 5432 postgres "$PGPASSWORD" postgres
 
       - name: Run backend tests
         run: |
