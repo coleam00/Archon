@@ -53,12 +53,23 @@ jobs:
         working-directory: ./archon-ui-main
 
       - name: Wait for Postgres to become available
+        env:
+          PGPASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: |
-          for i in {1..30}; do
-            pg_isready -h 127.0.0.1 -p 5432 -U postgres && break
+          # Increase retries and also validate a psql connection so migration errors
+          # are clearer when Postgres isn't reachable.
+          for i in {1..60}; do
+            pg_isready -h 127.0.0.1 -p 5432 -U postgres && echo "pg_isready ok" && break
             echo "Waiting for Postgres... ($i)"
             sleep 2
           done
+
+          echo "Testing psql connection (this will error if DB isn't ready)"
+          psql -h 127.0.0.1 -p 5432 -U postgres -c '\l' || {
+            echo "psql test failed; show pg_isready output:";
+            pg_isready -h 127.0.0.1 -p 5432 -U postgres -d postgres || true;
+            exit 1;
+          }
 
       - name: Run DB migrations
         env:
