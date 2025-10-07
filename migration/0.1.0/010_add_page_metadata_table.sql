@@ -18,7 +18,6 @@ CREATE TABLE IF NOT EXISTS archon_page_metadata (
     url TEXT NOT NULL,
 
     -- Content
-    title TEXT NOT NULL,
     full_content TEXT NOT NULL,
 
     -- Section metadata (for llms-full.txt H1 sections)
@@ -60,8 +59,7 @@ CREATE INDEX IF NOT EXISTS idx_archon_crawled_pages_page_id ON archon_crawled_pa
 -- Add comments to document the table structure
 COMMENT ON TABLE archon_page_metadata IS 'Stores complete documentation pages for agent retrieval';
 COMMENT ON COLUMN archon_page_metadata.source_id IS 'References the source this page belongs to';
-COMMENT ON COLUMN archon_page_metadata.url IS 'Unique URL of the page (synthetic for llms-full.txt sections)';
-COMMENT ON COLUMN archon_page_metadata.title IS 'Page title extracted from content or metadata';
+COMMENT ON COLUMN archon_page_metadata.url IS 'Unique URL of the page (synthetic for llms-full.txt sections with #anchor)';
 COMMENT ON COLUMN archon_page_metadata.full_content IS 'Complete markdown/text content of the page';
 COMMENT ON COLUMN archon_page_metadata.section_title IS 'H1 section title for llms-full.txt pages';
 COMMENT ON COLUMN archon_page_metadata.section_order IS 'Order of section in llms-full.txt file (0-based)';
