@@ -65,14 +65,12 @@ class PageStorageOperations:
                 continue
 
             # Prepare page record
-            title = doc.get("title", "Untitled").strip() or "Untitled"
             word_count = len(markdown.split())
             char_count = len(markdown)
 
             page_record = {
                 "source_id": source_id,
                 "url": url,
-                "title": title,
                 "full_content": markdown,
                 "section_title": None,  # Regular page, not a section
                 "section_order": 0,
@@ -154,13 +152,9 @@ class PageStorageOperations:
         pages_to_insert: list[dict[str, Any]] = []
 
         for section in sections:
-            # Extract title from section_title (remove "# " prefix)
-            title = section.section_title.replace("# ", "").strip()
-
             page_record = {
                 "source_id": source_id,
                 "url": section.url,
-                "title": title,
                 "full_content": section.content,
                 "section_title": section.section_title,
                 "section_order": section.section_order,

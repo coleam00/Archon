@@ -26,9 +26,7 @@ class PageResponse(BaseModel):
     id: str
     source_id: str
     url: str
-    title: str
     full_content: str
-    html_content: str | None = None
     section_title: str | None = None
     section_order: int = 0
     word_count: int

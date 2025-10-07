@@ -66,10 +66,10 @@ def create_section_url(base_url: str, h1_heading: str, section_order: int) -> st
         section_order: Section position (0-based)
 
     Returns:
-        Synthetic URL like "https://example.com/llms-full.txt#core-concepts"
+        Synthetic URL like "https://example.com/llms-full.txt#section-0-core-concepts"
     """
     slug = create_section_slug(h1_heading)
-    return f"{base_url}#{slug}"
+    return f"{base_url}#section-{section_order}-{slug}"
 
 
 def parse_llms_full_sections(content: str, base_url: str) -> list[LLMsFullSection]:

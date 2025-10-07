@@ -168,31 +168,42 @@ class DocumentStorageOperations:
         from .page_storage_operations import PageStorageOperations
         page_storage_ops = PageStorageOperations(self.supabase_client)
 
-        # Reconstruct crawl_results from url_to_full_document for page storage
-        reconstructed_crawl_results = []
-        for url, markdown in url_to_full_document.items():
-            # Find the first metadata for this URL to get title
-            title = "Untitled"
-            for metadata in all_metadatas:
-                if metadata.get("url") == url:
-                    title = metadata.get("title", "Untitled")
-                    break
+        # Check if this is an llms-full.txt file
+        is_llms_full = crawl_type == "llms-txt" or (
+            len(url_to_full_document) == 1 and
+            next(iter(url_to_full_document.keys())).endswith("llms-full.txt")
+        )
 
-            reconstructed_crawl_results.append({
-                "url": url,
-                "markdown": markdown,
-                "title": title,
-            })
+        if is_llms_full and url_to_full_document:
+            # Handle llms-full.txt section-based pages
+            base_url = next(iter(url_to_full_document.keys()))
+            content = url_to_full_document[base_url]
 
-        if reconstructed_crawl_results:
-            url_to_page_id = await page_storage_ops.store_pages(
-                reconstructed_crawl_results,
+            url_to_page_id = await page_storage_ops.store_llms_full_sections(
+                base_url,
+                content,
                 original_source_id,
                 request,
-                crawl_type,
+                crawl_type="llms_full",
             )
         else:
-            url_to_page_id = {}
+            # Handle regular pages
+            reconstructed_crawl_results = []
+            for url, markdown in url_to_full_document.items():
+                reconstructed_crawl_results.append({
+                    "url": url,
+                    "markdown": markdown,
+                })
+
+            if reconstructed_crawl_results:
+                url_to_page_id = await page_storage_ops.store_pages(
+                    reconstructed_crawl_results,
+                    original_source_id,
+                    request,
+                    crawl_type,
+                )
+            else:
+                url_to_page_id = {}
 
         safe_logfire_info(f"url_to_full_document keys: {list(url_to_full_document.keys())[:5]}")
 

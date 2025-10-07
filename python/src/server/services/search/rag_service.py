@@ -175,17 +175,22 @@ class RAGService:
     async def _group_chunks_by_pages(
         self, chunk_results: list[dict[str, Any]], match_count: int
     ) -> list[dict[str, Any]]:
-        """Group chunk results by page URL and fetch page metadata."""
-        url_groups: dict[str, dict[str, Any]] = {}
+        """Group chunk results by page_id (if available) or URL and fetch page metadata."""
+        page_groups: dict[str, dict[str, Any]] = {}
 
         for result in chunk_results:
             metadata = result.get("metadata", {})
+            page_id = metadata.get("page_id")
             url = metadata.get("url")
-            if not url:
+
+            # Use page_id as key if available, otherwise URL
+            group_key = page_id if page_id else url
+            if not group_key:
                 continue
 
-            if url not in url_groups:
-                url_groups[url] = {
+            if group_key not in page_groups:
+                page_groups[group_key] = {
+                    "page_id": page_id,
                     "url": url,
                     "chunk_matches": 0,
                     "total_similarity": 0.0,
@@ -193,28 +198,38 @@ class RAGService:
                     "source_id": metadata.get("source_id"),
                 }
 
-            url_groups[url]["chunk_matches"] += 1
-            url_groups[url]["total_similarity"] += result.get("similarity", 0.0)
+            page_groups[group_key]["chunk_matches"] += 1
+            page_groups[group_key]["total_similarity"] += result.get("similarity", 0.0)
 
         page_results = []
-        for url, data in url_groups.items():
+        for group_key, data in page_groups.items():
             avg_similarity = data["total_similarity"] / data["chunk_matches"]
             match_boost = min(0.2, data["chunk_matches"] * 0.02)
             aggregate_score = avg_similarity * (1 + match_boost)
 
-            page_info = (
-                self.supabase_client.table("archon_page_metadata")
-                .select("id, title, section_title, word_count")
-                .eq("url", url)
-                .maybe_single()
-                .execute()
-            )
+            # Query page by page_id if available, otherwise by URL
+            if data["page_id"]:
+                page_info = (
+                    self.supabase_client.table("archon_page_metadata")
+                    .select("id, url, section_title, word_count")
+                    .eq("id", data["page_id"])
+                    .maybe_single()
+                    .execute()
+                )
+            else:
+                # Regular pages - exact URL match
+                page_info = (
+                    self.supabase_client.table("archon_page_metadata")
+                    .select("id, url, section_title, word_count")
+                    .eq("url", data["url"])
+                    .maybe_single()
+                    .execute()
+                )
 
             if page_info and page_info.data is not None:
                 page_results.append({
                     "page_id": page_info.data["id"],
-                    "url": url,
-                    "title": page_info.data.get("title", "Untitled"),
+                    "url": page_info.data["url"],
                     "section_title": page_info.data.get("section_title"),
                     "word_count": page_info.data.get("word_count", 0),
                     "chunk_matches": data["chunk_matches"],
