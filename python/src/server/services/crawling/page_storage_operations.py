@@ -7,7 +7,9 @@ Pages are stored BEFORE chunking to maintain full context for agent retrieval.
 
 from typing import Any
 
-from ...config.logfire_config import get_logger, safe_logfire_info
+from postgrest.exceptions import APIError
+
+from ...config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
 from .helpers.llms_full_parser import parse_llms_full_sections
 
 logger = get_logger(__name__)
@@ -86,15 +88,15 @@ class PageStorageOperations:
             }
             pages_to_insert.append(page_record)
 
-        # Batch insert pages
+        # Batch upsert pages
         if pages_to_insert:
             try:
                 safe_logfire_info(
-                    f"Inserting {len(pages_to_insert)} pages into archon_page_metadata table"
+                    f"Upserting {len(pages_to_insert)} pages into archon_page_metadata table"
                 )
                 result = (
                     self.supabase_client.table("archon_page_metadata")
-                    .insert(pages_to_insert)
+                    .upsert(pages_to_insert, on_conflict="url")
                     .execute()
                 )
 
@@ -103,12 +105,22 @@ class PageStorageOperations:
                     url_to_page_id[page["url"]] = page["id"]
 
                 safe_logfire_info(
-                    f"Successfully stored {len(url_to_page_id)} pages in archon_page_metadata"
+                    f"Successfully stored {len(url_to_page_id)}/{len(pages_to_insert)} pages in archon_page_metadata"
                 )
 
-            except Exception as e:
-                logger.error(f"Error inserting pages into archon_page_metadata: {e}", exc_info=True)
+            except APIError as e:
+                safe_logfire_error(
+                    f"Database error upserting pages | source_id={source_id} | attempted={len(pages_to_insert)} | error={str(e)}"
+                )
+                logger.error(f"Failed to upsert pages for source {source_id}: {e}", exc_info=True)
                 # Don't raise - allow chunking to continue even if page storage fails
+
+            except Exception as e:
+                safe_logfire_error(
+                    f"Unexpected error upserting pages | source_id={source_id} | attempted={len(pages_to_insert)} | error={str(e)}"
+                )
+                logger.error(f"Unexpected error upserting pages for source {source_id}: {e}", exc_info=True)
+                # Don't raise - allow chunking to continue
 
         return url_to_page_id
 
@@ -175,15 +187,15 @@ class PageStorageOperations:
             }
             pages_to_insert.append(page_record)
 
-        # Batch insert pages
+        # Batch upsert pages
         if pages_to_insert:
             try:
                 safe_logfire_info(
-                    f"Inserting {len(pages_to_insert)} section pages into archon_page_metadata"
+                    f"Upserting {len(pages_to_insert)} section pages into archon_page_metadata"
                 )
                 result = (
                     self.supabase_client.table("archon_page_metadata")
-                    .insert(pages_to_insert)
+                    .upsert(pages_to_insert, on_conflict="url")
                     .execute()
                 )
 
@@ -192,13 +204,21 @@ class PageStorageOperations:
                     url_to_page_id[page["url"]] = page["id"]
 
                 safe_logfire_info(
-                    f"Successfully stored {len(url_to_page_id)} section pages"
+                    f"Successfully stored {len(url_to_page_id)}/{len(pages_to_insert)} section pages"
                 )
 
-            except Exception as e:
-                logger.error(
-                    f"Error inserting section pages into archon_page_metadata: {e}", exc_info=True
+            except APIError as e:
+                safe_logfire_error(
+                    f"Database error upserting sections | base_url={base_url} | attempted={len(pages_to_insert)} | error={str(e)}"
                 )
+                logger.error(f"Failed to upsert sections for {base_url}: {e}", exc_info=True)
+                # Don't raise - allow process to continue
+
+            except Exception as e:
+                safe_logfire_error(
+                    f"Unexpected error upserting sections | base_url={base_url} | attempted={len(pages_to_insert)} | error={str(e)}"
+                )
+                logger.error(f"Unexpected error upserting sections for {base_url}: {e}", exc_info=True)
                 # Don't raise - allow process to continue
 
         return url_to_page_id
@@ -218,8 +238,11 @@ class PageStorageOperations:
 
             safe_logfire_info(f"Updated chunk_count={chunk_count} for page_id={page_id}")
 
+        except APIError as e:
+            logger.warning(
+                f"Database error updating chunk_count for page {page_id}: {e}", exc_info=True
+            )
         except Exception as e:
             logger.warning(
-                f"Error updating chunk_count for page {page_id}: {e}", exc_info=True
+                f"Unexpected error updating chunk_count for page {page_id}: {e}", exc_info=True
             )
-            # Don't raise - this is a non-critical update
