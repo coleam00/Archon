@@ -119,8 +119,8 @@ class TestSourceRaceCondition:
         assert "upsert" in methods_called, "Should use upsert for new sources"
         assert "insert" not in methods_called, "Should not use insert to avoid race conditions"
 
-    def test_existing_source_uses_update(self):
-        """Test that existing sources still use UPDATE (not affected by change)."""
+    def test_existing_source_uses_upsert(self):
+        """Test that existing sources use UPSERT to handle race conditions."""
         mock_client = Mock()
         
         methods_called = []
@@ -158,9 +158,9 @@ class TestSourceRaceCondition:
         ))
         loop.close()
         
-        # Should use update for existing sources
-        assert "update" in methods_called, "Should use update for existing sources"
-        assert "upsert" not in methods_called, "Should not use upsert for existing sources"
+        # Should use upsert for existing sources to handle race conditions
+        assert "upsert" in methods_called, "Should use upsert for existing sources"
+        assert "update" not in methods_called, "Should not use update (upsert handles race conditions)"
 
     @pytest.mark.asyncio
     async def test_async_concurrent_creation(self):

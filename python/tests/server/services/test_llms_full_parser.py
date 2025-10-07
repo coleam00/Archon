@@ -24,10 +24,10 @@ def test_create_section_url():
     """Test synthetic URL generation with slug anchor"""
     base_url = "https://example.com/llms-full.txt"
     url = create_section_url(base_url, "# Core Concepts", 0)
-    assert url == "https://example.com/llms-full.txt#core-concepts"
+    assert url == "https://example.com/llms-full.txt#section-0-core-concepts"
 
     url = create_section_url(base_url, "# Getting Started", 1)
-    assert url == "https://example.com/llms-full.txt#getting-started"
+    assert url == "https://example.com/llms-full.txt#section-1-getting-started"
 
 
 def test_parse_single_section():
@@ -42,7 +42,7 @@ It can help with various tasks.
     assert len(sections) == 1
     assert sections[0].section_title == "# Core Concepts"
     assert sections[0].section_order == 0
-    assert sections[0].url == "https://example.com/llms-full.txt#core-concepts"
+    assert sections[0].url == "https://example.com/llms-full.txt#section-0-core-concepts"
     assert "Claude is an AI assistant" in sections[0].content
     assert sections[0].word_count > 0
 
@@ -70,9 +70,9 @@ The API uses REST principles.
     assert sections[1].section_order == 1
     assert sections[2].section_order == 2
 
-    assert sections[0].url == "https://example.com/llms-full.txt#core-concepts"
-    assert sections[1].url == "https://example.com/llms-full.txt#getting-started"
-    assert sections[2].url == "https://example.com/llms-full.txt#api-reference"
+    assert sections[0].url == "https://example.com/llms-full.txt#section-0-core-concepts"
+    assert sections[1].url == "https://example.com/llms-full.txt#section-1-getting-started"
+    assert sections[2].url == "https://example.com/llms-full.txt#section-2-api-reference"
 
 
 def test_no_h1_headers():

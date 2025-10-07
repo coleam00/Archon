@@ -268,6 +268,8 @@ When connected to Claude/Cursor/Windsurf, the following tools are available:
 - `archon:rag_search_knowledge_base` - Search knowledge base for relevant content
 - `archon:rag_search_code_examples` - Find code snippets in the knowledge base
 - `archon:rag_get_available_sources` - List available knowledge sources
+- `archon:rag_list_pages_for_source` - List all pages for a given source (browse documentation structure)
+- `archon:rag_read_full_page` - Retrieve full page content by page_id or URL
 
 ### Project Management
 

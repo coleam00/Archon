@@ -273,26 +273,22 @@ async def update_source_info(
             if original_url:
                 metadata["original_url"] = original_url
 
-            # Update existing source (preserving title)
-            update_data = {
+            # Use upsert to handle race conditions
+            upsert_data = {
+                "source_id": source_id,
+                "title": existing_title,
                 "summary": summary,
                 "total_word_count": word_count,
                 "metadata": metadata,
-                "updated_at": "now()",
             }
 
             # Add new fields if provided
             if source_url:
-                update_data["source_url"] = source_url
+                upsert_data["source_url"] = source_url
             if source_display_name:
-                update_data["source_display_name"] = source_display_name
+                upsert_data["source_display_name"] = source_display_name
 
-            result = (
-                client.table("archon_sources")
-                .update(update_data)
-                .eq("source_id", source_id)
-                .execute()
-            )
+            client.table("archon_sources").upsert(upsert_data).execute()
 
             search_logger.info(
                 f"Updated source {source_id} while preserving title: {existing_title}"

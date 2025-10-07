@@ -215,6 +215,85 @@ def register_rag_tools(mcp: FastMCP):
             return json.dumps({"success": False, "results": [], "error": str(e)}, indent=2)
 
     @mcp.tool()
+    async def rag_list_pages_for_source(
+        ctx: Context, source_id: str, section: str | None = None
+    ) -> str:
+        """
+        List all pages for a given knowledge source.
+
+        Use this after rag_get_available_sources() to see all pages in a source.
+        Useful for browsing documentation structure or finding specific pages.
+
+        Args:
+            source_id: Source ID from rag_get_available_sources() (e.g., "src_1234abcd")
+            section: Optional filter for llms-full.txt section title (e.g., "# Core Concepts")
+
+        Returns:
+            JSON string with structure:
+            - success: bool - Operation success status
+            - pages: list[dict] - Array of page objects with id, url, section_title, word_count
+            - total: int - Total number of pages
+            - source_id: str - The source ID that was queried
+            - error: str|null - Error description if success=false
+
+        Example workflow:
+            1. Call rag_get_available_sources() to get source_id
+            2. Call rag_list_pages_for_source(source_id) to see all pages
+            3. Call rag_read_full_page(page_id) to read specific pages
+        """
+        try:
+            api_url = get_api_url()
+            timeout = httpx.Timeout(30.0, connect=5.0)
+
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                params = {"source_id": source_id}
+                if section:
+                    params["section"] = section
+
+                response = await client.get(
+                    urljoin(api_url, "/api/pages"),
+                    params=params
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    return json.dumps(
+                        {
+                            "success": True,
+                            "pages": result.get("pages", []),
+                            "total": result.get("total", 0),
+                            "source_id": result.get("source_id", source_id),
+                            "error": None,
+                        },
+                        indent=2,
+                    )
+                else:
+                    error_detail = response.text
+                    return json.dumps(
+                        {
+                            "success": False,
+                            "pages": [],
+                            "total": 0,
+                            "source_id": source_id,
+                            "error": f"HTTP {response.status_code}: {error_detail}",
+                        },
+                        indent=2,
+                    )
+
+        except Exception as e:
+            logger.error(f"Error listing pages for source {source_id}: {e}")
+            return json.dumps(
+                {
+                    "success": False,
+                    "pages": [],
+                    "total": 0,
+                    "source_id": source_id,
+                    "error": str(e)
+                },
+                indent=2
+            )
+
+    @mcp.tool()
     async def rag_read_full_page(
         ctx: Context, page_id: str | None = None, url: str | None = None
     ) -> str:

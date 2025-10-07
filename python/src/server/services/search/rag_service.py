@@ -327,9 +327,22 @@ class RAGService:
                         if len(formatted_results) > match_count:
                             formatted_results = formatted_results[:match_count]
 
-                # Step 4: Group by pages if return_mode="pages"
+                # Step 4: Group by pages if return_mode="pages" AND pages exist
+                actual_return_mode = return_mode
                 if return_mode == "pages":
-                    formatted_results = await self._group_chunks_by_pages(formatted_results, match_count)
+                    # Check if any chunks have page_id set
+                    has_page_ids = any(
+                        result.get("metadata", {}).get("page_id") is not None
+                        for result in formatted_results
+                    )
+
+                    if has_page_ids:
+                        # Group by pages when page_ids exist
+                        formatted_results = await self._group_chunks_by_pages(formatted_results, match_count)
+                    else:
+                        # Fall back to chunks when no page_ids (pre-migration data)
+                        actual_return_mode = "chunks"
+                        logger.info("No page_ids found in results, returning chunks instead of pages")
 
                 # Build response
                 response_data = {
@@ -341,7 +354,7 @@ class RAGService:
                     "execution_path": "rag_service_pipeline",
                     "search_mode": "hybrid" if use_hybrid_search else "vector",
                     "reranking_applied": reranking_applied,
-                    "return_mode": return_mode,
+                    "return_mode": actual_return_mode,
                 }
 
                 span.set_attribute("final_results_count", len(formatted_results))
