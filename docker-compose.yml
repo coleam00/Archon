@@ -38,6 +38,9 @@ services:
       - ./migration:/app/migration # Mount migration files for version tracking
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     command:
       [
         "python",
@@ -96,6 +99,9 @@ services:
       
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     healthcheck:
       test:
         [
