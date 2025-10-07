@@ -19,6 +19,7 @@ from ..credential_service import credential_service
 # Import strategies
 # Import operations
 from .document_storage_operations import DocumentStorageOperations
+from .page_storage_operations import PageStorageOperations
 from .helpers.site_config import SiteConfig
 
 # Import helpers
@@ -98,6 +99,7 @@ class CrawlingService:
 
         # Initialize operations
         self.doc_storage_ops = DocumentStorageOperations(self.supabase_client)
+        self.page_storage_ops = PageStorageOperations(self.supabase_client)
 
         # Track progress state across all stages to prevent UI resets
         self.progress_state = {"progressId": self.progress_id} if self.progress_id else {}
@@ -431,6 +433,7 @@ class CrawlingService:
                 self._check_cancellation,
                 source_url=url,
                 source_display_name=source_display_name,
+                url_to_page_id=None,  # Will be populated after page storage
             )
 
             # Update progress tracker with source_id now that it's created

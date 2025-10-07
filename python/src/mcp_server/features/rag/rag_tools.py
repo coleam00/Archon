@@ -77,7 +77,11 @@ def register_rag_tools(mcp: FastMCP):
 
     @mcp.tool()
     async def rag_search_knowledge_base(
-        ctx: Context, query: str, source_id: str | None = None, match_count: int = 5
+        ctx: Context,
+        query: str,
+        source_id: str | None = None,
+        match_count: int = 5,
+        return_mode: str = "pages"
     ) -> str:
         """
         Search knowledge base for relevant content using RAG.
@@ -90,20 +94,31 @@ def register_rag_tools(mcp: FastMCP):
                       This is the 'id' field from available sources, NOT a URL or domain name.
                       Example: "src_1234abcd" not "docs.anthropic.com"
             match_count: Max results (default: 5)
+            return_mode: "pages" (default, full pages with metadata) or "chunks" (raw text chunks)
 
         Returns:
             JSON string with structure:
             - success: bool - Operation success status
-            - results: list[dict] - Array of matching documents with content and metadata
+            - results: list[dict] - Array of pages/chunks with content and metadata
+                      Pages include: page_id, url, title, preview, word_count, chunk_matches
+                      Chunks include: content, metadata, similarity
+            - return_mode: str - Mode used ("pages" or "chunks")
             - reranked: bool - Whether results were reranked
             - error: str|null - Error description if success=false
+
+        Note: Use "pages" mode for better context (recommended), or "chunks" for raw granular results.
+        After getting pages, use rag_read_full_page() to retrieve complete page content.
         """
         try:
             api_url = get_api_url()
             timeout = httpx.Timeout(30.0, connect=5.0)
 
             async with httpx.AsyncClient(timeout=timeout) as client:
-                request_data = {"query": query, "match_count": match_count}
+                request_data = {
+                    "query": query,
+                    "match_count": match_count,
+                    "return_mode": return_mode
+                }
                 if source_id:
                     request_data["source"] = source_id
 
@@ -115,6 +130,7 @@ def register_rag_tools(mcp: FastMCP):
                         {
                             "success": True,
                             "results": result.get("results", []),
+                            "return_mode": result.get("return_mode", return_mode),
                             "reranked": result.get("reranked", False),
                             "error": None,
                         },
@@ -197,6 +213,70 @@ def register_rag_tools(mcp: FastMCP):
         except Exception as e:
             logger.error(f"Error searching code examples: {e}")
             return json.dumps({"success": False, "results": [], "error": str(e)}, indent=2)
+
+    @mcp.tool()
+    async def rag_read_full_page(
+        ctx: Context, page_id: str | None = None, url: str | None = None
+    ) -> str:
+        """
+        Retrieve full page content from knowledge base.
+        Use this to get complete page content after RAG search.
+
+        Args:
+            page_id: Page UUID from search results (e.g., "550e8400-e29b-41d4-a716-446655440000")
+            url: Page URL (e.g., "https://docs.example.com/getting-started")
+
+        Note: Provide EITHER page_id OR url, not both.
+
+        Returns:
+            JSON string with structure:
+            - success: bool
+            - page: dict with full_content, title, url, metadata
+            - error: str|null
+        """
+        try:
+            if not page_id and not url:
+                return json.dumps(
+                    {"success": False, "error": "Must provide either page_id or url"},
+                    indent=2
+                )
+
+            api_url = get_api_url()
+            timeout = httpx.Timeout(30.0, connect=5.0)
+
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                if page_id:
+                    response = await client.get(urljoin(api_url, f"/api/pages/{page_id}"))
+                else:
+                    response = await client.get(
+                        urljoin(api_url, "/api/pages/by-url"),
+                        params={"url": url}
+                    )
+
+                if response.status_code == 200:
+                    page_data = response.json()
+                    return json.dumps(
+                        {
+                            "success": True,
+                            "page": page_data,
+                            "error": None,
+                        },
+                        indent=2,
+                    )
+                else:
+                    error_detail = response.text
+                    return json.dumps(
+                        {
+                            "success": False,
+                            "page": None,
+                            "error": f"HTTP {response.status_code}: {error_detail}",
+                        },
+                        indent=2,
+                    )
+
+        except Exception as e:
+            logger.error(f"Error reading page: {e}")
+            return json.dumps({"success": False, "page": None, "error": str(e)}, indent=2)
 
     # Log successful registration
     logger.info("✓ RAG tools registered (HTTP-based version)")

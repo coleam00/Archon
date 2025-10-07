@@ -172,21 +172,77 @@ class RAGService:
             use_enhancement=True,
         )
 
+    async def _group_chunks_by_pages(
+        self, chunk_results: list[dict[str, Any]], match_count: int
+    ) -> list[dict[str, Any]]:
+        """Group chunk results by page URL and fetch page metadata."""
+        url_groups: dict[str, dict[str, Any]] = {}
+
+        for result in chunk_results:
+            metadata = result.get("metadata", {})
+            url = metadata.get("url")
+            if not url:
+                continue
+
+            if url not in url_groups:
+                url_groups[url] = {
+                    "url": url,
+                    "chunk_matches": 0,
+                    "total_similarity": 0.0,
+                    "best_chunk_content": result.get("content", ""),
+                    "source_id": metadata.get("source_id"),
+                }
+
+            url_groups[url]["chunk_matches"] += 1
+            url_groups[url]["total_similarity"] += result.get("similarity", 0.0)
+
+        page_results = []
+        for url, data in url_groups.items():
+            avg_similarity = data["total_similarity"] / data["chunk_matches"]
+            match_boost = min(0.2, data["chunk_matches"] * 0.02)
+            aggregate_score = avg_similarity * (1 + match_boost)
+
+            page_info = (
+                self.supabase_client.table("archon_page_metadata")
+                .select("id, title, section_title, word_count")
+                .eq("url", url)
+                .maybe_single()
+                .execute()
+            )
+
+            if page_info and page_info.data is not None:
+                page_results.append({
+                    "page_id": page_info.data["id"],
+                    "url": url,
+                    "title": page_info.data.get("title", "Untitled"),
+                    "section_title": page_info.data.get("section_title"),
+                    "word_count": page_info.data.get("word_count", 0),
+                    "chunk_matches": data["chunk_matches"],
+                    "aggregate_similarity": aggregate_score,
+                    "average_similarity": avg_similarity,
+                    "preview": data["best_chunk_content"][:500],
+                    "source_id": data["source_id"],
+                })
+
+        page_results.sort(key=lambda x: x["aggregate_similarity"], reverse=True)
+        return page_results[:match_count]
+
     async def perform_rag_query(
-        self, query: str, source: str = None, match_count: int = 5
+        self, query: str, source: str = None, match_count: int = 5, return_mode: str = "chunks"
     ) -> tuple[bool, dict[str, Any]]:
         """
-        Perform a comprehensive RAG query that combines all enabled strategies.
+        Unified RAG query with all strategies.
 
         Pipeline:
-        1. Start with vector search
-        2. Apply hybrid search if enabled
-        3. Apply reranking if enabled
+        1. Vector/Hybrid Search (based on settings)
+        2. Reranking (if enabled)
+        3. Page Grouping (if return_mode="pages")
 
         Args:
             query: The search query
             source: Optional source domain to filter results
             match_count: Maximum number of results to return
+            return_mode: "chunks" (default) or "pages"
 
         Returns:
             Tuple of (success, result_dict)
@@ -256,6 +312,10 @@ class RAGService:
                         if len(formatted_results) > match_count:
                             formatted_results = formatted_results[:match_count]
 
+                # Step 4: Group by pages if return_mode="pages"
+                if return_mode == "pages":
+                    formatted_results = await self._group_chunks_by_pages(formatted_results, match_count)
+
                 # Build response
                 response_data = {
                     "results": formatted_results,
@@ -266,13 +326,15 @@ class RAGService:
                     "execution_path": "rag_service_pipeline",
                     "search_mode": "hybrid" if use_hybrid_search else "vector",
                     "reranking_applied": reranking_applied,
+                    "return_mode": return_mode,
                 }
 
                 span.set_attribute("final_results_count", len(formatted_results))
                 span.set_attribute("reranking_applied", reranking_applied)
+                span.set_attribute("return_mode", return_mode)
                 span.set_attribute("success", True)
 
-                logger.info(f"RAG query completed - {len(formatted_results)} results found")
+                logger.info(f"RAG query completed - {len(formatted_results)} {return_mode} found")
                 return True, response_data
 
             except Exception as e:

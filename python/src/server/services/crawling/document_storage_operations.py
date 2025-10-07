@@ -44,6 +44,7 @@ class DocumentStorageOperations:
         cancellation_check: Callable | None = None,
         source_url: str | None = None,
         source_display_name: str | None = None,
+        url_to_page_id: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """
         Process crawled documents and store them in the database.
@@ -136,6 +137,7 @@ class DocumentStorageOperations:
                     "description": doc.get("description", ""),
                     "source_id": source_id,
                     "knowledge_type": request.get("knowledge_type", "documentation"),
+                    "page_id": url_to_page_id.get(doc_url) if url_to_page_id else None,
                     "crawl_type": crawl_type,
                     "word_count": word_count,
                     "char_count": len(chunk),
@@ -155,12 +157,42 @@ class DocumentStorageOperations:
             if doc_index > 0 and doc_index % 5 == 0:
                 await asyncio.sleep(0)
 
-        # Create/update source record FIRST before storing documents
+        # Create/update source record FIRST (required for FK constraints on pages and chunks)
         if all_contents and all_metadatas:
             await self._create_source_records(
                 all_metadatas, all_contents, source_word_counts, request,
                 source_url, source_display_name
             )
+
+        # Store pages AFTER source is created but BEFORE chunks (FK constraint requirement)
+        from .page_storage_operations import PageStorageOperations
+        page_storage_ops = PageStorageOperations(self.supabase_client)
+
+        # Reconstruct crawl_results from url_to_full_document for page storage
+        reconstructed_crawl_results = []
+        for url, markdown in url_to_full_document.items():
+            # Find the first metadata for this URL to get title
+            title = "Untitled"
+            for metadata in all_metadatas:
+                if metadata.get("url") == url:
+                    title = metadata.get("title", "Untitled")
+                    break
+
+            reconstructed_crawl_results.append({
+                "url": url,
+                "markdown": markdown,
+                "title": title,
+            })
+
+        if reconstructed_crawl_results:
+            url_to_page_id = await page_storage_ops.store_pages(
+                reconstructed_crawl_results,
+                original_source_id,
+                request,
+                crawl_type,
+            )
+        else:
+            url_to_page_id = {}
 
         safe_logfire_info(f"url_to_full_document keys: {list(url_to_full_document.keys())[:5]}")
 
@@ -183,6 +215,7 @@ class DocumentStorageOperations:
             enable_parallel_batches=True,  # Enable parallel processing
             provider=None,  # Use configured provider
             cancellation_check=cancellation_check,  # Pass cancellation check
+            url_to_page_id=url_to_page_id,  # Link chunks to pages
         )
 
         # Calculate chunk counts

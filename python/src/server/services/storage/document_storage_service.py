@@ -25,6 +25,7 @@ async def add_documents_to_supabase(
     enable_parallel_batches: bool = True,
     provider: str | None = None,
     cancellation_check: Any | None = None,
+    url_to_page_id: dict[str, str] | None = None,
 ) -> dict[str, int]:
     """
     Add documents to Supabase with threading optimizations.
@@ -399,6 +400,9 @@ async def add_documents_to_supabase(
                     search_logger.warning(f"Unsupported embedding dimension {embedding_dim}, using embedding_1536")
                     embedding_column = "embedding_1536"
                 
+                # Get page_id for this URL if available
+                page_id = url_to_page_id.get(batch_urls[j]) if url_to_page_id else None
+
                 data = {
                     "url": batch_urls[j],
                     "chunk_number": batch_chunk_numbers[j],
@@ -409,6 +413,7 @@ async def add_documents_to_supabase(
                     "llm_chat_model": llm_chat_model,  # Add LLM model tracking
                     "embedding_model": embedding_model_name,  # Add embedding model tracking
                     "embedding_dimension": embedding_dim,  # Add dimension tracking
+                    "page_id": page_id,  # Link chunk to page
                 }
                 batch_data.append(data)
 

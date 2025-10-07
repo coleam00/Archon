@@ -179,12 +179,24 @@ class SinglePageCrawlStrategy:
                 if 'getting-started' in url:
                     logger.info(f"Markdown sample for getting-started: {markdown_sample}")
 
+                # Extract title from HTML <title> tag
+                title = "Untitled"
+                if result.html:
+                    import re
+                    title_match = re.search(r'<title[^>]*>(.*?)</title>', result.html, re.IGNORECASE | re.DOTALL)
+                    if title_match:
+                        extracted_title = title_match.group(1).strip()
+                        # Clean up HTML entities
+                        extracted_title = extracted_title.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>').replace('&quot;', '"')
+                        if extracted_title:
+                            title = extracted_title
+
                 return {
                     "success": True,
                     "url": original_url,  # Use original URL for tracking
                     "markdown": result.markdown,
                     "html": result.html,  # Use raw HTML instead of cleaned_html for code extraction
-                    "title": result.title or "Untitled",
+                    "title": title,
                     "links": result.links,
                     "content_length": len(result.markdown)
                 }

@@ -177,6 +177,7 @@ class RagQueryRequest(BaseModel):
     query: str
     source: str | None = None
     match_count: int = 5
+    return_mode: str = "chunks"  # "chunks" or "pages"
 
 
 @router.get("/crawl-progress/{progress_id}")
@@ -1116,10 +1117,13 @@ async def perform_rag_query(request: RagQueryRequest):
         raise HTTPException(status_code=422, detail="Query cannot be empty")
 
     try:
-        # Use RAGService for RAG query
+        # Use RAGService for unified RAG query with return_mode support
         search_service = RAGService(get_supabase_client())
         success, result = await search_service.perform_rag_query(
-            query=request.query, source=request.source, match_count=request.match_count
+            query=request.query,
+            source=request.source,
+            match_count=request.match_count,
+            return_mode=request.return_mode
         )
 
         if success:
