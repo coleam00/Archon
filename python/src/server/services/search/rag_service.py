@@ -235,7 +235,6 @@ class RAGService:
                     "chunk_matches": data["chunk_matches"],
                     "aggregate_similarity": aggregate_score,
                     "average_similarity": avg_similarity,
-                    "preview": data["best_chunk_content"][:500],
                     "source_id": data["source_id"],
                 })
 
