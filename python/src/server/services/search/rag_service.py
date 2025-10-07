@@ -199,7 +199,7 @@ class RAGService:
                 }
 
             page_groups[group_key]["chunk_matches"] += 1
-            page_groups[group_key]["total_similarity"] += result.get("similarity", 0.0)
+            page_groups[group_key]["total_similarity"] += result.get("similarity_score", 0.0)
 
         page_results = []
         for group_key, data in page_groups.items():

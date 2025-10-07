@@ -129,7 +129,7 @@ class DocumentStorageOperations:
                 all_chunk_numbers.append(i)
                 all_contents.append(chunk)
 
-                # Create metadata for each chunk
+                # Create metadata for each chunk (page_id will be set later)
                 word_count = len(chunk.split())
                 metadata = {
                     "url": doc_url,
@@ -137,7 +137,7 @@ class DocumentStorageOperations:
                     "description": doc.get("description", ""),
                     "source_id": source_id,
                     "knowledge_type": request.get("knowledge_type", "documentation"),
-                    "page_id": url_to_page_id.get(doc_url) if url_to_page_id else None,
+                    "page_id": None,  # Will be set after pages are stored
                     "crawl_type": crawl_type,
                     "word_count": word_count,
                     "char_count": len(chunk),
@@ -175,10 +175,11 @@ class DocumentStorageOperations:
         )
 
         if is_llms_full and url_to_full_document:
-            # Handle llms-full.txt section-based pages
+            # Handle llms-full.txt with section-based pages
             base_url = next(iter(url_to_full_document.keys()))
             content = url_to_full_document[base_url]
 
+            # Store section pages
             url_to_page_id = await page_storage_ops.store_llms_full_sections(
                 base_url,
                 content,
@@ -186,6 +187,46 @@ class DocumentStorageOperations:
                 request,
                 crawl_type="llms_full",
             )
+
+            # Parse sections and re-chunk each section
+            from .helpers.llms_full_parser import parse_llms_full_sections
+            sections = parse_llms_full_sections(content, base_url)
+
+            # Clear existing chunks and re-create from sections
+            all_urls.clear()
+            all_chunk_numbers.clear()
+            all_contents.clear()
+            all_metadatas.clear()
+            url_to_full_document.clear()
+
+            # Chunk each section separately
+            for section in sections:
+                # Update url_to_full_document with section content
+                url_to_full_document[section.url] = section.content
+                section_chunks = await storage_service.smart_chunk_text_async(
+                    section.content, chunk_size=5000
+                )
+
+                for i, chunk in enumerate(section_chunks):
+                    all_urls.append(section.url)
+                    all_chunk_numbers.append(i)
+                    all_contents.append(chunk)
+
+                    word_count = len(chunk.split())
+                    metadata = {
+                        "url": section.url,
+                        "title": section.section_title,
+                        "description": "",
+                        "source_id": original_source_id,
+                        "knowledge_type": request.get("knowledge_type", "documentation"),
+                        "page_id": url_to_page_id.get(section.url),
+                        "crawl_type": "llms_full",
+                        "word_count": word_count,
+                        "char_count": len(chunk),
+                        "chunk_index": i,
+                        "tags": request.get("tags", []),
+                    }
+                    all_metadatas.append(metadata)
         else:
             # Handle regular pages
             reconstructed_crawl_results = []
@@ -204,6 +245,12 @@ class DocumentStorageOperations:
                 )
             else:
                 url_to_page_id = {}
+
+            # Update all chunk metadata with correct page_id
+            for metadata in all_metadatas:
+                chunk_url = metadata.get("url")
+                if chunk_url and chunk_url in url_to_page_id:
+                    metadata["page_id"] = url_to_page_id[chunk_url]
 
         safe_logfire_info(f"url_to_full_document keys: {list(url_to_full_document.keys())[:5]}")
 
