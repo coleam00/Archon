@@ -205,6 +205,7 @@ To upgrade Archon to the latest version:
    git pull
    ```
 
+<<<<<<< HEAD
 2. **Rebuild and restart containers**:
    ```bash
    docker compose up -d --build
@@ -217,6 +218,16 @@ To upgrade Archon to the latest version:
    - If there are pending migrations, the UI will display them with clear instructions
    - Click on each migration to view and copy the SQL
    - Run the SQL scripts in your Supabase SQL editor in the order shown
+=======
+2. **Check for migrations**: Look in the `migration/` folder for any SQL files newer than your last update. Check the file created dates to determine if you need to run them. You can run these in the SQL editor just like you did when you first set up Archon. We are also working on a way to make handling these migrations automatic!
+
+3. **Rebuild and restart**:
+   ```bash
+   docker compose up -d --build
+   ```
+
+This is the same command used for initial setup - it rebuilds containers with the latest code and restarts services.
+>>>>>>> 8cc3bdf (Convert from CRLF to LF)
 
 ## What's Included
 
@@ -497,4 +508,8 @@ docker system prune -f
 
 Archon Community License (ACL) v1.2 - see [LICENSE](LICENSE) file for details.
 
+<<<<<<< HEAD
 **TL;DR**: Archon is free, open, and hackable. Run it, fork it, share it - just don't sell it as-a-service without permission.
+=======
+**TL;DR**: Archon is free, open, and hackable. Run it, fork it, share it - just don't sell it as-a-service without permission.
+>>>>>>> 8cc3bdf (Convert from CRLF to LF)
