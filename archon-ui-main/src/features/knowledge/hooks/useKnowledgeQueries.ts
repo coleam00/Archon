@@ -7,7 +7,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useSmartPolling } from "@/features/shared/hooks";
 import { useToast } from "@/features/shared/hooks/useToast";
-import { createOptimisticEntity, createOptimisticId } from "@/features/shared/utils/optimistic";
+import { createOptimisticEntity, createOptimisticId, replaceOptimisticEntity, removeDuplicateEntities } from "@/features/shared/utils/optimistic";
 import { useActiveOperations } from "../../progress/hooks";
 import { progressKeys } from "../../progress/hooks/useProgressQueries";
 import type { ActiveOperation, ActiveOperationsResponse } from "../../progress/types";
@@ -22,6 +22,56 @@ import type {
   UploadMetadata,
 } from "../types";
 import { getProviderErrorMessage } from "../utils/providerErrorHandler";
+
+/**
+ * Helper function to check if a knowledge item matches the given filter
+ */
+function itemMatchesFilter(item: KnowledgeItem & Partial<{ metadata: { tags?: string[] } }>, filter?: KnowledgeItemsFilter) {
+  if (!filter) return true;
+  const tags = item.metadata?.tags ?? [];
+
+  // Check basic filter criteria
+  const basicMatch = (
+    (!filter.knowledge_type || item.knowledge_type === filter.knowledge_type) &&
+    (!filter.source_type || item.source_type === filter.source_type) &&
+    (!filter.tags || filter.tags.every((t) => tags.some(tag => tag.toLowerCase().includes(t.toLowerCase()))))
+  );
+
+  // Enhanced search across title, URL, description, and metadata
+  if (filter.search && basicMatch) {
+    const searchTerm = filter.search.toLowerCase();
+    const title = item.title?.toLowerCase() || '';
+    const url = item.url?.toLowerCase() || '';
+    const description = item.metadata?.description?.toLowerCase() || '';
+
+    return title.includes(searchTerm) ||
+           url.includes(searchTerm) ||
+           description.includes(searchTerm);
+  }
+
+  return basicMatch;
+}
+
+/**
+ * Helper function to check filter equality for cache skip logic
+ */
+function filtersEqual(filter1?: KnowledgeItemsFilter, filter2?: KnowledgeItemsFilter): boolean {
+  if (!filter1 && !filter2) return true;
+  if (!filter1 || !filter2) return false;
+
+  // Compare tags arrays
+  const tagsEqual = (filter1.tags?.length || 0) === (filter2.tags?.length || 0) &&
+    (filter1.tags || []).every((tag, index) => tag === (filter2.tags || [])[index]);
+
+  return (
+    filter1.page === filter2.page &&
+    filter1.per_page === filter2.per_page &&
+    filter1.search === filter2.search &&
+    filter1.knowledge_type === filter2.knowledge_type &&
+    filter1.source_type === filter2.source_type &&
+    tagsEqual
+  );
+}
 
 // Query keys factory for better organization and type safety
 export const knowledgeKeys = {
@@ -93,11 +143,12 @@ export function useCodeExamples(sourceId: string | null) {
   });
 }
 
+
 /**
  * Crawl URL mutation with optimistic updates
  * Returns the progressId that can be used to track crawl progress
  */
-export function useCrawlUrl() {
+export function useCrawlUrl(currentFilter?: KnowledgeItemsFilter) {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
 
@@ -106,11 +157,10 @@ export function useCrawlUrl() {
     Error,
     CrawlRequest,
     {
-      previousKnowledge?: KnowledgeItem[];
       previousSummaries?: Array<[readonly unknown[], KnowledgeItemsResponse | undefined]>;
       previousOperations?: ActiveOperationsResponse;
       tempProgressId: string;
-      tempItemId: string;
+      optimisticId: string;
     }
   >({
     mutationFn: (request: CrawlRequest) => knowledgeService.crawlUrl(request),
@@ -119,23 +169,8 @@ export function useCrawlUrl() {
       await queryClient.cancelQueries({ queryKey: knowledgeKeys.summariesPrefix() });
       await queryClient.cancelQueries({ queryKey: progressKeys.active() });
 
-      // TODO: Fix invisible optimistic updates
-      // ISSUE: Optimistic updates are applied to knowledgeKeys.summaries(filter) queries,
-      // but the UI component (KnowledgeView) queries with dynamic filters that we don't have access to here.
-      // This means optimistic updates only work if the filter happens to match what's being viewed.
-      //
-      // CURRENT BEHAVIOR:
-      // - We update all cached summaries queries (lines 158-179 below)
-      // - BUT if the user changes filters after mutation starts, they won't see the optimistic update
-      // - AND we have no way to know what filter the user is currently viewing
-      //
-      // PROPER FIX requires one of:
-      // 1. Pass current filter from KnowledgeView to mutation hooks (prop drilling)
-      // 2. Create KnowledgeFilterContext to share filter state
-      // 3. Restructure to have a single source of truth query key like other features
-      //
-      // IMPACT: Users don't see immediate feedback when adding knowledge items - items only
-      // appear after the server responds (usually 1-3 seconds later)
+      // Optimistic updates target the currently viewed filter by
+      // checking if the new item matches the filter passed to the hook.
 
       // Snapshot the previous values for rollback
       const previousSummaries = queryClient.getQueriesData<KnowledgeItemsResponse>({
@@ -171,22 +206,56 @@ export function useCrawlUrl() {
         updated_at: new Date().toISOString(),
       } as Omit<KnowledgeItem, "id">);
 
-      // Update all summaries caches with optimistic data, respecting each cache's filter
+      // Prioritize updating the currently viewed filter for immediate user feedback
+      if (currentFilter) {
+        const currentQueryKey = knowledgeKeys.summaries(currentFilter);
+        const currentData = queryClient.getQueryData<KnowledgeItemsResponse>(currentQueryKey);
+
+        // Check if the optimistic item matches the current filter
+        if (itemMatchesFilter(optimisticItem, currentFilter)) {
+          if (!currentData) {
+            queryClient.setQueryData<KnowledgeItemsResponse>(currentQueryKey, {
+              items: [optimisticItem],
+              total: 1,
+              page: 1,
+              per_page: currentFilter?.per_page ?? 100,
+            });
+          } else {
+            queryClient.setQueryData<KnowledgeItemsResponse>(currentQueryKey, {
+              ...currentData,
+              items: [optimisticItem, ...currentData.items],
+              total: (currentData.total ?? currentData.items.length) + 1,
+            });
+          }
+        }
+      }
+
+      // Also update all other cached summaries for completeness
       const entries = queryClient.getQueriesData<KnowledgeItemsResponse>({
         queryKey: knowledgeKeys.summariesPrefix(),
       });
       for (const [qk, old] of entries) {
+        // Skip if this is the current query we already updated
+        const currentQueryKey = currentFilter ? knowledgeKeys.summaries(currentFilter) : null;
+        if (currentQueryKey && qk.length === currentQueryKey.length &&
+            qk.every((part, index) => {
+              if (index < qk.length - 1) return part === currentQueryKey[index];
+              // For the filter object, use the helper for deep comparison
+              const qkFilter = part as KnowledgeItemsFilter | undefined;
+              const currentFilterPart = currentQueryKey[index] as KnowledgeItemsFilter | undefined;
+              return filtersEqual(qkFilter, currentFilterPart);
+            })) {
+          continue;
+        }
+
         const filter = qk[qk.length - 1] as KnowledgeItemsFilter | undefined;
-        const matchesType = !filter?.knowledge_type || optimisticItem.knowledge_type === filter.knowledge_type;
-        const matchesTags =
-          !filter?.tags || filter.tags.every((t) => (optimisticItem.metadata?.tags ?? []).includes(t));
-        if (!(matchesType && matchesTags)) continue;
+        if (!itemMatchesFilter(optimisticItem, filter)) continue;
         if (!old) {
           queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
             items: [optimisticItem],
             total: 1,
             page: 1,
-            per_page: 100,
+            per_page: filter?.per_page ?? 100,
           });
         } else {
           queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
@@ -228,25 +297,34 @@ export function useCrawlUrl() {
       });
 
       // Return context for rollback and replacement
-      return { previousSummaries, previousOperations, tempProgressId };
+      return { previousSummaries, previousOperations, tempProgressId, optimisticId: optimisticItem._localId };
     },
     onSuccess: (response, _variables, context) => {
-      // Replace temporary IDs with real ones from the server
+      // Replace temporary IDs with real ones from the server using shared utilities
       if (context) {
-        // Update summaries cache with real progress ID
+        // Update summaries cache using replaceOptimisticEntity and removeDuplicateEntities
         queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summariesPrefix() }, (old) => {
           if (!old) return old;
+
+          // Find the optimistic item to create server entity with updated data
+          const optimisticItem = old.items.find(item => item._localId === context.optimisticId);
+          if (!optimisticItem) return old;
+
+          const serverItem: KnowledgeItem = {
+            ...optimisticItem,
+            source_id: response.progressId,
+            _optimistic: false,
+            _localId: undefined,
+          } as KnowledgeItem;
+
+          // Replace the optimistic entity with server data
+          const replacedItems = replaceOptimisticEntity(old.items, context.optimisticId, serverItem);
+          // Remove any duplicates that might have been created
+          const deduplicatedItems = removeDuplicateEntities(replacedItems);
+
           return {
             ...old,
-            items: old.items.map((item) => {
-              if (item.source_id === context.tempProgressId) {
-                return {
-                  ...item,
-                  source_id: response.progressId,
-                };
-              }
-              return item;
-            }),
+            items: deduplicatedItems,
           };
         });
 
@@ -300,7 +378,7 @@ export function useCrawlUrl() {
 /**
  * Upload document mutation with optimistic updates
  */
-export function useUploadDocument() {
+export function useUploadDocument(currentFilter?: KnowledgeItemsFilter) {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
 
@@ -312,6 +390,7 @@ export function useUploadDocument() {
       previousSummaries?: Array<[readonly unknown[], KnowledgeItemsResponse | undefined]>;
       previousOperations?: ActiveOperationsResponse;
       tempProgressId: string;
+      optimisticId: string;
     }
   >({
     mutationFn: ({ file, metadata }: { file: File; metadata: UploadMetadata }) =>
@@ -351,22 +430,56 @@ export function useUploadDocument() {
         updated_at: new Date().toISOString(),
       } as Omit<KnowledgeItem, "id">);
 
-      // Respect each cache's filter (knowledge_type, tags, etc.)
+      // Prioritize updating the currently viewed filter for immediate user feedback
+      if (currentFilter) {
+        const currentQueryKey = knowledgeKeys.summaries(currentFilter);
+        const currentData = queryClient.getQueryData<KnowledgeItemsResponse>(currentQueryKey);
+
+        // Check if the optimistic item matches the current filter
+        if (itemMatchesFilter(optimisticItem, currentFilter)) {
+          if (!currentData) {
+            queryClient.setQueryData<KnowledgeItemsResponse>(currentQueryKey, {
+              items: [optimisticItem],
+              total: 1,
+              page: 1,
+              per_page: currentFilter?.per_page ?? 100,
+            });
+          } else {
+            queryClient.setQueryData<KnowledgeItemsResponse>(currentQueryKey, {
+              ...currentData,
+              items: [optimisticItem, ...currentData.items],
+              total: (currentData.total ?? currentData.items.length) + 1,
+            });
+          }
+        }
+      }
+
+      // Also update all other cached summaries for completeness
       const entries = queryClient.getQueriesData<KnowledgeItemsResponse>({
         queryKey: knowledgeKeys.summariesPrefix(),
       });
       for (const [qk, old] of entries) {
+        // Skip if this is the current query we already updated
+        const currentQueryKey = currentFilter ? knowledgeKeys.summaries(currentFilter) : null;
+        if (currentQueryKey && qk.length === currentQueryKey.length &&
+            qk.every((part, index) => {
+              if (index < qk.length - 1) return part === currentQueryKey[index];
+              // For the filter object, use the helper for deep comparison
+              const qkFilter = part as KnowledgeItemsFilter | undefined;
+              const currentFilterPart = currentQueryKey[index] as KnowledgeItemsFilter | undefined;
+              return filtersEqual(qkFilter, currentFilterPart);
+            })) {
+          continue;
+        }
+
         const filter = qk[qk.length - 1] as KnowledgeItemsFilter | undefined;
-        const matchesType = !filter?.knowledge_type || optimisticItem.knowledge_type === filter.knowledge_type;
-        const matchesTags =
-          !filter?.tags || filter.tags.every((t) => (optimisticItem.metadata?.tags ?? []).includes(t));
-        if (!(matchesType && matchesTags)) continue;
+        if (!itemMatchesFilter(optimisticItem, filter)) continue;
         if (!old) {
           queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
             items: [optimisticItem],
             total: 1,
             page: 1,
-            per_page: 100,
+            per_page: filter?.per_page ?? 100,
           });
         } else {
           queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
@@ -407,25 +520,34 @@ export function useUploadDocument() {
         };
       });
 
-      return { previousSummaries, previousOperations, tempProgressId };
+      return { previousSummaries, previousOperations, tempProgressId, optimisticId: optimisticItem._localId };
     },
     onSuccess: (response, _variables, context) => {
-      // Replace temporary IDs with real ones from the server
+      // Replace temporary IDs with real ones from the server using shared utilities
       if (context && response?.progressId) {
-        // Update summaries cache with real progress ID
+        // Update summaries cache using shared utilities
         queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summariesPrefix() }, (old) => {
           if (!old) return old;
+
+          // Find the optimistic item to create server entity with updated data
+          const optimisticItem = old.items.find(item => item._localId === context.optimisticId);
+          if (!optimisticItem) return old;
+
+          const serverItem: KnowledgeItem = {
+            ...optimisticItem,
+            source_id: response.progressId,
+            _optimistic: false,
+            _localId: undefined,
+          } as KnowledgeItem;
+
+          // Replace the optimistic entity with server data
+          const replacedItems = replaceOptimisticEntity(old.items, context.optimisticId, serverItem);
+          // Remove any duplicates that might have been created
+          const deduplicatedItems = removeDuplicateEntities(replacedItems);
+
           return {
             ...old,
-            items: old.items.map((item) => {
-              if (item.source_id === context.tempProgressId) {
-                return {
-                  ...item,
-                  source_id: response.progressId,
-                };
-              }
-              return item;
-            }),
+            items: deduplicatedItems,
           };
         });
 

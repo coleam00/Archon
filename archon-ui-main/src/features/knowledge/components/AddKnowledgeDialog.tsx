@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { cn } from "../../ui/primitives/styles";
 import { Tabs, TabsContent } from "../../ui/primitives/tabs";
 import { useCrawlUrl, useUploadDocument } from "../hooks";
-import type { CrawlRequest, UploadMetadata } from "../types";
+import type { CrawlRequest, KnowledgeItemsFilter, UploadMetadata } from "../types";
 import { KnowledgeTypeSelector } from "./KnowledgeTypeSelector";
 import { LevelSelector } from "./LevelSelector";
 import { TagInput } from "./TagInput";
@@ -21,6 +21,7 @@ interface AddKnowledgeDialogProps {
   onOpenChange: (open: boolean) => void;
   onSuccess: () => void;
   onCrawlStarted?: (progressId: string) => void;
+  currentFilter?: KnowledgeItemsFilter;
 }
 
 export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
@@ -28,11 +29,12 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
   onOpenChange,
   onSuccess,
   onCrawlStarted,
+  currentFilter,
 }) => {
   const [activeTab, setActiveTab] = useState<"crawl" | "upload">("crawl");
   const { showToast } = useToast();
-  const crawlMutation = useCrawlUrl();
-  const uploadMutation = useUploadDocument();
+  const crawlMutation = useCrawlUrl(currentFilter);
+  const uploadMutation = useUploadDocument(currentFilter);
 
   // Generate unique IDs for form elements
   const urlId = useId();
@@ -83,7 +85,6 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
       showToast("Crawl started successfully", "success");
       resetForm();
       onSuccess();
-      onOpenChange(false);
     } catch (error) {
       // Display the actual error message from backend
       const message = error instanceof Error ? error.message : "Failed to start crawl";
@@ -198,7 +199,7 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
               </Label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Globe className="h-5 w-5" style={{ color: "#0891b2" }} />
+                  <Globe className="h-5 w-5 text-cyan-600" />
                 </div>
                 <Input
                   id={urlId}
