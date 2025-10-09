@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { Moon, Sun, FileText, Layout, Bot, Settings, Palette, Flame, Monitor } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Moon, Sun, FileText, Flame, Monitor } from 'lucide-react';
 import { Toggle } from '../ui/Toggle';
-import { Card } from '../ui/Card';
 import { useTheme } from '../../contexts/ThemeContext';
 import { credentialsService } from '../../services/credentialsService';
 import { useToast } from '../../features/shared/hooks/useToast';
@@ -17,8 +16,8 @@ export const FeaturesSection = () => {
   const [projectsEnabled, setProjectsEnabled] = useState(true);
   
   // Commented out for future release
-  const [agUILibraryEnabled, setAgUILibraryEnabled] = useState(false);
-  const [agentsEnabled, setAgentsEnabled] = useState(false);
+  //const [agUILibraryEnabled, setAgUILibraryEnabled] = useState(false);
+  //const [agentsEnabled, setAgentsEnabled] = useState(false);
   
   const [logfireEnabled, setLogfireEnabled] = useState(false);
   const [disconnectScreenEnabled, setDisconnectScreenEnabled] = useState(true);
@@ -39,7 +38,7 @@ export const FeaturesSection = () => {
       const [logfireResponse, projectsResponse, projectsHealthResponse, disconnectScreenRes] = await Promise.all([
         credentialsService.getCredential('LOGFIRE_ENABLED').catch(() => ({ value: undefined })),
         credentialsService.getCredential('PROJECTS_ENABLED').catch(() => ({ value: undefined })),
-        fetch(`${credentialsService['baseUrl']}/api/projects/health`).catch(() => null),
+        fetch(`${credentialsService['baseUrl']}/projects/health`).catch(() => null),
         credentialsService.getCredential('DISCONNECT_SCREEN_ENABLED').catch(() => ({ value: 'true' }))
       ]);
       
@@ -179,7 +178,7 @@ export const FeaturesSection = () => {
       setLoading(true);
       setDisconnectScreenEnabled(checked);
 
-      await serverHealthService.updateSettings(checked);
+      await serverHealthService.updateSettings({ enabled: checked });
 
       showToast(
         checked ? 'Disconnect Screen Enabled' : 'Disconnect Screen Disabled', 
