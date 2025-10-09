@@ -8,7 +8,7 @@ instead of direct database access or service imports.
 
 import json
 import logging
-from typing import Any
+from typing import Any, Optional
 
 import httpx
 
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class MCPClient:
     """Client for calling MCP tools via HTTP."""
 
-    def __init__(self, mcp_url: str = None):
+    def __init__(self, mcp_url: Optional[str] = None):
         """
         Initialize MCP client.
 
@@ -98,7 +98,7 @@ class MCPClient:
 
     # Convenience methods for common MCP tools
 
-    async def perform_rag_query(self, query: str, source: str = None, match_count: int = 5) -> str:
+    async def perform_rag_query(self, query: str, source: Optional[str] = None, match_count: int = 5) -> str:
         """Perform a RAG query through MCP."""
         result = await self.call_tool(
             "perform_rag_query", query=query, source=source, match_count=match_count
@@ -111,7 +111,7 @@ class MCPClient:
         return json.dumps(result) if isinstance(result, dict) else str(result)
 
     async def search_code_examples(
-        self, query: str, source_id: str = None, match_count: int = 5
+        self, query: str, source_id: Optional[str] = None, match_count: int = 5
     ) -> str:
         """Search code examples through MCP."""
         result = await self.call_tool(
