@@ -14,6 +14,7 @@ from typing import Any, Optional
 from ...config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
 from ...utils import get_supabase_client
 from ...utils.progress.progress_tracker import ProgressTracker
+from ..credential_service import credential_service
 
 # Import strategies
 # Import operations
@@ -32,22 +33,35 @@ logger = get_logger(__name__)
 
 # Global registry to track active orchestration services for cancellation support
 _active_orchestrations: dict[str, "CrawlingService"] = {}
+_orchestration_lock: asyncio.Lock | None = None
 
 
-def get_active_orchestration(progress_id: str) -> Optional["CrawlingService"]:
+def _ensure_orchestration_lock() -> asyncio.Lock:
+    global _orchestration_lock
+    if _orchestration_lock is None:
+        _orchestration_lock = asyncio.Lock()
+    return _orchestration_lock
+
+
+async def get_active_orchestration(progress_id: str) -> Optional["CrawlingService"]:
     """Get an active orchestration service by progress ID."""
-    return _active_orchestrations.get(progress_id)
+    lock = _ensure_orchestration_lock()
+    async with lock:
+        return _active_orchestrations.get(progress_id)
 
 
-def register_orchestration(progress_id: str, orchestration: "CrawlingService"):
+async def register_orchestration(progress_id: str, orchestration: "CrawlingService"):
     """Register an active orchestration service."""
-    _active_orchestrations[progress_id] = orchestration
+    lock = _ensure_orchestration_lock()
+    async with lock:
+        _active_orchestrations[progress_id] = orchestration
 
 
-def unregister_orchestration(progress_id: str):
+async def unregister_orchestration(progress_id: str):
     """Unregister an orchestration service."""
-    if progress_id in _active_orchestrations:
-        del _active_orchestrations[progress_id]
+    lock = _ensure_orchestration_lock()
+    async with lock:
+        _active_orchestrations.pop(progress_id, None)
 
 
 class CrawlingService:
@@ -246,7 +260,7 @@ class CrawlingService:
 
         # Register this orchestration service for cancellation support
         if self.progress_id:
-            register_orchestration(self.progress_id, self)
+            await register_orchestration(self.progress_id, self)
 
         # Start the crawl as an async task in the main event loop
         # Store the task reference for proper cancellation
@@ -477,14 +491,26 @@ class CrawlingService:
                 try:
                     # Extract provider from request or use credential service default
                     provider = request.get("provider")
+                    embedding_provider = None
+
                     if not provider:
                         try:
-                            from ..credential_service import credential_service
                             provider_config = await credential_service.get_active_provider("llm")
                             provider = provider_config.get("provider", "openai")
                         except Exception as e:
-                            logger.warning(f"Failed to get provider from credential service: {e}, defaulting to openai")
+                            logger.warning(
+                                f"Failed to get provider from credential service: {e}, defaulting to openai"
+                            )
                             provider = "openai"
+
+                    try:
+                        embedding_config = await credential_service.get_active_provider("embedding")
+                        embedding_provider = embedding_config.get("provider")
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to get embedding provider from credential service: {e}. Using configured default."
+                        )
+                        embedding_provider = None
 
                     code_examples_count = await self.doc_storage_ops.extract_and_store_code_examples(
                         crawl_results,
@@ -493,6 +519,7 @@ class CrawlingService:
                         code_progress_callback,
                         self._check_cancellation,
                         provider,
+                        embedding_provider,
                     )
                 except RuntimeError as e:
                     # Code extraction failed, continue crawl with warning
@@ -548,7 +575,7 @@ class CrawlingService:
 
             # Unregister after successful completion
             if self.progress_id:
-                unregister_orchestration(self.progress_id)
+                await unregister_orchestration(self.progress_id)
                 safe_logfire_info(
                     f"Unregistered orchestration service after completion | progress_id={self.progress_id}"
                 )
@@ -567,7 +594,7 @@ class CrawlingService:
             )
             # Unregister on cancellation
             if self.progress_id:
-                unregister_orchestration(self.progress_id)
+                await unregister_orchestration(self.progress_id)
                 safe_logfire_info(
                     f"Unregistered orchestration service on cancellation | progress_id={self.progress_id}"
                 )
@@ -591,7 +618,7 @@ class CrawlingService:
                 await self.progress_tracker.error(error_message)
             # Unregister on error
             if self.progress_id:
-                unregister_orchestration(self.progress_id)
+                await unregister_orchestration(self.progress_id)
                 safe_logfire_info(
                     f"Unregistered orchestration service on error | progress_id={self.progress_id}"
                 )

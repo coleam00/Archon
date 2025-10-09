@@ -5,15 +5,19 @@ Handles all OpenAI embedding operations with proper rate limiting and error hand
 """
 
 import asyncio
+import inspect
 import os
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
+import numpy as np
 import openai
 
 from ...config.logfire_config import safe_span, search_logger
 from ..credential_service import credential_service
-from ..llm_provider_service import get_embedding_model, get_llm_client, is_google_embedding_model, is_openai_embedding_model
+from ..llm_provider_service import get_embedding_model, get_llm_client
 from ..threading_service import get_threading_service
 from .embedding_exceptions import (
     EmbeddingAPIError,
@@ -63,6 +67,167 @@ class EmbeddingBatchResult:
     def total_requested(self) -> int:
         return self.success_count + self.failure_count
 
+
+class EmbeddingProviderAdapter(ABC):
+    """Adapter interface for embedding providers."""
+
+    @abstractmethod
+    async def create_embeddings(
+        self,
+        texts: list[str],
+        model: str,
+        dimensions: int | None = None,
+    ) -> list[list[float]]:
+        """Create embeddings for the given texts."""
+
+
+class OpenAICompatibleEmbeddingAdapter(EmbeddingProviderAdapter):
+    """Adapter for providers using the OpenAI embeddings API shape."""
+    
+    def __init__(self, client: Any):
+        self._client = client
+    
+    async def create_embeddings(
+        self,
+        texts: list[str],
+        model: str,
+        dimensions: int | None = None,
+    ) -> list[list[float]]:
+        request_args: dict[str, Any] = {
+            "model": model,
+            "input": texts,
+        }
+        if dimensions is not None:
+            request_args["dimensions"] = dimensions
+            
+        response = await self._client.embeddings.create(**request_args)
+        return [item.embedding for item in response.data]
+
+
+class GoogleEmbeddingAdapter(EmbeddingProviderAdapter):
+    """Adapter for Google's native embedding endpoint."""
+
+    async def create_embeddings(
+        self,
+        texts: list[str],
+        model: str,
+        dimensions: int | None = None,
+    ) -> list[list[float]]:
+        try:
+            google_api_key = await credential_service.get_credential("GOOGLE_API_KEY")
+            if not google_api_key:
+                raise EmbeddingAPIError("Google API key not found")
+
+            async with httpx.AsyncClient(timeout=30.0) as http_client:
+                embeddings = await asyncio.gather(
+                    *(
+                        self._fetch_single_embedding(http_client, google_api_key, model, text, dimensions)
+                        for text in texts
+                    )
+                )
+
+            return embeddings
+
+        except httpx.HTTPStatusError as error:
+            error_content = error.response.text
+            search_logger.error(
+                f"Google embedding API returned {error.response.status_code} - {error_content}",
+                exc_info=True,
+            )
+            raise EmbeddingAPIError(
+                f"Google embedding API error: {error.response.status_code} - {error_content}",
+                original_error=error,
+            ) from error
+        except Exception as error:
+            search_logger.error(f"Error calling Google embedding API: {error}", exc_info=True)
+            raise EmbeddingAPIError(
+                f"Google embedding error: {str(error)}", original_error=error
+            ) from error
+
+    async def _fetch_single_embedding(
+        self,
+        http_client: httpx.AsyncClient,
+        api_key: str,
+        model: str,
+        text: str,
+        dimensions: int | None = None,
+    ) -> list[float]:
+        if model.startswith("models/"):
+            url_model = model[len("models/") :]
+            payload_model = model
+        else:
+            url_model = model
+            payload_model = f"models/{model}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{url_model}:embedContent"
+        headers = {
+            "x-goog-api-key": api_key,
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": payload_model,
+            "content": {"parts": [{"text": text}]},
+        }
+
+        # Add output_dimensionality parameter if dimensions are specified and supported
+        if dimensions is not None and dimensions > 0:
+            model_name = payload_model.removeprefix("models/")
+            if model_name.startswith("textembedding-gecko"):
+                supported_dimensions = {128, 256, 512, 768}
+            else:
+                supported_dimensions = {128, 256, 512, 768, 1024, 1536, 2048, 3072}
+
+            if dimensions in supported_dimensions:
+                payload["outputDimensionality"] = dimensions
+            else:
+                search_logger.warning(
+                    f"Requested dimension {dimensions} is not supported by Google model '{model_name}'. "
+                    "Falling back to the provider default."
+                )
+
+        response = await http_client.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+
+        result = response.json()
+        embedding = result.get("embedding", {})
+        values = embedding.get("values") if isinstance(embedding, dict) else None
+        if not isinstance(values, list):
+            raise EmbeddingAPIError(f"Invalid embedding payload from Google: {result}")
+
+        # Normalize embeddings for dimensions < 3072 as per Google's documentation
+        actual_dimension = len(values)
+        if actual_dimension > 0 and actual_dimension < 3072:
+            values = self._normalize_embedding(values)
+
+        return values
+
+    def _normalize_embedding(self, embedding: list[float]) -> list[float]:
+        """Normalize embedding vector for dimensions < 3072."""
+        try:
+            embedding_array = np.array(embedding, dtype=np.float32)
+            norm = np.linalg.norm(embedding_array)
+            if norm > 0:
+                normalized = embedding_array / norm
+                return normalized.tolist()
+            else:
+                search_logger.warning("Zero-norm embedding detected, returning unnormalized")
+                return embedding
+        except Exception as e:
+            search_logger.error(f"Failed to normalize embedding: {e}")
+            # Return original embedding if normalization fails
+            return embedding
+
+
+def _get_embedding_adapter(provider: str, client: Any) -> EmbeddingProviderAdapter:
+    provider_name = (provider or "").lower()
+    if provider_name == "google":
+        return GoogleEmbeddingAdapter()
+    return OpenAICompatibleEmbeddingAdapter(client)
+
+
+async def _maybe_await(value: Any) -> Any:
+    """Await the value if it is awaitable, otherwise return as-is."""
+
+    return await value if inspect.isawaitable(value) else value
 
 # Provider-aware client factory
 get_openai_client = get_llm_client
@@ -185,27 +350,25 @@ async def create_embeddings_batch(
         "create_embeddings_batch", text_count=len(texts), total_chars=sum(len(t) for t in texts)
     ) as span:
         try:
-            # Intelligent embedding provider routing based on model type
-            # Get the embedding model first to determine the correct provider
-            embedding_model = await get_embedding_model(provider=provider)
+            embedding_config = await _maybe_await(
+                credential_service.get_active_provider(service_type="embedding")
+            )
 
-            # Route to correct provider based on model type
-            if is_google_embedding_model(embedding_model):
-                embedding_provider = "google"
-                search_logger.info(f"Routing to Google for embedding model: {embedding_model}")
-            elif is_openai_embedding_model(embedding_model) or "openai/" in embedding_model.lower():
+            embedding_provider = provider or embedding_config.get("provider")
+
+            if not isinstance(embedding_provider, str) or not embedding_provider.strip():
                 embedding_provider = "openai"
-                search_logger.info(f"Routing to OpenAI for embedding model: {embedding_model}")
-            else:
-                # Keep original provider for ollama and other providers
-                embedding_provider = provider
-                search_logger.info(f"Using original provider '{provider}' for embedding model: {embedding_model}")
 
+            if not embedding_provider:
+                search_logger.error("No embedding provider configured")
+                raise ValueError("No embedding provider configured. Please set EMBEDDING_PROVIDER environment variable.")
+
+            search_logger.info(f"Using embedding provider: '{embedding_provider}' (from EMBEDDING_PROVIDER setting)")
             async with get_llm_client(provider=embedding_provider, use_embedding_provider=True) as client:
                 # Load batch size and dimensions from settings
                 try:
-                    rag_settings = await credential_service.get_credentials_by_category(
-                        "rag_strategy"
+                    rag_settings = await _maybe_await(
+                        credential_service.get_credentials_by_category("rag_strategy")
                     )
                     batch_size = int(rag_settings.get("EMBEDDING_BATCH_SIZE", "100"))
                     embedding_dimensions = int(rag_settings.get("EMBEDDING_DIMENSIONS", "1536"))
@@ -215,6 +378,8 @@ async def create_embeddings_batch(
                     embedding_dimensions = 1536
 
                 total_tokens_used = 0
+                adapter = _get_embedding_adapter(embedding_provider, client)
+                dimensions_to_use = embedding_dimensions if embedding_dimensions > 0 else None
 
                 for i in range(0, len(texts), batch_size):
                     batch = texts[i : i + batch_size]
@@ -243,16 +408,14 @@ async def create_embeddings_batch(
                                 try:
                                     # Create embeddings for this batch
                                     embedding_model = await get_embedding_model(provider=embedding_provider)
-
-                                    response = await client.embeddings.create(
-                                        model=embedding_model,
-                                        input=batch,
-                                        dimensions=embedding_dimensions,
+                                    embeddings = await adapter.create_embeddings(
+                                        batch,
+                                        embedding_model,
+                                        dimensions=dimensions_to_use,
                                     )
 
-                                    # Add successful embeddings
-                                    for text, item in zip(batch, response.data, strict=False):
-                                        result.add_success(item.embedding, text)
+                                    for text, vector in zip(batch, embeddings, strict=False):
+                                        result.add_success(vector, text)
 
                                     break  # Success, exit retry loop
 
@@ -297,6 +460,17 @@ async def create_embeddings_batch(
                                             await asyncio.sleep(wait_time)
                                         else:
                                             raise  # Will be caught by outer try
+                                except EmbeddingRateLimitError as e:
+                                    retry_count += 1
+                                    if retry_count < max_retries:
+                                        wait_time = 2**retry_count
+                                        search_logger.warning(
+                                            f"Embedding rate limit for batch {batch_index}: {e}. "
+                                            f"Waiting {wait_time}s before retry {retry_count}/{max_retries}"
+                                        )
+                                        await asyncio.sleep(wait_time)
+                                    else:
+                                        raise
 
                     except Exception as e:
                         # This batch failed - track failures but continue with next batch
