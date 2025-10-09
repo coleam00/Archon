@@ -223,8 +223,8 @@ CREATE TABLE IF NOT EXISTS archon_crawled_pages (
     -- Add a unique constraint to prevent duplicate chunks for the same URL
     UNIQUE(url, chunk_number),
 
-    -- Add foreign key constraint to sources table
-    FOREIGN KEY (source_id) REFERENCES archon_sources(source_id)
+    -- Add foreign key constraint to sources table with CASCADE DELETE
+    FOREIGN KEY (source_id) REFERENCES archon_sources(source_id) ON DELETE CASCADE
 );
 
 -- Multi-dimensional indexes
@@ -272,8 +272,8 @@ CREATE TABLE IF NOT EXISTS archon_code_examples (
     -- Add a unique constraint to prevent duplicate chunks for the same URL
     UNIQUE(url, chunk_number),
 
-    -- Add foreign key constraint to sources table
-    FOREIGN KEY (source_id) REFERENCES archon_sources(source_id)
+    -- Add foreign key constraint to sources table with CASCADE DELETE
+    FOREIGN KEY (source_id) REFERENCES archon_sources(source_id) ON DELETE CASCADE
 );
 
 -- Multi-dimensional indexes
@@ -990,7 +990,8 @@ VALUES
   ('0.1.0', '005_ollama_create_functions'),
   ('0.1.0', '006_ollama_create_indexes_optional'),
   ('0.1.0', '007_add_priority_column_to_tasks'),
-  ('0.1.0', '008_add_migration_tracking')
+  ('0.1.0', '008_add_migration_tracking'),
+  ('0.1.0', '009_add_cascade_delete_constraints')
 ON CONFLICT (version, migration_name) DO NOTHING;
 
 -- Enable Row Level Security on migrations table
