@@ -34,11 +34,14 @@ function buildFullUrl(cleanEndpoint: string): string {
 }
 
 /**
- * Simple API call function for JSON APIs
+ * Simple API call function for JSON APIs and FormData uploads
  * Browser automatically handles ETags/304s through its HTTP cache
  *
- * NOTE: This wrapper is designed for JSON-only API calls.
- * For file uploads or FormData requests, use fetch() directly.
+ * Features:
+ * - Automatic FormData detection (avoids setting Content-Type header)
+ * - JSON API support with proper Content-Type headers
+ * - Built-in timeout and error handling
+ * - ETag/304 optimization through browser HTTP cache
  */
 export async function callAPIWithETag<T = unknown>(endpoint: string, options: RequestInit = {}): Promise<T> {
   try {
@@ -48,23 +51,30 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
     // Construct the full URL
     const fullUrl = buildFullUrl(cleanEndpoint);
 
-    // Build headers - only set Content-Type for requests with a body
-    // NOTE: We do NOT add If-None-Match headers; the browser handles ETag revalidation automatically
-    //
-    // Currently assumes headers are passed as plain objects (Record<string, string>)
-    // which works for all our current usage. The API doesn't require Accept headers
-    // since it always returns JSON, and we only set Content-Type when sending data.
-    const headers: Record<string, string> = {
-      ...((options.headers as Record<string, string>) || {}),
-    };
+    // Detect FormData to avoid setting Content-Type (browser sets multipart/form-data with boundary)
+    // Guard against environments where FormData is undefined (Node.js, Jest, iframes)
+    const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
 
-    // Only set Content-Type for requests that have a body (POST, PUT, PATCH, etc.)
-    // GET and DELETE requests should not have Content-Type header
-    const method = options.method?.toUpperCase() || 'GET';
-    const hasBody = options.body !== undefined && options.body !== null;
-    if (hasBody && !headers['Content-Type']) {
-      headers['Content-Type'] = 'application/json';
+    // Build headers - normalize and handle Content-Type properly for FormData
+    // NOTE: We do NOT add If-None-Match headers; the browser handles ETag revalidation automatically
+    // Normalize headers to support Headers instances, [string, string][] tuples, and plain objects
+    const headersObj = new Headers(options.headers as HeadersInit | undefined);
+
+    // Only set Accept header if not already provided by caller (preserves caller-provided Accept headers)
+    if (!headersObj.has("Accept")) {
+      headersObj.set("Accept", "application/json");
     }
+
+    if (isFormData) {
+      // For FormData, remove any Content-Type header to let browser set multipart/form-data with boundary
+      headersObj.delete("Content-Type");
+    } else if (!headersObj.has("Content-Type") && options.body != null) {
+      // Only set Content-Type if not already provided and body is present
+      headersObj.set("Content-Type", "application/json");
+    }
+
+    // Preserve Headers instance instead of converting to Record
+    const headers = headersObj;
 
     // Make the request with timeout
     // NOTE: Increased to 20s due to database performance issues with large DELETE operations
@@ -104,15 +114,32 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
       return undefined as T;
     }
 
-    // Parse response data
-    const result = await response.json();
-
-    // Check for API errors
-    if (result.error) {
-      throw new APIServiceError(result.error, "API_ERROR", response.status);
+    // Check content type before parsing as JSON
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    if (contentType.includes("application/json") || contentType.includes("+json")) {
+      // Parse JSON response
+      const result = await response.json();
+      if (result && typeof result === "object" && "error" in result && result.error) {
+        throw new APIServiceError(result.error as string, "API_ERROR", response.status);
+      }
+      return result as T;
     }
 
-    return result as T;
+    // Handle binary responses (PDFs, images, octet-stream)
+    if (
+      contentType.includes("application/octet-stream") ||
+      contentType.includes("application/pdf") ||
+      contentType.startsWith("image/") ||
+      contentType.includes("video/") ||
+      contentType.includes("audio/")
+    ) {
+      const blob = await response.blob();
+      return blob as unknown as T;
+    }
+
+    // Handle non-JSON or empty body responses
+    const text = await response.text().catch(() => "");
+    return text ? (text as unknown as T) : (undefined as T);
   } catch (error) {
     if (error instanceof APIServiceError) {
       throw error;

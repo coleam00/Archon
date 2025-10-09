@@ -56,7 +56,8 @@ describe("apiClient (callAPIWithETag)", () => {
         expect.stringContaining("/test-endpoint"),
         expect.objectContaining({
           headers: expect.objectContaining({
-            "Content-Type": "application/json",
+            "content-type": "application/json",
+            "accept": "application/json",
           }),
         }),
       );
@@ -168,9 +169,10 @@ describe("apiClient (callAPIWithETag)", () => {
         expect.any(String),
         expect.objectContaining({
           headers: expect.objectContaining({
-            "Content-Type": "application/json",
-            Authorization: "Bearer token123",
-            "Custom-Header": "custom-value",
+            "content-type": "application/json",
+            "accept": "application/json",
+            "authorization": "Bearer token123",
+            "custom-header": "custom-value",
           }),
         }),
       );
@@ -407,6 +409,192 @@ describe("apiClient (callAPIWithETag)", () => {
 
       // No special handling needed - it just works
       expect(result2.version).toBeGreaterThan(result1.version);
+    });
+  });
+
+  describe("FormData Support", () => {
+    it("should detect FormData and omit Content-Type header", async () => {
+      const mockData = { success: true, fileId: "123" };
+      const mockResponse = {
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(mockData),
+        headers: new Headers(),
+      };
+
+      global.fetch = vi.fn().mockResolvedValue(mockResponse);
+
+      const formData = new FormData();
+      formData.append("file", new File(["test content"], "test.txt", { type: "text/plain" }));
+      formData.append("metadata", "test metadata");
+
+      const result = await callAPIWithETag("/api/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      expect(result).toEqual(mockData);
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/upload"),
+        expect.objectContaining({
+          method: "POST",
+          body: formData,
+          headers: expect.objectContaining({
+            "accept": "application/json",
+            // Content-Type should NOT be present for FormData
+          }),
+        }),
+      );
+
+      // Verify Content-Type is NOT set (browser sets multipart/form-data with boundary)
+      const [, options] = (global.fetch as any).mock.calls[0];
+      expect(options.headers).not.toHaveProperty("content-type");
+    });
+
+    it("should still set Content-Type for JSON requests", async () => {
+      const mockData = { success: true };
+      const mockResponse = {
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(mockData),
+        headers: new Headers(),
+      };
+
+      global.fetch = vi.fn().mockResolvedValue(mockResponse);
+
+      const jsonPayload = { name: "test", type: "document" };
+
+      const result = await callAPIWithETag("/api/create", {
+        method: "POST",
+        body: JSON.stringify(jsonPayload),
+      });
+
+      expect(result).toEqual(mockData);
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/create"),
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            "content-type": "application/json",
+            "accept": "application/json",
+          }),
+        }),
+      );
+    });
+
+    it("should handle FormData upload errors properly", async () => {
+      const errorResponse = {
+        ok: false,
+        status: 413,
+        text: () => Promise.resolve(JSON.stringify({ detail: "File too large" })),
+        headers: new Headers(),
+      };
+
+      global.fetch = vi.fn().mockResolvedValue(errorResponse);
+
+      const formData = new FormData();
+      formData.append("file", new File(["large file content"], "large.txt"));
+
+      await expect(callAPIWithETag("/api/upload", {
+        method: "POST",
+        body: formData,
+      })).rejects.toThrow("File too large");
+    });
+
+    it("should preserve custom headers with FormData", async () => {
+      const mockData = { uploaded: true };
+      const mockResponse = {
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(mockData),
+        headers: new Headers(),
+      };
+
+      global.fetch = vi.fn().mockResolvedValue(mockResponse);
+
+      const formData = new FormData();
+      formData.append("file", new File(["test"], "test.txt"));
+
+      await callAPIWithETag("/api/upload", {
+        method: "POST",
+        body: formData,
+        headers: {
+          Authorization: "Bearer token123",
+          "X-Custom-Header": "custom-value",
+        },
+      });
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            "accept": "application/json",
+            "authorization": "Bearer token123",
+            "x-custom-header": "custom-value",
+            // Content-Type should NOT be present
+          }),
+        }),
+      );
+
+      const [, options] = (global.fetch as any).mock.calls[0];
+      expect(options.headers).not.toHaveProperty("Content-Type");
+    });
+
+    it("should work with binary files in FormData", async () => {
+      const mockData = { fileId: "binary-123", type: "image" };
+      const mockResponse = {
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(mockData),
+        headers: new Headers(),
+      };
+
+      global.fetch = vi.fn().mockResolvedValue(mockResponse);
+
+      // Create a mock binary file
+      const binaryData = new Uint8Array([0x89, 0x50, 0x4E, 0x47]); // PNG header
+      const binaryFile = new File([binaryData], "image.png", { type: "image/png" });
+
+      const formData = new FormData();
+      formData.append("image", binaryFile);
+      formData.append("description", "Test image upload");
+
+      const result = await callAPIWithETag("/api/images/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      expect(result).toEqual(mockData);
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/images/upload"),
+        expect.objectContaining({
+          body: formData,
+          headers: expect.not.objectContaining({
+            "Content-Type": expect.any(String),
+          }),
+        }),
+      );
+    });
+
+    it("should remove user-provided Content-Type for FormData", async () => {
+      const mockResponse = {
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ ok: true }),
+        headers: new Headers(),
+      };
+      global.fetch = vi.fn().mockResolvedValue(mockResponse);
+
+      const fd = new FormData();
+      fd.append("file", new File(["x"], "x.txt"));
+
+      await callAPIWithETag("/api/upload", {
+        method: "POST",
+        body: fd,
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+
+      const [, options] = (global.fetch as any).mock.calls[0];
+      expect(options.headers).not.toHaveProperty("content-type");
     });
   });
 });
