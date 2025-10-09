@@ -155,22 +155,37 @@ gh release create v1.0.0 --title "Release v1.0.0" --notes-file release-notes-ori
 
 ## Setup Instructions
 
-### 1. Create Anthropic API Key
+### 1. Get Claude Code OAuth Token
 
-1. Go to [Anthropic Console](https://console.anthropic.com/)
-2. Create a new API key
-3. Copy the key (starts with `sk-ant-...`)
+The GitHub Action uses Claude Code OAuth token (same as the `claude-review` workflow):
+
+1. Go to [Claude Code OAuth Setup](https://docs.anthropic.com/claude-code/oauth)
+2. Follow the instructions to get your OAuth token
+3. Copy the token
 
 ### 2. Add GitHub Secret
 
 1. Go to your repository's Settings
 2. Navigate to **Secrets and variables** → **Actions**
 3. Click **New repository secret**
-4. Name: `ANTHROPIC_API_KEY`
-5. Value: Paste your Anthropic API key
+4. Name: `CLAUDE_CODE_OAUTH_TOKEN`
+5. Value: Paste your Claude Code OAuth token
 6. Click **Add secret**
 
-### 3. Test the Workflow
+> **Note:** If you already have `CLAUDE_CODE_OAUTH_TOKEN` set up for `claude-review` workflow, you're all set! The same token is used for both workflows.
+
+### 3. (Optional) Get Anthropic API Key for Local Testing
+
+For local testing, you'll need an API key:
+
+1. Go to [Anthropic Console](https://console.anthropic.com/)
+2. Create a new API key
+3. Copy the key (starts with `sk-ant-...`)
+4. Export it: `export ANTHROPIC_API_KEY="sk-ant-..."`
+
+> **Note:** The GitHub Action uses OAuth token, but local testing uses API key for simplicity.
+
+### 4. Test the Workflow
 
 #### Option A: Create a Release via GitHub UI
 
@@ -326,13 +341,36 @@ Increase `max_tokens` for longer release notes:
 - Anthropic has generous rate limits for API keys
 - For very frequent releases, consider caching or batching
 
+## Authentication: GitHub Action vs Local Testing
+
+### GitHub Action (Claude Code OAuth)
+- Uses `CLAUDE_CODE_OAUTH_TOKEN` secret
+- Same authentication as `claude-review` workflow
+- Integrated with GitHub through Claude Code Action
+- No direct API costs (usage included with Claude Code)
+
+### Local Testing (API Key)
+- Uses `ANTHROPIC_API_KEY` environment variable
+- Direct API calls to Claude
+- Simpler for local testing and debugging
+- Cost: ~$0.003 per release (less than a penny)
+
+### Why Two Methods?
+
+- **GitHub Action**: Uses Claude Code Action for better GitHub integration and consistency with other workflows
+- **Local Testing**: Uses direct API for simplicity and faster iteration during development
+
 ## Cost Estimation
 
+### Local Testing (API Key)
 Claude API pricing (as of 2025):
 - Sonnet 4: ~$0.003 per release (assuming ~4K tokens)
 - Each release generation costs less than a penny
+- For a project with monthly releases: ~$0.036/year
 
-For a project with monthly releases: ~$0.036/year
+### GitHub Action (OAuth Token)
+- No additional costs beyond your Claude Code subscription
+- Usage included in Claude Code plan
 
 ## Best Practices
 

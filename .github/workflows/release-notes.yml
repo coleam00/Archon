@@ -16,6 +16,7 @@ on:
 permissions:
   contents: write
   pull-requests: read
+  id-token: write # Required for OIDC authentication
 
 jobs:
   generate-release-notes:
@@ -113,18 +114,14 @@ jobs:
               '.[] | select(.mergedAt >= $date) | "- #\(.number): \(.title) by @\(.author.login) - \(.url)"' \
             > prs.txt || echo "No PRs found" > prs.txt
 
-      - name: Generate release notes with Claude
-        id: claude
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      - name: Prepare release notes context
+        id: context
         run: |
-          # Read all gathered information
-          COMMITS=$(cat commits.txt)
-          FILE_CHANGES=$(cat changes.txt)
-          PRS=$(cat prs.txt)
+          # Create a context file with all the information
+          cat > release-context.md <<'EOF'
+          # Release Notes Generation Task
 
-          # Build the prompt content
-          PROMPT_CONTENT="You are writing release notes for Archon V2 Beta, a local-first AI knowledge management system.
+          You are writing release notes for Archon V2 Beta, a local-first AI knowledge management system.
 
           ## Release Information
 
@@ -135,21 +132,27 @@ jobs:
 
           ## Commits
 
-          \`\`\`
-          ${COMMITS}
-          \`\`\`
+          ```
+          EOF
+          cat commits.txt >> release-context.md
+          cat >> release-context.md <<'EOF'
+          ```
 
           ## Pull Requests Merged
 
-          \`\`\`
-          ${PRS}
-          \`\`\`
+          ```
+          EOF
+          cat prs.txt >> release-context.md
+          cat >> release-context.md <<'EOF'
+          ```
 
           ## File Changes
 
-          \`\`\`
-          ${FILE_CHANGES}
-          \`\`\`
+          ```
+          EOF
+          cat changes.txt >> release-context.md
+          cat >> release-context.md <<'EOF'
+          ```
 
           ## Instructions
 
@@ -212,49 +215,51 @@ jobs:
 
           ---
 
-          Write in a professional yet enthusiastic tone. Focus on user-facing changes. Be specific but concise."
+          Write in a professional yet enthusiastic tone. Focus on user-facing changes. Be specific but concise.
 
-          # Create the request using jq to properly escape JSON
-          jq -n \
-            --arg model "claude-sonnet-4-20250514" \
-            --arg content "$PROMPT_CONTENT" \
-            '{
-              model: $model,
-              max_tokens: 4096,
-              temperature: 0.7,
-              messages: [
-                {
-                  role: "user",
-                  content: $content
-                }
-              ]
-            }' > request.json
+          IMPORTANT: Output ONLY the release notes in markdown format. Do not include any preamble, explanation, or commentary - just the release notes themselves starting with the header.
+          EOF
 
-          # Call Claude API
-          RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
-            -H "Content-Type: application/json" \
-            -H "x-api-key: $ANTHROPIC_API_KEY" \
-            -H "anthropic-version: 2023-06-01" \
-            -d @request.json)
+      - name: Generate release notes with Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@beta
+        timeout-minutes: 10
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
-          # Extract release notes from response
-          echo "$RESPONSE" | jq -r '.content[0].text' > release_notes.md
+          custom_instructions: |
+            Read the file release-context.md which contains all the information about this release.
 
-          # Check if generation was successful
-          if [ ! -s release_notes.md ] || grep -q "error" release_notes.md; then
-            echo "❌ Failed to generate release notes"
-            echo "Response: $RESPONSE"
+            Generate comprehensive release notes following the structure and instructions in that file.
+
+            Output ONLY the release notes in markdown format - no preamble, no commentary, just the release notes.
+
+            Write to a file called release_notes.md with the generated release notes.
+
+      - name: Verify release notes were generated
+        run: |
+          if [ ! -f release_notes.md ]; then
+            echo "❌ release_notes.md was not created"
+            echo "Checking for any .md files in current directory:"
+            ls -la *.md || echo "No .md files found"
+            exit 1
+          fi
+
+          if [ ! -s release_notes.md ]; then
+            echo "❌ release_notes.md is empty"
             exit 1
           fi
 
           echo "✅ Release notes generated successfully"
+          echo ""
+          echo "Preview (first 50 lines):"
+          head -50 release_notes.md
 
       - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ steps.get_tag.outputs.tag }}"
-          NOTES=$(cat release_notes.md)
 
           # Check if release already exists
           if gh release view "$TAG" &>/dev/null; then
@@ -311,4 +316,8 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## Generated Release Notes" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          cat release_notes.md >> $GITHUB_STEP_SUMMARY
+          if [ -f release_notes.md ]; then
+            cat release_notes.md >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Release notes file not found" >> $GITHUB_STEP_SUMMARY
+          fi
