@@ -8,7 +8,9 @@ import { APIServiceError } from "../../shared/types/errors";
 import type {
   ChunksResponse,
   CodeExamplesResponse,
+  CrawlConfig,
   CrawlRequest,
+  CrawlRequestV2,
   CrawlStartResponse,
   KnowledgeItem,
   KnowledgeItemsFilter,
@@ -82,6 +84,18 @@ export const knowledgeService = {
    */
   async crawlUrl(request: CrawlRequest): Promise<CrawlStartResponse> {
     const response = await callAPIWithETag<CrawlStartResponse>("/api/knowledge-items/crawl", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+
+    return response;
+  },
+
+  /**
+   * Start crawling a URL with domain filtering (v2)
+   */
+  async crawlUrlV2(request: CrawlRequestV2): Promise<CrawlStartResponse> {
+    const response = await callAPIWithETag<CrawlStartResponse>("/api/knowledge-items/crawl-v2", {
       method: "POST",
       body: JSON.stringify(request),
     });
@@ -216,5 +230,27 @@ export const knowledgeService = {
    */
   async getKnowledgeSources(): Promise<KnowledgeSource[]> {
     return callAPIWithETag<KnowledgeSource[]>("/api/knowledge-items/sources");
+  },
+
+  /**
+   * Update crawler configuration for an existing knowledge item
+   * This will trigger a recrawl with the new configuration
+   */
+  async updateCrawlConfig(request: {
+    sourceId: string;
+    url: string;
+    knowledge_type: "technical" | "business";
+    max_depth: number;
+    tags?: string[];
+    crawl_config?: CrawlConfig;
+  }): Promise<CrawlStartResponse> {
+    const { sourceId, ...crawlData } = request;
+
+    const response = await callAPIWithETag<CrawlStartResponse>(`/api/knowledge-items/${sourceId}/update-config`, {
+      method: "POST",
+      body: JSON.stringify(crawlData),
+    });
+
+    return response;
   },
 };

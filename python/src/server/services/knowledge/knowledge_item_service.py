@@ -375,6 +375,11 @@ class KnowledgeItemService:
             "url": first_page_url,
             "source_id": source_id,
             "code_examples": code_examples,
+            # Include important fields at top level for easy access
+            "knowledge_type": source_metadata.get("knowledge_type", "technical"),
+            "max_depth": source_metadata.get("max_depth"),
+            "tags": source_metadata.get("tags", []),
+            "crawl_config": source_metadata.get("crawl_config"),
             "metadata": {
                 # Spread source_metadata first, then override with computed values
                 **source_metadata,

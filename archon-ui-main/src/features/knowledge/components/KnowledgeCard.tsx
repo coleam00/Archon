@@ -18,6 +18,7 @@ import { SimpleTooltip } from "../../ui/primitives/tooltip";
 import { useDeleteKnowledgeItem, useRefreshKnowledgeItem } from "../hooks";
 import type { KnowledgeItem } from "../types";
 import { extractDomain } from "../utils/knowledge-utils";
+import { EditCrawlConfigDialog } from "./EditCrawlConfigDialog";
 import { KnowledgeCardActions } from "./KnowledgeCardActions";
 import { KnowledgeCardTags } from "./KnowledgeCardTags";
 import { KnowledgeCardTitle } from "./KnowledgeCardTitle";
@@ -43,6 +44,7 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
   onRefreshStarted,
 }) => {
   const [isHovered, setIsHovered] = useState(false);
+  const [showEditConfigDialog, setShowEditConfigDialog] = useState(false);
   const deleteMutation = useDeleteKnowledgeItem();
   const refreshMutation = useRefreshKnowledgeItem();
 
@@ -222,6 +224,7 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
                 hasCodeExamples={codeExamplesCount > 0}
                 onViewDocuments={onViewDocument}
                 onViewCodeExamples={codeExamplesCount > 0 ? onViewCodeExamples : undefined}
+                onEditConfig={isUrl ? () => setShowEditConfigDialog(true) : undefined}
                 onRefresh={isUrl ? handleRefresh : undefined}
                 onDelete={handleDelete}
                 onExport={onExport}
@@ -344,6 +347,19 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Edit Configuration Dialog */}
+      <EditCrawlConfigDialog
+        sourceId={item.source_id}
+        open={showEditConfigDialog}
+        onOpenChange={setShowEditConfigDialog}
+        onSuccess={() => {
+          // The refresh will be handled by the update itself
+          if (onRefreshStarted) {
+            // We'll get the progressId from the update response
+          }
+        }}
+      />
     </motion.div>
   );
 };

@@ -4,7 +4,7 @@
  * Following the pattern from ProjectCardActions
  */
 
-import { Code, Download, Eye, MoreHorizontal, RefreshCw, Trash2 } from "lucide-react";
+import { Code, Download, Edit, Eye, MoreHorizontal, RefreshCw, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { DeleteConfirmModal } from "../../ui/components/DeleteConfirmModal";
 import { Button } from "../../ui/primitives/button";
@@ -24,6 +24,7 @@ interface KnowledgeCardActionsProps {
   hasCodeExamples: boolean;
   onViewDocuments: () => void;
   onViewCodeExamples?: () => void;
+  onEditConfig?: () => void;
   onRefresh?: () => Promise<void>;
   onDelete?: () => Promise<void>;
   onExport?: () => void;
@@ -36,6 +37,7 @@ export const KnowledgeCardActions: React.FC<KnowledgeCardActionsProps> = ({
   hasCodeExamples,
   onViewDocuments,
   onViewCodeExamples,
+  onEditConfig,
   onRefresh,
   onDelete,
   onExport,
@@ -91,6 +93,11 @@ export const KnowledgeCardActions: React.FC<KnowledgeCardActionsProps> = ({
     onExport?.();
   };
 
+  const handleEditConfig = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onEditConfig?.();
+  };
+
   return (
     <>
       <DropdownMenu>
@@ -121,6 +128,16 @@ export const KnowledgeCardActions: React.FC<KnowledgeCardActionsProps> = ({
               <Code className="w-4 h-4 mr-2" />
               View Code Examples
             </DropdownMenuItem>
+          )}
+
+          {isUrl && onEditConfig && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={handleEditConfig}>
+                <Edit className="w-4 h-4 mr-2" />
+                Edit Configuration
+              </DropdownMenuItem>
+            </>
           )}
 
           {isUrl && onRefresh && (

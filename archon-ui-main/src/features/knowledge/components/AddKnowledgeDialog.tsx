@@ -10,8 +10,9 @@ import { Button, Input, Label } from "../../ui/primitives";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/primitives/dialog";
 import { cn } from "../../ui/primitives/styles";
 import { Tabs, TabsContent } from "../../ui/primitives/tabs";
-import { useCrawlUrl, useUploadDocument } from "../hooks";
-import type { CrawlRequest, UploadMetadata } from "../types";
+import { useCrawlUrl, useCrawlUrlV2, useUploadDocument } from "../hooks";
+import type { CrawlConfig, CrawlRequest, CrawlRequestV2, UploadMetadata } from "../types";
+import { AdvancedCrawlConfig } from "./AdvancedCrawlConfig";
 import { KnowledgeTypeSelector } from "./KnowledgeTypeSelector";
 import { LevelSelector } from "./LevelSelector";
 import { TagInput } from "./TagInput";
@@ -32,6 +33,7 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
   const [activeTab, setActiveTab] = useState<"crawl" | "upload">("crawl");
   const { showToast } = useToast();
   const crawlMutation = useCrawlUrl();
+  const crawlV2Mutation = useCrawlUrlV2();
   const uploadMutation = useUploadDocument();
 
   // Generate unique IDs for form elements
@@ -43,6 +45,7 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
   const [crawlType, setCrawlType] = useState<"technical" | "business">("technical");
   const [maxDepth, setMaxDepth] = useState("2");
   const [tags, setTags] = useState<string[]>([]);
+  const [crawlConfig, setCrawlConfig] = useState<CrawlConfig>({});
 
   // Upload form state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -54,6 +57,7 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
     setCrawlType("technical");
     setMaxDepth("2");
     setTags([]);
+    setCrawlConfig({});
     setSelectedFile(null);
     setUploadType("technical");
     setUploadTags([]);
@@ -66,21 +70,42 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
     }
 
     try {
-      const request: CrawlRequest = {
-        url: crawlUrl,
-        knowledge_type: crawlType,
-        max_depth: parseInt(maxDepth, 10),
-        tags: tags.length > 0 ? tags : undefined,
-      };
+      // Check if we have any domain filtering configuration
+      const hasCrawlConfig =
+        (crawlConfig.allowed_domains && crawlConfig.allowed_domains.length > 0) ||
+        (crawlConfig.excluded_domains && crawlConfig.excluded_domains.length > 0) ||
+        (crawlConfig.include_patterns && crawlConfig.include_patterns.length > 0) ||
+        (crawlConfig.exclude_patterns && crawlConfig.exclude_patterns.length > 0);
 
-      const response = await crawlMutation.mutateAsync(request);
+      let response;
+
+      if (hasCrawlConfig) {
+        // Use v2 endpoint with domain filtering
+        const requestV2: CrawlRequestV2 = {
+          url: crawlUrl,
+          knowledge_type: crawlType,
+          max_depth: parseInt(maxDepth, 10),
+          tags: tags.length > 0 ? tags : undefined,
+          crawl_config: crawlConfig,
+        };
+        response = await crawlV2Mutation.mutateAsync(requestV2);
+      } else {
+        // Use regular endpoint
+        const request: CrawlRequest = {
+          url: crawlUrl,
+          knowledge_type: crawlType,
+          max_depth: parseInt(maxDepth, 10),
+          tags: tags.length > 0 ? tags : undefined,
+        };
+        response = await crawlMutation.mutateAsync(request);
+      }
 
       // Notify parent about the new crawl operation
       if (response?.progressId && onCrawlStarted) {
         onCrawlStarted(response.progressId);
       }
 
-      showToast("Crawl started successfully", "success");
+      showToast(hasCrawlConfig ? "Crawl started with domain filtering" : "Crawl started successfully", "success");
       resetForm();
       onSuccess();
       onOpenChange(false);
@@ -123,19 +148,19 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
     }
   };
 
-  const isProcessing = crawlMutation.isPending || uploadMutation.isPending;
+  const isProcessing = crawlMutation.isPending || crawlV2Mutation.isPending || uploadMutation.isPending;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[600px]">
-        <DialogHeader>
+      <DialogContent className="sm:max-w-[600px]" style={{ maxHeight: "85vh", display: "flex", flexDirection: "column" }}>
+        <DialogHeader className="flex-shrink-0">
           <DialogTitle>Add Knowledge</DialogTitle>
           <DialogDescription>Crawl websites or upload documents to expand your knowledge base.</DialogDescription>
         </DialogHeader>
 
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "crawl" | "upload")}>
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "crawl" | "upload")} className="flex-1 flex flex-col min-h-0">
           {/* Enhanced Tab Buttons */}
-          <div className="grid grid-cols-2 gap-3 p-2 rounded-xl backdrop-blur-md bg-gradient-to-b from-gray-100/30 via-gray-50/20 to-white/40 dark:from-gray-900/30 dark:via-gray-800/20 dark:to-black/40 border border-gray-200/40 dark:border-gray-700/40">
+          <div className="grid grid-cols-2 gap-3 p-2 rounded-xl backdrop-blur-md bg-gradient-to-b from-gray-100/30 via-gray-50/20 to-white/40 dark:from-gray-900/30 dark:via-gray-800/20 dark:to-black/40 border border-gray-200/40 dark:border-gray-700/40 flex-shrink-0">
             {/* Crawl Website Tab */}
             <button
               type="button"
@@ -190,7 +215,16 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
           </div>
 
           {/* Crawl Tab */}
-          <TabsContent value="crawl" className="space-y-6 mt-6">
+          <TabsContent value="crawl" className="mt-6 flex-1 min-h-0">
+            <div
+              className="overflow-y-auto overflow-x-hidden pr-2 scrollbar-thin scrollbar-thumb-gray-400 dark:scrollbar-thumb-gray-600 scrollbar-track-transparent"
+              style={{
+                maxHeight: "calc(85vh - 200px)",
+                overflowY: "scroll",
+                WebkitOverflowScrolling: "touch",
+                scrollbarWidth: "thin"
+              }}>
+              <div className="space-y-6 pb-4">
             {/* Enhanced URL Input Section */}
             <div className="space-y-3">
               <Label htmlFor={urlId} className="text-sm font-medium text-gray-900 dark:text-white/90">
@@ -215,6 +249,9 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
               </p>
             </div>
 
+            {/* Advanced Configuration - positioned directly below URL */}
+            <AdvancedCrawlConfig config={crawlConfig} onChange={setCrawlConfig} />
+
             <div className="space-y-6">
               <KnowledgeTypeSelector value={crawlType} onValueChange={setCrawlType} disabled={isProcessing} />
 
@@ -233,7 +270,7 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
               disabled={isProcessing || !crawlUrl}
               className="w-full bg-gradient-to-r from-cyan-500 to-cyan-600 hover:from-cyan-600 hover:to-cyan-700 backdrop-blur-md border border-cyan-400/50 shadow-[0_0_20px_rgba(6,182,212,0.25)] hover:shadow-[0_0_30px_rgba(6,182,212,0.35)] transition-all duration-200"
             >
-              {crawlMutation.isPending ? (
+              {(crawlMutation.isPending || crawlV2Mutation.isPending) ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                   Starting Crawl...
@@ -245,10 +282,21 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
                 </>
               )}
             </Button>
+              </div>
+            </div>
           </TabsContent>
 
           {/* Upload Tab */}
-          <TabsContent value="upload" className="space-y-6 mt-6">
+          <TabsContent value="upload" className="mt-6 flex-1 min-h-0">
+            <div
+              className="overflow-y-auto overflow-x-hidden pr-2 scrollbar-thin scrollbar-thumb-gray-400 dark:scrollbar-thumb-gray-600 scrollbar-track-transparent"
+              style={{
+                maxHeight: "calc(85vh - 200px)",
+                overflowY: "scroll",
+                WebkitOverflowScrolling: "touch",
+                scrollbarWidth: "thin"
+              }}>
+              <div className="space-y-6 pb-4">
             {/* Enhanced File Input Section */}
             <div className="space-y-3">
               <Label htmlFor={fileId} className="text-sm font-medium text-gray-900 dark:text-white/90">
@@ -326,6 +374,8 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
                 </>
               )}
             </Button>
+              </div>
+            </div>
           </TabsContent>
         </Tabs>
       </DialogContent>

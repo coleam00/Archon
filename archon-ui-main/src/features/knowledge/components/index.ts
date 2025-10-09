@@ -1,4 +1,5 @@
 export * from "./AddKnowledgeDialog";
+export * from "./AdvancedCrawlConfig";
 export * from "./DocumentBrowser";
 export * from "./KnowledgeCard";
 export * from "./KnowledgeList";
