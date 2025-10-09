@@ -12,3 +12,6 @@ temp/
 UAT/
 
 .DS_Store
+
+# Local release notes testing
+release-notes-*.md
