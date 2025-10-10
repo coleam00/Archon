@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { FileCode, Copy, Check } from 'lucide-react';
-import { Card } from '../ui/Card';
-import { Button } from '../ui/Button';
+import { Card } from '@/features/ui/primitives/card';
+import { Button } from '@/features/ui/primitives/button';
+import { RadioGroup, RadioGroupItem } from '@/features/ui/primitives/radio-group';
 import { useToast } from '../../features/shared/hooks/useToast';
 import { copyToClipboard } from '../../features/shared/utils/clipboard';
 
@@ -192,6 +193,18 @@ find_tasks(filter_by="project", filter_value="proj-123")
 
   const currentRules = selectedRuleType === 'claude' ? claudeRules : universalRules;
 
+  // Static margin lookup for bullet list indentation
+  const marginClasses = {
+    6: "ml-6",
+    8: "ml-8",
+    10: "ml-10",
+    12: "ml-12",
+    14: "ml-14",
+    16: "ml-16",
+    18: "ml-18",
+    20: "ml-20",
+  } satisfies Record<number, string>;
+
   // Simple markdown parser for display
   const renderMarkdown = (text: string) => {
     const lines = text.split('\n');
@@ -255,9 +268,9 @@ find_tasks(filter_by="project", filter_value="proj-123")
           .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
           .replace(/`([^`]+)`/g, '<code class="bg-gray-200 dark:bg-gray-700 px-1 py-0.5 rounded text-sm font-mono">$1</code>');
         const marginLeft = 6 + (indent * 2);
+        const marginClass = marginClasses[marginLeft as keyof typeof marginClasses] || "ml-6";
         elements.push(
-          <li key={index} className={`ml-${marginLeft} list-disc text-gray-600 dark:text-gray-400 my-0.5`} 
-              style={{ marginLeft: `${marginLeft * 4}px` }}
+          <li key={index} className={`${marginClass} list-disc text-gray-600 dark:text-gray-400 my-0.5`}
               dangerouslySetInnerHTML={{ __html: processedContent }} />
         );
       }
@@ -301,52 +314,45 @@ find_tasks(filter_by="project", filter_value="proj-123")
   };
 
   return (
-    <Card accentColor="blue" className="p-8">
+    <Card edgePosition="top" edgeColor="blue">
       <div className="space-y-6">
         <div className="flex justify-between items-start">
           <p className="text-sm text-gray-600 dark:text-zinc-400 w-4/5">
             Add global rules to your AI assistant to ensure consistent Archon workflow integration.
           </p>
-          <Button 
-            variant="outline" 
-            accentColor="blue" 
-            icon={copied ? <Check className="w-4 h-4 mr-1" /> : <Copy className="w-4 h-4 mr-1" />}
-            className="ml-auto whitespace-nowrap px-4 py-2"
-            size="md"
+          <Button
+            variant="outline"
+            className="ml-auto whitespace-nowrap"
             onClick={handleCopyToClipboard}
           >
+            {copied ? <Check className="w-4 h-4 mr-2" /> : <Copy className="w-4 h-4 mr-2" />}
             {copied ? 'Copied!' : `Copy ${selectedRuleType === 'claude' ? 'Claude Code' : 'Universal'} Rules`}
           </Button>
         </div>
 
         {/* Rule Type Selector */}
-        <fieldset className="flex items-center space-x-6">
-          <legend className="sr-only">Select rule type</legend>
-          <label className="flex items-center cursor-pointer">
-            <input
-              type="radio"
-              name="ruleType"
-              value="claude"
-              checked={selectedRuleType === 'claude'}
-              onChange={() => setSelectedRuleType('claude')}
-              className="mr-2 text-blue-500 focus:ring-blue-500"
-              aria-label="Claude Code Rules - Comprehensive Archon workflow instructions for Claude"
-            />
-            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Claude Code Rules</span>
-          </label>
-          <label className="flex items-center cursor-pointer">
-            <input
-              type="radio"
-              name="ruleType"
-              value="universal"
-              checked={selectedRuleType === 'universal'}
-              onChange={() => setSelectedRuleType('universal')}
-              className="mr-2 text-blue-500 focus:ring-blue-500"
-              aria-label="Universal Agent Rules - Simplified workflow for all other AI agents"
-            />
-            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Universal Agent Rules</span>
-          </label>
-        </fieldset>
+        <RadioGroup value={selectedRuleType} onValueChange={(value) => setSelectedRuleType(value as RuleType)}>
+          <div className="flex items-center space-x-6">
+            <div className="flex items-center gap-2">
+              <RadioGroupItem value="claude" id="claude-rules" />
+              <label
+                htmlFor="claude-rules"
+                className="text-sm font-medium text-gray-700 dark:text-gray-300 cursor-pointer"
+              >
+                Claude Code Rules
+              </label>
+            </div>
+            <div className="flex items-center gap-2">
+              <RadioGroupItem value="universal" id="universal-rules" />
+              <label
+                htmlFor="universal-rules"
+                className="text-sm font-medium text-gray-700 dark:text-gray-300 cursor-pointer"
+              >
+                Universal Agent Rules
+              </label>
+            </div>
+          </div>
+        </RadioGroup>
 
         <div className="border border-blue-200 dark:border-blue-800/30 bg-gradient-to-br from-blue-500/10 to-blue-600/10 backdrop-blur-sm rounded-md h-[400px] flex flex-col">
           <div className="p-4 pb-2 border-b border-blue-200/50 dark:border-blue-800/30">

@@ -17,13 +17,13 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useToast } from "../features/shared/hooks/useToast";
 import { useSettings } from "../contexts/SettingsContext";
 import { useStaggeredEntrance } from "../hooks/useStaggeredEntrance";
-import { FeaturesSection } from "../components/settings/FeaturesSection";
-import { APIKeysSection } from "../components/settings/APIKeysSection";
+import { FeaturesSection } from "../features/settings/components/FeaturesSection";
+import { APIKeysSection } from "../features/settings/components/APIKeysSection";
 import { RAGSettings } from "../components/settings/RAGSettings";
-import { CodeExtractionSettings } from "../components/settings/CodeExtractionSettings";
+import { CodeExtractionSettings } from "../features/settings/components/CodeExtractionSettings";
 import { IDEGlobalRules } from "../components/settings/IDEGlobalRules";
 import { ButtonPlayground } from "../components/settings/ButtonPlayground";
-import { CollapsibleSettingsCard } from "../components/ui/CollapsibleSettingsCard";
+import { CollapsibleSettingsCard } from "../features/settings/components/CollapsibleSettingsCard";
 import { BugReportButton } from "../components/bug-report/BugReportButton";
 import {
   credentialsService,
