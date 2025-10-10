@@ -31,6 +31,9 @@ class ChatMessage(BaseModel):
     timestamp: datetime
     agent_type: str | None = None
 
+class SendMessageRequest(BaseModel):
+    message: str
+
 
 # REST Endpoints (minimal for frontend compatibility)
 @router.post("/sessions")
@@ -66,7 +69,7 @@ async def get_messages(session_id: str):
 
 
 @router.post("/sessions/{session_id}/messages")
-async def send_message(session_id: str, request: dict):
+async def send_message(session_id: str, request: SendMessageRequest):
     """REST endpoint for sending messages."""
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -74,7 +77,7 @@ async def send_message(session_id: str, request: dict):
     # Store user message
     user_msg = {
         "id": str(uuid.uuid4()),
-        "content": request.get("message", ""),
+        "content": request.message,
         "sender": "user",
         "timestamp": datetime.now().isoformat(),
     }

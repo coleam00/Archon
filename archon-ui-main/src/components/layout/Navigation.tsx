@@ -1,4 +1,4 @@
-import { BookOpen, Settings } from "lucide-react";
+import { BookOpen, Settings, MessageSquare } from "lucide-react";
 import type React from "react";
 import { Link, useLocation } from "react-router-dom";
 // TEMPORARY: Use old SettingsContext until settings are migrated
@@ -32,6 +32,12 @@ export function Navigation({ className }: NavigationProps) {
       path: "/",
       icon: <BookOpen className="h-5 w-5" />,
       label: "Knowledge Base",
+      enabled: true,
+    },
+    {
+      path: "/chat",
+      icon: <MessageSquare className="h-5 w-5" />,
+      label: "Agent Chat",
       enabled: true,
     },
     {
