@@ -119,16 +119,27 @@ def parse_llms_full_sections(content: str, base_url: str) -> list[LLMsFullSectio
             )
         ]
     """
+    lines = content.split("\n")
+
+    # Pre-scan: mark which lines are inside code blocks
+    inside_code_block = set()
+    in_block = False
+    for i, line in enumerate(lines):
+        if line.strip().startswith("```"):
+            in_block = not in_block
+        if in_block:
+            inside_code_block.add(i)
+
+    # Parse sections, ignoring H1 headers inside code blocks
     sections: list[LLMsFullSection] = []
     current_h1: str | None = None
     current_content: list[str] = []
     section_order = 0
 
-    lines = content.split("\n")
-
-    for line in lines:
-        # Detect H1 (starts with "# " but not "##")
-        if line.startswith("# ") and not line.startswith("## "):
+    for i, line in enumerate(lines):
+        # Detect H1 (starts with "# " but not "##") - but ONLY if not in code block
+        is_h1 = line.startswith("# ") and not line.startswith("## ")
+        if is_h1 and i not in inside_code_block:
             # Save previous section if it exists
             if current_h1 is not None:
                 section_text = "\n".join(current_content)
@@ -159,11 +170,9 @@ def parse_llms_full_sections(content: str, base_url: str) -> list[LLMsFullSectio
     # Save last section
     if current_h1 is not None:
         section_text = "\n".join(current_content)
-        # Skip empty sections
         if section_text.strip():
             section_url = create_section_url(base_url, current_h1, section_order)
             word_count = len(section_text.split())
-
             sections.append(
                 LLMsFullSection(
                     section_title=current_h1,
@@ -185,5 +194,69 @@ def parse_llms_full_sections(content: str, base_url: str) -> list[LLMsFullSectio
                 word_count=len(content.split()),
             )
         )
+
+    # Fix sections that were split inside code blocks - merge them with next section
+    if sections:
+        fixed_sections: list[LLMsFullSection] = []
+        i = 0
+        while i < len(sections):
+            current = sections[i]
+
+            # Count ``` at start of lines only (proper code fences)
+            code_fence_count = sum(
+                1 for line in current.content.split('\n')
+                if line.strip().startswith('```')
+            )
+
+            # If odd number, we're inside an unclosed code block - merge with next
+            while code_fence_count % 2 == 1 and i + 1 < len(sections):
+                next_section = sections[i + 1]
+                # Combine content
+                combined_content = current.content + "\n\n" + next_section.content
+                # Update current with combined content
+                current = LLMsFullSection(
+                    section_title=current.section_title,
+                    section_order=current.section_order,
+                    content=combined_content,
+                    url=current.url,
+                    word_count=len(combined_content.split()),
+                )
+                # Move to next section and recount ``` at start of lines
+                i += 1
+                code_fence_count = sum(
+                    1 for line in current.content.split('\n')
+                    if line.strip().startswith('```')
+                )
+
+            fixed_sections.append(current)
+            i += 1
+
+        sections = fixed_sections
+
+    # Combine consecutive small sections (<200 chars) together
+    if sections:
+        combined_sections: list[LLMsFullSection] = []
+        i = 0
+        while i < len(sections):
+            current = sections[i]
+            combined_content = current.content
+
+            # Keep combining while current is small and there are more sections
+            while len(combined_content) < 200 and i + 1 < len(sections):
+                i += 1
+                combined_content = combined_content + "\n\n" + sections[i].content
+
+            # Create combined section with first section's metadata
+            combined = LLMsFullSection(
+                section_title=current.section_title,
+                section_order=current.section_order,
+                content=combined_content,
+                url=current.url,
+                word_count=len(combined_content.split()),
+            )
+            combined_sections.append(combined)
+            i += 1
+
+        sections = combined_sections
 
     return sections
