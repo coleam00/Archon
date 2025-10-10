@@ -50,13 +50,19 @@ It can help with various tasks.
 def test_parse_multiple_sections():
     """Test parsing multiple H1 sections"""
     content = """# Core Concepts
-Claude is an AI assistant.
+Claude is an AI assistant built by Anthropic that can help with various tasks.
+It uses advanced language models to understand and respond to queries.
+This section provides an overview of the core concepts and capabilities.
 
 # Getting Started
-To get started, create an account.
+To get started with Claude, you'll need to create an account and obtain API credentials.
+Follow the setup instructions and configure your development environment properly.
+This will enable you to make your first API calls and start building applications.
 
 # API Reference
-The API uses REST principles.
+The API uses REST principles and supports standard HTTP methods like GET, POST, PUT, and DELETE.
+Authentication is handled through API keys that should be kept secure at all times.
+Comprehensive documentation is available for all endpoints and response formats.
 """
     base_url = "https://example.com/llms-full.txt"
     sections = parse_llms_full_sections(content, base_url)
@@ -113,12 +119,16 @@ This is another subsection.
 def test_empty_sections_skipped():
     """Test that empty sections are skipped"""
     content = """# Section 1
-Content for section 1.
+This is the first section with enough content to prevent automatic combination.
+It contains multiple sentences and provides substantial information for testing purposes.
+The section has several lines to ensure it exceeds the minimum character threshold.
 
 #
 
 # Section 2
-Content for section 2.
+This is the second section with enough content to prevent automatic combination.
+It also contains multiple sentences and provides substantial information for testing.
+The section has several lines to ensure it exceeds the minimum character threshold.
 """
     base_url = "https://example.com/llms-full.txt"
     sections = parse_llms_full_sections(content, base_url)
@@ -132,17 +142,23 @@ Content for section 2.
 def test_consecutive_h1_headers():
     """Test handling multiple consecutive H1 headers"""
     content = """# Section 1
+The first section contains enough content to prevent automatic combination with subsequent sections.
+It has multiple sentences and provides substantial information for proper testing functionality.
+This ensures that the section exceeds the minimum character threshold requirement.
 # Section 2
-Some content here.
+This section also has enough content to prevent automatic combination with the previous section.
+It contains multiple sentences and provides substantial information for proper testing.
+The content here ensures that the section exceeds the minimum character threshold.
 """
     base_url = "https://example.com/llms-full.txt"
     sections = parse_llms_full_sections(content, base_url)
 
-    # Both sections should be parsed (first has only heading, second has content)
+    # Both sections should be parsed
     assert len(sections) == 2
     assert sections[0].section_title == "# Section 1"
     assert sections[1].section_title == "# Section 2"
-    assert "Some content here" in sections[1].content
+    assert "The first section contains enough content" in sections[0].content
+    assert "This section also has enough content" in sections[1].content
 
 
 def test_word_count_calculation():
