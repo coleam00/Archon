@@ -762,7 +762,6 @@ COMMENT ON FUNCTION hybrid_search_archon_code_examples IS 'Legacy hybrid search 
 ALTER TABLE archon_crawled_pages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE archon_sources ENABLE ROW LEVEL SECURITY;
 ALTER TABLE archon_code_examples ENABLE ROW LEVEL SECURITY;
-ALTER TABLE archon_page_metadata ENABLE ROW LEVEL SECURITY;
 
 -- Create policies that allow anyone to read
 CREATE POLICY "Allow public read access to archon_crawled_pages"
@@ -1024,6 +1023,9 @@ COMMENT ON COLUMN archon_page_metadata.char_count IS 'Number of characters in fu
 COMMENT ON COLUMN archon_page_metadata.chunk_count IS 'Number of chunks created from this page';
 COMMENT ON COLUMN archon_page_metadata.metadata IS 'Flexible JSON metadata (page_type, knowledge_type, tags, etc)';
 COMMENT ON COLUMN archon_crawled_pages.page_id IS 'Foreign key linking chunk to parent page';
+
+-- Enable RLS on archon_page_metadata
+ALTER TABLE archon_page_metadata ENABLE ROW LEVEL SECURITY;
 
 -- =====================================================
 -- SECTION 7: MIGRATION TRACKING
