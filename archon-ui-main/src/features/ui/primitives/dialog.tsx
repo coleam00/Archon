@@ -33,8 +33,9 @@ export const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
     showCloseButton?: boolean;
+    maxHeight?: string;
   }
->(({ className, children, showCloseButton = true, ...props }, ref) => (
+>(({ className, children, showCloseButton = true, maxHeight = "90vh", ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
     <DialogPrimitive.Content
@@ -43,6 +44,9 @@ export const DialogContent = React.forwardRef<
         "fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2",
         "p-6 rounded-md backdrop-blur-md",
         "w-full max-w-2xl",
+        // Height constraints and scroll behavior
+        `max-h-[${maxHeight}]`,
+        "overflow-y-auto",
         // Matching original glassmorphism
         "bg-gradient-to-b from-white/80 to-white/60 dark:from-white/10 dark:to-black/30",
         "border border-gray-200 dark:border-zinc-800/50",
@@ -60,6 +64,7 @@ export const DialogContent = React.forwardRef<
         "after:rounded-t-md after:pointer-events-none",
         className,
       )}
+      style={{ maxHeight }}
       {...props}
     >
       <div className="relative z-10">{children}</div>
@@ -80,6 +85,67 @@ export const DialogContent = React.forwardRef<
   </DialogPortal>
 ));
 DialogContent.displayName = DialogPrimitive.Content.displayName;
+
+// Scrollable Dialog Content with fixed header and scrollable body
+export const ScrollableDialogContent = React.forwardRef<
+  React.ElementRef<typeof DialogPrimitive.Content>,
+  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
+    showCloseButton?: boolean;
+    maxHeight?: string;
+  }
+>(({ className, children, showCloseButton = true, maxHeight = "90vh", ...props }, ref) => (
+  <DialogPortal>
+    <DialogOverlay />
+    <DialogPrimitive.Content
+      ref={ref}
+      className={cn(
+        "fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2",
+        "rounded-md backdrop-blur-md",
+        "w-full max-w-2xl",
+        `max-h-[${maxHeight}]`,
+        "overflow-hidden flex flex-col",
+        // Matching original glassmorphism
+        "bg-gradient-to-b from-white/80 to-white/60 dark:from-white/10 dark:to-black/30",
+        "border border-gray-200 dark:border-zinc-800/50",
+        "shadow-[0_10px_30px_-15px_rgba(0,0,0,0.1)] dark:shadow-[0_10px_30px_-15px_rgba(0,0,0,0.7)]",
+        // Top gradient bar (matching original)
+        "before:content-[''] before:absolute before:top-0 before:left-0 before:right-0",
+        "before:h-[2px] before:rounded-t-[4px]",
+        "before:bg-gradient-to-r before:from-cyan-500 before:to-fuchsia-500",
+        "before:shadow-[0_0_10px_2px_rgba(34,211,238,0.4)]",
+        "dark:before:shadow-[0_0_20px_5px_rgba(34,211,238,0.7)]",
+        // Top gradient glow (matching original)
+        "after:content-[''] after:absolute after:top-0 after:left-0 after:right-0",
+        "after:h-16 after:bg-gradient-to-b",
+        "after:from-cyan-100 after:to-white dark:after:from-cyan-500/20 dark:after:to-fuchsia-500/5",
+        "after:rounded-t-md after:pointer-events-none",
+        className,
+      )}
+      style={{ maxHeight }}
+      {...props}
+    >
+      {/* Scrollable Content Area */}
+      <div className="flex-1 overflow-y-auto">
+        {children}
+      </div>
+      
+      {showCloseButton && (
+        <DialogPrimitive.Close
+          className={cn(
+            "absolute right-4 top-4 z-20",
+            "text-gray-500 dark:text-gray-400",
+            "hover:text-gray-700 dark:hover:text-white",
+            "transition-colors",
+          )}
+        >
+          <X className="h-5 w-5" />
+          <span className="sr-only">Close</span>
+        </DialogPrimitive.Close>
+      )}
+    </DialogPrimitive.Content>
+  </DialogPortal>
+));
+ScrollableDialogContent.displayName = "ScrollableDialogContent";
 
 // Dialog Header
 export const DialogHeader = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
