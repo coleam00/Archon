@@ -19,7 +19,8 @@ import { useSettings } from "../contexts/SettingsContext";
 import { useStaggeredEntrance } from "../hooks/useStaggeredEntrance";
 import { FeaturesSection } from "../features/settings/components/FeaturesSection";
 import { APIKeysSection } from "../features/settings/components/APIKeysSection";
-import { RAGSettings } from "../components/settings/RAGSettings";
+import { ModelsSection } from "../features/settings/components/ModelsSection";
+import { RAGSettings } from "../features/settings/components/RAGSettings";
 import { CodeExtractionSettings } from "../features/settings/components/CodeExtractionSettings";
 import { IDEGlobalRules } from "../components/settings/IDEGlobalRules";
 import { ButtonPlayground } from "../components/settings/ButtonPlayground";
@@ -145,6 +146,22 @@ export const SettingsPage = () => {
             </CollapsibleSettingsCard>
           </motion.div>
 
+          {/* Model Providers */}
+          <motion.div variants={itemVariants}>
+            <CollapsibleSettingsCard
+              title="Model Providers"
+              icon={Brain}
+              accentColor="blue"
+              storageKey="model-providers"
+              defaultExpanded={true}
+            >
+              <ModelsSection
+                ragSettings={ragSettings}
+                setRagSettings={setRagSettings}
+              />
+            </CollapsibleSettingsCard>
+          </motion.div>
+
           {/* Version Status */}
           <motion.div variants={itemVariants}>
             <CollapsibleSettingsCard
@@ -201,7 +218,7 @@ export const SettingsPage = () => {
           </motion.div>
           <motion.div variants={itemVariants}>
             <CollapsibleSettingsCard
-              title="RAG Settings"
+              title="RAG Strategies"
               icon={Brain}
               accentColor="green"
               storageKey="rag-settings"

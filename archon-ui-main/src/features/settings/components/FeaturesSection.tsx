@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Moon, Sun, FileText, Layout, Bot, Settings, Palette, Flame, Monitor } from 'lucide-react';
+import { Moon, Sun, FileText, Palette, Flame, Monitor } from 'lucide-react';
 import { Switch } from '@/features/ui/primitives/switch';
 import { Card } from '@/features/ui/primitives/card';
 import { useTheme } from '../../../contexts/ThemeContext';
