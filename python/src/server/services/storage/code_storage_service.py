@@ -82,6 +82,10 @@ def _is_reasoning_text_response(text: str) -> bool:
 
     text_lower = text.lower().strip()
 
+    # Check for XML-style thinking tags (common in models with extended thinking)
+    if text_lower.startswith("<think>") or "<think>" in text_lower[:100]:
+        return True
+
     # Check if it's clearly not JSON (starts with reasoning text)
     starts_with_reasoning = any(text_lower.startswith(starter) for starter in REASONING_STARTERS)
 
@@ -658,7 +662,7 @@ Format your response as JSON:
             is_grok_model = (provider_lower == "grok") or ("grok" in model_choice.lower())
 
             supports_response_format_base = (
-                provider_lower in {"openai", "google", "anthropic"}
+                provider_lower in {"openai", "google", "anthropic", "ollama"}
                 or (provider_lower == "openrouter" and model_choice.startswith("openai/"))
             )
 
