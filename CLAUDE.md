@@ -66,6 +66,32 @@ When a process should continue despite failures, it must **skip the failed item 
 
 ## Development Commands
 
+### Makefile (Recommended)
+
+The project includes a comprehensive Makefile for streamlined development:
+
+```bash
+# Setup and validation
+make install    # Install dependencies for both frontend and backend
+make check      # Validate environment setup (Node.js, Docker, .env file)
+
+# Development workflows (automatically runs make check first)
+make dev        # Hybrid mode: backend in Docker, frontend local (recommended)
+make dev-docker # Full Docker mode: all services in containers
+make stop       # Stop all running services
+
+# Testing and quality
+make test       # Run all tests (frontend + backend)
+make test-fe    # Frontend tests only
+make test-be    # Backend tests only  
+make lint       # Run all linters (frontend + backend)
+make lint-fe    # Frontend linter only (ESLint + Biome)
+make lint-be    # Backend linter only (Ruff auto-fix)
+
+# Cleanup
+make clean      # Remove all containers and volumes (with confirmation)
+```
+
 ### Frontend (archon-ui-main/)
 
 ```bash
@@ -94,19 +120,48 @@ npx tsc --noEmit 2>&1 | grep "src/features"  # Check features only
 
 ### Backend (python/)
 
+#### Environment Setup & Validation
+
 ```bash
-# Using uv package manager (preferred)
+# Environment validation (called automatically by make dev/dev-docker)
+node check-env.js        # Validates .env file exists and contains required variables
+```
+
+The `check-env.js` script validates:
+- `.env` file exists (copy from `.env.example` if missing)
+- Required variables: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` 
+- URL format validation for `SUPABASE_URL`
+- Service key length validation
+
+#### Python Development (uv package manager)
+
+```bash
+# Dependency management with groups (see dependency groups section below)
 uv sync --group all      # Install all dependencies
+uv sync --group server   # Server container dependencies only
+uv sync --group mcp      # MCP container dependencies only  
+uv sync --group agents   # Agents container dependencies only
+uv sync --group dev      # Development tools (ruff, mypy, pytest)
+
+# Local development
 uv run python -m src.server.main  # Run server locally on 8181
 uv run pytest            # Run all tests
 uv run pytest tests/test_api_essentials.py -v  # Run specific test
 uv run ruff check        # Run linter
 uv run ruff check --fix  # Auto-fix linting issues
 uv run mypy src/         # Type check
+```
 
-# Docker operations
-docker compose up --build -d       # Start all services
+#### Docker Operations
+
+```bash
+# Service profiles (see Docker profiles section below)
+docker compose up --build -d       # Default: server, mcp, frontend
 docker compose --profile backend up -d  # Backend only (for hybrid dev)
+docker compose --profile agents up -d   # Include agents service
+docker compose --profile full up -d     # All services
+
+# Monitoring and maintenance
 docker compose logs -f archon-server   # View server logs
 docker compose logs -f archon-mcp      # View MCP server logs
 docker compose restart archon-server   # Restart after code changes
@@ -140,6 +195,32 @@ make test-be             # Backend tests only
 
 #### TanStack Query Implementation
 
+### Docker Compose Profiles
+
+The project uses Docker profiles to control which services run:
+
+```bash
+# Profile combinations
+docker compose up                        # Default: server, mcp, frontend only
+docker compose --profile agents up      # Also includes agents service
+docker compose --profile backend up     # Backend services only (server, mcp) - for hybrid dev
+docker compose --profile frontend up    # Frontend only (for development)
+docker compose --profile full up        # All services including agents
+
+# Common development patterns
+make dev                                 # Uses --profile backend (recommended hybrid mode)
+make dev-docker                          # Uses --profile full (everything in containers)
+```
+
+**Profile Usage:**
+- **Default** (no profile): Core services for typical use
+- **backend**: For hybrid development (backend in Docker, frontend local)
+- **agents**: Include PydanticAI agents service (optional, resource-intensive)
+- **frontend**: Frontend container only (rarely used directly)
+- **full**: Complete stack including all optional services
+
+### Service Architecture
+
 For architecture and file references:
 @PRPs/ai_docs/DATA_FETCHING_ARCHITECTURE.md
 
@@ -164,6 +245,28 @@ See implementation examples:
 
 @PRPs/ai_docs/ETAG_IMPLEMENTATION.md
 
+## Database Setup & Migration
+
+### Migration Files
+
+The `/migration/` directory contains SQL scripts for database setup and updates:
+
+```bash
+migration/
+├── complete_setup.sql              # Full database schema setup
+├── RESET_DB.sql                    # Database reset script (destructive)
+├── add_hybrid_search_tsvector.sql  # Adds tsvector for keyword search
+└── add_source_url_display_name.sql # Adds display name field to sources
+```
+
+### Database Setup Process
+
+1. **New Installation**: Execute `complete_setup.sql` for full schema
+2. **Schema Updates**: Apply specific migration files in chronological order
+3. **Development Reset**: Use `RESET_DB.sql` to completely reset (⚠️ destructive)
+
+Migration files should be applied directly to your Supabase instance via the SQL editor or command line tools.
+
 ## Database Schema
 
 Key tables in Supabase:
@@ -185,6 +288,36 @@ Key tables in Supabase:
 @PRPs/ai_docs/API_NAMING_CONVENTIONS.md
 
 Use database values directly (no FE mapping; type‑safe end‑to‑end from BE upward):
+
+## Python Dependency Groups
+
+The backend uses `uv` with sophisticated dependency grouping in `pyproject.toml`:
+
+```bash
+# Install specific dependency groups
+uv sync --group all      # All dependencies (for local development)
+uv sync --group server   # Server container dependencies only
+uv sync --group mcp      # MCP container dependencies only  
+uv sync --group agents   # Agents container dependencies only
+uv sync --group dev      # Development tools (ruff, mypy, pytest)
+
+# Combine groups as needed
+uv sync --group server --group dev  # Server deps + development tools
+```
+
+**Dependency Groups:**
+
+- **dev**: Testing and linting tools (pytest, mypy, ruff, factory-boy)
+- **server**: Main server dependencies (FastAPI, crawl4ai, supabase, openai, document processing)
+- **server-reranking**: Optional ML dependencies (sentence-transformers, torch, transformers)  
+- **mcp**: MCP protocol server dependencies (mcp, httpx, fastapi, supabase)
+- **agents**: PydanticAI agents dependencies (pydantic-ai, fastapi, httpx)
+- **all**: Combines all groups for comprehensive local development
+
+**Container Usage:**
+- Each Docker container installs only its required dependency group
+- Reduces image size and attack surface
+- Faster builds and deployments
 
 ## Environment Variables
 
