@@ -60,24 +60,7 @@ cd archon
 # Create environment file
 cp .env.example .env
 ```
-
-### 2. Configure Environment
-
-Edit `.env` and add your credentials:
-
-```bash
-# Required
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_KEY=your-service-key-here
-
-# Optional (but recommended for monitoring)
-OPENAI_API_KEY=sk-proj-your-openai-key
-# Unified Logging Configuration (Optional)
-LOGFIRE_ENABLED=false              # true=Logfire logging, false=standard logging
-LOGFIRE_TOKEN=your-logfire-token-here    # Only required when LOGFIRE_ENABLED=true
-```
-
-### 3. Set Up Database
+### 2. Set Up Database
 
 <Admonition type="info" icon="🗄️" title="Database Setup">
 Create a new [Supabase project](https://supabase.com/dashboard), then follow these setup steps in order:
@@ -95,6 +78,43 @@ Create a new [Supabase project](https://supabase.com/dashboard), then follow the
 #### 🔄 Database Reset (Optional)
 **Run `migration/RESET_DB.sql`** - ⚠️ **Completely resets database (deletes ALL data!)**
 
+#### 🚢 Local Docker Instance (Optional)
+
+#####  Docker Networking Scope
+set `SUPABASE_URL` to http://host.docker.internal:8000 (unless you have an IP address set up).
+##### Generate new `SERVICE_ROLE_KEY`
+1. Go to [jwt.io](https://jwt.io/)
+2. Click `JWT Decoder` tab
+3. Paste Supabase `JWT_SECRET` into `JWT Signature Verification` and ensure it is valid. Otherwise generate a new one using `Generate example` button with option `HS256`.
+4. Click `JWT Encoder` tab
+5. If not present, create the JSON header and paste it into `Header: Algorithm & Token Type`:
+    ```json
+    {
+    "alg": "HS256",
+    "typ": "JWT"
+    }
+6. Create the JSON payload for our service role and paste it into `Payload: Data`:
+    ```json
+    {
+    "role": "service_role",
+    "iss": "supabase",
+    "iat": 1737350400,
+    "exp": 1999999999
+    }
+7. Paste your valid `$JWT_SECRET` into the `Sign JWT: Secret` field.
+8.  Copy the signed `JSON Web Token`. This will be your `SERVICE_ROLE_KEY` in Supabase .env and your `SUPABASE_SERVICE_KEY` Archon .env.
+
+##### Generate new `ANON_KEY`
+  1.  Repeat the same steps as the `SUPABASE_SERVICE_KEY` but at Step f. change the JSON payload to the following:
+      ```json
+      {
+      "role": "anon",
+      "iss": "supabase",
+      "iat": 1737350400,
+      "exp": 1999999999
+      }
+      ```
+
 <details>
 <summary>🔍 **How to run SQL scripts in Supabase**</summary>
 
@@ -111,6 +131,22 @@ Create a new [Supabase project](https://supabase.com/dashboard), then follow the
 2. Then run migrations 1, 2, 3 in order to rebuild
 
 </details>
+
+### 3. Configure Environment
+
+Edit `.env` and add your credentials:
+
+```bash
+# Required
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_KEY=your-service-key-here
+
+# Optional (but recommended for monitoring)
+OPENAI_API_KEY=sk-proj-your-openai-key
+# Unified Logging Configuration (Optional)
+LOGFIRE_ENABLED=false              # true=Logfire logging, false=standard logging
+LOGFIRE_TOKEN=your-logfire-token-here    # Only required when LOGFIRE_ENABLED=true
+```
 
 ### 4. Start Archon
 
