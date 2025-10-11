@@ -66,7 +66,7 @@ export const RAGSettings = ({ ragSettings, setRagSettings }: RAGSettingsProps) =
           size="sm"
         >
           {saving ? <Loader className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-          {saving ? 'Saving...' : 'Save Settings'}
+          {saving ? 'Saving...' : 'Save'}
         </Button>
       </div>
 

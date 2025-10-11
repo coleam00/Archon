@@ -59,7 +59,7 @@ const logoBackgrounds = {
   google: "",
   openrouter: "",
   ollama: "",
-  anthropic: ""
+  anthropic: "bg-white rounded p-1"
 } satisfies Record<ProviderKey, string>;
 
 const providerNameFontSizes = {
@@ -355,7 +355,8 @@ export const ModelsSection = ({ ragSettings, setRagSettings }: ModelsSectionProp
       }));
     }
     updateChatRagSettingsRef.current = true;
-  }, [chatProvider, setRagSettings]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatProvider, ragSettings.LLM_PROVIDER]);
 
   useEffect(() => {
     if (updateEmbeddingRagSettingsRef.current && embeddingProvider && embeddingProvider !== ragSettings.EMBEDDING_PROVIDER) {
@@ -365,7 +366,8 @@ export const ModelsSection = ({ ragSettings, setRagSettings }: ModelsSectionProp
       }));
     }
     updateEmbeddingRagSettingsRef.current = true;
-  }, [embeddingProvider, setRagSettings]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embeddingProvider, ragSettings.EMBEDDING_PROVIDER]);
 
   useEffect(() => {
     if (chatProvider && ragSettings.MODEL_CHOICE && providerModels) {
@@ -378,6 +380,7 @@ export const ModelsSection = ({ ragSettings, setRagSettings }: ModelsSectionProp
         });
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ragSettings.MODEL_CHOICE, chatProvider, providerModels]);
 
   useEffect(() => {
@@ -391,6 +394,7 @@ export const ModelsSection = ({ ragSettings, setRagSettings }: ModelsSectionProp
         });
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ragSettings.EMBEDDING_MODEL, embeddingProvider, providerModels]);
 
   const testProviderConnection = useCallback(async (provider: string): Promise<boolean> => {
@@ -605,12 +609,12 @@ export const ModelsSection = ({ ragSettings, setRagSettings }: ModelsSectionProp
                 : 'shadow-[0_0_15px_rgba(16,185,129,0.25)]'}
             `}
           >
-            <span className="flex flex-col items-center gap-1">
+            <span className="flex flex-col items-center gap-1 w-full min-w-0">
               <span className="flex items-center gap-2">
                 <LuBrainCircuit className="w-4 h-4 text-emerald-300" aria-hidden="true" />
                 <span>Chat: {chatProvider}</span>
               </span>
-              <span className="text-xs text-emerald-400 font-normal">
+              <span className="text-xs text-emerald-400 font-normal truncate w-full block">
                 Current: {ragSettings.MODEL_CHOICE || 'Not set'}
               </span>
             </span>
@@ -629,12 +633,12 @@ export const ModelsSection = ({ ragSettings, setRagSettings }: ModelsSectionProp
                 : 'shadow-[0_0_15px_rgba(168,85,247,0.25)]'}
             `}
           >
-            <span className="flex flex-col items-center gap-1">
+            <span className="flex flex-col items-center gap-1 w-full min-w-0">
               <span className="flex items-center gap-2">
                 <PiDatabaseThin className="w-4 h-4 text-purple-300" aria-hidden="true" />
-                <span>Embeddings: {embeddingProvider}</span>
+                <span>Embed: {embeddingProvider}</span>
               </span>
-              <span className="text-xs text-purple-400 font-normal">
+              <span className="text-xs text-purple-400 font-normal truncate w-full block">
                 Current: {ragSettings.EMBEDDING_MODEL || 'Not set'}
               </span>
             </span>

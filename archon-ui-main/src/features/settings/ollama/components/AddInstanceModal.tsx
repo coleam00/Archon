@@ -99,7 +99,7 @@ export const AddInstanceModal: React.FC<AddInstanceModalProps> = ({ open, onOpen
               <Input
                 id={urlId}
                 type="url"
-                placeholder="http://localhost:11434"
+                placeholder="http://host.docker.internal:11434/v1"
                 value={formData.baseUrl}
                 onChange={(e) => setFormData((prev) => ({ ...prev, baseUrl: e.target.value }))}
                 disabled={createInstanceMutation.isPending}

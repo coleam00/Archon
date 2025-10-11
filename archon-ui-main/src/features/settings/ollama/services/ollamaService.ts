@@ -39,14 +39,15 @@ export const ollamaService = {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         const startTime = performance.now();
-        const response = await fetch(`${baseUrl}/api/providers/validate`, {
+        const response = await fetch(`${baseUrl}/api/ollama/validate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            provider: 'ollama',
-            base_url: instanceBaseUrl
+            instance_url: instanceBaseUrl,
+            instance_type: 'both',
+            timeout_seconds: 30
           })
         });
 
@@ -61,8 +62,8 @@ export const ollamaService = {
         return {
           isHealthy: data.is_valid === true,
           responseTimeMs,
-          modelsAvailable: data.models_count,
-          error: data.is_valid ? undefined : data.error || 'Connection failed'
+          modelsAvailable: data.models_available || 0,
+          error: data.is_valid ? undefined : data.error_message || 'Connection failed'
         };
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
