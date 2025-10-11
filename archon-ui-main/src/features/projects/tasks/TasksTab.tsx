@@ -3,7 +3,7 @@ import { useCallback, useState } from "react";
 import { DndProvider } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
 import { DeleteConfirmModal } from "../../ui/components/DeleteConfirmModal";
-import { Button } from "../../ui/primitives";
+import { Button, Card } from "../../ui/primitives";
 import { cn, glassmorphism } from "../../ui/primitives/styles";
 import { TaskEditModal } from "./components/TaskEditModal";
 import { useDeleteTask, useProjectTasks, useUpdateTask } from "./hooks";
@@ -260,18 +260,17 @@ const ViewControls = ({ viewMode, onViewChange, onAddTask }: ViewControlsProps) 
         </Button>
 
         {/* View Toggle Controls with Glassmorphism */}
-        <div
-          className={cn(
-            "flex items-center overflow-hidden pointer-events-auto",
-            glassmorphism.background.subtle,
-            glassmorphism.border.default,
-            glassmorphism.shadow.elevated,
-            "rounded-lg",
-          )}
+        <Card
+          blur="lg"
+          transparency="medium"
+          size="none"
+          className="flex items-center overflow-hidden pointer-events-auto rounded-lg"
         >
           <button
             type="button"
             onClick={() => onViewChange("table")}
+            aria-label="Switch to table view"
+            aria-pressed={viewMode === "table"}
             className={cn(
               "px-5 py-2.5 flex items-center gap-2 relative transition-all duration-300",
               viewMode === "table"
@@ -279,7 +278,7 @@ const ViewControls = ({ viewMode, onViewChange, onAddTask }: ViewControlsProps) 
                 : "text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-300",
             )}
           >
-            <Table className="w-4 h-4" />
+            <Table className="w-4 h-4" aria-hidden="true" />
             <span>Table</span>
             {viewMode === "table" && (
               <span
@@ -296,6 +295,8 @@ const ViewControls = ({ viewMode, onViewChange, onAddTask }: ViewControlsProps) 
           <button
             type="button"
             onClick={() => onViewChange("board")}
+            aria-label="Switch to board view"
+            aria-pressed={viewMode === "board"}
             className={cn(
               "px-5 py-2.5 flex items-center gap-2 relative transition-all duration-300",
               viewMode === "board"
@@ -303,7 +304,7 @@ const ViewControls = ({ viewMode, onViewChange, onAddTask }: ViewControlsProps) 
                 : "text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-300",
             )}
           >
-            <LayoutGrid className="w-4 h-4" />
+            <LayoutGrid className="w-4 h-4" aria-hidden="true" />
             <span>Board</span>
             {viewMode === "board" && (
               <span
@@ -316,7 +317,7 @@ const ViewControls = ({ viewMode, onViewChange, onAddTask }: ViewControlsProps) 
               />
             )}
           </button>
-        </div>
+        </Card>
       </div>
     </div>
   );

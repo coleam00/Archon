@@ -73,7 +73,7 @@ export const KnowledgeView = () => {
       // Check if it was an error or success
       if (op.status === "error" || op.status === "failed") {
         // Show error message with details
-        const errorMessage = op.message || op.error || "Operation failed";
+        const errorMessage = op.message || "Operation failed";
         showToast(`❌ ${errorMessage}`, "error", 7000);
       } else if (op.status === "completed") {
         // Show success message
@@ -141,7 +141,7 @@ export const KnowledgeView = () => {
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-white/90">Active Operations ({activeOperations.length})</h3>
               <div className="flex items-center gap-2 text-sm text-gray-400">
-                <div className="w-2 h-2 bg-cyan-400 rounded-full animate-pulse" />
+                <div className="w-2 h-2 bg-cyan-400 dark:bg-cyan-400 rounded-full animate-pulse" />
                 Live Updates
               </div>
             </div>

@@ -228,7 +228,7 @@ export function useCrawlUrl() {
       });
 
       // Return context for rollback and replacement
-      return { previousSummaries, previousOperations, tempProgressId };
+      return { previousSummaries, previousOperations, tempProgressId, tempItemId: tempProgressId };
     },
     onSuccess: (response, _variables, context) => {
       // Replace temporary IDs with real ones from the server
@@ -407,7 +407,7 @@ export function useUploadDocument() {
         };
       });
 
-      return { previousSummaries, previousOperations, tempProgressId };
+      return { previousSummaries, previousOperations, tempProgressId, tempItemId: tempProgressId };
     },
     onSuccess: (response, _variables, context) => {
       // Replace temporary IDs with real ones from the server

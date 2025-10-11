@@ -107,7 +107,7 @@ export const KnowledgeList: React.FC<KnowledgeListProps> = ({
         className="flex items-center justify-center py-12"
       >
         <div className="text-center max-w-md" role="alert">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-red-500/10 mb-4">
+          <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-red-500/10 dark:bg-red-500/10 mb-4">
             <AlertCircle className="w-6 h-6 text-red-400" />
           </div>
           <h3 className="text-lg font-semibold mb-2">Failed to Load Knowledge Base</h3>
@@ -130,7 +130,7 @@ export const KnowledgeList: React.FC<KnowledgeListProps> = ({
         className="flex items-center justify-center py-12"
       >
         <div className="text-center max-w-md">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-cyan-500/10 mb-4">
+          <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-cyan-500/10 dark:bg-cyan-500/10 mb-4">
             <AlertCircle className="w-6 h-6 text-cyan-400" />
           </div>
           <h3 className="text-lg font-semibold mb-2">No Knowledge Items</h3>

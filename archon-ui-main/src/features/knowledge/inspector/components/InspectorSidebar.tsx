@@ -102,9 +102,9 @@ export const InspectorSidebar: React.FC<InspectorSidebarProps> = ({
                 onClick={() => onItemSelect(item)}
                 className={cn(
                   "w-full text-left p-3 rounded-lg mb-1 transition-all",
-                  "hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-cyan-500/50",
+                  "hover:bg-white/5 dark:hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-cyan-500/50",
                   selectedItemId === item.id
-                    ? "bg-cyan-500/10 border border-cyan-500/30 ring-1 ring-cyan-500/20"
+                    ? "bg-cyan-500/10 dark:bg-cyan-500/10 border border-cyan-500/30 dark:border-cyan-500/30 ring-1 ring-cyan-500/20"
                     : "border border-transparent",
                 )}
                 role="option"
@@ -128,7 +128,7 @@ export const InspectorSidebar: React.FC<InspectorSidebarProps> = ({
                         {getItemTitle(item)}
                       </span>
                       {viewMode === "code" && (item as CodeExample).language && (
-                        <span className="px-1.5 py-0.5 bg-green-500/10 text-green-400 text-xs rounded flex-shrink-0">
+                        <span className="px-1.5 py-0.5 bg-green-500/10 text-green-600 dark:text-green-400 text-xs rounded flex-shrink-0">
                           {(item as CodeExample).language}
                         </span>
                       )}
@@ -157,7 +157,7 @@ export const InspectorSidebar: React.FC<InspectorSidebarProps> = ({
                   size="sm"
                   onClick={onLoadMore}
                   disabled={isFetchingNextPage}
-                  className="w-full text-cyan-400 hover:text-white hover:bg-cyan-500/10 transition-all"
+                  className="w-full text-cyan-600 dark:text-cyan-400 hover:text-white dark:hover:text-white hover:bg-cyan-500/10 transition-all"
                   aria-label={`Load more ${viewMode}`}
                 >
                   {isFetchingNextPage ? (

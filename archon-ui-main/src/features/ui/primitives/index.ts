@@ -24,6 +24,7 @@ export * from "./grouped-card";
 export * from "./input";
 export * from "./inspector-dialog";
 export * from "./pill";
+export * from "./pill-navigation";
 export * from "./select";
 export * from "./selectable-card";
 // Export style utilities

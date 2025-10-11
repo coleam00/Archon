@@ -8,8 +8,8 @@ import { useId, useState } from "react";
 import { useToast } from "@/features/shared/hooks/useToast";
 import { Button, Input, Label } from "../../ui/primitives";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/primitives/dialog";
-import { cn } from "../../ui/primitives/styles";
-import { Tabs, TabsContent } from "../../ui/primitives/tabs";
+import { cn, glassCard } from "../../ui/primitives/styles";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/primitives/tabs";
 import { useCrawlUrl, useUploadDocument } from "../hooks";
 import type { CrawlRequest, UploadMetadata } from "../types";
 import { KnowledgeTypeSelector } from "./KnowledgeTypeSelector";
@@ -134,59 +134,17 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
         </DialogHeader>
 
         <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "crawl" | "upload")}>
-          {/* Enhanced Tab Buttons */}
-          <div className="grid grid-cols-2 gap-3 p-2 rounded-xl backdrop-blur-md bg-gradient-to-b from-gray-100/30 via-gray-50/20 to-white/40 dark:from-gray-900/30 dark:via-gray-800/20 dark:to-black/40 border border-gray-200/40 dark:border-gray-700/40">
-            {/* Crawl Website Tab */}
-            <button
-              type="button"
-              onClick={() => setActiveTab("crawl")}
-              className={cn(
-                "relative flex items-center justify-center gap-3 px-6 py-4 rounded-lg transition-all duration-300",
-                "backdrop-blur-md border-2 font-medium text-sm",
-                activeTab === "crawl"
-                  ? "bg-gradient-to-b from-cyan-100/70 via-cyan-50/40 to-white/80 dark:from-cyan-900/40 dark:via-cyan-800/25 dark:to-black/50 border-cyan-400/60 text-cyan-700 dark:text-cyan-300 shadow-[0_0_20px_rgba(34,211,238,0.25)]"
-                  : "bg-gradient-to-b from-white/40 via-white/30 to-white/60 dark:from-gray-800/40 dark:via-gray-800/30 dark:to-black/60 border-gray-300/40 dark:border-gray-600/40 text-gray-600 dark:text-gray-300 hover:border-cyan-300/50 hover:text-cyan-600 dark:hover:text-cyan-400 hover:shadow-[0_0_15px_rgba(34,211,238,0.15)]",
-              )}
-            >
-              {/* Top accent glow for active state */}
-              {activeTab === "crawl" && (
-                <div className="pointer-events-none absolute inset-x-0 top-0">
-                  <div className="mx-2 mt-0.5 h-[2px] rounded-full bg-cyan-500" />
-                  <div className="-mt-1 h-8 w-full bg-gradient-to-b from-cyan-500/30 to-transparent blur-md" />
-                </div>
-              )}
-              <Globe className={cn("w-5 h-5", activeTab === "crawl" ? "text-cyan-500" : "text-current")} />
-              <div className="flex flex-col items-start gap-0.5">
-                <span className="font-semibold">Crawl Website</span>
-                <span className="text-xs opacity-80">Scan web pages</span>
-              </div>
-            </button>
-
-            {/* Upload Document Tab */}
-            <button
-              type="button"
-              onClick={() => setActiveTab("upload")}
-              className={cn(
-                "relative flex items-center justify-center gap-3 px-6 py-4 rounded-lg transition-all duration-300",
-                "backdrop-blur-md border-2 font-medium text-sm",
-                activeTab === "upload"
-                  ? "bg-gradient-to-b from-purple-100/70 via-purple-50/40 to-white/80 dark:from-purple-900/40 dark:via-purple-800/25 dark:to-black/50 border-purple-400/60 text-purple-700 dark:text-purple-300 shadow-[0_0_20px_rgba(147,51,234,0.25)]"
-                  : "bg-gradient-to-b from-white/40 via-white/30 to-white/60 dark:from-gray-800/40 dark:via-gray-800/30 dark:to-black/60 border-gray-300/40 dark:border-gray-600/40 text-gray-600 dark:text-gray-300 hover:border-purple-300/50 hover:text-purple-600 dark:hover:text-purple-400 hover:shadow-[0_0_15px_rgba(147,51,234,0.15)]",
-              )}
-            >
-              {/* Top accent glow for active state */}
-              {activeTab === "upload" && (
-                <div className="pointer-events-none absolute inset-x-0 top-0">
-                  <div className="mx-2 mt-0.5 h-[2px] rounded-full bg-purple-500" />
-                  <div className="-mt-1 h-8 w-full bg-gradient-to-b from-purple-500/30 to-transparent blur-md" />
-                </div>
-              )}
-              <Upload className={cn("w-5 h-5", activeTab === "upload" ? "text-purple-500" : "text-current")} />
-              <div className="flex flex-col items-start gap-0.5">
-                <span className="font-semibold">Upload Document</span>
-                <span className="text-xs opacity-80">Add local files</span>
-              </div>
-            </button>
+          <div className="flex justify-center">
+            <TabsList>
+              <TabsTrigger value="crawl" color="blue">
+                <Globe className="w-4 h-4 mr-2" />
+                Crawl Website
+              </TabsTrigger>
+              <TabsTrigger value="upload" color="purple">
+                <Upload className="w-4 h-4 mr-2" />
+                Upload Document
+              </TabsTrigger>
+            </TabsList>
           </div>
 
           {/* Crawl Tab */}
@@ -207,12 +165,14 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
                   value={crawlUrl}
                   onChange={(e) => setCrawlUrl(e.target.value)}
                   disabled={isProcessing}
-                  className="pl-10 h-12 backdrop-blur-md bg-gradient-to-r from-white/60 to-white/50 dark:from-black/60 dark:to-black/50 border-gray-300/60 dark:border-gray-600/60 focus:border-cyan-400/70 focus:shadow-[0_0_20px_rgba(34,211,238,0.15)]"
+                  className={cn(
+                    "pl-10 h-12",
+                    glassCard.blur.md,
+                    glassCard.transparency.medium,
+                    "border-gray-300/60 dark:border-gray-600/60 focus:border-cyan-400/70",
+                  )}
                 />
               </div>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                Enter the URL of a website you want to crawl for knowledge
-              </p>
             </div>
 
             <div className="space-y-6">
@@ -231,7 +191,13 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
             <Button
               onClick={handleCrawl}
               disabled={isProcessing || !crawlUrl}
-              className="w-full bg-gradient-to-r from-cyan-500 to-cyan-600 hover:from-cyan-600 hover:to-cyan-700 backdrop-blur-md border border-cyan-400/50 shadow-[0_0_20px_rgba(6,182,212,0.25)] hover:shadow-[0_0_30px_rgba(6,182,212,0.35)] transition-all duration-200"
+              className={[
+                "w-full bg-gradient-to-r from-cyan-500 to-cyan-600",
+                "hover:from-cyan-600 hover:to-cyan-700",
+                "backdrop-blur-md border border-cyan-400/50",
+                "shadow-[0_0_20px_rgba(6,182,212,0.25)] hover:shadow-[0_0_30px_rgba(6,182,212,0.35)]",
+                "transition-all duration-200",
+              ].join(" ")}
             >
               {crawlMutation.isPending ? (
                 <>
@@ -268,11 +234,11 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
                 <div
                   className={cn(
                     "relative h-20 rounded-xl border-2 border-dashed transition-all duration-200",
-                    "backdrop-blur-md bg-gradient-to-b from-white/60 via-white/40 to-white/50 dark:from-black/60 dark:via-black/40 dark:to-black/50",
                     "flex flex-col items-center justify-center gap-2 text-center p-4",
-                    selectedFile
-                      ? "border-purple-400/70 bg-gradient-to-b from-purple-50/60 to-white/60 dark:from-purple-900/20 dark:to-black/50"
-                      : "border-gray-300/60 dark:border-gray-600/60 hover:border-purple-400/50 hover:bg-gradient-to-b hover:from-purple-50/40 hover:to-white/60 dark:hover:from-purple-900/10 dark:hover:to-black/50",
+                    glassCard.blur.md,
+                    selectedFile ? glassCard.tints.purple.light : glassCard.transparency.medium,
+                    selectedFile ? "border-purple-400/70" : "border-gray-300/60 dark:border-gray-600/60",
+                    !selectedFile && "hover:border-purple-400/50",
                     isProcessing && "opacity-50 cursor-not-allowed",
                   )}
                 >
@@ -312,7 +278,13 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
             <Button
               onClick={handleUpload}
               disabled={isProcessing || !selectedFile}
-              className="w-full bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 backdrop-blur-md border border-purple-400/50 shadow-[0_0_20px_rgba(147,51,234,0.25)] hover:shadow-[0_0_30px_rgba(147,51,234,0.35)] transition-all duration-200"
+              className={[
+                "w-full bg-gradient-to-r from-purple-500 to-purple-600",
+                "hover:from-purple-600 hover:to-purple-700",
+                "backdrop-blur-md border border-purple-400/50",
+                "shadow-[0_0_20px_rgba(147,51,234,0.25)] hover:shadow-[0_0_30px_rgba(147,51,234,0.35)]",
+                "transition-all duration-200",
+              ].join(" ")}
             >
               {uploadMutation.isPending ? (
                 <>

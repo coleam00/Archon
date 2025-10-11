@@ -97,7 +97,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   }
 
   return (
-    <motion.div initial="hidden" animate="visible" className="relative mb-10" variants={itemVariants}>
+    <motion.div initial="hidden" animate="visible" className="relative mb-10 w-full" variants={itemVariants}>
       <div className="overflow-x-auto overflow-y-visible pb-4 pt-2 pr-6 md:pr-8 scrollbar-thin">
         <ul className="flex gap-4 min-w-max pl-6 md:pl-8" aria-label="Projects">
           {sortedProjects.map((project) => (

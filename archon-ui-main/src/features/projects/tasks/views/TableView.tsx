@@ -2,12 +2,19 @@ import { Check, Edit, Tag, Trash2 } from "lucide-react";
 import React, { useState } from "react";
 import { useDrag, useDrop } from "react-dnd";
 import { Button, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../ui/primitives";
-import { cn } from "../../../ui/primitives/styles";
+import { cn, glassmorphism } from "../../../ui/primitives/styles";
 import { EditableTableCell } from "../components/EditableTableCell";
 import { TaskAssignee } from "../components/TaskAssignee";
 import { useDeleteTask, useUpdateTask } from "../hooks";
 import type { Assignee, Task } from "../types";
 import { getOrderColor, getOrderGlow, ItemTypes } from "../utils/task-styles";
+
+const rowVariants = {
+  even: "bg-white/50 dark:bg-black/50",
+  odd: "bg-gray-50/80 dark:bg-gray-900/30",
+  hover:
+    "hover:bg-gradient-to-r hover:from-cyan-50/70 hover:to-purple-50/70 dark:hover:from-cyan-900/20 dark:hover:to-purple-900/20",
+} satisfies Record<string, string>;
 
 interface TableViewProps {
   tasks: Task[];
@@ -114,11 +121,9 @@ const DraggableRow = ({
     <tr
       ref={(node) => drag(drop(node))}
       className={cn(
-        "group transition-all duration-200 cursor-move",
-        index % 2 === 0 ? "bg-white/50 dark:bg-black/50" : "bg-gray-50/80 dark:bg-gray-900/30",
-        "hover:bg-gradient-to-r hover:from-cyan-50/70 hover:to-purple-50/70",
-        "dark:hover:from-cyan-900/20 dark:hover:to-purple-900/20",
-        "border-b border-gray-200 dark:border-gray-800",
+        "group transition-all duration-200 cursor-move border-b border-gray-200 dark:border-gray-800",
+        index % 2 === 0 ? rowVariants.even : rowVariants.odd,
+        rowVariants.hover,
         isDragging && "opacity-50 scale-105 shadow-lg",
         isOver && "bg-cyan-100/50 dark:bg-cyan-900/20 border-cyan-400",
       )}
@@ -178,8 +183,8 @@ const DraggableRow = ({
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="ghost" size="xs" onClick={handleEdit} className="h-7 w-7 p-0">
-                  <Edit className="w-3 h-3" />
+                <Button variant="ghost" size="xs" onClick={handleEdit} className="h-7 w-7 p-0" aria-label="Edit task">
+                  <Edit className="w-3 h-3" aria-hidden="true" />
                 </Button>
               </TooltipTrigger>
               <TooltipContent>Edit task</TooltipContent>
@@ -192,8 +197,9 @@ const DraggableRow = ({
                   size="xs"
                   onClick={handleComplete}
                   className="h-7 w-7 p-0 text-green-600 hover:text-green-700"
+                  aria-label="Mark task as complete"
                 >
-                  <Check className="w-3 h-3" />
+                  <Check className="w-3 h-3" aria-hidden="true" />
                 </Button>
               </TooltipTrigger>
               <TooltipContent>Mark as complete</TooltipContent>
@@ -207,8 +213,9 @@ const DraggableRow = ({
                   onClick={handleDelete}
                   className="h-7 w-7 p-0 text-red-600 hover:text-red-700"
                   disabled={deleteTaskMutation.isPending}
+                  aria-label="Delete task"
                 >
-                  <Trash2 className="w-3 h-3" />
+                  <Trash2 className="w-3 h-3" aria-hidden="true" />
                 </Button>
               </TooltipTrigger>
               <TooltipContent>Delete task</TooltipContent>
@@ -255,7 +262,7 @@ export const TableView = ({
     <div className="overflow-x-auto">
       <table className="w-full">
         <thead>
-          <tr className="bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800 border-b-2 border-gray-200 dark:border-gray-700">
+          <tr className={cn(glassmorphism.background.card, "border-b-2 border-gray-200 dark:border-gray-700")}>
             <th className="w-1"></th>
             <th className="px-4 py-3 text-left text-sm font-medium text-gray-700 dark:text-gray-300">Title</th>
             <th className="px-4 py-3 text-left text-sm font-medium text-gray-700 dark:text-gray-300 w-32">Status</th>

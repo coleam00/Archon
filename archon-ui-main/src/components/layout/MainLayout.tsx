@@ -129,11 +129,12 @@ export function MainLayout({ children, className }: MainLayoutProps) {
   }, [isBackendError, backendError, showToast]);
 
   return (
-    <div className={cn("relative min-h-screen bg-white dark:bg-black overflow-hidden", className)}>
+    <div className={cn("relative min-h-screen overflow-hidden", className)}>
       {/* TEMPORARY: Show backend startup error using old component */}
       {backendStartupFailed && <BackendStartupError />}
 
-      {/* Fixed full-page background grid that doesn't scroll */}
+      {/* Fixed full-page background - grid pattern on dark background */}
+      <div className="fixed inset-0 bg-white dark:bg-black pointer-events-none -z-10" />
       <div className="fixed inset-0 neon-grid pointer-events-none z-0" />
 
       {/* Floating Navigation */}
@@ -143,7 +144,7 @@ export function MainLayout({ children, className }: MainLayoutProps) {
       </div>
 
       {/* Main Content Area - matches old layout exactly */}
-      <div className="relative flex-1 pl-[100px] z-10">
+      <div className="relative flex-1 pl-[100px]">
         <div className="container mx-auto px-8 relative">
           <div className="min-h-screen pt-8 pb-16">{children}</div>
         </div>

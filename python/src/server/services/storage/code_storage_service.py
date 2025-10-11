@@ -82,6 +82,10 @@ def _is_reasoning_text_response(text: str) -> bool:
 
     text_lower = text.lower().strip()
 
+    # Check for XML-style thinking tags (common in models with extended thinking)
+    if text_lower.startswith("<think>") or "<think>" in text_lower[:100]:
+        return True
+
     # Check if it's clearly not JSON (starts with reasoning text)
     starts_with_reasoning = any(text_lower.startswith(starter) for starter in REASONING_STARTERS)
 
@@ -592,10 +596,23 @@ def generate_code_example_summary(
 
 
 async def _generate_code_example_summary_async(
-    code: str, context_before: str, context_after: str, language: str = "", provider: str = None
+    code: str,
+    context_before: str,
+    context_after: str,
+    language: str = "",
+    provider: str = None,
+    client = None
 ) -> dict[str, str]:
     """
     Async version of generate_code_example_summary using unified LLM provider service.
+
+    Args:
+        code: The code example to summarize
+        context_before: Context before the code block
+        context_after: Context after the code block
+        language: Programming language of the code
+        provider: LLM provider to use (optional)
+        client: Pre-initialized LLM client for reuse (optional, improves performance)
     """
 
     # Get model choice from credential service (RAG setting)
@@ -647,283 +664,312 @@ Format your response as JSON:
         + "\n\nSecond attempt enforcement: Return JSON only with the exact schema. No additional text or reasoning content."
     )
 
+    # Use provided client or create a new one
+    if client is not None:
+        # Reuse provided client for better performance
+        return await _generate_summary_with_client(
+            client, code, context_before, context_after, language, provider,
+            model_choice, guard_prompt, strict_prompt
+        )
+    else:
+        # Create new client (backward compatibility)
+        async with get_llm_client(provider=provider) as new_client:
+            return await _generate_summary_with_client(
+                new_client, code, context_before, context_after, language, provider,
+                model_choice, guard_prompt, strict_prompt
+            )
+
+
+async def _generate_summary_with_client(
+    llm_client, code: str, context_before: str, context_after: str,
+    language: str, provider: str, model_choice: str,
+    guard_prompt: str, strict_prompt: str
+) -> dict[str, str]:
+    """Helper function that generates summary using a provided client."""
+    search_logger.info(
+        f"Generating summary for {hash(code) & 0xffffff:06x} using model: {model_choice}"
+    )
+
+    provider_lower = provider.lower()
+    is_grok_model = (provider_lower == "grok") or ("grok" in model_choice.lower())
+    is_ollama = provider_lower == "ollama"
+
+    supports_response_format_base = (
+        provider_lower in {"openai", "google", "anthropic"}
+        or (provider_lower == "openrouter" and model_choice.startswith("openai/"))
+    )
+
+    last_response_obj = None
+    last_elapsed_time = None
+    last_response_content = ""
+    last_json_error: json.JSONDecodeError | None = None
+
     try:
-        # Use unified LLM provider service
-        async with get_llm_client(provider=provider) as client:
-            search_logger.info(
-                f"Generating summary for {hash(code) & 0xffffff:06x} using model: {model_choice}"
-            )
+        for enforce_json, current_prompt in ((False, guard_prompt), (True, strict_prompt)):
+            request_params = {
+                "model": model_choice,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are a helpful assistant that analyzes code examples and provides JSON responses with example names and summaries.",
+                    },
+                    {"role": "user", "content": current_prompt},
+                ],
+                "max_tokens": 2000,
+                "temperature": 0.3,
+            }
 
-            provider_lower = provider.lower()
-            is_grok_model = (provider_lower == "grok") or ("grok" in model_choice.lower())
+            should_use_response_format = False
+            if enforce_json:
+                if not is_grok_model and (supports_response_format_base or provider_lower == "openrouter"):
+                    should_use_response_format = True
+            else:
+                if supports_response_format_base:
+                    should_use_response_format = True
 
-            supports_response_format_base = (
-                provider_lower in {"openai", "google", "anthropic"}
-                or (provider_lower == "openrouter" and model_choice.startswith("openai/"))
-            )
+            if should_use_response_format:
+                request_params["response_format"] = {"type": "json_object"}
 
-            last_response_obj = None
-            last_elapsed_time = None
-            last_response_content = ""
-            last_json_error: json.JSONDecodeError | None = None
+            # Ollama uses a different parameter format for JSON mode
+            if is_ollama and enforce_json:
+                # Remove response_format if it was set (shouldn't be for ollama)
+                request_params.pop("response_format", None)
+                # Ollama expects "format": "json" parameter
+                request_params["format"] = "json"
+                search_logger.debug("Using Ollama-specific JSON format parameter")
 
-            for enforce_json, current_prompt in ((False, guard_prompt), (True, strict_prompt)):
-                request_params = {
-                    "model": model_choice,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": "You are a helpful assistant that analyzes code examples and provides JSON responses with example names and summaries.",
-                        },
-                        {"role": "user", "content": current_prompt},
-                    ],
-                    "max_tokens": 2000,
-                    "temperature": 0.3,
-                }
+            if is_grok_model:
+                unsupported_params = ["presence_penalty", "frequency_penalty", "stop", "reasoning_effort"]
+                for param in unsupported_params:
+                    if param in request_params:
+                        removed_value = request_params.pop(param)
+                        search_logger.warning(f"Removed unsupported Grok parameter '{param}': {removed_value}")
 
-                should_use_response_format = False
-                if enforce_json:
-                    if not is_grok_model and (supports_response_format_base or provider_lower == "openrouter"):
-                        should_use_response_format = True
-                else:
-                    if supports_response_format_base:
-                        should_use_response_format = True
+                supported_params = ["model", "messages", "max_tokens", "temperature", "response_format", "stream", "tools", "tool_choice"]
+                for param in list(request_params.keys()):
+                    if param not in supported_params:
+                        search_logger.warning(f"Parameter '{param}' may not be supported by Grok reasoning models")
 
-                if should_use_response_format:
-                    request_params["response_format"] = {"type": "json_object"}
+            start_time = time.time()
+            max_retries = 3 if is_grok_model else 1
+            retry_delay = 1.0
+            response_content_local = ""
+            reasoning_text_local = ""
+            json_error_occurred = False
 
-                if is_grok_model:
-                    unsupported_params = ["presence_penalty", "frequency_penalty", "stop", "reasoning_effort"]
-                    for param in unsupported_params:
-                        if param in request_params:
-                            removed_value = request_params.pop(param)
-                            search_logger.warning(f"Removed unsupported Grok parameter '{param}': {removed_value}")
+            for attempt in range(max_retries):
+                try:
+                    if is_grok_model and attempt > 0:
+                        search_logger.info(f"Grok retry attempt {attempt + 1}/{max_retries} after {retry_delay:.1f}s delay")
+                        await asyncio.sleep(retry_delay)
 
-                    supported_params = ["model", "messages", "max_tokens", "temperature", "response_format", "stream", "tools", "tool_choice"]
-                    for param in list(request_params.keys()):
-                        if param not in supported_params:
-                            search_logger.warning(f"Parameter '{param}' may not be supported by Grok reasoning models")
+                    final_params = prepare_chat_completion_params(model_choice, request_params)
+                    response = await llm_client.chat.completions.create(**final_params)
+                    last_response_obj = response
 
-                start_time = time.time()
-                max_retries = 3 if is_grok_model else 1
-                retry_delay = 1.0
-                response_content_local = ""
-                reasoning_text_local = ""
-                json_error_occurred = False
+                    choice = response.choices[0] if response.choices else None
+                    message = choice.message if choice and hasattr(choice, "message") else None
+                    response_content_local = ""
+                    reasoning_text_local = ""
 
-                for attempt in range(max_retries):
-                    try:
-                        if is_grok_model and attempt > 0:
-                            search_logger.info(f"Grok retry attempt {attempt + 1}/{max_retries} after {retry_delay:.1f}s delay")
-                            await asyncio.sleep(retry_delay)
+                    if choice:
+                        response_content_local, reasoning_text_local, _ = extract_message_text(choice)
 
-                        final_params = prepare_chat_completion_params(model_choice, request_params)
-                        response = await client.chat.completions.create(**final_params)
-                        last_response_obj = response
+                    # Enhanced logging for response analysis
+                    if message and reasoning_text_local:
+                        content_preview = response_content_local[:100] if response_content_local else "None"
+                        reasoning_preview = reasoning_text_local[:100] if reasoning_text_local else "None"
+                        search_logger.debug(
+                            f"Response has reasoning content - content: '{content_preview}', reasoning: '{reasoning_preview}'"
+                        )
 
-                        choice = response.choices[0] if response.choices else None
-                        message = choice.message if choice and hasattr(choice, "message") else None
-                        response_content_local = ""
-                        reasoning_text_local = ""
+                    if response_content_local:
+                        last_response_content = response_content_local.strip()
 
-                        if choice:
-                            response_content_local, reasoning_text_local, _ = extract_message_text(choice)
-
-                        # Enhanced logging for response analysis
-                        if message and reasoning_text_local:
-                            content_preview = response_content_local[:100] if response_content_local else "None"
-                            reasoning_preview = reasoning_text_local[:100] if reasoning_text_local else "None"
-                            search_logger.debug(
-                                f"Response has reasoning content - content: '{content_preview}', reasoning: '{reasoning_preview}'"
-                            )
-
-                        if response_content_local:
-                            last_response_content = response_content_local.strip()
-
-                            # Pre-validate response before processing
-                            if len(last_response_content) < 20 or (len(last_response_content) < 50 and not last_response_content.strip().startswith('{')):
-                                # Very minimal response - likely "Okay\nOkay" type
-                                search_logger.debug(f"Minimal response detected: {repr(last_response_content)}")
-                                # Generate fallback directly from context
-                                fallback_json = synthesize_json_from_reasoning("", code, language)
-                                if fallback_json:
-                                    try:
-                                        result = json.loads(fallback_json)
-                                        final_result = {
-                                            "example_name": result.get("example_name", f"Code Example{f' ({language})' if language else ''}"),
-                                            "summary": result.get("summary", "Code example for demonstration purposes."),
-                                        }
-                                        search_logger.info(f"Generated fallback summary from context - Name: '{final_result['example_name']}', Summary length: {len(final_result['summary'])}")
-                                        return final_result
-                                    except json.JSONDecodeError:
-                                        pass  # Continue to normal error handling
-                                else:
-                                    # Even synthesis failed - provide hardcoded fallback for minimal responses
+                        # Pre-validate response before processing
+                        if len(last_response_content) < 20 or (len(last_response_content) < 50 and not last_response_content.strip().startswith('{')):
+                            # Very minimal response - likely "Okay\nOkay" type
+                            search_logger.debug(f"Minimal response detected: {repr(last_response_content)}")
+                            # Generate fallback directly from context
+                            fallback_json = synthesize_json_from_reasoning("", code, language)
+                            if fallback_json:
+                                try:
+                                    result = json.loads(fallback_json)
                                     final_result = {
-                                        "example_name": f"Code Example{f' ({language})' if language else ''}",
-                                        "summary": "Code example extracted from development context.",
+                                        "example_name": result.get("example_name", f"Code Example{f' ({language})' if language else ''}"),
+                                        "summary": result.get("summary", "Code example for demonstration purposes."),
                                     }
-                                    search_logger.info(f"Used hardcoded fallback for minimal response - Name: '{final_result['example_name']}', Summary length: {len(final_result['summary'])}")
+                                    search_logger.info(f"Generated fallback summary from context - Name: '{final_result['example_name']}', Summary length: {len(final_result['summary'])}")
                                     return final_result
-
-                            payload = _extract_json_payload(last_response_content, code, language)
-                            if payload != last_response_content:
-                                search_logger.debug(
-                                    f"Sanitized LLM response payload before parsing: {repr(payload[:200])}..."
-                                )
-
-                            try:
-                                result = json.loads(payload)
-
-                                if not result.get("example_name") or not result.get("summary"):
-                                    search_logger.warning(f"Incomplete response from LLM: {result}")
-
+                                except json.JSONDecodeError:
+                                    pass  # Continue to normal error handling
+                            else:
+                                # Even synthesis failed - provide hardcoded fallback for minimal responses
                                 final_result = {
-                                    "example_name": result.get(
-                                        "example_name", f"Code Example{f' ({language})' if language else ''}"
-                                    ),
-                                    "summary": result.get("summary", "Code example for demonstration purposes."),
+                                    "example_name": f"Code Example{f' ({language})' if language else ''}",
+                                    "summary": "Code example extracted from development context.",
                                 }
-
-                                search_logger.info(
-                                    f"Generated code example summary - Name: '{final_result['example_name']}', Summary length: {len(final_result['summary'])}"
-                                )
+                                search_logger.info(f"Used hardcoded fallback for minimal response - Name: '{final_result['example_name']}', Summary length: {len(final_result['summary'])}")
                                 return final_result
 
-                            except json.JSONDecodeError as json_error:
-                                last_json_error = json_error
-                                json_error_occurred = True
-                                snippet = last_response_content[:200]
-                                if not enforce_json:
-                                    # Check if this was reasoning text that couldn't be parsed
-                                    if _is_reasoning_text_response(last_response_content):
-                                        search_logger.debug(
-                                            f"Reasoning text detected but no JSON extracted. Response snippet: {repr(snippet)}"
-                                        )
-                                    else:
-                                        search_logger.warning(
-                                            f"Failed to parse JSON response from LLM (non-strict attempt). Error: {json_error}. Response snippet: {repr(snippet)}"
-                                        )
-                                    break
-                                else:
-                                    search_logger.error(
-                                        f"Strict JSON enforcement still failed to produce valid JSON: {json_error}. Response snippet: {repr(snippet)}"
+                        payload = _extract_json_payload(last_response_content, code, language)
+                        if payload != last_response_content:
+                            search_logger.debug(
+                                f"Sanitized LLM response payload before parsing: {repr(payload[:200])}..."
+                            )
+
+                        try:
+                            result = json.loads(payload)
+
+                            if not result.get("example_name") or not result.get("summary"):
+                                search_logger.warning(f"Incomplete response from LLM: {result}")
+
+                            final_result = {
+                                "example_name": result.get(
+                                    "example_name", f"Code Example{f' ({language})' if language else ''}"
+                                ),
+                                "summary": result.get("summary", "Code example for demonstration purposes."),
+                            }
+
+                            search_logger.info(
+                                f"Generated code example summary - Name: '{final_result['example_name']}', Summary length: {len(final_result['summary'])}"
+                            )
+                            return final_result
+
+                        except json.JSONDecodeError as json_error:
+                            last_json_error = json_error
+                            json_error_occurred = True
+                            snippet = last_response_content[:200]
+                            if not enforce_json:
+                                # Check if this was reasoning text that couldn't be parsed
+                                if _is_reasoning_text_response(last_response_content):
+                                    search_logger.debug(
+                                        f"Reasoning text detected but no JSON extracted. Response snippet: {repr(snippet)}"
                                     )
-                                    break
+                                else:
+                                    search_logger.warning(
+                                        f"Failed to parse JSON response from LLM (non-strict attempt). Error: {json_error}. Response snippet: {repr(snippet)}"
+                                    )
+                                break
+                            else:
+                                search_logger.error(
+                                    f"Strict JSON enforcement still failed to produce valid JSON: {json_error}. Response snippet: {repr(snippet)}"
+                                )
+                                break
 
-                        elif is_grok_model and attempt < max_retries - 1:
-                            search_logger.warning(f"Grok empty response on attempt {attempt + 1}, retrying...")
-                            retry_delay *= 2
-                            continue
-                        else:
-                            break
-
-                    except Exception as e:
-                        if is_grok_model and attempt < max_retries - 1:
-                            search_logger.error(f"Grok request failed on attempt {attempt + 1}: {e}, retrying...")
-                            retry_delay *= 2
-                            continue
-                        else:
-                            raise
-
-                if is_grok_model:
-                    elapsed_time = time.time() - start_time
-                    last_elapsed_time = elapsed_time
-                    search_logger.debug(f"Grok total response time: {elapsed_time:.2f}s")
-
-                if json_error_occurred:
-                    if not enforce_json:
+                    elif is_grok_model and attempt < max_retries - 1:
+                        search_logger.warning(f"Grok empty response on attempt {attempt + 1}, retrying...")
+                        retry_delay *= 2
                         continue
                     else:
                         break
 
-                if response_content_local:
-                    # We would have returned already on success; if we reach here, parsing failed but we are not retrying
+                except Exception as e:
+                    if is_grok_model and attempt < max_retries - 1:
+                        search_logger.error(f"Grok request failed on attempt {attempt + 1}: {e}, retrying...")
+                        retry_delay *= 2
+                        continue
+                    else:
+                        raise
+
+            if is_grok_model:
+                elapsed_time = time.time() - start_time
+                last_elapsed_time = elapsed_time
+                search_logger.debug(f"Grok total response time: {elapsed_time:.2f}s")
+
+            if json_error_occurred:
+                if not enforce_json:
                     continue
-
-            response_content = last_response_content
-            response = last_response_obj
-            elapsed_time = last_elapsed_time if last_elapsed_time is not None else 0.0
-
-            if last_json_error is not None and response_content:
-                search_logger.error(
-                    f"LLM response after strict enforcement was still not valid JSON: {last_json_error}. Clearing response to trigger error handling."
-                )
-                response_content = ""
-
-            if not response_content:
-                search_logger.error(f"Empty response from LLM for model: {model_choice} (provider: {provider})")
-                if is_grok_model:
-                    search_logger.error("Grok empty response debugging:")
-                    search_logger.error(f"  - Request took: {elapsed_time:.2f}s")
-                    search_logger.error(f"  - Response status: {getattr(response, 'status_code', 'N/A')}")
-                    search_logger.error(f"  - Response headers: {getattr(response, 'headers', 'N/A')}")
-                    search_logger.error(f"  - Full response: {response}")
-                    search_logger.error(f"  - Response choices length: {len(response.choices) if response.choices else 0}")
-                    if response.choices:
-                        search_logger.error(f"  - First choice: {response.choices[0]}")
-                        search_logger.error(f"  - Message content: '{response.choices[0].message.content}'")
-                        search_logger.error(f"  - Message role: {response.choices[0].message.role}")
-                    search_logger.error("Check: 1) API key validity, 2) rate limits, 3) model availability")
-
-                    # Implement fallback for Grok failures
-                    search_logger.warning("Attempting fallback to OpenAI due to Grok failure...")
-                    try:
-                        # Use OpenAI as fallback with similar parameters
-                        fallback_params = {
-                            "model": "gpt-4o-mini",
-                            "messages": request_params["messages"],
-                            "temperature": request_params.get("temperature", 0.1),
-                            "max_tokens": request_params.get("max_tokens", 500),
-                        }
-
-                        async with get_llm_client(provider="openai") as fallback_client:
-                            fallback_response = await fallback_client.chat.completions.create(**fallback_params)
-                            fallback_content = fallback_response.choices[0].message.content
-                            if fallback_content and fallback_content.strip():
-                                search_logger.info("gpt-4o-mini fallback succeeded")
-                                response_content = fallback_content.strip()
-                            else:
-                                search_logger.error("gpt-4o-mini fallback also returned empty response")
-                                raise ValueError(f"Both {model_choice} and gpt-4o-mini fallback failed")
-
-                    except Exception as fallback_error:
-                        search_logger.error(f"gpt-4o-mini fallback failed: {fallback_error}")
-                        raise ValueError(f"{model_choice} failed and fallback to gpt-4o-mini also failed: {fallback_error}") from fallback_error
                 else:
-                    search_logger.debug(f"Full response object: {response}")
-                    raise ValueError("Empty response from LLM")
+                    break
 
-            if not response_content:
-                # This should not happen after fallback logic, but safety check
-                raise ValueError("No valid response content after all attempts")
+            if response_content_local:
+                # We would have returned already on success; if we reach here, parsing failed but we are not retrying
+                continue
 
-            response_content = response_content.strip()
-            search_logger.debug(f"LLM API response: {repr(response_content[:200])}...")
+        response_content = last_response_content
+        response = last_response_obj
+        elapsed_time = last_elapsed_time if last_elapsed_time is not None else 0.0
 
-            payload = _extract_json_payload(response_content, code, language)
-            if payload != response_content:
-                search_logger.debug(
-                    f"Sanitized LLM response payload before parsing: {repr(payload[:200])}..."
-                )
-
-            result = json.loads(payload)
-
-            # Validate the response has the required fields
-            if not result.get("example_name") or not result.get("summary"):
-                search_logger.warning(f"Incomplete response from LLM: {result}")
-
-            final_result = {
-                "example_name": result.get(
-                    "example_name", f"Code Example{f' ({language})' if language else ''}"
-                ),
-                "summary": result.get("summary", "Code example for demonstration purposes."),
-            }
-
-            search_logger.info(
-                f"Generated code example summary - Name: '{final_result['example_name']}', Summary length: {len(final_result['summary'])}"
+        if last_json_error is not None and response_content:
+            search_logger.error(
+                f"LLM response after strict enforcement was still not valid JSON: {last_json_error}. Clearing response to trigger error handling."
             )
-            return final_result
+            response_content = ""
+
+        if not response_content:
+            search_logger.error(f"Empty response from LLM for model: {model_choice} (provider: {provider})")
+            if is_grok_model:
+                search_logger.error("Grok empty response debugging:")
+                search_logger.error(f"  - Request took: {elapsed_time:.2f}s")
+                search_logger.error(f"  - Response status: {getattr(response, 'status_code', 'N/A')}")
+                search_logger.error(f"  - Response headers: {getattr(response, 'headers', 'N/A')}")
+                search_logger.error(f"  - Full response: {response}")
+                search_logger.error(f"  - Response choices length: {len(response.choices) if response.choices else 0}")
+                if response.choices:
+                    search_logger.error(f"  - First choice: {response.choices[0]}")
+                    search_logger.error(f"  - Message content: '{response.choices[0].message.content}'")
+                    search_logger.error(f"  - Message role: {response.choices[0].message.role}")
+                search_logger.error("Check: 1) API key validity, 2) rate limits, 3) model availability")
+
+                # Implement fallback for Grok failures
+                search_logger.warning("Attempting fallback to OpenAI due to Grok failure...")
+                try:
+                    # Use OpenAI as fallback with similar parameters
+                    fallback_params = {
+                        "model": "gpt-4o-mini",
+                        "messages": request_params["messages"],
+                        "temperature": request_params.get("temperature", 0.1),
+                        "max_tokens": request_params.get("max_tokens", 500),
+                    }
+
+                    async with get_llm_client(provider="openai") as fallback_client:
+                        fallback_response = await fallback_client.chat.completions.create(**fallback_params)
+                        fallback_content = fallback_response.choices[0].message.content
+                        if fallback_content and fallback_content.strip():
+                            search_logger.info("gpt-4o-mini fallback succeeded")
+                            response_content = fallback_content.strip()
+                        else:
+                            search_logger.error("gpt-4o-mini fallback also returned empty response")
+                            raise ValueError(f"Both {model_choice} and gpt-4o-mini fallback failed")
+
+                except Exception as fallback_error:
+                    search_logger.error(f"gpt-4o-mini fallback failed: {fallback_error}")
+                    raise ValueError(f"{model_choice} failed and fallback to gpt-4o-mini also failed: {fallback_error}") from fallback_error
+            else:
+                search_logger.debug(f"Full response object: {response}")
+                raise ValueError("Empty response from LLM")
+
+        if not response_content:
+            # This should not happen after fallback logic, but safety check
+            raise ValueError("No valid response content after all attempts")
+
+        response_content = response_content.strip()
+        search_logger.debug(f"LLM API response: {repr(response_content[:200])}...")
+
+        payload = _extract_json_payload(response_content, code, language)
+        if payload != response_content:
+            search_logger.debug(
+                f"Sanitized LLM response payload before parsing: {repr(payload[:200])}..."
+            )
+
+        result = json.loads(payload)
+
+        # Validate the response has the required fields
+        if not result.get("example_name") or not result.get("summary"):
+            search_logger.warning(f"Incomplete response from LLM: {result}")
+
+        final_result = {
+            "example_name": result.get(
+                "example_name", f"Code Example{f' ({language})' if language else ''}"
+            ),
+            "summary": result.get("summary", "Code example for demonstration purposes."),
+        }
+
+        search_logger.info(
+            f"Generated code example summary - Name: '{final_result['example_name']}', Summary length: {len(final_result['summary'])}"
+        )
+        return final_result
 
     except json.JSONDecodeError as e:
         search_logger.error(
@@ -934,7 +980,7 @@ Format your response as JSON:
             fallback_json = synthesize_json_from_reasoning("", code, language)
             if fallback_json:
                 fallback_result = json.loads(fallback_json)
-                search_logger.info(f"Generated context-aware fallback summary")
+                search_logger.info("Generated context-aware fallback summary")
                 return {
                     "example_name": fallback_result.get("example_name", f"Code Example{f' ({language})' if language else ''}"),
                     "summary": fallback_result.get("summary", "Code example for demonstration purposes."),
@@ -953,7 +999,7 @@ Format your response as JSON:
             fallback_json = synthesize_json_from_reasoning("", code, language)
             if fallback_json:
                 fallback_result = json.loads(fallback_json)
-                search_logger.info(f"Generated context-aware fallback summary after error")
+                search_logger.info("Generated context-aware fallback summary after error")
                 return {
                     "example_name": fallback_result.get("example_name", f"Code Example{f' ({language})' if language else ''}"),
                     "summary": fallback_result.get("summary", "Code example for demonstration purposes."),
@@ -1002,82 +1048,84 @@ async def generate_code_summaries_batch(
         f"Generating summaries for {len(code_blocks)} code blocks with max_workers={max_workers}"
     )
 
-    # Semaphore to limit concurrent requests
-    semaphore = asyncio.Semaphore(max_workers)
-    completed_count = 0
-    lock = asyncio.Lock()
+    # Create a shared LLM client for all summaries (performance optimization)
+    async with get_llm_client(provider=provider) as shared_client:
+        search_logger.debug("Created shared LLM client for batch summary generation")
 
-    async def generate_single_summary_with_limit(block: dict[str, Any]) -> dict[str, str]:
-        nonlocal completed_count
-        async with semaphore:
-            # Add delay between requests to avoid rate limiting
-            await asyncio.sleep(0.5)  # 500ms delay between requests
+        # Semaphore to limit concurrent requests
+        semaphore = asyncio.Semaphore(max_workers)
+        completed_count = 0
+        lock = asyncio.Lock()
 
-            # Run the synchronous function in a thread
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                generate_code_example_summary,
-                block["code"],
-                block["context_before"],
-                block["context_after"],
-                block.get("language", ""),
-                provider,
+        async def generate_single_summary_with_limit(block: dict[str, Any]) -> dict[str, str]:
+            nonlocal completed_count
+            async with semaphore:
+                # Add delay between requests to avoid rate limiting
+                await asyncio.sleep(0.5)  # 500ms delay between requests
+
+                # Call async version directly with shared client (no event loop overhead)
+                result = await _generate_code_example_summary_async(
+                    block["code"],
+                    block["context_before"],
+                    block["context_after"],
+                    block.get("language", ""),
+                    provider,
+                    shared_client  # Pass shared client for reuse
+                )
+
+                # Update progress
+                async with lock:
+                    completed_count += 1
+                    if progress_callback:
+                        # Simple progress based on summaries completed
+                        progress_percentage = int((completed_count / len(code_blocks)) * 100)
+                        await progress_callback({
+                            "status": "code_extraction",
+                            "percentage": progress_percentage,
+                            "log": f"Generated {completed_count}/{len(code_blocks)} code summaries",
+                            "completed_summaries": completed_count,
+                            "total_summaries": len(code_blocks),
+                        })
+
+                return result
+
+        # Process all blocks concurrently but with rate limiting
+        try:
+            summaries = await asyncio.gather(
+                *[generate_single_summary_with_limit(block) for block in code_blocks],
+                return_exceptions=True,
             )
 
-            # Update progress
-            async with lock:
-                completed_count += 1
-                if progress_callback:
-                    # Simple progress based on summaries completed
-                    progress_percentage = int((completed_count / len(code_blocks)) * 100)
-                    await progress_callback({
-                        "status": "code_extraction",
-                        "percentage": progress_percentage,
-                        "log": f"Generated {completed_count}/{len(code_blocks)} code summaries",
-                        "completed_summaries": completed_count,
-                        "total_summaries": len(code_blocks),
-                    })
+            # Handle any exceptions in the results
+            final_summaries = []
+            for i, summary in enumerate(summaries):
+                if isinstance(summary, Exception):
+                    search_logger.error(f"Error generating summary for code block {i}: {summary}")
+                    # Use fallback summary
+                    language = code_blocks[i].get("language", "")
+                    fallback = {
+                        "example_name": f"Code Example{f' ({language})' if language else ''}",
+                        "summary": "Code example for demonstration purposes.",
+                    }
+                    final_summaries.append(fallback)
+                else:
+                    final_summaries.append(summary)
 
-            return result
+            search_logger.info(f"Successfully generated {len(final_summaries)} code summaries")
+            return final_summaries
 
-    # Process all blocks concurrently but with rate limiting
-    try:
-        summaries = await asyncio.gather(
-            *[generate_single_summary_with_limit(block) for block in code_blocks],
-            return_exceptions=True,
-        )
-
-        # Handle any exceptions in the results
-        final_summaries = []
-        for i, summary in enumerate(summaries):
-            if isinstance(summary, Exception):
-                search_logger.error(f"Error generating summary for code block {i}: {summary}")
-                # Use fallback summary
-                language = code_blocks[i].get("language", "")
+        except Exception as e:
+            search_logger.error(f"Error in batch summary generation: {e}")
+            # Return fallback summaries for all blocks
+            fallback_summaries = []
+            for block in code_blocks:
+                language = block.get("language", "")
                 fallback = {
                     "example_name": f"Code Example{f' ({language})' if language else ''}",
                     "summary": "Code example for demonstration purposes.",
                 }
-                final_summaries.append(fallback)
-            else:
-                final_summaries.append(summary)
-
-        search_logger.info(f"Successfully generated {len(final_summaries)} code summaries")
-        return final_summaries
-
-    except Exception as e:
-        search_logger.error(f"Error in batch summary generation: {e}")
-        # Return fallback summaries for all blocks
-        fallback_summaries = []
-        for block in code_blocks:
-            language = block.get("language", "")
-            fallback = {
-                "example_name": f"Code Example{f' ({language})' if language else ''}",
-                "summary": "Code example for demonstration purposes.",
-            }
-            fallback_summaries.append(fallback)
-        return fallback_summaries
+                fallback_summaries.append(fallback)
+            return fallback_summaries
 
 
 async def add_code_examples_to_supabase(

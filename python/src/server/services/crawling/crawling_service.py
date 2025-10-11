@@ -214,6 +214,7 @@ class CrawlingService:
         urls: list[str],
         max_concurrent: int | None = None,
         progress_callback: Callable[[str, int, str], Awaitable[None]] | None = None,
+        link_text_fallbacks: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         """Batch crawl multiple URLs in parallel."""
         return await self.batch_strategy.crawl_batch_with_progress(
@@ -223,6 +224,7 @@ class CrawlingService:
             max_concurrent,
             progress_callback,
             self._check_cancellation,  # Pass cancellation check
+            link_text_fallbacks,  # Pass link text fallbacks
         )
 
     async def crawl_recursive_with_progress(
@@ -698,35 +700,40 @@ class CrawlingService:
             if crawl_results and len(crawl_results) > 0:
                 content = crawl_results[0].get('markdown', '')
                 if self.url_handler.is_link_collection_file(url, content):
-                    # Extract links from the content
-                    extracted_links = self.url_handler.extract_markdown_links(content, url)
+                    # Extract links WITH text from the content
+                    extracted_links_with_text = self.url_handler.extract_markdown_links_with_text(content, url)
 
                     # Filter out self-referential links to avoid redundant crawling
-                    if extracted_links:
-                        original_count = len(extracted_links)
-                        extracted_links = [
-                            link for link in extracted_links
+                    if extracted_links_with_text:
+                        original_count = len(extracted_links_with_text)
+                        extracted_links_with_text = [
+                            (link, text) for link, text in extracted_links_with_text
                             if not self._is_self_link(link, url)
                         ]
-                        self_filtered_count = original_count - len(extracted_links)
+                        self_filtered_count = original_count - len(extracted_links_with_text)
                         if self_filtered_count > 0:
                             logger.info(f"Filtered out {self_filtered_count} self-referential links from {original_count} extracted links")
 
                     # Filter out binary files (PDFs, images, archives, etc.) to avoid wasteful crawling
-                    if extracted_links:
-                        original_count = len(extracted_links)
-                        extracted_links = [link for link in extracted_links if not self.url_handler.is_binary_file(link)]
-                        filtered_count = original_count - len(extracted_links)
+                    if extracted_links_with_text:
+                        original_count = len(extracted_links_with_text)
+                        extracted_links_with_text = [(link, text) for link, text in extracted_links_with_text if not self.url_handler.is_binary_file(link)]
+                        filtered_count = original_count - len(extracted_links_with_text)
                         if filtered_count > 0:
                             logger.info(f"Filtered out {filtered_count} binary files from {original_count} extracted links")
 
-                    if extracted_links:
+                    if extracted_links_with_text:
+                        # Build mapping of URL -> link text for title fallback
+                        url_to_link_text = {link: text for link, text in extracted_links_with_text}
+                        extracted_links = [link for link, _ in extracted_links_with_text]
+
                         # Crawl the extracted links using batch crawling
                         logger.info(f"Crawling {len(extracted_links)} extracted links from {url}")
                         batch_results = await self.crawl_batch_with_progress(
                             extracted_links,
                             max_concurrent=request.get('max_concurrent'),  # None -> use DB settings
                             progress_callback=await self._create_crawl_progress_callback("crawling"),
+                            link_text_fallbacks=url_to_link_text,  # Pass link text for title fallback
                         )
 
                         # Combine original text file results with batch results

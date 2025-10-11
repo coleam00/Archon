@@ -1,10 +1,18 @@
 import { motion } from "framer-motion";
-import { Plus } from "lucide-react";
+import { LayoutGrid, List, Plus, Search, X } from "lucide-react";
 import type React from "react";
+import { ReactNode } from "react";
 import { Button } from "../../ui/primitives/button";
+import { Input } from "../../ui/primitives/input";
+import { cn } from "../../ui/primitives/styles";
 
 interface ProjectHeaderProps {
   onNewProject: () => void;
+  layoutMode?: "horizontal" | "sidebar";
+  onLayoutModeChange?: (mode: "horizontal" | "sidebar") => void;
+  rightContent?: ReactNode;
+  searchQuery?: string;
+  onSearchChange?: (query: string) => void;
 }
 
 const titleVariants = {
@@ -25,7 +33,14 @@ const itemVariants = {
   },
 };
 
-export const ProjectHeader: React.FC<ProjectHeaderProps> = ({ onNewProject }) => {
+export const ProjectHeader: React.FC<ProjectHeaderProps> = ({
+  onNewProject,
+  layoutMode,
+  onLayoutModeChange,
+  rightContent,
+  searchQuery,
+  onSearchChange,
+}) => {
   return (
     <motion.div
       className="flex items-center justify-between mb-8"
@@ -44,10 +59,62 @@ export const ProjectHeader: React.FC<ProjectHeaderProps> = ({ onNewProject }) =>
         />
         Projects
       </motion.h1>
-      <Button onClick={onNewProject} variant="cyan" className="shadow-lg shadow-cyan-500/20">
-        <Plus className="w-4 h-4 mr-2" />
-        New Project
-      </Button>
+      <div className="flex items-center gap-3">
+        {/* Search input */}
+        {searchQuery !== undefined && onSearchChange && (
+          <div className="relative w-64">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <Input
+              type="text"
+              placeholder="Search projects..."
+              value={searchQuery}
+              onChange={(e) => onSearchChange(e.target.value)}
+              className="pl-9 pr-8"
+              aria-label="Search projects"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => onSearchChange("")}
+                className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                aria-label="Clear search"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        )}
+        {/* Layout toggle - show if mode and change handler provided */}
+        {layoutMode && onLayoutModeChange && (
+          <div className="flex gap-1 p-1 bg-black/30 dark:bg-black/50 rounded-lg border border-white/10">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onLayoutModeChange("horizontal")}
+              className={cn("px-3", layoutMode === "horizontal" && "bg-purple-500/20 text-purple-400")}
+              aria-label="Switch to horizontal layout"
+              aria-pressed={layoutMode === "horizontal"}
+            >
+              <LayoutGrid className="w-4 h-4" aria-hidden="true" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onLayoutModeChange("sidebar")}
+              className={cn("px-3", layoutMode === "sidebar" && "bg-purple-500/20 text-purple-400")}
+              aria-label="Switch to sidebar layout"
+              aria-pressed={layoutMode === "sidebar"}
+            >
+              <List className="w-4 h-4" aria-hidden="true" />
+            </Button>
+          </div>
+        )}
+        {rightContent}
+        <Button onClick={onNewProject} variant="cyan" className="shadow-lg shadow-cyan-500/20">
+          <Plus className="w-4 h-4 mr-2" />
+          New Project
+        </Button>
+      </div>
     </motion.div>
   );
 };

@@ -1,10 +1,15 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
+import { Activity, CheckCircle2, FileText, LayoutGrid, List, ListTodo, Pin } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useStaggeredEntrance } from "../../../hooks/useStaggeredEntrance";
+import { isOptimistic } from "../../shared/utils/optimistic";
 import { DeleteConfirmModal } from "../../ui/components/DeleteConfirmModal";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/primitives";
+import { OptimisticIndicator } from "../../ui/primitives/OptimisticIndicator";
+import { Button, PillNavigation, SelectableCard } from "../../ui/primitives";
+import { StatPill } from "../../ui/primitives/pill";
+import { cn } from "../../ui/primitives/styles";
 import { NewProjectModal } from "../components/NewProjectModal";
 import { ProjectHeader } from "../components/ProjectHeader";
 import { ProjectList } from "../components/ProjectList";
@@ -44,6 +49,9 @@ export function ProjectsView({ className = "", "data-id": dataId }: ProjectsView
   // State management
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [activeTab, setActiveTab] = useState("tasks");
+  const [layoutMode, setLayoutMode] = useState<"horizontal" | "sidebar">("horizontal");
+  const [sidebarExpanded, setSidebarExpanded] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [projectToDelete, setProjectToDelete] = useState<{
@@ -59,14 +67,20 @@ export function ProjectsView({ className = "", "data-id": dataId }: ProjectsView
   const updateProjectMutation = useUpdateProject();
   const deleteProjectMutation = useDeleteProject();
 
-  // Sort projects - pinned first, then alphabetically
+  // Sort and filter projects
   const sortedProjects = useMemo(() => {
-    return [...(projects as Project[])].sort((a, b) => {
+    // Filter by search query
+    const filtered = (projects as Project[]).filter((project) =>
+      project.title.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+
+    // Sort: pinned first, then alphabetically
+    return filtered.sort((a, b) => {
       if (a.pinned && !b.pinned) return -1;
       if (!a.pinned && b.pinned) return 1;
       return a.title.localeCompare(b.title);
     });
-  }, [projects]);
+  }, [projects, searchQuery]);
 
   // Handle project selection
   const handleProjectSelect = useCallback(
@@ -165,51 +179,142 @@ export function ProjectsView({ className = "", "data-id": dataId }: ProjectsView
       initial="hidden"
       animate={isVisible ? "visible" : "hidden"}
       variants={containerVariants}
-      className={`max-w-full mx-auto ${className}`}
+      className={cn("max-w-full mx-auto", className)}
       data-id={dataId}
     >
-      <ProjectHeader onNewProject={() => setIsNewProjectModalOpen(true)} />
-
-      <ProjectList
-        projects={sortedProjects}
-        selectedProject={selectedProject}
-        taskCounts={taskCounts}
-        isLoading={isLoadingProjects}
-        error={projectsError as Error | null}
-        onProjectSelect={handleProjectSelect}
-        onPinProject={handlePinProject}
-        onDeleteProject={handleDeleteProject}
-        onRetry={() => queryClient.invalidateQueries({ queryKey: projectKeys.lists() })}
+      <ProjectHeader
+        onNewProject={() => setIsNewProjectModalOpen(true)}
+        layoutMode={layoutMode}
+        onLayoutModeChange={setLayoutMode}
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
       />
 
-      {/* Project Details Section */}
-      {selectedProject && (
-        <motion.div variants={itemVariants} className="relative">
-          <Tabs defaultValue="tasks" value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsList>
-              <TabsTrigger value="docs" className="py-3 font-mono transition-all duration-300" color="blue">
-                Docs
-              </TabsTrigger>
-              <TabsTrigger value="tasks" className="py-3 font-mono transition-all duration-300" color="orange">
-                Tasks
-              </TabsTrigger>
-            </TabsList>
+      {layoutMode === "horizontal" ? (
+        <>
+          <ProjectList
+            projects={sortedProjects}
+            selectedProject={selectedProject}
+            taskCounts={taskCounts}
+            isLoading={isLoadingProjects}
+            error={projectsError as Error | null}
+            onProjectSelect={handleProjectSelect}
+            onPinProject={handlePinProject}
+            onDeleteProject={handleDeleteProject}
+            onRetry={() => queryClient.invalidateQueries({ queryKey: projectKeys.lists() })}
+          />
 
-            {/* Tab content */}
-            <div>
-              {activeTab === "docs" && (
-                <TabsContent value="docs" className="mt-0">
-                  <DocsTab project={selectedProject} />
-                </TabsContent>
-              )}
-              {activeTab === "tasks" && (
-                <TabsContent value="tasks" className="mt-0">
-                  <TasksTab projectId={selectedProject.id} />
-                </TabsContent>
-              )}
+          {/* Project Details Section */}
+          {selectedProject && (
+            <motion.div variants={itemVariants} className="relative">
+              {/* PillNavigation centered, View Toggle on right */}
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex-1" />
+                <PillNavigation
+                  items={[
+                    { id: "docs", label: "Docs", icon: <FileText className="w-4 h-4" /> },
+                    { id: "tasks", label: "Tasks", icon: <ListTodo className="w-4 h-4" /> },
+                  ]}
+                  activeSection={activeTab}
+                  onSectionClick={(id) => setActiveTab(id as string)}
+                  colorVariant="orange"
+                  size="small"
+                  showIcons={true}
+                  showText={true}
+                  hasSubmenus={false}
+                />
+                <div className="flex-1" />
+              </div>
+
+              {/* Tab content */}
+              <div>
+                {activeTab === "docs" && <DocsTab project={selectedProject} />}
+                {activeTab === "tasks" && <TasksTab projectId={selectedProject.id} />}
+              </div>
+            </motion.div>
+          )}
+        </>
+      ) : (
+        /* Sidebar Mode */
+        <div className="flex gap-6">
+          {/* Left Sidebar - Collapsible Project List */}
+          {sidebarExpanded && (
+            <div className="w-64 flex-shrink-0 space-y-2">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-semibold text-gray-800 dark:text-white">Projects</h3>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSidebarExpanded(false)}
+                  className="px-2"
+                  aria-label="Collapse sidebar"
+                  aria-expanded={sidebarExpanded}
+                >
+                  <List className="w-3 h-3" aria-hidden="true" />
+                </Button>
+              </div>
+              <div className="space-y-2">
+                {sortedProjects.map((project) => (
+                  <SidebarProjectCard
+                    key={project.id}
+                    project={project}
+                    isSelected={selectedProject?.id === project.id}
+                    taskCounts={taskCounts[project.id] || { todo: 0, doing: 0, review: 0, done: 0 }}
+                    onSelect={() => handleProjectSelect(project)}
+                  />
+                ))}
+              </div>
             </div>
-          </Tabs>
-        </motion.div>
+          )}
+
+          {/* Main Content Area - CRITICAL: min-w-0 prevents page expansion */}
+          <div className="flex-1 min-w-0">
+            {selectedProject && (
+              <>
+                {/* Header with project name, tabs, view toggle inline */}
+                <div className="flex items-center gap-4 mb-4">
+                  {!sidebarExpanded && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setSidebarExpanded(true)}
+                      className="px-2 flex-shrink-0"
+                      aria-label="Expand sidebar"
+                      aria-expanded={sidebarExpanded}
+                    >
+                      <List className="w-3 h-3 mr-1" aria-hidden="true" />
+                      <span className="text-sm font-medium">{selectedProject.title}</span>
+                    </Button>
+                  )}
+
+                  {/* PillNavigation - ALWAYS CENTERED */}
+                  <div className="flex-1 flex justify-center">
+                    <PillNavigation
+                      items={[
+                        { id: "docs", label: "Docs", icon: <FileText className="w-4 h-4" /> },
+                        { id: "tasks", label: "Tasks", icon: <ListTodo className="w-4 h-4" /> },
+                      ]}
+                      activeSection={activeTab}
+                      onSectionClick={(id) => setActiveTab(id as string)}
+                      colorVariant="orange"
+                      size="small"
+                      showIcons={true}
+                      showText={true}
+                      hasSubmenus={false}
+                    />
+                  </div>
+                  <div className="flex-1" />
+                </div>
+
+                {/* Tab Content */}
+                <div>
+                  {activeTab === "docs" && <DocsTab project={selectedProject} />}
+                  {activeTab === "tasks" && <TasksTab projectId={selectedProject.id} />}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       )}
 
       {/* Modals */}
@@ -232,3 +337,77 @@ export function ProjectsView({ className = "", "data-id": dataId }: ProjectsView
     </motion.div>
   );
 }
+
+// Sidebar Project Card - compact variant with StatPills
+interface SidebarProjectCardProps {
+  project: Project;
+  isSelected: boolean;
+  taskCounts: {
+    todo: number;
+    doing: number;
+    review: number;
+    done: number;
+  };
+  onSelect: () => void;
+}
+
+const SidebarProjectCard: React.FC<SidebarProjectCardProps> = ({ project, isSelected, taskCounts, onSelect }) => {
+  const optimistic = isOptimistic(project);
+
+  const getBackgroundClass = () => {
+    if (project.pinned)
+      return "bg-gradient-to-b from-purple-100/80 via-purple-50/30 to-purple-100/50 dark:from-purple-900/30 dark:via-purple-900/20 dark:to-purple-900/10";
+    if (isSelected)
+      return "bg-gradient-to-b from-white/70 via-purple-50/20 to-white/50 dark:from-white/5 dark:via-purple-900/5 dark:to-black/20";
+    return "bg-gradient-to-b from-white/80 to-white/60 dark:from-white/10 dark:to-black/30";
+  };
+
+  return (
+    <SelectableCard
+      isSelected={isSelected}
+      isPinned={project.pinned}
+      showAuroraGlow={isSelected}
+      onSelect={onSelect}
+      size="none"
+      blur="md"
+      className={cn("p-2", getBackgroundClass(), optimistic && "opacity-80 ring-1 ring-cyan-400/30")}
+    >
+      <div className="space-y-2">
+        {/* Title */}
+        <div className="flex items-center justify-between">
+          <h4
+            className={cn(
+              "font-medium text-sm line-clamp-1 flex-1",
+              isSelected ? "text-purple-700 dark:text-purple-300" : "text-gray-700 dark:text-gray-300",
+            )}
+          >
+            {project.title}
+          </h4>
+          <div className="flex items-center gap-1">
+            {project.pinned && (
+              <div
+                className="flex items-center gap-1 px-1.5 py-0.5 bg-purple-500 dark:bg-purple-600 text-white text-[9px] font-bold rounded-full"
+                aria-label="Pinned"
+              >
+                <Pin className="w-2.5 h-2.5" aria-hidden="true" />
+              </div>
+            )}
+            <OptimisticIndicator isOptimistic={optimistic} />
+          </div>
+        </div>
+
+        {/* Status Pills - horizontal layout with icons */}
+        <div className="flex items-center gap-1.5">
+          <StatPill color="pink" value={taskCounts.todo} size="sm" icon={<ListTodo className="w-3 h-3" />} />
+          <StatPill
+            color="blue"
+            value={taskCounts.doing + taskCounts.review}
+            size="sm"
+            icon={<Activity className="w-3 h-3" />}
+          />
+          <StatPill color="green" value={taskCounts.done} size="sm" icon={<CheckCircle2 className="w-3 h-3" />} />
+        </div>
+      </div>
+    </SelectableCard>
+  );
+};

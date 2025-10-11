@@ -37,7 +37,7 @@ export const BoardView = ({
   return (
     <div className="flex flex-col h-full min-h-[70vh] relative">
       {/* Board Columns Grid */}
-      <div className="grid grid-cols-4 gap-1 flex-1 p-2">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2 flex-1 p-2 min-h-[500px]">
         {columns.map(({ status, title }) => (
           <KanbanColumn
             key={status}

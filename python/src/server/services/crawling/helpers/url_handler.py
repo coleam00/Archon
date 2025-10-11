@@ -282,21 +282,37 @@ class URLHandler:
     def extract_markdown_links(content: str, base_url: Optional[str] = None) -> List[str]:
         """
         Extract markdown-style links from text content.
-        
+
         Args:
             content: Text content to extract links from
             base_url: Base URL to resolve relative links against
-            
+
         Returns:
             List of absolute URLs found in the content
+        """
+        # Extract with text and return only URLs for backward compatibility
+        links_with_text = URLHandler.extract_markdown_links_with_text(content, base_url)
+        return [url for url, _ in links_with_text]
+
+    @staticmethod
+    def extract_markdown_links_with_text(content: str, base_url: Optional[str] = None) -> List[tuple[str, str]]:
+        """
+        Extract markdown-style links from text content with their link text.
+
+        Args:
+            content: Text content to extract links from
+            base_url: Base URL to resolve relative links against
+
+        Returns:
+            List of (url, link_text) tuples
         """
         try:
             if not content:
                 return []
-            
+
             # Ultimate URL pattern with comprehensive format support:
             #  1) [text](url) - markdown links
-            #  2) <https://...> - autolinks  
+            #  2) <https://...> - autolinks
             #  3) https://... - bare URLs with protocol
             #  4) //example.com - protocol-relative URLs
             #  5) www.example.com - scheme-less www URLs
@@ -317,7 +333,7 @@ class URLHandler:
                 cleaned = ''.join(c for c in cleaned if unicodedata.category(c) not in ('Cf', 'Cc'))
                 return cleaned
 
-            urls = []
+            links = []
             for match in re.finditer(combined_pattern, content):
                 url = (
                     match.group('md')
@@ -350,21 +366,24 @@ class URLHandler:
 
                 # Only include HTTP/HTTPS URLs
                 if url.startswith(('http://', 'https://')):
-                    urls.append(url)
-            
-            # Remove duplicates while preserving order
+                    # Extract link text if available (from markdown links)
+                    link_text = match.group('text') if match.group('md') else ''
+                    link_text = link_text.strip() if link_text else ''
+                    links.append((url, link_text))
+
+            # Remove duplicates while preserving order (first occurrence wins)
             seen = set()
-            unique_urls = []
-            for url in urls:
+            unique_links = []
+            for url, text in links:
                 if url not in seen:
                     seen.add(url)
-                    unique_urls.append(url)
-            
-            logger.info(f"Extracted {len(unique_urls)} unique links from content")
-            return unique_urls
-            
+                    unique_links.append((url, text))
+
+            logger.info(f"Extracted {len(unique_links)} unique links from content")
+            return unique_links
+
         except Exception as e:
-            logger.error(f"Error extracting markdown links: {e}", exc_info=True)
+            logger.error(f"Error extracting markdown links with text: {e}", exc_info=True)
             return []
     
     @staticmethod

@@ -3,7 +3,9 @@ import type React from "react";
 import { useCallback } from "react";
 import { useDrag, useDrop } from "react-dnd";
 import { isOptimistic } from "@/features/shared/utils/optimistic";
+import { Card } from "../../../ui/primitives";
 import { OptimisticIndicator } from "../../../ui/primitives/OptimisticIndicator";
+import { cn } from "../../../ui/primitives/styles";
 import { useTaskActions } from "../hooks";
 import type { Assignee, Task, TaskPriority } from "../types";
 import { getOrderColor, getOrderGlow, ItemTypes } from "../utils/task-styles";
@@ -120,48 +122,40 @@ export const TaskCard: React.FC<TaskCardProps> = ({
     }
   };
 
-  // Glassmorphism styling constants
-  const cardBaseStyles =
-    "bg-gradient-to-b from-white/80 to-white/60 dark:from-white/10 dark:to-black/30 border border-gray-200 dark:border-gray-700 rounded-lg backdrop-blur-md";
-  const transitionStyles = "transition-all duration-200 ease-in-out";
-
-  // Subtle highlight effect for related tasks
-  const highlightGlow = isHighlighted ? "border-cyan-400/50 shadow-[0_0_8px_rgba(34,211,238,0.2)]" : "";
-
-  // Selection styling with glassmorphism
-  const selectionGlow = isSelected
-    ? "border-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.4)] bg-blue-50/30 dark:bg-blue-900/20"
-    : "";
-
-  // Beautiful hover effect with glowing borders
-  const hoverEffectClasses =
-    "group-hover:border-cyan-400/70 dark:group-hover:border-cyan-500/50 group-hover:shadow-[0_0_15px_rgba(34,211,238,0.4)] dark:group-hover:shadow-[0_0_15px_rgba(34,211,238,0.6)]";
-
   return (
     // biome-ignore lint/a11y/useSemanticElements: Drag-and-drop card with react-dnd - requires div for drag handle
     <div
       ref={(node) => drag(drop(node))}
-      role="button"
-      tabIndex={0}
-      className={`w-full min-h-[140px] cursor-move relative ${isDragging ? "opacity-50 scale-90" : "scale-100 opacity-100"} ${transitionStyles} group`}
+      role="group"
+      className={cn(
+        "w-full min-h-[140px] cursor-move relative group",
+        "transition-all duration-200 ease-in-out",
+        isDragging ? "opacity-50 scale-90" : "scale-100 opacity-100",
+      )}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       onClick={handleTaskClick}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          if (onEdit) {
-            onEdit(task);
-          }
-        }
-      }}
     >
-      <div
-        className={`${cardBaseStyles} ${transitionStyles} ${hoverEffectClasses} ${highlightGlow} ${selectionGlow} ${optimistic ? "opacity-80 ring-1 ring-cyan-400/30" : ""} w-full min-h-[140px] h-full`}
+      <Card
+        blur="md"
+        transparency="light"
+        size="none"
+        className={cn(
+          "transition-all duration-200 ease-in-out",
+          "w-full min-h-[140px] h-full",
+          isHighlighted && "border-cyan-400/50 shadow-[0_0_8px_rgba(34,211,238,0.2)]",
+          isSelected && "border-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.4)]",
+          "group-hover:border-cyan-400/70 dark:group-hover:border-cyan-500/50 group-hover:shadow-[0_0_15px_rgba(34,211,238,0.4)] dark:group-hover:shadow-[0_0_15px_rgba(34,211,238,0.6)]",
+          optimistic && "opacity-80 ring-1 ring-cyan-400/30",
+        )}
       >
         {/* Priority indicator with beautiful glow */}
         <div
-          className={`absolute left-0 top-0 bottom-0 w-[3px] ${getOrderColor(task.task_order)} ${getOrderGlow(task.task_order)} rounded-l-lg opacity-80 group-hover:w-[4px] group-hover:opacity-100 transition-all duration-300`}
+          className={cn(
+            "absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg opacity-80 group-hover:w-[4px] group-hover:opacity-100 transition-all duration-300",
+            getOrderColor(task.task_order),
+            getOrderGlow(task.task_order),
+          )}
         />
 
         {/* Content container with fixed padding */}
@@ -186,7 +180,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
             <OptimisticIndicator isOptimistic={optimistic} className="ml-auto" />
 
             {/* Action buttons group */}
-            <div className={`${optimistic ? "" : "ml-auto"} flex items-center gap-1.5`}>
+            <div className={cn("flex items-center gap-1.5", !optimistic && "ml-auto")}>
               <TaskCardActions
                 taskId={task.id}
                 taskTitle={task.title}
@@ -232,7 +226,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
             />
           </div>
         </div>
-      </div>
+      </Card>
     </div>
   );
 };

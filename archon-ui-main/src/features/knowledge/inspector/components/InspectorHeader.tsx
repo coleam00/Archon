@@ -38,8 +38,8 @@ export const InspectorHeader: React.FC<InspectorHeaderProps> = ({
               className={cn(
                 "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium",
                 item.source_type === "url"
-                  ? "bg-blue-500/10 text-blue-400 border border-blue-500/20"
-                  : "bg-purple-500/10 text-purple-400 border border-purple-500/20",
+                  ? "bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20"
+                  : "bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20",
               )}
             >
               {item.source_type === "url" ? (
@@ -60,8 +60,8 @@ export const InspectorHeader: React.FC<InspectorHeaderProps> = ({
               className={cn(
                 "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium",
                 item.knowledge_type === "technical"
-                  ? "bg-green-500/10 text-green-400 border border-green-500/20"
-                  : "bg-orange-500/10 text-orange-400 border border-orange-500/20",
+                  ? "bg-green-500/10 text-green-600 dark:text-green-400 border border-green-500/20"
+                  : "bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/20",
               )}
             >
               {item.knowledge_type === "technical" ? (

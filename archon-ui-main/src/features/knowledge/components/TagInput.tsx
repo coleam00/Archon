@@ -7,7 +7,7 @@ import { motion } from "framer-motion";
 import { Plus, X } from "lucide-react";
 import { useState } from "react";
 import { Input } from "../../ui/primitives";
-import { cn } from "../../ui/primitives/styles";
+import { cn, glassCard } from "../../ui/primitives/styles";
 
 interface TagInputProps {
   tags: string[];
@@ -75,12 +75,17 @@ export const TagInput: React.FC<TagInputProps> = ({
 
   return (
     <div className="space-y-3">
-      <div className="text-sm font-medium text-gray-900 dark:text-white/90">Tags</div>
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-sm font-medium text-gray-900 dark:text-white/90">Tags</div>
+        <div className="text-xs text-gray-500 dark:text-gray-400">
+          Press Enter or comma to add tags • Backspace to remove last tag
+        </div>
+      </div>
 
       {/* Tag Display */}
       {tags.length > 0 && (
         <div className="flex flex-wrap gap-2">
-          {tags.map((tag, index) => (
+          {tags.map((tag) => (
             <motion.div
               key={tag}
               initial={{ opacity: 0, scale: 0.8 }}
@@ -88,9 +93,9 @@ export const TagInput: React.FC<TagInputProps> = ({
               exit={{ opacity: 0, scale: 0.8 }}
               className={cn(
                 "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium",
-                "backdrop-blur-md bg-gradient-to-r from-blue-100/80 to-blue-50/60 dark:from-blue-900/40 dark:to-blue-800/30",
-                "border border-blue-300/50 dark:border-blue-700/50",
-                "text-blue-700 dark:text-blue-300",
+                glassCard.blur.md,
+                glassCard.tints.blue.medium,
+                "border border-blue-400/30",
                 "transition-all duration-200",
               )}
             >
@@ -102,7 +107,7 @@ export const TagInput: React.FC<TagInputProps> = ({
                   className="ml-0.5 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-200 transition-colors"
                   aria-label={`Remove ${tag} tag`}
                 >
-                  <X className="w-3 h-3" />
+                  <X className="w-3 h-3" aria-hidden="true" />
                 </button>
               )}
             </motion.div>
@@ -122,19 +127,21 @@ export const TagInput: React.FC<TagInputProps> = ({
           onKeyDown={handleKeyDown}
           placeholder={tags.length >= maxTags ? "Maximum tags reached" : placeholder}
           disabled={disabled || tags.length >= maxTags}
-          className="pl-9 backdrop-blur-md bg-gradient-to-r from-white/60 to-white/50 dark:from-black/60 dark:to-black/50 border-gray-300/60 dark:border-gray-600/60 focus:border-blue-400/70 focus:shadow-[0_0_15px_rgba(59,130,246,0.15)]"
+          className={cn(
+            "pl-9",
+            glassCard.blur.md,
+            glassCard.transparency.medium,
+            "border-gray-300/60 dark:border-gray-600/60 focus:border-blue-400/70",
+          )}
         />
       </div>
 
-      {/* Help Text */}
-      <div className="text-xs text-gray-500 dark:text-gray-400 space-y-1">
-        <p>Press Enter or comma to add tags • Backspace to remove last tag</p>
-        {maxTags && (
-          <p>
-            {tags.length}/{maxTags} tags used
-          </p>
-        )}
-      </div>
+      {/* Tag count */}
+      {maxTags && (
+        <div className="text-xs text-gray-500 dark:text-gray-400">
+          {tags.length}/{maxTags} tags used
+        </div>
+      )}
     </div>
   );
 };

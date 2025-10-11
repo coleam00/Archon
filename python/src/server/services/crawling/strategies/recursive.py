@@ -277,10 +277,23 @@ class RecursiveCrawlStrategy:
                     total_processed += 1
 
                     if result.success and result.markdown and result.markdown.fit_markdown:
+                        # Extract title from HTML <title> tag
+                        title = "Untitled"
+                        if result.html:
+                            import re
+                            title_match = re.search(r'<title[^>]*>(.*?)</title>', result.html, re.IGNORECASE | re.DOTALL)
+                            if title_match:
+                                extracted_title = title_match.group(1).strip()
+                                # Clean up HTML entities
+                                extracted_title = extracted_title.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>').replace('&quot;', '"')
+                                if extracted_title:
+                                    title = extracted_title
+
                         results_all.append({
                             "url": original_url,
                             "markdown": result.markdown.fit_markdown,
                             "html": result.html,  # Always use raw HTML for code extraction
+                            "title": title,
                         })
                         depth_successful += 1
 

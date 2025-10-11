@@ -4,9 +4,9 @@
  */
 
 import { motion } from "framer-motion";
-import { Check, Info } from "lucide-react";
-import { cn } from "../../ui/primitives/styles";
-import { SimpleTooltip } from "../../ui/primitives/tooltip";
+import { Info } from "lucide-react";
+import { cn, glassCard } from "../../ui/primitives/styles";
+import { SimpleTooltip, Tooltip, TooltipContent, TooltipTrigger } from "../../ui/primitives/tooltip";
 
 interface LevelSelectorProps {
   value: string;
@@ -43,36 +43,47 @@ const LEVELS = [
 
 export const LevelSelector: React.FC<LevelSelectorProps> = ({ value, onValueChange, disabled = false }) => {
   const tooltipContent = (
-    <div className="space-y-2 text-xs">
-      <div className="font-semibold mb-2">Crawl Depth Level Explanations:</div>
+    <div className="space-y-2 max-w-xs">
+      <div className="font-semibold mb-2 text-sm">Crawl Depth Levels:</div>
       {LEVELS.map((level) => (
-        <div key={level.value} className="space-y-1">
-          <div className="font-medium">
-            Level {level.value}: "{level.description}"
+        <div key={level.value} className="space-y-0.5">
+          <div className="text-xs font-medium">
+            Level {level.value}: {level.description}
           </div>
-          <div className="text-gray-300 dark:text-gray-400 pl-2">{level.details}</div>
+          <div className="text-xs text-gray-400 dark:text-gray-500 pl-2">{level.details}</div>
         </div>
       ))}
-      <div className="mt-3 pt-2 border-t border-gray-600 dark:border-gray-400">
-        <div className="flex items-center gap-1">
-          <span>💡</span>
-          <span className="font-medium">More data isn't always better. Choose based on your needs.</span>
-        </div>
+      <div className="mt-2 pt-2 border-t border-gray-600 dark:border-gray-500 text-xs">
+        💡 More data isn't always better. Choose based on your needs.
       </div>
     </div>
   );
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <div className="text-sm font-medium text-gray-900 dark:text-white/90" id="crawl-depth-label">
-          Crawl Depth
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <div className="text-sm font-medium text-gray-900 dark:text-white/90" id="crawl-depth-label">
+            Crawl Depth
+          </div>
+          <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className="text-gray-400 hover:text-cyan-500 transition-colors cursor-help"
+              aria-label="Show crawl depth level details"
+            >
+              <Info className="w-4 h-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right">{tooltipContent}</TooltipContent>
+        </Tooltip>
         </div>
-        <SimpleTooltip content={tooltipContent}>
-          <Info className="w-4 h-4 text-gray-400 hover:text-cyan-500 transition-colors cursor-help" />
-        </SimpleTooltip>
+        <div className="text-xs text-gray-500 dark:text-gray-400">
+          Higher levels crawl deeper into the website structure
+        </div>
       </div>
-      <div className="grid grid-cols-4 gap-3" role="radiogroup" aria-labelledby="crawl-depth-label">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" role="radiogroup" aria-labelledby="crawl-depth-label">
         {LEVELS.map((level) => {
           const isSelected = value === level.value;
 
@@ -98,29 +109,34 @@ export const LevelSelector: React.FC<LevelSelectorProps> = ({ value, onValueChan
                   }}
                   disabled={disabled}
                   className={cn(
-                    "relative w-full h-16 rounded-xl transition-all duration-200 border-2",
+                    "relative w-full h-16 rounded-xl transition-all duration-200",
                     "flex flex-col items-center justify-center gap-1",
-                    "backdrop-blur-md focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2",
-                    isSelected
-                      ? "border-cyan-500/60 bg-gradient-to-b from-cyan-100/60 via-cyan-50/30 to-white/70 dark:from-cyan-900/30 dark:via-cyan-900/15 dark:to-black/40"
-                      : "border-gray-300/50 dark:border-gray-700/50 bg-gradient-to-b from-gray-50/50 via-gray-25/25 to-white/60 dark:from-gray-800/20 dark:via-gray-800/10 dark:to-black/30",
-                    !disabled && "hover:border-cyan-400/50 hover:shadow-[0_0_15px_rgba(6,182,212,0.15)]",
+                    glassCard.base,
+                    "focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500 focus-visible:ring-offset-2",
+                    isSelected ? glassCard.edgeColors.cyan.border : "border border-gray-300/50 dark:border-gray-700/50",
+                    isSelected ? glassCard.tints.cyan.light : glassCard.transparency.light,
+                    !disabled && !isSelected && "hover:border-cyan-400/50",
                     disabled && "opacity-50 cursor-not-allowed",
                   )}
                 >
-                  {/* Top accent glow for selected state */}
+                  {/* Top edge-lit effect for selected state */}
                   {isSelected && (
-                    <div className="pointer-events-none absolute inset-x-0 top-0">
-                      <div className="mx-1 mt-0.5 h-[2px] rounded-full bg-cyan-500" />
-                      <div className="-mt-1 h-6 w-full bg-gradient-to-b from-cyan-500/25 to-transparent blur-md" />
-                    </div>
-                  )}
-
-                  {/* Selection indicator */}
-                  {isSelected && (
-                    <div className="absolute -top-1 -right-1 w-5 h-5 bg-cyan-500 rounded-full flex items-center justify-center">
-                      <Check className="w-3 h-3 text-white" />
-                    </div>
+                    <>
+                      <div
+                        className={cn(
+                          "absolute inset-x-0 top-0 h-[2px] pointer-events-none z-10",
+                          glassCard.edgeLit.position.top,
+                          glassCard.edgeLit.color.cyan.line,
+                          glassCard.edgeLit.color.cyan.glow,
+                        )}
+                      />
+                      <div
+                        className={cn(
+                          "absolute inset-x-0 top-0 h-16 bg-gradient-to-b to-transparent blur-lg pointer-events-none z-10",
+                          glassCard.edgeLit.color.cyan.gradient.vertical,
+                        )}
+                      />
+                    </>
                   )}
 
                   {/* Level number */}
@@ -147,11 +163,6 @@ export const LevelSelector: React.FC<LevelSelectorProps> = ({ value, onValueChan
             </motion.div>
           );
         })}
-      </div>
-
-      {/* Help text */}
-      <div className="text-xs text-gray-500 dark:text-gray-400 text-center">
-        Higher levels crawl deeper into the website structure
       </div>
     </div>
   );

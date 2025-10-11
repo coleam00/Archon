@@ -14,5 +14,5 @@ ON CONFLICT (key) DO NOTHING;
 
 -- Record migration application for tracking
 INSERT INTO archon_migrations (version, migration_name)
-VALUES ('0.1.0', '009_add_provider_placeholders')
+VALUES ('0.1.0', '010_add_provider_placeholders')
 ON CONFLICT (version, migration_name) DO NOTHING;

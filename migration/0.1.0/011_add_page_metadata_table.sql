@@ -69,6 +69,11 @@ COMMENT ON COLUMN archon_page_metadata.chunk_count IS 'Number of chunks created 
 COMMENT ON COLUMN archon_page_metadata.metadata IS 'Flexible JSON metadata (page_type, knowledge_type, tags, etc)';
 COMMENT ON COLUMN archon_crawled_pages.page_id IS 'Foreign key linking chunk to parent page';
 
+-- Record migration application for tracking
+INSERT INTO archon_migrations (version, migration_name)
+VALUES ('0.1.0', '011_add_page_metadata_table')
+ON CONFLICT (version, migration_name) DO NOTHING;
+
 -- =====================================================
 -- MIGRATION COMPLETE
 -- =====================================================

@@ -72,8 +72,8 @@ export const KnowledgeCardType: React.FC<KnowledgeCardTypeProps> = ({ sourceId, 
               "border-cyan-400 dark:border-cyan-600",
               "focus:ring-1 focus:ring-cyan-400",
               isTechnical
-                ? "bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400"
-                : "bg-pink-100 text-pink-700 dark:bg-pink-500/10 dark:text-pink-400",
+                ? "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400"
+                : "bg-purple-500/10 text-purple-600 dark:text-purple-400",
             )}
           >
             <SelectValue>
@@ -111,8 +111,8 @@ export const KnowledgeCardType: React.FC<KnowledgeCardTypeProps> = ({ sourceId, 
           "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium cursor-pointer",
           "hover:ring-1 hover:ring-cyan-400/50 transition-all",
           isTechnical
-            ? "bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400"
-            : "bg-pink-100 text-pink-700 dark:bg-pink-500/10 dark:text-pink-400",
+            ? "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400"
+            : "bg-purple-500/10 text-purple-600 dark:text-purple-400",
           updateMutation.isPending && "opacity-50 cursor-not-allowed",
         )}
         onClick={handleClick}

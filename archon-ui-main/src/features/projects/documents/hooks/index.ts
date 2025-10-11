@@ -1,7 +1,7 @@
 /**
  * Document Hooks
  *
- * Read-only hooks for document display
+ * Hooks for document display and editing
  */
 
-export { useProjectDocuments } from "./useDocumentQueries";
+export { useCreateDocument, useDeleteDocument, useProjectDocuments, useUpdateDocument } from "./useDocumentQueries";

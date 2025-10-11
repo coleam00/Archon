@@ -215,7 +215,10 @@ export const KnowledgeCardTags: React.FC<KnowledgeCardTagsProps> = ({ sourceId, 
                 <Badge
                   color="gray"
                   variant="outline"
-                  className="flex items-center gap-1 text-[10px] cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors group pr-0.5 px-1.5 py-0.5 h-5"
+                  className={[
+                    "flex items-center gap-1 text-[10px] cursor-pointer",
+                    "hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors group pr-0.5 px-1.5 py-0.5 h-5",
+                  ].join(" ")}
                   onClick={() => {
                     setIsEditing(true);
                     // Load this specific tag for editing
@@ -255,7 +258,10 @@ export const KnowledgeCardTags: React.FC<KnowledgeCardTagsProps> = ({ sourceId, 
         <button
           type="button"
           onClick={() => setShowAllTags(!showAllTags)}
-          className="flex items-center gap-0.5 text-[10px] text-gray-500 dark:text-gray-400 hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors px-1 py-0.5 rounded"
+          className={[
+            "flex items-center gap-0.5 text-[10px] text-gray-500 dark:text-gray-400",
+            "hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors px-1 py-0.5 rounded",
+          ].join(" ")}
         >
           {showAllTags ? (
             <>
@@ -322,7 +328,12 @@ export const KnowledgeCardTags: React.FC<KnowledgeCardTagsProps> = ({ sourceId, 
                 }
               }, 0);
             }}
-            className="flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] rounded border border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:text-cyan-600 dark:hover:text-cyan-400 hover:border-cyan-400 dark:hover:border-cyan-600 transition-colors h-5"
+            className={[
+              "flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] rounded border h-5",
+              "border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400",
+              "hover:text-cyan-600 dark:hover:text-cyan-400 hover:border-cyan-400 dark:hover:border-cyan-600",
+              "transition-colors",
+            ].join(" ")}
             aria-label="Add tags"
           >
             <Plus className="w-2.5 h-2.5" />
@@ -338,7 +349,10 @@ export const KnowledgeCardTags: React.FC<KnowledgeCardTagsProps> = ({ sourceId, 
             type="button"
             onClick={handleSaveTags}
             disabled={updateMutation.isPending}
-            className="px-2 py-1 text-xs bg-cyan-600 text-white rounded hover:bg-cyan-700 disabled:opacity-50 transition-colors"
+            className={[
+              "px-2 py-1 text-xs bg-cyan-600 dark:bg-cyan-600 text-white",
+              "hover:bg-cyan-700 dark:hover:bg-cyan-700 disabled:opacity-50 transition-colors",
+            ].join(" ")}
           >
             Save
           </button>
@@ -346,7 +360,10 @@ export const KnowledgeCardTags: React.FC<KnowledgeCardTagsProps> = ({ sourceId, 
             type="button"
             onClick={handleCancelEdit}
             disabled={updateMutation.isPending}
-            className="px-2 py-1 text-xs bg-gray-500 text-white rounded hover:bg-gray-600 disabled:opacity-50 transition-colors"
+            className={[
+              "px-2 py-1 text-xs bg-gray-500 dark:bg-gray-500 text-white",
+              "hover:bg-gray-600 dark:hover:bg-gray-600 disabled:opacity-50 transition-colors",
+            ].join(" ")}
           >
             Cancel
           </button>

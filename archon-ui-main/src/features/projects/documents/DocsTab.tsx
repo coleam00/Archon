@@ -1,11 +1,12 @@
-import { FileText, Search } from "lucide-react";
+import { FileText, Plus, Search } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Input } from "../../ui/primitives";
-import { cn } from "../../ui/primitives/styles";
+import { DeleteConfirmModal } from "../../ui/components/DeleteConfirmModal";
+import { Button, Input } from "../../ui/primitives";
+import { AddDocumentModal } from "./components/AddDocumentModal";
 import { DocumentCard } from "./components/DocumentCard";
 import { DocumentViewer } from "./components/DocumentViewer";
-import { useProjectDocuments } from "./hooks";
-import type { ProjectDocument } from "./types";
+import { useCreateDocument, useDeleteDocument, useProjectDocuments, useUpdateDocument } from "./hooks";
+import type { DocumentContent, ProjectDocument } from "./types";
 
 interface DocsTabProps {
   project?: {
@@ -25,10 +26,75 @@ export const DocsTab = ({ project }: DocsTabProps) => {
 
   // Fetch documents from project's docs field
   const { data: documents = [], isLoading } = useProjectDocuments(projectId);
+  const updateDocumentMutation = useUpdateDocument(projectId);
+  const createDocumentMutation = useCreateDocument(projectId);
+  const deleteDocumentMutation = useDeleteDocument(projectId);
 
   // Document state
   const [selectedDocument, setSelectedDocument] = useState<ProjectDocument | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [documentToDelete, setDocumentToDelete] = useState<ProjectDocument | null>(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+
+  // Handle document save
+  const handleSaveDocument = async (documentId: string, content: DocumentContent) => {
+    try {
+      await updateDocumentMutation.mutateAsync({
+        documentId,
+        updates: { content },
+      });
+    } catch (error) {
+      console.error("Failed to save document:", error);
+      throw error;
+    }
+  };
+
+  // Handle add document
+  const handleAddDocument = async (title: string, document_type: string) => {
+    await createDocumentMutation.mutateAsync({
+      title,
+      document_type,
+      content: { markdown: "# " + title + "\n\nStart writing your document here..." },
+      // NOTE: Archon does not have user authentication - this is a single-user local app.
+      // "User" is a constant representing the sole user of this Archon instance.
+      author: "User",
+    });
+  };
+
+  // Handle delete document
+  const handleDeleteDocument = (doc: ProjectDocument) => {
+    setDocumentToDelete(doc);
+    setShowDeleteModal(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!documentToDelete) return;
+
+    await deleteDocumentMutation.mutateAsync(documentToDelete.id);
+
+    // Clear selection if deleted document was selected
+    if (selectedDocument?.id === documentToDelete.id) {
+      setSelectedDocument(null);
+    }
+
+    setShowDeleteModal(false);
+    setDocumentToDelete(null);
+  };
+
+  const cancelDelete = () => {
+    setShowDeleteModal(false);
+    setDocumentToDelete(null);
+  };
+
+  // Reset state when project changes
+  useEffect(() => {
+    setSelectedDocument(null);
+    setSearchQuery("");
+    setShowAddModal(false);
+    setShowDeleteModal(false);
+    setDocumentToDelete(null);
+  }, [projectId]);
 
   // Auto-select first document when documents load
   useEffect(() => {
@@ -59,111 +125,97 @@ export const DocsTab = ({ project }: DocsTabProps) => {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-200px)]">
-      {/* Migration Warning Banner */}
-      <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 px-4 py-3">
-        <div className="flex items-start gap-3">
-          <div className="text-yellow-600 dark:text-yellow-400">
-            <svg className="w-5 h-5 mt-0.5" fill="currentColor" viewBox="0 0 20 20" aria-label="Warning">
-              <title>Warning icon</title>
-              <path
-                fillRule="evenodd"
-                d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z"
-                clipRule="evenodd"
-              />
-            </svg>
-          </div>
-          <div className="flex-1">
-            <h3 className="text-sm font-semibold text-yellow-800 dark:text-yellow-300">
-              Project Documents Under Migration
-            </h3>
-            <p className="text-sm text-yellow-700 dark:text-yellow-400 mt-1">
-              Editing and uploading project documents is currently disabled while we migrate to a new storage system.
-              <strong className="font-semibold">
-                {" "}
-                Please backup your existing project documents elsewhere as they will be lost when the migration is
-                complete.
-              </strong>
-            </p>
-            <p className="text-xs text-yellow-600 dark:text-yellow-500 mt-1">
-              Note: This only affects project-specific documents. Your knowledge base documents are safe and unaffected.
-            </p>
-          </div>
-        </div>
-      </div>
-
+    <div className="flex h-[600px] gap-6">
       {/* Main Content */}
-      <div className="flex flex-1">
-        {/* Left Sidebar - Document List */}
-        <div
-          className={cn(
-            "w-80 flex flex-col",
-            "border-r border-gray-200 dark:border-gray-700",
-            "bg-gray-50 dark:bg-gray-900",
-          )}
-        >
-          {/* Header */}
-          <div className="p-4 border-b border-gray-200 dark:border-gray-700">
-            <h2 className="text-lg font-semibold mb-3 flex items-center gap-2 text-gray-800 dark:text-white">
-              <FileText className="w-5 h-5" />
-              Documents (Read-Only)
-            </h2>
-
-            {/* Search */}
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <Input
-                type="text"
-                placeholder="Search documents..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9"
-              />
-            </div>
-
-            {/* Info message */}
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-3">
-              Viewing {documents.length} document{documents.length !== 1 ? "s" : ""}
-            </p>
+      {/* Left Sidebar - Document List */}
+      <div className="w-64 flex flex-col space-y-4 overflow-visible">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <FileText className="w-5 h-5 text-gray-700 dark:text-gray-300" />
+            <h3 className="text-lg font-semibold text-gray-800 dark:text-white">Documents</h3>
           </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowAddModal(true)}
+            className="text-cyan-600 dark:text-cyan-400 hover:bg-cyan-500/10"
+            aria-label="Add new document"
+          >
+            <Plus className="w-4 h-4" aria-hidden="true" />
+          </Button>
+        </div>
 
-          {/* Document List */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-2">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Input
+            type="text"
+            placeholder="Search..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-9"
+            aria-label="Search documents"
+          />
+        </div>
+
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          {documents.length} document{documents.length !== 1 ? "s" : ""}
+        </p>
+
+        <div className="flex-1 min-h-0">
+          <div className="h-full overflow-y-auto space-y-2 p-2 -mx-2">
             {filteredDocuments.length === 0 ? (
               <div className="text-center py-8 text-gray-500 dark:text-gray-400">
                 <FileText className="w-12 h-12 mx-auto mb-3 opacity-30" />
                 <p className="text-sm">{searchQuery ? "No documents found" : "No documents in this project"}</p>
               </div>
             ) : (
-              filteredDocuments.map((doc) => (
-                <DocumentCard
-                  key={doc.id}
-                  document={doc}
-                  isActive={selectedDocument?.id === doc.id}
-                  onSelect={setSelectedDocument}
-                  onDelete={() => {}} // No delete in read-only mode
-                />
-              ))
+              <div className="space-y-2">
+                {filteredDocuments.map((doc) => (
+                  <DocumentCard
+                    key={doc.id}
+                    document={doc}
+                    isActive={selectedDocument?.id === doc.id}
+                    onSelect={setSelectedDocument}
+                    onDelete={handleDeleteDocument}
+                  />
+                ))}
+              </div>
             )}
           </div>
         </div>
-
-        {/* Right Content - Document Viewer */}
-        <div className="flex-1 bg-white dark:bg-gray-900">
-          {selectedDocument ? (
-            <DocumentViewer document={selectedDocument} />
-          ) : (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center">
-                <FileText className="w-16 h-16 text-gray-300 dark:text-gray-700 mx-auto mb-4" />
-                <p className="text-gray-500 dark:text-gray-400">
-                  {documents.length > 0 ? "Select a document to view" : "No documents available"}
-                </p>
-              </div>
-            </div>
-          )}
-        </div>
       </div>
+
+      {/* Right Content - Document Viewer */}
+      <div className="flex-1 overflow-y-auto">
+        {selectedDocument ? (
+          <DocumentViewer document={selectedDocument} onSave={handleSaveDocument} />
+        ) : (
+          <div className="flex items-center justify-center h-full">
+            <div className="text-center">
+              <FileText className="w-16 h-16 text-gray-300 dark:text-gray-700 mx-auto mb-4" />
+              <p className="text-gray-500 dark:text-gray-400">
+                {documents.length > 0 ? "Select a document to view" : "No documents available"}
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Add Document Modal */}
+      <AddDocumentModal open={showAddModal} onOpenChange={setShowAddModal} onAdd={handleAddDocument} />
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmModal
+        open={showDeleteModal}
+        onOpenChange={(open) => {
+          setShowDeleteModal(open);
+          if (!open) setDocumentToDelete(null);
+        }}
+        itemName={documentToDelete?.title ?? ""}
+        onConfirm={confirmDelete}
+        onCancel={cancelDelete}
+        type="document"
+      />
     </div>
   );
 };
