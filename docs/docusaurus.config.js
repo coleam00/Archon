@@ -8,7 +8,7 @@ export default {
   baseUrl: '/',
   onBrokenLinks: 'warn',
   onBrokenMarkdownLinks: 'warn',
-  favicon: 'favicon.png',
+  favicon: 'img/favicon.svg',
   organizationName: 'archon',
   projectName: 'archon',
   
@@ -132,7 +132,7 @@ export default {
         title: 'Archon',
         logo: {
           alt: 'Archon Logo',
-          src: 'logo-neon.png',
+          src: 'img/logo-neon.svg',
         },
         items: [
           {
