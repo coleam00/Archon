@@ -106,6 +106,19 @@ INSERT INTO archon_settings (key, encrypted_value, is_encrypted, category, descr
 ('GROK_API_KEY', NULL, true, 'api_keys', 'Grok API key for xAI models. Get from: https://console.x.ai/')
 ON CONFLICT (key) DO NOTHING;
 
+-- Cloud Provider Credentials (Azure OpenAI and AWS Bedrock)
+-- These can be configured via Settings > Cloud Providers in the UI
+INSERT INTO archon_settings (key, encrypted_value, is_encrypted, category, description) VALUES
+('AZURE_OPENAI_API_KEY', NULL, true, 'cloud_providers', 'Azure OpenAI API key from Azure Portal. Configure via Settings > Cloud Providers.'),
+('AZURE_OPENAI_ENDPOINT', NULL, false, 'cloud_providers', 'Azure OpenAI resource endpoint URL (e.g., https://your-resource.openai.azure.com/)'),
+('AZURE_OPENAI_API_VERSION', NULL, false, 'cloud_providers', 'Azure OpenAI API version in YYYY-MM-DD format (e.g., 2024-02-15-preview)'),
+('AZURE_OPENAI_DEPLOYMENT', NULL, false, 'cloud_providers', 'Azure OpenAI deployment name (optional, used for default model)'),
+('AWS_ACCESS_KEY_ID', NULL, true, 'cloud_providers', 'AWS IAM Access Key ID for Bedrock. Configure via Settings > Cloud Providers.'),
+('AWS_SECRET_ACCESS_KEY', NULL, true, 'cloud_providers', 'AWS IAM Secret Access Key for Bedrock. Configure via Settings > Cloud Providers.'),
+('AWS_REGION', NULL, false, 'cloud_providers', 'AWS region for Bedrock service (e.g., us-east-1, us-west-2)'),
+('AWS_BEDROCK_MODEL_ID', NULL, false, 'cloud_providers', 'Default AWS Bedrock model ID (e.g., anthropic.claude-3-sonnet-20240229-v1:0)')
+ON CONFLICT (key) DO NOTHING;
+
 -- Code Extraction Settings Migration
 -- Adds configurable settings for the code extraction service
 

@@ -61,7 +61,7 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/)
 - [Node.js 18+](https://nodejs.org/) (for hybrid development mode)
 - [Supabase](https://supabase.com/) account (free tier or local Supabase both work)
-- [OpenAI API key](https://platform.openai.com/api-keys) (Gemini and Ollama are supported too!)
+- [OpenAI API key](https://platform.openai.com/api-keys) (Azure OpenAI, Gemini, and Ollama are supported too!)
 - (OPTIONAL) [Make](https://www.gnu.org/software/make/) (see [Installing Make](#installing-make) below)
 
 ### Setup Instructions
@@ -160,16 +160,16 @@ sudo yum install make
 <summary><strong>🚀 Quick Command Reference for Make</strong></summary>
 <br/>
 
-| Command           | Description                                             |
-| ----------------- | ------------------------------------------------------- |
+| Command           | Description                                            |
+| ----------------- | ------------------------------------------------------ |
 | `make dev`        | Start hybrid dev (backend in Docker, frontend local) ⭐ |
-| `make dev-docker` | Everything in Docker                                    |
-| `make stop`       | Stop all services                                       |
-| `make test`       | Run all tests                                           |
-| `make lint`       | Run linters                                             |
-| `make install`    | Install dependencies                                    |
-| `make check`      | Check environment setup                                 |
-| `make clean`      | Remove containers and volumes (with confirmation)       |
+| `make dev-docker` | Everything in Docker                                   |
+| `make stop`       | Stop all services                                      |
+| `make test`       | Run all tests                                          |
+| `make lint`       | Run linters                                            |
+| `make install`    | Install dependencies                                   |
+| `make check`      | Check environment setup                                |
+| `make clean`      | Remove containers and volumes (with confirmation)      |
 
 </details>
 
@@ -209,7 +209,7 @@ The reset script safely removes all tables, functions, triggers, and policies wi
 | **Web Interface**  | archon-ui      | http://localhost:3737 | Main dashboard and controls       |
 | **API Service**    | archon-server  | http://localhost:8181 | Web crawling, document processing |
 | **MCP Server**     | archon-mcp     | http://localhost:8051 | Model Context Protocol interface  |
-| **Agents Service** | archon-agents  | http://localhost:8052 | AI/ML operations, reranking       |  
+| **Agents Service** | archon-agents  | http://localhost:8052 | AI/ML operations, reranking       |
 
 ## Upgrading
 
@@ -247,7 +247,7 @@ To upgrade Archon to the latest version:
 
 - **Model Context Protocol (MCP)**: Connect any MCP-compatible client (Claude Code, Cursor, even non-AI coding assistants like Claude Desktop)
 - **MCP Tools**: Comprehensive yet simple set of tools for RAG queries, task management, and project operations
-- **Multi-LLM Support**: Works with OpenAI, Ollama, and Google Gemini models
+- **Multi-LLM Support**: Works with OpenAI, Azure OpenAI, Ollama, and Google Gemini models
 - **RAG Strategies**: Hybrid search, contextual embeddings, and result reranking for optimal AI responses
 - **Real-time Streaming**: Live responses from AI agents with progress tracking
 
@@ -297,7 +297,7 @@ Archon uses true microservices architecture with clear separation of concerns:
 | -------------- | -------------------- | ---------------------------- | ------------------------------------------------------------------ |
 | **Frontend**   | `archon-ui-main/`    | Web interface and dashboard  | React, TypeScript, TailwindCSS, Socket.IO client                   |
 | **Server**     | `python/src/server/` | Core business logic and APIs | FastAPI, service layer, Socket.IO broadcasts, all ML/AI operations |
-| **MCP Server** | `python/src/mcp/`    | MCP protocol interface       | Lightweight HTTP wrapper, MCP tools, session management         |
+| **MCP Server** | `python/src/mcp/`    | MCP protocol interface       | Lightweight HTTP wrapper, MCP tools, session management            |
 | **Agents**     | `python/src/agents/` | PydanticAI agent hosting     | Document and RAG agents, streaming responses                       |
 
 ### Communication Patterns

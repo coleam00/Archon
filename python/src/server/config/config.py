@@ -26,6 +26,16 @@ class EnvironmentConfig:
     openai_api_key: str | None = None
     host: str = "0.0.0.0"
     transport: str = "sse"
+    # Azure OpenAI configuration
+    azure_openai_endpoint: str | None = None
+    azure_openai_api_key: str | None = None
+    azure_openai_api_version: str | None = None
+    azure_openai_deployment: str | None = None
+    # AWS Bedrock configuration
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    aws_region: str | None = None
+    aws_bedrock_model_id: str | None = None
 
 
 @dataclass
@@ -49,6 +59,93 @@ def validate_openai_api_key(api_key: str) -> bool:
     return True
 
 
+def validate_azure_openai_endpoint(endpoint: str) -> bool:
+    """Validate Azure OpenAI endpoint format."""
+    if not endpoint:
+        raise ConfigurationError("Azure OpenAI endpoint cannot be empty")
+
+    parsed = urlparse(endpoint)
+    if parsed.scheme not in ("http", "https"):
+        raise ConfigurationError("Azure OpenAI endpoint must use HTTP or HTTPS")
+
+    if not parsed.netloc:
+        raise ConfigurationError("Invalid Azure OpenAI endpoint format")
+
+    # Azure OpenAI endpoints typically contain '.openai.azure.com'
+    if ".openai.azure.com" not in parsed.netloc:
+        # Warning but allow non-standard endpoints
+        pass
+
+    return True
+
+
+def validate_azure_openai_api_version(api_version: str) -> bool:
+    """Validate Azure OpenAI API version format."""
+    if not api_version:
+        raise ConfigurationError("Azure OpenAI API version cannot be empty")
+
+    # Azure API versions follow YYYY-MM-DD format or YYYY-MM-DD-preview
+    import re
+
+    pattern = r"^\d{4}-\d{2}-\d{2}(-preview)?$"
+    if not re.match(pattern, api_version):
+        raise ConfigurationError(
+            f"Azure OpenAI API version must follow YYYY-MM-DD or YYYY-MM-DD-preview format, got: {api_version}"
+        )
+
+    return True
+
+
+def validate_aws_access_key_id(access_key_id: str) -> bool:
+    """Validate AWS Access Key ID format."""
+    if not access_key_id:
+        raise ConfigurationError("AWS Access Key ID cannot be empty")
+
+    # AWS Access Key IDs are 20 characters long and start with AKIA or ASIA
+    if not (access_key_id.startswith("AKIA") or access_key_id.startswith("ASIA")):
+        raise ConfigurationError(
+            "AWS Access Key ID must start with 'AKIA' (long-term) or 'ASIA' (temporary)"
+        )
+
+    if len(access_key_id) != 20:
+        raise ConfigurationError(
+            f"AWS Access Key ID must be exactly 20 characters, got {len(access_key_id)}"
+        )
+
+    return True
+
+
+def validate_aws_region(region: str) -> bool:
+    """Validate AWS region format."""
+    if not region:
+        raise ConfigurationError("AWS region cannot be empty")
+
+    # Common AWS regions for Bedrock
+    valid_regions = {
+        "us-east-1",
+        "us-east-2",
+        "us-west-1",
+        "us-west-2",
+        "ap-south-1",
+        "ap-northeast-1",
+        "ap-northeast-2",
+        "ap-southeast-1",
+        "ap-southeast-2",
+        "ca-central-1",
+        "eu-central-1",
+        "eu-west-1",
+        "eu-west-2",
+        "eu-west-3",
+        "sa-east-1",
+    }
+
+    if region not in valid_regions:
+        # Warning but allow non-standard regions
+        pass
+
+    return True
+
+
 def validate_supabase_key(supabase_key: str) -> tuple[bool, str]:
     """Validate Supabase key type and return validation result.
 
@@ -68,14 +165,14 @@ def validate_supabase_key(supabase_key: str) -> tuple[bool, str]:
         # Also skip all other validations (aud, exp, etc) since we only care about the role
         decoded = jwt.decode(
             supabase_key,
-            '',
+            "",
             options={
                 "verify_signature": False,
                 "verify_aud": False,
                 "verify_exp": False,
                 "verify_nbf": False,
-                "verify_iat": False
-            }
+                "verify_iat": False,
+            },
         )
         role = decoded.get("role")
 
@@ -120,14 +217,18 @@ def validate_supabase_url(url: str) -> bool:
             # Class C: 192.168.0.0/16
             # Also includes link-local (169.254.0.0/16) and loopback
             # Exclude unspecified address (0.0.0.0) for security
-            if (ip.is_private or ip.is_loopback or ip.is_link_local) and not ip.is_unspecified:
+            if (
+                ip.is_private or ip.is_loopback or ip.is_link_local
+            ) and not ip.is_unspecified:
                 return True
         except ValueError:
             # hostname is not a valid IP address, could be a domain name
             pass
 
         # If not a local host or private IP, require HTTPS
-        raise ConfigurationError(f"Supabase URL must use HTTPS for non-local environments (hostname: {hostname})")
+        raise ConfigurationError(
+            f"Supabase URL must use HTTPS for non-local environments (hostname: {hostname})"
+        )
 
     if not parsed.netloc:
         raise ConfigurationError("Invalid Supabase URL format")
@@ -140,6 +241,12 @@ def load_environment_config() -> EnvironmentConfig:
     # OpenAI API key is optional at startup - can be set via API
     openai_api_key = os.getenv("OPENAI_API_KEY")
 
+    # Azure OpenAI configuration (optional)
+    azure_openai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+    azure_openai_api_key = os.getenv("AZURE_OPENAI_API_KEY")
+    azure_openai_api_version = os.getenv("AZURE_OPENAI_API_VERSION")
+    azure_openai_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+
     # Required environment variables for database access
     supabase_url = os.getenv("SUPABASE_URL")
     if not supabase_url:
@@ -147,11 +254,20 @@ def load_environment_config() -> EnvironmentConfig:
 
     supabase_service_key = os.getenv("SUPABASE_SERVICE_KEY")
     if not supabase_service_key:
-        raise ConfigurationError("SUPABASE_SERVICE_KEY environment variable is required")
+        raise ConfigurationError(
+            "SUPABASE_SERVICE_KEY environment variable is required"
+        )
 
     # Validate required fields
     if openai_api_key:
         validate_openai_api_key(openai_api_key)
+
+    # Validate Azure OpenAI configuration if provided
+    if azure_openai_endpoint:
+        validate_azure_openai_endpoint(azure_openai_endpoint)
+    if azure_openai_api_version:
+        validate_azure_openai_api_version(azure_openai_api_version)
+
     validate_supabase_url(supabase_url)
 
     # Validate Supabase key type
@@ -200,7 +316,9 @@ def load_environment_config() -> EnvironmentConfig:
     try:
         port = int(port_str)
     except ValueError as e:
-        raise ConfigurationError(f"PORT must be a valid integer, got: {port_str}") from e
+        raise ConfigurationError(
+            f"PORT must be a valid integer, got: {port_str}"
+        ) from e
 
     return EnvironmentConfig(
         openai_api_key=openai_api_key,
@@ -209,6 +327,10 @@ def load_environment_config() -> EnvironmentConfig:
         host=host,
         port=port,
         transport=transport,
+        azure_openai_endpoint=azure_openai_endpoint,
+        azure_openai_api_key=azure_openai_api_key,
+        azure_openai_api_version=azure_openai_api_version,
+        azure_openai_deployment=azure_openai_deployment,
     )
 
 

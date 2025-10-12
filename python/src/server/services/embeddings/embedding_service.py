@@ -35,7 +35,9 @@ class EmbeddingBatchResult:
     failed_items: list[dict[str, Any]] = field(default_factory=list)
     success_count: int = 0
     failure_count: int = 0
-    texts_processed: list[str] = field(default_factory=list)  # Successfully processed texts
+    texts_processed: list[str] = field(
+        default_factory=list
+    )  # Successfully processed texts
 
     def add_success(self, embedding: list[float], text: str):
         """Add a successful embedding."""
@@ -83,10 +85,10 @@ class EmbeddingProviderAdapter(ABC):
 
 class OpenAICompatibleEmbeddingAdapter(EmbeddingProviderAdapter):
     """Adapter for providers using the OpenAI embeddings API shape."""
-    
+
     def __init__(self, client: Any):
         self._client = client
-    
+
     async def create_embeddings(
         self,
         texts: list[str],
@@ -99,7 +101,37 @@ class OpenAICompatibleEmbeddingAdapter(EmbeddingProviderAdapter):
         }
         if dimensions is not None:
             request_args["dimensions"] = dimensions
-            
+
+        response = await self._client.embeddings.create(**request_args)
+        return [item.embedding for item in response.data]
+
+
+class AzureOpenAIEmbeddingAdapter(EmbeddingProviderAdapter):
+    """Adapter for Azure OpenAI embeddings API."""
+
+    def __init__(self, client: Any):
+        self._client = client
+
+    async def create_embeddings(
+        self,
+        texts: list[str],
+        model: str,
+        dimensions: int | None = None,
+    ) -> list[list[float]]:
+        """
+        Create embeddings using Azure OpenAI.
+
+        For Azure OpenAI, the 'model' parameter should be the deployment name,
+        not the model name (e.g., "my-embedding-deployment" not "text-embedding-3-small").
+        """
+        request_args: dict[str, Any] = {
+            "model": model,  # This is the deployment name for Azure
+            "input": texts,
+        }
+        # Azure OpenAI supports dimensions parameter for certain models
+        if dimensions is not None:
+            request_args["dimensions"] = dimensions
+
         response = await self._client.embeddings.create(**request_args)
         return [item.embedding for item in response.data]
 
@@ -121,7 +153,9 @@ class GoogleEmbeddingAdapter(EmbeddingProviderAdapter):
             async with httpx.AsyncClient(timeout=30.0) as http_client:
                 embeddings = await asyncio.gather(
                     *(
-                        self._fetch_single_embedding(http_client, google_api_key, model, text, dimensions)
+                        self._fetch_single_embedding(
+                            http_client, google_api_key, model, text, dimensions
+                        )
                         for text in texts
                     )
                 )
@@ -139,7 +173,9 @@ class GoogleEmbeddingAdapter(EmbeddingProviderAdapter):
                 original_error=error,
             ) from error
         except Exception as error:
-            search_logger.error(f"Error calling Google embedding API: {error}", exc_info=True)
+            search_logger.error(
+                f"Error calling Google embedding API: {error}", exc_info=True
+            )
             raise EmbeddingAPIError(
                 f"Google embedding error: {str(error)}", original_error=error
             ) from error
@@ -209,7 +245,9 @@ class GoogleEmbeddingAdapter(EmbeddingProviderAdapter):
                 normalized = embedding_array / norm
                 return normalized.tolist()
             else:
-                search_logger.warning("Zero-norm embedding detected, returning unnormalized")
+                search_logger.warning(
+                    "Zero-norm embedding detected, returning unnormalized"
+                )
                 return embedding
         except Exception as e:
             search_logger.error(f"Failed to normalize embedding: {e}")
@@ -221,6 +259,8 @@ def _get_embedding_adapter(provider: str, client: Any) -> EmbeddingProviderAdapt
     provider_name = (provider or "").lower()
     if provider_name == "google":
         return GoogleEmbeddingAdapter()
+    elif provider_name == "azure-openai":
+        return AzureOpenAIEmbeddingAdapter(client)
     return OpenAICompatibleEmbeddingAdapter(client)
 
 
@@ -228,6 +268,7 @@ async def _maybe_await(value: Any) -> Any:
     """Await the value if it is awaitable, otherwise return as-is."""
 
     return await value if inspect.isawaitable(value) else value
+
 
 # Provider-aware client factory
 get_openai_client = get_llm_client
@@ -262,7 +303,9 @@ async def create_embedding(text: str, provider: str | None = None) -> list[float
                         f"OpenAI quota exhausted: {error_msg}", text_preview=text
                     )
                 elif "rate" in error_msg.lower():
-                    raise EmbeddingRateLimitError(f"Rate limit hit: {error_msg}", text_preview=text)
+                    raise EmbeddingRateLimitError(
+                        f"Rate limit hit: {error_msg}", text_preview=text
+                    )
                 else:
                     raise EmbeddingAPIError(
                         f"Failed to create embedding: {error_msg}", text_preview=text
@@ -286,7 +329,9 @@ async def create_embedding(text: str, provider: str | None = None) -> list[float
                 f"OpenAI quota exhausted: {error_msg}", text_preview=text
             )
         elif "rate_limit" in error_msg.lower():
-            raise EmbeddingRateLimitError(f"Rate limit hit: {error_msg}", text_preview=text)
+            raise EmbeddingRateLimitError(
+                f"Rate limit hit: {error_msg}", text_preview=text
+            )
         else:
             raise EmbeddingAPIError(
                 f"Embedding error: {error_msg}", text_preview=text, original_error=e
@@ -327,7 +372,8 @@ async def create_embeddings_batch(
             continue
 
         search_logger.error(
-            f"Invalid text type at index {i}: {type(text)}, value: {text}", exc_info=True
+            f"Invalid text type at index {i}: {type(text)}, value: {text}",
+            exc_info=True,
         )
         try:
             converted = str(text)
@@ -347,7 +393,9 @@ async def create_embeddings_batch(
     threading_service = get_threading_service()
 
     with safe_span(
-        "create_embeddings_batch", text_count=len(texts), total_chars=sum(len(t) for t in texts)
+        "create_embeddings_batch",
+        text_count=len(texts),
+        total_chars=sum(len(t) for t in texts),
     ) as span:
         try:
             embedding_config = await _maybe_await(
@@ -356,30 +404,45 @@ async def create_embeddings_batch(
 
             embedding_provider = provider or embedding_config.get("provider")
 
-            if not isinstance(embedding_provider, str) or not embedding_provider.strip():
+            if (
+                not isinstance(embedding_provider, str)
+                or not embedding_provider.strip()
+            ):
                 embedding_provider = "openai"
 
             if not embedding_provider:
                 search_logger.error("No embedding provider configured")
-                raise ValueError("No embedding provider configured. Please set EMBEDDING_PROVIDER environment variable.")
+                raise ValueError(
+                    "No embedding provider configured. Please set EMBEDDING_PROVIDER environment variable."
+                )
 
-            search_logger.info(f"Using embedding provider: '{embedding_provider}' (from EMBEDDING_PROVIDER setting)")
-            async with get_llm_client(provider=embedding_provider, use_embedding_provider=True) as client:
+            search_logger.info(
+                f"Using embedding provider: '{embedding_provider}' (from EMBEDDING_PROVIDER setting)"
+            )
+            async with get_llm_client(
+                provider=embedding_provider, use_embedding_provider=True
+            ) as client:
                 # Load batch size and dimensions from settings
                 try:
                     rag_settings = await _maybe_await(
                         credential_service.get_credentials_by_category("rag_strategy")
                     )
                     batch_size = int(rag_settings.get("EMBEDDING_BATCH_SIZE", "100"))
-                    embedding_dimensions = int(rag_settings.get("EMBEDDING_DIMENSIONS", "1536"))
+                    embedding_dimensions = int(
+                        rag_settings.get("EMBEDDING_DIMENSIONS", "1536")
+                    )
                 except Exception as e:
-                    search_logger.warning(f"Failed to load embedding settings: {e}, using defaults")
+                    search_logger.warning(
+                        f"Failed to load embedding settings: {e}, using defaults"
+                    )
                     batch_size = 100
                     embedding_dimensions = 1536
 
                 total_tokens_used = 0
                 adapter = _get_embedding_adapter(embedding_provider, client)
-                dimensions_to_use = embedding_dimensions if embedding_dimensions > 0 else None
+                dimensions_to_use = (
+                    embedding_dimensions if embedding_dimensions > 0 else None
+                )
 
                 for i in range(0, len(texts), batch_size):
                     batch = texts[i : i + batch_size]
@@ -393,28 +456,39 @@ async def create_embeddings_batch(
                         # Create rate limit progress callback if we have a progress callback
                         rate_limit_callback = None
                         if progress_callback:
+
                             async def rate_limit_callback(data: dict):
                                 # Send heartbeat during rate limit wait
                                 processed = result.success_count + result.failure_count
-                                message = f"Rate limited: {data.get('message', 'Waiting...')}"
-                                await progress_callback(message, (processed / len(texts)) * 100)
+                                message = (
+                                    f"Rate limited: {data.get('message', 'Waiting...')}"
+                                )
+                                await progress_callback(
+                                    message, (processed / len(texts)) * 100
+                                )
 
                         # Rate limit each batch
-                        async with threading_service.rate_limited_operation(batch_tokens, rate_limit_callback):
+                        async with threading_service.rate_limited_operation(
+                            batch_tokens, rate_limit_callback
+                        ):
                             retry_count = 0
                             max_retries = 3
 
                             while retry_count < max_retries:
                                 try:
                                     # Create embeddings for this batch
-                                    embedding_model = await get_embedding_model(provider=embedding_provider)
+                                    embedding_model = await get_embedding_model(
+                                        provider=embedding_provider
+                                    )
                                     embeddings = await adapter.create_embeddings(
                                         batch,
                                         embedding_model,
                                         dimensions=dimensions_to_use,
                                     )
 
-                                    for text, vector in zip(batch, embeddings, strict=False):
+                                    for text, vector in zip(
+                                        batch, embeddings, strict=False
+                                    ):
                                         result.add_success(vector, text)
 
                                     break  # Success, exit retry loop
@@ -474,7 +548,9 @@ async def create_embeddings_batch(
 
                     except Exception as e:
                         # This batch failed - track failures but continue with next batch
-                        search_logger.error(f"Batch {batch_index} failed: {e}", exc_info=True)
+                        search_logger.error(
+                            f"Batch {batch_index} failed: {e}", exc_info=True
+                        )
 
                         for text in batch:
                             if isinstance(e, EmbeddingError):
@@ -483,7 +559,8 @@ async def create_embeddings_batch(
                                 result.add_failure(
                                     text,
                                     EmbeddingAPIError(
-                                        f"Failed to create embedding: {str(e)}", original_error=e
+                                        f"Failed to create embedding: {str(e)}",
+                                        original_error=e,
                                     ),
                                     batch_index,
                                 )
@@ -512,13 +589,18 @@ async def create_embeddings_batch(
         except Exception as e:
             # Catastrophic failure - return what we have
             span.set_attribute("catastrophic_failure", True)
-            search_logger.error(f"Catastrophic failure in batch embedding: {e}", exc_info=True)
+            search_logger.error(
+                f"Catastrophic failure in batch embedding: {e}", exc_info=True
+            )
 
             # Mark remaining texts as failed
             processed_count = result.success_count + result.failure_count
             for text in texts[processed_count:]:
                 result.add_failure(
-                    text, EmbeddingAPIError(f"Catastrophic failure: {str(e)}", original_error=e)
+                    text,
+                    EmbeddingAPIError(
+                        f"Catastrophic failure: {str(e)}", original_error=e
+                    ),
                 )
 
             return result

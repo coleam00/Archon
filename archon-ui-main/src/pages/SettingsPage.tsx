@@ -12,6 +12,7 @@ import {
   Bug,
   Info,
   Database,
+  Cloud,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useToast } from "../features/shared/hooks/useToast";
@@ -19,6 +20,7 @@ import { useSettings } from "../contexts/SettingsContext";
 import { useStaggeredEntrance } from "../hooks/useStaggeredEntrance";
 import { FeaturesSection } from "../components/settings/FeaturesSection";
 import { APIKeysSection } from "../components/settings/APIKeysSection";
+import { CloudProvidersSection } from "../components/settings/CloudProvidersSection";
 import { RAGSettings } from "../components/settings/RAGSettings";
 import { CodeExtractionSettings } from "../components/settings/CodeExtractionSettings";
 import { IDEGlobalRules } from "../components/settings/IDEGlobalRules";
@@ -197,6 +199,17 @@ export const SettingsPage = () => {
               defaultExpanded={true}
             >
               <APIKeysSection />
+            </CollapsibleSettingsCard>
+          </motion.div>
+          <motion.div variants={itemVariants}>
+            <CollapsibleSettingsCard
+              title="Cloud Providers"
+              icon={Cloud}
+              accentColor="blue"
+              storageKey="cloud-providers"
+              defaultExpanded={true}
+            >
+              <CloudProvidersSection />
             </CollapsibleSettingsCard>
           </motion.div>
           <motion.div variants={itemVariants}>

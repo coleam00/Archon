@@ -41,20 +41,37 @@ export const APIKeysSection = () => {
   const loadCredentials = async () => {
     try {
       setLoading(true);
-      
+
       // Load all credentials
       const allCredentials = await credentialsService.getAllCredentials();
-      
+
       // Filter to only show API keys (credentials that end with _KEY or _API)
+      // EXCLUDE cloud provider credentials (they have their own dedicated section)
+      const cloudProviderKeys = [
+        'AZURE_OPENAI_API_KEY',
+        'AZURE_OPENAI_ENDPOINT',
+        'AZURE_OPENAI_API_VERSION',
+        'AZURE_OPENAI_DEPLOYMENT',
+        'AWS_ACCESS_KEY_ID',
+        'AWS_SECRET_ACCESS_KEY',
+        'AWS_REGION',
+        'AWS_BEDROCK_MODEL_ID'
+      ];
+
       const apiKeys = allCredentials.filter(cred => {
         const key = cred.key.toUpperCase();
+        // Exclude cloud provider credentials
+        if (cloudProviderKeys.includes(key)) {
+          return false;
+        }
+        // Include credentials with _KEY, _API, or API_ in the name
         return key.includes('_KEY') || key.includes('_API') || key.includes('API_');
       });
-      
+
       // Convert to UI format
       const uiCredentials = apiKeys.map(cred => {
         const isEncryptedFromBackend = cred.is_encrypted && cred.value === '[ENCRYPTED]';
-        
+
         return {
           key: cred.key,
           value: cred.value || '',
@@ -68,7 +85,7 @@ export const APIKeysSection = () => {
           isFromBackend: !cred.isNew, // Mark as from backend unless it's a new credential
         };
       });
-      
+
       setCustomCredentials(uiCredentials);
     } catch (err) {
       console.error('Failed to load credentials:', err);
@@ -90,7 +107,7 @@ export const APIKeysSection = () => {
       isNew: true,
       isFromBackend: false // New credentials are not from backend
     };
-    
+
     setCustomCredentials([...customCredentials, newCred]);
   };
 
@@ -134,7 +151,7 @@ export const APIKeysSection = () => {
 
   const deleteCredential = async (index: number) => {
     const cred = customCredentials[index];
-    
+
     if (cred.isNew) {
       // Just remove from UI if it's not saved yet
       setCustomCredentials(customCredentials.filter((_, i) => i !== index));
@@ -153,7 +170,7 @@ export const APIKeysSection = () => {
   const saveAllChanges = async () => {
     setSaving(true);
     let hasErrors = false;
-    
+
     for (const cred of customCredentials) {
       if (cred.hasChanges || cred.isNew) {
         if (!cred.key) {
@@ -161,7 +178,7 @@ export const APIKeysSection = () => {
           hasErrors = true;
           continue;
         }
-        
+
         try {
           if (cred.isNew) {
             await credentialsService.createCredential({
@@ -200,12 +217,12 @@ export const APIKeysSection = () => {
         }
       }
     }
-    
+
     if (!hasErrors) {
       showToast('All changes saved successfully!', 'success');
       await loadCredentials(); // Reload to get fresh data
     }
-    
+
     setSaving(false);
   };
 
@@ -225,179 +242,177 @@ export const APIKeysSection = () => {
 
   return (
     <Card accentColor="pink" className="p-8">
-        <div className="space-y-4">
-          {/* Description text */}
-          <p className="text-sm text-gray-600 dark:text-zinc-400 mb-4">
-            Manage your API keys and credentials for various services used by Archon.
-          </p>
+      <div className="space-y-4">
+        {/* Description text */}
+        <p className="text-sm text-gray-600 dark:text-zinc-400 mb-4">
+          Manage your API keys and credentials for various services used by Archon.
+        </p>
 
-          {/* Credentials list */}
-          <div className="space-y-3">
-            {/* Header row */}
-            <div className="grid grid-cols-[240px_1fr_40px] gap-4 px-2 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-              <div>Key Name</div>
-              <div>Value</div>
-              <div></div>
-            </div>
+        {/* Credentials list */}
+        <div className="space-y-3">
+          {/* Header row */}
+          <div className="grid grid-cols-[240px_1fr_40px] gap-4 px-2 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+            <div>Key Name</div>
+            <div>Value</div>
+            <div></div>
+          </div>
 
-            {/* Credential rows */}
-            {customCredentials.map((cred, index) => (
-              <div 
-                key={index} 
-                className="grid grid-cols-[240px_1fr_40px] gap-4 items-center"
-              >
-                {/* Key name column */}
-                <div className="flex items-center">
+          {/* Credential rows */}
+          {customCredentials.map((cred, index) => (
+            <div
+              key={index}
+              className="grid grid-cols-[240px_1fr_40px] gap-4 items-center"
+            >
+              {/* Key name column */}
+              <div className="flex items-center">
+                <input
+                  type="text"
+                  value={cred.key}
+                  onChange={(e) => updateCredential(index, 'key', e.target.value)}
+                  placeholder="Enter key name"
+                  className="w-full px-3 py-2 rounded-md bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 text-sm font-mono"
+                />
+              </div>
+
+              {/* Value column with encryption toggle */}
+              <div className="flex items-center gap-2">
+                <div className="flex-1 relative">
                   <input
-                    type="text"
-                    value={cred.key}
-                    onChange={(e) => updateCredential(index, 'key', e.target.value)}
-                    placeholder="Enter key name"
-                    className="w-full px-3 py-2 rounded-md bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 text-sm font-mono"
+                    type={cred.showValue ? 'text' : 'password'}
+                    value={cred.value}
+                    onChange={(e) => updateCredential(index, 'value', e.target.value)}
+                    placeholder={cred.is_encrypted && !cred.value ? 'Enter new value (encrypted)' : 'Enter value'}
+                    className={`w-full px-3 py-2 pr-20 rounded-md border text-sm ${cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]'
+                        ? 'bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-600 text-gray-500 dark:text-gray-400'
+                        : 'bg-white dark:bg-gray-900 border-gray-300 dark:border-gray-700'
+                      }`}
+                    title={cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]'
+                      ? 'Click to edit this encrypted credential'
+                      : undefined}
                   />
-                </div>
 
-                {/* Value column with encryption toggle */}
-                <div className="flex items-center gap-2">
-                  <div className="flex-1 relative">
-                    <input
-                      type={cred.showValue ? 'text' : 'password'}
-                      value={cred.value}
-                      onChange={(e) => updateCredential(index, 'value', e.target.value)}
-                      placeholder={cred.is_encrypted && !cred.value ? 'Enter new value (encrypted)' : 'Enter value'}
-                      className={`w-full px-3 py-2 pr-20 rounded-md border text-sm ${
-                        cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]'
-                          ? 'bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-600 text-gray-500 dark:text-gray-400'
-                          : 'bg-white dark:bg-gray-900 border-gray-300 dark:border-gray-700'
+                  {/* Show/Hide value button */}
+                  <button
+                    type="button"
+                    onClick={() => toggleValueVisibility(index)}
+                    disabled={cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]'}
+                    className={`absolute right-10 top-1/2 -translate-y-1/2 p-1.5 rounded transition-colors ${cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]'
+                        ? 'cursor-not-allowed opacity-50'
+                        : 'hover:bg-gray-200 dark:hover:bg-gray-700'
                       }`}
-                      title={cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]' 
-                        ? 'Click to edit this encrypted credential' 
-                        : undefined}
-                    />
-                    
-                    {/* Show/Hide value button */}
-                    <button
-                      type="button"
-                      onClick={() => toggleValueVisibility(index)}
-                      disabled={cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]'}
-                      className={`absolute right-10 top-1/2 -translate-y-1/2 p-1.5 rounded transition-colors ${
-                        cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]'
-                          ? 'cursor-not-allowed opacity-50'
-                          : 'hover:bg-gray-200 dark:hover:bg-gray-700'
-                      }`}
-                      title={
-                        cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]'
-                          ? 'Edit credential to view and modify'
-                          : cred.showValue ? 'Hide value' : 'Show value'
-                      }
-                    >
-                      {cred.showValue ? (
-                        <EyeOff className="w-4 h-4 text-gray-500" />
-                      ) : (
-                        <Eye className="w-4 h-4 text-gray-500" />
-                      )}
-                    </button>
-                    
-                    {/* Encryption toggle */}
-                    <button
-                      type="button"
-                      onClick={() => toggleEncryption(index)}
-                      disabled={cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]'}
-                      className={`
+                    title={
+                      cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]'
+                        ? 'Edit credential to view and modify'
+                        : cred.showValue ? 'Hide value' : 'Show value'
+                    }
+                  >
+                    {cred.showValue ? (
+                      <EyeOff className="w-4 h-4 text-gray-500" />
+                    ) : (
+                      <Eye className="w-4 h-4 text-gray-500" />
+                    )}
+                  </button>
+
+                  {/* Encryption toggle */}
+                  <button
+                    type="button"
+                    onClick={() => toggleEncryption(index)}
+                    disabled={cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]'}
+                    className={`
                         absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded transition-colors
                         ${cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]'
-                          ? 'cursor-not-allowed opacity-50 text-pink-400'
-                          : cred.is_encrypted 
-                            ? 'text-pink-600 dark:text-pink-400 hover:bg-pink-100 dark:hover:bg-pink-900/20' 
-                            : 'text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
-                        }
-                      `}
-                      title={
-                        cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]'
-                          ? 'Edit credential to modify encryption'
-                          : cred.is_encrypted ? 'Encrypted - click to decrypt' : 'Not encrypted - click to encrypt'
+                        ? 'cursor-not-allowed opacity-50 text-pink-400'
+                        : cred.is_encrypted
+                          ? 'text-pink-600 dark:text-pink-400 hover:bg-pink-100 dark:hover:bg-pink-900/20'
+                          : 'text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
                       }
-                    >
-                      {cred.is_encrypted ? (
-                        <Lock className="w-4 h-4" />
-                      ) : (
-                        <Unlock className="w-4 h-4" />
-                      )}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Actions column */}
-                <div className="flex items-center justify-center">
-                  <button
-                    onClick={() => deleteCredential(index)}
-                    className="p-1 rounded text-gray-400 hover:text-red-600 transition-colors"
-                    title="Delete credential"
+                      `}
+                    title={
+                      cred.isFromBackend && cred.is_encrypted && cred.value === '[ENCRYPTED]'
+                        ? 'Edit credential to modify encryption'
+                        : cred.is_encrypted ? 'Encrypted - click to decrypt' : 'Not encrypted - click to encrypt'
+                    }
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    {cred.is_encrypted ? (
+                      <Lock className="w-4 h-4" />
+                    ) : (
+                      <Unlock className="w-4 h-4" />
+                    )}
                   </button>
                 </div>
               </div>
-            ))}
-          </div>
 
-          {/* Add credential button */}
-          <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+              {/* Actions column */}
+              <div className="flex items-center justify-center">
+                <button
+                  onClick={() => deleteCredential(index)}
+                  className="p-1 rounded text-gray-400 hover:text-red-600 transition-colors"
+                  title="Delete credential"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Add credential button */}
+        <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+          <Button
+            variant="outline"
+            onClick={handleAddNewRow}
+            accentColor="pink"
+            size="sm"
+          >
+            <Plus className="w-3.5 h-3.5 mr-1.5" />
+            Add Credential
+          </Button>
+        </div>
+
+        {/* Save all changes button */}
+        {hasUnsavedChanges && (
+          <div className="pt-4 flex justify-center gap-2">
             <Button
-              variant="outline"
-              onClick={handleAddNewRow}
-              accentColor="pink"
-              size="sm"
+              variant="ghost"
+              onClick={loadCredentials}
+              disabled={saving}
             >
-              <Plus className="w-3.5 h-3.5 mr-1.5" />
-              Add Credential
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={saveAllChanges}
+              accentColor="green"
+              disabled={saving}
+              className="shadow-emerald-500/20 shadow-sm"
+            >
+              {saving ? (
+                <>
+                  <div className="w-4 h-4 mr-2 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Save className="w-4 h-4 mr-2" />
+                  Save All Changes
+                </>
+              )}
             </Button>
           </div>
+        )}
 
-          {/* Save all changes button */}
-          {hasUnsavedChanges && (
-            <div className="pt-4 flex justify-center gap-2">
-              <Button
-                variant="ghost"
-                onClick={loadCredentials}
-                disabled={saving}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="primary"
-                onClick={saveAllChanges}
-                accentColor="green"
-                disabled={saving}
-                className="shadow-emerald-500/20 shadow-sm"
-              >
-                {saving ? (
-                  <>
-                    <div className="w-4 h-4 mr-2 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  <>
-                    <Save className="w-4 h-4 mr-2" />
-                    Save All Changes
-                  </>
-                )}
-              </Button>
-            </div>
-          )}
-
-          {/* Security Notice */}
-          <div className="p-3 mt-6 mb-2 bg-gray-50 dark:bg-black/40 rounded-md flex items-start gap-3">
-            <div className="w-5 h-5 text-pink-500 mt-0.5 flex-shrink-0">
-              <Lock className="w-5 h-5" />
-            </div>
-            <div className="text-sm text-gray-600 dark:text-gray-400">
-              <p>
-                Encrypted credentials are masked after saving. Click on a masked credential to edit it - this allows you to change the value and encryption settings.
-              </p>
-            </div>
+        {/* Security Notice */}
+        <div className="p-3 mt-6 mb-2 bg-gray-50 dark:bg-black/40 rounded-md flex items-start gap-3">
+          <div className="w-5 h-5 text-pink-500 mt-0.5 flex-shrink-0">
+            <Lock className="w-5 h-5" />
+          </div>
+          <div className="text-sm text-gray-600 dark:text-gray-400">
+            <p>
+              Encrypted credentials are masked after saving. Click on a masked credential to edit it - this allows you to change the value and encryption settings.
+            </p>
           </div>
         </div>
-      </Card>
+      </div>
+    </Card>
   );
 };

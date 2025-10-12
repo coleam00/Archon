@@ -45,6 +45,7 @@ server = [
     "asyncpg>=0.29.0",
     # AI/ML libraries
     "openai==1.71.0",
+    "boto3>=1.34.0",  # AWS SDK for Bedrock
     # Document processing
     "pypdf2>=3.0.1",
     "pdfplumber>=0.11.6",
@@ -108,6 +109,7 @@ all = [
     "supabase==2.15.1",
     "asyncpg>=0.29.0",
     "openai==1.71.0",
+    "boto3>=1.34.0",
     "pypdf2>=3.0.1",
     "pdfplumber>=0.11.6",
     "python-docx>=1.1.2",

@@ -70,7 +70,9 @@ async def list_credentials(category: str | None = None):
             for cred in credentials
         ]
     except Exception as e:
-        logfire.error(f"Error listing credentials | category={category} | error={str(e)}")
+        logfire.error(
+            f"Error listing credentials | category={category} | error={str(e)}"
+        )
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -120,7 +122,9 @@ async def create_credential(request: CredentialRequest):
             }
         else:
             logfire.error(f"Failed to save credential | key={request.key}")
-            raise HTTPException(status_code=500, detail={"error": "Failed to save credential"})
+            raise HTTPException(
+                status_code=500, detail={"error": "Failed to save credential"}
+            )
 
     except Exception as e:
         logfire.error(f"Error creating credential | key={request.key} | error={str(e)}")
@@ -149,7 +153,9 @@ async def get_credential(key: str):
         if value is None:
             # Check if this is an optional setting with a default value
             if key in OPTIONAL_SETTINGS_WITH_DEFAULTS:
-                logfire.info(f"Returning default value for optional setting | key={key}")
+                logfire.info(
+                    f"Returning default value for optional setting | key={key}"
+                )
                 return {
                     "key": key,
                     "value": OPTIONAL_SETTINGS_WITH_DEFAULTS[key],
@@ -159,7 +165,9 @@ async def get_credential(key: str):
                 }
 
             logfire.warning(f"Credential not found | key={key}")
-            raise HTTPException(status_code=404, detail={"error": f"Credential {key} not found"})
+            raise HTTPException(
+                status_code=404, detail={"error": f"Credential {key} not found"}
+            )
 
         logfire.info(f"Credential retrieved successfully | key={key}")
 
@@ -218,7 +226,9 @@ async def update_credential(key: str, request: dict[str, Any]):
                 category = existing.category
             if description is None:
                 description = existing.description
-            logfire.info(f"Updating existing credential | key={key} | category={category}")
+            logfire.info(
+                f"Updating existing credential | key={key} | category={category}"
+            )
 
         success = await credential_service.set_credential(
             key=key,
@@ -233,10 +243,95 @@ async def update_credential(key: str, request: dict[str, Any]):
                 f"Credential updated successfully | key={key} | is_encrypted={is_encrypted}"
             )
 
-            return {"success": True, "message": f"Credential {key} updated successfully"}
+            # Auto-switch provider when cloud provider credentials are saved
+            if category == "cloud_providers" and value and value.strip():
+                # Determine which provider to switch to based on the credential key
+                provider_switch_map = {
+                    "AZURE_OPENAI_API_KEY": "azure-openai",
+                    "AZURE_OPENAI_ENDPOINT": "azure-openai",
+                    "AWS_ACCESS_KEY_ID": "aws-bedrock",
+                    "AWS_SECRET_ACCESS_KEY": "aws-bedrock",
+                }
+
+                target_provider = provider_switch_map.get(key)
+
+                if target_provider:
+                    # Check if we have all required credentials for this provider
+                    if target_provider == "azure-openai":
+                        # Check if we have all Azure OpenAI credentials
+                        azure_api_key = await credential_service.get_credential(
+                            "AZURE_OPENAI_API_KEY"
+                        )
+                        azure_endpoint = await credential_service.get_credential(
+                            "AZURE_OPENAI_ENDPOINT"
+                        )
+                        azure_version = await credential_service.get_credential(
+                            "AZURE_OPENAI_API_VERSION"
+                        )
+
+                        if azure_api_key and azure_endpoint and azure_version:
+                            # Switch to Azure OpenAI
+                            await credential_service.set_credential(
+                                key="LLM_PROVIDER",
+                                value="azure-openai",
+                                is_encrypted=False,
+                                category="rag_strategy",
+                                description="LLM provider to use: openai, ollama, or google",
+                            )
+                            # Also update EMBEDDING_PROVIDER to match
+                            await credential_service.set_credential(
+                                key="EMBEDDING_PROVIDER",
+                                value="azure-openai",
+                                is_encrypted=False,
+                                category="rag_strategy",
+                                description="Embedding provider to use (if different from LLM_PROVIDER)",
+                            )
+                            logfire.info(
+                                "Auto-switched LLM_PROVIDER and EMBEDDING_PROVIDER to azure-openai after saving Azure credentials"
+                            )
+
+                    elif target_provider == "aws-bedrock":
+                        # Check if we have all AWS Bedrock credentials
+                        aws_access_key = await credential_service.get_credential(
+                            "AWS_ACCESS_KEY_ID"
+                        )
+                        aws_secret_key = await credential_service.get_credential(
+                            "AWS_SECRET_ACCESS_KEY"
+                        )
+                        aws_region = await credential_service.get_credential(
+                            "AWS_REGION"
+                        )
+
+                        if aws_access_key and aws_secret_key and aws_region:
+                            # Switch to AWS Bedrock
+                            await credential_service.set_credential(
+                                key="LLM_PROVIDER",
+                                value="aws-bedrock",
+                                is_encrypted=False,
+                                category="rag_strategy",
+                                description="LLM provider to use: openai, ollama, or google",
+                            )
+                            # Also update EMBEDDING_PROVIDER to match
+                            await credential_service.set_credential(
+                                key="EMBEDDING_PROVIDER",
+                                value="aws-bedrock",
+                                is_encrypted=False,
+                                category="rag_strategy",
+                                description="Embedding provider to use (if different from LLM_PROVIDER)",
+                            )
+                            logfire.info(
+                                "Auto-switched LLM_PROVIDER and EMBEDDING_PROVIDER to aws-bedrock after saving AWS credentials"
+                            )
+
+            return {
+                "success": True,
+                "message": f"Credential {key} updated successfully",
+            }
         else:
             logfire.error(f"Failed to update credential | key={key}")
-            raise HTTPException(status_code=500, detail={"error": "Failed to update credential"})
+            raise HTTPException(
+                status_code=500, detail={"error": "Failed to update credential"}
+            )
 
     except Exception as e:
         logfire.error(f"Error updating credential | key={key} | error={str(e)}")
@@ -253,10 +348,15 @@ async def delete_credential(key: str):
         if success:
             logfire.info(f"Credential deleted successfully | key={key}")
 
-            return {"success": True, "message": f"Credential {key} deleted successfully"}
+            return {
+                "success": True,
+                "message": f"Credential {key} deleted successfully",
+            }
         else:
             logfire.error(f"Failed to delete credential | key={key}")
-            raise HTTPException(status_code=500, detail={"error": "Failed to delete credential"})
+            raise HTTPException(
+                status_code=500, detail={"error": "Failed to delete credential"}
+            )
 
     except Exception as e:
         logfire.error(f"Error deleting credential | key={key} | error={str(e)}")
@@ -290,19 +390,27 @@ async def database_metrics():
 
         # Get projects count
         projects_response = (
-            supabase_client.table("archon_projects").select("id", count="exact").execute()
+            supabase_client.table("archon_projects")
+            .select("id", count="exact")
+            .execute()
         )
         tables_info["projects"] = (
             projects_response.count if projects_response.count is not None else 0
         )
 
         # Get tasks count
-        tasks_response = supabase_client.table("archon_tasks").select("id", count="exact").execute()
-        tables_info["tasks"] = tasks_response.count if tasks_response.count is not None else 0
+        tasks_response = (
+            supabase_client.table("archon_tasks").select("id", count="exact").execute()
+        )
+        tables_info["tasks"] = (
+            tasks_response.count if tasks_response.count is not None else 0
+        )
 
         # Get crawled pages count
         pages_response = (
-            supabase_client.table("archon_crawled_pages").select("id", count="exact").execute()
+            supabase_client.table("archon_crawled_pages")
+            .select("id", count="exact")
+            .execute()
         )
         tables_info["crawled_pages"] = (
             pages_response.count if pages_response.count is not None else 0
@@ -310,7 +418,9 @@ async def database_metrics():
 
         # Get settings count
         settings_response = (
-            supabase_client.table("archon_settings").select("id", count="exact").execute()
+            supabase_client.table("archon_settings")
+            .select("id", count="exact")
+            .execute()
         )
         tables_info["settings"] = (
             settings_response.count if settings_response.count is not None else 0
@@ -346,46 +456,52 @@ async def settings_health():
 @router.post("/credentials/status-check")
 async def check_credential_status(request: dict[str, list[str]]):
     """Check status of API credentials by actually decrypting and validating them.
-    
+
     This endpoint is specifically for frontend status indicators and returns
     decrypted credential values for connectivity testing.
     """
     try:
         credential_keys = request.get("keys", [])
         logfire.info(f"Checking status for credentials: {credential_keys}")
-        
+
         result = {}
-        
+
         for key in credential_keys:
             try:
                 # Get decrypted value for status checking
-                decrypted_value = await credential_service.get_credential(key, decrypt=True)
-                
-                if decrypted_value and isinstance(decrypted_value, str) and decrypted_value.strip():
+                decrypted_value = await credential_service.get_credential(
+                    key, decrypt=True
+                )
+
+                if (
+                    decrypted_value
+                    and isinstance(decrypted_value, str)
+                    and decrypted_value.strip()
+                ):
                     result[key] = {
                         "key": key,
                         "value": decrypted_value,
-                        "has_value": True
+                        "has_value": True,
                     }
                 else:
-                    result[key] = {
-                        "key": key,
-                        "value": None,
-                        "has_value": False
-                    }
-                    
+                    result[key] = {"key": key, "value": None, "has_value": False}
+
             except Exception as e:
-                logfire.warning(f"Failed to get credential for status check: {key} | error={str(e)}")
+                logfire.warning(
+                    f"Failed to get credential for status check: {key} | error={str(e)}"
+                )
                 result[key] = {
                     "key": key,
                     "value": None,
                     "has_value": False,
-                    "error": str(e)
+                    "error": str(e),
                 }
-        
-        logfire.info(f"Credential status check completed | checked={len(credential_keys)} | found={len([k for k, v in result.items() if v.get('has_value')])}")
+
+        logfire.info(
+            f"Credential status check completed | checked={len(credential_keys)} | found={len([k for k, v in result.items() if v.get('has_value')])}"
+        )
         return result
-        
+
     except Exception as e:
         logfire.error(f"Error in credential status check | error={str(e)}")
         raise HTTPException(status_code=500, detail={"error": str(e)})

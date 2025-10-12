@@ -23,7 +23,16 @@ def _is_valid_provider(provider: str) -> bool:
     """Basic provider validation."""
     if not provider or not isinstance(provider, str):
         return False
-    return provider.lower() in {"openai", "ollama", "google", "openrouter", "anthropic", "grok"}
+    return provider.lower() in {
+        "openai",
+        "azure-openai",
+        "aws-bedrock",
+        "ollama",
+        "google",
+        "openrouter",
+        "anthropic",
+        "grok",
+    }
 
 
 def _sanitize_for_log(text: str) -> str:
@@ -31,6 +40,7 @@ def _sanitize_for_log(text: str) -> str:
     if not text:
         return ""
     import re
+
     sanitized = re.sub(r"sk-[a-zA-Z0-9-_]{20,}", "[REDACTED]", text)
     sanitized = re.sub(r"xai-[a-zA-Z0-9-_]{20,}", "[REDACTED]", sanitized)
     return sanitized[:100]
@@ -39,7 +49,9 @@ def _sanitize_for_log(text: str) -> str:
 # Secure settings cache with TTL and validation
 _settings_cache: dict[str, tuple[Any, float, str]] = {}  # value, timestamp, checksum
 _CACHE_TTL_SECONDS = 300  # 5 minutes
-_cache_access_log: list[dict] = []  # Track cache access patterns for security monitoring
+_cache_access_log: list[dict] = (
+    []
+)  # Track cache access patterns for security monitoring
 
 
 def _calculate_cache_checksum(value: Any) -> str:
@@ -50,13 +62,17 @@ def _calculate_cache_checksum(value: Any) -> str:
     # Convert value to JSON string for consistent hashing
     try:
         value_str = json.dumps(value, sort_keys=True, default=str)
-        return hashlib.sha256(value_str.encode()).hexdigest()[:16]  # First 16 chars for efficiency
+        return hashlib.sha256(value_str.encode()).hexdigest()[
+            :16
+        ]  # First 16 chars for efficiency
     except Exception:
         # Fallback for non-serializable objects
         return hashlib.sha256(str(value).encode()).hexdigest()[:16]
 
 
-def _log_cache_access(key: str, action: str, hit: bool = None, security_event: str = None) -> None:
+def _log_cache_access(
+    key: str, action: str, hit: bool = None, security_event: str = None
+) -> None:
     """Log cache access for security monitoring."""
 
     access_entry = {
@@ -64,7 +80,7 @@ def _log_cache_access(key: str, action: str, hit: bool = None, security_event: s
         "key": _sanitize_for_log(key),
         "action": action,  # "get", "set", "invalidate", "clear"
         "hit": hit,  # For get operations
-        "security_event": security_event  # "checksum_mismatch", "expired", etc.
+        "security_event": security_event,  # "checksum_mismatch", "expired", etc.
     }
 
     # Keep only last 100 access entries to prevent memory growth
@@ -98,17 +114,25 @@ def _get_cached_settings(key: str) -> Any | None:
             if current_checksum != stored_checksum:
                 # Cache tampering detected, remove entry
                 del _settings_cache[key]
-                _log_cache_access(key, "get", hit=False, security_event="checksum_mismatch")
-                logger.error(f"Cache integrity violation detected for key: {_sanitize_for_log(key)}")
+                _log_cache_access(
+                    key, "get", hit=False, security_event="checksum_mismatch"
+                )
+                logger.error(
+                    f"Cache integrity violation detected for key: {_sanitize_for_log(key)}"
+                )
                 return None
 
             # Additional validation for provider configurations
             if "provider_config" in key and isinstance(value, dict):
                 # Basic validation: check required fields
-                if not value.get("provider") or not _is_valid_provider(value.get("provider")):
+                if not value.get("provider") or not _is_valid_provider(
+                    value.get("provider")
+                ):
                     # Invalid configuration in cache, remove it
                     del _settings_cache[key]
-                    _log_cache_access(key, "get", hit=False, security_event="invalid_config")
+                    _log_cache_access(
+                        key, "get", hit=False, security_event="invalid_config"
+                    )
                     return None
 
             _log_cache_access(key, "get", hit=True)
@@ -119,7 +143,9 @@ def _get_cached_settings(key: str) -> Any | None:
 
     except Exception as e:
         # Cache access error, log and return None for safety
-        _log_cache_access(key, "get", hit=False, security_event=f"access_error: {str(e)}")
+        _log_cache_access(
+            key, "get", hit=False, security_event=f"access_error: {str(e)}"
+        )
         return None
 
 
@@ -130,9 +156,13 @@ def _set_cached_settings(key: str, value: Any) -> None:
         # Validate provider configurations before caching
         if "provider_config" in key and isinstance(value, dict):
             # Basic validation: check required fields
-            if not value.get("provider") or not _is_valid_provider(value.get("provider")):
+            if not value.get("provider") or not _is_valid_provider(
+                value.get("provider")
+            ):
                 _log_cache_access(key, "set", security_event="invalid_config_rejected")
-                logger.warning(f"Rejected caching of invalid provider config for key: {_sanitize_for_log(key)}")
+                logger.warning(
+                    f"Rejected caching of invalid provider config for key: {_sanitize_for_log(key)}"
+                )
                 return
 
         # Calculate integrity checksum
@@ -154,7 +184,9 @@ def clear_provider_cache() -> None:
     cache_size_before = len(_settings_cache)
     _settings_cache.clear()
     _log_cache_access("*", "clear")
-    logger.debug(f"Provider configuration cache cleared ({cache_size_before} entries removed)")
+    logger.debug(
+        f"Provider configuration cache cleared ({cache_size_before} entries removed)"
+    )
 
 
 def invalidate_provider_cache(provider: str = None) -> None:
@@ -171,12 +203,18 @@ def invalidate_provider_cache(provider: str = None) -> None:
         cache_size_before = len(_settings_cache)
         _settings_cache.clear()
         _log_cache_access("*", "invalidate")
-        logger.debug(f"All provider cache entries invalidated ({cache_size_before} entries)")
+        logger.debug(
+            f"All provider cache entries invalidated ({cache_size_before} entries)"
+        )
     else:
         # Validate provider name before processing
         if not _is_valid_provider(provider):
-            _log_cache_access(provider, "invalidate", security_event="invalid_provider_name")
-            logger.warning(f"Rejected cache invalidation for invalid provider: {_sanitize_for_log(provider)}")
+            _log_cache_access(
+                provider, "invalidate", security_event="invalid_provider_name"
+            )
+            logger.warning(
+                f"Rejected cache invalidation for invalid provider: {_sanitize_for_log(provider)}"
+            )
             return
 
         # Clear specific provider entries
@@ -190,7 +228,9 @@ def invalidate_provider_cache(provider: str = None) -> None:
             _log_cache_access(key, "invalidate")
 
         safe_provider = _sanitize_for_log(provider)
-        logger.debug(f"Cache entries for provider '{safe_provider}' invalidated: {len(keys_to_remove)} entries removed")
+        logger.debug(
+            f"Cache entries for provider '{safe_provider}' invalidated: {len(keys_to_remove)} entries removed"
+        )
 
 
 def get_cache_stats() -> dict[str, Any]:
@@ -213,13 +253,13 @@ def get_cache_stats() -> dict[str, Any]:
             "expired_access_attempts": 0,
             "invalid_config_rejections": 0,
             "access_errors": 0,
-            "total_security_events": 0
+            "total_security_events": 0,
         },
         "access_patterns": {
             "recent_cache_hits": 0,
             "recent_cache_misses": 0,
-            "hit_rate": 0.0
-        }
+            "hit_rate": 0.0,
+        },
     }
 
     # Analyze cache entries
@@ -284,13 +324,14 @@ def get_cache_security_report() -> dict[str, Any]:
         "timestamp": current_time,
         "analysis_period_hours": 1,
         "security_events": [],
-        "recommendations": []
+        "recommendations": [],
     }
 
     # Extract security events from last hour
     recent_threshold = current_time - 3600
     security_events = [
-        access for access in _cache_access_log
+        access
+        for access in _cache_access_log
         if access["timestamp"] >= recent_threshold and access["security_event"]
     ]
 
@@ -298,17 +339,33 @@ def get_cache_security_report() -> dict[str, Any]:
 
     # Generate recommendations based on security events
     if len(security_events) > 10:
-        report["recommendations"].append("High number of security events detected - investigate potential attacks")
+        report["recommendations"].append(
+            "High number of security events detected - investigate potential attacks"
+        )
 
-    integrity_violations = sum(1 for event in security_events if "checksum_mismatch" in event.get("security_event", ""))
+    integrity_violations = sum(
+        1
+        for event in security_events
+        if "checksum_mismatch" in event.get("security_event", "")
+    )
     if integrity_violations > 0:
-        report["recommendations"].append(f"Cache integrity violations detected ({integrity_violations}) - check for memory corruption or attacks")
+        report["recommendations"].append(
+            f"Cache integrity violations detected ({integrity_violations}) - check for memory corruption or attacks"
+        )
 
-    invalid_configs = sum(1 for event in security_events if "invalid_config" in event.get("security_event", ""))
+    invalid_configs = sum(
+        1
+        for event in security_events
+        if "invalid_config" in event.get("security_event", "")
+    )
     if invalid_configs > 3:
-        report["recommendations"].append(f"Multiple invalid configuration attempts ({invalid_configs}) - validate data sources")
+        report["recommendations"].append(
+            f"Multiple invalid configuration attempts ({invalid_configs}) - validate data sources"
+        )
 
     return report
+
+
 @asynccontextmanager
 async def get_llm_client(
     provider: str | None = None,
@@ -347,7 +404,9 @@ async def get_llm_client(
             cache_key = "rag_strategy_settings"
             rag_settings = _get_cached_settings(cache_key)
             if rag_settings is None:
-                rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+                rag_settings = await credential_service.get_credentials_by_category(
+                    "rag_strategy"
+                )
                 _set_cached_settings(cache_key, rag_settings)
                 logger.debug("Fetched and cached rag_strategy settings")
             else:
@@ -367,7 +426,9 @@ async def get_llm_client(
             cache_key = f"provider_config_{service_type}"
             provider_config = _get_cached_settings(cache_key)
             if provider_config is None:
-                provider_config = await credential_service.get_active_provider(service_type)
+                provider_config = await credential_service.get_active_provider(
+                    service_type
+                )
                 _set_cached_settings(cache_key, provider_config)
                 logger.debug(f"Fetched and cached {service_type} provider config")
             else:
@@ -376,7 +437,9 @@ async def get_llm_client(
             provider_name = provider_config["provider"]
             api_key = provider_config["api_key"]
             # For Ollama, don't use the base_url from config - let _get_optimal_ollama_instance decide
-            base_url = provider_config["base_url"] if provider_name != "ollama" else None
+            base_url = (
+                provider_config["base_url"] if provider_name != "ollama" else None
+            )
 
         # Comprehensive provider validation with security checks
         if not _is_valid_provider(provider_name):
@@ -389,14 +452,98 @@ async def get_llm_client(
             elif len(api_key) > 500:  # Reasonable API key length limit
                 raise ValueError("API key length exceeds security limits")
             # Additional security: check for suspicious patterns
-            if any(char in api_key for char in ['\n', '\r', '\t', '\0']):
+            if any(char in api_key for char in ["\n", "\r", "\t", "\0"]):
                 raise ValueError("API key contains invalid characters")
 
         # Sanitize provider name for logging
-        safe_provider_name = _sanitize_for_log(provider_name) if provider_name else "unknown"
+        safe_provider_name = (
+            _sanitize_for_log(provider_name) if provider_name else "unknown"
+        )
         logger.info(f"Creating LLM client for provider: {safe_provider_name}")
 
-        if provider_name == "openai":
+        if provider_name == "azure-openai":
+            # Azure OpenAI requires specific configuration
+            azure_endpoint = await credential_service.get_credential(
+                "AZURE_OPENAI_ENDPOINT"
+            )
+            azure_api_version = await credential_service.get_credential(
+                "AZURE_OPENAI_API_VERSION"
+            )
+
+            if not azure_endpoint:
+                raise ValueError(
+                    "Azure OpenAI endpoint not configured. Set AZURE_OPENAI_ENDPOINT."
+                )
+            if not api_key:
+                raise ValueError(
+                    "Azure OpenAI API key not found. Set AZURE_OPENAI_API_KEY."
+                )
+            if not azure_api_version:
+                # Default to a stable API version if not specified
+                azure_api_version = "2024-02-15-preview"
+                logger.warning(
+                    f"Azure OpenAI API version not set, using default: {azure_api_version}"
+                )
+
+            client = openai.AsyncAzureOpenAI(
+                api_key=api_key,
+                azure_endpoint=azure_endpoint,
+                api_version=azure_api_version,
+            )
+            logger.info(
+                f"Azure OpenAI client created successfully with endpoint: {azure_endpoint}"
+            )
+
+        elif provider_name == "aws-bedrock":
+            # AWS Bedrock requires boto3 SDK for Converse API
+            try:
+                import boto3
+                from botocore.config import Config as BotoConfig
+            except ImportError as import_error:
+                raise ValueError(
+                    "AWS Bedrock support requires boto3. Install with: pip install boto3"
+                ) from import_error
+
+            # Get AWS credentials
+            aws_secret_key = await credential_service.get_credential(
+                "AWS_SECRET_ACCESS_KEY"
+            )
+            aws_region = await credential_service.get_credential("AWS_REGION")
+
+            if not api_key:  # api_key is AWS_ACCESS_KEY_ID
+                raise ValueError("AWS Access Key ID not found. Set AWS_ACCESS_KEY_ID.")
+            if not aws_secret_key:
+                raise ValueError(
+                    "AWS Secret Access Key not found. Set AWS_SECRET_ACCESS_KEY."
+                )
+            if not aws_region:
+                aws_region = "us-east-1"  # Default region
+                logger.warning(f"AWS region not set, using default: {aws_region}")
+
+            # Create boto3 Bedrock runtime client
+            bedrock_config = BotoConfig(
+                region_name=aws_region,
+                signature_version="v4",
+                retries={"max_attempts": 3, "mode": "adaptive"},
+            )
+
+            bedrock_client = boto3.client(
+                "bedrock-runtime",
+                aws_access_key_id=api_key,
+                aws_secret_access_key=aws_secret_key,
+                config=bedrock_config,
+            )
+
+            # Wrap boto3 client in a compatible interface
+            # We'll create a custom wrapper that implements the OpenAI-like async interface
+            from ..adapters.aws_bedrock_adapter import AWSBedrockClientAdapter
+
+            client = AWSBedrockClientAdapter(bedrock_client, aws_region)
+            logger.info(
+                f"AWS Bedrock client created successfully in region: {aws_region}"
+            )
+
+        elif provider_name == "openai":
             if api_key:
                 client = openai.AsyncOpenAI(api_key=api_key)
                 logger.info("OpenAI client created successfully")
@@ -440,7 +587,9 @@ async def get_llm_client(
                 api_key="ollama",  # Required but unused by Ollama
                 base_url=ollama_base_url,
             )
-            logger.info(f"Ollama client created successfully with base URL: {ollama_base_url}")
+            logger.info(
+                f"Ollama client created successfully with base URL: {ollama_base_url}"
+            )
 
         elif provider_name == "google":
             if not api_key:
@@ -448,7 +597,8 @@ async def get_llm_client(
 
             client = openai.AsyncOpenAI(
                 api_key=api_key,
-                base_url=base_url or "https://generativelanguage.googleapis.com/v1beta/openai/",
+                base_url=base_url
+                or "https://generativelanguage.googleapis.com/v1beta/openai/",
             )
             logger.info("Google Gemini client created successfully")
 
@@ -474,14 +624,18 @@ async def get_llm_client(
 
         elif provider_name == "grok":
             if not api_key:
-                raise ValueError("Grok API key not found - set GROK_API_KEY environment variable")
+                raise ValueError(
+                    "Grok API key not found - set GROK_API_KEY environment variable"
+                )
 
             # Enhanced Grok API key validation (secure - no key fragments logged)
             key_format_valid = api_key.startswith("xai-")
             key_length_valid = len(api_key) >= 20
 
             if not key_format_valid:
-                logger.warning("Grok API key format validation failed - should start with 'xai-'")
+                logger.warning(
+                    "Grok API key format validation failed - should start with 'xai-'"
+                )
 
             if not key_length_valid:
                 logger.warning("Grok API key validation failed - insufficient length")
@@ -509,7 +663,9 @@ async def get_llm_client(
         yield client
     finally:
         if client is not None:
-            safe_provider = _sanitize_for_log(provider_name) if provider_name else "unknown"
+            safe_provider = (
+                _sanitize_for_log(provider_name) if provider_name else "unknown"
+            )
 
             try:
                 close_method = getattr(client, "aclose", None)
@@ -548,24 +704,29 @@ async def get_llm_client(
                 )
 
 
-
-async def _get_optimal_ollama_instance(instance_type: str | None = None,
-                                       use_embedding_provider: bool = False,
-                                       base_url_override: str | None = None) -> str:
+async def _get_optimal_ollama_instance(
+    instance_type: str | None = None,
+    use_embedding_provider: bool = False,
+    base_url_override: str | None = None,
+) -> str:
     """
     Get the optimal Ollama instance URL based on configuration and health status.
-    
+
     Args:
         instance_type: Preferred instance type ('chat', 'embedding', 'both', or None)
         use_embedding_provider: Whether this is for embedding operations
         base_url_override: Override URL if specified
-        
+
     Returns:
         Best available Ollama instance URL
     """
     # If override URL provided, use it directly
     if base_url_override:
-        return base_url_override if base_url_override.endswith('/v1') else f"{base_url_override}/v1"
+        return (
+            base_url_override
+            if base_url_override.endswith("/v1")
+            else f"{base_url_override}/v1"
+        )
 
     try:
         # For now, we don't have multi-instance support, so skip to single instance config
@@ -573,25 +734,39 @@ async def _get_optimal_ollama_instance(instance_type: str | None = None,
         logger.info("Using single instance Ollama configuration")
 
         # Get single instance configuration from RAG settings
-        rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+        rag_settings = await credential_service.get_credentials_by_category(
+            "rag_strategy"
+        )
 
         # Check if we need embedding provider and have separate embedding URL
         if use_embedding_provider or instance_type == "embedding":
             embedding_url = rag_settings.get("OLLAMA_EMBEDDING_URL")
             if embedding_url:
-                return embedding_url if embedding_url.endswith('/v1') else f"{embedding_url}/v1"
+                return (
+                    embedding_url
+                    if embedding_url.endswith("/v1")
+                    else f"{embedding_url}/v1"
+                )
 
         # Default to LLM base URL for chat operations
-        fallback_url = rag_settings.get("LLM_BASE_URL", "http://host.docker.internal:11434")
-        return fallback_url if fallback_url.endswith('/v1') else f"{fallback_url}/v1"
+        fallback_url = rag_settings.get(
+            "LLM_BASE_URL", "http://host.docker.internal:11434"
+        )
+        return fallback_url if fallback_url.endswith("/v1") else f"{fallback_url}/v1"
 
     except Exception as e:
         logger.error(f"Error getting Ollama configuration: {e}")
         # Final fallback to localhost only if we can't get RAG settings
         try:
-            rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
-            fallback_url = rag_settings.get("LLM_BASE_URL", "http://host.docker.internal:11434")
-            return fallback_url if fallback_url.endswith('/v1') else f"{fallback_url}/v1"
+            rag_settings = await credential_service.get_credentials_by_category(
+                "rag_strategy"
+            )
+            fallback_url = rag_settings.get(
+                "LLM_BASE_URL", "http://host.docker.internal:11434"
+            )
+            return (
+                fallback_url if fallback_url.endswith("/v1") else f"{fallback_url}/v1"
+            )
         except Exception as fallback_error:
             logger.error(f"Could not retrieve fallback configuration: {fallback_error}")
             return "http://host.docker.internal:11434/v1"
@@ -616,7 +791,9 @@ async def get_embedding_model(provider: str | None = None) -> str:
             cache_key = "rag_strategy_settings"
             rag_settings = _get_cached_settings(cache_key)
             if rag_settings is None:
-                rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+                rag_settings = await credential_service.get_credentials_by_category(
+                    "rag_strategy"
+                )
                 _set_cached_settings(cache_key, rag_settings)
             custom_model = rag_settings.get("EMBEDDING_MODEL", "")
         else:
@@ -624,7 +801,9 @@ async def get_embedding_model(provider: str | None = None) -> str:
             cache_key = "provider_config_embedding"
             provider_config = _get_cached_settings(cache_key)
             if provider_config is None:
-                provider_config = await credential_service.get_active_provider("embedding")
+                provider_config = await credential_service.get_active_provider(
+                    "embedding"
+                )
                 _set_cached_settings(cache_key, provider_config)
             provider_name = provider_config["provider"]
             custom_model = provider_config["embedding_model"]
@@ -632,21 +811,40 @@ async def get_embedding_model(provider: str | None = None) -> str:
         # Comprehensive provider validation for embeddings
         if not _is_valid_provider(provider_name):
             safe_provider = _sanitize_for_log(provider_name)
-            logger.warning(f"Invalid embedding provider: {safe_provider}, falling back to OpenAI")
+            logger.warning(
+                f"Invalid embedding provider: {safe_provider}, falling back to OpenAI"
+            )
             provider_name = "openai"
         # Use custom model if specified (with validation)
         if custom_model and len(custom_model.strip()) > 0:
             custom_model = custom_model.strip()
             # Basic model name validation (check length and basic characters)
-            if len(custom_model) <= 100 and not any(char in custom_model for char in ['\n', '\r', '\t', '\0']):
+            if len(custom_model) <= 100 and not any(
+                char in custom_model for char in ["\n", "\r", "\t", "\0"]
+            ):
                 return custom_model
             else:
                 safe_model = _sanitize_for_log(custom_model)
-                logger.warning(f"Invalid custom embedding model '{safe_model}' for provider '{provider_name}', using default")
+                logger.warning(
+                    f"Invalid custom embedding model '{safe_model}' for provider '{provider_name}', using default"
+                )
 
         # Return provider-specific defaults
         if provider_name == "openai":
             return "text-embedding-3-small"
+        elif provider_name == "azure-openai":
+            # For Azure OpenAI, use the deployment name from settings
+            # This is required for Azure OpenAI embeddings
+            deployment = await credential_service.get_credential(
+                "AZURE_OPENAI_DEPLOYMENT"
+            )
+            if deployment:
+                return deployment
+            else:
+                logger.warning(
+                    "Azure OpenAI deployment not set, using default model name"
+                )
+                return "text-embedding-3-small"
         elif provider_name == "ollama":
             # Ollama default embedding model
             return "nomic-embed-text"
@@ -665,6 +863,16 @@ async def get_embedding_model(provider: str | None = None) -> str:
             # Grok supports OpenAI and Google embedding models through their API
             # Default to OpenAI's latest for compatibility
             return "text-embedding-3-small"
+        elif provider_name == "aws-bedrock":
+            # AWS Bedrock default embedding model (Amazon Titan Embeddings)
+            bedrock_model_id = await credential_service.get_credential(
+                "AWS_BEDROCK_MODEL_ID"
+            )
+            if bedrock_model_id:
+                return bedrock_model_id
+            else:
+                # Default to Titan Embeddings V1
+                return "amazon.titan-embed-text-v1"
         else:
             # Fallback to OpenAI's model
             return "text-embedding-3-small"
@@ -714,7 +922,7 @@ def is_google_embedding_model(model: str) -> bool:
         "text-embedding-005",
         "text-multilingual-embedding-002",
         "gemini-embedding-001",
-        "multimodalembedding@001"
+        "multimodalembedding@001",
     ]
 
     return any(pattern in model_lower for pattern in google_patterns)
@@ -738,6 +946,10 @@ def is_valid_embedding_model_for_provider(model: str, provider: str) -> bool:
 
     if provider_lower == "openai":
         return is_openai_embedding_model(model)
+    elif provider_lower == "azure-openai":
+        # Azure OpenAI uses deployment names, which can be any string
+        # so we accept any non-empty string as valid
+        return bool(model and model.strip())
     elif provider_lower == "google":
         return is_google_embedding_model(model)
     elif provider_lower in ["openrouter", "anthropic", "grok"]:
@@ -771,7 +983,7 @@ def get_supported_embedding_models(provider: str) -> list[str]:
     openai_models = [
         "text-embedding-ada-002",
         "text-embedding-3-small",
-        "text-embedding-3-large"
+        "text-embedding-3-large",
     ]
 
     google_models = [
@@ -779,10 +991,14 @@ def get_supported_embedding_models(provider: str) -> list[str]:
         "text-embedding-005",
         "text-multilingual-embedding-002",
         "gemini-embedding-001",
-        "multimodalembedding@001"
+        "multimodalembedding@001",
     ]
 
     if provider_lower == "openai":
+        return openai_models
+    elif provider_lower == "azure-openai":
+        # Azure OpenAI uses deployment names which are user-defined
+        # Return OpenAI models as reference, but actual deployment names may differ
         return openai_models
     elif provider_lower == "google":
         return google_models
@@ -791,6 +1007,14 @@ def get_supported_embedding_models(provider: str) -> list[str]:
         return openai_models + google_models
     elif provider_lower == "ollama":
         return ["nomic-embed-text", "all-minilm", "mxbai-embed-large"]
+    elif provider_lower == "aws-bedrock":
+        # AWS Bedrock embedding models
+        return [
+            "amazon.titan-embed-text-v1",
+            "amazon.titan-embed-text-v2:0",
+            "cohere.embed-english-v3",
+            "cohere.embed-multilingual-v3",
+        ]
     else:
         # For unknown providers, assume OpenAI compatibility
         return openai_models
@@ -931,15 +1155,26 @@ def _is_reasoning_text(text: str) -> bool:
 
     # Common reasoning text patterns
     reasoning_indicators = [
-        "okay, let's see", "let me think", "first, i need to", "looking at this",
-        "step by step", "analyzing", "breaking this down", "considering",
-        "let me work through", "i should", "thinking about", "examining"
+        "okay, let's see",
+        "let me think",
+        "first, i need to",
+        "looking at this",
+        "step by step",
+        "analyzing",
+        "breaking this down",
+        "considering",
+        "let me work through",
+        "i should",
+        "thinking about",
+        "examining",
     ]
 
     return any(indicator in text_lower for indicator in reasoning_indicators)
 
 
-def extract_json_from_reasoning(reasoning_text: str, context_code: str = "", language: str = "") -> str:
+def extract_json_from_reasoning(
+    reasoning_text: str, context_code: str = "", language: str = ""
+) -> str:
     """Extract JSON content from reasoning text, with synthesis fallback."""
     if not reasoning_text:
         return ""
@@ -948,8 +1183,10 @@ def extract_json_from_reasoning(reasoning_text: str, context_code: str = "", lan
     import re
 
     # Try to find JSON blocks in markdown
-    json_block_pattern = r'```(?:json)?\s*(\{.*?\})\s*```'
-    json_matches = re.findall(json_block_pattern, reasoning_text, re.DOTALL | re.IGNORECASE)
+    json_block_pattern = r"```(?:json)?\s*(\{.*?\})\s*```"
+    json_matches = re.findall(
+        json_block_pattern, reasoning_text, re.DOTALL | re.IGNORECASE
+    )
 
     for match in json_matches:
         try:
@@ -960,14 +1197,16 @@ def extract_json_from_reasoning(reasoning_text: str, context_code: str = "", lan
             continue
 
     # Try to find standalone JSON objects
-    json_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
+    json_pattern = r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}"
     json_matches = re.findall(json_pattern, reasoning_text, re.DOTALL)
 
     for match in json_matches:
         try:
             parsed = json.loads(match.strip())
             # Ensure it has expected structure
-            if isinstance(parsed, dict) and any(key in parsed for key in ["example_name", "summary", "name", "title"]):
+            if isinstance(parsed, dict) and any(
+                key in parsed for key in ["example_name", "summary", "name", "title"]
+            ):
                 return match.strip()
         except json.JSONDecodeError:
             continue
@@ -976,7 +1215,9 @@ def extract_json_from_reasoning(reasoning_text: str, context_code: str = "", lan
     return synthesize_json_from_reasoning(reasoning_text, context_code, language)
 
 
-def synthesize_json_from_reasoning(reasoning_text: str, context_code: str = "", language: str = "") -> str:
+def synthesize_json_from_reasoning(
+    reasoning_text: str, context_code: str = "", language: str = ""
+) -> str:
     """Generate JSON structure from reasoning text when no JSON is found."""
     if not reasoning_text and not context_code:
         return ""
@@ -991,44 +1232,44 @@ def synthesize_json_from_reasoning(reasoning_text: str, context_code: str = "", 
 
     # Common action patterns in reasoning text and code
     action_patterns = [
-        (r'\b(?:parse|parsing|parsed)\b', 'Parse'),
-        (r'\b(?:create|creating|created)\b', 'Create'),
-        (r'\b(?:analyze|analyzing|analyzed)\b', 'Analyze'),
-        (r'\b(?:extract|extracting|extracted)\b', 'Extract'),
-        (r'\b(?:generate|generating|generated)\b', 'Generate'),
-        (r'\b(?:process|processing|processed)\b', 'Process'),
-        (r'\b(?:load|loading|loaded)\b', 'Load'),
-        (r'\b(?:handle|handling|handled)\b', 'Handle'),
-        (r'\b(?:manage|managing|managed)\b', 'Manage'),
-        (r'\b(?:build|building|built)\b', 'Build'),
-        (r'\b(?:define|defining|defined)\b', 'Define'),
-        (r'\b(?:implement|implementing|implemented)\b', 'Implement'),
-        (r'\b(?:fetch|fetching|fetched)\b', 'Fetch'),
-        (r'\b(?:connect|connecting|connected)\b', 'Connect'),
-        (r'\b(?:validate|validating|validated)\b', 'Validate'),
+        (r"\b(?:parse|parsing|parsed)\b", "Parse"),
+        (r"\b(?:create|creating|created)\b", "Create"),
+        (r"\b(?:analyze|analyzing|analyzed)\b", "Analyze"),
+        (r"\b(?:extract|extracting|extracted)\b", "Extract"),
+        (r"\b(?:generate|generating|generated)\b", "Generate"),
+        (r"\b(?:process|processing|processed)\b", "Process"),
+        (r"\b(?:load|loading|loaded)\b", "Load"),
+        (r"\b(?:handle|handling|handled)\b", "Handle"),
+        (r"\b(?:manage|managing|managed)\b", "Manage"),
+        (r"\b(?:build|building|built)\b", "Build"),
+        (r"\b(?:define|defining|defined)\b", "Define"),
+        (r"\b(?:implement|implementing|implemented)\b", "Implement"),
+        (r"\b(?:fetch|fetching|fetched)\b", "Fetch"),
+        (r"\b(?:connect|connecting|connected)\b", "Connect"),
+        (r"\b(?:validate|validating|validated)\b", "Validate"),
     ]
 
     # Technology/concept patterns
     tech_patterns = [
-        (r'\bjson\b', 'JSON'),
-        (r'\bapi\b', 'API'),
-        (r'\bfile\b', 'File'),
-        (r'\bdata\b', 'Data'),
-        (r'\bcode\b', 'Code'),
-        (r'\btext\b', 'Text'),
-        (r'\bcontent\b', 'Content'),
-        (r'\bresponse\b', 'Response'),
-        (r'\brequest\b', 'Request'),
-        (r'\bconfig\b', 'Config'),
-        (r'\bllm\b', 'LLM'),
-        (r'\bmodel\b', 'Model'),
-        (r'\bexample\b', 'Example'),
-        (r'\bcontext\b', 'Context'),
-        (r'\basync\b', 'Async'),
-        (r'\bfunction\b', 'Function'),
-        (r'\bclass\b', 'Class'),
-        (r'\bprint\b', 'Output'),
-        (r'\breturn\b', 'Return'),
+        (r"\bjson\b", "JSON"),
+        (r"\bapi\b", "API"),
+        (r"\bfile\b", "File"),
+        (r"\bdata\b", "Data"),
+        (r"\bcode\b", "Code"),
+        (r"\btext\b", "Text"),
+        (r"\bcontent\b", "Content"),
+        (r"\bresponse\b", "Response"),
+        (r"\brequest\b", "Request"),
+        (r"\bconfig\b", "Config"),
+        (r"\bllm\b", "LLM"),
+        (r"\bmodel\b", "Model"),
+        (r"\bexample\b", "Example"),
+        (r"\bcontext\b", "Context"),
+        (r"\basync\b", "Async"),
+        (r"\bfunction\b", "Function"),
+        (r"\bclass\b", "Class"),
+        (r"\bprint\b", "Output"),
+        (r"\breturn\b", "Return"),
     ]
 
     # Extract actions and technologies from combined text
@@ -1061,8 +1302,12 @@ def synthesize_json_from_reasoning(reasoning_text: str, context_code: str = "", 
         example_name = " ".join(example_name_words[:4])
 
     # Generate summary from reasoning content
-    reasoning_lines = reasoning_text.split('\n')
-    meaningful_lines = [line.strip() for line in reasoning_lines if line.strip() and len(line.strip()) > 10]
+    reasoning_lines = reasoning_text.split("\n")
+    meaningful_lines = [
+        line.strip()
+        for line in reasoning_lines
+        if line.strip() and len(line.strip()) > 10
+    ]
 
     if meaningful_lines:
         # Take first meaningful sentence for summary base
@@ -1084,10 +1329,7 @@ def synthesize_json_from_reasoning(reasoning_text: str, context_code: str = "", 
         summary = summary[:297] + "..."
 
     # Create JSON structure
-    result = {
-        "example_name": example_name,
-        "summary": summary
-    }
+    result = {"example_name": example_name, "summary": summary}
 
     return json.dumps(result)
 
@@ -1127,19 +1369,23 @@ def prepare_chat_completion_params(model: str, params: dict) -> dict:
     # Remove custom temperature for reasoning models (they only support default temperature=1.0)
     if reasoning_model and "temperature" in updated_params:
         original_temp = updated_params.pop("temperature")
-        logger.debug(f"Removed custom temperature {original_temp} for reasoning model {model} (only supports default temperature=1.0)")
+        logger.debug(
+            f"Removed custom temperature {original_temp} for reasoning model {model} (only supports default temperature=1.0)"
+        )
 
     return updated_params
 
 
-async def get_embedding_model_with_routing(provider: str | None = None, instance_url: str | None = None) -> tuple[str, str]:
+async def get_embedding_model_with_routing(
+    provider: str | None = None, instance_url: str | None = None
+) -> tuple[str, str]:
     """
     Get the embedding model with intelligent routing for multi-instance setups.
-    
+
     Args:
         provider: Override provider selection
         instance_url: Specific instance URL to use
-        
+
     Returns:
         Tuple of (model_name, instance_url) for embedding operations
     """
@@ -1149,14 +1395,21 @@ async def get_embedding_model_with_routing(provider: str | None = None, instance
 
         # If specific instance URL provided, use it
         if instance_url:
-            final_url = instance_url if instance_url.endswith('/v1') else f"{instance_url}/v1"
+            final_url = (
+                instance_url if instance_url.endswith("/v1") else f"{instance_url}/v1"
+            )
             return model_name, final_url
 
         # For Ollama provider, use intelligent instance routing
-        if provider == "ollama" or (not provider and (await credential_service.get_credentials_by_category("rag_strategy")).get("LLM_PROVIDER") == "ollama"):
+        if provider == "ollama" or (
+            not provider
+            and (
+                await credential_service.get_credentials_by_category("rag_strategy")
+            ).get("LLM_PROVIDER")
+            == "ollama"
+        ):
             optimal_url = await _get_optimal_ollama_instance(
-                instance_type="embedding",
-                use_embedding_provider=True
+                instance_type="embedding", use_embedding_provider=True
             )
             return model_name, optimal_url
 
@@ -1168,14 +1421,16 @@ async def get_embedding_model_with_routing(provider: str | None = None, instance
         return "text-embedding-3-small", None
 
 
-async def validate_provider_instance(provider: str, instance_url: str | None = None) -> dict[str, any]:
+async def validate_provider_instance(
+    provider: str, instance_url: str | None = None
+) -> dict[str, any]:
     """
     Validate a provider instance and return health information.
-    
+
     Args:
         provider: Provider name (openai, ollama, google, etc.)
         instance_url: Instance URL for providers that support multiple instances
-        
+
     Returns:
         Dictionary with validation results and health status
     """
@@ -1188,10 +1443,12 @@ async def validate_provider_instance(provider: str, instance_url: str | None = N
             if not instance_url:
                 instance_url = await _get_optimal_ollama_instance()
                 # Remove /v1 suffix for health checking
-                if instance_url.endswith('/v1'):
+                if instance_url.endswith("/v1"):
                     instance_url = instance_url[:-3]
 
-            health_status = await model_discovery_service.check_instance_health(instance_url)
+            health_status = await model_discovery_service.check_instance_health(
+                instance_url
+            )
 
             return {
                 "provider": provider,
@@ -1200,7 +1457,7 @@ async def validate_provider_instance(provider: str, instance_url: str | None = N
                 "response_time_ms": health_status.response_time_ms,
                 "models_available": health_status.models_available,
                 "error_message": health_status.error_message,
-                "validation_timestamp": time.time()
+                "validation_timestamp": time.time(),
             }
 
         else:
@@ -1212,7 +1469,7 @@ async def validate_provider_instance(provider: str, instance_url: str | None = N
                 if provider == "openai":
                     # List models to validate API key
                     models = await client.models.list()
-                    model_count = len(models.data) if hasattr(models, 'data') else 0
+                    model_count = len(models.data) if hasattr(models, "data") else 0
                 elif provider == "google":
                     # For Google, we can't easily list models, just validate client creation
                     model_count = 1  # Assume available if client creation succeeded
@@ -1228,7 +1485,7 @@ async def validate_provider_instance(provider: str, instance_url: str | None = N
                     "response_time_ms": response_time,
                     "models_available": model_count,
                     "error_message": None,
-                    "validation_timestamp": time.time()
+                    "validation_timestamp": time.time(),
                 }
 
     except Exception as e:
@@ -1240,9 +1497,8 @@ async def validate_provider_instance(provider: str, instance_url: str | None = N
             "response_time_ms": None,
             "models_available": 0,
             "error_message": str(e),
-            "validation_timestamp": time.time()
+            "validation_timestamp": time.time(),
         }
-
 
 
 def requires_max_completion_tokens(model_name: str) -> bool:

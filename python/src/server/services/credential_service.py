@@ -36,8 +36,6 @@ class CredentialItem:
     description: str | None = None
 
 
-
-
 class CredentialService:
     """Service for managing application credentials and configuration."""
 
@@ -71,7 +69,9 @@ class CredentialService:
                 match = re.match(r"https://([^.]+)\.supabase\.co", url)
                 if match:
                     project_id = match.group(1)
-                    logger.debug(f"Supabase client initialized for project: {project_id}")
+                    logger.debug(
+                        f"Supabase client initialized for project: {project_id}"
+                    )
                 else:
                     logger.debug("Supabase client initialized successfully")
 
@@ -157,7 +157,9 @@ class CredentialService:
             logger.error(f"Error loading credentials: {e}")
             raise
 
-    async def get_credential(self, key: str, default: Any = None, decrypt: bool = True) -> Any:
+    async def get_credential(
+        self, key: str, default: Any = None, decrypt: bool = True
+    ) -> Any:
         """Get a credential value by key."""
         if not self._cache_initialized:
             await self.load_all_credentials()
@@ -244,6 +246,7 @@ class CredentialService:
                 # Also invalidate provider service cache to ensure immediate effect
                 try:
                     from .llm_provider_service import clear_provider_cache
+
                     clear_provider_cache()
                     logger.debug("Also cleared LLM provider service cache")
                 except Exception as e:
@@ -252,14 +255,23 @@ class CredentialService:
                 # Also invalidate LLM provider service cache for provider config
                 try:
                     from . import llm_provider_service
+
                     # Clear the provider config caches that depend on RAG settings
-                    cache_keys_to_clear = ["provider_config_llm", "provider_config_embedding", "rag_strategy_settings"]
+                    cache_keys_to_clear = [
+                        "provider_config_llm",
+                        "provider_config_embedding",
+                        "rag_strategy_settings",
+                    ]
                     for cache_key in cache_keys_to_clear:
                         if cache_key in llm_provider_service._settings_cache:
                             del llm_provider_service._settings_cache[cache_key]
-                            logger.debug(f"Invalidated LLM provider service cache key: {cache_key}")
+                            logger.debug(
+                                f"Invalidated LLM provider service cache key: {cache_key}"
+                            )
                 except ImportError:
-                    logger.warning("Could not import llm_provider_service to invalidate cache")
+                    logger.warning(
+                        "Could not import llm_provider_service to invalidate cache"
+                    )
                 except Exception as e:
                     logger.error(f"Error invalidating LLM provider service cache: {e}")
 
@@ -294,6 +306,7 @@ class CredentialService:
                 # Also invalidate provider service cache to ensure immediate effect
                 try:
                     from .llm_provider_service import clear_provider_cache
+
                     clear_provider_cache()
                     logger.debug("Also cleared LLM provider service cache")
                 except Exception as e:
@@ -302,14 +315,23 @@ class CredentialService:
                 # Also invalidate LLM provider service cache for provider config
                 try:
                     from . import llm_provider_service
+
                     # Clear the provider config caches that depend on RAG settings
-                    cache_keys_to_clear = ["provider_config_llm", "provider_config_embedding", "rag_strategy_settings"]
+                    cache_keys_to_clear = [
+                        "provider_config_llm",
+                        "provider_config_embedding",
+                        "rag_strategy_settings",
+                    ]
                     for cache_key in cache_keys_to_clear:
                         if cache_key in llm_provider_service._settings_cache:
                             del llm_provider_service._settings_cache[cache_key]
-                            logger.debug(f"Invalidated LLM provider service cache key: {cache_key}")
+                            logger.debug(
+                                f"Invalidated LLM provider service cache key: {cache_key}"
+                            )
                 except ImportError:
-                    logger.warning("Could not import llm_provider_service to invalidate cache")
+                    logger.warning(
+                        "Could not import llm_provider_service to invalidate cache"
+                    )
                 except Exception as e:
                     logger.error(f"Error invalidating LLM provider service cache: {e}")
 
@@ -341,7 +363,10 @@ class CredentialService:
         try:
             supabase = self._get_supabase_client()
             result = (
-                supabase.table("archon_settings").select("*").eq("category", category).execute()
+                supabase.table("archon_settings")
+                .select("*")
+                .eq("category", category)
+                .execute()
             )
 
             credentials = {}
@@ -443,24 +468,53 @@ class CredentialService:
                 explicit_embedding_provider = rag_settings.get("EMBEDDING_PROVIDER")
 
                 # Validate that embedding provider actually supports embeddings
-                embedding_capable_providers = {"openai", "google", "ollama"}
+                # Include cloud providers that support embeddings
+                embedding_capable_providers = {
+                    "openai",
+                    "azure-openai",  # Azure OpenAI supports embeddings
+                    "aws-bedrock",  # AWS Bedrock supports embeddings (Titan, Cohere)
+                    "google",
+                    "ollama",
+                }
 
-                if (explicit_embedding_provider and
-                    explicit_embedding_provider != "" and
-                    explicit_embedding_provider in embedding_capable_providers):
+                if (
+                    explicit_embedding_provider
+                    and explicit_embedding_provider != ""
+                    and explicit_embedding_provider in embedding_capable_providers
+                ):
                     # Use the explicitly set embedding provider
                     provider = explicit_embedding_provider
                     logger.debug(f"Using explicit embedding provider: '{provider}'")
                 else:
-                    # Fall back to OpenAI as default embedding provider for backward compatibility
-                    if explicit_embedding_provider and explicit_embedding_provider not in embedding_capable_providers:
-                        logger.warning(f"Invalid embedding provider '{explicit_embedding_provider}' doesn't support embeddings, defaulting to OpenAI")
-                    provider = "openai"
-                    logger.debug(f"No explicit embedding provider set, defaulting to OpenAI for backward compatibility")
+                    # If no explicit embedding provider, check if LLM_PROVIDER supports embeddings
+                    llm_provider = rag_settings.get("LLM_PROVIDER", "openai")
+                    if llm_provider in embedding_capable_providers:
+                        # Use LLM provider for embeddings if it supports them
+                        provider = llm_provider
+                        logger.debug(f"Using LLM provider for embeddings: '{provider}'")
+                    else:
+                        # Fall back to OpenAI as default embedding provider for backward compatibility
+                        if (
+                            explicit_embedding_provider
+                            and explicit_embedding_provider
+                            not in embedding_capable_providers
+                        ):
+                            logger.warning(
+                                f"Invalid embedding provider '{explicit_embedding_provider}' doesn't support embeddings, defaulting to OpenAI"
+                            )
+                        provider = "openai"
+                        logger.debug(
+                            "No valid embedding provider found, defaulting to OpenAI for backward compatibility"
+                        )
             else:
                 provider = rag_settings.get("LLM_PROVIDER", "openai")
                 # Ensure provider is a valid string, not a boolean or other type
-                if not isinstance(provider, str) or provider.lower() in ("true", "false", "none", "null"):
+                if not isinstance(provider, str) or provider.lower() in (
+                    "true",
+                    "false",
+                    "none",
+                    "null",
+                ):
                     provider = "openai"
 
             # Get API key for this provider
@@ -504,10 +558,12 @@ class CredentialService:
         """Get API key for a specific provider."""
         key_mapping = {
             "openai": "OPENAI_API_KEY",
+            "azure-openai": "AZURE_OPENAI_API_KEY",
             "google": "GOOGLE_API_KEY",
             "openrouter": "OPENROUTER_API_KEY",
             "anthropic": "ANTHROPIC_API_KEY",
             "grok": "GROK_API_KEY",
+            "aws-bedrock": "AWS_ACCESS_KEY_ID",  # AWS uses access key as primary credential
             "ollama": None,  # No API key needed
         }
 
@@ -519,7 +575,15 @@ class CredentialService:
     def _get_provider_base_url(self, provider: str, rag_settings: dict) -> str | None:
         """Get base URL for provider."""
         if provider == "ollama":
-            return rag_settings.get("LLM_BASE_URL", "http://host.docker.internal:11434/v1")
+            return rag_settings.get(
+                "LLM_BASE_URL", "http://host.docker.internal:11434/v1"
+            )
+        elif provider == "azure-openai":
+            # Azure OpenAI endpoint will be handled separately with AsyncAzureOpenAI
+            return None
+        elif provider == "aws-bedrock":
+            # AWS Bedrock region will be handled separately with boto3
+            return None
         elif provider == "google":
             return "https://generativelanguage.googleapis.com/v1beta/openai/"
         elif provider == "openrouter":
@@ -530,7 +594,9 @@ class CredentialService:
             return "https://api.x.ai/v1"
         return None  # Use default for OpenAI
 
-    async def set_active_provider(self, provider: str, service_type: str = "llm") -> bool:
+    async def set_active_provider(
+        self, provider: str, service_type: str = "llm"
+    ) -> bool:
         """Set the active provider for a service type."""
         try:
             # For now, we'll update the RAG strategy settings
@@ -541,7 +607,9 @@ class CredentialService:
                 description=f"Active {service_type} provider",
             )
         except Exception as e:
-            logger.error(f"Error setting active provider {provider} for {service_type}: {e}")
+            logger.error(
+                f"Error setting active provider {provider} for {service_type}: {e}"
+            )
             return False
 
 
@@ -555,10 +623,16 @@ async def get_credential(key: str, default: Any = None) -> Any:
 
 
 async def set_credential(
-    key: str, value: str, is_encrypted: bool = False, category: str = None, description: str = None
+    key: str,
+    value: str,
+    is_encrypted: bool = False,
+    category: str = None,
+    description: str = None,
 ) -> bool:
     """Convenience function to set a credential."""
-    return await credential_service.set_credential(key, value, is_encrypted, category, description)
+    return await credential_service.set_credential(
+        key, value, is_encrypted, category, description
+    )
 
 
 async def initialize_credentials() -> None:
