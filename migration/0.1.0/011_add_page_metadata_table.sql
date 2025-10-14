@@ -73,24 +73,26 @@ COMMENT ON COLUMN archon_crawled_pages.page_id IS 'Foreign key linking chunk to 
 ALTER TABLE archon_page_metadata ENABLE ROW LEVEL SECURITY;
 
 -- Create RLS policies for archon_page_metadata
+-- Service role gets full access (for backend operations)
 CREATE POLICY "Allow service role full access to archon_page_metadata"
 ON archon_page_metadata
 FOR ALL
-TO public
+TO service_role
 USING (true)
 WITH CHECK (true);
 
-CREATE POLICY "Allow authenticated users to read and update archon_page_metadata"
+-- Authenticated users get read-only access
+CREATE POLICY "Allow authenticated users to read archon_page_metadata"
 ON archon_page_metadata
-FOR ALL
+FOR SELECT
 TO authenticated
-USING (true)
-WITH CHECK (true);
+USING (true);
 
 -- Grant table-level permissions (CRITICAL for service_role access)
+-- Follow least privilege principle: only service_role gets full access
 GRANT ALL ON TABLE archon_page_metadata TO postgres;
-GRANT ALL ON TABLE archon_page_metadata TO anon;
-GRANT ALL ON TABLE archon_page_metadata TO authenticated;
+GRANT SELECT ON TABLE archon_page_metadata TO anon;
+GRANT SELECT ON TABLE archon_page_metadata TO authenticated;
 GRANT ALL ON TABLE archon_page_metadata TO service_role;
 
 -- Record migration application for tracking
