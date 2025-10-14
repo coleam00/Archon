@@ -90,10 +90,33 @@ USING (true);
 
 -- Grant table-level permissions (CRITICAL for service_role access)
 -- Follow least privilege principle: only service_role gets full access
+-- Note: anon has no GRANT since there's no corresponding RLS policy (intentional)
 GRANT ALL ON TABLE archon_page_metadata TO postgres;
-GRANT SELECT ON TABLE archon_page_metadata TO anon;
 GRANT SELECT ON TABLE archon_page_metadata TO authenticated;
 GRANT ALL ON TABLE archon_page_metadata TO service_role;
+
+-- Trigger function for automatic updated_at timestamp
+CREATE OR REPLACE FUNCTION archon_set_updated_at()
+RETURNS trigger AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger for updated_at (idempotent - only creates if missing)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger
+    WHERE tgname = 'trg_archon_page_metadata_set_updated_at'
+  ) THEN
+    CREATE TRIGGER trg_archon_page_metadata_set_updated_at
+    BEFORE UPDATE ON archon_page_metadata
+    FOR EACH ROW EXECUTE FUNCTION archon_set_updated_at();
+  END IF;
+END;
+$$;
 
 -- Record migration application for tracking
 INSERT INTO archon_migrations (version, migration_name)
