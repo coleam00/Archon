@@ -46,12 +46,12 @@ CREATE OR REPLACE FUNCTION hybrid_search_archon_crawled_pages_multi(
 )
 RETURNS TABLE (
     id BIGINT,
-    url VARCHAR,
+    url TEXT,
     chunk_number INTEGER,
     content TEXT,
     metadata JSONB,
     source_id TEXT,
-    similarity FLOAT,
+    similarity DOUBLE PRECISION,
     match_type TEXT
 )
 LANGUAGE plpgsql
@@ -143,9 +143,9 @@ BEGIN
 END;
 $$;
 
--- Legacy compatibility function (defaults to 1536D)
+-- Auto-detecting wrapper function (supports all dimensions)
 CREATE OR REPLACE FUNCTION hybrid_search_archon_crawled_pages(
-    query_embedding vector(1536),
+    query_embedding VECTOR,
     query_text TEXT,
     match_count INT DEFAULT 10,
     filter JSONB DEFAULT '{}'::jsonb,
@@ -153,18 +153,21 @@ CREATE OR REPLACE FUNCTION hybrid_search_archon_crawled_pages(
 )
 RETURNS TABLE (
     id BIGINT,
-    url VARCHAR,
+    url TEXT,
     chunk_number INTEGER,
     content TEXT,
     metadata JSONB,
     source_id TEXT,
-    similarity FLOAT,
+    similarity DOUBLE PRECISION,
     match_type TEXT
 )
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    detected_dimension INT;
 BEGIN
-    RETURN QUERY SELECT * FROM hybrid_search_archon_crawled_pages_multi(query_embedding, 1536, query_text, match_count, filter, source_filter);
+    detected_dimension := vector_dims(query_embedding);
+    RETURN QUERY SELECT * FROM hybrid_search_archon_crawled_pages_multi(query_embedding, detected_dimension, query_text, match_count, filter, source_filter);
 END;
 $$;
 
@@ -179,13 +182,13 @@ CREATE OR REPLACE FUNCTION hybrid_search_archon_code_examples_multi(
 )
 RETURNS TABLE (
     id BIGINT,
-    url VARCHAR,
+    url TEXT,
     chunk_number INTEGER,
     content TEXT,
     summary TEXT,
     metadata JSONB,
     source_id TEXT,
-    similarity FLOAT,
+    similarity DOUBLE PRECISION,
     match_type TEXT
 )
 LANGUAGE plpgsql
@@ -280,9 +283,9 @@ BEGIN
 END;
 $$;
 
--- Legacy compatibility function (defaults to 1536D)
+-- Auto-detecting wrapper function (supports all dimensions)
 CREATE OR REPLACE FUNCTION hybrid_search_archon_code_examples(
-    query_embedding vector(1536),
+    query_embedding VECTOR,
     query_text TEXT,
     match_count INT DEFAULT 10,
     filter JSONB DEFAULT '{}'::jsonb,
@@ -290,19 +293,22 @@ CREATE OR REPLACE FUNCTION hybrid_search_archon_code_examples(
 )
 RETURNS TABLE (
     id BIGINT,
-    url VARCHAR,
+    url TEXT,
     chunk_number INTEGER,
     content TEXT,
     summary TEXT,
     metadata JSONB,
     source_id TEXT,
-    similarity FLOAT,
+    similarity DOUBLE PRECISION,
     match_type TEXT
 )
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    detected_dimension INT;
 BEGIN
-    RETURN QUERY SELECT * FROM hybrid_search_archon_code_examples_multi(query_embedding, 1536, query_text, match_count, filter, source_filter);
+    detected_dimension := vector_dims(query_embedding);
+    RETURN QUERY SELECT * FROM hybrid_search_archon_code_examples_multi(query_embedding, detected_dimension, query_text, match_count, filter, source_filter);
 END;
 $$;
 
