@@ -12,8 +12,7 @@ import socket
 import asyncio
 from urllib.parse import urlparse
 
-import docker
-from docker.errors import NotFound
+# Docker SDK is imported lazily inside get_container_status() when MCP_USE_DOCKER_SDK=true
 from fastapi import APIRouter, HTTPException
 
 # Import unified logging

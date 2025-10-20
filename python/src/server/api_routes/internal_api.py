@@ -9,6 +9,7 @@ import logging
 import os
 import ipaddress
 from typing import Any, List
+from ipaddress import IPv4Address, IPv6Address, IPv4Network, IPv6Network
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -19,8 +20,8 @@ logger = logging.getLogger(__name__)
 # Create router with internal prefix
 router = APIRouter(prefix="/internal", tags=["internal"])
 
-def _parse_cidrs(raw: str) -> List[ipaddress._BaseNetwork]:
-    nets: List[ipaddress._BaseNetwork] = []
+def _parse_cidrs(raw: str) -> list[IPv4Network | IPv6Network]:
+    nets: list[IPv4Network | IPv6Network] = []
     for part in (raw or "").split(","):
         part = part.strip()
         if not part:
@@ -50,10 +51,10 @@ _ALLOWED_EXTRA = _parse_cidrs(os.getenv("INTERNAL_ALLOWED_CIDRS", ""))
 # (Optional) proxies we trust for X-Forwarded-For
 _TRUSTED_PROXIES = _parse_cidrs(os.getenv("TRUSTED_PROXY_CIDRS", ""))
 
-def _in_any(ip: ipaddress._BaseAddress, nets: List[ipaddress._BaseNetwork]) -> bool:
+def _in_any(ip: IPv4Address | IPv6Address, nets: list[IPv4Network | IPv6Network]) -> bool:
     return any(ip in n for n in nets)
 
-def _client_ip(request: Request) -> ipaddress._BaseAddress | None:
+def _client_ip(request: Request) -> IPv4Address | IPv6Address | None:
     """Return the true client IP. If peer is a trusted proxy, honor X-Forwarded-For."""
     peer = (request.client.host if request.client else None)
     if not peer:
@@ -144,8 +145,8 @@ async def get_agent_credentials(request: Request) -> dict[str, Any]:
         # Filter out None values
         logger.info(f"Provided credentials to agents service from {request.client.host}")
         return {k: v for k, v in credentials.items() if v is not None}
-    except Exception as e:
-        logger.error(f"Error retrieving agent credentials: {e}")
+    except Exception:
+        logger.exception("Error retrieving agent credentials")
         raise HTTPException(status_code=500, detail="Failed to retrieve credentials")
 
 
@@ -164,6 +165,6 @@ async def get_mcp_credentials(request: Request) -> dict[str, Any]:
     try:
         logger.info(f"Provided credentials to MCP service from {request.client.host}")
         return {"LOG_LEVEL": await credential_service.get_credential("LOG_LEVEL", default="INFO")}
-    except Exception as e:
-        logger.error(f"Error retrieving MCP credentials: {e}")
+    except Exception:
+        logger.exception("Error retrieving MCP credentials")
         raise HTTPException(status_code=500, detail="Failed to retrieve credentials")
