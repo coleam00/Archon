@@ -173,12 +173,29 @@ async def get_mcp_sessions():
         safe_set_attribute(span, "method", "GET")
 
         try:
-            # Basic session info for now
+            # Get session manager and active sessions
+            from ..services.mcp_session_manager import get_session_manager
+
+            mcp_session_manager = get_session_manager()
+            active_sessions = mcp_session_manager.get_active_sessions()
+            session_count = mcp_session_manager.get_session_count()
+
+            # Get container status for uptime
             status = get_container_status()
 
             session_info = {
-                "active_sessions": 0,  # TODO: Implement real session tracking
+                "active_sessions": session_count,
                 "session_timeout": 3600,  # 1 hour default
+                "sessions": [
+                    {
+                        "session_id": s.session_id,
+                        "client_id": s.client_id,
+                        "connected_at": s.connected_at.isoformat(),
+                        "last_activity": s.last_activity.isoformat(),
+                        "tools_called": s.tools_called,
+                    }
+                    for s in active_sessions
+                ],
             }
 
             # Add uptime if server is running

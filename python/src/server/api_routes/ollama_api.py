@@ -16,7 +16,12 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..config.logfire_config import get_logger
-from ..services.llm_provider_service import validate_provider_instance
+from ..services.credential_service import credential_service
+from ..services.llm_provider_service import (
+    get_ollama_instances,
+    refresh_ollama_instances,
+    validate_provider_instance,
+)
 from ..services.ollama.embedding_router import embedding_router
 from ..services.ollama.model_discovery_service import model_discovery_service
 
@@ -351,7 +356,7 @@ async def get_available_embedding_routes_endpoint(
 async def clear_ollama_cache_endpoint() -> dict[str, str]:
     """
     Clear all Ollama-related caches for fresh data retrieval.
-    
+
     Useful for forcing refresh of model lists, capabilities, and health status
     after making changes to Ollama instances or models.
     """
@@ -366,6 +371,9 @@ async def clear_ollama_cache_endpoint() -> dict[str, str]:
         # Clear embedding router cache
         embedding_router.clear_routing_cache()
 
+        # Refresh Ollama instances
+        await refresh_ollama_instances()
+
         logger.info("All Ollama caches cleared successfully")
 
         return {"message": "All Ollama caches cleared successfully"}
@@ -373,6 +381,202 @@ async def clear_ollama_cache_endpoint() -> dict[str, str]:
     except Exception as e:
         logger.error(f"Error clearing caches: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to clear caches: {str(e)}")
+
+
+# Instance Management Endpoints
+class AddInstanceRequest(BaseModel):
+    """Request for adding a new Ollama instance."""
+    base_url: str = Field(..., description="Base URL of the Ollama instance")
+    name: str = Field(..., description="Friendly name for the instance")
+    api_key: str | None = Field(None, description="Optional API key")
+    instance_type: str = Field("both", description="Instance type: chat, embedding, or both")
+
+
+class UpdateInstanceRequest(BaseModel):
+    """Request for updating an Ollama instance."""
+    base_url: str | None = Field(None, description="Base URL of the Ollama instance")
+    name: str | None = Field(None, description="Friendly name for the instance")
+    api_key: str | None = Field(None, description="Optional API key")
+    instance_type: str | None = Field(None, description="Instance type: chat, embedding, or both")
+    enabled: bool | None = Field(None, description="Whether instance is enabled")
+
+
+class OllamaInstanceResponse(BaseModel):
+    """Response model for Ollama instance information."""
+    id: str
+    base_url: str
+    name: str
+    instance_type: str
+    enabled: bool
+    is_healthy: bool | None = None
+    models: list[str] | None = None
+    response_time_ms: float | None = None
+    last_checked: float | None = None
+
+
+@router.get("/instances/managed", response_model=list[OllamaInstanceResponse])
+async def list_managed_instances() -> list[OllamaInstanceResponse]:
+    """
+    List all managed Ollama instances with health status.
+
+    Returns instances configured in the database with their current health status,
+    available models, and performance metrics.
+    """
+    try:
+        logger.info("Retrieving managed Ollama instances")
+
+        # Get instances with health status
+        instances = await get_ollama_instances()
+
+        response = []
+        for inst in instances:
+            inst_dict = inst.to_dict()
+            response.append(
+                OllamaInstanceResponse(
+                    id=f"ollama_instance_{inst.base_url.replace('://', '_').replace('/', '_').replace(':', '_')}",
+                    base_url=inst_dict["base_url"],
+                    name=inst_dict["name"],
+                    instance_type=inst_dict["instance_type"],
+                    enabled=inst_dict["enabled"],
+                    is_healthy=inst_dict.get("is_healthy"),
+                    models=inst_dict.get("models"),
+                    response_time_ms=inst_dict.get("response_time_ms"),
+                    last_checked=inst_dict.get("last_checked"),
+                )
+            )
+
+        logger.info(f"Found {len(response)} managed Ollama instances")
+        return response
+
+    except Exception as e:
+        logger.error(f"Error listing managed instances: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list instances: {str(e)}")
+
+
+@router.post("/instances/managed", response_model=dict[str, Any])
+async def add_managed_instance(request: AddInstanceRequest) -> dict[str, Any]:
+    """
+    Add a new managed Ollama instance.
+
+    Registers a new Ollama instance in the database for multi-instance support
+    and load balancing.
+    """
+    try:
+        logger.info(f"Adding Ollama instance: {request.name} at {request.base_url}")
+
+        # Add to database
+        result = await credential_service.add_ollama_instance(
+            base_url=request.base_url,
+            name=request.name,
+            api_key=request.api_key,
+            instance_type=request.instance_type,
+        )
+
+        # Refresh instances to include the new one
+        await refresh_ollama_instances()
+
+        logger.info(f"Successfully added Ollama instance: {request.name}")
+        return {
+            "message": "Ollama instance added successfully",
+            "instance": result,
+        }
+
+    except Exception as e:
+        logger.error(f"Error adding Ollama instance: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to add instance: {str(e)}")
+
+
+@router.put("/instances/managed/{instance_id}", response_model=dict[str, str])
+async def update_managed_instance(instance_id: str, request: UpdateInstanceRequest) -> dict[str, str]:
+    """
+    Update an existing managed Ollama instance.
+
+    Modifies configuration for an existing Ollama instance including URL,
+    name, type, and enabled status.
+    """
+    try:
+        logger.info(f"Updating Ollama instance: {instance_id}")
+
+        success = await credential_service.update_ollama_instance(
+            instance_id=instance_id,
+            base_url=request.base_url,
+            name=request.name,
+            api_key=request.api_key,
+            instance_type=request.instance_type,
+            enabled=request.enabled,
+        )
+
+        if not success:
+            raise HTTPException(status_code=404, detail="Instance not found")
+
+        # Refresh instances to reflect changes
+        await refresh_ollama_instances()
+
+        logger.info(f"Successfully updated Ollama instance: {instance_id}")
+        return {"message": "Instance updated successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating Ollama instance: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update instance: {str(e)}")
+
+
+@router.delete("/instances/managed/{instance_id}", response_model=dict[str, str])
+async def remove_managed_instance(instance_id: str) -> dict[str, str]:
+    """
+    Remove a managed Ollama instance.
+
+    Deletes an Ollama instance from the database. The instance will no longer
+    be used for load balancing.
+    """
+    try:
+        logger.info(f"Removing Ollama instance: {instance_id}")
+
+        success = await credential_service.remove_ollama_instance(instance_id)
+
+        if not success:
+            raise HTTPException(status_code=404, detail="Instance not found")
+
+        # Refresh instances to remove from cache
+        await refresh_ollama_instances()
+
+        logger.info(f"Successfully removed Ollama instance: {instance_id}")
+        return {"message": "Instance removed successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error removing Ollama instance: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to remove instance: {str(e)}")
+
+
+@router.post("/instances/refresh", response_model=dict[str, Any])
+async def refresh_instances_endpoint() -> dict[str, Any]:
+    """
+    Refresh all Ollama instances.
+
+    Forces a health check on all configured instances and updates their status.
+    Useful after adding/removing models or restarting instances.
+    """
+    try:
+        logger.info("Refreshing Ollama instances")
+
+        await refresh_ollama_instances()
+        instances = await get_ollama_instances()
+
+        healthy_count = sum(1 for inst in instances if inst.is_healthy)
+
+        return {
+            "message": "Instances refreshed successfully",
+            "total_instances": len(instances),
+            "healthy_instances": healthy_count,
+            "unhealthy_instances": len(instances) - healthy_count,
+        }
+
+    except Exception as e:
+        logger.error(f"Error refreshing instances: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to refresh instances: {str(e)}")
 
 
 class ModelDiscoveryAndStoreRequest(BaseModel):

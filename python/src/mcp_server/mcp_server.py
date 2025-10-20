@@ -169,6 +169,11 @@ async def lifespan(server: FastMCP) -> AsyncIterator[ArchonContext]:
             # Perform initial health check
             await perform_health_checks(context)
 
+            # Register server session
+            server_session_id = str(id(context))  # Use context ID as session identifier
+            session_manager.register_session(server_session_id, "mcp-server")
+            logger.info(f"✓ Server session registered: {server_session_id}")
+
             logger.info("✓ MCP server ready")
 
             # Store context globally
@@ -182,8 +187,13 @@ async def lifespan(server: FastMCP) -> AsyncIterator[ArchonContext]:
             logger.error(traceback.format_exc())
             raise
         finally:
-            # Clean up resources
+            # Clean up resources and unregister session
             logger.info("🧹 Cleaning up MCP server...")
+            if _shared_context:
+                server_session_id = str(id(_shared_context))
+                session_manager = get_session_manager()
+                session_manager.unregister_session(server_session_id)
+                logger.info(f"✓ Server session unregistered: {server_session_id}")
             logger.info("✅ MCP server shutdown complete")
 
 
@@ -342,8 +352,12 @@ async def health_check(ctx: Context) -> str:
         JSON with health status, uptime, and service availability
     """
     try:
-        # Try to get the lifespan context
+        # Track session activity
         context = getattr(ctx.request_context, "lifespan_context", None)
+        if context:
+            session_manager = get_session_manager()
+            server_session_id = str(id(context))
+            session_manager.update_activity(server_session_id)
 
         if context is None:
             # Server starting up
@@ -393,6 +407,12 @@ async def session_info(ctx: Context) -> str:
     try:
         session_manager = get_session_manager()
 
+        # Track session activity
+        context = getattr(ctx.request_context, "lifespan_context", None)
+        if context:
+            server_session_id = str(id(context))
+            session_manager.update_activity(server_session_id)
+
         # Build session info
         session_info_data = {
             "active_sessions": session_manager.get_active_session_count(),
@@ -400,7 +420,6 @@ async def session_info(ctx: Context) -> str:
         }
 
         # Add server uptime
-        context = getattr(ctx.request_context, "lifespan_context", None)
         if context and hasattr(context, "startup_time"):
             session_info_data["server_uptime_seconds"] = time.time() - context.startup_time
 

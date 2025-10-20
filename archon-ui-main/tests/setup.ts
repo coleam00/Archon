@@ -48,28 +48,14 @@ Object.defineProperty(window, 'localStorage', {
 Element.prototype.scrollIntoView = vi.fn()
 window.HTMLElement.prototype.scrollIntoView = vi.fn()
 
-// Mock lucide-react icons - simple implementation
-vi.mock('lucide-react', () => ({
-  Trash2: () => 'Trash2',
-  X: () => 'X',
-  AlertCircle: () => 'AlertCircle',
-  Loader2: () => 'Loader2',
-  BookOpen: () => 'BookOpen',
-  Settings: () => 'Settings',
-  WifiOff: () => 'WifiOff',
-  ChevronDown: () => 'ChevronDown',
-  ChevronRight: () => 'ChevronRight',
-  Plus: () => 'Plus',
-  Search: () => 'Search',
-  Activity: () => 'Activity',
-  CheckCircle2: () => 'CheckCircle2',
-  ListTodo: () => 'ListTodo',
-  MoreHorizontal: () => 'MoreHorizontal',
-  Pin: () => 'Pin',
-  PinOff: () => 'PinOff',
-  Clipboard: () => 'Clipboard',
-  // Add more icons as needed
-}))
+// Mock lucide-react icons - comprehensive list for all components
+vi.mock('lucide-react', () => {
+  const MockIcon = () => null;
+
+  return new Proxy({}, {
+    get: () => MockIcon
+  });
+})
 
 // Mock ResizeObserver
 global.ResizeObserver = vi.fn().mockImplementation(() => ({

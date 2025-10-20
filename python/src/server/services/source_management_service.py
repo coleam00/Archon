@@ -396,10 +396,10 @@ class SourceManagementService:
 
     def delete_source(self, source_id: str) -> tuple[bool, dict[str, Any]]:
         """
-        Delete a source from the database.
+        Delete a source and all related data in batches.
 
-        With CASCADE DELETE constraints in place (migration 009), deleting the source
-        will automatically delete all associated crawled_pages and code_examples.
+        For sources with thousands of documents, batch deletion prevents timeout issues
+        by processing deletes in manageable chunks.
 
         Args:
             source_id: The source ID to delete
@@ -408,12 +408,57 @@ class SourceManagementService:
             Tuple of (success, result_dict)
         """
         try:
-            logger.info(f"Starting delete_source for source_id: {source_id}")
+            logger.info(f"Starting batch deletion for source_id: {source_id}")
+            BATCH_SIZE = 1000
 
-            # With CASCADE DELETE, we only need to delete from the sources table
-            # The database will automatically handle deleting related records
-            logger.info(f"Deleting source {source_id} (CASCADE will handle related records)")
+            # Delete documents in batches (largest table)
+            documents_deleted = 0
+            while True:
+                result = (
+                    self.supabase_client.table("archon_documents")
+                    .delete()
+                    .eq("source_id", source_id)
+                    .limit(BATCH_SIZE)
+                    .execute()
+                )
 
+                batch_count = len(result.data) if result.data else 0
+                documents_deleted += batch_count
+                logger.info(
+                    f"Deleted {batch_count} documents (total: {documents_deleted}) for source {source_id}",
+                    extra={"batch_size": BATCH_SIZE, "source_id": source_id}
+                )
+
+                if batch_count < BATCH_SIZE:
+                    break
+
+            # Delete crawled pages in batches
+            pages_deleted = 0
+            while True:
+                result = (
+                    self.supabase_client.table("archon_crawled_pages")
+                    .delete()
+                    .eq("source_id", source_id)
+                    .limit(BATCH_SIZE)
+                    .execute()
+                )
+
+                batch_count = len(result.data) if result.data else 0
+                pages_deleted += batch_count
+
+                if batch_count < BATCH_SIZE:
+                    break
+
+            # Delete code examples (typically smaller table)
+            code_result = (
+                self.supabase_client.table("archon_code_examples")
+                .delete()
+                .eq("source_id", source_id)
+                .execute()
+            )
+            code_deleted = len(code_result.data) if code_result.data else 0
+
+            # Finally delete the source itself
             source_response = (
                 self.supabase_client.table("archon_sources")
                 .delete()
@@ -424,17 +469,32 @@ class SourceManagementService:
             source_deleted = len(source_response.data) if source_response.data else 0
 
             if source_deleted > 0:
-                logger.info(f"Successfully deleted source {source_id} and all related data via CASCADE")
+                logger.info(
+                    f"Successfully deleted source {source_id} and all related data",
+                    extra={
+                        "source_id": source_id,
+                        "documents_deleted": documents_deleted,
+                        "pages_deleted": pages_deleted,
+                        "code_examples_deleted": code_deleted
+                    }
+                )
                 return True, {
                     "source_id": source_id,
-                    "message": "Source and all related data deleted successfully via CASCADE DELETE"
+                    "message": "Source and all related data deleted successfully",
+                    "documents_deleted": documents_deleted,
+                    "pages_deleted": pages_deleted,
+                    "code_examples_deleted": code_deleted
                 }
             else:
                 logger.warning(f"No source found with ID {source_id}")
                 return False, {"error": f"Source {source_id} not found"}
 
         except Exception as e:
-            logger.error(f"Error deleting source {source_id}: {e}")
+            logger.error(
+                f"Error deleting source {source_id}: {e}",
+                exc_info=True,
+                extra={"source_id": source_id}
+            )
             return False, {"error": f"Error deleting source: {str(e)}"}
 
     def update_source_metadata(

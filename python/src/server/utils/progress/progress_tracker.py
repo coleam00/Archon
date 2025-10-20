@@ -100,25 +100,20 @@ class ProgressTracker:
             log: Log message describing current operation
             **kwargs: Additional data to include in update
         """
-        # Debug logging for document_storage issue
-        if status == "document_storage" and progress >= 90:
-            safe_logfire_info(
-                f"DEBUG: ProgressTracker.update called | status={status} | progress={progress} | "
-                f"current_state_progress={self.state.get('progress', 0)} | kwargs_keys={list(kwargs.keys())}"
-            )
-        
-        # CRITICAL: Never allow progress to go backwards
         current_progress = self.state.get("progress", 0)
         new_progress = min(100, max(0, progress))  # Ensure 0-100
 
         # Only update if new progress is greater than or equal to current
-        # (equal allows status updates without progress regression)
         if new_progress < current_progress:
             safe_logfire_info(
-                f"Progress backwards prevented: {current_progress}% -> {new_progress}% | "
-                f"progress_id={self.progress_id} | status={status}"
+                "Progress regression prevented",
+                extra={
+                    "progress_id": self.progress_id,
+                    "status": status,
+                    "current_progress": current_progress,
+                    "attempted_progress": new_progress
+                }
             )
-            # Keep the higher progress value
             actual_progress = current_progress
         else:
             actual_progress = new_progress
@@ -129,13 +124,6 @@ class ProgressTracker:
             "log": log,
             "timestamp": datetime.now().isoformat(),
         })
-        
-        # DEBUG: Log final state for document_storage
-        if status == "document_storage" and actual_progress >= 35:
-            safe_logfire_info(
-                f"DEBUG ProgressTracker state updated | status={status} | actual_progress={actual_progress} | "
-                f"state_progress={self.state.get('progress')} | received_progress={progress}"
-            )
 
         # Add log entry
         if "logs" not in self.state:
@@ -348,8 +336,13 @@ class ProgressTracker:
         ProgressTracker._progress_states[self.progress_id] = self.state
 
         safe_logfire_info(
-            f"📊 [PROGRESS] Updated {self.operation_type} | ID: {self.progress_id} | "
-            f"Status: {self.state.get('status')} | Progress: {self.state.get('progress')}%"
+            "Progress state updated",
+            extra={
+                "progress_id": self.progress_id,
+                "operation_type": self.operation_type,
+                "status": self.state.get("status"),
+                "progress": self.state.get("progress")
+            }
         )
 
     def _format_duration(self, seconds: float) -> str:

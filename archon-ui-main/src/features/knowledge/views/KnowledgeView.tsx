@@ -10,11 +10,13 @@ import type { ActiveOperation } from "../../progress/types";
 import { AddKnowledgeDialog } from "../components/AddKnowledgeDialog";
 import { KnowledgeHeader } from "../components/KnowledgeHeader";
 import { KnowledgeList } from "../components/KnowledgeList";
+import { KnowledgeFilterProvider, useKnowledgeFilterContext } from "../contexts/KnowledgeFilterContext";
 import { useKnowledgeSummaries } from "../hooks/useKnowledgeQueries";
 import { KnowledgeInspector } from "../inspector/components/KnowledgeInspector";
 import type { KnowledgeItem, KnowledgeItemsFilter } from "../types";
 
-export const KnowledgeView = () => {
+function KnowledgeViewContent() {
+  const { setFilter } = useKnowledgeFilterContext();
   // View state
   const [viewMode, setViewMode] = useState<"grid" | "table">("grid");
   const [searchQuery, setSearchQuery] = useState("");
@@ -42,6 +44,11 @@ export const KnowledgeView = () => {
 
     return f;
   }, [searchQuery, typeFilter]);
+
+  // Update the filter context whenever the filter changes
+  useEffect(() => {
+    setFilter(filter);
+  }, [filter, setFilter]);
 
   // Fetch knowledge summaries (no automatic polling!)
   const { data, isLoading, error, refetch, setActiveCrawlIds, activeOperations } = useKnowledgeSummaries(filter);
@@ -193,5 +200,13 @@ export const KnowledgeView = () => {
         />
       )}
     </div>
+  );
+}
+
+export const KnowledgeView = () => {
+  return (
+    <KnowledgeFilterProvider>
+      <KnowledgeViewContent />
+    </KnowledgeFilterProvider>
   );
 };

@@ -5,17 +5,87 @@ Provides a unified interface for creating OpenAI-compatible clients for differen
 Supports OpenAI, Ollama, and Google Gemini.
 """
 
+import asyncio
 import inspect
 import time
 from contextlib import asynccontextmanager
 from typing import Any
 
+import httpx
 import openai
 
 from ..config.logfire_config import get_logger
 from .credential_service import credential_service
 
 logger = get_logger(__name__)
+
+
+class OllamaInstance:
+    """Represents an Ollama instance with health status and capabilities."""
+
+    def __init__(
+        self,
+        base_url: str,
+        name: str,
+        api_key: str | None = None,
+        instance_type: str = "both",
+        enabled: bool = True,
+    ):
+        self.base_url = base_url.rstrip("/")
+        self.name = name
+        self.api_key = api_key
+        self.instance_type = instance_type
+        self.enabled = enabled
+        self.is_healthy = False
+        self.models: list[str] = []
+        self.response_time_ms: float | None = None
+        self.last_checked: float | None = None
+
+    async def health_check(self) -> bool:
+        """Check if Ollama instance is reachable and get available models."""
+        start_time = time.time()
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(f"{self.base_url}/api/tags")
+                self.is_healthy = response.status_code == 200
+
+                if self.is_healthy:
+                    data = response.json()
+                    self.models = [m["name"] for m in data.get("models", [])]
+                    self.response_time_ms = (time.time() - start_time) * 1000
+                    self.last_checked = time.time()
+                    logger.debug(
+                        f"Ollama instance {self.name} healthy with {len(self.models)} models (response time: {self.response_time_ms:.2f}ms)"
+                    )
+
+                return self.is_healthy
+        except Exception as e:
+            logger.debug(f"Ollama health check failed for {self.base_url}: {e}")
+            self.is_healthy = False
+            self.response_time_ms = (time.time() - start_time) * 1000
+            self.last_checked = time.time()
+            return False
+
+    def supports_instance_type(self, requested_type: str | None) -> bool:
+        """Check if this instance supports the requested type."""
+        if not requested_type:
+            return True
+        if self.instance_type == "both":
+            return True
+        return self.instance_type == requested_type
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert instance to dictionary format."""
+        return {
+            "base_url": self.base_url,
+            "name": self.name,
+            "instance_type": self.instance_type,
+            "enabled": self.enabled,
+            "is_healthy": self.is_healthy,
+            "models": self.models,
+            "response_time_ms": self.response_time_ms,
+            "last_checked": self.last_checked,
+        }
 
 
 # Basic validation functions to avoid circular imports
@@ -549,41 +619,172 @@ async def get_llm_client(
 
 
 
-async def _get_optimal_ollama_instance(instance_type: str | None = None,
-                                       use_embedding_provider: bool = False,
-                                       base_url_override: str | None = None) -> str:
+class OllamaInstanceManager:
+    """Manager for Ollama instances with load balancing."""
+
+    def __init__(self):
+        self._instances: list[OllamaInstance] = []
+        self._last_instance_index = 0
+        self._last_refresh: float | None = None
+        self._refresh_interval = 300  # 5 minutes
+
+    async def get_ollama_instances(self, force_refresh: bool = False) -> list[OllamaInstance]:
+        """Discover and validate Ollama instances from credentials."""
+        current_time = time.time()
+
+        # Check if we need to refresh
+        if (
+            not force_refresh
+            and self._instances
+            and self._last_refresh
+            and (current_time - self._last_refresh) < self._refresh_interval
+        ):
+            logger.debug("Using cached Ollama instances")
+            return self._instances
+
+        logger.info("Discovering Ollama instances")
+
+        # Get credentials from database
+        credentials = await credential_service.get_ollama_instances()
+
+        if not credentials:
+            # Return default localhost instance
+            default = OllamaInstance(
+                base_url="http://host.docker.internal:11434", name="Default Ollama"
+            )
+            await default.health_check()
+            self._instances = [default] if default.is_healthy else []
+            self._last_refresh = current_time
+            return self._instances
+
+        # Create instances from credentials
+        instances = [
+            OllamaInstance(
+                base_url=cred["base_url"],
+                name=cred["name"],
+                api_key=cred.get("api_key"),
+                instance_type=cred.get("instance_type", "both"),
+                enabled=cred.get("enabled", True),
+            )
+            for cred in credentials
+            if cred.get("enabled", True)
+        ]
+
+        # Health check all instances in parallel
+        await asyncio.gather(*[inst.health_check() for inst in instances])
+
+        # Return only healthy instances
+        healthy = [inst for inst in instances if inst.is_healthy]
+
+        logger.info(f"Found {len(healthy)} healthy Ollama instances out of {len(instances)}")
+
+        self._instances = healthy
+        self._last_refresh = current_time
+        return healthy
+
+    async def get_best_ollama_instance(
+        self, required_model: str | None = None, instance_type: str | None = None
+    ) -> OllamaInstance | None:
+        """Get best available Ollama instance using round-robin load balancing."""
+        if not self._instances:
+            await self.get_ollama_instances()
+
+        if not self._instances:
+            logger.warning("No healthy Ollama instances available")
+            return None
+
+        # Filter by instance type if specified
+        candidates = [
+            inst for inst in self._instances if inst.supports_instance_type(instance_type)
+        ]
+
+        # Filter by model if specified
+        if required_model:
+            model_candidates = [inst for inst in candidates if required_model in inst.models]
+            if model_candidates:
+                candidates = model_candidates
+            else:
+                logger.warning(
+                    f"No instances found with model {required_model}, using any available instance"
+                )
+
+        if not candidates:
+            logger.warning(f"No instances available for type {instance_type}")
+            return None
+
+        # Round-robin load balancing
+        instance = candidates[self._last_instance_index % len(candidates)]
+        self._last_instance_index += 1
+
+        logger.debug(f"Selected Ollama instance: {instance.name} ({instance.base_url})")
+        return instance
+
+    async def refresh_ollama_instances(self) -> None:
+        """Refresh the list of Ollama instances."""
+        await self.get_ollama_instances(force_refresh=True)
+
+
+# Global instance manager
+_ollama_manager = OllamaInstanceManager()
+
+
+async def get_ollama_instances() -> list[OllamaInstance]:
+    """Get all discovered Ollama instances."""
+    return await _ollama_manager.get_ollama_instances()
+
+
+async def refresh_ollama_instances() -> None:
+    """Refresh the list of Ollama instances."""
+    await _ollama_manager.refresh_ollama_instances()
+
+
+async def _get_optimal_ollama_instance(
+    instance_type: str | None = None,
+    use_embedding_provider: bool = False,
+    base_url_override: str | None = None,
+) -> str:
     """
     Get the optimal Ollama instance URL based on configuration and health status.
-    
+
     Args:
         instance_type: Preferred instance type ('chat', 'embedding', 'both', or None)
         use_embedding_provider: Whether this is for embedding operations
         base_url_override: Override URL if specified
-        
+
     Returns:
         Best available Ollama instance URL
     """
     # If override URL provided, use it directly
     if base_url_override:
-        return base_url_override if base_url_override.endswith('/v1') else f"{base_url_override}/v1"
+        return base_url_override if base_url_override.endswith("/v1") else f"{base_url_override}/v1"
 
     try:
-        # For now, we don't have multi-instance support, so skip to single instance config
-        # TODO: Implement get_ollama_instances() method in CredentialService for multi-instance support
-        logger.info("Using single instance Ollama configuration")
+        # Determine instance type based on usage
+        if use_embedding_provider or instance_type == "embedding":
+            target_type = "embedding"
+        else:
+            target_type = instance_type or "chat"
 
-        # Get single instance configuration from RAG settings
+        # Get best instance using load balancer
+        instance = await _ollama_manager.get_best_ollama_instance(instance_type=target_type)
+
+        if instance:
+            base_url = instance.base_url
+            return base_url if base_url.endswith("/v1") else f"{base_url}/v1"
+
+        # Fallback to RAG settings if no instances configured
+        logger.info("No configured Ollama instances, falling back to RAG settings")
         rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
 
         # Check if we need embedding provider and have separate embedding URL
         if use_embedding_provider or instance_type == "embedding":
             embedding_url = rag_settings.get("OLLAMA_EMBEDDING_URL")
             if embedding_url:
-                return embedding_url if embedding_url.endswith('/v1') else f"{embedding_url}/v1"
+                return embedding_url if embedding_url.endswith("/v1") else f"{embedding_url}/v1"
 
         # Default to LLM base URL for chat operations
         fallback_url = rag_settings.get("LLM_BASE_URL", "http://host.docker.internal:11434")
-        return fallback_url if fallback_url.endswith('/v1') else f"{fallback_url}/v1"
+        return fallback_url if fallback_url.endswith("/v1") else f"{fallback_url}/v1"
 
     except Exception as e:
         logger.error(f"Error getting Ollama configuration: {e}")
@@ -591,7 +792,7 @@ async def _get_optimal_ollama_instance(instance_type: str | None = None,
         try:
             rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
             fallback_url = rag_settings.get("LLM_BASE_URL", "http://host.docker.internal:11434")
-            return fallback_url if fallback_url.endswith('/v1') else f"{fallback_url}/v1"
+            return fallback_url if fallback_url.endswith("/v1") else f"{fallback_url}/v1"
         except Exception as fallback_error:
             logger.error(f"Could not retrieve fallback configuration: {fallback_error}")
             return "http://host.docker.internal:11434/v1"

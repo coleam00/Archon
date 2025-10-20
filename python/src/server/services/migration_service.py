@@ -228,6 +228,41 @@ class MigrationService:
             "applied_count": len(applied),
         }
 
+    async def apply_deletion_indexes(self) -> dict[str, Any]:
+        """
+        Apply indexes to improve DELETE performance.
+
+        Creates indexes on foreign key columns to speed up CASCADE DELETE operations,
+        particularly for sources with large numbers of related documents.
+
+        Returns:
+            Dict containing success status and details
+        """
+        logfire.info("Applying deletion performance indexes")
+
+        try:
+            # Read SQL from migration file
+            migration_path = self._migrations_dir / "add_deletion_indexes.sql"
+
+            if not migration_path.exists():
+                raise FileNotFoundError(f"Migration file not found: {migration_path}")
+
+            sql = migration_path.read_text()
+
+            # Execute migration using SQL RPC
+            supabase = self._get_supabase_client()
+            await supabase.rpc("sql", {"query": sql}).execute()
+
+            logfire.info("Deletion indexes applied successfully")
+            return {
+                "success": True,
+                "message": "Deletion performance indexes applied",
+                "indexes_created": 3,
+            }
+        except Exception as e:
+            logfire.error(f"Failed to apply deletion indexes: {e}")
+            raise
+
 
 # Export singleton instance
 migration_service = MigrationService()

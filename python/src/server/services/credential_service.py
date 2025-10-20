@@ -544,6 +544,171 @@ class CredentialService:
             logger.error(f"Error setting active provider {provider} for {service_type}: {e}")
             return False
 
+    async def get_ollama_instances(self) -> list[dict[str, Any]]:
+        """Get all configured Ollama instances."""
+        try:
+            supabase = self._get_supabase_client()
+            result = (
+                supabase.table("archon_settings")
+                .select("*")
+                .eq("category", "ollama_instances")
+                .execute()
+            )
+
+            instances = []
+            for item in result.data:
+                try:
+                    # Parse the instance configuration
+                    value = item.get("value")
+                    if isinstance(value, str):
+                        import json
+                        config = json.loads(value)
+                    else:
+                        config = value
+
+                    instances.append({
+                        "id": item["key"],
+                        "base_url": config.get("base_url"),
+                        "name": config.get("name", "Ollama Instance"),
+                        "api_key": config.get("api_key"),
+                        "instance_type": config.get("instance_type", "both"),
+                        "enabled": config.get("enabled", True),
+                    })
+                except Exception as e:
+                    logger.warning(f"Failed to parse Ollama instance {item.get('key')}: {e}")
+                    continue
+
+            logger.debug(f"Retrieved {len(instances)} Ollama instances from database")
+            return instances
+
+        except Exception as e:
+            logger.error(f"Failed to get Ollama instances: {e}")
+            return []
+
+    async def add_ollama_instance(
+        self,
+        base_url: str,
+        name: str = "Ollama Instance",
+        api_key: str | None = None,
+        instance_type: str = "both",
+    ) -> dict[str, Any]:
+        """Add a new Ollama instance."""
+        try:
+            import json
+            from datetime import datetime
+
+            # Generate a unique ID for this instance
+            instance_id = f"ollama_instance_{base_url.replace('://', '_').replace('/', '_').replace(':', '_')}"
+
+            config = {
+                "base_url": base_url,
+                "name": name,
+                "api_key": api_key,
+                "instance_type": instance_type,
+                "enabled": True,
+                "created_at": datetime.now().isoformat(),
+            }
+
+            supabase = self._get_supabase_client()
+            result = (
+                supabase.table("archon_settings")
+                .upsert(
+                    {
+                        "key": instance_id,
+                        "value": json.dumps(config),
+                        "category": "ollama_instances",
+                        "description": f"Ollama instance: {name}",
+                    },
+                    on_conflict="key",
+                )
+                .execute()
+            )
+
+            logger.info(f"Added Ollama instance: {name} at {base_url}")
+            return {
+                "id": instance_id,
+                "base_url": base_url,
+                "name": name,
+                "instance_type": instance_type,
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to add Ollama instance: {e}")
+            raise
+
+    async def remove_ollama_instance(self, instance_id: str) -> bool:
+        """Remove an Ollama instance."""
+        try:
+            supabase = self._get_supabase_client()
+            supabase.table("archon_settings").delete().eq("key", instance_id).eq(
+                "category", "ollama_instances"
+            ).execute()
+
+            logger.info(f"Removed Ollama instance: {instance_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to remove Ollama instance {instance_id}: {e}")
+            return False
+
+    async def update_ollama_instance(
+        self,
+        instance_id: str,
+        base_url: str | None = None,
+        name: str | None = None,
+        api_key: str | None = None,
+        instance_type: str | None = None,
+        enabled: bool | None = None,
+    ) -> bool:
+        """Update an existing Ollama instance."""
+        try:
+            import json
+
+            # Get existing instance
+            supabase = self._get_supabase_client()
+            result = (
+                supabase.table("archon_settings")
+                .select("value")
+                .eq("key", instance_id)
+                .eq("category", "ollama_instances")
+                .execute()
+            )
+
+            if not result.data:
+                logger.warning(f"Ollama instance {instance_id} not found")
+                return False
+
+            # Parse existing config
+            existing_value = result.data[0]["value"]
+            if isinstance(existing_value, str):
+                config = json.loads(existing_value)
+            else:
+                config = existing_value
+
+            # Update fields
+            if base_url is not None:
+                config["base_url"] = base_url
+            if name is not None:
+                config["name"] = name
+            if api_key is not None:
+                config["api_key"] = api_key
+            if instance_type is not None:
+                config["instance_type"] = instance_type
+            if enabled is not None:
+                config["enabled"] = enabled
+
+            # Update in database
+            supabase.table("archon_settings").update(
+                {"value": json.dumps(config), "description": f"Ollama instance: {config.get('name')}"}
+            ).eq("key", instance_id).execute()
+
+            logger.info(f"Updated Ollama instance: {instance_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to update Ollama instance {instance_id}: {e}")
+            return False
+
 
 # Global instance
 credential_service = CredentialService()

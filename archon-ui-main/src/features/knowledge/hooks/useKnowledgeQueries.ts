@@ -12,6 +12,7 @@ import { useActiveOperations } from "../../progress/hooks";
 import { progressKeys } from "../../progress/hooks/useProgressQueries";
 import type { ActiveOperation, ActiveOperationsResponse } from "../../progress/types";
 import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../shared/config/queryPatterns";
+import { useKnowledgeFilterContext } from "../contexts/KnowledgeFilterContext";
 import { knowledgeService } from "../services";
 import type {
   CrawlRequest,
@@ -100,6 +101,7 @@ export function useCodeExamples(sourceId: string | null) {
 export function useCrawlUrl() {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
+  const { currentFilter } = useKnowledgeFilterContext();
 
   return useMutation<
     CrawlStartResponse,
@@ -107,7 +109,7 @@ export function useCrawlUrl() {
     CrawlRequest,
     {
       previousKnowledge?: KnowledgeItem[];
-      previousSummaries?: Array<[readonly unknown[], KnowledgeItemsResponse | undefined]>;
+      previousSummaries?: KnowledgeItemsResponse;
       previousOperations?: ActiveOperationsResponse;
       tempProgressId: string;
       tempItemId: string;
@@ -116,31 +118,13 @@ export function useCrawlUrl() {
     mutationFn: (request: CrawlRequest) => knowledgeService.crawlUrl(request),
     onMutate: async (request) => {
       // Cancel any outgoing refetches to prevent race conditions
-      await queryClient.cancelQueries({ queryKey: knowledgeKeys.summariesPrefix() });
+      await queryClient.cancelQueries({ queryKey: knowledgeKeys.summaries(currentFilter) });
       await queryClient.cancelQueries({ queryKey: progressKeys.active() });
 
-      // TODO: Fix invisible optimistic updates
-      // ISSUE: Optimistic updates are applied to knowledgeKeys.summaries(filter) queries,
-      // but the UI component (KnowledgeView) queries with dynamic filters that we don't have access to here.
-      // This means optimistic updates only work if the filter happens to match what's being viewed.
-      //
-      // CURRENT BEHAVIOR:
-      // - We update all cached summaries queries (lines 158-179 below)
-      // - BUT if the user changes filters after mutation starts, they won't see the optimistic update
-      // - AND we have no way to know what filter the user is currently viewing
-      //
-      // PROPER FIX requires one of:
-      // 1. Pass current filter from KnowledgeView to mutation hooks (prop drilling)
-      // 2. Create KnowledgeFilterContext to share filter state
-      // 3. Restructure to have a single source of truth query key like other features
-      //
-      // IMPACT: Users don't see immediate feedback when adding knowledge items - items only
-      // appear after the server responds (usually 1-3 seconds later)
-
       // Snapshot the previous values for rollback
-      const previousSummaries = queryClient.getQueriesData<KnowledgeItemsResponse>({
-        queryKey: knowledgeKeys.summariesPrefix(),
-      });
+      const previousSummaries = queryClient.getQueryData<KnowledgeItemsResponse>(
+        knowledgeKeys.summaries(currentFilter)
+      );
       const previousOperations = queryClient.getQueryData<ActiveOperationsResponse>(progressKeys.active());
 
       // Generate temporary progress ID and optimistic entity
@@ -171,31 +155,22 @@ export function useCrawlUrl() {
         updated_at: new Date().toISOString(),
       } as Omit<KnowledgeItem, "id">);
 
-      // Update all summaries caches with optimistic data, respecting each cache's filter
-      const entries = queryClient.getQueriesData<KnowledgeItemsResponse>({
-        queryKey: knowledgeKeys.summariesPrefix(),
-      });
-      for (const [qk, old] of entries) {
-        const filter = qk[qk.length - 1] as KnowledgeItemsFilter | undefined;
-        const matchesType = !filter?.knowledge_type || optimisticItem.knowledge_type === filter.knowledge_type;
-        const matchesTags =
-          !filter?.tags || filter.tags.every((t) => (optimisticItem.metadata?.tags ?? []).includes(t));
-        if (!(matchesType && matchesTags)) continue;
+      // Apply optimistic update to the current filter's query
+      queryClient.setQueryData<KnowledgeItemsResponse>(knowledgeKeys.summaries(currentFilter), (old) => {
         if (!old) {
-          queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
+          return {
             items: [optimisticItem],
             total: 1,
             page: 1,
             per_page: 100,
-          });
-        } else {
-          queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
-            ...old,
-            items: [optimisticItem, ...old.items],
-            total: (old.total ?? old.items.length) + 1,
-          });
+          };
         }
-      }
+        return {
+          ...old,
+          items: [optimisticItem, ...old.items],
+          total: (old.total ?? old.items.length) + 1,
+        };
+      });
 
       // Create optimistic progress operation
       const optimisticOperation: ActiveOperation = {
@@ -234,7 +209,7 @@ export function useCrawlUrl() {
       // Replace temporary IDs with real ones from the server
       if (context) {
         // Update summaries cache with real progress ID
-        queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summariesPrefix() }, (old) => {
+        queryClient.setQueryData<KnowledgeItemsResponse>(knowledgeKeys.summaries(currentFilter), (old) => {
           if (!old) return old;
           return {
             ...old,
@@ -282,10 +257,7 @@ export function useCrawlUrl() {
     onError: (error, _variables, context) => {
       // Rollback optimistic updates on error
       if (context?.previousSummaries) {
-        // Rollback all summary queries
-        for (const [queryKey, data] of context.previousSummaries) {
-          queryClient.setQueryData(queryKey, data);
-        }
+        queryClient.setQueryData(knowledgeKeys.summaries(currentFilter), context.previousSummaries);
       }
       if (context?.previousOperations) {
         queryClient.setQueryData(progressKeys.active(), context.previousOperations);
@@ -303,13 +275,14 @@ export function useCrawlUrl() {
 export function useUploadDocument() {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
+  const { currentFilter } = useKnowledgeFilterContext();
 
   return useMutation<
     { progressId: string; message: string },
     Error,
     { file: File; metadata: UploadMetadata },
     {
-      previousSummaries?: Array<[readonly unknown[], KnowledgeItemsResponse | undefined]>;
+      previousSummaries?: KnowledgeItemsResponse;
       previousOperations?: ActiveOperationsResponse;
       tempProgressId: string;
     }
@@ -318,13 +291,13 @@ export function useUploadDocument() {
       knowledgeService.uploadDocument(file, metadata),
     onMutate: async ({ file, metadata }) => {
       // Cancel any outgoing refetches to prevent race conditions
-      await queryClient.cancelQueries({ queryKey: knowledgeKeys.summariesPrefix() });
+      await queryClient.cancelQueries({ queryKey: knowledgeKeys.summaries(currentFilter) });
       await queryClient.cancelQueries({ queryKey: progressKeys.active() });
 
       // Snapshot the previous values for rollback
-      const previousSummaries = queryClient.getQueriesData<KnowledgeItemsResponse>({
-        queryKey: knowledgeKeys.summariesPrefix(),
-      });
+      const previousSummaries = queryClient.getQueryData<KnowledgeItemsResponse>(
+        knowledgeKeys.summaries(currentFilter)
+      );
       const previousOperations = queryClient.getQueryData<ActiveOperationsResponse>(progressKeys.active());
 
       const tempProgressId = createOptimisticId();
@@ -351,31 +324,22 @@ export function useUploadDocument() {
         updated_at: new Date().toISOString(),
       } as Omit<KnowledgeItem, "id">);
 
-      // Respect each cache's filter (knowledge_type, tags, etc.)
-      const entries = queryClient.getQueriesData<KnowledgeItemsResponse>({
-        queryKey: knowledgeKeys.summariesPrefix(),
-      });
-      for (const [qk, old] of entries) {
-        const filter = qk[qk.length - 1] as KnowledgeItemsFilter | undefined;
-        const matchesType = !filter?.knowledge_type || optimisticItem.knowledge_type === filter.knowledge_type;
-        const matchesTags =
-          !filter?.tags || filter.tags.every((t) => (optimisticItem.metadata?.tags ?? []).includes(t));
-        if (!(matchesType && matchesTags)) continue;
+      // Apply optimistic update to the current filter's query
+      queryClient.setQueryData<KnowledgeItemsResponse>(knowledgeKeys.summaries(currentFilter), (old) => {
         if (!old) {
-          queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
+          return {
             items: [optimisticItem],
             total: 1,
             page: 1,
             per_page: 100,
-          });
-        } else {
-          queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
-            ...old,
-            items: [optimisticItem, ...old.items],
-            total: (old.total ?? old.items.length) + 1,
-          });
+          };
         }
-      }
+        return {
+          ...old,
+          items: [optimisticItem, ...old.items],
+          total: (old.total ?? old.items.length) + 1,
+        };
+      });
 
       // Create optimistic progress operation for upload
       const optimisticOperation: ActiveOperation = {
@@ -413,7 +377,7 @@ export function useUploadDocument() {
       // Replace temporary IDs with real ones from the server
       if (context && response?.progressId) {
         // Update summaries cache with real progress ID
-        queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summariesPrefix() }, (old) => {
+        queryClient.setQueryData<KnowledgeItemsResponse>(knowledgeKeys.summaries(currentFilter), (old) => {
           if (!old) return old;
           return {
             ...old,
@@ -460,9 +424,7 @@ export function useUploadDocument() {
     onError: (error, _variables, context) => {
       // Rollback optimistic updates on error
       if (context?.previousSummaries) {
-        for (const [queryKey, data] of context.previousSummaries) {
-          queryClient.setQueryData(queryKey, data);
-        }
+        queryClient.setQueryData(knowledgeKeys.summaries(currentFilter), context.previousSummaries);
       }
       if (context?.previousOperations) {
         queryClient.setQueryData(progressKeys.active(), context.previousOperations);

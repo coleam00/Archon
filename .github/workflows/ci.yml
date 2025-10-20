@@ -39,37 +39,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # - name: Run ESLint
-      #   run: npm run lint
-# 
-      # - name: Run TypeScript type check
-      #   run: npx tsc --noEmit
-# 
-      # - name: Run Vitest tests with coverage
-      #   run: npm run test:coverage:run
-# 
-      # - name: Generate test summary
-      #   if: always()
-      #   run: npm run test:coverage:summary
-# 
-      # - name: Upload frontend test results
-      #   if: always()
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: frontend-test-results
-      #     path: |
-      #       archon-ui-main/coverage/test-results.json
-      #       archon-ui-main/public/test-results/
-      #     retention-days: 30
-# 
-      # - name: Upload frontend coverage to Codecov
-      #   if: always()
-      #   uses: codecov/codecov-action@v4
-      #   with:
-      #     files: ./archon-ui-main/public/test-results/coverage/lcov.info
-      #     flags: frontend
-      #     name: frontend-coverage
-      #     token: ${{ secrets.CODECOV_TOKEN }}
+      - name: Run ESLint
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Check TypeScript
+        run: npx tsc --noEmit
+
+      - name: Run Frontend Tests
+        run: npm run test:coverage:stream
 
   # Job 2: Backend Testing (Python/pytest)
   backend-tests:
