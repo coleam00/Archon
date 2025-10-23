@@ -113,7 +113,7 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
 
 Once everything is running:
 
-1. **Test Web Crawling**: Go to http://localhost:3737 → Knowledge Base → "Crawl Website" → Enter a doc URL (such as https://ai.pydantic.dev/llms-full.txt)
+1. **Test Web Crawling**: Go to http://localhost:3737 → Knowledge Base → "Crawl Website" → Enter a doc URL (such as https://ai.pydantic.dev/llms.txt)
 2. **Test Document Upload**: Knowledge Base → Upload a PDF
 3. **Test Projects**: Projects → Create a new project and add tasks
 4. **Integrate with your AI coding assistant**: MCP Dashboard → Copy connection config for your AI coding assistant 

@@ -6,6 +6,7 @@
 export type ProgressStatus =
   | "starting"
   | "initializing"
+  | "discovery"
   | "analyzing"
   | "crawling"
   | "processing"
@@ -24,7 +25,16 @@ export type ProgressStatus =
   | "cancelled"
   | "stopping";
 
-export type CrawlType = "normal" | "sitemap" | "llms-txt" | "text_file" | "refresh";
+export type CrawlType =
+  | "normal"
+  | "sitemap"
+  | "llms-txt"
+  | "text_file"
+  | "refresh"
+  | "llms_txt_with_linked_files"
+  | "llms_txt_linked_files"
+  | "discovery_single_file"
+  | "discovery_sitemap";
 export type UploadType = "document";
 
 export interface BaseProgressData {
@@ -48,6 +58,10 @@ export interface CrawlProgressData extends BaseProgressData {
   codeBlocksFound?: number;
   totalSummaries?: number;
   completedSummaries?: number;
+  // Discovery-related fields
+  discoveredFile?: string;
+  discoveredFileType?: string;
+  linkedFiles?: string[];
   originalCrawlParams?: {
     url: string;
     knowledge_type?: string;
@@ -100,6 +114,10 @@ export interface ActiveOperation {
     code_examples_found?: number;
     current_operation?: string;
   };
+  // Discovery information
+  discovered_file?: string;
+  discovered_file_type?: string;
+  linked_files?: string[];
 }
 
 export interface ActiveOperationsResponse {
@@ -127,6 +145,13 @@ export interface ProgressResponse {
   codeBlocksFound?: number;
   totalSummaries?: number;
   completedSummaries?: number;
+  // Discovery-related fields
+  discoveredFile?: string;
+  discovered_file?: string; // Snake case from backend
+  discoveredFileType?: string;
+  discovered_file_type?: string; // Snake case from backend
+  linkedFiles?: string[];
+  linked_files?: string[]; // Snake case from backend
   fileName?: string;
   fileSize?: number;
   chunksProcessed?: number;

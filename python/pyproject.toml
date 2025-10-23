@@ -59,6 +59,7 @@ server = [
     "pydantic>=2.0.0",
     "python-dotenv>=1.0.0",
     "docker>=6.1.0",
+    "tldextract>=5.0.0",
     # Logging
     "logfire>=0.30.0",
     # Testing (needed for UI-triggered tests)
@@ -127,6 +128,7 @@ all = [
     "cryptography>=41.0.0",
     "slowapi>=0.1.9",
     "docker>=6.1.0",
+    "tldextract>=5.0.0",
     "logfire>=0.30.0",
     # MCP specific (mcp version)
     "mcp==1.12.2",

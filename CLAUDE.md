@@ -216,6 +216,16 @@ SUPABASE_SERVICE_KEY=your-service-key-here      # Use legacy key format for clou
 Optional variables and full configuration:
 See `python/.env.example` for complete list
 
+### Repository Configuration
+
+Repository information (owner, name) is centralized in `python/src/server/config/version.py`:
+- `GITHUB_REPO_OWNER` - GitHub repository owner (default: "coleam00")
+- `GITHUB_REPO_NAME` - GitHub repository name (default: "Archon")
+
+This is the single source of truth for repository configuration. All services (version checking, bug reports, etc.) should import these constants rather than hardcoding repository URLs.
+
+Environment variable override: `GITHUB_REPO="owner/repo"` can be set to override defaults.
+
 ## Common Development Tasks
 
 ### Add a new API endpoint
