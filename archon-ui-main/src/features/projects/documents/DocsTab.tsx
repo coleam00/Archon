@@ -55,7 +55,7 @@ export const DocsTab = ({ project }: DocsTabProps) => {
     await createDocumentMutation.mutateAsync({
       title,
       document_type,
-      content: { markdown: "# " + title + "\n\nStart writing your document here..." },
+      content: { markdown: `# ${title}\n\nStart writing your document here...` },
       // NOTE: Archon does not have user authentication - this is a single-user local app.
       // "User" is a constant representing the sole user of this Archon instance.
       author: "User",
@@ -94,7 +94,7 @@ export const DocsTab = ({ project }: DocsTabProps) => {
     setShowAddModal(false);
     setShowDeleteModal(false);
     setDocumentToDelete(null);
-  }, [projectId]);
+  }, []);
 
   // Auto-select first document when documents load
   useEffect(() => {

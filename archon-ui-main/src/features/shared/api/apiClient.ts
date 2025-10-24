@@ -42,11 +42,18 @@ function buildFullUrl(cleanEndpoint: string): string {
  */
 export async function callAPIWithETag<T = unknown>(endpoint: string, options: RequestInit = {}): Promise<T> {
   try {
-    // Clean endpoint
-    const cleanEndpoint = endpoint.startsWith("/api") ? endpoint.substring(4) : endpoint;
+    // Handle absolute URLs (direct service connections)
+    const isAbsoluteUrl = endpoint.startsWith("http://") || endpoint.startsWith("https://");
 
-    // Construct the full URL
-    const fullUrl = buildFullUrl(cleanEndpoint);
+    let fullUrl: string;
+    if (isAbsoluteUrl) {
+      // Use absolute URL as-is (for direct service connections)
+      fullUrl = endpoint;
+    } else {
+      // Clean endpoint and build relative URL
+      const cleanEndpoint = endpoint.startsWith("/api") ? endpoint.substring(4) : endpoint;
+      fullUrl = buildFullUrl(cleanEndpoint);
+    }
 
     // Build headers - only set Content-Type for requests with a body
     // NOTE: We do NOT add If-None-Match headers; the browser handles ETag revalidation automatically
@@ -60,7 +67,7 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
 
     // Only set Content-Type for requests that have a body (POST, PUT, PATCH, etc.)
     // GET and DELETE requests should not have Content-Type header
-    const method = options.method?.toUpperCase() || "GET";
+    const _method = options.method?.toUpperCase() || "GET";
     const hasBody = options.body !== undefined && options.body !== null;
     if (hasBody && !headers["Content-Type"]) {
       headers["Content-Type"] = "application/json";

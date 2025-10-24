@@ -67,17 +67,17 @@ export const LevelSelector: React.FC<LevelSelectorProps> = ({ value, onValueChan
             Crawl Depth
           </div>
           <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              className="text-gray-400 hover:text-cyan-500 transition-colors cursor-help"
-              aria-label="Show crawl depth level details"
-            >
-              <Info className="w-4 h-4" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right">{tooltipContent}</TooltipContent>
-        </Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                className="text-gray-400 hover:text-cyan-500 transition-colors cursor-help"
+                aria-label="Show crawl depth level details"
+              >
+                <Info className="w-4 h-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">{tooltipContent}</TooltipContent>
+          </Tooltip>
         </div>
         <div className="text-xs text-gray-500 dark:text-gray-400">
           Higher levels crawl deeper into the website structure

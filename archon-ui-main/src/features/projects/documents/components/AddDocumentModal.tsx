@@ -52,13 +52,7 @@ export const AddDocumentModal = ({ open, onOpenChange, onAdd }: AddDocumentModal
       setError(null);
       onOpenChange(false);
     } catch (err) {
-      setError(
-        typeof err === "string"
-          ? err
-          : err instanceof Error
-            ? err.message
-            : "Failed to create document"
-      );
+      setError(typeof err === "string" ? err : err instanceof Error ? err.message : "Failed to create document");
     } finally {
       setIsAdding(false);
     }
@@ -81,7 +75,10 @@ export const AddDocumentModal = ({ open, onOpenChange, onAdd }: AddDocumentModal
             )}
 
             <div>
-              <label htmlFor="document-title" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label
+                htmlFor="document-title"
+                className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+              >
                 Document Title
               </label>
               <Input
@@ -96,7 +93,10 @@ export const AddDocumentModal = ({ open, onOpenChange, onAdd }: AddDocumentModal
             </div>
 
             <div>
-              <label htmlFor="document-type" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label
+                htmlFor="document-type"
+                className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+              >
                 Document Type
               </label>
               <Select value={type} onValueChange={setType} disabled={isAdding}>
@@ -104,11 +104,21 @@ export const AddDocumentModal = ({ open, onOpenChange, onAdd }: AddDocumentModal
                   <SelectValue placeholder="Select a document type" />
                 </SelectTrigger>
                 <SelectContent color="cyan">
-                  <SelectItem value="spec" color="cyan">Specification</SelectItem>
-                  <SelectItem value="api" color="cyan">API Documentation</SelectItem>
-                  <SelectItem value="guide" color="cyan">Guide</SelectItem>
-                  <SelectItem value="note" color="cyan">Note</SelectItem>
-                  <SelectItem value="design" color="cyan">Design</SelectItem>
+                  <SelectItem value="spec" color="cyan">
+                    Specification
+                  </SelectItem>
+                  <SelectItem value="api" color="cyan">
+                    API Documentation
+                  </SelectItem>
+                  <SelectItem value="guide" color="cyan">
+                    Guide
+                  </SelectItem>
+                  <SelectItem value="note" color="cyan">
+                    Note
+                  </SelectItem>
+                  <SelectItem value="design" color="cyan">
+                    Design
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>

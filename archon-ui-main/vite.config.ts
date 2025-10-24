@@ -295,6 +295,23 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
         return [...new Set([...defaultHosts, ...hostFromEnv, ...customHosts])];
       })(),
       proxy: {
+        // Agent Work Orders API proxy (must come before general /api)
+        '/api/agent-work-orders': {
+          target: isDocker ? 'http://archon-agent-work-orders:8053' : 'http://localhost:8053',
+          changeOrigin: true,
+          secure: false,
+          configure: (proxy, options) => {
+            const targetUrl = isDocker ? 'http://archon-agent-work-orders:8053' : 'http://localhost:8053';
+            proxy.on('error', (err, req, res) => {
+              console.log('🚨 [VITE PROXY ERROR - Agent Work Orders]:', err.message);
+              console.log('🚨 [VITE PROXY ERROR] Target:', targetUrl);
+              console.log('🚨 [VITE PROXY ERROR] Request:', req.url);
+            });
+            proxy.on('proxyReq', (proxyReq, req, res) => {
+              console.log('🔄 [VITE PROXY - Agent Work Orders] Forwarding:', req.method, req.url, 'to', `${targetUrl}${req.url}`);
+            });
+          }
+        },
         '/api': {
           target: `http://${proxyHost}:${port}`,
           changeOrigin: true,

@@ -155,7 +155,7 @@ export function usePaginatedInspectorData({
   useEffect(() => {
     resetDocs();
     resetCode();
-  }, [sourceId, enabled, resetDocs, resetCode]);
+  }, [resetDocs, resetCode]);
 
   return {
     documents: {

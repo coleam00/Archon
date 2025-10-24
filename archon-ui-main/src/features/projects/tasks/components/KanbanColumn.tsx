@@ -3,7 +3,7 @@ import { useRef } from "react";
 import { useDrop } from "react-dnd";
 import { cn } from "../../../ui/primitives/styles";
 import type { Task } from "../types";
-import { getColumnColor, getColumnGlow, ItemTypes } from "../utils/task-styles";
+import { getColumnGlow, ItemTypes } from "../utils/task-styles";
 import { TaskCard } from "./TaskCard";
 
 interface KanbanColumnProps {
@@ -90,7 +90,7 @@ export const KanbanColumn = ({
           <div
             className={cn(
               "inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium border backdrop-blur-md",
-              statusInfo.color
+              statusInfo.color,
             )}
           >
             {statusInfo.icon}
