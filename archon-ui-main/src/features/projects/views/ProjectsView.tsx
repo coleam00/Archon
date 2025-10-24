@@ -15,6 +15,7 @@ import { ProjectHeader } from "../components/ProjectHeader";
 import { ProjectList } from "../components/ProjectList";
 import { DocsTab } from "../documents/DocsTab";
 import { projectKeys, useDeleteProject, useProjects, useUpdateProject } from "../hooks/useProjectQueries";
+import { useSelectedProjectId } from "../hooks/useSelectedProject";
 import { useTaskCounts } from "../tasks/hooks";
 import { TasksTab } from "../tasks/TasksTab";
 import type { Project } from "../types";
@@ -48,6 +49,7 @@ export function ProjectsView({ className = "", "data-id": dataId }: ProjectsView
 
   // State management
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const { selectedProjectId, setSelectedProjectId } = useSelectedProjectId();
   const [activeTab, setActiveTab] = useState("tasks");
   const [layoutMode, setLayoutMode] = useState<"horizontal" | "sidebar">("horizontal");
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
@@ -88,32 +90,52 @@ export function ProjectsView({ className = "", "data-id": dataId }: ProjectsView
       if (selectedProject?.id === project.id) return;
 
       setSelectedProject(project);
+      setSelectedProjectId(project.id);
       setActiveTab("tasks");
       navigate(`/projects/${project.id}`, { replace: true });
     },
-    [selectedProject?.id, navigate],
+    [selectedProject?.id, navigate, setSelectedProjectId],
   );
 
-  // Auto-select project based on URL or default to leftmost
+  // Auto-select project: URL param > stored selection > pinned > first
   useEffect(() => {
     if (!sortedProjects.length) return;
 
-    // If there's a projectId in the URL, select that project
+    // 1) URL param takes precedence
     if (projectId) {
-      const project = sortedProjects.find((p) => p.id === projectId);
-      if (project) {
-        setSelectedProject(project);
+      const fromUrl = sortedProjects.find((p) => p.id === projectId);
+      if (fromUrl) {
+        setSelectedProject(fromUrl);
+        if (selectedProjectId !== fromUrl.id) setSelectedProjectId(fromUrl.id);
         return;
       }
     }
 
-    // Otherwise, select the first (leftmost) project
-    if (!selectedProject || !sortedProjects.find((p) => p.id === selectedProject.id)) {
-      const defaultProject = sortedProjects[0];
-      setSelectedProject(defaultProject);
-      navigate(`/projects/${defaultProject.id}`, { replace: true });
+    // 2) Stored selection
+    if (selectedProjectId) {
+      const fromStorage = sortedProjects.find((p) => p.id === selectedProjectId);
+      if (fromStorage) {
+        setSelectedProject(fromStorage);
+        if (projectId !== fromStorage.id) navigate(`/projects/${fromStorage.id}`, { replace: true });
+        return;
+      }
     }
-  }, [sortedProjects, projectId, selectedProject, navigate]);
+
+    // 3) Pinned project
+    const pinnedProject = sortedProjects.find((p) => p.pinned);
+    if (pinnedProject) {
+      setSelectedProject(pinnedProject);
+      setSelectedProjectId(pinnedProject.id);
+      if (projectId !== pinnedProject.id) navigate(`/projects/${pinnedProject.id}`, { replace: true });
+      return;
+    }
+
+    // 4) Fallback to first
+    const defaultProject = sortedProjects[0];
+    setSelectedProject(defaultProject);
+    setSelectedProjectId(defaultProject.id);
+    if (projectId !== defaultProject.id) navigate(`/projects/${defaultProject.id}`, { replace: true });
+  }, [sortedProjects, projectId, selectedProjectId, navigate, setSelectedProjectId]);
 
   // Refetch task counts when projects change
   useEffect(() => {
@@ -156,9 +178,11 @@ export function ProjectsView({ className = "", "data-id": dataId }: ProjectsView
           if (remainingProjects.length > 0) {
             const nextProject = remainingProjects[0];
             setSelectedProject(nextProject);
+            setSelectedProjectId(nextProject.id);
             navigate(`/projects/${nextProject.id}`, { replace: true });
           } else {
             setSelectedProject(null);
+            setSelectedProjectId(null);
             navigate("/projects", { replace: true });
           }
         }

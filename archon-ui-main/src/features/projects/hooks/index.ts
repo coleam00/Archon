@@ -17,3 +17,5 @@ export {
   useProjects,
   useUpdateProject,
 } from "./useProjectQueries";
+
+export { useSelectedProjectId } from "./useSelectedProject";
