@@ -22,6 +22,7 @@ export const agentWorkOrderKeys = {
   details: () => [...agentWorkOrderKeys.all, "detail"] as const,
   detail: (id: string) => [...agentWorkOrderKeys.details(), id] as const,
   stepHistory: (id: string) => [...agentWorkOrderKeys.detail(id), "steps"] as const,
+  byRepository: (repositoryId: string) => [...agentWorkOrderKeys.all, "repository", repositoryId] as const,
 };
 
 /**
@@ -44,7 +45,7 @@ export function useWorkOrders(statusFilter?: AgentWorkOrderStatus): UseQueryResu
     refetchInterval: (query) => {
       const data = query.state.data as AgentWorkOrder[] | undefined;
       const hasActiveWorkOrders = data?.some(
-        (wo) => wo.status === "running" || wo.status === "pending"
+        (wo) => wo.status === "in_progress" || wo.status === "todo"
       );
       return hasActiveWorkOrders ? refetchInterval : false;
     },
@@ -71,7 +72,7 @@ export function useWorkOrder(id: string | undefined): UseQueryResult<AgentWorkOr
     staleTime: STALE_TIMES.instant,
     refetchInterval: (query) => {
       const data = query.state.data as AgentWorkOrder | undefined;
-      if (data?.status === "running" || data?.status === "pending") {
+      if (data?.status === "in_progress" || data?.status === "todo") {
         return refetchInterval;
       }
       return false;
@@ -110,6 +111,37 @@ export function useStepHistory(workOrderId: string | undefined): UseQueryResult<
 }
 
 /**
+ * Hook to fetch work orders for a specific repository with smart polling
+ * Automatically polls when any work order is active
+ *
+ * @param repositoryId - Repository ID (undefined disables query)
+ * @returns Query result with work orders array
+ */
+export function useRepositoryWorkOrders(repositoryId: string | undefined): UseQueryResult<AgentWorkOrder[], Error> {
+  const refetchInterval = useSmartPolling({
+    baseInterval: 3000,
+    enabled: true,
+  });
+
+  return useQuery({
+    queryKey: repositoryId ? agentWorkOrderKeys.byRepository(repositoryId) : DISABLED_QUERY_KEY,
+    queryFn: () =>
+      repositoryId
+        ? agentWorkOrdersService.listWorkOrdersByRepository(repositoryId)
+        : Promise.reject(new Error("No repository ID provided")),
+    enabled: !!repositoryId,
+    staleTime: STALE_TIMES.instant,
+    refetchInterval: (query) => {
+      const data = query.state.data as AgentWorkOrder[] | undefined;
+      const hasActiveWorkOrders = data?.some(
+        (wo) => wo.status === "in_progress" || wo.status === "todo"
+      );
+      return hasActiveWorkOrders ? refetchInterval : false;
+    },
+  });
+}
+
+/**
  * Hook to create a new agent work order
  * Automatically invalidates work order lists on success
  *
@@ -123,11 +155,64 @@ export function useCreateWorkOrder() {
 
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: agentWorkOrderKeys.lists() });
+      if (data.repository_id) {
+        queryClient.invalidateQueries({ queryKey: agentWorkOrderKeys.byRepository(data.repository_id) });
+      }
       queryClient.setQueryData(agentWorkOrderKeys.detail(data.agent_work_order_id), data);
     },
 
     onError: (error) => {
       console.error("Failed to create work order:", error);
+    },
+  });
+}
+
+/**
+ * Hook to update work order status
+ * Automatically invalidates queries on success
+ *
+ * @returns Mutation object with mutate function
+ */
+export function useUpdateWorkOrderStatus() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string }) =>
+      agentWorkOrdersService.updateWorkOrderStatus(id, status),
+
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: agentWorkOrderKeys.lists() });
+      if (data.repository_id) {
+        queryClient.invalidateQueries({ queryKey: agentWorkOrderKeys.byRepository(data.repository_id) });
+      }
+      queryClient.setQueryData(agentWorkOrderKeys.detail(data.agent_work_order_id), data);
+    },
+
+    onError: (error) => {
+      console.error("Failed to update work order status:", error);
+    },
+  });
+}
+
+/**
+ * Hook to delete a work order
+ * Automatically invalidates queries on success
+ *
+ * @returns Mutation object with mutate function
+ */
+export function useDeleteWorkOrder() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: string) => agentWorkOrdersService.deleteWorkOrder(id),
+
+    onSuccess: (_, deletedId) => {
+      queryClient.invalidateQueries({ queryKey: agentWorkOrderKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: agentWorkOrderKeys.all });
+    },
+
+    onError: (error) => {
+      console.error("Failed to delete work order:", error);
     },
   });
 }

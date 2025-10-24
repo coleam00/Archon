@@ -68,8 +68,8 @@ async def create_agent_work_order(
     )
 
     try:
-        # Generate ID
-        agent_work_order_id = generate_work_order_id()
+        # Use provided ID or generate new one
+        agent_work_order_id = request.agent_work_order_id or generate_work_order_id()
 
         # Create state
         state = AgentWorkOrderState(

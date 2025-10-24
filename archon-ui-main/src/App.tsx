@@ -46,7 +46,8 @@ const AppRoutes = () => {
         <Route path="/projects" element={<Navigate to="/" replace />} />
       )}
       <Route path="/agent-work-orders" element={<AgentWorkOrdersPage />} />
-      <Route path="/agent-work-orders/:id" element={<AgentWorkOrderDetailPage />} />
+      <Route path="/agent-work-orders/:repositoryId" element={<AgentWorkOrdersPage />} />
+      <Route path="/agent-work-orders/detail/:workOrderId" element={<AgentWorkOrderDetailPage />} />
     </Routes>
   );
 };

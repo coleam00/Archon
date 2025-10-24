@@ -9,18 +9,11 @@ import { callAPIWithETag } from "@/features/shared/api/apiClient";
 import type { AgentWorkOrder, AgentWorkOrderStatus, CreateAgentWorkOrderRequest, StepHistory } from "../types";
 
 /**
- * Get the base URL for agent work orders API
- * Defaults to /api/agent-work-orders (proxy through main server)
- * Can be overridden with VITE_AGENT_WORK_ORDERS_URL for direct connection
+ * Get the base URL for work orders API
+ * Work orders CRUD goes to Archon server at /api/work-orders
  */
 const getBaseUrl = (): string => {
-  const directUrl = import.meta.env.VITE_AGENT_WORK_ORDERS_URL;
-  if (directUrl) {
-    // Direct URL should include the full path
-    return `${directUrl}/api/agent-work-orders`;
-  }
-  // Default: proxy through main server
-  return "/api/agent-work-orders";
+  return "/api/work-orders";
 };
 
 export const agentWorkOrdersService = {
@@ -66,13 +59,55 @@ export const agentWorkOrdersService = {
 
   /**
    * Get the complete step execution history for a work order
+   * This comes from the agent service (8053) via proxy
    *
    * @param id - The work order ID
    * @returns Promise resolving to the step history
    * @throws Error if work order not found or request fails
    */
   async getStepHistory(id: string): Promise<StepHistory> {
+    return await callAPIWithETag<StepHistory>(`/api/agent-work-orders/${id}/steps`);
+  },
+
+  /**
+   * List work orders for a specific repository
+   *
+   * @param repositoryId - The repository ID
+   * @returns Promise resolving to array of work orders for the repository
+   * @throws Error if request fails
+   */
+  async listWorkOrdersByRepository(repositoryId: string): Promise<AgentWorkOrder[]> {
+    const response = await callAPIWithETag<{ work_orders: AgentWorkOrder[]; count: number }>(`/api/repositories/${repositoryId}/work-orders`);
+    return response.work_orders;
+  },
+
+  /**
+   * Update work order status
+   *
+   * @param id - The work order ID
+   * @param status - The new status
+   * @returns Promise resolving to updated work order
+   * @throws Error if update fails
+   */
+  async updateWorkOrderStatus(id: string, status: string): Promise<AgentWorkOrder> {
     const baseUrl = getBaseUrl();
-    return await callAPIWithETag<StepHistory>(`${baseUrl}/${id}/steps`);
+    return await callAPIWithETag<AgentWorkOrder>(`${baseUrl}/${id}/status`, {
+      method: "PUT",
+      body: JSON.stringify({ status }),
+    });
+  },
+
+  /**
+   * Delete a work order
+   *
+   * @param id - The work order ID
+   * @returns Promise resolving when delete completes
+   * @throws Error if delete fails
+   */
+  async deleteWorkOrder(id: string): Promise<void> {
+    const baseUrl = getBaseUrl();
+    await callAPIWithETag<void>(`${baseUrl}/${id}`, {
+      method: "DELETE",
+    });
   },
 };

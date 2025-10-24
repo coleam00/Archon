@@ -6,13 +6,13 @@
  */
 
 /**
- * Status of an agent work order
- * - pending: Work order created but not started
- * - running: Work order is currently executing
- * - completed: Work order finished successfully
- * - failed: Work order encountered an error
+ * Status of an agent work order (Kanban column status)
+ * - todo: Work order created but not started
+ * - in_progress: Work order is currently executing
+ * - review: Paused for human-in-loop review
+ * - done: Work order finished (completed or failed)
  */
-export type AgentWorkOrderStatus = "pending" | "running" | "completed" | "failed";
+export type AgentWorkOrderStatus = "todo" | "in_progress" | "review" | "done";
 
 /**
  * Available workflow steps for agent work orders
@@ -35,17 +35,14 @@ export interface AgentWorkOrder {
   /** Unique identifier for the work order */
   agent_work_order_id: string;
 
-  /** URL of the git repository to work on */
-  repository_url: string;
+  /** Reference to the repository this work order belongs to */
+  repository_id: string;
 
-  /** Unique identifier for the sandbox instance */
-  sandbox_identifier: string;
+  /** User's natural language request describing the work */
+  user_request: string;
 
-  /** Name of the git branch created for this work order (null if not yet created) */
-  git_branch_name: string | null;
-
-  /** ID of the agent session executing this work order (null if not started) */
-  agent_session_id: string | null;
+  /** Selected workflow commands/steps */
+  selected_commands: WorkflowStep[];
 
   /** Type of sandbox being used */
   sandbox_type: SandboxType;
@@ -53,11 +50,20 @@ export interface AgentWorkOrder {
   /** GitHub issue number associated with this work order (optional) */
   github_issue_number: string | null;
 
-  /** Current status of the work order */
+  /** Current status of the work order (Kanban column) */
   status: AgentWorkOrderStatus;
 
   /** Current workflow phase/step being executed (null if not started) */
   current_phase: string | null;
+
+  /** Name of the git branch created for this work order (null if not yet created) */
+  git_branch_name: string | null;
+
+  /** URL of the created pull request (null if not yet created) */
+  github_pull_request_url: string | null;
+
+  /** Error message if work order failed (null if successful or still running) */
+  error_message: string | null;
 
   /** Timestamp when work order was created */
   created_at: string;
@@ -65,31 +71,22 @@ export interface AgentWorkOrder {
   /** Timestamp when work order was last updated */
   updated_at: string;
 
-  /** URL of the created pull request (null if not yet created) */
-  github_pull_request_url: string | null;
-
-  /** Number of commits made during execution */
-  git_commit_count: number;
-
-  /** Number of files changed during execution */
-  git_files_changed: number;
-
-  /** Error message if work order failed (null if successful or still running) */
-  error_message: string | null;
+  /** Timestamp when work order was completed (null if not done) */
+  completed_at: string | null;
 }
 
 /**
  * Request payload for creating a new agent work order
  */
 export interface CreateAgentWorkOrderRequest {
-  /** URL of the git repository to work on */
-  repository_url: string;
-
-  /** Type of sandbox to use for execution */
-  sandbox_type: SandboxType;
+  /** Repository ID this work order belongs to */
+  repository_id: string;
 
   /** User's natural language request describing the work to be done */
   user_request: string;
+
+  /** Type of sandbox to use for execution */
+  sandbox_type?: SandboxType;
 
   /** Optional array of specific commands to execute (defaults to all if not provided) */
   selected_commands?: WorkflowStep[];

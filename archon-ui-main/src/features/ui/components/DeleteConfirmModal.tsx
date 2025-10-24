@@ -17,10 +17,11 @@ interface DeleteConfirmModalProps {
   itemName: string;
   onConfirm: () => void;
   onCancel: () => void;
-  type: "project" | "task" | "client" | "document" | "knowledge";
+  type: "project" | "task" | "client" | "document" | "knowledge" | "repository";
   size?: "compact" | "default" | "large";
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  isDeleting?: boolean;
 }
 
 export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
@@ -31,6 +32,7 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
   size = "default",
   open = false,
   onOpenChange,
+  isDeleting = false,
 }) => {
   const TITLES: Record<DeleteConfirmModalProps["type"], string> = {
     project: "Delete Project",
@@ -38,6 +40,7 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
     client: "Delete MCP Client",
     document: "Delete Document",
     knowledge: "Delete Knowledge Item",
+    repository: "Delete Repository",
   };
 
   const MESSAGES: Record<DeleteConfirmModalProps["type"], (_n: string) => string> = {
@@ -47,6 +50,7 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
     document: (_n) => `Are you sure you want to delete this document?`,
     knowledge: (n) =>
       `Are you sure you want to delete "${n}"? All associated documents and code examples will be permanently removed.`,
+    repository: (n) => `Are you sure you want to delete "${n}"? All work orders for this repository will also be deleted.`,
   };
 
   // Size-specific styling for icon
@@ -130,8 +134,9 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
               onClick={onConfirm}
               variant="destructive"
               size={size === "compact" ? "sm" : size === "large" ? "lg" : "default"}
+              disabled={isDeleting}
             >
-              Delete
+              {isDeleting ? "Deleting..." : "Delete"}
             </Button>
           </AlertDialogAction>
         </AlertDialogFooter>

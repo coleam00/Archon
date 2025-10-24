@@ -101,6 +101,7 @@ class CreateAgentWorkOrderRequest(BaseModel):
     automatically detect and fetch the issue details.
     """
 
+    agent_work_order_id: str | None = Field(None, description="Optional pre-determined work order ID (generated if not provided)")
     repository_url: str = Field(..., description="Git repository URL")
     sandbox_type: SandboxType = Field(
         default=SandboxType.GIT_WORKTREE,

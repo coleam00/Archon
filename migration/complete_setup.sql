@@ -1024,7 +1024,76 @@ COMMENT ON COLUMN archon_document_versions.document_id IS 'For docs arrays, the 
 COMMENT ON COLUMN archon_document_versions.task_id IS 'DEPRECATED: No longer used for new versions, kept for historical task version data';
 
 -- =====================================================
--- SECTION 7: MIGRATION TRACKING
+-- SECTION 7: AGENT WORK ORDERS MODULE
+-- =====================================================
+
+-- GitHub Repositories for Agent Work Orders
+CREATE TABLE IF NOT EXISTS agent_work_order_repositories (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  repository_url TEXT NOT NULL UNIQUE,
+  repository_name TEXT NOT NULL,
+  repository_owner TEXT NOT NULL,
+  repository_display_name TEXT,
+  pinned BOOLEAN DEFAULT false,
+  metadata JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Agent Work Orders Status Tracking
+CREATE TABLE IF NOT EXISTS agent_work_orders (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  agent_work_order_id TEXT NOT NULL UNIQUE,
+  repository_id UUID NOT NULL REFERENCES agent_work_order_repositories(id) ON DELETE CASCADE,
+
+  user_request TEXT NOT NULL,
+  selected_commands JSONB DEFAULT '[]'::jsonb,
+  sandbox_type TEXT DEFAULT 'git_worktree',
+  github_issue_number TEXT,
+
+  status TEXT DEFAULT 'pending',
+  current_phase TEXT,
+
+  git_branch_name TEXT,
+  github_pull_request_url TEXT,
+  error_message TEXT,
+
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  completed_at TIMESTAMPTZ
+);
+
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_awo_repos_url ON agent_work_order_repositories(repository_url);
+CREATE INDEX IF NOT EXISTS idx_awo_repos_owner ON agent_work_order_repositories(repository_owner);
+CREATE INDEX IF NOT EXISTS idx_awo_repos_pinned ON agent_work_order_repositories(pinned DESC, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_awo_work_order_id ON agent_work_orders(agent_work_order_id);
+CREATE INDEX IF NOT EXISTS idx_awo_repository_id ON agent_work_orders(repository_id);
+CREATE INDEX IF NOT EXISTS idx_awo_status ON agent_work_orders(status);
+CREATE INDEX IF NOT EXISTS idx_awo_repo_status ON agent_work_orders(repository_id, status);
+CREATE INDEX IF NOT EXISTS idx_awo_created ON agent_work_orders(created_at DESC);
+
+-- Triggers for updated_at
+CREATE TRIGGER update_agent_work_order_repos_updated_at
+  BEFORE UPDATE ON agent_work_order_repositories
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_agent_work_orders_updated_at
+  BEFORE UPDATE ON agent_work_orders
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+
+-- Comments for documentation
+COMMENT ON TABLE agent_work_order_repositories IS 'GitHub repositories configured for agent work orders';
+COMMENT ON TABLE agent_work_orders IS 'High-level work order status tracking (detailed execution in agent service)';
+COMMENT ON COLUMN agent_work_orders.user_request IS 'User description of the work to be done';
+COMMENT ON COLUMN agent_work_orders.selected_commands IS 'Workflow steps chosen: ["create-branch", "planning", "execute", "commit", "create-pr"]';
+COMMENT ON COLUMN agent_work_orders.status IS 'Kanban column status: todo, in_progress, review, done';
+COMMENT ON COLUMN agent_work_orders.current_phase IS 'Agent execution phase (when in_progress): planning, executing, committing';
+
+-- =====================================================
+-- SECTION 8: MIGRATION TRACKING
 -- =====================================================
 
 -- Create archon_migrations table for tracking applied database migrations
@@ -1062,7 +1131,8 @@ VALUES
   ('0.1.0', '008_add_migration_tracking'),
   ('0.1.0', '009_add_cascade_delete_constraints'),
   ('0.1.0', '010_add_provider_placeholders'),
-  ('0.1.0', '011_add_page_metadata_table')
+  ('0.1.0', '011_add_page_metadata_table'),
+  ('0.1.0', '012_add_agent_work_orders_repositories')
 ON CONFLICT (version, migration_name) DO NOTHING;
 
 -- Enable Row Level Security on migrations table
@@ -1083,7 +1153,7 @@ CREATE POLICY "Allow authenticated users to read archon_migrations" ON archon_mi
     USING (true);
 
 -- =====================================================
--- SECTION 8: PROMPTS TABLE
+-- SECTION 9: PROMPTS TABLE
 -- =====================================================
 
 -- Prompts table for managing agent system prompts
@@ -1105,7 +1175,7 @@ CREATE OR REPLACE TRIGGER update_archon_prompts_updated_at
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- =====================================================
--- SECTION 9: RLS POLICIES FOR PROJECTS MODULE
+-- SECTION 10: RLS POLICIES FOR PROJECTS AND AGENT WORK ORDERS
 -- =====================================================
 
 -- Enable Row Level Security (RLS) for all tables
@@ -1114,6 +1184,8 @@ ALTER TABLE archon_tasks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE archon_project_sources ENABLE ROW LEVEL SECURITY;
 ALTER TABLE archon_document_versions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE archon_prompts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_work_order_repositories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_work_orders ENABLE ROW LEVEL SECURITY;
 
 -- Create RLS policies for service role (full access)
 CREATE POLICY "Allow service role full access to archon_projects" ON archon_projects
@@ -1129,6 +1201,12 @@ CREATE POLICY "Allow service role full access to archon_document_versions" ON ar
     FOR ALL USING (auth.role() = 'service_role');
 
 CREATE POLICY "Allow service role full access to archon_prompts" ON archon_prompts
+    FOR ALL USING (auth.role() = 'service_role');
+
+CREATE POLICY "Allow service role full access to agent_work_order_repositories" ON agent_work_order_repositories
+    FOR ALL USING (auth.role() = 'service_role');
+
+CREATE POLICY "Allow service role full access to agent_work_orders" ON agent_work_orders
     FOR ALL USING (auth.role() = 'service_role');
 
 -- Create RLS policies for authenticated users
@@ -1152,8 +1230,16 @@ CREATE POLICY "Allow authenticated users to read archon_prompts" ON archon_promp
     FOR SELECT TO authenticated
     USING (true);
 
+CREATE POLICY "Allow authenticated users to read and update agent_work_order_repositories" ON agent_work_order_repositories
+    FOR ALL TO authenticated
+    USING (true);
+
+CREATE POLICY "Allow authenticated users to read and update agent_work_orders" ON agent_work_orders
+    FOR ALL TO authenticated
+    USING (true);
+
 -- =====================================================
--- SECTION 10: DEFAULT PROMPTS DATA
+-- SECTION 11: DEFAULT PROMPTS DATA
 -- =====================================================
 
 -- Seed with default prompts for each content type

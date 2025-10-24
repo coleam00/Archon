@@ -74,4 +74,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${AGENT_WORK_ORDERS_PORT}/health')"
 
 # Run the Agent Work Orders service
-CMD python -m uvicorn src.agent_work_orders.server:app --host 0.0.0.0 --port ${AGENT_WORK_ORDERS_PORT}
+# Configure git to use GH_TOKEN at runtime, then start the server
+CMD git config --global url."https://${GH_TOKEN}@github.com/".insteadOf "https://github.com/" && \
+    python -m uvicorn src.agent_work_orders.server:app --host 0.0.0.0 --port ${AGENT_WORK_ORDERS_PORT}
