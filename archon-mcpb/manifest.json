@@ -1,0 +1,136 @@
+{
+  "manifest_version": "0.2",
+  "name": "archon",
+  "display_name": "Archon MCP",
+  "version": "0.1.0",
+  "description": "Connection proxy for Archon MCP Server - Knowledge management and RAG search for AI coding assistants",
+  "long_description": "Archon MCP Connection Proxy enables easy integration with AI clients like Claude Desktop. This lightweight proxy connects to your running Archon instance, providing access to custom knowledge bases, semantic search, and task management.\n\nIMPORTANT PREREQUISITES:- Archon must be running: docker compose up -d\n- Archon backend accessible at http://localhost:8181 (will be verified on startup)\n- Archon MCP server accessible at http://localhost:8051/mcp (configurable)\n- This is a CONNECTION PROXY - it forwards requests to your running Archon instance\n- Start Archon first: cd archon && docker compose up -d\n- Manage knowledge base through Archon web UI: http://localhost:3737",
+  "author": {
+    "name": "Cole Medin & Archon Contributors",
+    "email": "support@archon.dev",
+    "url": "https://github.com/coleam00/archon"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/coleam00/archon"
+  },
+  "homepage": "https://github.com/coleam00/archon",
+  "documentation": "https://github.com/coleam00/archon#readme",
+  "support": "https://github.com/coleam00/archon/issues",
+  "icon": "icon.png",
+  "server": {
+    "type": "python",
+    "entry_point": "server/proxy.py",
+    "mcp_config": {
+      "command": "python",
+      "args": [
+        "${__dirname}/server/proxy.py"
+      ],
+      "env": {
+        "ARCHON_API_URL": "http://localhost:8181",
+        "ARCHON_MCP_PORT": "${user_config.mcp_port}",
+        "LOG_LEVEL": "${user_config.log_level}"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "rag_get_available_sources",
+      "description": "Get list of available knowledge sources"
+    },
+    {
+      "name": "rag_search_knowledge_base",
+      "description": "Search knowledge base using semantic RAG (2-5 keywords recommended)"
+    },
+    {
+      "name": "rag_search_code_examples",
+      "description": "Search for code examples in documentation"
+    },
+    {
+      "name": "rag_list_pages_for_source",
+      "description": "List all pages for a specific knowledge source"
+    },
+    {
+      "name": "rag_read_full_page",
+      "description": "Retrieve full page content by page_id or URL"
+    },
+    {
+      "name": "find_projects",
+      "description": "List, search, or get specific project details"
+    },
+    {
+      "name": "manage_project",
+      "description": "Create, update, or delete projects"
+    },
+    {
+      "name": "find_tasks",
+      "description": "List, search, or get specific task details"
+    },
+    {
+      "name": "manage_task",
+      "description": "Create, update, or delete tasks"
+    },
+    {
+      "name": "find_documents",
+      "description": "List, search, or get specific project documents"
+    },
+    {
+      "name": "manage_document",
+      "description": "Create, update, or delete project documents"
+    },
+    {
+      "name": "find_versions",
+      "description": "List version history or get specific version"
+    },
+    {
+      "name": "manage_version",
+      "description": "Create or restore document versions"
+    },
+    {
+      "name": "get_project_features",
+      "description": "Get features list from a project"
+    },
+    {
+      "name": "health_check",
+      "description": "Check MCP server health and dependencies"
+    },
+    {
+      "name": "session_info",
+      "description": "Get active session information"
+    }
+  ],
+  "keywords": [
+    "knowledge-management",
+    "rag",
+    "semantic-search",
+    "documentation",
+    "ai-assistant",
+    "mcp",
+    "project-management",
+    "task-tracking"
+  ],
+  "license": "ACL-1.2",
+  "user_config": {
+    "mcp_port": {
+      "type": "string",
+      "title": "MCP Port",
+      "description": "Port for the Archon MCP server (default: 8051)",
+      "default": "8051",
+      "required": false,
+      "sensitive": false
+    },
+    "log_level": {
+      "type": "string",
+      "title": "Log Level",
+      "description": "Logging verbosity: DEBUG, INFO, WARNING, or ERROR (optional)",
+      "default": "INFO",
+      "required": false,
+      "sensitive": false
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin", "win32", "linux"],
+    "python": ">=3.12.0"
+  }
+}
