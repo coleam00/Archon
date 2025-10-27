@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Moon, Sun, FileText, Layout, Bot, Settings, Palette, Flame, Monitor } from 'lucide-react';
-import { Toggle } from '../ui/Toggle';
+import { Switch } from '@/features/ui/primitives/switch';
 import { Card } from '../ui/Card';
 import { useTheme } from '../../contexts/ThemeContext';
 import { credentialsService } from '../../services/credentialsService';
-import { useToast } from '../../contexts/ToastContext';
+import { useToast } from '../../features/shared/hooks/useToast';
 import { serverHealthService } from '../../services/serverHealthService';
+import { useSettings } from '../../contexts/SettingsContext';
 
 export const FeaturesSection = () => {
   const {
@@ -13,23 +14,29 @@ export const FeaturesSection = () => {
     setTheme
   } = useTheme();
   const { showToast } = useToast();
+  const { styleGuideEnabled, setStyleGuideEnabled: setStyleGuideContext } = useSettings();
   const isDarkMode = theme === 'dark';
   const [projectsEnabled, setProjectsEnabled] = useState(true);
-  
+  const [styleGuideEnabledLocal, setStyleGuideEnabledLocal] = useState(styleGuideEnabled);
+
   // Commented out for future release
   const [agUILibraryEnabled, setAgUILibraryEnabled] = useState(false);
   const [agentsEnabled, setAgentsEnabled] = useState(false);
-  
+
   const [logfireEnabled, setLogfireEnabled] = useState(false);
   const [disconnectScreenEnabled, setDisconnectScreenEnabled] = useState(true);
   const [loading, setLoading] = useState(true);
   const [projectsSchemaValid, setProjectsSchemaValid] = useState(true);
   const [projectsSchemaError, setProjectsSchemaError] = useState<string | null>(null);
 
-  // Load settings on mount
+  // Load settings on mount and sync with context
   useEffect(() => {
     loadSettings();
   }, []);
+
+  useEffect(() => {
+    setStyleGuideEnabledLocal(styleGuideEnabled);
+  }, [styleGuideEnabled]);
 
   const loadSettings = async () => {
     try {
@@ -174,7 +181,7 @@ export const FeaturesSection = () => {
 
   const handleDisconnectScreenToggle = async (checked: boolean) => {
     if (loading) return;
-    
+
     try {
       setLoading(true);
       setDisconnectScreenEnabled(checked);
@@ -182,13 +189,36 @@ export const FeaturesSection = () => {
       await serverHealthService.updateSettings(checked);
 
       showToast(
-        checked ? 'Disconnect Screen Enabled' : 'Disconnect Screen Disabled', 
+        checked ? 'Disconnect Screen Enabled' : 'Disconnect Screen Disabled',
         checked ? 'success' : 'warning'
       );
     } catch (error) {
       console.error('Failed to update disconnect screen setting:', error);
       setDisconnectScreenEnabled(!checked);
       showToast('Failed to update disconnect screen setting', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleStyleGuideToggle = async (checked: boolean) => {
+    if (loading) return;
+
+    try {
+      setLoading(true);
+      setStyleGuideEnabledLocal(checked);
+
+      // Update context which will save to backend
+      await setStyleGuideContext(checked);
+
+      showToast(
+        checked ? 'Style Guide Enabled' : 'Style Guide Disabled',
+        checked ? 'success' : 'warning'
+      );
+    } catch (error) {
+      console.error('Failed to update style guide setting:', error);
+      setStyleGuideEnabledLocal(!checked);
+      showToast('Failed to update style guide setting', 'error');
     } finally {
       setLoading(false);
     }
@@ -208,7 +238,14 @@ export const FeaturesSection = () => {
               </p>
             </div>
             <div className="flex-shrink-0">
-              <Toggle checked={isDarkMode} onCheckedChange={handleThemeToggle} accentColor="purple" icon={isDarkMode ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />} />
+              <Switch
+                size="lg"
+                checked={isDarkMode}
+                onCheckedChange={handleThemeToggle}
+                color="purple"
+                iconOn={<Moon className="w-5 h-5" />}
+                iconOff={<Sun className="w-5 h-5" />}
+              />
             </div>
           </div>
 
@@ -228,12 +265,35 @@ export const FeaturesSection = () => {
               )}
             </div>
             <div className="flex-shrink-0">
-              <Toggle 
-                checked={projectsEnabled} 
-                onCheckedChange={handleProjectsToggle} 
-                accentColor="blue" 
+              <Switch
+                size="lg"
+                checked={projectsEnabled}
+                onCheckedChange={handleProjectsToggle}
+                color="blue"
                 icon={<FileText className="w-5 h-5" />}
                 disabled={loading || !projectsSchemaValid}
+              />
+            </div>
+          </div>
+
+          {/* Style Guide Toggle */}
+          <div className="flex items-center gap-4 p-4 rounded-xl bg-gradient-to-br from-cyan-500/10 to-cyan-600/5 backdrop-blur-sm border border-cyan-500/20 shadow-lg">
+            <div className="flex-1 min-w-0">
+              <p className="font-medium text-gray-800 dark:text-white">
+                Style Guide
+              </p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                Show UI style guide and components in navigation
+              </p>
+            </div>
+            <div className="flex-shrink-0">
+              <Switch
+                size="lg"
+                checked={styleGuideEnabledLocal}
+                onCheckedChange={handleStyleGuideToggle}
+                color="cyan"
+                icon={<Palette className="w-5 h-5" />}
+                disabled={loading}
               />
             </div>
           </div>
@@ -283,10 +343,11 @@ export const FeaturesSection = () => {
               </p>
             </div>
             <div className="flex-shrink-0">
-              <Toggle 
-                checked={logfireEnabled} 
-                onCheckedChange={handleLogfireToggle} 
-                accentColor="orange" 
+              <Switch
+                size="lg"
+                checked={logfireEnabled}
+                onCheckedChange={handleLogfireToggle}
+                color="orange"
                 icon={<Flame className="w-5 h-5" />}
                 disabled={loading}
               />
@@ -304,10 +365,11 @@ export const FeaturesSection = () => {
               </p>
             </div>
             <div className="flex-shrink-0">
-              <Toggle 
-                checked={disconnectScreenEnabled} 
-                onCheckedChange={handleDisconnectScreenToggle} 
-                accentColor="green" 
+              <Switch
+                size="lg"
+                checked={disconnectScreenEnabled}
+                onCheckedChange={handleDisconnectScreenToggle}
+                color="green"
                 icon={<Monitor className="w-5 h-5" />}
                 disabled={loading}
               />

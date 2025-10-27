@@ -267,7 +267,7 @@ const ReactFlowDiagram = ({ reactFlowInstance, lucideIcons }) => {
           style={{ background: '#8b5cf6', border: '2px solid #8b5cf6' }}
         />
 <img src="/img/Python-logo-notext.svg" alt="Python" className={styles.pythonIcon} />
-        <img src="/img/logo-neon.svg" alt="Archon" className={styles.archonIcon} />
+        <img src="/logo-neon.png" alt="Archon" className={styles.archonIcon} />
         <div className={styles.archonText}>
           <h3>{data.label}</h3>
           <p>{data.subtitle}</p>

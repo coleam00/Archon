@@ -100,6 +100,23 @@ class BaseStorageService(ABC):
             # Move start position for next chunk
             start = end
 
+        # Combine consecutive small chunks (<200 chars) together
+        if chunks:
+            combined_chunks: list[str] = []
+            i = 0
+            while i < len(chunks):
+                current = chunks[i]
+
+                # Keep combining while current is small and there are more chunks
+                while len(current) < 200 and i + 1 < len(chunks):
+                    i += 1
+                    current = current + "\n\n" + chunks[i]
+
+                combined_chunks.append(current)
+                i += 1
+
+            chunks = combined_chunks
+
         return chunks
 
     async def smart_chunk_text_async(

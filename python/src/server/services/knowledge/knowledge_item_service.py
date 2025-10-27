@@ -48,7 +48,7 @@ class KnowledgeItemService:
 
             # Apply knowledge type filter at database level if provided
             if knowledge_type:
-                query = query.eq("metadata->>knowledge_type", knowledge_type)
+                query = query.contains("metadata", {"knowledge_type": knowledge_type})
 
             # Apply search filter at database level if provided
             if search:
@@ -65,7 +65,7 @@ class KnowledgeItemService:
 
             # Apply same filters to count query
             if knowledge_type:
-                count_query = count_query.eq("metadata->>knowledge_type", knowledge_type)
+                count_query = count_query.contains("metadata", {"knowledge_type": knowledge_type})
 
             if search:
                 search_pattern = f"%{search}%"
@@ -136,19 +136,26 @@ class KnowledgeItemService:
                 source_id = source["source_id"]
                 source_metadata = source.get("metadata", {})
 
-                # Use batched data instead of individual queries
-                first_page_url = first_urls.get(source_id, f"source://{source_id}")
+                # Use the original source_url from the source record (the URL the user entered)
+                # Fall back to first crawled page URL, then to source:// format as last resort
+                source_url = source.get("source_url")
+                if source_url:
+                    display_url = source_url
+                else:
+                    display_url = first_urls.get(source_id, f"source://{source_id}")
+                
                 code_examples_count = code_example_counts.get(source_id, 0)
                 chunks_count = chunk_counts.get(source_id, 0)
 
-                # Determine source type
-                source_type = self._determine_source_type(source_metadata, first_page_url)
+                # Determine source type - use display_url for type detection
+                source_type = self._determine_source_type(source_metadata, display_url)
 
                 item = {
                     "id": source_id,
                     "title": source.get("title", source.get("summary", "Untitled")),
-                    "url": first_page_url,
+                    "url": display_url,
                     "source_id": source_id,
+                    "source_type": source_type,  # Add top-level source_type field
                     "code_examples": [{"count": code_examples_count}]
                     if code_examples_count > 0
                     else [],  # Minimal array just for count display
@@ -369,9 +376,11 @@ class KnowledgeItemService:
             "source_id": source_id,
             "code_examples": code_examples,
             "metadata": {
+                # Spread source_metadata first, then override with computed values
+                **source_metadata,
                 "knowledge_type": source_metadata.get("knowledge_type", "technical"),
                 "tags": source_metadata.get("tags", []),
-                "source_type": source_type,
+                "source_type": source_type,  # This should be the correctly determined source_type
                 "status": "active",
                 "description": source_metadata.get("description", source.get("summary", "")),
                 "chunks_count": await self._get_chunks_count(source_id),  # Get actual chunk count
@@ -385,7 +394,6 @@ class KnowledgeItemService:
                 "file_type": source_metadata.get("file_type"),
                 "update_frequency": source.get("update_frequency", 7),
                 "code_examples_count": len(code_examples),
-                **source_metadata,
             },
             "created_at": source.get("created_at"),
             "updated_at": source.get("updated_at"),

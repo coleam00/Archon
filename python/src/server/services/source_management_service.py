@@ -11,28 +11,12 @@ from supabase import Client
 
 from ..config.logfire_config import get_logger, search_logger
 from .client_manager import get_supabase_client
+from .llm_provider_service import extract_message_text, get_llm_client
 
 logger = get_logger(__name__)
 
 
-def _get_model_choice() -> str:
-    """Get MODEL_CHOICE with direct fallback."""
-    try:
-        # Direct cache/env fallback
-        from .credential_service import credential_service
-
-        if credential_service._cache_initialized and "MODEL_CHOICE" in credential_service._cache:
-            model = credential_service._cache["MODEL_CHOICE"]
-        else:
-            model = os.getenv("MODEL_CHOICE", "gpt-4.1-nano")
-        logger.debug(f"Using model choice: {model}")
-        return model
-    except Exception as e:
-        logger.warning(f"Error getting model choice: {e}, using default")
-        return "gpt-4.1-nano"
-
-
-def extract_source_summary(
+async def extract_source_summary(
     source_id: str, content: str, max_length: int = 500, provider: str = None
 ) -> str:
     """
@@ -55,10 +39,6 @@ def extract_source_summary(
     if not content or len(content.strip()) == 0:
         return default_summary
 
-    # Get the model choice from credential service (RAG setting)
-    model_choice = _get_model_choice()
-    search_logger.info(f"Generating summary for {source_id} using model: {model_choice}")
-
     # Limit content length to avoid token limits
     truncated_content = content[:25000] if len(content) > 25000 else content
 
@@ -71,66 +51,44 @@ The above content is from the documentation for '{source_id}'. Please provide a 
 """
 
     try:
-        try:
-            import os
+        async with get_llm_client(provider=provider) as client:
+            # Get model choice from credential service
+            from .credential_service import credential_service
+            rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+            model_choice = rag_settings.get("MODEL_CHOICE", "gpt-4.1-nano")
 
-            import openai
+            search_logger.info(f"Generating summary for {source_id} using model: {model_choice}")
 
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                # Try to get from credential service with direct fallback
-                from .credential_service import credential_service
+            # Call the LLM API to generate the summary
+            response = await client.chat.completions.create(
+                model=model_choice,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a helpful assistant that provides concise library/tool/framework summaries.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+            )
 
-                if (
-                    credential_service._cache_initialized
-                    and "OPENAI_API_KEY" in credential_service._cache
-                ):
-                    cached_key = credential_service._cache["OPENAI_API_KEY"]
-                    if isinstance(cached_key, dict) and cached_key.get("is_encrypted"):
-                        api_key = credential_service._decrypt_value(cached_key["encrypted_value"])
-                    else:
-                        api_key = cached_key
-                else:
-                    api_key = os.getenv("OPENAI_API_KEY", "")
+            # Extract the generated summary with proper error handling
+            if not response or not response.choices or len(response.choices) == 0:
+                search_logger.error(f"Empty or invalid response from LLM for {source_id}")
+                return default_summary
 
-            if not api_key:
-                raise ValueError("No OpenAI API key available")
+            choice = response.choices[0]
+            summary_text, _, _ = extract_message_text(choice)
+            if not summary_text:
+                search_logger.error(f"LLM returned None content for {source_id}")
+                return default_summary
 
-            client = openai.OpenAI(api_key=api_key)
-            search_logger.info("Successfully created LLM client fallback for summary generation")
-        except Exception as e:
-            search_logger.error(f"Failed to create LLM client fallback: {e}")
-            return default_summary
+            summary = summary_text.strip()
 
-        # Call the OpenAI API to generate the summary
-        response = client.chat.completions.create(
-            model=model_choice,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant that provides concise library/tool/framework summaries.",
-                },
-                {"role": "user", "content": prompt},
-            ],
-        )
+            # Ensure the summary is not too long
+            if len(summary) > max_length:
+                summary = summary[:max_length] + "..."
 
-        # Extract the generated summary with proper error handling
-        if not response or not response.choices or len(response.choices) == 0:
-            search_logger.error(f"Empty or invalid response from LLM for {source_id}")
-            return default_summary
-
-        message_content = response.choices[0].message.content
-        if message_content is None:
-            search_logger.error(f"LLM returned None content for {source_id}")
-            return default_summary
-
-        summary = message_content.strip()
-
-        # Ensure the summary is not too long
-        if len(summary) > max_length:
-            summary = summary[:max_length] + "..."
-
-        return summary
+            return summary
 
     except Exception as e:
         search_logger.error(
@@ -139,12 +97,15 @@ The above content is from the documentation for '{source_id}'. Please provide a 
         return default_summary
 
 
-def generate_source_title_and_metadata(
+async def generate_source_title_and_metadata(
     source_id: str,
     content: str,
     knowledge_type: str = "technical",
     tags: list[str] | None = None,
     provider: str = None,
+    original_url: str | None = None,
+    source_display_name: str | None = None,
+    source_type: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """
     Generate a user-friendly title and metadata for a source based on its content.
@@ -154,6 +115,7 @@ def generate_source_title_and_metadata(
         content: Sample content from the source
         knowledge_type: Type of knowledge (default: "technical")
         tags: Optional list of tags
+        provider: Optional provider override
 
     Returns:
         Tuple of (title, metadata)
@@ -164,79 +126,92 @@ def generate_source_title_and_metadata(
     # Try to generate a better title from content
     if content and len(content.strip()) > 100:
         try:
-            try:
-                import os
+            async with get_llm_client(provider=provider) as client:
+                # Get model choice from credential service
+                from .credential_service import credential_service
+                rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+                model_choice = rag_settings.get("MODEL_CHOICE", "gpt-4.1-nano")
 
-                import openai
+                # Limit content for prompt
+                sample_content = content[:3000] if len(content) > 3000 else content
 
-                api_key = os.getenv("OPENAI_API_KEY")
-                if not api_key:
-                    # Try to get from credential service with direct fallback
-                    from .credential_service import credential_service
-
-                    if (
-                        credential_service._cache_initialized
-                        and "OPENAI_API_KEY" in credential_service._cache
-                    ):
-                        cached_key = credential_service._cache["OPENAI_API_KEY"]
-                        if isinstance(cached_key, dict) and cached_key.get("is_encrypted"):
-                            api_key = credential_service._decrypt_value(
-                                cached_key["encrypted_value"]
-                            )
-                        else:
-                            api_key = cached_key
+                # Determine source type from URL patterns
+                source_type_info = ""
+                if original_url:
+                    if "llms.txt" in original_url:
+                        source_type_info = " (detected from llms.txt file)"
+                    elif "sitemap" in original_url:
+                        source_type_info = " (detected from sitemap)"
+                    elif any(doc_indicator in original_url for doc_indicator in ["docs", "documentation", "api"]):
+                        source_type_info = " (detected from documentation site)"
                     else:
-                        api_key = os.getenv("OPENAI_API_KEY", "")
+                        source_type_info = " (detected from website)"
 
-                if not api_key:
-                    raise ValueError("No OpenAI API key available")
+                # Use display name if available for better context
+                source_context = source_display_name if source_display_name else source_id
 
-                client = openai.OpenAI(api_key=api_key)
-            except Exception as e:
-                search_logger.error(
-                    f"Failed to create LLM client fallback for title generation: {e}"
-                )
-                # Don't proceed if client creation fails
-                raise
+                prompt = f"""You are creating a title for crawled content that identifies the SERVICE NAME and SOURCE TYPE.
 
-            model_choice = _get_model_choice()
+Source ID: {source_id}
+Original URL: {original_url or 'Not provided'}
+Display Name: {source_context}
+{source_type_info}
 
-            # Limit content for prompt
-            sample_content = content[:3000] if len(content) > 3000 else content
-
-            prompt = f"""Based on this content from {source_id}, generate a concise, descriptive title (3-6 words) that captures what this source is about:
-
+Content sample:
 {sample_content}
 
-Provide only the title, nothing else."""
+Generate a title in this format: "[Service Name] [Source Type]"
 
-            response = client.chat.completions.create(
-                model=model_choice,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a helpful assistant that generates concise titles.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-            )
+Requirements:
+- Identify the service/platform name from the URL (e.g., "Anthropic", "OpenAI", "Supabase", "Mem0")
+- Identify the source type: Documentation, API Reference, llms.txt, Guide, etc.
+- Keep it concise (2-4 words total)
+- Use proper capitalization
 
-            generated_title = response.choices[0].message.content.strip()
-            # Clean up the title
-            generated_title = generated_title.strip("\"'")
-            if len(generated_title) < 50:  # Sanity check
-                title = generated_title
+Examples:
+- "Anthropic Documentation" 
+- "OpenAI API Reference"
+- "Mem0 llms.txt"
+- "Supabase Docs"
+- "GitHub Guide"
+
+Generate only the title, nothing else."""
+
+                response = await client.chat.completions.create(
+                    model=model_choice,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are a helpful assistant that generates concise titles.",
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                )
+
+                choice = response.choices[0]
+                generated_title, _, _ = extract_message_text(choice)
+                generated_title = generated_title.strip()
+                # Clean up the title
+                generated_title = generated_title.strip("\"'")
+                if len(generated_title) < 50:  # Sanity check
+                    title = generated_title
 
         except Exception as e:
             search_logger.error(f"Error generating title for {source_id}: {e}")
 
-    # Build metadata
-    metadata = {"knowledge_type": knowledge_type, "tags": tags or [], "auto_generated": True}
+    # Build metadata - source_type will be determined by caller based on actual URL
+    # Default to "url" but this should be overridden by the caller
+    metadata = {
+        "knowledge_type": knowledge_type,
+        "tags": tags or [],
+        "source_type": source_type or "url",  # Use provided source_type or default to "url"
+        "auto_generated": True
+    }
 
     return title, metadata
 
 
-def update_source_info(
+async def update_source_info(
     client: Client,
     source_id: str,
     summary: str,
@@ -246,6 +221,9 @@ def update_source_info(
     tags: list[str] | None = None,
     update_frequency: int = 7,
     original_url: str | None = None,
+    source_url: str | None = None,
+    source_display_name: str | None = None,
+    source_type: str | None = None,
 ):
     """
     Update or insert source information in the sources table.
@@ -260,6 +238,7 @@ def update_source_info(
         tags: List of tags
         update_frequency: Update frequency in days
     """
+    search_logger.info(f"Updating source {source_id} with knowledge_type={knowledge_type}")
     try:
         # First, check if source already exists to preserve title
         existing_source = (
@@ -272,51 +251,108 @@ def update_source_info(
             search_logger.info(f"Preserving existing title for {source_id}: {existing_title}")
 
             # Update metadata while preserving title
+            # Use provided source_type or determine from URLs
+            determined_source_type = source_type
+            if not determined_source_type:
+                # Determine source_type based on source_url or original_url
+                if source_url and source_url.startswith("file://"):
+                    determined_source_type = "file"
+                elif original_url and original_url.startswith("file://"):
+                    determined_source_type = "file"
+                else:
+                    determined_source_type = "url"
+
             metadata = {
                 "knowledge_type": knowledge_type,
                 "tags": tags or [],
+                "source_type": determined_source_type,
                 "auto_generated": False,  # Mark as not auto-generated since we're preserving
                 "update_frequency": update_frequency,
             }
+            search_logger.info(f"Updating existing source {source_id} metadata: knowledge_type={knowledge_type}")
             if original_url:
                 metadata["original_url"] = original_url
 
-            # Update existing source (preserving title)
-            result = (
-                client.table("archon_sources")
-                .update({
-                    "summary": summary,
-                    "total_word_count": word_count,
-                    "metadata": metadata,
-                    "updated_at": "now()",
-                })
-                .eq("source_id", source_id)
-                .execute()
-            )
+            # Use upsert to handle race conditions
+            upsert_data = {
+                "source_id": source_id,
+                "title": existing_title,
+                "summary": summary,
+                "total_word_count": word_count,
+                "metadata": metadata,
+            }
+
+            # Add new fields if provided
+            if source_url:
+                upsert_data["source_url"] = source_url
+            if source_display_name:
+                upsert_data["source_display_name"] = source_display_name
+
+            client.table("archon_sources").upsert(upsert_data).execute()
 
             search_logger.info(
                 f"Updated source {source_id} while preserving title: {existing_title}"
             )
         else:
-            # New source - generate title and metadata
-            title, metadata = generate_source_title_and_metadata(
-                source_id, content, knowledge_type, tags
-            )
+            # New source - use display name as title if available, otherwise generate
+            if source_display_name:
+                # Use the display name directly as the title (truncated to prevent DB issues)
+                title = source_display_name[:100].strip()
+
+                # Use provided source_type or determine from URLs
+                determined_source_type = source_type
+                if not determined_source_type:
+                    # Determine source_type based on source_url or original_url
+                    if source_url and source_url.startswith("file://"):
+                        determined_source_type = "file"
+                    elif original_url and original_url.startswith("file://"):
+                        determined_source_type = "file"
+                    else:
+                        determined_source_type = "url"
+
+                metadata = {
+                    "knowledge_type": knowledge_type,
+                    "tags": tags or [],
+                    "source_type": determined_source_type,
+                    "auto_generated": False,
+                }
+            else:
+                # Fallback to AI generation only if no display name
+                title, metadata = await generate_source_title_and_metadata(
+                    source_id, content, knowledge_type, tags, None, original_url, source_display_name, source_type
+                )
+
+                # Override the source_type from AI with actual URL-based determination
+                if source_url and source_url.startswith("file://"):
+                    metadata["source_type"] = "file"
+                elif original_url and original_url.startswith("file://"):
+                    metadata["source_type"] = "file"
+                else:
+                    metadata["source_type"] = "url"
 
             # Add update_frequency and original_url to metadata
             metadata["update_frequency"] = update_frequency
             if original_url:
                 metadata["original_url"] = original_url
 
-            # Insert new source
-            client.table("archon_sources").insert({
+            search_logger.info(f"Creating new source {source_id} with knowledge_type={knowledge_type}")
+            # Use upsert to avoid race conditions with concurrent crawls
+            upsert_data = {
                 "source_id": source_id,
                 "title": title,
                 "summary": summary,
                 "total_word_count": word_count,
                 "metadata": metadata,
-            }).execute()
-            search_logger.info(f"Created new source {source_id} with title: {title}")
+            }
+
+            # Add new fields if provided
+            if source_url:
+                upsert_data["source_url"] = source_url
+            if source_display_name:
+                upsert_data["source_display_name"] = source_display_name
+
+            client.table("archon_sources").upsert(upsert_data).execute()
+            search_logger.info(f"Created/updated source {source_id} with title: {title}")
 
     except Exception as e:
         search_logger.error(f"Error updating source {source_id}: {e}")
@@ -360,7 +396,10 @@ class SourceManagementService:
 
     def delete_source(self, source_id: str) -> tuple[bool, dict[str, Any]]:
         """
-        Delete a source and all associated crawled pages and code examples from the database.
+        Delete a source from the database.
+
+        With CASCADE DELETE constraints in place (migration 009), deleting the source
+        will automatically delete all associated crawled_pages and code_examples.
 
         Args:
             source_id: The source ID to delete
@@ -371,61 +410,31 @@ class SourceManagementService:
         try:
             logger.info(f"Starting delete_source for source_id: {source_id}")
 
-            # Delete from crawled_pages table
-            try:
-                logger.info(f"Deleting from crawled_pages table for source_id: {source_id}")
-                pages_response = (
-                    self.supabase_client.table("archon_crawled_pages")
-                    .delete()
-                    .eq("source_id", source_id)
-                    .execute()
-                )
-                pages_deleted = len(pages_response.data) if pages_response.data else 0
-                logger.info(f"Deleted {pages_deleted} pages from crawled_pages")
-            except Exception as pages_error:
-                logger.error(f"Failed to delete from crawled_pages: {pages_error}")
-                return False, {"error": f"Failed to delete crawled pages: {str(pages_error)}"}
+            # With CASCADE DELETE, we only need to delete from the sources table
+            # The database will automatically handle deleting related records
+            logger.info(f"Deleting source {source_id} (CASCADE will handle related records)")
 
-            # Delete from code_examples table
-            try:
-                logger.info(f"Deleting from code_examples table for source_id: {source_id}")
-                code_response = (
-                    self.supabase_client.table("archon_code_examples")
-                    .delete()
-                    .eq("source_id", source_id)
-                    .execute()
-                )
-                code_deleted = len(code_response.data) if code_response.data else 0
-                logger.info(f"Deleted {code_deleted} code examples")
-            except Exception as code_error:
-                logger.error(f"Failed to delete from code_examples: {code_error}")
-                return False, {"error": f"Failed to delete code examples: {str(code_error)}"}
+            source_response = (
+                self.supabase_client.table("archon_sources")
+                .delete()
+                .eq("source_id", source_id)
+                .execute()
+            )
 
-            # Delete from sources table
-            try:
-                logger.info(f"Deleting from sources table for source_id: {source_id}")
-                source_response = (
-                    self.supabase_client.table("archon_sources")
-                    .delete()
-                    .eq("source_id", source_id)
-                    .execute()
-                )
-                source_deleted = len(source_response.data) if source_response.data else 0
-                logger.info(f"Deleted {source_deleted} source records")
-            except Exception as source_error:
-                logger.error(f"Failed to delete from sources: {source_error}")
-                return False, {"error": f"Failed to delete source: {str(source_error)}"}
+            source_deleted = len(source_response.data) if source_response.data else 0
 
-            logger.info("Delete operation completed successfully")
-            return True, {
-                "source_id": source_id,
-                "pages_deleted": pages_deleted,
-                "code_examples_deleted": code_deleted,
-                "source_records_deleted": source_deleted,
-            }
+            if source_deleted > 0:
+                logger.info(f"Successfully deleted source {source_id} and all related data via CASCADE")
+                return True, {
+                    "source_id": source_id,
+                    "message": "Source and all related data deleted successfully via CASCADE DELETE"
+                }
+            else:
+                logger.warning(f"No source found with ID {source_id}")
+                return False, {"error": f"Source {source_id} not found"}
 
         except Exception as e:
-            logger.error(f"Unexpected error in delete_source: {e}")
+            logger.error(f"Error deleting source {source_id}: {e}")
             return False, {"error": f"Error deleting source: {str(e)}"}
 
     def update_source_metadata(
@@ -499,7 +508,7 @@ class SourceManagementService:
             logger.error(f"Error updating source metadata: {e}")
             return False, {"error": f"Error updating source metadata: {str(e)}"}
 
-    def create_source_info(
+    async def create_source_info(
         self,
         source_id: str,
         content_sample: str,
@@ -527,10 +536,10 @@ class SourceManagementService:
                 tags = []
 
             # Generate source summary using the utility function
-            source_summary = extract_source_summary(source_id, content_sample)
+            source_summary = await extract_source_summary(source_id, content_sample)
 
             # Create the source info using the utility function
-            update_source_info(
+            await update_source_info(
                 self.supabase_client,
                 source_id,
                 source_summary,
@@ -620,7 +629,7 @@ class SourceManagementService:
 
             if knowledge_type:
                 # Filter by metadata->knowledge_type
-                query = query.filter("metadata->>knowledge_type", "eq", knowledge_type)
+                query = query.contains("metadata", {"knowledge_type": knowledge_type})
 
             response = query.execute()
 

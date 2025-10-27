@@ -7,8 +7,6 @@ These services extend the base storage functionality with specific implementatio
 
 from typing import Any
 
-from fastapi import WebSocket
-
 from ...config.logfire_config import get_logger, safe_span
 from .base_storage_service import BaseStorageService
 from .document_storage_service import add_documents_to_supabase
@@ -26,7 +24,7 @@ class DocumentStorageService(BaseStorageService):
         source_id: str,
         knowledge_type: str = "documentation",
         tags: list[str] | None = None,
-        websocket: WebSocket | None = None,
+        extract_code_examples: bool = True,
         progress_callback: Any | None = None,
         cancellation_check: Any | None = None,
     ) -> tuple[bool, dict[str, Any]]:
@@ -39,12 +37,15 @@ class DocumentStorageService(BaseStorageService):
             source_id: Source identifier
             knowledge_type: Type of knowledge
             tags: Optional list of tags
-            websocket: Optional WebSocket for progress
+            extract_code_examples: Whether to extract code examples from the document
             progress_callback: Optional callback for progress
+            cancellation_check: Optional function to check for cancellation
 
         Returns:
             Tuple of (success, result_dict)
         """
+        logger.info(f"Document upload starting: {filename} as {knowledge_type} knowledge")
+
         with safe_span(
             "upload_document",
             filename=filename,
@@ -54,16 +55,6 @@ class DocumentStorageService(BaseStorageService):
             try:
                 # Progress reporting helper
                 async def report_progress(message: str, percentage: int, batch_info: dict = None):
-                    if websocket:
-                        data = {
-                            "type": "upload_progress",
-                            "filename": filename,
-                            "progress": percentage,
-                            "message": message,
-                        }
-                        if batch_info:
-                            data.update(batch_info)
-                        await websocket.send_json(data)
                     if progress_callback:
                         await progress_callback(message, percentage, batch_info)
 
@@ -79,7 +70,7 @@ class DocumentStorageService(BaseStorageService):
                 )
 
                 if not chunks:
-                    raise ValueError("No content could be extracted from the document")
+                    raise ValueError(f"No content could be extracted from {filename}. The file may be empty, corrupted, or in an unsupported format.")
 
                 await report_progress("Preparing document chunks...", 30)
 
@@ -102,6 +93,7 @@ class DocumentStorageService(BaseStorageService):
                             "source": source_id,
                             "source_id": source_id,
                             "knowledge_type": knowledge_type,
+                            "source_type": "file",  # FIX: Mark as file upload
                             "filename": filename,
                         },
                     )
@@ -121,18 +113,22 @@ class DocumentStorageService(BaseStorageService):
                 url_to_full_document = {doc_url: file_content}
 
                 # Update source information
-                from ...utils import extract_source_summary, update_source_info
+                from ..source_management_service import extract_source_summary, update_source_info
 
-                source_summary = await self.threading_service.run_cpu_intensive(
-                    extract_source_summary, source_id, file_content[:5000]
-                )
+                source_summary = await extract_source_summary(source_id, file_content[:5000])
 
-                await self.threading_service.run_io_bound(
-                    update_source_info,
+                logger.info(f"Updating source info for {source_id} with knowledge_type={knowledge_type}")
+                await update_source_info(
                     self.supabase_client,
                     source_id,
                     source_summary,
                     total_word_count,
+                    content=file_content[:1000],  # content for title generation
+                    knowledge_type=knowledge_type,
+                    tags=tags,
+                    source_url=f"file://{filename}",
+                    source_display_name=filename,
+                    source_type="file",  # Mark as file upload
                 )
 
                 await report_progress("Storing document chunks...", 70)
@@ -152,10 +148,65 @@ class DocumentStorageService(BaseStorageService):
                     cancellation_check=cancellation_check,
                 )
 
+                # Extract code examples if requested
+                code_examples_count = 0
+                if extract_code_examples and len(chunks) > 0:
+                    try:
+                        await report_progress("Extracting code examples...", 85)
+                        
+                        logger.info(f"🔍 DEBUG: Starting code extraction for {filename} | extract_code_examples={extract_code_examples}")
+                        
+                        # Import code extraction service
+                        from ..crawling.code_extraction_service import CodeExtractionService
+                        
+                        code_service = CodeExtractionService(self.supabase_client)
+                        
+                        # Create crawl_results format expected by code extraction service
+                        # markdown: cleaned plaintext (HTML->markdown for HTML files, raw content otherwise)
+                        # html: empty string to prevent HTML extraction path confusion
+                        # content_type: proper type to guide extraction method selection
+                        crawl_results = [{
+                            "url": doc_url,
+                            "markdown": file_content,  # Cleaned plaintext/markdown content
+                            "html": "",  # Empty to prevent HTML extraction path
+                            "content_type": "application/pdf" if filename.lower().endswith('.pdf') else (
+                                "text/markdown" if filename.lower().endswith(('.html', '.htm', '.md')) else "text/plain"
+                            )
+                        }]
+                        
+                        logger.info(f"🔍 DEBUG: Created crawl_results with url={doc_url}, content_length={len(file_content)}")
+                        
+                        # Create progress callback for code extraction
+                        async def code_progress_callback(data: dict):
+                            logger.info(f"🔍 DEBUG: Code extraction progress: {data}")
+                            if progress_callback:
+                                # Map code extraction progress (0-100) to our remaining range (85-95)
+                                raw_progress = data.get("progress", data.get("percentage", 0))
+                                mapped_progress = 85 + (raw_progress / 100.0) * 10  # 85% to 95%
+                                message = data.get("log", "Extracting code examples...")
+                                await progress_callback(message, int(mapped_progress))
+                        
+                        logger.info(f"🔍 DEBUG: About to call extract_and_store_code_examples...")
+                        code_examples_count = await code_service.extract_and_store_code_examples(
+                            crawl_results=crawl_results,
+                            url_to_full_document=url_to_full_document,
+                            source_id=source_id,
+                            progress_callback=code_progress_callback,
+                            cancellation_check=cancellation_check,
+                        )
+                        
+                        logger.info(f"🔍 DEBUG: Code extraction completed: {code_examples_count} code examples found for {filename}")
+                        
+                    except Exception as e:
+                        # Log error with full traceback but don't fail the entire upload
+                        logger.error(f"Code extraction failed for {filename}: {e}", exc_info=True)
+                        code_examples_count = 0
+                
                 await report_progress("Document upload completed!", 100)
 
                 result = {
                     "chunks_stored": len(chunks),
+                    "code_examples_stored": code_examples_count,
                     "total_word_count": total_word_count,
                     "source_id": source_id,
                     "filename": filename,
@@ -163,10 +214,11 @@ class DocumentStorageService(BaseStorageService):
 
                 span.set_attribute("success", True)
                 span.set_attribute("chunks_stored", len(chunks))
+                span.set_attribute("code_examples_stored", code_examples_count)
                 span.set_attribute("total_word_count", total_word_count)
 
                 logger.info(
-                    f"Document upload completed successfully: filename={filename}, chunks_stored={len(chunks)}, total_word_count={total_word_count}"
+                    f"Document upload completed successfully: filename={filename}, chunks_stored={len(chunks)}, code_examples_stored={code_examples_count}, total_word_count={total_word_count}"
                 )
 
                 return True, result
@@ -176,12 +228,7 @@ class DocumentStorageService(BaseStorageService):
                 span.set_attribute("error", str(e))
                 logger.error(f"Error uploading document: {e}")
 
-                if websocket:
-                    await websocket.send_json({
-                        "type": "upload_error",
-                        "error": str(e),
-                        "filename": filename,
-                    })
+                # Error will be handled by caller
 
                 return False, {"error": f"Error uploading document: {str(e)}"}
 
@@ -191,7 +238,7 @@ class DocumentStorageService(BaseStorageService):
 
         Args:
             documents: List of documents to store
-            **kwargs: Additional options (websocket, progress_callback, etc.)
+            **kwargs: Additional options (progress_callback, etc.)
 
         Returns:
             Storage result
@@ -204,7 +251,7 @@ class DocumentStorageService(BaseStorageService):
                 source_id=doc.get("source_id", "upload"),
                 knowledge_type=doc.get("knowledge_type", "documentation"),
                 tags=doc.get("tags"),
-                websocket=kwargs.get("websocket"),
+                extract_code_examples=doc.get("extract_code_examples", True),
                 progress_callback=kwargs.get("progress_callback"),
                 cancellation_check=kwargs.get("cancellation_check"),
             )

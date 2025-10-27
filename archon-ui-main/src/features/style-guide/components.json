@@ -1,0 +1,210 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "version": "1.0.0",
+  "description": "Archon UI Component Reference for AI Agents and Developers",
+  "categories": {
+    "navigation": {
+      "description": "Navigation components for app and page-level navigation",
+      "components": [
+        {
+          "name": "MainNavigation",
+          "path": "archon-ui-main/src/components/layout/Navigation.tsx",
+          "usage": "Fixed left sidebar navigation with glassmorphism, tooltips, and active state indicators",
+          "props": ["className?"],
+          "example": "Fixed position, icon-based, tooltip on hover, neon glow on active"
+        },
+        {
+          "name": "PageTabs",
+          "path": "archon-ui-main/src/features/ui/primitives/tabs.tsx (Radix Tabs)",
+          "usage": "Top-level page navigation tabs (e.g., Docs/Tasks in Projects)",
+          "props": ["defaultValue", "value", "onValueChange"],
+          "example": "See Projects page (Docs/Tasks tabs) - archon-ui-main/src/features/projects/views/ProjectsView.tsx:188-210"
+        },
+        {
+          "name": "ViewToggleButtons",
+          "path": "archon-ui-main/src/features/knowledge/components/KnowledgeHeader.tsx:88-118",
+          "usage": "Toggle between grid and table views",
+          "props": ["viewMode", "onViewModeChange"],
+          "example": "Grid/List icon buttons with active state styling"
+        }
+      ]
+    },
+    "layouts": {
+      "description": "Page layout patterns",
+      "components": [
+        {
+          "name": "CardGridLayout",
+          "path": "archon-ui-main/src/features/projects/components/ProjectList.tsx:100-117",
+          "usage": "Horizontal scrolling card grid for project cards or similar items",
+          "pattern": "flex gap-4 overflow-x-auto with min-w-max",
+          "example": "Projects page - horizontal scrollable cards",
+          "variant": "horizontal (default)"
+        },
+        {
+          "name": "SidebarListLayout",
+          "path": "archon-ui-main/src/features/style-guide/layouts/ProjectsLayoutExample.tsx",
+          "usage": "Sidebar navigation list with compact cards and search",
+          "pattern": "Fixed left column (w-72) with vertical list, Input for search, main content on right (flex-1)",
+          "example": "Projects page sidebar variant - vertical list with smaller cards",
+          "variant": "sidebar (alternative to horizontal cards)"
+        },
+        {
+          "name": "BentoGridLayout",
+          "path": "archon-ui-main/src/pages/SettingsPage.tsx:125-223",
+          "usage": "Two-column responsive grid for collapsible settings cards",
+          "pattern": "grid grid-cols-1 lg:grid-cols-2 gap-6",
+          "example": "Settings page - left/right column layout"
+        },
+        {
+          "name": "ResponsiveGridLayout",
+          "path": "archon-ui-main/src/features/knowledge/components/KnowledgeList.tsx:158-183",
+          "usage": "Responsive grid for card items (1/2/3/4 columns)",
+          "pattern": "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4",
+          "example": "Knowledge page grid view"
+        },
+        {
+          "name": "TableLayout",
+          "path": "archon-ui-main/src/features/knowledge/components/KnowledgeTable.tsx:68-209",
+          "usage": "Table with glassmorphism styling, hover states, and action buttons",
+          "pattern": "overflow-x-auto wrapper with full-width table",
+          "example": "Knowledge page table view"
+        }
+      ]
+    },
+    "cards": {
+      "description": "Card components for various use cases",
+      "components": [
+        {
+          "name": "ProjectCard",
+          "path": "archon-ui-main/src/features/projects/components/ProjectCard.tsx",
+          "usage": "Card with real-time data (task counts), selection states, pinned indicator",
+          "features": ["glassmorphism", "hover effects", "neon glow borders", "task count pills", "pin badge"],
+          "example": "w-72 min-h-[180px] with gradient backgrounds"
+        },
+        {
+          "name": "CollapsibleSettingsCard",
+          "path": "archon-ui-main/src/components/ui/CollapsibleSettingsCard.tsx",
+          "usage": "Collapsible card with PowerButton toggle and flicker animation",
+          "features": ["expand/collapse", "localStorage persistence", "accent colors"],
+          "example": "Settings page cards"
+        },
+        {
+          "name": "GlassCard (Primitive)",
+          "path": "archon-ui-main/src/features/ui/primitives/card.tsx",
+          "usage": "Base glassmorphism card with configurable blur, transparency, tints, edges",
+          "props": ["blur?", "transparency?", "glassTint?", "edgePosition?", "edgeColor?", "size?"],
+          "example": "See GlassCardConfigurator for all options"
+        }
+      ]
+    },
+    "information_display": {
+      "description": "Patterns for displaying structured information",
+      "components": [
+        {
+          "name": "DocumentBrowser",
+          "path": "archon-ui-main/src/features/knowledge/components/DocumentBrowser.tsx",
+          "usage": "Modal for displaying documents, code, logs, or structured information with tabs and search",
+          "features": [
+            "Dialog modal",
+            "Tabs navigation",
+            "Search filtering",
+            "Expandable content",
+            "Code syntax highlighting"
+          ],
+          "radix_used": ["Dialog", "Tabs", "Input"],
+          "pattern": "Dialog + Tabs + Search input + Collapsible items with expand/collapse",
+          "example": "Knowledge inspector, document viewer, code browser, log viewer"
+        }
+      ]
+    },
+    "buttons": {
+      "description": "Button components and variants",
+      "components": [
+        {
+          "name": "Button (Primitive)",
+          "path": "archon-ui-main/src/features/ui/primitives/button.tsx",
+          "usage": "Base button with glassmorphism variants",
+          "variants": ["default", "destructive", "outline", "ghost", "cyan", "purple", "green"],
+          "sizes": ["sm", "md", "lg", "icon"],
+          "example": "See ButtonConfigurator for all variants"
+        }
+      ]
+    },
+    "radix_primitives": {
+      "description": "Radix UI primitives with Archon glassmorphism styling",
+      "components": [
+        {
+          "name": "Tabs",
+          "path": "archon-ui-main/src/features/ui/primitives/tabs.tsx",
+          "usage": "Tab navigation with color variants and neon glow effects",
+          "radix_package": "@radix-ui/react-tabs",
+          "parts": ["Tabs", "TabsList", "TabsTrigger", "TabsContent"],
+          "props": ["defaultValue", "value", "onValueChange", "color (cyan|blue|purple|orange|green|pink)"],
+          "example": "Projects page Docs/Tasks tabs"
+        },
+        {
+          "name": "Select",
+          "path": "archon-ui-main/src/features/ui/primitives/select.tsx",
+          "usage": "Dropdown select with glassmorphism and color variants",
+          "radix_package": "@radix-ui/react-select",
+          "parts": ["Select", "SelectTrigger", "SelectValue", "SelectContent", "SelectItem"],
+          "props": ["value", "onValueChange", "color (purple|blue|green|pink|orange|cyan)"],
+          "example": "Configurators use Select for all dropdowns"
+        },
+        {
+          "name": "Dialog",
+          "path": "archon-ui-main/src/features/ui/primitives/dialog.tsx",
+          "usage": "Modal dialogs with glassmorphism backdrop",
+          "radix_package": "@radix-ui/react-dialog",
+          "parts": ["Dialog", "DialogTrigger", "DialogContent", "DialogHeader", "DialogTitle", "DialogDescription"],
+          "props": ["open", "onOpenChange"],
+          "example": "NewProjectModal, EditTaskModal"
+        },
+        {
+          "name": "Checkbox",
+          "path": "archon-ui-main/src/features/ui/primitives/checkbox.tsx",
+          "usage": "Styled checkbox with color variants",
+          "radix_package": "@radix-ui/react-checkbox",
+          "parts": ["Checkbox"],
+          "props": ["checked", "onCheckedChange", "color (cyan|purple|blue|green|etc)"],
+          "example": "Settings toggles, NavigationConfigurator"
+        },
+        {
+          "name": "Switch",
+          "path": "archon-ui-main/src/features/ui/primitives/switch.tsx",
+          "usage": "Toggle switch with smooth animations",
+          "radix_package": "@radix-ui/react-switch",
+          "parts": ["Switch"],
+          "props": ["checked", "onCheckedChange"],
+          "example": "Feature toggles in Settings"
+        },
+        {
+          "name": "Tooltip",
+          "path": "archon-ui-main/src/features/ui/primitives/tooltip.tsx",
+          "usage": "Hover tooltips with glassmorphism",
+          "radix_package": "@radix-ui/react-tooltip",
+          "parts": ["TooltipProvider", "Tooltip", "TooltipTrigger", "TooltipContent"],
+          "props": ["delayDuration", "side", "align"],
+          "example": "Navigation sidebar icons"
+        },
+        {
+          "name": "DropdownMenu",
+          "path": "archon-ui-main/src/features/ui/primitives/dropdown-menu.tsx",
+          "usage": "Context menus with glassmorphism",
+          "radix_package": "@radix-ui/react-dropdown-menu",
+          "parts": ["DropdownMenu", "DropdownMenuTrigger", "DropdownMenuContent", "DropdownMenuItem"],
+          "example": "ProjectCardActions, context menus"
+        },
+        {
+          "name": "ToggleGroup",
+          "path": "archon-ui-main/src/features/ui/primitives/toggle-group.tsx",
+          "usage": "Mutually exclusive button group",
+          "radix_package": "@radix-ui/react-toggle-group",
+          "parts": ["ToggleGroup", "ToggleGroupItem"],
+          "props": ["type (single|multiple)", "value", "onValueChange"],
+          "example": "KnowledgeHeader type filter"
+        }
+      ]
+    }
+  }
+}

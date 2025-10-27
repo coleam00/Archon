@@ -68,3 +68,9 @@ logs/
 # Jupyter
 .ipynb_checkpoints
 *.ipynb
+
+.pytest_cache
+.mypy_cache
+.my_cache
+.ruff_cache
+.ruff

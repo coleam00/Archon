@@ -47,7 +47,7 @@ jobs:
             You are authorized to IMPLEMENT FIXES and CREATE PULL REQUESTS.
 
             ## Your Role
-            You are fixing issues in Archon V2 Alpha. Follow CLAUDE.md for project principles and commands.
+            You are fixing issues in Archon V2 Beta. Follow CLAUDE.md for project principles and commands.
 
             ## Architecture Context
             - Frontend: React + TypeScript + Vite (port 3737)
@@ -110,7 +110,7 @@ jobs:
             - Follow CLAUDE.md for all commands and project principles
             - Prefer ripgrep over grep for searching
             - Keep changes minimal - resist urge to refactor
-            - Alpha project: Quick fixes over perfect solutions
+            - Beta project: Quick fixes over perfect solutions
 
           # Commented out - using default tools
           # allowed_tools: "Edit(*),MultiEdit(*),Write(*),Read(*),Grep(*),LS(*),Glob(*),TodoWrite(*),NotebookEdit(*),Bash(git *),Bash(npm *),Bash(uv *),Bash(python *),Bash(pip *),Bash(cd *),Bash(pwd),Bash(ls *),Bash(cat *),Bash(head *),Bash(tail *),Bash(wc *),Bash(find *),Bash(grep *),Bash(rg *),Bash(sed *),Bash(awk *),Bash(curl *),Bash(wget *),Bash(echo *),Bash(mkdir *),Bash(rm -rf node_modules),Bash(rm -rf __pycache__),Bash(rm -rf .pytest_cache),WebSearch(*),WebFetch(*)"

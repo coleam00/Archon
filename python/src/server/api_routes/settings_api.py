@@ -139,11 +139,12 @@ OPTIONAL_SETTINGS_WITH_DEFAULTS = {
 
 
 @router.get("/credentials/{key}")
-async def get_credential(key: str, decrypt: bool = True):
+async def get_credential(key: str):
     """Get a specific credential by key."""
     try:
-        logfire.info(f"Getting credential | key={key} | decrypt={decrypt}")
-        value = await credential_service.get_credential(key, decrypt=decrypt)
+        logfire.info(f"Getting credential | key={key}")
+        # Never decrypt - always get metadata only for encrypted credentials
+        value = await credential_service.get_credential(key, decrypt=False)
 
         if value is None:
             # Check if this is an optional setting with a default value
@@ -162,16 +163,17 @@ async def get_credential(key: str, decrypt: bool = True):
 
         logfire.info(f"Credential retrieved successfully | key={key}")
 
-        # For encrypted credentials, return metadata instead of the actual value for security
-        if isinstance(value, dict) and value.get("is_encrypted") and not decrypt:
+        if isinstance(value, dict) and value.get("is_encrypted"):
             return {
                 "key": key,
+                "value": "[ENCRYPTED]",
                 "is_encrypted": True,
                 "category": value.get("category"),
                 "description": value.get("description"),
                 "has_value": bool(value.get("encrypted_value")),
             }
 
+        # For non-encrypted credentials, return the actual value
         return {"key": key, "value": value, "is_encrypted": False}
 
     except HTTPException:
@@ -339,3 +341,51 @@ async def settings_health():
     result = {"status": "healthy", "service": "settings"}
 
     return result
+
+
+@router.post("/credentials/status-check")
+async def check_credential_status(request: dict[str, list[str]]):
+    """Check status of API credentials by actually decrypting and validating them.
+    
+    This endpoint is specifically for frontend status indicators and returns
+    decrypted credential values for connectivity testing.
+    """
+    try:
+        credential_keys = request.get("keys", [])
+        logfire.info(f"Checking status for credentials: {credential_keys}")
+        
+        result = {}
+        
+        for key in credential_keys:
+            try:
+                # Get decrypted value for status checking
+                decrypted_value = await credential_service.get_credential(key, decrypt=True)
+                
+                if decrypted_value and isinstance(decrypted_value, str) and decrypted_value.strip():
+                    result[key] = {
+                        "key": key,
+                        "value": decrypted_value,
+                        "has_value": True
+                    }
+                else:
+                    result[key] = {
+                        "key": key,
+                        "value": None,
+                        "has_value": False
+                    }
+                    
+            except Exception as e:
+                logfire.warning(f"Failed to get credential for status check: {key} | error={str(e)}")
+                result[key] = {
+                    "key": key,
+                    "value": None,
+                    "has_value": False,
+                    "error": str(e)
+                }
+        
+        logfire.info(f"Credential status check completed | checked={len(credential_keys)} | found={len([k for k, v in result.items() if v.get('has_value')])}")
+        return result
+        
+    except Exception as e:
+        logfire.error(f"Error in credential status check | error={str(e)}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})

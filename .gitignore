@@ -3,3 +3,16 @@ __pycache__
 .serena
 .claude/settings.local.json
 PRPs/local
+PRPs/completed/
+PRPs/stories/
+PRPs/reviews/
+/logs/
+.zed
+tmp/
+temp/
+UAT/
+
+.DS_Store
+
+# Local release notes testing
+release-notes-*.md

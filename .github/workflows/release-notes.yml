@@ -1,0 +1,319 @@
+name: AI-Generated Release Notes
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name (e.g., v1.0.0)'
+        required: true
+        type: string
+
+jobs:
+  generate-release-notes:
+    name: Generate Release Notes with Claude
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Full git history
+
+      - name: Get release tag
+        id: get_tag
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag_name }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" == "release" ]; then
+            echo "tag=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get previous tag
+        id: prev_tag
+        run: |
+          CURRENT_TAG="${{ steps.get_tag.outputs.tag }}"
+          PREVIOUS_TAG=$(git tag --sort=-v:refname | grep -A1 "^${CURRENT_TAG}$" | tail -1)
+
+          if [ -z "$PREVIOUS_TAG" ] || [ "$PREVIOUS_TAG" == "$CURRENT_TAG" ]; then
+            # First release or no previous tag - use initial commit
+            PREVIOUS_TAG=$(git rev-list --max-parents=0 HEAD)
+            echo "previous_tag=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
+            echo "is_first_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "previous_tag=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
+            echo "is_first_release=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get commit messages
+        id: commits
+        run: |
+          CURRENT_TAG="${{ steps.get_tag.outputs.tag }}"
+          PREVIOUS_TAG="${{ steps.prev_tag.outputs.previous_tag }}"
+
+          # Get commit history
+          COMMITS=$(git log ${PREVIOUS_TAG}..${CURRENT_TAG} --pretty=format:"- %s (%h) by %an" --no-merges)
+
+          # Save to file to preserve formatting
+          echo "$COMMITS" > commits.txt
+
+          # Get stats
+          COMMIT_COUNT=$(echo "$COMMITS" | wc -l)
+          echo "commit_count=$COMMIT_COUNT" >> $GITHUB_OUTPUT
+
+      - name: Get changed files summary
+        id: files
+        run: |
+          CURRENT_TAG="${{ steps.get_tag.outputs.tag }}"
+          PREVIOUS_TAG="${{ steps.prev_tag.outputs.previous_tag }}"
+
+          # Get file change statistics
+          FILES_CHANGED=$(git diff ${PREVIOUS_TAG}..${CURRENT_TAG} --stat | tail -1)
+          echo "files_summary=$FILES_CHANGED" >> $GITHUB_OUTPUT
+
+          # Get detailed changes by component
+          echo "### File Changes by Component" > changes.txt
+          echo "" >> changes.txt
+          echo "**Frontend:**" >> changes.txt
+          git diff ${PREVIOUS_TAG}..${CURRENT_TAG} --stat -- archon-ui-main/ | head -20 >> changes.txt
+          echo "" >> changes.txt
+          echo "**Backend:**" >> changes.txt
+          git diff ${PREVIOUS_TAG}..${CURRENT_TAG} --stat -- python/ | head -20 >> changes.txt
+          echo "" >> changes.txt
+          echo "**Documentation:**" >> changes.txt
+          git diff ${PREVIOUS_TAG}..${CURRENT_TAG} --stat -- '*.md' PRPs/ | head -10 >> changes.txt
+
+      - name: Get closed PRs
+        id: prs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CURRENT_TAG="${{ steps.get_tag.outputs.tag }}"
+          PREVIOUS_TAG="${{ steps.prev_tag.outputs.previous_tag }}"
+
+          # Get date of previous tag
+          PREV_DATE=$(git log -1 --format=%ai ${PREVIOUS_TAG})
+
+          # Get merged PRs since previous tag
+          gh pr list \
+            --state merged \
+            --limit 100 \
+            --json number,title,mergedAt,author,url \
+            --jq --arg date "$PREV_DATE" \
+              '.[] | select(.mergedAt >= $date) | "- #\(.number): \(.title) by @\(.author.login) - \(.url)"' \
+            > prs.txt || echo "No PRs found" > prs.txt
+
+      - name: Prepare release notes context
+        id: context
+        run: |
+          # Create a context file with all the information
+          cat > release-context.md <<'EOF'
+          # Release Notes Generation Task
+
+          You are writing release notes for Archon V2 Beta, a local-first AI knowledge management system.
+
+          ## Release Information
+
+          **Version:** ${{ steps.get_tag.outputs.tag }}
+          **Previous Version:** ${{ steps.prev_tag.outputs.previous_tag }}
+          **Commits:** ${{ steps.commits.outputs.commit_count }}
+          **Is First Release:** ${{ steps.prev_tag.outputs.is_first_release }}
+
+          ## Commits
+
+          ```
+          EOF
+          cat commits.txt >> release-context.md
+          cat >> release-context.md <<'EOF'
+          ```
+
+          ## Pull Requests Merged
+
+          ```
+          EOF
+          cat prs.txt >> release-context.md
+          cat >> release-context.md <<'EOF'
+          ```
+
+          ## File Changes
+
+          ```
+          EOF
+          cat changes.txt >> release-context.md
+          cat >> release-context.md <<'EOF'
+          ```
+
+          ## Instructions
+
+          Generate comprehensive release notes following this structure:
+
+          # 🚀 Release ${{ steps.get_tag.outputs.tag }}
+
+          ## 📝 Overview
+          [2-3 sentence summary of this release]
+
+          ## ✨ What's New
+
+          ### Major Features
+          - [List major new features with brief descriptions]
+
+          ### Improvements
+          - [List improvements and enhancements]
+
+          ### Bug Fixes
+          - [List bug fixes]
+
+          ## 🔧 Technical Changes
+
+          ### Backend (Python/FastAPI)
+          - [Notable backend changes]
+
+          ### Frontend (React/TypeScript)
+          - [Notable frontend changes]
+
+          ### Infrastructure
+          - [Docker, CI/CD, deployment changes]
+
+          ## 📊 Statistics
+          - **Commits:** ${{ steps.commits.outputs.commit_count }}
+          - **Pull Requests:** [Count from PRs list]
+          - **Files Changed:** [From file stats]
+          - **Contributors:** [Unique authors from commits]
+
+          ## 🙏 Contributors
+
+          Thanks to everyone who contributed to this release:
+          [List unique contributors with @ mentions]
+
+          ## 📚 Documentation
+
+          [If documentation changes, list them]
+
+          ## ⚠️ Breaking Changes
+
+          [List any breaking changes - this is beta software, so breaking changes are expected]
+
+          ## 🔗 Links
+
+          - **Full Changelog:** https://github.com/${{ github.repository }}/compare/${{ steps.prev_tag.outputs.previous_tag }}...${{ steps.get_tag.outputs.tag }}
+          - **Installation Guide:** [Link to docs]
+
+          ---
+
+          **Note:** This is a beta release. Features may change rapidly. Report issues at: https://github.com/${{ github.repository }}/issues
+
+          ---
+
+          Write in a professional yet enthusiastic tone. Focus on user-facing changes. Be specific but concise.
+
+          IMPORTANT: Output ONLY the release notes in markdown format. Do not include any preamble, explanation, or commentary - just the release notes themselves starting with the header.
+          EOF
+
+      - name: Generate release notes with Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@beta
+        timeout-minutes: 10
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          mode: agent
+
+          direct_prompt: |
+            Read the file release-context.md which contains all the information about this release.
+
+            Generate comprehensive release notes following the structure and instructions in that file.
+
+            Output ONLY the release notes in markdown format - no preamble, no commentary, just the release notes.
+
+            Write to a file called release_notes.md with the generated release notes.
+
+      - name: Verify release notes were generated
+        run: |
+          if [ ! -f release_notes.md ]; then
+            echo "❌ release_notes.md was not created"
+            echo "Checking for any .md files in current directory:"
+            ls -la *.md || echo "No .md files found"
+            exit 1
+          fi
+
+          if [ ! -s release_notes.md ]; then
+            echo "❌ release_notes.md is empty"
+            exit 1
+          fi
+
+          echo "✅ Release notes generated successfully"
+          echo ""
+          echo "Preview (first 50 lines):"
+          head -50 release_notes.md
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.get_tag.outputs.tag }}"
+
+          # Check if release already exists
+          if gh release view "$TAG" &>/dev/null; then
+            echo "Release $TAG exists, updating notes..."
+            gh release edit "$TAG" --notes-file release_notes.md
+          else
+            echo "Creating new release $TAG..."
+            gh release create "$TAG" \
+              --title "Release $TAG" \
+              --notes-file release_notes.md \
+              --draft=false \
+              --latest
+          fi
+
+      - name: Upload release notes as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes-${{ steps.get_tag.outputs.tag }}
+          path: release_notes.md
+          retention-days: 90
+
+      - name: Comment on related PRs
+        if: steps.prev_tag.outputs.is_first_release == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.get_tag.outputs.tag }}"
+
+          # Get PR numbers from commits in this release
+          CURRENT_TAG="${{ steps.get_tag.outputs.tag }}"
+          PREVIOUS_TAG="${{ steps.prev_tag.outputs.previous_tag }}"
+
+          # Extract PR numbers from commit messages
+          PR_NUMBERS=$(git log ${PREVIOUS_TAG}..${CURRENT_TAG} --oneline |
+            grep -oP '#\K\d+' || true)
+
+          if [ -n "$PR_NUMBERS" ]; then
+            for PR in $PR_NUMBERS; do
+              echo "Adding release comment to PR #$PR"
+              gh pr comment "$PR" \
+                --body "🎉 This pull request has been included in release [$TAG](https://github.com/${{ github.repository }}/releases/tag/$TAG)!" \
+                || echo "Could not comment on PR #$PR (might be closed)"
+            done
+          fi
+
+      - name: Create summary
+        if: always()
+        run: |
+          echo "# 🎉 Release Notes Generation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Release Tag:** ${{ steps.get_tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Previous Tag:** ${{ steps.prev_tag.outputs.previous_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commits:** ${{ steps.commits.outputs.commit_count }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Generated Release Notes" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f release_notes.md ]; then
+            cat release_notes.md >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Release notes file not found" >> $GITHUB_STEP_SUMMARY
+          fi

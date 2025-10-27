@@ -3,7 +3,7 @@
 -- =====================================================
 -- This script combines all migrations into a single file
 -- for easy one-time database initialization
--- 
+--
 -- Run this script in your Supabase SQL Editor to set up
 -- the complete Archon database schema and initial data
 -- =====================================================
@@ -15,6 +15,7 @@
 -- Enable required PostgreSQL extensions
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- =====================================================
 -- SECTION 2: CREDENTIALS AND SETTINGS
@@ -47,9 +48,9 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
-CREATE TRIGGER update_archon_settings_updated_at 
-    BEFORE UPDATE ON archon_settings 
-    FOR EACH ROW 
+CREATE TRIGGER update_archon_settings_updated_at
+    BEFORE UPDATE ON archon_settings
+    FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
 -- Create RLS (Row Level Security) policies for settings
@@ -93,13 +94,16 @@ INSERT INTO archon_settings (key, encrypted_value, is_encrypted, category, descr
 -- LLM Provider configuration settings
 INSERT INTO archon_settings (key, value, is_encrypted, category, description) VALUES
 ('LLM_PROVIDER', 'openai', false, 'rag_strategy', 'LLM provider to use: openai, ollama, or google'),
-('LLM_BASE_URL', NULL, false, 'rag_strategy', 'Custom base URL for LLM provider (mainly for Ollama, e.g., http://localhost:11434/v1)'),
+('LLM_BASE_URL', NULL, false, 'rag_strategy', 'Custom base URL for LLM provider (mainly for Ollama, e.g., http://host.docker.internal:11434/v1)'),
 ('EMBEDDING_MODEL', 'text-embedding-3-small', false, 'rag_strategy', 'Embedding model for vector search and similarity matching (required for all embedding operations)')
 ON CONFLICT (key) DO NOTHING;
 
 -- Add provider API key placeholders
 INSERT INTO archon_settings (key, encrypted_value, is_encrypted, category, description) VALUES
-('GOOGLE_API_KEY', NULL, true, 'api_keys', 'Google API Key for Gemini models. Get from: https://aistudio.google.com/apikey')
+('GOOGLE_API_KEY', NULL, true, 'api_keys', 'Google API key for Gemini models. Get from: https://aistudio.google.com/apikey'),
+('OPENROUTER_API_KEY', NULL, true, 'api_keys', 'OpenRouter API key for hosted community models. Get from: https://openrouter.ai/keys'),
+('ANTHROPIC_API_KEY', NULL, true, 'api_keys', 'Anthropic API key for Claude models. Get from: https://console.anthropic.com/account/keys'),
+('GROK_API_KEY', NULL, true, 'api_keys', 'Grok API key for xAI models. Get from: https://console.x.ai/')
 ON CONFLICT (key) DO NOTHING;
 
 -- Code Extraction Settings Migration
@@ -170,6 +174,8 @@ COMMENT ON TABLE archon_settings IS 'Stores application configuration including 
 -- Create the sources table
 CREATE TABLE IF NOT EXISTS archon_sources (
     source_id TEXT PRIMARY KEY,
+    source_url TEXT,
+    source_display_name TEXT,
     summary TEXT,
     total_word_count INTEGER DEFAULT 0,
     title TEXT,
@@ -180,10 +186,15 @@ CREATE TABLE IF NOT EXISTS archon_sources (
 
 -- Create indexes for better query performance
 CREATE INDEX IF NOT EXISTS idx_archon_sources_title ON archon_sources(title);
+CREATE INDEX IF NOT EXISTS idx_archon_sources_url ON archon_sources(source_url);
+CREATE INDEX IF NOT EXISTS idx_archon_sources_display_name ON archon_sources(source_display_name);
 CREATE INDEX IF NOT EXISTS idx_archon_sources_metadata ON archon_sources USING GIN(metadata);
 CREATE INDEX IF NOT EXISTS idx_archon_sources_knowledge_type ON archon_sources((metadata->>'knowledge_type'));
 
--- Add comments to document the new columns
+-- Add comments to document the columns
+COMMENT ON COLUMN archon_sources.source_id IS 'Unique hash identifier for the source (16-char SHA256 hash of URL)';
+COMMENT ON COLUMN archon_sources.source_url IS 'The original URL that was crawled to create this source';
+COMMENT ON COLUMN archon_sources.source_display_name IS 'Human-readable name for UI display (e.g., "GitHub - microsoft/typescript")';
 COMMENT ON COLUMN archon_sources.title IS 'Descriptive title for the source (e.g., "Pydantic AI API Reference")';
 COMMENT ON COLUMN archon_sources.metadata IS 'JSONB field storing knowledge_type, tags, and other metadata';
 
@@ -195,20 +206,45 @@ CREATE TABLE IF NOT EXISTS archon_crawled_pages (
     content TEXT NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     source_id TEXT NOT NULL,
-    embedding VECTOR(1536),  -- OpenAI embeddings are 1536 dimensions
+    -- Multi-dimensional embedding support for different models
+    embedding_384 VECTOR(384),   -- Small embedding models
+    embedding_768 VECTOR(768),   -- Google/Ollama models  
+    embedding_1024 VECTOR(1024), -- Ollama large models
+    embedding_1536 VECTOR(1536), -- OpenAI standard models
+    embedding_3072 VECTOR(3072), -- OpenAI large models
+    -- Model tracking columns
+    llm_chat_model TEXT,                -- LLM model used for processing (e.g., 'gpt-4', 'llama3:8b')
+    embedding_model TEXT,                -- Embedding model used (e.g., 'text-embedding-3-large', 'all-MiniLM-L6-v2')
+    embedding_dimension INTEGER,         -- Dimension of the embedding used (384, 768, 1024, 1536, 3072)
+    -- Hybrid search support
+    content_search_vector tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
-    
+
     -- Add a unique constraint to prevent duplicate chunks for the same URL
     UNIQUE(url, chunk_number),
-    
-    -- Add foreign key constraint to sources table
-    FOREIGN KEY (source_id) REFERENCES archon_sources(source_id)
+
+    -- Add foreign key constraint to sources table with CASCADE DELETE
+    FOREIGN KEY (source_id) REFERENCES archon_sources(source_id) ON DELETE CASCADE
 );
 
--- Create indexes for better performance
-CREATE INDEX ON archon_crawled_pages USING ivfflat (embedding vector_cosine_ops);
+-- Multi-dimensional indexes
+CREATE INDEX IF NOT EXISTS idx_archon_crawled_pages_embedding_384 ON archon_crawled_pages USING ivfflat (embedding_384 vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS idx_archon_crawled_pages_embedding_768 ON archon_crawled_pages USING ivfflat (embedding_768 vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS idx_archon_crawled_pages_embedding_1024 ON archon_crawled_pages USING ivfflat (embedding_1024 vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS idx_archon_crawled_pages_embedding_1536 ON archon_crawled_pages USING ivfflat (embedding_1536 vector_cosine_ops) WITH (lists = 100);
+-- Note: 3072-dimensional embeddings cannot have vector indexes due to PostgreSQL vector extension 2000 dimension limit
+-- The embedding_3072 column exists but cannot be indexed with current pgvector version
+
+-- Other indexes for archon_crawled_pages
 CREATE INDEX idx_archon_crawled_pages_metadata ON archon_crawled_pages USING GIN (metadata);
 CREATE INDEX idx_archon_crawled_pages_source_id ON archon_crawled_pages (source_id);
+-- Hybrid search indexes
+CREATE INDEX idx_archon_crawled_pages_content_search ON archon_crawled_pages USING GIN (content_search_vector);
+CREATE INDEX idx_archon_crawled_pages_content_trgm ON archon_crawled_pages USING GIN (content gin_trgm_ops);
+-- Multi-dimensional embedding indexes
+CREATE INDEX idx_archon_crawled_pages_embedding_model ON archon_crawled_pages (embedding_model);
+CREATE INDEX idx_archon_crawled_pages_embedding_dimension ON archon_crawled_pages (embedding_dimension);
+CREATE INDEX idx_archon_crawled_pages_llm_chat_model ON archon_crawled_pages (llm_chat_model);
 
 -- Create the code_examples table
 CREATE TABLE IF NOT EXISTS archon_code_examples (
@@ -219,26 +255,192 @@ CREATE TABLE IF NOT EXISTS archon_code_examples (
     summary TEXT NOT NULL,  -- Summary of the code example
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     source_id TEXT NOT NULL,
-    embedding VECTOR(1536),  -- OpenAI embeddings are 1536 dimensions
+    -- Multi-dimensional embedding support for different models
+    embedding_384 VECTOR(384),   -- Small embedding models
+    embedding_768 VECTOR(768),   -- Google/Ollama models  
+    embedding_1024 VECTOR(1024), -- Ollama large models
+    embedding_1536 VECTOR(1536), -- OpenAI standard models
+    embedding_3072 VECTOR(3072), -- OpenAI large models
+    -- Model tracking columns
+    llm_chat_model TEXT,                -- LLM model used for processing (e.g., 'gpt-4', 'llama3:8b')
+    embedding_model TEXT,                -- Embedding model used (e.g., 'text-embedding-3-large', 'all-MiniLM-L6-v2')
+    embedding_dimension INTEGER,         -- Dimension of the embedding used (384, 768, 1024, 1536, 3072)
+    -- Hybrid search support
+    content_search_vector tsvector GENERATED ALWAYS AS (to_tsvector('english', content || ' ' || COALESCE(summary, ''))) STORED,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
-    
+
     -- Add a unique constraint to prevent duplicate chunks for the same URL
     UNIQUE(url, chunk_number),
-    
-    -- Add foreign key constraint to sources table
-    FOREIGN KEY (source_id) REFERENCES archon_sources(source_id)
+
+    -- Add foreign key constraint to sources table with CASCADE DELETE
+    FOREIGN KEY (source_id) REFERENCES archon_sources(source_id) ON DELETE CASCADE
 );
 
--- Create indexes for better performance
-CREATE INDEX ON archon_code_examples USING ivfflat (embedding vector_cosine_ops);
+-- Create archon_page_metadata table
+-- This table stores complete documentation pages alongside chunks for improved agent context retrieval
+CREATE TABLE IF NOT EXISTS archon_page_metadata (
+    -- Primary identification
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_id TEXT NOT NULL,
+    url TEXT NOT NULL,
+
+    -- Content
+    full_content TEXT NOT NULL,
+
+    -- Section metadata (for llms-full.txt H1 sections)
+    section_title TEXT,
+    section_order INT DEFAULT 0,
+
+    -- Statistics
+    word_count INT NOT NULL,
+    char_count INT NOT NULL,
+    chunk_count INT NOT NULL DEFAULT 0,
+
+    -- Timestamps
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+
+    -- Flexible metadata storage
+    metadata JSONB DEFAULT '{}'::jsonb,
+
+    -- Constraints
+    CONSTRAINT archon_page_metadata_url_unique UNIQUE(url),
+    CONSTRAINT archon_page_metadata_source_fk FOREIGN KEY (source_id)
+        REFERENCES archon_sources(source_id) ON DELETE CASCADE
+);
+
+-- Add page_id foreign key to archon_crawled_pages
+-- This links chunks back to their parent page
+-- NULLABLE because existing chunks won't have a page_id yet
+ALTER TABLE archon_crawled_pages
+ADD COLUMN IF NOT EXISTS page_id UUID REFERENCES archon_page_metadata(id) ON DELETE SET NULL;
+
+-- Create indexes for query performance
+CREATE INDEX IF NOT EXISTS idx_archon_page_metadata_source_id ON archon_page_metadata(source_id);
+CREATE INDEX IF NOT EXISTS idx_archon_page_metadata_url ON archon_page_metadata(url);
+CREATE INDEX IF NOT EXISTS idx_archon_page_metadata_section ON archon_page_metadata(source_id, section_title, section_order);
+CREATE INDEX IF NOT EXISTS idx_archon_page_metadata_created_at ON archon_page_metadata(created_at);
+CREATE INDEX IF NOT EXISTS idx_archon_page_metadata_metadata ON archon_page_metadata USING GIN(metadata);
+CREATE INDEX IF NOT EXISTS idx_archon_crawled_pages_page_id ON archon_crawled_pages(page_id);
+
+-- Add comments to document the table structure
+COMMENT ON TABLE archon_page_metadata IS 'Stores complete documentation pages for agent retrieval';
+COMMENT ON COLUMN archon_page_metadata.source_id IS 'References the source this page belongs to';
+COMMENT ON COLUMN archon_page_metadata.url IS 'Unique URL of the page (synthetic for llms-full.txt sections with #anchor)';
+COMMENT ON COLUMN archon_page_metadata.full_content IS 'Complete markdown/text content of the page';
+COMMENT ON COLUMN archon_page_metadata.section_title IS 'H1 section title for llms-full.txt pages';
+COMMENT ON COLUMN archon_page_metadata.section_order IS 'Order of section in llms-full.txt file (0-based)';
+COMMENT ON COLUMN archon_page_metadata.word_count IS 'Number of words in full_content';
+COMMENT ON COLUMN archon_page_metadata.char_count IS 'Number of characters in full_content';
+COMMENT ON COLUMN archon_page_metadata.chunk_count IS 'Number of chunks created from this page';
+COMMENT ON COLUMN archon_page_metadata.metadata IS 'Flexible JSON metadata (page_type, knowledge_type, tags, etc)';
+COMMENT ON COLUMN archon_crawled_pages.page_id IS 'Foreign key linking chunk to parent page';
+
+-- Enable RLS on archon_page_metadata
+ALTER TABLE archon_page_metadata ENABLE ROW LEVEL SECURITY;
+
+-- Multi-dimensional indexes
+CREATE INDEX IF NOT EXISTS idx_archon_code_examples_embedding_384 ON archon_code_examples USING ivfflat (embedding_384 vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS idx_archon_code_examples_embedding_768 ON archon_code_examples USING ivfflat (embedding_768 vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS idx_archon_code_examples_embedding_1024 ON archon_code_examples USING ivfflat (embedding_1024 vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS idx_archon_code_examples_embedding_1536 ON archon_code_examples USING ivfflat (embedding_1536 vector_cosine_ops) WITH (lists = 100);
+-- Note: 3072-dimensional embeddings cannot have vector indexes due to PostgreSQL vector extension 2000 dimension limit
+-- The embedding_3072 column exists but cannot be indexed with current pgvector version
+
+-- Other indexes for archon_code_examples
 CREATE INDEX idx_archon_code_examples_metadata ON archon_code_examples USING GIN (metadata);
 CREATE INDEX idx_archon_code_examples_source_id ON archon_code_examples (source_id);
+-- Hybrid search indexes
+CREATE INDEX idx_archon_code_examples_content_search ON archon_code_examples USING GIN (content_search_vector);
+CREATE INDEX idx_archon_code_examples_content_trgm ON archon_code_examples USING GIN (content gin_trgm_ops);
+CREATE INDEX idx_archon_code_examples_summary_trgm ON archon_code_examples USING GIN (summary gin_trgm_ops);
+-- Multi-dimensional embedding indexes
+CREATE INDEX idx_archon_code_examples_embedding_model ON archon_code_examples (embedding_model);
+CREATE INDEX idx_archon_code_examples_embedding_dimension ON archon_code_examples (embedding_dimension);
+CREATE INDEX idx_archon_code_examples_llm_chat_model ON archon_code_examples (llm_chat_model);
+
+-- =====================================================
+-- SECTION 4.5: MULTI-DIMENSIONAL EMBEDDING HELPER FUNCTIONS
+-- =====================================================
+
+-- Function to detect embedding dimension from vector
+CREATE OR REPLACE FUNCTION detect_embedding_dimension(embedding_vector vector)
+RETURNS INTEGER AS $$
+BEGIN
+    RETURN vector_dims(embedding_vector);
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+-- Function to get the appropriate column name for a dimension
+CREATE OR REPLACE FUNCTION get_embedding_column_name(dimension INTEGER)
+RETURNS TEXT AS $$
+BEGIN
+    CASE dimension
+        WHEN 384 THEN RETURN 'embedding_384';
+        WHEN 768 THEN RETURN 'embedding_768';
+        WHEN 1024 THEN RETURN 'embedding_1024';
+        WHEN 1536 THEN RETURN 'embedding_1536';
+        WHEN 3072 THEN RETURN 'embedding_3072';
+        ELSE RAISE EXCEPTION 'Unsupported embedding dimension: %. Supported dimensions are: 384, 768, 1024, 1536, 3072', dimension;
+    END CASE;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
 
 -- =====================================================
 -- SECTION 5: SEARCH FUNCTIONS
 -- =====================================================
 
--- Create a function to search for documentation chunks
+-- Create multi-dimensional function to search for documentation chunks
+CREATE OR REPLACE FUNCTION match_archon_crawled_pages_multi (
+  query_embedding VECTOR,
+  embedding_dimension INTEGER,
+  match_count INT DEFAULT 10,
+  filter JSONB DEFAULT '{}'::jsonb,
+  source_filter TEXT DEFAULT NULL
+) RETURNS TABLE (
+  id BIGINT,
+  url VARCHAR,
+  chunk_number INTEGER,
+  content TEXT,
+  metadata JSONB,
+  source_id TEXT,
+  similarity FLOAT
+)
+LANGUAGE plpgsql
+AS $$
+#variable_conflict use_column
+DECLARE
+  sql_query TEXT;
+  embedding_column TEXT;
+BEGIN
+  -- Determine which embedding column to use based on dimension
+  CASE embedding_dimension
+    WHEN 384 THEN embedding_column := 'embedding_384';
+    WHEN 768 THEN embedding_column := 'embedding_768';
+    WHEN 1024 THEN embedding_column := 'embedding_1024';
+    WHEN 1536 THEN embedding_column := 'embedding_1536';
+    WHEN 3072 THEN embedding_column := 'embedding_3072';
+    ELSE RAISE EXCEPTION 'Unsupported embedding dimension: %', embedding_dimension;
+  END CASE;
+
+  -- Build dynamic query
+  sql_query := format('
+    SELECT id, url, chunk_number, content, metadata, source_id,
+           1 - (%I <=> $1) AS similarity
+    FROM archon_crawled_pages
+    WHERE (%I IS NOT NULL)
+      AND metadata @> $3
+      AND ($4 IS NULL OR source_id = $4)
+    ORDER BY %I <=> $1
+    LIMIT $2',
+    embedding_column, embedding_column, embedding_column);
+
+  -- Execute dynamic query
+  RETURN QUERY EXECUTE sql_query USING query_embedding, match_count, filter, source_filter;
+END;
+$$;
+
+-- Legacy compatibility function (defaults to 1536D)
 CREATE OR REPLACE FUNCTION match_archon_crawled_pages (
   query_embedding VECTOR(1536),
   match_count INT DEFAULT 10,
@@ -255,26 +457,63 @@ CREATE OR REPLACE FUNCTION match_archon_crawled_pages (
 )
 LANGUAGE plpgsql
 AS $$
-#variable_conflict use_column
 BEGIN
-  RETURN QUERY
-  SELECT
-    id,
-    url,
-    chunk_number,
-    content,
-    metadata,
-    source_id,
-    1 - (archon_crawled_pages.embedding <=> query_embedding) AS similarity
-  FROM archon_crawled_pages
-  WHERE metadata @> filter
-    AND (source_filter IS NULL OR source_id = source_filter)
-  ORDER BY archon_crawled_pages.embedding <=> query_embedding
-  LIMIT match_count;
+  RETURN QUERY SELECT * FROM match_archon_crawled_pages_multi(query_embedding, 1536, match_count, filter, source_filter);
 END;
 $$;
 
--- Create a function to search for code examples
+-- Create multi-dimensional function to search for code examples
+CREATE OR REPLACE FUNCTION match_archon_code_examples_multi (
+  query_embedding VECTOR,
+  embedding_dimension INTEGER,
+  match_count INT DEFAULT 10,
+  filter JSONB DEFAULT '{}'::jsonb,
+  source_filter TEXT DEFAULT NULL
+) RETURNS TABLE (
+  id BIGINT,
+  url VARCHAR,
+  chunk_number INTEGER,
+  content TEXT,
+  summary TEXT,
+  metadata JSONB,
+  source_id TEXT,
+  similarity FLOAT
+)
+LANGUAGE plpgsql
+AS $$
+#variable_conflict use_column
+DECLARE
+  sql_query TEXT;
+  embedding_column TEXT;
+BEGIN
+  -- Determine which embedding column to use based on dimension
+  CASE embedding_dimension
+    WHEN 384 THEN embedding_column := 'embedding_384';
+    WHEN 768 THEN embedding_column := 'embedding_768';
+    WHEN 1024 THEN embedding_column := 'embedding_1024';
+    WHEN 1536 THEN embedding_column := 'embedding_1536';
+    WHEN 3072 THEN embedding_column := 'embedding_3072';
+    ELSE RAISE EXCEPTION 'Unsupported embedding dimension: %', embedding_dimension;
+  END CASE;
+
+  -- Build dynamic query
+  sql_query := format('
+    SELECT id, url, chunk_number, content, summary, metadata, source_id,
+           1 - (%I <=> $1) AS similarity
+    FROM archon_code_examples
+    WHERE (%I IS NOT NULL)
+      AND metadata @> $3
+      AND ($4 IS NULL OR source_id = $4)
+    ORDER BY %I <=> $1
+    LIMIT $2',
+    embedding_column, embedding_column, embedding_column);
+
+  -- Execute dynamic query
+  RETURN QUERY EXECUTE sql_query USING query_embedding, match_count, filter, source_filter;
+END;
+$$;
+
+-- Legacy compatibility function (defaults to 1536D)
 CREATE OR REPLACE FUNCTION match_archon_code_examples (
   query_embedding VECTOR(1536),
   match_count INT DEFAULT 10,
@@ -292,25 +531,291 @@ CREATE OR REPLACE FUNCTION match_archon_code_examples (
 )
 LANGUAGE plpgsql
 AS $$
-#variable_conflict use_column
 BEGIN
-  RETURN QUERY
-  SELECT
-    id,
-    url,
-    chunk_number,
-    content,
-    summary,
-    metadata,
-    source_id,
-    1 - (archon_code_examples.embedding <=> query_embedding) AS similarity
-  FROM archon_code_examples
-  WHERE metadata @> filter
-    AND (source_filter IS NULL OR source_id = source_filter)
-  ORDER BY archon_code_examples.embedding <=> query_embedding
-  LIMIT match_count;
+  RETURN QUERY SELECT * FROM match_archon_code_examples_multi(query_embedding, 1536, match_count, filter, source_filter);
 END;
 $$;
+
+-- =====================================================
+-- SECTION 5B: HYBRID SEARCH FUNCTIONS WITH TS_VECTOR
+-- =====================================================
+
+-- Multi-dimensional hybrid search function for archon_crawled_pages
+CREATE OR REPLACE FUNCTION hybrid_search_archon_crawled_pages_multi(
+    query_embedding VECTOR,
+    embedding_dimension INTEGER,
+    query_text TEXT,
+    match_count INT DEFAULT 10,
+    filter JSONB DEFAULT '{}'::jsonb,
+    source_filter TEXT DEFAULT NULL
+)
+RETURNS TABLE (
+    id BIGINT,
+    url VARCHAR,
+    chunk_number INTEGER,
+    content TEXT,
+    metadata JSONB,
+    source_id TEXT,
+    similarity FLOAT,
+    match_type TEXT
+)
+LANGUAGE plpgsql
+AS $$
+#variable_conflict use_column
+DECLARE
+    max_vector_results INT;
+    max_text_results INT;
+    sql_query TEXT;
+    embedding_column TEXT;
+BEGIN
+    -- Determine which embedding column to use based on dimension
+    CASE embedding_dimension
+        WHEN 384 THEN embedding_column := 'embedding_384';
+        WHEN 768 THEN embedding_column := 'embedding_768';
+        WHEN 1024 THEN embedding_column := 'embedding_1024';
+        WHEN 1536 THEN embedding_column := 'embedding_1536';
+        WHEN 3072 THEN embedding_column := 'embedding_3072';
+        ELSE RAISE EXCEPTION 'Unsupported embedding dimension: %', embedding_dimension;
+    END CASE;
+
+    -- Calculate how many results to fetch from each search type
+    max_vector_results := match_count;
+    max_text_results := match_count;
+    
+    -- Build dynamic query with proper embedding column
+    sql_query := format('
+    WITH vector_results AS (
+        -- Vector similarity search
+        SELECT 
+            cp.id,
+            cp.url,
+            cp.chunk_number,
+            cp.content,
+            cp.metadata,
+            cp.source_id,
+            1 - (cp.%I <=> $1) AS vector_sim
+        FROM archon_crawled_pages cp
+        WHERE cp.metadata @> $4
+            AND ($5 IS NULL OR cp.source_id = $5)
+            AND cp.%I IS NOT NULL
+        ORDER BY cp.%I <=> $1
+        LIMIT $2
+    ),
+    text_results AS (
+        -- Full-text search with ranking
+        SELECT 
+            cp.id,
+            cp.url,
+            cp.chunk_number,
+            cp.content,
+            cp.metadata,
+            cp.source_id,
+            ts_rank_cd(cp.content_search_vector, plainto_tsquery(''english'', $6)) AS text_sim
+        FROM archon_crawled_pages cp
+        WHERE cp.metadata @> $4
+            AND ($5 IS NULL OR cp.source_id = $5)
+            AND cp.content_search_vector @@ plainto_tsquery(''english'', $6)
+        ORDER BY text_sim DESC
+        LIMIT $3
+    ),
+    combined_results AS (
+        -- Combine results from both searches
+        SELECT 
+            COALESCE(v.id, t.id) AS id,
+            COALESCE(v.url, t.url) AS url,
+            COALESCE(v.chunk_number, t.chunk_number) AS chunk_number,
+            COALESCE(v.content, t.content) AS content,
+            COALESCE(v.metadata, t.metadata) AS metadata,
+            COALESCE(v.source_id, t.source_id) AS source_id,
+            -- Use vector similarity if available, otherwise text similarity
+            COALESCE(v.vector_sim, t.text_sim, 0)::float8 AS similarity,
+            -- Determine match type
+            CASE 
+                WHEN v.id IS NOT NULL AND t.id IS NOT NULL THEN ''hybrid''
+                WHEN v.id IS NOT NULL THEN ''vector''
+                ELSE ''keyword''
+            END AS match_type
+        FROM vector_results v
+        FULL OUTER JOIN text_results t ON v.id = t.id
+    )
+    SELECT * FROM combined_results
+    ORDER BY similarity DESC
+    LIMIT $2', 
+    embedding_column, embedding_column, embedding_column);
+
+    -- Execute dynamic query
+    RETURN QUERY EXECUTE sql_query USING query_embedding, max_vector_results, max_text_results, filter, source_filter, query_text;
+END;
+$$;
+
+-- Legacy compatibility function (defaults to 1536D)
+CREATE OR REPLACE FUNCTION hybrid_search_archon_crawled_pages(
+    query_embedding vector(1536),
+    query_text TEXT,
+    match_count INT DEFAULT 10,
+    filter JSONB DEFAULT '{}'::jsonb,
+    source_filter TEXT DEFAULT NULL
+)
+RETURNS TABLE (
+    id BIGINT,
+    url VARCHAR,
+    chunk_number INTEGER,
+    content TEXT,
+    metadata JSONB,
+    source_id TEXT,
+    similarity FLOAT,
+    match_type TEXT
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY SELECT * FROM hybrid_search_archon_crawled_pages_multi(query_embedding, 1536, query_text, match_count, filter, source_filter);
+END;
+$$;
+
+-- Multi-dimensional hybrid search function for archon_code_examples
+CREATE OR REPLACE FUNCTION hybrid_search_archon_code_examples_multi(
+    query_embedding VECTOR,
+    embedding_dimension INTEGER,
+    query_text TEXT,
+    match_count INT DEFAULT 10,
+    filter JSONB DEFAULT '{}'::jsonb,
+    source_filter TEXT DEFAULT NULL
+)
+RETURNS TABLE (
+    id BIGINT,
+    url VARCHAR,
+    chunk_number INTEGER,
+    content TEXT,
+    summary TEXT,
+    metadata JSONB,
+    source_id TEXT,
+    similarity FLOAT,
+    match_type TEXT
+)
+LANGUAGE plpgsql
+AS $$
+#variable_conflict use_column
+DECLARE
+    max_vector_results INT;
+    max_text_results INT;
+    sql_query TEXT;
+    embedding_column TEXT;
+BEGIN
+    -- Determine which embedding column to use based on dimension
+    CASE embedding_dimension
+        WHEN 384 THEN embedding_column := 'embedding_384';
+        WHEN 768 THEN embedding_column := 'embedding_768';
+        WHEN 1024 THEN embedding_column := 'embedding_1024';
+        WHEN 1536 THEN embedding_column := 'embedding_1536';
+        WHEN 3072 THEN embedding_column := 'embedding_3072';
+        ELSE RAISE EXCEPTION 'Unsupported embedding dimension: %', embedding_dimension;
+    END CASE;
+
+    -- Calculate how many results to fetch from each search type
+    max_vector_results := match_count;
+    max_text_results := match_count;
+    
+    -- Build dynamic query with proper embedding column
+    sql_query := format('
+    WITH vector_results AS (
+        -- Vector similarity search
+        SELECT 
+            ce.id,
+            ce.url,
+            ce.chunk_number,
+            ce.content,
+            ce.summary,
+            ce.metadata,
+            ce.source_id,
+            1 - (ce.%I <=> $1) AS vector_sim
+        FROM archon_code_examples ce
+        WHERE ce.metadata @> $4
+            AND ($5 IS NULL OR ce.source_id = $5)
+            AND ce.%I IS NOT NULL
+        ORDER BY ce.%I <=> $1
+        LIMIT $2
+    ),
+    text_results AS (
+        -- Full-text search with ranking (searches both content and summary)
+        SELECT 
+            ce.id,
+            ce.url,
+            ce.chunk_number,
+            ce.content,
+            ce.summary,
+            ce.metadata,
+            ce.source_id,
+            ts_rank_cd(ce.content_search_vector, plainto_tsquery(''english'', $6)) AS text_sim
+        FROM archon_code_examples ce
+        WHERE ce.metadata @> $4
+            AND ($5 IS NULL OR ce.source_id = $5)
+            AND ce.content_search_vector @@ plainto_tsquery(''english'', $6)
+        ORDER BY text_sim DESC
+        LIMIT $3
+    ),
+    combined_results AS (
+        -- Combine results from both searches
+        SELECT 
+            COALESCE(v.id, t.id) AS id,
+            COALESCE(v.url, t.url) AS url,
+            COALESCE(v.chunk_number, t.chunk_number) AS chunk_number,
+            COALESCE(v.content, t.content) AS content,
+            COALESCE(v.summary, t.summary) AS summary,
+            COALESCE(v.metadata, t.metadata) AS metadata,
+            COALESCE(v.source_id, t.source_id) AS source_id,
+            -- Use vector similarity if available, otherwise text similarity
+            COALESCE(v.vector_sim, t.text_sim, 0)::float8 AS similarity,
+            -- Determine match type
+            CASE 
+                WHEN v.id IS NOT NULL AND t.id IS NOT NULL THEN ''hybrid''
+                WHEN v.id IS NOT NULL THEN ''vector''
+                ELSE ''keyword''
+            END AS match_type
+        FROM vector_results v
+        FULL OUTER JOIN text_results t ON v.id = t.id
+    )
+    SELECT * FROM combined_results
+    ORDER BY similarity DESC
+    LIMIT $2', 
+    embedding_column, embedding_column, embedding_column);
+
+    -- Execute dynamic query
+    RETURN QUERY EXECUTE sql_query USING query_embedding, max_vector_results, max_text_results, filter, source_filter, query_text;
+END;
+$$;
+
+-- Legacy compatibility function (defaults to 1536D)
+CREATE OR REPLACE FUNCTION hybrid_search_archon_code_examples(
+    query_embedding vector(1536),
+    query_text TEXT,
+    match_count INT DEFAULT 10,
+    filter JSONB DEFAULT '{}'::jsonb,
+    source_filter TEXT DEFAULT NULL
+)
+RETURNS TABLE (
+    id BIGINT,
+    url VARCHAR,
+    chunk_number INTEGER,
+    content TEXT,
+    summary TEXT,
+    metadata JSONB,
+    source_id TEXT,
+    similarity FLOAT,
+    match_type TEXT
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY SELECT * FROM hybrid_search_archon_code_examples_multi(query_embedding, 1536, query_text, match_count, filter, source_filter);
+END;
+$$;
+
+-- Add comments to document the new functionality
+COMMENT ON FUNCTION hybrid_search_archon_crawled_pages_multi IS 'Multi-dimensional hybrid search combining vector similarity and full-text search with configurable embedding dimensions';
+COMMENT ON FUNCTION hybrid_search_archon_crawled_pages IS 'Legacy hybrid search function for backward compatibility (uses 1536D embeddings)';
+COMMENT ON FUNCTION hybrid_search_archon_code_examples_multi IS 'Multi-dimensional hybrid search on code examples with configurable embedding dimensions';
+COMMENT ON FUNCTION hybrid_search_archon_code_examples IS 'Legacy hybrid search function for code examples (uses 1536D embeddings)';
 
 -- =====================================================
 -- SECTION 6: RLS POLICIES FOR KNOWLEDGE BASE
@@ -340,6 +845,12 @@ CREATE POLICY "Allow public read access to archon_code_examples"
   TO public
   USING (true);
 
+CREATE POLICY "Allow public read access to archon_page_metadata"
+  ON archon_page_metadata
+  FOR SELECT
+  TO public
+  USING (true);
+
 -- =====================================================
 -- SECTION 7: PROJECTS AND TASKS MODULE
 -- =====================================================
@@ -348,6 +859,13 @@ CREATE POLICY "Allow public read access to archon_code_examples"
 -- Create task_status enum if it doesn't exist
 DO $$ BEGIN
     CREATE TYPE task_status AS ENUM ('todo','doing','review','done');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+-- Create task_priority enum if it doesn't exist
+DO $$ BEGIN
+    CREATE TYPE task_priority AS ENUM ('low', 'medium', 'high', 'critical');
 EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
@@ -379,6 +897,7 @@ CREATE TABLE IF NOT EXISTS archon_tasks (
   status task_status DEFAULT 'todo',
   assignee TEXT DEFAULT 'User' CHECK (assignee IS NOT NULL AND assignee != ''),
   task_order INTEGER DEFAULT 0,
+  priority task_priority DEFAULT 'medium' NOT NULL,
   feature TEXT,
   sources JSONB DEFAULT '[]'::jsonb,
   code_examples JSONB DEFAULT '[]'::jsonb,
@@ -416,7 +935,7 @@ CREATE TABLE IF NOT EXISTS archon_document_versions (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   -- Ensure we have either project_id OR task_id, not both
   CONSTRAINT chk_project_or_task CHECK (
-    (project_id IS NOT NULL AND task_id IS NULL) OR 
+    (project_id IS NOT NULL AND task_id IS NULL) OR
     (project_id IS NULL AND task_id IS NOT NULL)
   ),
   -- Unique constraint to prevent duplicate version numbers per field
@@ -428,6 +947,7 @@ CREATE INDEX IF NOT EXISTS idx_archon_tasks_project_id ON archon_tasks(project_i
 CREATE INDEX IF NOT EXISTS idx_archon_tasks_status ON archon_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_archon_tasks_assignee ON archon_tasks(assignee);
 CREATE INDEX IF NOT EXISTS idx_archon_tasks_order ON archon_tasks(task_order);
+CREATE INDEX IF NOT EXISTS idx_archon_tasks_priority ON archon_tasks(priority);
 CREATE INDEX IF NOT EXISTS idx_archon_tasks_archived ON archon_tasks(archived);
 CREATE INDEX IF NOT EXISTS idx_archon_tasks_archived_at ON archon_tasks(archived_at);
 CREATE INDEX IF NOT EXISTS idx_archon_project_sources_project_id ON archon_project_sources(project_id);
@@ -439,57 +959,58 @@ CREATE INDEX IF NOT EXISTS idx_archon_document_versions_version_number ON archon
 CREATE INDEX IF NOT EXISTS idx_archon_document_versions_created_at ON archon_document_versions(created_at);
 
 -- Apply triggers to tables
-CREATE OR REPLACE TRIGGER update_archon_projects_updated_at 
-    BEFORE UPDATE ON archon_projects 
+CREATE OR REPLACE TRIGGER update_archon_projects_updated_at
+    BEFORE UPDATE ON archon_projects
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE OR REPLACE TRIGGER update_archon_tasks_updated_at 
-    BEFORE UPDATE ON archon_tasks 
+CREATE OR REPLACE TRIGGER update_archon_tasks_updated_at
+    BEFORE UPDATE ON archon_tasks
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Soft delete function for tasks
 CREATE OR REPLACE FUNCTION archive_task(
     task_id_param UUID,
     archived_by_param TEXT DEFAULT 'system'
-) 
+)
 RETURNS BOOLEAN AS $$
 DECLARE
     task_exists BOOLEAN;
 BEGIN
     -- Check if task exists and is not already archived
     SELECT EXISTS(
-        SELECT 1 FROM archon_tasks 
+        SELECT 1 FROM archon_tasks
         WHERE id = task_id_param AND archived = FALSE
     ) INTO task_exists;
-    
+
     IF NOT task_exists THEN
         RETURN FALSE;
     END IF;
-    
+
     -- Archive the task
-    UPDATE archon_tasks 
-    SET 
+    UPDATE archon_tasks
+    SET
         archived = TRUE,
         archived_at = NOW(),
         archived_by = archived_by_param,
         updated_at = NOW()
     WHERE id = task_id_param;
-    
+
     -- Also archive all subtasks
-    UPDATE archon_tasks 
-    SET 
+    UPDATE archon_tasks
+    SET
         archived = TRUE,
-        archived_at = NOW(), 
+        archived_at = NOW(),
         archived_by = archived_by_param,
         updated_at = NOW()
     WHERE parent_task_id = task_id_param AND archived = FALSE;
-    
+
     RETURN TRUE;
 END;
 $$ LANGUAGE plpgsql;
 
 -- Add comments to document the soft delete fields
 COMMENT ON COLUMN archon_tasks.assignee IS 'The agent or user assigned to this task. Can be any valid agent name or "User"';
+COMMENT ON COLUMN archon_tasks.priority IS 'Task priority level independent of visual ordering - used for semantic importance (low, medium, high, critical)';
 COMMENT ON COLUMN archon_tasks.archived IS 'Soft delete flag - TRUE if task is archived/deleted';
 COMMENT ON COLUMN archon_tasks.archived_at IS 'Timestamp when task was archived';
 COMMENT ON COLUMN archon_tasks.archived_by IS 'User/system that archived the task';
@@ -501,6 +1022,65 @@ COMMENT ON COLUMN archon_document_versions.content IS 'Full snapshot of field co
 COMMENT ON COLUMN archon_document_versions.change_type IS 'Type of change: create, update, delete, restore, backup';
 COMMENT ON COLUMN archon_document_versions.document_id IS 'For docs arrays, the specific document ID that was changed';
 COMMENT ON COLUMN archon_document_versions.task_id IS 'DEPRECATED: No longer used for new versions, kept for historical task version data';
+
+-- =====================================================
+-- SECTION 7: MIGRATION TRACKING
+-- =====================================================
+
+-- Create archon_migrations table for tracking applied database migrations
+CREATE TABLE IF NOT EXISTS archon_migrations (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  version VARCHAR(20) NOT NULL,
+  migration_name VARCHAR(255) NOT NULL,
+  applied_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  checksum VARCHAR(32),
+  UNIQUE(version, migration_name)
+);
+
+-- Add indexes for fast lookups
+CREATE INDEX IF NOT EXISTS idx_archon_migrations_version ON archon_migrations(version);
+CREATE INDEX IF NOT EXISTS idx_archon_migrations_applied_at ON archon_migrations(applied_at DESC);
+
+-- Add comments describing table purpose
+COMMENT ON TABLE archon_migrations IS 'Tracks database migrations that have been applied to maintain schema version consistency';
+COMMENT ON COLUMN archon_migrations.version IS 'Archon version that introduced this migration';
+COMMENT ON COLUMN archon_migrations.migration_name IS 'Filename of the migration SQL file';
+COMMENT ON COLUMN archon_migrations.applied_at IS 'Timestamp when migration was applied';
+COMMENT ON COLUMN archon_migrations.checksum IS 'Optional MD5 checksum of migration file content';
+
+-- Record all migrations as applied since this is a complete setup
+-- This ensures the migration system knows the database is fully up-to-date
+INSERT INTO archon_migrations (version, migration_name)
+VALUES
+  ('0.1.0', '001_add_source_url_display_name'),
+  ('0.1.0', '002_add_hybrid_search_tsvector'),
+  ('0.1.0', '003_ollama_add_columns'),
+  ('0.1.0', '004_ollama_migrate_data'),
+  ('0.1.0', '005_ollama_create_functions'),
+  ('0.1.0', '006_ollama_create_indexes_optional'),
+  ('0.1.0', '007_add_priority_column_to_tasks'),
+  ('0.1.0', '008_add_migration_tracking'),
+  ('0.1.0', '009_add_cascade_delete_constraints'),
+  ('0.1.0', '010_add_provider_placeholders'),
+  ('0.1.0', '011_add_page_metadata_table')
+ON CONFLICT (version, migration_name) DO NOTHING;
+
+-- Enable Row Level Security on migrations table
+ALTER TABLE archon_migrations ENABLE ROW LEVEL SECURITY;
+
+-- Drop existing policies if they exist (makes this idempotent)
+DROP POLICY IF EXISTS "Allow service role full access to archon_migrations" ON archon_migrations;
+DROP POLICY IF EXISTS "Allow authenticated users to read archon_migrations" ON archon_migrations;
+
+-- Create RLS policies for migrations table
+-- Service role has full access
+CREATE POLICY "Allow service role full access to archon_migrations" ON archon_migrations
+    FOR ALL USING (auth.role() = 'service_role');
+
+-- Authenticated users can only read migrations (they cannot modify migration history)
+CREATE POLICY "Allow authenticated users to read archon_migrations" ON archon_migrations
+    FOR SELECT TO authenticated
+    USING (true);
 
 -- =====================================================
 -- SECTION 8: PROMPTS TABLE
@@ -520,8 +1100,8 @@ CREATE TABLE IF NOT EXISTS archon_prompts (
 CREATE INDEX IF NOT EXISTS idx_archon_prompts_name ON archon_prompts(prompt_name);
 
 -- Add trigger to automatically update updated_at timestamp
-CREATE OR REPLACE TRIGGER update_archon_prompts_updated_at 
-    BEFORE UPDATE ON archon_prompts 
+CREATE OR REPLACE TRIGGER update_archon_prompts_updated_at
+    BEFORE UPDATE ON archon_prompts
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- =====================================================
@@ -787,7 +1367,7 @@ Remember: Create production-ready data models.', 'System prompt for creating dat
 -- SETUP COMPLETE
 -- =====================================================
 -- Your Archon database is now fully configured!
--- 
+--
 -- Next steps:
 -- 1. Add your OpenAI API key via the Settings UI
 -- 2. Enable Projects feature if needed

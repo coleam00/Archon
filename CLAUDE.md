@@ -2,23 +2,27 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Alpha Development Guidelines
+## Beta Development Guidelines
 
 **Local-only deployment** - each user runs their own instance.
 
 ### Core Principles
 
-- **No backwards compatibility** - remove deprecated code immediately
+- **No backwards compatibility; we follow a fix‑forward approach** — remove deprecated code immediately
 - **Detailed errors over graceful failures** - we want to identify and fix issues fast
-- **Break things to improve them** - alpha is for rapid iteration
+- **Break things to improve them** - beta is for rapid iteration
+- **Continuous improvement** - embrace change and learn from mistakes
+- **KISS** - keep it simple
+- **DRY** when appropriate
+- **YAGNI** — don't implement features that are not needed
 
 ### Error Handling
 
-**Core Principle**: In alpha, we need to intelligently decide when to fail hard and fast to quickly address issues, and when to allow processes to complete in critical services despite failures. Read below carefully and make intelligent decisions on a case-by-case basis.
+**Core Principle**: In beta, we need to intelligently decide when to fail hard and fast to quickly address issues, and when to allow processes to complete in critical services despite failures. Read below carefully and make intelligent decisions on a case-by-case basis.
 
 #### When to Fail Fast and Loud (Let it Crash!)
 
-These errors should stop execution and bubble up immediately:
+These errors should stop execution and bubble up immediately: (except for crawling flows)
 
 - **Service startup failures** - If credentials, database, or any service can't initialize, the system should crash with a clear error
 - **Missing configuration** - Missing environment variables or invalid settings should stop the system
@@ -40,51 +44,7 @@ These operations should continue but track and report failures clearly:
 
 #### Critical Nuance: Never Accept Corrupted Data
 
-When a process should continue despite failures, it must **skip the failed item entirely** rather than storing corrupted data:
-
-**❌ WRONG - Silent Corruption:**
-
-```python
-try:
-    embedding = create_embedding(text)
-except Exception as e:
-    embedding = [0.0] * 1536  # NEVER DO THIS - corrupts database
-    store_document(doc, embedding)
-```
-
-**✅ CORRECT - Skip Failed Items:**
-
-```python
-try:
-    embedding = create_embedding(text)
-    store_document(doc, embedding)  # Only store on success
-except Exception as e:
-    failed_items.append({'doc': doc, 'error': str(e)})
-    logger.error(f"Skipping document {doc.id}: {e}")
-    # Continue with next document, don't store anything
-```
-
-**✅ CORRECT - Batch Processing with Failure Tracking:**
-
-```python
-def process_batch(items):
-    results = {'succeeded': [], 'failed': []}
-
-    for item in items:
-        try:
-            result = process_item(item)
-            results['succeeded'].append(result)
-        except Exception as e:
-            results['failed'].append({
-                'item': item,
-                'error': str(e),
-                'traceback': traceback.format_exc()
-            })
-            logger.error(f"Failed to process {item.id}: {e}")
-
-    # Always return both successes and failures
-    return results
-```
+When a process should continue despite failures, it must **skip the failed item entirely** rather than storing corrupted data
 
 #### Error Message Guidelines
 
@@ -98,19 +58,11 @@ def process_batch(items):
 ### Code Quality
 
 - Remove dead code immediately rather than maintaining it - no backward compatibility or legacy functions
-- Prioritize functionality over production-ready patterns
+- Avoid backward compatibility mappings or legacy function wrappers
+- Fix forward
 - Focus on user experience and feature completeness
-- When updating code, don't reference what is changing (avoid keywords like LEGACY, CHANGED, REMOVED), instead focus on comments that document just the functionality of the code
-
-## Architecture Overview
-
-Archon V2 Alpha is a microservices-based knowledge management system with MCP (Model Context Protocol) integration:
-
-- **Frontend (port 3737)**: React + TypeScript + Vite + TailwindCSS
-- **Main Server (port 8181)**: FastAPI + Socket.IO for real-time updates
-- **MCP Server (port 8051)**: Lightweight HTTP-based MCP protocol server
-- **Agents Service (port 8052)**: PydanticAI agents for AI/ML operations
-- **Database**: Supabase (PostgreSQL + pgvector for embeddings)
+- When updating code, don't reference what is changing (avoid keywords like SIMPLIFIED, ENHANCED, LEGACY, CHANGED, REMOVED), instead focus on comments that document just the functionality of the code
+- When commenting on code in the codebase, only comment on the functionality and reasoning behind the code. Refrain from speaking to Archon being in "beta" or referencing anything else that comes from these global rules.
 
 ## Development Commands
 
@@ -119,112 +71,142 @@ Archon V2 Alpha is a microservices-based knowledge management system with MCP (M
 ```bash
 npm run dev              # Start development server on port 3737
 npm run build            # Build for production
-npm run lint             # Run ESLint
-npm run test             # Run Vitest tests
-npm run test:coverage    # Run tests with coverage report
+npm run lint             # Run ESLint on legacy code (excludes /features)
+npm run lint:files path/to/file.tsx  # Lint specific files
+
+# Biome for /src/features directory only
+npm run biome            # Check features directory
+npm run biome:fix        # Auto-fix issues
+npm run biome:format     # Format code (120 char lines)
+npm run biome:ai         # Machine-readable JSON output for AI
+npm run biome:ai-fix     # Auto-fix with JSON output
+
+# Testing
+npm run test             # Run all tests in watch mode
+npm run test:ui          # Run with Vitest UI interface
+npm run test:coverage:stream  # Run once with streaming output
+vitest run src/features/projects  # Test specific directory
+
+# TypeScript
+npx tsc --noEmit         # Check all TypeScript errors
+npx tsc --noEmit 2>&1 | grep "src/features"  # Check features only
 ```
 
 ### Backend (python/)
 
 ```bash
-# Using uv package manager
-uv sync                  # Install/update dependencies
-uv run pytest            # Run tests
-uv run python -m src.server.main  # Run server locally
+# Using uv package manager (preferred)
+uv sync --group all      # Install all dependencies
+uv run python -m src.server.main  # Run server locally on 8181
+uv run pytest            # Run all tests
+uv run pytest tests/test_api_essentials.py -v  # Run specific test
+uv run ruff check        # Run linter
+uv run ruff check --fix  # Auto-fix linting issues
+uv run mypy src/         # Type check
 
-# With Docker
-docker-compose up --build -d       # Start all services
-docker-compose logs -f             # View logs
-docker-compose restart              # Restart services
+# Docker operations
+docker compose up --build -d       # Start all services
+docker compose --profile backend up -d  # Backend only (for hybrid dev)
+docker compose logs -f archon-server   # View server logs
+docker compose logs -f archon-mcp      # View MCP server logs
+docker compose restart archon-server   # Restart after code changes
+docker compose down      # Stop all services
+docker compose down -v   # Stop and remove volumes
 ```
 
-### Testing
+### Quick Workflows
 
 ```bash
-# Frontend tests (from archon-ui-main/)
-npm run test:coverage:stream       # Run with streaming output
-npm run test:ui                    # Run with Vitest UI
+# Hybrid development (recommended) - backend in Docker, frontend local
+make dev                 # Or manually: docker compose --profile backend up -d && cd archon-ui-main && npm run dev
 
-# Backend tests (from python/)
-uv run pytest tests/test_api_essentials.py -v
-uv run pytest tests/test_service_integration.py -v
+# Full Docker mode
+make dev-docker          # Or: docker compose up --build -d
+
+# Run linters before committing
+make lint                # Runs both frontend and backend linters
+make lint-fe             # Frontend only (ESLint + Biome)
+make lint-be             # Backend only (Ruff + MyPy)
+
+# Testing
+make test                # Run all tests
+make test-fe             # Frontend tests only
+make test-be             # Backend tests only
 ```
 
-## Key API Endpoints
+## Architecture Overview
 
-### Knowledge Base
+@PRPs/ai_docs/ARCHITECTURE.md
 
-- `POST /api/knowledge/crawl` - Crawl a website
-- `POST /api/knowledge/upload` - Upload documents (PDF, DOCX, MD)
-- `GET /api/knowledge/items` - List knowledge items
-- `POST /api/knowledge/search` - RAG search
+#### TanStack Query Implementation
 
-### MCP Integration
+For architecture and file references:
+@PRPs/ai_docs/DATA_FETCHING_ARCHITECTURE.md
 
-- `GET /api/mcp/health` - MCP server status
-- `POST /api/mcp/tools/{tool_name}` - Execute MCP tool
-- `GET /api/mcp/tools` - List available tools
+For code patterns and examples:
+@PRPs/ai_docs/QUERY_PATTERNS.md
 
-### Projects & Tasks (when enabled)
+#### Service Layer Pattern
 
-- `GET /api/projects` - List projects
-- `POST /api/projects` - Create project
-- `GET /api/projects/{id}/tasks` - Get project tasks
-- `POST /api/projects/{id}/tasks` - Create task
+See implementation examples:
+- API routes: `python/src/server/api_routes/projects_api.py`
+- Service layer: `python/src/server/services/project_service.py`
+- Pattern: API Route → Service → Database
 
-## Socket.IO Events
+#### Error Handling Patterns
 
-Real-time updates via Socket.IO on port 8181:
+See implementation examples:
+- Custom exceptions: `python/src/server/exceptions.py`
+- Exception handlers: `python/src/server/main.py` (search for @app.exception_handler)
+- Service error handling: `python/src/server/services/` (various services)
 
-- `crawl_progress` - Website crawling progress
-- `project_creation_progress` - Project setup progress
-- `task_update` - Task status changes
-- `knowledge_update` - Knowledge base changes
+## ETag Implementation
 
-## Environment Variables
-
-Required in `.env`:
-
-```bash
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_KEY=your-service-key-here
-```
-
-Optional:
-
-```bash
-OPENAI_API_KEY=your-openai-key        # Can be set via UI
-LOGFIRE_TOKEN=your-logfire-token      # For observability
-LOG_LEVEL=INFO                         # DEBUG, INFO, WARNING, ERROR
-```
-
-## File Organization
-
-### Frontend Structure
-
-- `src/components/` - Reusable UI components
-- `src/pages/` - Main application pages
-- `src/services/` - API communication and business logic
-- `src/hooks/` - Custom React hooks
-- `src/contexts/` - React context providers
-
-### Backend Structure
-
-- `src/server/` - Main FastAPI application
-- `src/server/api_routes/` - API route handlers
-- `src/server/services/` - Business logic services
-- `src/mcp/` - MCP server implementation
-- `src/agents/` - PydanticAI agent implementations
+@PRPs/ai_docs/ETAG_IMPLEMENTATION.md
 
 ## Database Schema
 
 Key tables in Supabase:
 
 - `sources` - Crawled websites and uploaded documents
+  - Stores metadata, crawl status, and configuration
 - `documents` - Processed document chunks with embeddings
+  - Text chunks with vector embeddings for semantic search
 - `projects` - Project management (optional feature)
+  - Contains features array, documents, and metadata
 - `tasks` - Task tracking linked to projects
+  - Status: todo, doing, review, done
+  - Assignee: User, Archon, AI IDE Agent
 - `code_examples` - Extracted code snippets
+  - Language, summary, and relevance metadata
+
+## API Naming Conventions
+
+@PRPs/ai_docs/API_NAMING_CONVENTIONS.md
+
+Use database values directly (no FE mapping; type‑safe end‑to‑end from BE upward):
+
+## Environment Variables
+
+Required in `.env`:
+
+```bash
+SUPABASE_URL=https://your-project.supabase.co  # Or http://host.docker.internal:8000 for local
+SUPABASE_SERVICE_KEY=your-service-key-here      # Use legacy key format for cloud Supabase
+```
+
+Optional variables and full configuration:
+See `python/.env.example` for complete list
+
+### Repository Configuration
+
+Repository information (owner, name) is centralized in `python/src/server/config/version.py`:
+- `GITHUB_REPO_OWNER` - GitHub repository owner (default: "coleam00")
+- `GITHUB_REPO_NAME` - GitHub repository name (default: "Archon")
+
+This is the single source of truth for repository configuration. All services (version checking, bug reports, etc.) should import these constants rather than hardcoding repository URLs.
+
+Environment variable override: `GITHUB_REPO="owner/repo"` can be set to override defaults.
 
 ## Common Development Tasks
 
@@ -233,50 +215,102 @@ Key tables in Supabase:
 1. Create route handler in `python/src/server/api_routes/`
 2. Add service logic in `python/src/server/services/`
 3. Include router in `python/src/server/main.py`
-4. Update frontend service in `archon-ui-main/src/services/`
+4. Update frontend service in `archon-ui-main/src/features/[feature]/services/`
 
-### Add a new UI component
+### Add a new UI component in features directory
 
-1. Create component in `archon-ui-main/src/components/`
-2. Add to page in `archon-ui-main/src/pages/`
-3. Include any new API calls in services
-4. Add tests in `archon-ui-main/test/`
+**IMPORTANT**: Review UI design standards in `@PRPs/ai_docs/UI_STANDARDS.md` before creating UI components.
+
+1. Use Radix UI primitives from `src/features/ui/primitives/`
+2. Create component in relevant feature folder under `src/features/[feature]/components/`
+3. Define types in `src/features/[feature]/types/`
+4. Use TanStack Query hook from `src/features/[feature]/hooks/`
+5. Apply Tron-inspired glassmorphism styling with Tailwind
+6. Follow responsive design patterns (mobile-first with breakpoints)
+7. Ensure no dynamic Tailwind class construction (see UI_STANDARDS.md Section 2)
+
+### Add or modify MCP tools
+
+1. MCP tools are in `python/src/mcp_server/features/[feature]/[feature]_tools.py`
+2. Follow the pattern:
+   - `find_[resource]` - Handles list, search, and get single item operations
+   - `manage_[resource]` - Handles create, update, delete with an "action" parameter
+3. Register tools in the feature's `__init__.py` file
 
 ### Debug MCP connection issues
 
 1. Check MCP health: `curl http://localhost:8051/health`
-2. View MCP logs: `docker-compose logs archon-mcp`
+2. View MCP logs: `docker compose logs archon-mcp`
 3. Test tool execution via UI MCP page
 4. Verify Supabase connection and credentials
 
+### Fix TypeScript/Linting Issues
+
+```bash
+# TypeScript errors in features
+npx tsc --noEmit 2>&1 | grep "src/features"
+
+# Biome auto-fix for features
+npm run biome:fix
+
+# ESLint for legacy code
+npm run lint:files src/components/SomeComponent.tsx
+```
+
 ## Code Quality Standards
 
-We enforce code quality through automated linting and type checking:
+### Frontend
+
+- **TypeScript**: Strict mode enabled, no implicit any
+- **Biome** for `/src/features/`: 120 char lines, double quotes, trailing commas
+- **ESLint** for legacy code: Standard React rules
+- **Testing**: Vitest with React Testing Library
+
+### Backend
 
 - **Python 3.12** with 120 character line length
-- **Ruff** for linting - checks for errors, warnings, unused imports, and code style
-- **Mypy** for type checking - ensures type safety across the codebase
-- **Auto-formatting** on save in IDEs to maintain consistent style
-- Run `uv run ruff check` and `uv run mypy src/` locally before committing
+- **Ruff** for linting - checks for errors, warnings, unused imports
+- **Mypy** for type checking - ensures type safety
+- **Pytest** for testing with async support
 
 ## MCP Tools Available
 
-When connected to Cursor/Windsurf:
+When connected to Claude/Cursor/Windsurf, the following tools are available:
 
-- `archon:perform_rag_query` - Search knowledge base
-- `archon:search_code_examples` - Find code snippets
-- `archon:manage_project` - Project operations
-- `archon:manage_task` - Task management
-- `archon:get_available_sources` - List knowledge sources
+### Knowledge Base Tools
+
+- `archon:rag_search_knowledge_base` - Search knowledge base for relevant content
+- `archon:rag_search_code_examples` - Find code snippets in the knowledge base
+- `archon:rag_get_available_sources` - List available knowledge sources
+- `archon:rag_list_pages_for_source` - List all pages for a given source (browse documentation structure)
+- `archon:rag_read_full_page` - Retrieve full page content by page_id or URL
+
+### Project Management
+
+- `archon:find_projects` - Find all projects, search, or get specific project (by project_id)
+- `archon:manage_project` - Manage projects with actions: "create", "update", "delete"
+
+### Task Management
+
+- `archon:find_tasks` - Find tasks with search, filters, or get specific task (by task_id)
+- `archon:manage_task` - Manage tasks with actions: "create", "update", "delete"
+
+### Document Management
+
+- `archon:find_documents` - Find documents, search, or get specific document (by document_id)
+- `archon:manage_document` - Manage documents with actions: "create", "update", "delete"
+
+### Version Control
+
+- `archon:find_versions` - Find version history or get specific version
+- `archon:manage_version` - Manage versions with actions: "create", "restore"
 
 ## Important Notes
 
 - Projects feature is optional - toggle in Settings UI
-- All services communicate via HTTP, not gRPC
-- Socket.IO handles all real-time updates
+- TanStack Query handles all data fetching; smart HTTP polling is used where appropriate (no WebSockets)
 - Frontend uses Vite proxy for API calls in development
 - Python backend uses `uv` for dependency management
 - Docker Compose handles service orchestration
-
-ADDITIONAL CONTEXT FOR SPECIFICALLY HOW TO USE ARCHON ITSELF:
-@CLAUDE-ARCHON.md
+- TanStack Query for all data fetching - NO PROP DRILLING
+- Vertical slice architecture in `/features` - features own their sub-features

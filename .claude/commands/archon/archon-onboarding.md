@@ -7,7 +7,7 @@ description: |
 argument-hint: none
 ---
 
-You are helping a new developer get up and running with the Archon V2 Alpha project! Your goal is to provide them with a personalized onboarding experience.
+You are helping a new developer get up and running with the Archon V2 Beta project! Your goal is to provide them with a personalized onboarding experience.
 
 ## What is Archon?
 
@@ -133,7 +133,7 @@ When analyzing the user's chosen area, look for:
 After analyzing their chosen area, provide the user with:
 
 1. Key development patterns they should know:
-   - Alpha mindset (break things to improve them)
+   - Beta mindset (break things to improve them)
    - Error philosophy (fail fast with detailed errors)
    - Service boundaries (no cross-service imports)
    - Real-time updates via Socket.IO
@@ -150,4 +150,4 @@ After analyzing their chosen area, provide the user with:
    - Testing requirements
    - Local vs Docker differences
 
-Remember to encourage the user to start small and iterate. This is alpha software designed for rapid experimentation.
+Remember to encourage the user to start small and iterate. This is beta software designed for rapid experimentation.

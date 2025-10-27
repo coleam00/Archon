@@ -172,21 +172,91 @@ class RAGService:
             use_enhancement=True,
         )
 
+    async def _group_chunks_by_pages(
+        self, chunk_results: list[dict[str, Any]], match_count: int
+    ) -> list[dict[str, Any]]:
+        """Group chunk results by page_id (if available) or URL and fetch page metadata."""
+        page_groups: dict[str, dict[str, Any]] = {}
+
+        for result in chunk_results:
+            metadata = result.get("metadata", {})
+            page_id = metadata.get("page_id")
+            url = metadata.get("url")
+
+            # Use page_id as key if available, otherwise URL
+            group_key = page_id if page_id else url
+            if not group_key:
+                continue
+
+            if group_key not in page_groups:
+                page_groups[group_key] = {
+                    "page_id": page_id,
+                    "url": url,
+                    "chunk_matches": 0,
+                    "total_similarity": 0.0,
+                    "best_chunk_content": result.get("content", ""),
+                    "source_id": metadata.get("source_id"),
+                }
+
+            page_groups[group_key]["chunk_matches"] += 1
+            page_groups[group_key]["total_similarity"] += result.get("similarity_score", 0.0)
+
+        page_results = []
+        for group_key, data in page_groups.items():
+            avg_similarity = data["total_similarity"] / data["chunk_matches"]
+            match_boost = min(0.2, data["chunk_matches"] * 0.02)
+            aggregate_score = avg_similarity * (1 + match_boost)
+
+            # Query page by page_id if available, otherwise by URL
+            if data["page_id"]:
+                page_info = (
+                    self.supabase_client.table("archon_page_metadata")
+                    .select("id, url, section_title, word_count")
+                    .eq("id", data["page_id"])
+                    .maybe_single()
+                    .execute()
+                )
+            else:
+                # Regular pages - exact URL match
+                page_info = (
+                    self.supabase_client.table("archon_page_metadata")
+                    .select("id, url, section_title, word_count")
+                    .eq("url", data["url"])
+                    .maybe_single()
+                    .execute()
+                )
+
+            if page_info and page_info.data is not None:
+                page_results.append({
+                    "page_id": page_info.data["id"],
+                    "url": page_info.data["url"],
+                    "section_title": page_info.data.get("section_title"),
+                    "word_count": page_info.data.get("word_count", 0),
+                    "chunk_matches": data["chunk_matches"],
+                    "aggregate_similarity": aggregate_score,
+                    "average_similarity": avg_similarity,
+                    "source_id": data["source_id"],
+                })
+
+        page_results.sort(key=lambda x: x["aggregate_similarity"], reverse=True)
+        return page_results[:match_count]
+
     async def perform_rag_query(
-        self, query: str, source: str = None, match_count: int = 5
+        self, query: str, source: str = None, match_count: int = 5, return_mode: str = "chunks"
     ) -> tuple[bool, dict[str, Any]]:
         """
-        Perform a comprehensive RAG query that combines all enabled strategies.
+        Unified RAG query with all strategies.
 
         Pipeline:
-        1. Start with vector search
-        2. Apply hybrid search if enabled
-        3. Apply reranking if enabled
+        1. Vector/Hybrid Search (based on settings)
+        2. Reranking (if enabled)
+        3. Page Grouping (if return_mode="pages")
 
         Args:
             query: The search query
             source: Optional source domain to filter results
             match_count: Maximum number of results to return
+            return_mode: "chunks" (default) or "pages"
 
         Returns:
             Tuple of (success, result_dict)
@@ -204,10 +274,19 @@ class RAGService:
                 use_hybrid_search = self.get_bool_setting("USE_HYBRID_SEARCH", False)
                 use_reranking = self.get_bool_setting("USE_RERANKING", False)
 
+                # If reranking is enabled, fetch more candidates for the reranker to evaluate
+                # This allows the reranker to see a broader set of results
+                search_match_count = match_count
+                if use_reranking and self.reranking_strategy:
+                    # Fetch 5x the requested amount when reranking is enabled
+                    # The reranker will select the best from this larger pool
+                    search_match_count = match_count * 5
+                    logger.debug(f"Reranking enabled - fetching {search_match_count} candidates for {match_count} final results")
+
                 # Step 1 & 2: Get results (with hybrid search if enabled)
                 results = await self.search_documents(
                     query=query,
-                    match_count=match_count,
+                    match_count=search_match_count,
                     filter_metadata=filter_metadata,
                     use_hybrid_search=use_hybrid_search,
                 )
@@ -234,14 +313,35 @@ class RAGService:
                 reranking_applied = False
                 if self.reranking_strategy and formatted_results:
                     try:
+                        # Pass top_k to limit results to the originally requested count
                         formatted_results = await self.reranking_strategy.rerank_results(
-                            query, formatted_results, content_key="content"
+                            query, formatted_results, content_key="content", top_k=match_count
                         )
                         reranking_applied = True
-                        logger.debug(f"Reranking applied to {len(formatted_results)} results")
+                        logger.debug(f"Reranking applied: {search_match_count} candidates -> {len(formatted_results)} final results")
                     except Exception as e:
                         logger.warning(f"Reranking failed: {e}")
                         reranking_applied = False
+                        # If reranking fails but we fetched extra results, trim to requested count
+                        if len(formatted_results) > match_count:
+                            formatted_results = formatted_results[:match_count]
+
+                # Step 4: Group by pages if return_mode="pages" AND pages exist
+                actual_return_mode = return_mode
+                if return_mode == "pages":
+                    # Check if any chunks have page_id set
+                    has_page_ids = any(
+                        result.get("metadata", {}).get("page_id") is not None
+                        for result in formatted_results
+                    )
+
+                    if has_page_ids:
+                        # Group by pages when page_ids exist
+                        formatted_results = await self._group_chunks_by_pages(formatted_results, match_count)
+                    else:
+                        # Fall back to chunks when no page_ids (pre-migration data)
+                        actual_return_mode = "chunks"
+                        logger.info("No page_ids found in results, returning chunks instead of pages")
 
                 # Build response
                 response_data = {
@@ -253,13 +353,15 @@ class RAGService:
                     "execution_path": "rag_service_pipeline",
                     "search_mode": "hybrid" if use_hybrid_search else "vector",
                     "reranking_applied": reranking_applied,
+                    "return_mode": actual_return_mode,
                 }
 
                 span.set_attribute("final_results_count", len(formatted_results))
                 span.set_attribute("reranking_applied", reranking_applied)
+                span.set_attribute("return_mode", return_mode)
                 span.set_attribute("success", True)
 
-                logger.info(f"RAG query completed - {len(formatted_results)} results found")
+                logger.info(f"RAG query completed - {len(formatted_results)} {return_mode} found")
                 return True, response_data
 
             except Exception as e:
@@ -313,6 +415,12 @@ class RAGService:
                 use_hybrid_search = self.get_bool_setting("USE_HYBRID_SEARCH", False)
                 use_reranking = self.get_bool_setting("USE_RERANKING", False)
 
+                # If reranking is enabled, fetch more candidates
+                search_match_count = match_count
+                if use_reranking and self.reranking_strategy:
+                    search_match_count = match_count * 5
+                    logger.debug(f"Reranking enabled for code search - fetching {search_match_count} candidates")
+
                 # Prepare filter
                 filter_metadata = {"source": source_id} if source_id and source_id.strip() else None
 
@@ -320,7 +428,7 @@ class RAGService:
                     # Use hybrid search for code examples
                     results = await self.hybrid_strategy.search_code_examples_hybrid(
                         query=query,
-                        match_count=match_count,
+                        match_count=search_match_count,
                         filter_metadata=filter_metadata,
                         source_id=source_id,
                     )
@@ -328,7 +436,7 @@ class RAGService:
                     # Use standard agentic search
                     results = await self.agentic_strategy.search_code_examples(
                         query=query,
-                        match_count=match_count,
+                        match_count=search_match_count,
                         filter_metadata=filter_metadata,
                         source_id=source_id,
                     )
@@ -337,10 +445,14 @@ class RAGService:
                 if self.reranking_strategy and results:
                     try:
                         results = await self.reranking_strategy.rerank_results(
-                            query, results, content_key="content"
+                            query, results, content_key="content", top_k=match_count
                         )
+                        logger.debug(f"Code reranking applied: {search_match_count} candidates -> {len(results)} final results")
                     except Exception as e:
                         logger.warning(f"Code reranking failed: {e}")
+                        # If reranking fails but we fetched extra results, trim to requested count
+                        if len(results) > match_count:
+                            results = results[:match_count]
 
                 # Format results
                 formatted_results = []

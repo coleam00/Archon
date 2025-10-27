@@ -10,18 +10,35 @@ class ProgressMapper:
     """Maps sub-task progress to overall progress ranges"""
 
     # Define progress ranges for each stage
+    # Reflects actual processing time distribution
     STAGE_RANGES = {
-        "starting": (0, 0),
-        "analyzing": (0, 5),
-        "crawling": (5, 30),
-        "processing": (30, 35),
-        "document_storage": (35, 80),
-        "code_extraction": (80, 95),
-        "extracting": (80, 95),  # Alias for code_extraction
-        "finalization": (95, 100),
+        # Common stages
+        "starting": (0, 1),
+        "initializing": (0, 1),
+        "error": (-1, -1),            # Special case for errors
+        "cancelled": (-1, -1),        # Special case for cancellation
         "completed": (100, 100),
-        "complete": (100, 100),  # Alias
-        "error": (-1, -1),  # Special case for errors
+        "complete": (100, 100),       # Alias
+
+        # Crawl-specific stages - rebalanced based on actual time taken
+        "analyzing": (1, 3),          # URL analysis is quick
+        "discovery": (3, 4),          # File discovery is quick (new stage for discovery feature)
+        "crawling": (4, 15),          # Crawling can take time for deep/many URLs
+        "processing": (15, 20),       # Content processing/chunking
+        "source_creation": (20, 25),  # DB operations
+        "document_storage": (25, 40), # Embeddings generation takes significant time
+        "code_extraction": (40, 90),  # Code extraction + summaries - still longest but more balanced
+        "code_storage": (40, 90),     # Alias
+        "extracting": (40, 90),       # Alias for code_extraction
+        "finalization": (90, 100),    # Final steps and cleanup
+
+        # Upload-specific stages
+        "reading": (0, 5),
+        "text_extraction": (5, 10),   # Clear name for text extraction from files
+        "chunking": (10, 15),
+        # Note: source_creation is defined above at (20, 25) for all operations
+        "summarizing": (25, 35),
+        "storing": (35, 100),
     }
 
     def __init__(self):
@@ -40,9 +57,9 @@ class ProgressMapper:
         Returns:
             Overall progress percentage (0-100)
         """
-        # Handle error state
-        if stage == "error":
-            return -1
+        # Handle error and cancelled states - preserve last known progress
+        if stage in ("error", "cancelled"):
+            return self.last_overall_progress
 
         # Get stage range
         if stage not in self.STAGE_RANGES:
@@ -60,6 +77,16 @@ class ProgressMapper:
         stage_progress = max(0, min(100, stage_progress))  # Clamp to 0-100
         stage_range = end - start
         mapped_progress = start + (stage_progress / 100.0) * stage_range
+
+        # Debug logging for document_storage
+        if stage == "document_storage" and stage_progress >= 90:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(
+                f"DEBUG: ProgressMapper.map_progress | stage={stage} | stage_progress={stage_progress}% | "
+                f"range=({start}, {end}) | mapped_before_check={mapped_progress:.1f}% | "
+                f"last_overall={self.last_overall_progress}%"
+            )
 
         # Ensure progress never goes backwards
         mapped_progress = max(self.last_overall_progress, mapped_progress)

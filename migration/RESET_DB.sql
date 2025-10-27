@@ -63,7 +63,11 @@ BEGIN
     -- Prompts policies
     DROP POLICY IF EXISTS "Allow service role full access to archon_prompts" ON archon_prompts;
     DROP POLICY IF EXISTS "Allow authenticated users to read archon_prompts" ON archon_prompts;
-    
+
+    -- Migration tracking policies
+    DROP POLICY IF EXISTS "Allow service role full access to archon_migrations" ON archon_migrations;
+    DROP POLICY IF EXISTS "Allow authenticated users to read archon_migrations" ON archon_migrations;
+
     -- Legacy table policies (for migration from old schema)
     DROP POLICY IF EXISTS "Allow service role full access" ON settings;
     DROP POLICY IF EXISTS "Allow authenticated users to read and update" ON settings;
@@ -133,6 +137,10 @@ BEGIN
     DROP FUNCTION IF EXISTS match_archon_crawled_pages(vector, int, jsonb, text) CASCADE;
     DROP FUNCTION IF EXISTS match_archon_code_examples(vector, int, jsonb, text) CASCADE;
     
+    -- Hybrid search functions (with ts_vector support)
+    DROP FUNCTION IF EXISTS hybrid_search_archon_crawled_pages(vector, text, int, jsonb, text) CASCADE;
+    DROP FUNCTION IF EXISTS hybrid_search_archon_code_examples(vector, text, int, jsonb, text) CASCADE;
+    
     -- Search functions (old without prefix)
     DROP FUNCTION IF EXISTS match_crawled_pages(vector, int, jsonb, text) CASCADE;
     DROP FUNCTION IF EXISTS match_code_examples(vector, int, jsonb, text) CASCADE;
@@ -170,7 +178,10 @@ BEGIN
     
     -- Configuration System - new archon_ prefixed table
     DROP TABLE IF EXISTS archon_settings CASCADE;
-    
+
+    -- Migration tracking table
+    DROP TABLE IF EXISTS archon_migrations CASCADE;
+
     -- Legacy tables (without archon_ prefix) - for migration purposes
     DROP TABLE IF EXISTS document_versions CASCADE;
     DROP TABLE IF EXISTS project_sources CASCADE;

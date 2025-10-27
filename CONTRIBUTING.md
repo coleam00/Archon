@@ -53,8 +53,10 @@ Archon uses true microservices architecture with clear separation of concerns:
 ### Prerequisites
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- [Node.js 18+](https://nodejs.org/) (for hybrid development mode)
 - [Supabase](https://supabase.com/) account (free tier works)
 - [OpenAI API key](https://platform.openai.com/api-keys) or alternative LLM provider
+- (Optional) [Make](https://www.gnu.org/software/make/) for simplified workflows
 - Basic knowledge of Python (FastAPI) and TypeScript (React)
 
 ### Initial Setup
@@ -74,12 +76,48 @@ After forking the repository, you'll need to:
 3. **Start Development Environment**
 
    ```bash
-   docker-compose up --build -d
+   # Using Docker Compose directly
+   docker compose --profile full up --build -d
+   
+   # Or using Make (if installed)
+   make dev-docker
    ```
 
 4. **Configure API Keys**
    - Open http://localhost:3737
    - Go to Settings → Add your OpenAI API key
+
+## 👑 Important Standards for Contributing
+
+There are a few very important rules that we ask you follow when contributing to Archon.
+Some things like testing are covered more later in this document but there are a few
+very important specifics to call out here.
+
+**1. Check the list of PRs** to make sure you aren't about to fix or implement something that's already been done! Also be sure to check the [Archon Kanban board](https://github.com/users/coleam00/projects/1) where the maintainers are manage issues/features.
+
+**2. Try to keep the changes to less than 2,000 lines of code.** The more granular the PR, the better! If your changes must be larger, it's very important to go into extra detail in your PR and explain why the larger changes are necessary.
+
+**3. Keep PRs to a single feature.** Please split any that implement multiple features into multiple PRs.
+
+**4. Even within individual features, aim for simplicity** - concise implementations are always the best!
+
+**5. If your code changes touch the crawling functionality in any way**, please test crawling an llms-full.txt, llms.txt, a sitemap.xml, and a normal URL with recursive crawling. Here are smaller examples you can use for testing:
+   - llms.txt: https://docs.mem0.ai/llms.txt
+   - llms-full.txt: https://docs.mem0.ai/llms-full.txt
+   - sitemap.xml: https://mem0.ai/sitemap.xml
+   - Normal URL: https://docs.anthropic.com/en/docs/claude-code/overview
+
+Make sure the crawling completes end to end, the code examples exist, and the Archon MCP can be used to successfully search through the documentation.
+
+**6. If your code changes touch the project/task management in any way**, please test all the CRUD (Create, Read, Update, Delete) operations on both projects and tasks. Generally you will:
+   - Create a new project
+   - Create a couple of tasks
+   - Move the tasks around the kanban board
+   - Edit descriptions
+
+Test these things using both the UI and the MCP server. This process will be similar if your code changes touch the docs part of Archon too.
+
+**7. If your code changes touch the MCP server instructions or anything else more high level** that could affect how AI coding assistants use the Archon MCP, please retest by creating a simple project from scratch that leverages Archon for RAG, task management, etc.
 
 ## 🔄 Contribution Process
 
@@ -111,13 +149,15 @@ After forking the repository, you'll need to:
    - This creates your own copy of the repository
 
    ```bash
-   # Clone your fork (replace 'your-username' with your GitHub username)
+   # Clone your fork from main branch for contributing (replace 'your-username' with your GitHub username)
    git clone https://github.com/your-username/archon.git
    cd archon
 
    # Add upstream remote to sync with main repository later
    git remote add upstream https://github.com/coleam00/archon.git
    ```
+
+   **Note:** The `main` branch is used for contributions and contains the latest development work. The `stable` branch is for users who want a more tested, stable version of Archon.
 
 2. **🤖 AI Coding Assistant Setup**
 
@@ -131,7 +171,7 @@ After forking the repository, you'll need to:
 
 3. **Create Feature Branch**
 
-   **Best Practice**: Always create a feature branch rather than working directly on main. This keeps your main branch clean and makes it easier to sync with the upstream repository.
+   **Best Practice**: Always create a feature branch from main rather than working directly on it. This keeps your main branch clean and makes it easier to sync with the upstream repository.
 
    ```bash
    git checkout -b feature/your-feature-name
@@ -180,14 +220,17 @@ After forking the repository, you'll need to:
    **Test commands:**
 
    ```bash
-   # Backend tests
-   cd python && python -m pytest
-
-   # Frontend tests
-   cd archon-ui-main && npm run test
+   # Using Make (if installed)
+   make test       # Run all tests
+   make test-fe    # Frontend tests only
+   make test-be    # Backend tests only
+   
+   # Or manually
+   cd python && python -m pytest       # Backend tests
+   cd archon-ui-main && npm run test   # Frontend tests
 
    # Full integration test
-   docker-compose up --build -d
+   docker compose --profile full up --build -d
    # Test via UI at http://localhost:3737
    ```
 
@@ -293,7 +336,10 @@ After forking the repository, you'll need to:
 2. **Testing Your Changes**
 
    ```bash
-   # Run Python tests
+   # Using Make (if installed)
+   make test-be
+   
+   # Or manually
    cd python && python -m pytest tests/
 
    # Run specific test categories
@@ -303,8 +349,8 @@ After forking the repository, you'll need to:
 
 3. **Code Quality**
    ```bash
-   # We encourage you to use linters for all code
    # Follow service patterns from existing code
+   # Maintain consistency with the codebase
    ```
 
 ### Frontend Development (React)
@@ -319,10 +365,22 @@ After forking the repository, you'll need to:
    archon-ui-main/src/pages/YourPage.tsx
    ```
 
-2. **Testing Your Changes**
+2. **UI Design Standards**
+
+   Before creating or modifying UI components, review the design standards:
+   - **UI Standards**: `PRPs/ai_docs/UI_STANDARDS.md` - Complete Tailwind v4, Radix, and responsive design patterns
+   - **Style Guide**: Enable in Settings → scroll to "Feature Flags" → Enable "Style Guide Page"
+     - Access at http://localhost:3737/style-guide
+     - View all available primitives, colors, layouts, and component patterns
+   - **UI Consistency Review**: Run `/archon:archon-ui-consistency-review <path>` to automatically check your components for compliance
+
+3. **Testing Your Changes**
 
    ```bash
-   # Run frontend tests
+   # Using Make (if installed)
+   make test-fe
+
+   # Or manually
    cd archon-ui-main && npm run test
 
    # Run with coverage
@@ -332,9 +390,12 @@ After forking the repository, you'll need to:
    npm run test:ui
    ```
 
-3. **Development Server**
+4. **Development Server**
    ```bash
-   # For faster iteration, run frontend locally
+   # Using Make for hybrid mode (if installed)
+   make dev  # Backend in Docker, frontend local
+
+   # Or manually for faster iteration
    cd archon-ui-main && npm run dev
    # Still connects to Docker backend services
    ```
