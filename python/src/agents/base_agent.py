@@ -6,15 +6,62 @@ This provides common functionality and dependency injection for all agents.
 
 import asyncio
 import logging
+import os
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
+from openai import AsyncOpenAI
 from pydantic import BaseModel
 from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
 
 logger = logging.getLogger(__name__)
+
+
+def _prepare_model_for_agent(model_string: str) -> str | OpenAIChatModel:
+    """
+    Prepare model string for PydanticAI Agent, handling LM-Studio provider.
+
+    PydanticAI doesn't have built-in support for "lmstudio:" prefix, but since
+    LM-Studio uses OpenAI-compatible API, we can create a custom OpenAI model
+    with the LM-Studio base URL.
+
+    Args:
+        model_string: Model string in format "provider:model-name" (e.g., "lmstudio:llama-3.2-1b-instruct")
+
+    Returns:
+        Either the original model string (for built-in providers) or a configured OpenAIChatModel
+    """
+    if not model_string or ":" not in model_string:
+        return model_string
+
+    provider, model_name = model_string.split(":", 1)
+
+    # Handle LM-Studio as a special case
+    if provider.lower() == "lmstudio":
+        # Get LM-Studio base URL from environment or use default
+        base_url = os.getenv("LM_STUDIO_BASE_URL", "http://host.docker.internal:1234/v1")
+
+        logger.info(f"Creating LM-Studio model with base_url: {base_url}, model: {model_name}")
+
+        # Create custom OpenAI-compatible client for LM-Studio
+        client = AsyncOpenAI(
+            api_key="lm-studio",  # LM-Studio doesn't require a real API key
+            base_url=base_url
+        )
+
+        # Create OpenAIChatModel with custom provider
+        return OpenAIChatModel(
+            model_name,
+            provider=OpenAIProvider(openai_client=client)
+        )
+
+    # For all other providers (openai, anthropic, google, etc.), return as-is
+    # PydanticAI has built-in support for these
+    return model_string
 
 
 @dataclass
@@ -158,7 +205,8 @@ class BaseAgent(ABC, Generic[DepsT, OutputT]):
         enable_rate_limiting: bool = True,
         **agent_kwargs,
     ):
-        self.model = model
+        # Prepare model for PydanticAI (handles LM-Studio and other custom providers)
+        self.model = _prepare_model_for_agent(model)
         self.name = name or self.__class__.__name__
         self.retries = retries
         self.enable_rate_limiting = enable_rate_limiting
