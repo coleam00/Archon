@@ -443,7 +443,7 @@ class CredentialService:
                 explicit_embedding_provider = rag_settings.get("EMBEDDING_PROVIDER")
 
                 # Validate that embedding provider actually supports embeddings
-                embedding_capable_providers = {"openai", "google", "ollama"}
+                embedding_capable_providers = {"openai", "google", "ollama", "lmstudio"}
 
                 if (explicit_embedding_provider and
                     explicit_embedding_provider != "" and
@@ -509,17 +509,20 @@ class CredentialService:
             "anthropic": "ANTHROPIC_API_KEY",
             "grok": "GROK_API_KEY",
             "ollama": None,  # No API key needed
+            "lmstudio": None,  # No API key needed for local instance
         }
 
         key_name = key_mapping.get(provider)
         if key_name:
             return await self.get_credential(key_name)
-        return "ollama" if provider == "ollama" else None
+        return "lm-studio" if provider == "lmstudio" else ("ollama" if provider == "ollama" else None)
 
     def _get_provider_base_url(self, provider: str, rag_settings: dict) -> str | None:
         """Get base URL for provider."""
         if provider == "ollama":
             return rag_settings.get("LLM_BASE_URL", "http://host.docker.internal:11434/v1")
+        elif provider == "lmstudio":
+            return rag_settings.get("LMSTUDIO_BASE_URL", "http://host.docker.internal:1234/v1")
         elif provider == "google":
             return "https://generativelanguage.googleapis.com/v1beta/openai/"
         elif provider == "openrouter":

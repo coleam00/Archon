@@ -12,10 +12,10 @@ import { credentialsService } from '../../services/credentialsService';
 import OllamaModelDiscoveryModal from './OllamaModelDiscoveryModal';
 import OllamaModelSelectionModal from './OllamaModelSelectionModal';
 
-type ProviderKey = 'openai' | 'google' | 'ollama' | 'anthropic' | 'grok' | 'openrouter';
+type ProviderKey = 'openai' | 'google' | 'ollama' | 'anthropic' | 'grok' | 'openrouter' | 'lmstudio';
 
 // Providers that support embedding models
-const EMBEDDING_CAPABLE_PROVIDERS: ProviderKey[] = ['openai', 'google', 'ollama'];
+const EMBEDDING_CAPABLE_PROVIDERS: ProviderKey[] = ['openai', 'google', 'ollama', 'lmstudio'];
 
 interface ProviderModels {
   chatModel: string;
@@ -34,7 +34,8 @@ const getDefaultModels = (provider: ProviderKey): ProviderModels => {
     google: 'gemini-1.5-flash',
     grok: 'grok-3-mini', // Updated to use grok-3-mini as default
     openrouter: 'openai/gpt-4o-mini',
-    ollama: 'llama3:8b'
+    ollama: 'llama3:8b',
+    lmstudio: 'llama-3.2-1b-instruct'
   };
 
   const embeddingDefaults: Record<ProviderKey, string> = {
@@ -43,7 +44,8 @@ const getDefaultModels = (provider: ProviderKey): ProviderModels => {
     google: 'text-embedding-004',
     grok: 'text-embedding-3-small', // Fallback to OpenAI
     openrouter: 'text-embedding-3-small',
-    ollama: 'nomic-embed-text'
+    ollama: 'nomic-embed-text',
+    lmstudio: 'text-embedding-nomic-embed-text'
   };
 
   return {
@@ -71,7 +73,7 @@ const loadProviderModels = (): ProviderModelMap => {
   }
 
   // Return defaults for all providers if nothing saved
-  const providers: ProviderKey[] = ['openai', 'google', 'openrouter', 'ollama', 'anthropic', 'grok'];
+  const providers: ProviderKey[] = ['openai', 'google', 'openrouter', 'ollama', 'anthropic', 'grok', 'lmstudio'];
   const defaultModels: ProviderModelMap = {} as ProviderModelMap;
 
   providers.forEach(provider => {
@@ -89,6 +91,7 @@ const colorStyles: Record<ProviderKey, string> = {
   ollama: 'border-purple-500 bg-purple-500/10',
   anthropic: 'border-orange-500 bg-orange-500/10',
   grok: 'border-yellow-500 bg-yellow-500/10',
+  lmstudio: 'border-indigo-500 bg-indigo-500/10',
 };
 
 const providerWarningAlertStyle = 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800 text-yellow-800 dark:text-yellow-300';
@@ -98,6 +101,7 @@ const providerMissingAlertStyle = providerErrorAlertStyle;
 const providerDisplayNames: Record<ProviderKey, string> = {
   openai: 'OpenAI',
   google: 'Google',
+  lmstudio: 'LM-Studio',
   openrouter: 'OpenRouter',
   ollama: 'Ollama',
   anthropic: 'Anthropic',
@@ -105,7 +109,7 @@ const providerDisplayNames: Record<ProviderKey, string> = {
 };
 
 const isProviderKey = (value: unknown): value is ProviderKey =>
-  typeof value === 'string' && ['openai', 'google', 'openrouter', 'ollama', 'anthropic', 'grok'].includes(value);
+  typeof value === 'string' && ['openai', 'google', 'openrouter', 'ollama', 'anthropic', 'grok', 'lmstudio'].includes(value);
 
 // Default base URL for Ollama instances when not explicitly configured
 const DEFAULT_OLLAMA_URL = 'http://host.docker.internal:11434/v1';
@@ -970,6 +974,10 @@ const manualTestConnection = async (
 
           return 'missing';
         }
+      case 'lmstudio':
+        // LM-Studio runs locally and doesn't require an API key
+        // Always return 'configured' since it's a local service
+        return 'configured';
       case 'anthropic':
         const hasAnthropicKey = hasApiCredential('ANTHROPIC_API_KEY');
         const anthropicConnected = providerConnectionStatus['anthropic']?.connected || false;
@@ -1013,6 +1021,8 @@ const manualTestConnection = async (
       providerAlertMessage = 'Local Ollama service detected. Click "Test Connection" to confirm model availability.';
       providerAlertClassName = providerWarningAlertStyle;
     }
+  } else if (activeProviderKey === 'lmstudio') {
+    // LM-Studio is a local service, no API key needed - no alert
   } else if (activeProviderKey && selectedProviderStatus === 'missing') {
     const providerName = providerDisplayNames[activeProviderKey] ?? activeProviderKey;
     providerAlertMessage = `${providerName} API key is not configured. Add it in Settings > API Keys.`;
@@ -1291,13 +1301,14 @@ const manualTestConnection = async (
             Select {activeSelection === 'chat' ? 'Chat' : 'Embedding'} Provider
           </label>
           <div className={`grid gap-3 mb-4 ${
-            activeSelection === 'chat' ? 'grid-cols-6' : 'grid-cols-3'
+            activeSelection === 'chat' ? 'grid-cols-7' : 'grid-cols-4'
           }`}>
             {[
               { key: 'openai', name: 'OpenAI', logo: '/img/OpenAI.png', color: 'green' },
               { key: 'google', name: 'Google', logo: '/img/google-logo.svg', color: 'blue' },
               { key: 'openrouter', name: 'OpenRouter', logo: '/img/OpenRouter.png', color: 'cyan' },
               { key: 'ollama', name: 'Ollama', logo: '/img/Ollama.png', color: 'purple' },
+              { key: 'lmstudio', name: 'LM-Studio', logo: '/img/LM-Studio.svg', color: 'indigo' },
               { key: 'anthropic', name: 'Anthropic', logo: '/img/claude-logo.svg', color: 'orange' },
               { key: 'grok', name: 'Grok', logo: '/img/Grok.png', color: 'yellow' }
             ]

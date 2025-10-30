@@ -22,6 +22,7 @@ export interface RagSettings {
   LLM_INSTANCE_NAME?: string;
   OLLAMA_EMBEDDING_URL?: string;
   OLLAMA_EMBEDDING_INSTANCE_NAME?: string;
+  LMSTUDIO_BASE_URL?: string;
   EMBEDDING_MODEL?: string;
   EMBEDDING_PROVIDER?: string;
   // Crawling Performance Settings
@@ -201,6 +202,7 @@ class CredentialsService {
   LLM_INSTANCE_NAME: "",
   OLLAMA_EMBEDDING_URL: "",
   OLLAMA_EMBEDDING_INSTANCE_NAME: "",
+  LMSTUDIO_BASE_URL: "",
   EMBEDDING_PROVIDER: "openai",
   EMBEDDING_MODEL: "",
       // Crawling Performance Settings defaults
@@ -233,6 +235,7 @@ class CredentialsService {
             "LLM_INSTANCE_NAME",
             "OLLAMA_EMBEDDING_URL",
             "OLLAMA_EMBEDDING_INSTANCE_NAME",
+            "LMSTUDIO_BASE_URL",
             "EMBEDDING_PROVIDER",
             "EMBEDDING_MODEL",
             "CRAWL_WAIT_STRATEGY",

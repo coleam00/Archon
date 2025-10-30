@@ -23,7 +23,7 @@ def _is_valid_provider(provider: str) -> bool:
     """Basic provider validation."""
     if not provider or not isinstance(provider, str):
         return False
-    return provider.lower() in {"openai", "ollama", "google", "openrouter", "anthropic", "grok"}
+    return provider.lower() in {"openai", "ollama", "google", "openrouter", "anthropic", "grok", "lmstudio"}
 
 
 def _sanitize_for_log(text: str) -> str:
@@ -496,6 +496,15 @@ async def get_llm_client(
             )
             logger.info("Grok client created successfully")
 
+        elif provider_name == "lmstudio":
+            # LM-Studio uses OpenAI-compatible API but runs locally
+            # API key is not required for local instances
+            client = openai.AsyncOpenAI(
+                api_key=api_key or "lm-studio",  # LM-Studio doesn't require a real key
+                base_url=base_url or "http://host.docker.internal:1234/v1",
+            )
+            logger.info(f"LM-Studio client created successfully with base URL: {base_url or 'http://host.docker.internal:1234/v1'}")
+
         else:
             raise ValueError(f"Unsupported LLM provider: {provider_name}")
 
@@ -665,6 +674,10 @@ async def get_embedding_model(provider: str | None = None) -> str:
             # Grok supports OpenAI and Google embedding models through their API
             # Default to OpenAI's latest for compatibility
             return "text-embedding-3-small"
+        elif provider_name == "lmstudio":
+            # LM-Studio uses local models with OpenAI-compatible API
+            # Common embedding models in LM-Studio
+            return "text-embedding-nomic-embed-text"
         else:
             # Fallback to OpenAI's model
             return "text-embedding-3-small"
@@ -748,6 +761,11 @@ def is_valid_embedding_model_for_provider(model: str, provider: str) -> bool:
         model_lower = model.lower()
         ollama_patterns = ["nomic-embed", "all-minilm", "mxbai-embed", "embed"]
         return any(pattern in model_lower for pattern in ollama_patterns)
+    elif provider_lower == "lmstudio":
+        # LM-Studio supports local models, typically with "embed" in the name
+        model_lower = model.lower()
+        lmstudio_patterns = ["embed", "nomic", "all-minilm", "bge", "gte"]
+        return any(pattern in model_lower for pattern in lmstudio_patterns)
     else:
         # For unknown providers, assume OpenAI compatibility
         return is_openai_embedding_model(model)
@@ -791,6 +809,9 @@ def get_supported_embedding_models(provider: str) -> list[str]:
         return openai_models + google_models
     elif provider_lower == "ollama":
         return ["nomic-embed-text", "all-minilm", "mxbai-embed-large"]
+    elif provider_lower == "lmstudio":
+        # LM-Studio supports various local embedding models
+        return ["text-embedding-nomic-embed-text", "nomic-embed-text", "all-minilm-l6-v2", "bge-small-en-v1.5", "gte-large"]
     else:
         # For unknown providers, assume OpenAI compatibility
         return openai_models
