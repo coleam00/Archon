@@ -268,9 +268,7 @@ export const CrawlingProgress: React.FC<CrawlingProgressProps> = ({ onSwitchToBr
                           {operation.discovered_file}
                         </a>
                       ) : (
-                        <span className="text-sm text-gray-400 truncate block">
-                          {operation.discovered_file}
-                        </span>
+                        <span className="text-sm text-gray-400 truncate block">{operation.discovered_file}</span>
                       )}
                     </div>
                   )}
@@ -283,7 +281,7 @@ export const CrawlingProgress: React.FC<CrawlingProgressProps> = ({ onSwitchToBr
                         {operation.linked_files.length > 1 ? "s" : ""}
                       </div>
                       <div className="space-y-1 max-h-32 overflow-y-auto">
-                        {operation.linked_files.map((file: string, idx: number) => (
+                        {operation.linked_files.map((file: string, idx: number) =>
                           isValidHttpUrl(file) ? (
                             <a
                               key={idx}
@@ -298,8 +296,8 @@ export const CrawlingProgress: React.FC<CrawlingProgressProps> = ({ onSwitchToBr
                             <span key={idx} className="text-xs text-gray-400 truncate block">
                               • {file}
                             </span>
-                          )
-                        ))}
+                          ),
+                        )}
                       </div>
                     </div>
                   )}

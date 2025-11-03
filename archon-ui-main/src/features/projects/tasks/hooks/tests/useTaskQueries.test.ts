@@ -3,7 +3,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Task } from "../../types";
-import { taskKeys, useCreateTask, useProjectTasks, useTaskCounts } from "../useTaskQueries";
+import { taskKeys, useCreateTask, useProjectTasks } from "../useTaskQueries";
 
 // Mock the services
 vi.mock("../../services", () => ({

@@ -2,7 +2,7 @@ import React from "react";
 import { cn } from "./styles";
 
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: "default" | "destructive" | "outline" | "ghost" | "link" | "cyan" | "knowledge"; // Tron-style purple button used on Knowledge Base
+  variant?: "default" | "destructive" | "outline" | "ghost" | "link" | "cyan" | "knowledge" | "green" | "blue"; // Tron-style glass buttons
   size?: "default" | "sm" | "lg" | "icon" | "xs";
   loading?: boolean;
   children: React.ReactNode;
@@ -87,6 +87,30 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         "hover:shadow-[0_0_20px_rgba(168,85,247,0.5)]",
         "dark:hover:shadow-[0_0_25px_rgba(168,85,247,0.7)]",
         "focus-visible:ring-purple-500",
+      ),
+      green: cn(
+        "backdrop-blur-md",
+        "bg-gradient-to-b from-green-100/80 to-white/60",
+        "dark:from-green-500/20 dark:to-green-500/10",
+        "text-green-700 dark:text-green-100",
+        "border border-green-300/50 dark:border-green-500/50",
+        "hover:from-green-200/90 hover:to-green-100/70",
+        "dark:hover:from-green-400/30 dark:hover:to-green-500/20",
+        "hover:shadow-[0_0_20px_rgba(34,197,94,0.5)]",
+        "dark:hover:shadow-[0_0_25px_rgba(34,197,94,0.7)]",
+        "focus-visible:ring-green-500",
+      ),
+      blue: cn(
+        "backdrop-blur-md",
+        "bg-gradient-to-b from-blue-100/80 to-white/60",
+        "dark:from-blue-500/20 dark:to-blue-500/10",
+        "text-blue-700 dark:text-blue-100",
+        "border border-blue-300/50 dark:border-blue-500/50",
+        "hover:from-blue-200/90 hover:to-blue-100/70",
+        "dark:hover:from-blue-400/30 dark:hover:to-blue-500/20",
+        "hover:shadow-[0_0_20px_rgba(59,130,246,0.5)]",
+        "dark:hover:shadow-[0_0_25px_rgba(59,130,246,0.7)]",
+        "focus-visible:ring-blue-500",
       ),
     };
 

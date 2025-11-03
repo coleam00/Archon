@@ -27,6 +27,7 @@ services:
       - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
       - ARCHON_MCP_PORT=${ARCHON_MCP_PORT:-8051}
       - ARCHON_AGENTS_PORT=${ARCHON_AGENTS_PORT:-8052}
+      - AGENT_WORK_ORDERS_PORT=${AGENT_WORK_ORDERS_PORT:-8053}
       - AGENTS_ENABLED=${AGENTS_ENABLED:-false}
       - ARCHON_HOST=${HOST:-localhost}
     networks:
@@ -140,6 +141,58 @@ services:
           "sh",
           "-c",
           'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:${ARCHON_AGENTS_PORT:-8052}/health'')"',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Agent Work Orders Service (Independent microservice for workflow execution)
+  archon-agent-work-orders:
+    profiles:
+      - work-orders  # Only starts when explicitly using --profile work-orders
+    build:
+      context: ./python
+      dockerfile: Dockerfile.agent-work-orders
+      args:
+        BUILDKIT_INLINE_CACHE: 1
+        AGENT_WORK_ORDERS_PORT: ${AGENT_WORK_ORDERS_PORT:-8053}
+    container_name: archon-agent-work-orders
+    depends_on:
+      - archon-server
+    ports:
+      - "${AGENT_WORK_ORDERS_PORT:-8053}:${AGENT_WORK_ORDERS_PORT:-8053}"
+    environment:
+      - ENABLE_AGENT_WORK_ORDERS=true
+      - SERVICE_DISCOVERY_MODE=docker_compose
+      - STATE_STORAGE_TYPE=supabase
+      - ARCHON_SERVER_URL=http://archon-server:${ARCHON_SERVER_PORT:-8181}
+      - ARCHON_MCP_URL=http://archon-mcp:${ARCHON_MCP_PORT:-8051}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - LOGFIRE_TOKEN=${LOGFIRE_TOKEN:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - AGENT_WORK_ORDERS_PORT=${AGENT_WORK_ORDERS_PORT:-8053}
+      - CLAUDE_CLI_PATH=${CLAUDE_CLI_PATH:-claude}
+      - GH_CLI_PATH=${GH_CLI_PATH:-gh}
+      - GH_TOKEN=${GITHUB_PAT_TOKEN}
+    networks:
+      - app-network
+    volumes:
+      - ./python/src/agent_work_orders:/app/src/agent_work_orders # Hot reload for agent work orders
+      - /tmp/agent-work-orders:/tmp/agent-work-orders # Temp files
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          'import urllib.request; urllib.request.urlopen("http://localhost:${AGENT_WORK_ORDERS_PORT:-8053}/health")',
         ]
       interval: 30s
       timeout: 10s

@@ -60,11 +60,8 @@ export const documentService = {
    * Delete a document
    */
   async deleteDocument(projectId: string, documentId: string): Promise<void> {
-    await callAPIWithETag<{ success: boolean; message: string }>(
-      `/api/projects/${projectId}/docs/${documentId}`,
-      {
-        method: "DELETE",
-      },
-    );
+    await callAPIWithETag<{ success: boolean; message: string }>(`/api/projects/${projectId}/docs/${documentId}`, {
+      method: "DELETE",
+    });
   },
 };

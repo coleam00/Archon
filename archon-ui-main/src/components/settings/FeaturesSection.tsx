@@ -14,10 +14,16 @@ export const FeaturesSection = () => {
     setTheme
   } = useTheme();
   const { showToast } = useToast();
-  const { styleGuideEnabled, setStyleGuideEnabled: setStyleGuideContext } = useSettings();
+  const {
+    styleGuideEnabled,
+    setStyleGuideEnabled: setStyleGuideContext,
+    agentWorkOrdersEnabled,
+    setAgentWorkOrdersEnabled: setAgentWorkOrdersContext
+  } = useSettings();
   const isDarkMode = theme === 'dark';
   const [projectsEnabled, setProjectsEnabled] = useState(true);
   const [styleGuideEnabledLocal, setStyleGuideEnabledLocal] = useState(styleGuideEnabled);
+  const [agentWorkOrdersEnabledLocal, setAgentWorkOrdersEnabledLocal] = useState(agentWorkOrdersEnabled);
 
   // Commented out for future release
   const [agUILibraryEnabled, setAgUILibraryEnabled] = useState(false);
@@ -37,6 +43,10 @@ export const FeaturesSection = () => {
   useEffect(() => {
     setStyleGuideEnabledLocal(styleGuideEnabled);
   }, [styleGuideEnabled]);
+
+  useEffect(() => {
+    setAgentWorkOrdersEnabledLocal(agentWorkOrdersEnabled);
+  }, [agentWorkOrdersEnabled]);
 
   const loadSettings = async () => {
     try {
@@ -224,6 +234,29 @@ export const FeaturesSection = () => {
     }
   };
 
+  const handleAgentWorkOrdersToggle = async (checked: boolean) => {
+    if (loading) return;
+
+    try {
+      setLoading(true);
+      setAgentWorkOrdersEnabledLocal(checked);
+
+      // Update context which will save to backend
+      await setAgentWorkOrdersContext(checked);
+
+      showToast(
+        checked ? 'Agent Work Orders Enabled' : 'Agent Work Orders Disabled',
+        checked ? 'success' : 'warning'
+      );
+    } catch (error) {
+      console.error('Failed to update agent work orders setting:', error);
+      setAgentWorkOrdersEnabledLocal(!checked);
+      showToast('Failed to update agent work orders setting', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <>
       <div className="grid grid-cols-2 gap-4">
@@ -293,6 +326,28 @@ export const FeaturesSection = () => {
                 onCheckedChange={handleStyleGuideToggle}
                 color="cyan"
                 icon={<Palette className="w-5 h-5" />}
+                disabled={loading}
+              />
+            </div>
+          </div>
+
+          {/* Agent Work Orders Toggle */}
+          <div className="flex items-center gap-4 p-4 rounded-xl bg-gradient-to-br from-green-500/10 to-green-600/5 backdrop-blur-sm border border-green-500/20 shadow-lg">
+            <div className="flex-1 min-w-0">
+              <p className="font-medium text-gray-800 dark:text-white">
+                Agent Work Orders
+              </p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                Enable automated development workflows with Claude Code CLI
+              </p>
+            </div>
+            <div className="flex-shrink-0">
+              <Switch
+                size="lg"
+                checked={agentWorkOrdersEnabledLocal}
+                onCheckedChange={handleAgentWorkOrdersToggle}
+                color="green"
+                icon={<Bot className="w-5 h-5" />}
                 disabled={loading}
               />
             </div>

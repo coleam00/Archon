@@ -5,12 +5,24 @@ __pycache__
 PRPs/local
 PRPs/completed/
 PRPs/stories/
+PRPs/examples
+PRPs/features
+PRPs/specs
 PRPs/reviews/
 /logs/
 .zed
 tmp/
 temp/
 UAT/
+
+# Temporary validation/report markdown files
+/*_RESULTS.md
+/*_SUMMARY.md
+/*_REPORT.md
+/*_SUCCESS.md
+/*_COMPLETION*.md
+/ACTUAL_*.md
+/VALIDATION_*.md
 
 .DS_Store
 

@@ -240,12 +240,12 @@ export function useMultipleOperations(
 
   // Reset tracking sets when progress IDs change
   // Use sorted JSON stringification for stable dependency that handles reordering
-  const progressIdsKey = useMemo(() => JSON.stringify([...progressIds].sort()), [progressIds]);
+  const _progressIdsKey = useMemo(() => JSON.stringify([...progressIds].sort()), [progressIds]);
   useEffect(() => {
     completedIds.current.clear();
     errorIds.current.clear();
     notFoundCounts.current.clear();
-  }, [progressIdsKey]); // Stable dependency across reorderings
+  }, [_progressIdsKey]); // Stable dependency across reorderings
 
   const queries = useQueries({
     queries: progressIds.map((progressId) => ({

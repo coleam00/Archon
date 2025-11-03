@@ -150,7 +150,7 @@ export const KnowledgeCardTitle: React.FC<KnowledgeCardTitleProps> = ({
             "focus:ring-1 focus:ring-cyan-400 px-2 py-1",
           )}
         />
-        {description && description.trim() && (
+        {description?.trim() && (
           <Tooltip delayDuration={200}>
             <TooltipTrigger asChild>
               <Info
@@ -183,7 +183,7 @@ export const KnowledgeCardTitle: React.FC<KnowledgeCardTitleProps> = ({
           {title}
         </h3>
       </SimpleTooltip>
-      {description && description.trim() && (
+      {description?.trim() && (
         <Tooltip delayDuration={200}>
           <TooltipTrigger asChild>
             <Info

@@ -41,10 +41,7 @@ export const ContentViewer: React.FC<ContentViewerProps> = ({ selectedItem, onCo
     try {
       // Escape HTML entities FIRST per Prism documentation requirement
       // Prism expects pre-escaped input to prevent XSS
-      const escaped = code
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
+      const escaped = code.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
       const lang = language?.toLowerCase() || "javascript";
       const grammar = Prism.languages[lang] || Prism.languages.javascript;

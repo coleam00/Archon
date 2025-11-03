@@ -1,0 +1,81 @@
+# Agent Work Orders Service - Independent microservice for agent execution
+FROM python:3.12 AS builder
+
+WORKDIR /build
+
+# Install build dependencies and uv
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir uv
+
+# Copy pyproject.toml for dependency installation
+COPY pyproject.toml .
+
+# Install agent work orders dependencies to a virtual environment using uv
+RUN uv venv /venv && \
+    . /venv/bin/activate && \
+    uv pip install . --group agent-work-orders
+
+# Runtime stage
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install runtime dependencies: git, gh CLI, curl
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    ca-certificates \
+    wget \
+    gnupg \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | gpg --dearmor -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+    && apt-get update \
+    && apt-get install -y gh \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Copy the virtual environment from builder
+COPY --from=builder /venv /venv
+
+# Copy agent work orders source code only (not entire server)
+COPY src/agent_work_orders/ src/agent_work_orders/
+COPY src/__init__.py src/
+
+# Copy Claude command files for agent work orders
+COPY .claude/ .claude/
+
+# Create non-root user for security (Claude CLI blocks --dangerously-skip-permissions with root)
+RUN useradd -m -u 1000 -s /bin/bash agentuser && \
+    chown -R agentuser:agentuser /app /venv
+
+# Create volume mount points for git operations and temp files
+RUN mkdir -p /repos /tmp/agent-work-orders && \
+    chown -R agentuser:agentuser /repos /tmp/agent-work-orders && \
+    chmod -R 755 /repos /tmp/agent-work-orders
+
+# Install Claude CLI for non-root user
+USER agentuser
+RUN curl -fsSL https://claude.ai/install.sh | bash
+
+# Configure git to use gh CLI for GitHub authentication
+# This allows git clone to authenticate using GH_TOKEN environment variable
+RUN git config --global credential.helper '!gh auth git-credential'
+
+# Set environment variables
+ENV PYTHONPATH="/app:$PYTHONPATH"
+ENV PYTHONUNBUFFERED=1
+ENV PATH="/venv/bin:/home/agentuser/.local/bin:$PATH"
+
+# Expose agent work orders service port
+ARG AGENT_WORK_ORDERS_PORT=8053
+ENV AGENT_WORK_ORDERS_PORT=${AGENT_WORK_ORDERS_PORT}
+EXPOSE ${AGENT_WORK_ORDERS_PORT}
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${AGENT_WORK_ORDERS_PORT}/health')"
+
+# Run the Agent Work Orders service
+CMD python -m uvicorn src.agent_work_orders.server:app --host 0.0.0.0 --port ${AGENT_WORK_ORDERS_PORT}

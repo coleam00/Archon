@@ -118,7 +118,7 @@ export const DocumentCard = memo(({ document, isActive, onSelect, onDelete }: Do
       aria-label={`${isActive ? "Selected: " : ""}${document.title}`}
       className={cn("relative w-full cursor-pointer transition-all duration-300 group", isActive && "scale-[1.02]")}
     >
-        <div>
+      <div>
         {/* Document Type Badge */}
         <div
           className={cn(
@@ -177,7 +177,7 @@ export const DocumentCard = memo(({ document, isActive, onSelect, onDelete }: Do
             <Trash2 className="w-4 h-4" aria-hidden="true" />
           </Button>
         )}
-        </div>
+      </div>
     </Card>
   );
 });
