@@ -7,7 +7,9 @@ not by external clients. They provide internal functionality like credential sha
 
 import logging
 import os
-from typing import Any
+import ipaddress
+from typing import Any, List
+from ipaddress import IPv4Address, IPv6Address, IPv4Network, IPv6Network
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -18,36 +20,73 @@ logger = logging.getLogger(__name__)
 # Create router with internal prefix
 router = APIRouter(prefix="/internal", tags=["internal"])
 
-# Simple IP-based access control for internal endpoints
-ALLOWED_INTERNAL_IPS = [
-    "127.0.0.1",  # Localhost
-    "172.18.0.0/16",  # Docker network range
-    "archon-agents",  # Docker service name
-    "archon-mcp",  # Docker service name
-]
+def _parse_cidrs(raw: str) -> list[IPv4Network | IPv6Network]:
+    nets: list[IPv4Network | IPv6Network] = []
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            # accept single IPs too (will be normalized as /32 or /128)
+            if "/" not in part:
+                # interpret bare IP as single-host network
+                ip = ipaddress.ip_address(part)
+                cidr = f"{part}/32" if ip.version == 4 else f"{part}/128"
+                nets.append(ipaddress.ip_network(cidr, strict=False))
+            else:
+                nets.append(ipaddress.ip_network(part, strict=False))
+        except ValueError:
+            logger.warning(f"Skipping invalid CIDR/IP in env: {part}")
+    return nets
 
+# Defaults: localhost + common container ranges (overlay/bridge)
+_DEFAULT_ALLOWED = _parse_cidrs(
+    "127.0.0.1/32,::1/128,"
+    "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+)
+
+# Extra allowed ranges via env
+_ALLOWED_EXTRA = _parse_cidrs(os.getenv("INTERNAL_ALLOWED_CIDRS", ""))
+
+# (Optional) proxies we trust for X-Forwarded-For
+_TRUSTED_PROXIES = _parse_cidrs(os.getenv("TRUSTED_PROXY_CIDRS", ""))
+
+def _in_any(ip: IPv4Address | IPv6Address, nets: list[IPv4Network | IPv6Network]) -> bool:
+    return any(ip in n for n in nets)
+
+def _client_ip(request: Request) -> IPv4Address | IPv6Address | None:
+    """Return the true client IP. If peer is a trusted proxy, honor X-Forwarded-For."""
+    peer = (request.client.host if request.client else None)
+    if not peer:
+        return None
+    try:
+        peer_ip = ipaddress.ip_address(peer)
+    except ValueError:
+        return None
+
+    # If the direct peer is a trusted proxy (e.g., Traefik on overlay),
+    # use the left-most X-Forwarded-For as the original client.
+    if _TRUSTED_PROXIES and _in_any(peer_ip, _TRUSTED_PROXIES):
+        xff = request.headers.get("x-forwarded-for", "")
+        if xff:
+            first = xff.split(",")[0].strip()
+            try:
+                return ipaddress.ip_address(first)
+            except ValueError:
+                pass  # fall back to peer_ip
+    return peer_ip
 
 def is_internal_request(request: Request) -> bool:
     """Check if request is from an internal source."""
-    client_host = request.client.host if request.client else None
-
-    if not client_host:
+    ip = _client_ip(request)
+    if ip is None:
         return False
-
-    # Check if it's a Docker network IP (172.16.0.0/12 range)
-    if client_host.startswith("172."):
-        parts = client_host.split(".")
-        if len(parts) == 4:
-            second_octet = int(parts[1])
-            # Docker uses 172.16.0.0 - 172.31.255.255
-            if 16 <= second_octet <= 31:
-                logger.info(f"Allowing Docker network request from {client_host}")
-                return True
-
-    # Check if it's localhost
-    if client_host in ["127.0.0.1", "::1", "localhost"]:
+    # Allow if the IP is in default internal ranges or extra env ranges
+    if _in_any(ip, _DEFAULT_ALLOWED) or _in_any(ip, _ALLOWED_EXTRA):
+        logger.debug(f"Internal request allowed from {ip}")
         return True
 
+    logger.warning(f"Blocked non-internal request from {ip}")
     return False
 
 
@@ -104,13 +143,10 @@ async def get_agent_credentials(request: Request) -> dict[str, Any]:
         }
 
         # Filter out None values
-        credentials = {k: v for k, v in credentials.items() if v is not None}
-
         logger.info(f"Provided credentials to agents service from {request.client.host}")
-        return credentials
-
-    except Exception as e:
-        logger.error(f"Error retrieving agent credentials: {e}")
+        return {k: v for k, v in credentials.items() if v is not None}
+    except Exception:
+        logger.exception("Error retrieving agent credentials")
         raise HTTPException(status_code=500, detail="Failed to retrieve credentials")
 
 
@@ -127,14 +163,8 @@ async def get_mcp_credentials(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=403, detail="Access forbidden")
 
     try:
-        credentials = {
-            # MCP might need some credentials in the future
-            "LOG_LEVEL": await credential_service.get_credential("LOG_LEVEL", default="INFO"),
-        }
-
         logger.info(f"Provided credentials to MCP service from {request.client.host}")
-        return credentials
-
-    except Exception as e:
-        logger.error(f"Error retrieving MCP credentials: {e}")
+        return {"LOG_LEVEL": await credential_service.get_credential("LOG_LEVEL", default="INFO")}
+    except Exception:
+        logger.exception("Error retrieving MCP credentials")
         raise HTTPException(status_code=500, detail="Failed to retrieve credentials")

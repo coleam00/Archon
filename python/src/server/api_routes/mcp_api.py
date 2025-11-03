@@ -8,58 +8,129 @@ The MCP container is managed by docker-compose, not by this API.
 import os
 from typing import Any
 
-import docker
-from docker.errors import NotFound
+import socket
+import asyncio
+from urllib.parse import urlparse
+
+# Docker SDK is imported lazily inside get_container_status() when MCP_USE_DOCKER_SDK=true
 from fastapi import APIRouter, HTTPException
 
 # Import unified logging
 from ..config.logfire_config import api_logger, safe_set_attribute, safe_span
 
+def _env(name: str, default: str | None = None) -> str | None:
+    v = os.getenv(name)
+    return v if v not in (None, "") else default
+
+def _resolve_all(host: str) -> list[str]:
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+        return sorted({info[4][0] for info in infos})
+    except socket.gaierror:
+        return []
+
+def _discovery_host(host: str, dns_mode: str) -> str:
+    return f"tasks.{host}" if (dns_mode or "service").lower() == "tasks" else host
+
+async def _tcp_open(host: str, port: int, timeout: float = 2.5) -> bool:
+    """Non-blocking TCP connect (runs in a threadpool so we never block the event loop)."""
+    def _connect():
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    try:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _connect)
+    except Exception:
+        return False
+
 router = APIRouter(prefix="/api/mcp", tags=["mcp"])
 
+# get_container_status() must be ASYNC:
+async def get_container_status() -> dict[str, Any]:
+    """
+    Portable status:
+    - If MCP_USE_DOCKER_SDK=true and docker.sock is present, try Docker API
+      (useful for local dev/compose).
+    - Otherwise, use DNS + non-blocking TCP reachability to the MCP service (works in Swarm).
+    """
+    # ------------- Config -------------
+    use_sdk = (_env("MCP_USE_DOCKER_SDK", "false") or "false").lower() in ("1", "true", "yes")
+    container_name = _env("MCP_CONTAINER_NAME", "archon-mcp") or "archon-mcp"
+    mcp_host = _env("MCP_HOST", _env("ARCHON_MCP_HOST", "archon-mcp")) or "archon-mcp"
+    mcp_port = int(_env("ARCHON_MCP_PORT", "8051") or "8051")
+    dns_mode = (_env("MCP_DNS_MODE", "service") or "service").lower()  # "service" | "tasks"
 
-def get_container_status() -> dict[str, Any]:
-    """Get simple MCP container status without Docker management."""
-    docker_client = None
-    try:
-        docker_client = docker.from_env()
-        container = docker_client.containers.get("archon-mcp")
-
-        # Get container status
-        container_status = container.status
-
-        # Map Docker statuses to simple statuses
-        if container_status == "running":
-            status = "running"
-            # Try to get uptime from container info
-            try:
-                from datetime import datetime
-                started_at = container.attrs["State"]["StartedAt"]
-                started_time = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
-                uptime = int((datetime.now(started_time.tzinfo) - started_time).total_seconds())
-            except Exception:
-                uptime = None
+    # ------------- Try Docker SDK (opt-in) -------------
+    if use_sdk:
+        try:
+            import docker  # lazy import so module loads without docker installed
+            from docker.errors import NotFound  # noqa: F401
+        except Exception:
+            api_logger.warning("MCP_USE_DOCKER_SDK=true but 'docker' package not available; skipping SDK path.")
         else:
-            status = "stopped"
-            uptime = None
+            docker_client = None
+            try:
+                docker_client = docker.from_env()
+                container = docker_client.containers.get(container_name)
+                container_status = container.status  # "running", "exited", etc.
+                if container_status == "running":
+                    status = "running"
+                    try:
+                        from datetime import datetime
+                        started_at = container.attrs["State"]["StartedAt"]
+                        started_time = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+                        uptime = int((datetime.now(started_time.tzinfo) - started_time).total_seconds())
+                    except Exception:
+                        uptime = None
+                else:
+                    status, uptime = "stopped", None
 
+                return {
+                    "status": status,
+                    "uptime": uptime,
+                    "logs": [],
+                    "container_status": container_status
+                }
+            except docker.errors.NotFound:  # type: ignore[attr-defined]
+                # Fall through to DNS/TCP for Swarm where names differ
+                pass
+            except Exception:
+                api_logger.warning("Docker SDK status failed; falling back to DNS/TCP", exc_info=True)
+            finally:
+                if docker_client is not None:
+                    try:
+                        docker_client.close()
+                    except Exception:
+                        pass
+
+    # ------------- DNS/TCP (Swarm/Compose safe) -------------
+    try:
+        host_for_discovery = _discovery_host(mcp_host, dns_mode)
+        addrs = _resolve_all(host_for_discovery)
+        replicas = len(addrs)
+
+        tcp_ok = await _tcp_open(mcp_host, mcp_port, timeout=2.5)
+
+        if replicas == 0 and not tcp_ok:
+            return {
+                "status": "not_found",
+                "uptime": None,
+                "logs": [],
+                "container_status": "not_found",
+                "message": "MCP service not resolvable/reachable"
+            }
+
+        status = "running" if tcp_ok else "stopped"
         return {
             "status": status,
-            "uptime": uptime,
-            "logs": [],  # No log streaming anymore
-            "container_status": container_status
-        }
-
-    except NotFound:
-        return {
-            "status": "not_found",
             "uptime": None,
             "logs": [],
-            "container_status": "not_found",
-            "message": "MCP container not found. Run: docker compose up -d archon-mcp"
+            "container_status": status,
+            "replicas": replicas,
+            "addresses": addrs
         }
     except Exception as e:
-        api_logger.error("Failed to get container status", exc_info=True)
+        api_logger.error("Failed to determine MCP status via DNS/TCP", exc_info=True)
         return {
             "status": "error",
             "uptime": None,
@@ -67,12 +138,6 @@ def get_container_status() -> dict[str, Any]:
             "container_status": "error",
             "error": str(e)
         }
-    finally:
-        if docker_client is not None:
-            try:
-                docker_client.close()
-            except Exception:
-                pass
 
 
 @router.get("/status")
@@ -83,7 +148,7 @@ async def get_status():
         safe_set_attribute(span, "method", "GET")
 
         try:
-            status = get_container_status()
+            status = await get_container_status()   # <-- await
             api_logger.debug(f"MCP server status checked - status={status.get('status')}")
             safe_set_attribute(span, "status", status.get("status"))
             safe_set_attribute(span, "uptime", status.get("uptime"))
@@ -174,7 +239,7 @@ async def get_mcp_sessions():
 
         try:
             # Basic session info for now
-            status = get_container_status()
+            status = await get_container_status()
 
             session_info = {
                 "active_sessions": 0,  # TODO: Implement real session tracking
