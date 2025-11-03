@@ -132,7 +132,7 @@ export default {
         title: 'Archon',
         logo: {
           alt: 'Archon Logo',
-          src: 'logo-neon.png',
+          src: 'img/logo-neon.png',
         },
         items: [
           {
