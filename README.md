@@ -85,8 +85,8 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
    ```
 
    IMPORTANT NOTES:
-   - For cloud Supabase: they recently introduced a new type of service role key but use the legacy one (the longer one).
-   - For local Supabase: set SUPABASE_URL to http://host.docker.internal:8000 (unless you have an IP address set up).
+   - For cloud Supabase: They recently introduced a new type of service role key but use the legacy one (the longer one).
+   - For local Supabase: Set `SUPABASE_URL` to http://host.docker.internal:8000 (unless you have an IP address set up). To get `SUPABASE_SERVICE_KEY` run `supabase status -o env`.
 
 3. **Database Setup**: In your [Supabase project](https://supabase.com/dashboard) SQL Editor, copy, paste, and execute the contents of `migration/complete_setup.sql`
 
