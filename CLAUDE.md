@@ -209,7 +209,7 @@ Use database values directly (no FE mapping; type‑safe end‑to‑end from BE 
 Required in `.env`:
 
 ```bash
-SUPABASE_URL=https://your-project.supabase.co  # Or http://host.docker.internal:8000 for local
+SUPABASE_URL=https://your-project.supabase.co  # Or http://host.docker.internal:54321 for local
 SUPABASE_SERVICE_KEY=your-service-key-here      # Use legacy key format for cloud Supabase
 ```
 
