@@ -295,6 +295,59 @@ Recommendation:
 - ADD: `app.include_router(orchestrator_router)` (after agent_chat_router)
 - **VALIDATE**: `grep -q "orchestrator_router" python/src/server/main.py && echo "✓"`
 
+### UPDATE archon-ui-main/src/features/agent-work-orders/state/agentWorkOrdersStore.ts:
+
+**ADD NEW SLICE**: `slices/orchestratorSlice.ts`
+
+**Client UI State** (Zustand - follows `PRPs/ai_docs/ZUSTAND_STATE_MANAGEMENT.md`):
+```typescript
+export interface OrchestratorSlice {
+  // Chat panel state
+  isChatPanelOpen: boolean;
+  openChatPanel: () => void;
+  closeChatPanel: () => void;
+  toggleChatPanel: () => void;
+
+  // Session persistence
+  sessionId: string | null;
+  setSessionId: (id: string) => void;
+  clearSession: () => void;
+
+  // Chat input draft (persisted)
+  chatInputDraft: string;
+  setChatInputDraft: (draft: string) => void;
+}
+```
+
+**Update Store Type**:
+```typescript
+export type AgentWorkOrdersStore = UIPreferencesSlice & ModalsSlice & FiltersSlice & SSESlice & OrchestratorSlice;
+```
+
+**Update Persistence** (partialize):
+```typescript
+sessionId: state.sessionId,           // PERSIST
+chatInputDraft: state.chatInputDraft, // PERSIST
+// Do NOT persist: isChatPanelOpen (ephemeral)
+```
+
+**Selector Usage in Components**:
+```typescript
+// ✅ Single value
+const isChatPanelOpen = useAgentWorkOrdersStore((s) => s.isChatPanelOpen);
+const toggleChatPanel = useAgentWorkOrdersStore((s) => s.toggleChatPanel);
+
+// ✅ Multiple values - use useShallow
+import { useShallow } from 'zustand/react/shallow';
+const { sessionId, chatInputDraft } = useAgentWorkOrdersStore(
+  useShallow((s) => ({ sessionId: s.sessionId, chatInputDraft: s.chatInputDraft }))
+);
+```
+
+**VALIDATE**: `npx tsc --noEmit`
+
+---
+
 ### CREATE archon-ui-main/src/features/orchestrator-chat/types/index.ts:
 
 - DEFINE: ChatMessage interface

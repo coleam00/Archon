@@ -55,6 +55,25 @@ You only have to run the ones you haven't already! If you don't remember exactly
 - Records all applied migrations
 - Enables migration version control
 
+**2.9. `009_add_cascade_delete_constraints.sql`**
+- Adds cascade delete constraints to maintain referential integrity
+- Ensures cleanup of related records when parent records are deleted
+
+**2.10. `010_add_provider_placeholders.sql`**
+- Adds provider-related columns for multi-provider support
+- Prepares database for future provider flexibility
+
+**2.11. `011_add_page_metadata_table.sql`**
+- Creates page metadata tracking table
+- Improves crawl page tracking and organization
+
+**2.12. `012_add_context_hub_tables.sql`** ⭐ NEW FEATURE
+- Adds Context Engineering Hub feature to Archon
+- Creates template tables: agent_templates, step_templates, workflow_templates, coding_standards
+- Enables template management for workflows, agents, and coding standards
+- Seeds 3 agent templates, 5 step templates, 2 workflows, 3 coding standards
+- **Feature Toggle**: Enabled by default in Settings → Features
+
 ## Migration Process (Follow This Order!)
 
 ### Step 1: Backup Your Data
@@ -74,6 +93,10 @@ You only have to run the ones you haven't already! If you don't remember exactly
 -- 6. Run: 006_ollama_create_indexes_optional.sql (optional - may timeout)
 -- 7. Run: 007_add_priority_column_to_tasks.sql
 -- 8. Run: 008_add_migration_tracking.sql
+-- 9. Run: 009_add_cascade_delete_constraints.sql
+-- 10. Run: 010_add_provider_placeholders.sql
+-- 11. Run: 011_add_page_metadata_table.sql
+-- 12. Run: 012_add_context_hub_tables.sql ⭐ NEW FEATURE
 ```
 
 ### Step 3: Restart Services
@@ -104,6 +127,10 @@ psql -h your-supabase-host -p 5432 -U postgres -d postgres
 \i /path/to/006_ollama_create_indexes_optional.sql
 \i /path/to/007_add_priority_column_to_tasks.sql
 \i /path/to/008_add_migration_tracking.sql
+\i /path/to/009_add_cascade_delete_constraints.sql
+\i /path/to/010_add_provider_placeholders.sql
+\i /path/to/011_add_page_metadata_table.sql
+\i /path/to/012_add_context_hub_tables.sql
 
 # Exit
 \q
@@ -120,6 +147,10 @@ docker cp 005_ollama_create_functions.sql supabase-db:/tmp/
 docker cp 006_ollama_create_indexes_optional.sql supabase-db:/tmp/
 docker cp 007_add_priority_column_to_tasks.sql supabase-db:/tmp/
 docker cp 008_add_migration_tracking.sql supabase-db:/tmp/
+docker cp 009_add_cascade_delete_constraints.sql supabase-db:/tmp/
+docker cp 010_add_provider_placeholders.sql supabase-db:/tmp/
+docker cp 011_add_page_metadata_table.sql supabase-db:/tmp/
+docker cp 012_add_context_hub_tables.sql supabase-db:/tmp/
 
 # Execute migrations in order
 docker exec -it supabase-db psql -U postgres -d postgres -f /tmp/001_add_source_url_display_name.sql
@@ -130,6 +161,10 @@ docker exec -it supabase-db psql -U postgres -d postgres -f /tmp/005_ollama_crea
 docker exec -it supabase-db psql -U postgres -d postgres -f /tmp/006_ollama_create_indexes_optional.sql
 docker exec -it supabase-db psql -U postgres -d postgres -f /tmp/007_add_priority_column_to_tasks.sql
 docker exec -it supabase-db psql -U postgres -d postgres -f /tmp/008_add_migration_tracking.sql
+docker exec -it supabase-db psql -U postgres -d postgres -f /tmp/009_add_cascade_delete_constraints.sql
+docker exec -it supabase-db psql -U postgres -d postgres -f /tmp/010_add_provider_placeholders.sql
+docker exec -it supabase-db psql -U postgres -d postgres -f /tmp/011_add_page_metadata_table.sql
+docker exec -it supabase-db psql -U postgres -d postgres -f /tmp/012_add_context_hub_tables.sql
 ```
 
 ## Migration Safety
@@ -154,4 +189,5 @@ docker exec -it supabase-db psql -U postgres -d postgres -f /tmp/008_add_migrati
 3. **Configure New Features:**
    - Go to Settings page in Archon UI
    - Configure your preferred LLM and embedding models
-   - New crawls will automatically use model tracking
+   - Enable Context Hub feature toggle (if running migration 012)
+   - Navigate to /context-hub to create templates

@@ -1364,12 +1364,200 @@ You are the Data-Builder Agent. Your purpose is to transform descriptions of dat
 Remember: Create production-ready data models.', 'System prompt for creating data models in the data array');
 
 -- =====================================================
+-- CONTEXT ENGINEERING HUB TABLES
+-- =====================================================
+-- Template library for workflows, agents, steps, and coding standards
+-- Accessible via MCP server for manual IDE usage
+-- Used by Agent Work Orders for automated workflow execution
+-- =====================================================
+
+-- Step type enum
+CREATE TYPE workflow_step_type AS ENUM (
+  'planning',    -- Requirements analysis, design (≥1 required in workflow)
+  'implement',   -- Code changes, features (≥1 required in workflow)
+  'validate',    -- Testing, review, verification (≥1 required in workflow)
+  'prime',       -- Context loading, repo priming (optional)
+  'git'          -- Git operations: create-branch, commit, create-pr (optional)
+);
+
+-- Agent Templates
+CREATE TABLE archon_agent_templates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  slug TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  system_prompt TEXT NOT NULL,
+  model TEXT DEFAULT 'sonnet',
+  temperature REAL DEFAULT 0.0,
+  tools JSONB DEFAULT '[]',
+  standards JSONB DEFAULT '{}',
+  metadata JSONB DEFAULT '{}',
+  is_active BOOLEAN DEFAULT TRUE,
+  version INTEGER DEFAULT 1,
+  parent_template_id UUID REFERENCES archon_agent_templates(id) ON DELETE SET NULL,
+  created_by TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+
+  CONSTRAINT unique_agent_slug_version UNIQUE (slug, version)
+);
+
+CREATE INDEX idx_agent_templates_slug ON archon_agent_templates(slug);
+CREATE INDEX idx_agent_templates_active ON archon_agent_templates(is_active) WHERE is_active = TRUE;
+CREATE INDEX idx_agent_templates_parent ON archon_agent_templates(parent_template_id);
+
+COMMENT ON TABLE archon_agent_templates IS 'Reusable agent definitions with prompts, tools, and standards';
+COMMENT ON COLUMN archon_agent_templates.tools IS 'Array of tool names: ["Read", "Write", "Edit", "Bash"]';
+COMMENT ON COLUMN archon_agent_templates.version IS 'Version number (updates create new versions)';
+
+-- Step Templates
+CREATE TABLE archon_step_templates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  step_type workflow_step_type NOT NULL,
+  slug TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  prompt_template TEXT NOT NULL,
+  agent_template_id UUID REFERENCES archon_agent_templates(id) ON DELETE SET NULL,
+  sub_steps JSONB DEFAULT '[]',
+  metadata JSONB DEFAULT '{}',
+  is_active BOOLEAN DEFAULT TRUE,
+  version INTEGER DEFAULT 1,
+  parent_template_id UUID REFERENCES archon_step_templates(id) ON DELETE SET NULL,
+  created_by TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+
+  CONSTRAINT unique_step_slug_version UNIQUE (slug, version)
+);
+
+CREATE INDEX idx_step_templates_type ON archon_step_templates(step_type);
+CREATE INDEX idx_step_templates_slug ON archon_step_templates(slug);
+CREATE INDEX idx_step_templates_active ON archon_step_templates(is_active) WHERE is_active = TRUE;
+CREATE INDEX idx_step_templates_agent ON archon_step_templates(agent_template_id);
+
+COMMENT ON TABLE archon_step_templates IS 'Workflow step templates with multi-agent sub-workflow support';
+COMMENT ON COLUMN archon_step_templates.sub_steps IS 'Array of sub-step configs: [{order, name, agent_template_slug, prompt_template, required}, ...]';
+
+-- Workflow Templates
+CREATE TABLE archon_workflow_templates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  slug TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  steps JSONB NOT NULL,
+  metadata JSONB DEFAULT '{}',
+  is_active BOOLEAN DEFAULT TRUE,
+  created_by TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_workflow_templates_slug ON archon_workflow_templates(slug);
+CREATE INDEX idx_workflow_templates_active ON archon_workflow_templates(is_active) WHERE is_active = TRUE;
+
+COMMENT ON TABLE archon_workflow_templates IS 'Complete workflow sequences (must have ≥1 planning, implement, validate)';
+
+-- Coding Standards Library
+CREATE TABLE archon_coding_standards (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  slug TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  language TEXT NOT NULL,
+  description TEXT,
+  standards JSONB NOT NULL,
+  metadata JSONB DEFAULT '{}',
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_coding_standards_slug ON archon_coding_standards(slug);
+CREATE INDEX idx_coding_standards_language ON archon_coding_standards(language);
+CREATE INDEX idx_coding_standards_active ON archon_coding_standards(is_active) WHERE is_active = TRUE;
+
+COMMENT ON TABLE archon_coding_standards IS 'Reusable coding standards library';
+
+-- Seed default templates
+INSERT INTO archon_agent_templates (slug, name, description, system_prompt, model, tools, metadata)
+VALUES
+  ('python-backend-expert', 'Python Backend Expert', 'Expert in FastAPI, async Python, and backend architecture',
+   'You are a Python backend development expert specializing in FastAPI, async programming, database design, and API architecture. You write clean, type-safe code following PEP 8 and modern Python best practices.',
+   'sonnet', '["Read", "Write", "Edit", "Grep", "Bash"]'::jsonb, '{"tags": ["python", "backend", "fastapi"]}'::jsonb),
+  ('code-reviewer', 'Code Reviewer', 'Expert code reviewer focusing on quality, security, and best practices',
+   'You are an expert code reviewer with deep knowledge of software engineering principles, security best practices, and code quality standards. You provide constructive feedback and identify potential issues.',
+   'sonnet', '["Read", "Grep"]'::jsonb, '{"tags": ["review", "security", "quality"]}'::jsonb),
+  ('react-frontend-specialist', 'React Frontend Specialist', 'Expert in React, TypeScript, and modern frontend development',
+   'You are a frontend development expert specializing in React, TypeScript, TanStack Query, and modern UI development. You build responsive, accessible, and performant user interfaces.',
+   'sonnet', '["Read", "Write", "Edit", "Grep"]'::jsonb, '{"tags": ["react", "frontend", "typescript"]}'::jsonb);
+
+INSERT INTO archon_step_templates (step_type, slug, name, description, prompt_template, agent_template_id, sub_steps)
+SELECT
+  'planning', 'standard-planning', 'Standard Planning', 'Requirements analysis and implementation planning',
+  'Analyze the following request and create a detailed implementation plan:\n\n{{user_request}}\n\nConsider:\n- Requirements and constraints\n- Technical approach\n- Implementation steps\n- Testing strategy\n- Potential risks',
+  (SELECT id FROM archon_agent_templates WHERE slug = 'python-backend-expert' LIMIT 1), '[]'::jsonb
+UNION ALL SELECT
+  'implement', 'standard-implement', 'Standard Implementation', 'Code implementation following the plan',
+  'Implement the following plan:\n\n{{previous_output}}\n\nEnsure:\n- Clean, type-safe code\n- Proper error handling\n- Comprehensive logging\n- Following coding standards',
+  (SELECT id FROM archon_agent_templates WHERE slug = 'python-backend-expert' LIMIT 1), '[]'::jsonb
+UNION ALL SELECT
+  'validate', 'standard-review', 'Standard Review', 'Code review and validation',
+  'Review the implementation:\n\n{{previous_output}}\n\nCheck for:\n- Code quality and best practices\n- Security vulnerabilities\n- Test coverage\n- Documentation completeness',
+  (SELECT id FROM archon_agent_templates WHERE slug = 'code-reviewer' LIMIT 1), '[]'::jsonb
+UNION ALL SELECT
+  'prime', 'repo-priming', 'Repository Priming', 'Load repository context and architecture',
+  'Prime your understanding of the repository:\n\nRepository: {{repository_url}}\nPriming Context: {{priming_context}}\n\nReview the codebase structure, architecture, and key files.',
+  (SELECT id FROM archon_agent_templates WHERE slug = 'python-backend-expert' LIMIT 1), '[]'::jsonb
+UNION ALL SELECT
+  'git', 'create-pr', 'Create Pull Request', 'Create GitHub pull request with changes',
+  'Create a pull request with the implemented changes:\n\nBranch: {{git_branch}}\nCommits: {{git_commits}}\n\nEnsure:\n- Clear PR title and description\n- Links to related issues\n- Test results included',
+  (SELECT id FROM archon_agent_templates WHERE slug = 'python-backend-expert' LIMIT 1), '[]'::jsonb;
+
+INSERT INTO archon_workflow_templates (slug, name, description, steps)
+VALUES
+  ('standard-dev', 'Standard Development Workflow', 'Basic plan → implement → review workflow',
+   '[
+     {"step_type": "planning", "order": 1, "step_template_slug": "standard-planning", "pause_after": false},
+     {"step_type": "implement", "order": 2, "step_template_slug": "standard-implement", "pause_after": false},
+     {"step_type": "validate", "order": 3, "step_template_slug": "standard-review", "pause_after": false}
+   ]'::jsonb),
+  ('fullstack-workflow', 'Fullstack Development Workflow', 'Complete workflow with priming and PR creation',
+   '[
+     {"step_type": "prime", "order": 1, "step_template_slug": "repo-priming", "pause_after": false},
+     {"step_type": "planning", "order": 2, "step_template_slug": "standard-planning", "pause_after": false},
+     {"step_type": "implement", "order": 3, "step_template_slug": "standard-implement", "pause_after": false},
+     {"step_type": "validate", "order": 4, "step_template_slug": "standard-review", "pause_after": false},
+     {"step_type": "git", "order": 5, "step_template_slug": "create-pr", "pause_after": false}
+   ]'::jsonb);
+
+INSERT INTO archon_coding_standards (slug, name, language, description, standards)
+VALUES
+  ('typescript-strict', 'TypeScript Strict', 'typescript', 'TypeScript with strict mode and comprehensive type checking',
+   '{"linter": "tsc", "strict": true, "noImplicitAny": true, "rules": ["no-any", "no-explicit-any"]}'::jsonb),
+  ('python-ruff', 'Python Ruff Linter', 'python', 'Python linting with Ruff (fast Rust-based linter)',
+   '{"linter": "ruff", "line_length": 120, "rules": ["E", "F", "I"], "exclude": ["migrations/", "tests/"]}'::jsonb),
+  ('react-best-practices', 'React Best Practices', 'javascript', 'React development standards and best practices',
+   '{"linter": "biome", "rules": ["react-hooks", "react-jsx-key"], "jsx": true, "formatting": {"line_width": 120}}'::jsonb);
+
+-- Enable Context Hub feature by default
+INSERT INTO archon_credentials (key, value, is_encrypted, category, description)
+VALUES (
+  'CONTEXT_HUB_ENABLED',
+  'true',
+  FALSE,
+  'features',
+  'Enable Context Engineering Hub for template management'
+)
+ON CONFLICT (key) DO NOTHING;
+
+-- =====================================================
 -- SETUP COMPLETE
 -- =====================================================
 -- Your Archon database is now fully configured!
 --
 -- Next steps:
 -- 1. Add your OpenAI API key via the Settings UI
--- 2. Enable Projects feature if needed
--- 3. Start crawling websites or uploading documents
+-- 2. Enable/disable features in Settings → Features
+-- 3. Navigate to /context-hub to create templates (if enabled)
+-- 4. Start crawling websites or uploading documents
 -- =====================================================

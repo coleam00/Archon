@@ -299,6 +299,51 @@ Checkpoints are configured in workflow templates (Phase 1):
 - ADD: `router.include_router(pause_router)` (include in main router)
 - **VALIDATE**: `grep -q "pause_router" python/src/agent_work_orders/api/routes.py && echo "✓"`
 
+### UPDATE archon-ui-main/src/features/agent-work-orders/state/agentWorkOrdersStore.ts:
+
+**ADD NEW SLICE**: `slices/pauseSlice.ts`
+
+**Client UI State** (Zustand - follows `PRPs/ai_docs/ZUSTAND_STATE_MANAGEMENT.md`):
+```typescript
+export interface PauseSlice {
+  // Feedback modal state
+  showFeedbackModal: boolean;
+  openFeedbackModal: () => void;
+  closeFeedbackModal: () => void;
+
+  // Feedback draft (persisted)
+  feedbackDraft: string;
+  setFeedbackDraft: (draft: string) => void;
+  clearFeedbackDraft: () => void;
+
+  // Selected decision (ephemeral - used during submission)
+  pendingDecision: 'approve' | 'revise' | 'cancel' | null;
+  setPendingDecision: (decision: PauseSlice['pendingDecision']) => void;
+}
+```
+
+**Update Store Type**:
+```typescript
+export type AgentWorkOrdersStore = UIPreferencesSlice & ModalsSlice & FiltersSlice & SSESlice & OrchestratorSlice & PauseSlice;
+```
+
+**Update Persistence** (partialize):
+```typescript
+feedbackDraft: state.feedbackDraft, // PERSIST (recover from accidental close)
+// Do NOT persist: showFeedbackModal, pendingDecision (ephemeral)
+```
+
+**Selector Usage**:
+```typescript
+// ✅ Single value
+const feedbackDraft = useAgentWorkOrdersStore((s) => s.feedbackDraft);
+const setFeedbackDraft = useAgentWorkOrdersStore((s) => s.setFeedbackDraft);
+```
+
+**VALIDATE**: `npx tsc --noEmit`
+
+---
+
 ### CREATE archon-ui-main/src/features/agent-work-orders/components/PauseStateCard.tsx:
 
 - IMPLEMENT: Pause state display and action component

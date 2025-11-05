@@ -1,246 +1,229 @@
 # Agent Work Orders - Phase Summary & Quick Reference
 
 **Last Updated**: 2025-01-05
-**Status**: Planning Complete, Ready for Implementation
-**Total Phases**: 6 (5 immediate + 1 deferred)
-**Estimated Timeline**: 11.5-14.5 weeks
+**Status**: Architecture Finalized, Ready for Implementation
+**Total Phases**: 7 (6 implementation + 1 deferred)
 
 ---
 
 ## Quick Reference
 
-| Phase | Name | Duration | Risk | Breaking | Status | PRP File |
-|-------|------|----------|------|----------|--------|----------|
-| **1** | Template Storage | 1.5w | 🟢 Low | ❌ None | 🔴 Not Started | `story_phase1_template_system_backend.md` |
-| **2** | Context Hub UI | 2w | 🟢 Low | ❌ None | 🔴 Not Started | `story_phase2_context_hub_frontend.md` |
-| **3A** | Template Execution | 2.5w | 🟡 Med | ⚠️ Flag | 🔴 Not Started | `story_awo_template_execution_system.md` |
-| **3B** | Orchestrator Agent | 2w | 🟢 Low | ❌ None | 🔴 Not Started | `story_phase3b_orchestrator_agent.md` |
-| **4** | Human-in-Loop | 2w | 🟡 Med | ⚠️ Timing | 🔴 Not Started | `story_phase4_hitl_pause_resume.md` |
-| **5** | CLI Adapters | 1.5w | 🟢 Low | ❌ None | 🔴 Not Started | `story_phase5_cli_adapter_system.md` |
-| **6** | Parallel Execution | 3-4w | 🔴 High | ⚠️ Complex | ⚪ Deferred | *(Not yet created)* |
-
-**Total**: 11.5 weeks (optimistic) | 14.5 weeks (conservative with buffer)
+| Phase | Name | Risk | Breaking | Status | PRP File |
+|-------|------|------|----------|--------|----------|
+| **0** | Database Setup | 🟢 Low | ❌ None | 🟢 Complete | `story_phase0_database_setup.md` |
+| **1** | Context Hub | 🟢 Low | ❌ None | 🔴 Not Started | `story_phase1_context_hub.md` |
+| **2** | AWO Foundation | 🟢 Low | ❌ None | 🔴 Not Started | `story_phase2_awo_foundation.md` |
+| **3** | AWO Execution | 🟡 Med | ⚠️ Flag | 🔴 Not Started | `story_phase3_awo_execution.md` |
+| **4** | Orchestrator | 🟢 Low | ❌ None | 🔴 Not Started | `story_phase4_orchestrator.md` |
+| **5** | HITL | 🟡 Med | ⚠️ Timing | 🔴 Not Started | `story_phase5_hitl.md` |
+| **6** | CLI Adapters | 🟢 Low | ❌ None | 🔴 Not Started | `story_phase6_cli_adapters.md` |
+| **7** | Parallel Exec | 🔴 High | ⚠️ Complex | ⚪ Deferred | *(Not yet created)* |
 
 ---
 
 ## Phase Dependency Chain
 
 ```
-Phase 1 → Phase 2 → Phase 3A → Phase 3B → Phase 4 → Phase 5 → Phase 6
-   ↓         ↓          ↓          ↓          ↓         ↓         ↓
-Storage → UI → Execution → Chat → Pause → Multi-CLI → Parallel
+Phase 0 → Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5 → Phase 6 → Phase 7
+   ↓         ↓          ↓          ↓          ↓         ↓         ↓         ↓
+ Setup → Context → AWO Link → Execution → Chat → Pause → Multi-CLI → Parallel
 ```
 
-**Critical Path**: Phase 3A (everything else depends on it)
+**Critical Path**: Phase 3 (all automation depends on it)
 
 **Parallelization Opportunities**:
-- Phase 3B and Phase 4 can start simultaneously after Phase 3A
-- Phase 5 only needs Phase 3A (independent of 3B and 4)
+- Phase 4 and Phase 5 can start after Phase 3 (independent)
+- Phase 6 only needs Phase 3 (independent of 4 and 5)
 
 ---
 
 ## One-Sentence Descriptions
 
-### Phase 1: Template Storage
-**What**: Store agent/step/workflow templates in database with versioning, sub-workflow support, and CRUD APIs.
-**Why**: Foundation for all customization - must exist before UI or execution can use templates.
-**Critical Validation**: Existing work orders MUST still use hardcoded .md files (templates are storage only).
+### Phase 0: Database Setup
+**What**: SQL migrations for Context Hub (core) and AWO (optional) with seed data.
+**Why**: Foundation for all data storage - templates, workflows, coding standards, repositories, work orders.
+**Critical Validation**: Migrations run successfully, seed data loads, all tables indexed correctly.
 
-### Phase 2: Context Hub UI
-**What**: Build web interface for browsing, creating, editing templates with sub-workflow builder.
-**Why**: Users need UI to manage templates before they can be executed in Phase 3A.
-**Critical Validation**: Creating work orders via UI MUST still use hardcoded commands (UI is display only).
+### Phase 1: Context Hub
+**What**: Backend APIs + Frontend UI for managing templates, workflows, agents, and coding standards.
+**Why**: Users need UI to create/edit templates before they can be used by AWO or MCP server.
+**Critical Validation**: Workflow validation enforces required step types (planning, implement, validate).
 
-### Phase 3A: Template Execution System
-**What**: Refactor orchestrator to execute workflows using templates with multi-agent sub-workflow support, flag-gated per repository.
-**Why**: This is where templates become REAL - workflows actually use custom agents and sub-workflows instead of hardcoded .md files.
-**Critical Validation**: Flag toggle works - default repositories use hardcoded, opt-in repositories use templates.
+### Phase 2: AWO Foundation
+**What**: Link repositories to Context Hub templates with customizations (priming context, coding standards, agent overrides).
+**Why**: Repository-specific configurations without modifying generic templates.
+**Critical Validation**: Template → repository linking works, overrides don't affect templates, step selection documented.
 
-### Phase 3B: Orchestrator Agent
-**What**: PydanticAI conversational agent with intelligent task analysis and template selection via natural language chat.
-**Why**: Makes template system accessible - users can create work orders by chatting instead of filling forms.
-**Critical Validation**: Orchestrator creates work orders that use template execution (not hardcoded).
+### Phase 3: AWO Execution
+**What**: Execute workflows using Context Hub templates + repository overrides, with sub-workflow support, flag-gated per repo.
+**Why**: This is where templates become REAL - workflows execute using custom agents and sub-workflows.
+**Critical Validation**: Hardcoded mode (default) still works, template mode executes correctly, sub-workflows work.
 
-### Phase 4: Human-in-the-Loop
-**What**: Configurable pause checkpoints (pause_after flag in templates) with approve/revise/cancel decisions.
+### Phase 4: Orchestrator Agent
+**What**: PydanticAI conversational agent with intelligent workflow/agent selection via natural language chat.
+**Why**: Makes template system accessible - users create work orders by chatting instead of filling forms.
+**Critical Validation**: Task analysis recommends correct agents, work orders created via chat execute successfully.
+
+### Phase 5: Human-in-the-Loop
+**What**: Configurable pause checkpoints (`pause_after` flag in templates) with approve/revise/cancel decisions.
 **Why**: Users need to review plans/code before proceeding - critical for production use.
-**Critical Validation**: Workflows with pause_after=false still run end-to-end (backward compat with Phase 3A).
+**Critical Validation**: Workflows without pause_after still run end-to-end (backward compat).
 
-### Phase 5: CLI Adapter System
-**What**: Generic adapter architecture supporting Claude, Gemini, Codex CLIs with provider switching per repository/agent.
+### Phase 6: Multi-CLI Support
+**What**: Generic adapter architecture supporting Claude, Gemini, Codex CLIs with provider switching.
 **Why**: Flexibility - use best CLI for each task type, not locked into Claude.
-**Critical Validation**: Default provider (Claude) works identically to pre-Phase 5 behavior.
+**Critical Validation**: Default provider (Claude) works identically to pre-Phase 6 behavior.
 
-### Phase 6: Parallel CLI Execution (Deferred)
-**What**: Run multiple CLIs simultaneously (Claude AND Gemini), compare outputs, merge results or let user choose.
-**Why**: Compare AI providers side-by-side, select best implementation, A/B testing.
-**Decision**: Defer until Phases 1-5 stable - high complexity, resource intensive.
+### Phase 7: Parallel Execution (Deferred)
+**What**: Run multiple CLIs simultaneously, compare outputs, merge results or let user choose.
+**Why**: Compare AI providers side-by-side, A/B testing, select best implementation.
+**Decision**: Defer until Phases 0-6 stable - high complexity, resource intensive.
 
 ---
 
-## Key Innovations
+## Key Architectural Concepts
 
-### 1. Multi-Agent Sub-Workflows
-**Enabled By**: Phase 1 (storage), Phase 2 (builder), Phase 3A (execution)
+### Context Hub vs Agent Work Orders
 
-```yaml
-Planning Step:
-  Sub-Step 1: Requirements Analyst analyzes user request
-  Sub-Step 2: Security Expert reviews for vulnerabilities
-  Sub-Step 3: Architect synthesizes implementation plan
-Result: Comprehensive plan from 3 specialized perspectives
+**Context Hub** (Core Archon Feature):
+- **Storage:** `complete_setup.sql` (core database)
+- **Purpose:** Template library accessible by MCP server
+- **Usage:** Manual (IDE agents query MCP → download → create `.claude/commands/`)
+- **Tables:** agent_templates, step_templates, workflow_templates, coding_standards
+
+**Agent Work Orders** (Optional Automation):
+- **Storage:** `agent_work_orders_complete.sql` (optional database)
+- **Purpose:** Automated workflow execution using Context Hub templates
+- **Usage:** Autonomous (git ops, commits, PRs, template execution)
+- **Tables:** configured_repositories, repository_agent_overrides, agent_work_orders
+
+### Template → Instance Pattern
+
+**Templates** (Context Hub):
+- Generic, reusable definitions
+- Shared across all repositories
+- Updated via Context Hub UI
+
+**Instances** (Repository-Specific):
+- Based on templates with customizations
+- Priming context (file paths, architecture)
+- Coding standards (TypeScript, Ruff, pytest)
+- Agent tool overrides
+- Changes don't affect templates
+
+**Example:**
+```
+Template: "Python Backend Expert" (generic)
+    ↓ Apply to Repository
+Instance: "Python Backend Expert" (my-nextjs-app)
+  + Priming: "Backend is in /services/api/src"
+  + Coding Standards: [TypeScript, Ruff]
+  + Tool Override: Add "Bash" to tools list
 ```
 
-**Use Cases**:
-- Complex features requiring multiple expertise areas
-- Security-critical implementations (always include security expert)
-- Full-stack features (frontend + backend + infrastructure experts)
-- Code reviews (multiple reviewers with different focuses)
+### Step Type System
 
-### 2. Template-Based Execution
-**Enabled By**: Phase 3A
+**Step Types** (Enum):
+- `'planning'` - Requirements analysis, design (≥1 required)
+- `'implement'` - Code changes, features (≥1 required)
+- `'validate'` - Testing, review, verification (≥1 required)
+- `'prime'` - Context loading, repo priming (optional)
+- `'git'` - Git operations: create-branch, commit, create-pr (optional)
 
-**Before (Hardcoded)**:
-```python
-# Reads: .claude/commands/agent-work-orders/planning.md
-prompt = read_file(".claude/commands/planning.md")
+**Workflow Validation:**
+- Every workflow MUST have ≥1 planning, implement, validate step
+- Can have multiple of each type
+- Can have optional prime/git steps
+
+### Sub-Workflow Architecture
+
+**Single-Agent Step:**
+```
+Step: "Planning"
+Agent: Python Backend Expert
+Prompt: "Create implementation plan..."
 ```
 
-**After (Template-Based)**:
-```python
-# Reads from database, resolves agents, renders with context
-workflow = resolve_workflow_for_repository(repo_id)
-step_config = workflow.steps.find(s => s.step_type == "planning")
-prompt = render_prompt(step_config.prompt_template, context)
-agents = resolve_agents_for_sub_steps(step_config.sub_steps)
+**Multi-Agent Sub-Workflow:**
+```
+Step: "Planning"
+  Sub-Step 1 (order: 1):
+    Agent: Requirements Analyst
+    Prompt: "Analyze requirements for: {{user_request}}"
+  Sub-Step 2 (order: 2):
+    Agent: Security Expert
+    Prompt: "Review security of: {{sub_steps.0.output}}"
+  Sub-Step 3 (order: 3):
+    Agent: Architect
+    Prompt: "Synthesize plan from: {{sub_steps.0.output}}, {{sub_steps.1.output}}"
 ```
 
-**Benefits**:
-- Customizable per repository
-- Version-controlled changes
-- Multi-agent collaboration
-- No code changes to update prompts
+**Result:** Comprehensive plan from multiple specialized perspectives.
 
-### 3. Intelligent Orchestration
-**Enabled By**: Phase 3B
+### Coding Standards System
 
-**User**: "Add authentication to my API"
+**Coding Standards Library** (Context Hub):
+- Reusable standards for different languages/tools
+- Examples: "TypeScript Strict", "Python Ruff", "React Best Practices"
+- Stored as JSONB: linter config, rules, min coverage, etc.
 
-**Orchestrator**:
-1. Analyzes task (backend, security-critical)
-2. Recommends agents (Python Expert + Security Expert)
-3. Suggests multi-agent planning workflow
-4. Creates work order with recommended templates
-5. Monitors progress
-6. Notifies at checkpoints
+**Assignment to Repositories:**
+- Repository can have multiple coding standards
+- Standards applied during validation steps
+- Repository-specific, not per-workflow
 
-**Benefits**:
-- No manual template selection
-- Task-appropriate agent recommendations
-- Conversational UX (no forms)
-- Intelligent defaults
+**Example:**
+```sql
+-- Create coding standard
+INSERT INTO archon_coding_standards (
+  slug = 'typescript-strict',
+  language = 'typescript',
+  standards = {
+    "linter": "tsc",
+    "strict": true,
+    "rules": ["no-any", "no-implicit-any"]
+  }
+);
 
-### 4. Configurable HITL Checkpoints
-**Enabled By**: Phase 4
-
-**Workflow Template A** (High Oversight):
-```yaml
-Planning: pause_after=true
-Execute: pause_after=true
-Review: pause_after=true
-Result: User approves at every step
+-- Assign to repository
+UPDATE archon_configured_repositories
+SET coding_standard_ids = ['typescript-strict-uuid', 'ruff-uuid']
+WHERE id = 'my-repo-uuid';
 ```
-
-**Workflow Template B** (Quick Fixes):
-```yaml
-Planning: pause_after=false
-Execute: pause_after=false
-Result: Runs end-to-end without pausing
-```
-
-**Benefits**:
-- Flexible oversight (high for critical work, low for minor fixes)
-- User controls when to review
-- Prevents wasted work (catch issues early)
-
-### 5. Provider Flexibility
-**Enabled By**: Phase 5
-
-**Repository Defaults**:
-- Repo A (Python project): Claude CLI (best for Python)
-- Repo B (Frontend project): Gemini CLI (test alternative)
-
-**Agent Overrides**:
-- Security Expert agent: Always uses Codex (specialized security analysis)
-
-**Benefits**:
-- Use best CLI for each task
-- Easy to switch providers
-- Compare providers over time
-- Not locked into single vendor
 
 ---
 
 ## Critical Success Factors
 
 ### 1. Backward Compatibility (Every Phase)
-**Rule**: Existing work orders MUST continue to work with hardcoded .md files until Phase 3A + flag enabled.
+**Rule**: Existing work orders MUST continue working with hardcoded .md files until Phase 3 + flag enabled.
 
-**Test (Run After Every Phase)**:
+**Test (Run After Every Phase):**
 ```bash
 curl -X POST .../agent-work-orders/ -d '{"repository_url": "...", "user_request": "..."}'
 curl -N .../logs/stream | grep "\.md"
 # MUST see: "Loading command from: .claude/commands/agent-work-orders/planning.md"
 ```
 
-### 2. Incremental Rollout (Phase 3A)
-**Rule**: Template execution flag-gated per repository (use_template_execution).
+### 2. Incremental Rollout (Phase 3)
+**Rule**: Template execution flag-gated per repository (`use_template_execution`).
 
-**Test**:
+**Test:**
 ```bash
 # Default: use_template_execution=false → hardcoded
 # Opt-in: use_template_execution=true → templates
 ```
 
-### 3. No Breaking Changes (Phases 1, 2, 3B, 5)
+### 3. No Breaking Changes (Phases 0, 1, 2, 4, 6)
 **Rule**: These phases are additive only - zero impact on existing functionality.
 
-**Test**: Create work order before phase → Create work order after phase → Identical behavior.
+**Test:** Create work order before phase → Create work order after phase → Identical behavior.
 
-### 4. Controlled Breaking Changes (Phases 3A, 4)
+### 4. Controlled Breaking Changes (Phases 3, 5)
 **Rule**: Changes allowed but gated by configuration.
 
-**Phase 3A**: Flag-gated per repository
-**Phase 4**: Workflows without pause_after=true unaffected
-
----
-
-## Testing Strategy
-
-### Unit Tests (Every Phase)
-- 80%+ code coverage
-- Mock external dependencies
-- Test edge cases and error handling
-- Fast (< 5 seconds total)
-
-### Integration Tests (Every Phase)
-- API endpoints functional
-- Services communicate correctly
-- Database operations work
-- Medium speed (< 30 seconds total)
-
-### E2E Tests (After Each Phase)
-- Full user journeys
-- Real CLI execution (in test mode)
-- Git operations
-- Slow (2-5 minutes total)
-
-### Backward Compatibility Tests (Every Phase - MANDATORY)
-- Create work order via existing flow
-- Verify hardcoded commands used
-- Verify no template errors
-- Verify workflow completes
-- **If this fails, phase implementation has failed**
+**Phase 3**: Flag-gated per repository
+**Phase 5**: Workflows without pause_after unaffected
 
 ---
 
@@ -248,24 +231,32 @@ curl -N .../logs/stream | grep "\.md"
 
 ### Database Migration Pattern
 ```sql
--- Prefix: archon_
--- Indexes: Always add for foreign keys and frequently queried columns
--- Constraints: UNIQUE, NOT NULL, CHECK, FK with ON DELETE CASCADE
--- Comments: Document purpose of tables and complex columns
+-- Core Archon (complete_setup.sql)
+CREATE TABLE archon_agent_templates (...);
+CREATE TABLE archon_step_templates (
+  ...,
+  step_type workflow_step_type NOT NULL -- Enum
+);
+
+-- Agent Work Orders (agent_work_orders_complete.sql)
+CREATE TABLE archon_configured_repositories (
+  ...,
+  workflow_template_id UUID FK NULL,
+  coding_standard_ids UUID[] DEFAULT '{}',
+  priming_context JSONB DEFAULT '{}'
+);
 ```
 
 ### Pydantic Model Pattern
 ```python
-class EntityTemplate(BaseModel):
+class AgentTemplate(BaseModel):
     id: str
-    slug: str  # Unique, URL-safe identifier
+    slug: str  # Unique identifier
     name: str
-    description: str
+    system_prompt: str
+    tools: list[str] = []  # Default tools
+    standards: dict[str, Any] = {}  # Default standards
     is_active: bool = True
-    version: int = 1
-    parent_template_id: str | None = None  # For versioning
-    created_at: datetime
-    updated_at: datetime
 ```
 
 ### Service Pattern
@@ -274,29 +265,14 @@ class TemplateService:
     async def list_templates(self, filter_by=None) -> list[Template]:
         """List templates with optional filtering"""
 
-    async def get_template(self, slug: str) -> Template:
+    async def get_template(self, slug: str) -> Template | None:
         """Get single template by slug"""
 
     async def create_template(self, data: CreateRequest) -> Template:
-        """Create new template (version 1)"""
+        """Create new template"""
 
     async def update_template(self, slug: str, updates: UpdateRequest) -> Template:
-        """Update template (creates new version)"""
-```
-
-### API Route Pattern
-```python
-router = APIRouter()
-
-@router.get("/templates/agents")
-async def list_agent_templates() -> list[AgentTemplate]:
-    service = TemplateService()
-    return await service.list_templates()
-
-@router.post("/templates/agents")
-async def create_agent_template(data: CreateRequest) -> AgentTemplate:
-    service = TemplateService()
-    return await service.create_template(data)
+        """Update template"""
 ```
 
 ### TanStack Query Hook Pattern
@@ -315,6 +291,34 @@ export function useAgentTemplates() {
   })
 }
 ```
+
+---
+
+## Example User Flow
+
+### Scenario A: Manual IDE Agent Usage (Context Hub Only)
+1. User creates "Fullstack Dev Workflow" in Context Hub
+2. Template defines: Plan → Backend Implement → Frontend Implement → Validate
+3. User's Claude Code queries MCP server: "Give me Fullstack Dev Workflow"
+4. MCP returns template definitions
+5. Claude Code creates `.claude/commands/planning.md`, etc.
+6. User manually runs commands in IDE
+
+### Scenario B: Automated Agent Work Orders
+1. User creates "Fullstack Dev Workflow" in Context Hub (same as above)
+2. User goes to AWO page → "Apply template to repository"
+3. User customizes:
+   - Priming: "Frontend: apps/web/src, Backend: services/api/src"
+   - Coding Standards: [TypeScript Strict, Ruff]
+   - Agent Override: Add "Bash" to Python Expert tools
+4. User creates work order: "Add authentication feature"
+5. AWO automatically:
+   - Creates branch
+   - Runs Plan (uses repo-specific priming)
+   - Runs Backend Implement (knows backend is in /services/api)
+   - Runs Frontend Implement (knows frontend is in /apps/web)
+   - Runs Validate (applies TypeScript + Ruff standards)
+   - Creates commit + PR
 
 ---
 
@@ -353,8 +357,8 @@ export function useAgentTemplates() {
 
 ### Backward Compatibility (CRITICAL)
 - [ ] Create work order via existing flow
-- [ ] Logs show hardcoded .md files used
-- [ ] No template errors in logs
+- [ ] Logs show hardcoded .md files used (if applicable)
+- [ ] No template errors
 - [ ] Workflow completes successfully
 - [ ] Zero breaking changes
 
@@ -375,535 +379,151 @@ export function useAgentTemplates() {
 ## Command Reference
 
 ### Start Services
-
 ```bash
 # Backend services
 docker compose --profile backend up -d
 
 # Agent Work Orders service
-cd python
 uv run python -m uvicorn src.agent_work_orders.server:app --port 8053 --reload
 
 # Frontend
-cd archon-ui-main
-npm run dev
+cd archon-ui-main && npm run dev
 ```
 
 ### Run Tests
-
-```bash
-# Backend unit tests
-uv run pytest python/tests/agent_work_orders/ -v
-
-# Backend specific test file
-uv run pytest python/tests/agent_work_orders/services/test_template_service.py -v
-
-# Frontend unit tests
-npm run test src/features/context-hub/
-
-# Integration tests
-uv run pytest python/tests/agent_work_orders/integration/ -v
-```
-
-### Linting & Type Checking
-
 ```bash
 # Backend
-uv run ruff check python/src/agent_work_orders/ --fix
-uv run mypy python/src/agent_work_orders/
-uv run ruff format python/src/agent_work_orders/
+uv run pytest tests/agent_work_orders/ -v
+
+# Frontend
+npm run test src/features/context-hub/
+```
+
+### Linting
+```bash
+# Backend
+uv run ruff check src/agent_work_orders/ --fix
+uv run mypy src/agent_work_orders/
 
 # Frontend
 npx tsc --noEmit
 npm run biome:fix
-npx tsc --noEmit 2>&1 | grep "src/features/context-hub"
 ```
 
-### Database Operations
-
+### Database
 ```bash
-# Run migration in Supabase SQL Editor
-# Copy contents of migration/add_*.sql
-# Paste in SQL Editor
-# Execute
+# Run migrations in Supabase SQL Editor
+# 1. Run complete_setup.sql
+# 2. Run agent_work_orders_complete.sql
 
-# Verify table created
-SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'archon_%template%';
+# Verify tables
+SELECT table_name FROM information_schema.tables
+WHERE table_name LIKE 'archon_%template%' OR table_name LIKE 'archon_%work%order%';
 
-# Check data
+# Check seed data
 SELECT COUNT(*) FROM archon_agent_templates;
-SELECT * FROM archon_agent_templates LIMIT 5;
-```
-
-### API Testing
-
-```bash
-# List templates
-curl http://localhost:8053/api/agent-work-orders/templates/agents | jq .
-
-# Create template
-curl -X POST http://localhost:8053/api/agent-work-orders/templates/agents \
-  -H "Content-Type: application/json" \
-  -d '{...}' | jq .
-
-# Update template (creates version 2)
-curl -X PUT http://localhost:8053/api/agent-work-orders/templates/agents/{slug} \
-  -d '{...}' | jq .
-
-# Get versions
-curl http://localhost:8053/api/agent-work-orders/templates/agents/{slug}/versions | jq .
+SELECT COUNT(*) FROM archon_step_templates;
+SELECT COUNT(*) FROM archon_workflow_templates;
+SELECT COUNT(*) FROM archon_coding_standards;
 ```
 
 ---
 
 ## Phase Milestones
 
+### Phase 0 Complete When:
+- [ ] All migration files created
+- [ ] Migrations run successfully in Supabase
+- [ ] Seed data loaded
+- [ ] All tables verified
+
 ### Phase 1 Complete When:
-- [ ] Templates stored in database
-- [ ] APIs return seeded templates
-- [ ] Versioning creates version 2 on update
-- [ ] **Work orders still use hardcoded .md files**
+- [ ] Can create templates in Context Hub UI
+- [ ] Workflow validation enforces required step types
+- [ ] APIs return created templates
+- [ ] TypeScript compiles with zero errors
 
 ### Phase 2 Complete When:
-- [ ] Can browse templates in Context Hub UI
-- [ ] Can create agent templates via form
-- [ ] Can build sub-workflows with SubStepBuilder
-- [ ] Can configure repository preferences
-- [ ] **Work orders still use hardcoded .md files**
+- [ ] Can apply template to repository
+- [ ] Can customize priming context
+- [ ] Can assign coding standards
+- [ ] Can override agent tools per repo
+- [ ] Step selection documented
 
-### Phase 3A Complete When:
-- [ ] Flag toggle per repository works
-- [ ] Template execution produces successful work orders
-- [ ] Sub-workflows execute with multiple agents
-- [ ] **Hardcoded mode still works (default)**
-- [ ] **Template mode works (opt-in)**
-
-### Phase 3B Complete When:
-- [ ] Can chat with orchestrator
-- [ ] Task analysis recommends correct agents
-- [ ] Work orders created via chat use templates
-- [ ] Multi-turn conversations work
+### Phase 3 Complete When:
+- [ ] Hardcoded mode still works (default)
+- [ ] Template mode works (opt-in)
+- [ ] Sub-workflows execute correctly
+- [ ] Repository overrides applied
 
 ### Phase 4 Complete When:
-- [ ] Workflows pause at configured checkpoints
-- [ ] User can approve/revise/cancel
-- [ ] Revise re-runs step with feedback
-- [ ] **Workflows without pause_after=true still run end-to-end**
+- [ ] Can chat with orchestrator
+- [ ] Task analysis recommends correct agents
+- [ ] Work orders created via chat execute
 
 ### Phase 5 Complete When:
-- [ ] Can switch between Claude/Gemini per repository
-- [ ] Both CLIs produce normalized events
-- [ ] Agent template preferences override repository defaults
-- [ ] **Claude (default) works identically to pre-Phase 5**
+- [ ] Workflows pause at configured checkpoints
+- [ ] User can approve/revise/cancel
+- [ ] Workflows without pause_after run end-to-end
 
----
-
-## Core Architectural Concepts
-
-### Template Hierarchy
-
-```
-WorkflowTemplate (e.g., "Advanced Backend Workflow")
-    ↓
-StepConfig (e.g., Planning step with multi-agent flag)
-    ↓
-StepTemplate (e.g., "Multi-Agent Planning")
-    ↓
-SubStepConfig[] (e.g., 3 sub-steps)
-    ↓
-AgentTemplate (e.g., "Python Expert", "Security Expert", "Architect")
-```
-
-### Core Steps vs Setup Steps
-
-**Core Steps** (Configurable with templates):
-- **Planning**: Requirements → Design → Plan
-- **Execute**: Implementation → Testing → Documentation
-- **Review**: Code review → Security audit → Approval
-
-**Setup Steps** (Always hardcoded):
-- **create-branch**: Git branch/worktree creation
-- **commit**: Git staging and commit
-- **create-pr**: GitHub PR creation
-
-**Rationale**: Core steps need AI intelligence and customization. Setup steps are mechanical git/GitHub operations.
-
-### Sub-Workflow Execution Flow
-
-```
-1. Template Resolution
-   ↓
-2. Check sub_steps array
-   ↓
-3. If empty → Single-agent execution
-   ↓
-4. If populated → Multi-agent sub-workflow:
-   ↓
-   a. Execute sub-step 1 (agent A)
-   b. Pass output to sub-step 2 (agent B)
-   c. Pass outputs 1+2 to sub-step 3 (agent C)
-   d. Aggregate all outputs
-   ↓
-5. Return combined result
-```
-
-### CLI Adapter Flow
-
-```
-1. Get provider preference (Agent > Repository > Default)
-   ↓
-2. Adapter factory creates adapter instance
-   ↓
-3. Adapter executes CLI command
-   ↓
-4. Adapter parses stream-json output
-   ↓
-5. Adapter normalizes to CLIEvent
-   ↓
-6. Events consumed by orchestrator
-```
+### Phase 6 Complete When:
+- [ ] Can switch between Claude/Gemini
+- [ ] Event normalization works
+- [ ] Claude (default) works identically to pre-Phase 6
 
 ---
 
 ## Decision Log
 
-### Why Phase 3A is Critical Path?
-All subsequent phases depend on template execution working:
-- Phase 3B orchestrator needs templates to be used
-- Phase 4 HITL needs template-based checkpoints
-- Phase 5 CLI adapters work with template execution
+### Why Phase 0 is Setup Only?
+**Reason:** Separates pure database work from code implementation, allows user to verify schema before coding.
 
-### Why CLI Adapters are Last (Phase 5)?
-- Least critical for core functionality
-- No dependencies from other phases
-- Adds flexibility but doesn't enable new features
-- Can be skipped if only using Claude
+### Why Combine Backend + Frontend in Phase 1?
+**Reason:** Context Hub is not complex enough to split, and UI depends on backend APIs immediately.
 
-### Why Defer Parallel Execution (Phase 6)?
-- High complexity (parallel worktrees, result comparison, merging)
-- Resource intensive (2x API calls, 2x execution time)
-- Unclear user demand (prove value with Phase 5 first)
-- Phases 1-5 provide 90% of value
+### Why Coding Standards Separate from Workflows?
+**Reason:** More flexible - can mix and match standards without duplicating workflow definitions.
 
-### Why Polling for HITL Instead of WebSocket?
-- Simpler implementation (REST vs WebSocket)
-- Faster to market (Phase 4A)
-- Proven pattern (existing SSE logs use polling)
-- Can upgrade to WebSocket later (Phase 4B) without breaking changes
+### Why Agent Overrides at Repository Level, Not Work Order Level?
+**Reason:** Overrides are repository characteristics (tools needed for this codebase), not work order characteristics.
 
-### Why Separate Phase 3A from Phase 2?
-- Phase 2 is UI-heavy (frontend work)
-- Phase 3A is orchestrator-heavy (backend work)
-- Different skill sets required
-- Can be developed by different team members simultaneously
+### Why Defer MCP Server Until After Phase 6?
+**Reason:** Templates must exist and be stable before exposing via MCP. Focus on core functionality first.
 
----
-
-## Migration from Hardcoded to Templates
-
-### Current State (Before Phase 1)
-```
-Work Order Created
-    ↓
-Read: .claude/commands/agent-work-orders/planning.md
-    ↓
-Execute: Claude CLI with hardcoded prompt
-    ↓
-Read: .claude/commands/agent-work-orders/execute.md
-    ↓
-Execute: Claude CLI with hardcoded prompt
-    ↓
-Complete
-```
-
-### After Phase 1-2 (Templates Stored, UI Built)
-```
-Work Order Created
-    ↓
-Still reads: .claude/commands/agent-work-orders/planning.md
-    ↓
-Still executes: Claude CLI with hardcoded prompt
-    ↓
-Complete
-
-(Templates exist in DB but not used)
-```
-
-### After Phase 3A (Template Execution - Flag Disabled)
-```
-Work Order Created (repository.use_template_execution=false)
-    ↓
-Read: .claude/commands/agent-work-orders/planning.md
-    ↓
-Execute: Claude CLI with hardcoded prompt
-    ↓
-Complete
-
-(Same as before - backward compatible)
-```
-
-### After Phase 3A (Template Execution - Flag Enabled)
-```
-Work Order Created (repository.use_template_execution=true)
-    ↓
-Resolve: workflow_template = "advanced-dev"
-    ↓
-Resolve: step_template = "multi-agent-planning"
-    ↓
-Resolve: sub_steps = [Requirements Analyst, Security Expert, Architect]
-    ↓
-Execute: Sub-step 1 with agent A
-Execute: Sub-step 2 with agent B
-Execute: Sub-step 3 with agent C
-    ↓
-Aggregate: Combined plan from all 3 agents
-    ↓
-Continue workflow...
-    ↓
-Complete
-
-(NEW behavior - templates used)
-```
-
-### After Phase 5 (CLI Adapters)
-```
-Work Order Created (repository.use_template_execution=true, repository.preferred_cli="gemini")
-    ↓
-Resolve: workflow_template
-    ↓
-Resolve: sub_steps with different CLI per agent
-    ↓
-Execute: Sub-step 1 with Gemini CLI (agent prefers Gemini)
-Execute: Sub-step 2 with Claude CLI (agent prefers Claude)
-Execute: Sub-step 3 with Gemini CLI (repository default)
-    ↓
-Aggregate: Results (CLI-independent)
-    ↓
-Complete
-```
-
----
-
-## Risk Mitigation Strategies
-
-### Phase 1 Risk: Template Storage Complexity
-**Mitigation**:
-- Follow existing patterns (project_service.py)
-- Comprehensive unit tests for versioning
-- Seed templates before testing APIs
-
-### Phase 2 Risk: UI Complexity (Sub-Workflow Builder)
-**Mitigation**:
-- Start with simple up/down buttons (defer drag-drop)
-- Limit to 5 sub-steps max (show warning if exceeded)
-- Extensive form validation
-- Mock backend services in tests
-
-### Phase 3A Risk: Breaking Existing Workflows
-**Mitigation**:
-- Flag-gated rollout (default: false)
-- Extensive backward compatibility testing
-- Keep hardcoded mode as permanent fallback
-- Gradual migration (one repository at a time)
-
-### Phase 4 Risk: Workflow Hangs on Pause
-**Mitigation**:
-- Timeout after 24 hours (auto-cancel)
-- Admin override API endpoint
-- Clear UI indicators (user knows workflow is paused)
-- Resume events properly cleaned up
-
-### Phase 5 Risk: CLI Output Format Changes
-**Mitigation**:
-- Version pin CLI tools in documentation
-- Adapter versioning (ClaudeAdapterV1, ClaudeAdapterV2)
-- Graceful degradation (fallback to Claude if other CLI fails)
-- Extensive error handling in parsers
+### Why Defer Parallel Execution (Phase 7)?
+**Reason:** High complexity, resource intensive, unclear user demand. Prove value with Phases 0-6 first.
 
 ---
 
 ## Success Metrics
 
-### Quantitative Metrics
+### Quantitative
 - [ ] 100% of existing work orders still work after each phase
-- [ ] < 5% failure rate in template-based work orders
 - [ ] Template resolution time < 100ms
 - [ ] Sub-workflow overhead < 30s per sub-step
 - [ ] API response time < 500ms for template CRUD
 - [ ] UI load time < 2 seconds for Context Hub
 
-### Qualitative Metrics
-- [ ] Users can create custom agents without code changes
-- [ ] Multi-agent workflows produce higher quality output than single-agent
-- [ ] Orchestrator recommendations are helpful and accurate
-- [ ] HITL checkpoints prevent wasted work (catch issues early)
-- [ ] CLI switching works seamlessly (no user-visible differences)
-
-### User Acceptance Criteria
-- [ ] Non-technical users can build workflows via UI
-- [ ] Developers can create specialized agents for their tech stack
-- [ ] Chat interface reduces time to create work orders (< 1 minute)
-- [ ] Pause/resume gives confidence in AI work (review before proceeding)
-- [ ] Zero confusion about which templates are active
-
----
-
-## Phase Readiness Checklist
-
-### Ready to Start Phase 1 When:
-- [x] All PRPs reviewed and approved
-- [x] Implementation tracker created
-- [x] Development environment set up
-- [x] Supabase project ready
-
-### Ready to Start Phase 2 When:
-- [ ] Phase 1 complete (all validation gates passed)
-- [ ] Template APIs functional
-- [ ] Seed data loaded
-
-### Ready to Start Phase 3A When:
-- [ ] Phase 1 complete
-- [ ] Phase 2 complete (UI to configure templates)
-- [ ] Team understands sub-workflow design
-
-### Ready to Start Phase 3B When:
-- [ ] Phase 3A complete (template execution working)
-- [ ] PydanticAI library understood
-- [ ] Model configuration working
-
-### Ready to Start Phase 4 When:
-- [ ] Phase 3A complete (checkpoint configuration in templates)
-- [ ] asyncio.Event pattern understood
-
-### Ready to Start Phase 5 When:
-- [ ] Phase 3A complete (template execution stable)
-- [ ] Multiple CLI tools installed and tested
-
-### Ready to Consider Phase 6 When:
-- [ ] Phase 5 stable for 4+ weeks
-- [ ] User demand for parallel execution validated
-- [ ] Resource/cost implications understood
-
----
-
-## Quick Reference: File Locations
-
-### Phase 1 (Backend)
-- Migrations: `migration/add_*_template*.sql`
-- Models: `python/src/agent_work_orders/models.py`
-- Services: `python/src/agent_work_orders/services/template_service.py`
-- API: `python/src/agent_work_orders/api/template_routes.py`
-- Tests: `python/tests/agent_work_orders/services/test_template_service.py`
-
-### Phase 2 (Frontend)
-- Types: `archon-ui-main/src/features/context-hub/types/index.ts`
-- Services: `archon-ui-main/src/features/context-hub/services/`
-- Components: `archon-ui-main/src/features/context-hub/components/`
-- Views: `archon-ui-main/src/features/context-hub/views/`
-- Page: `archon-ui-main/src/pages/ContextHubPage.tsx`
-
-### Phase 3A (Template Execution)
-- Resolver: `python/src/agent_work_orders/services/template_resolver.py`
-- Sub-workflow: `python/src/agent_work_orders/services/sub_workflow_orchestrator.py`
-- Orchestrator: `python/src/agent_work_orders/workflow_engine/workflow_orchestrator.py`
-- Tests: `python/tests/agent_work_orders/integration/test_template_execution_mode.py`
-
-### Phase 3B (Orchestrator)
-- Agent: `python/src/agents/orchestrator/agent.py`
-- Tools: `python/src/agents/orchestrator/tools.py`
-- Service: `python/src/agents/orchestrator/service.py`
-- API: `python/src/server/api_routes/orchestrator_api.py`
-- Frontend: `archon-ui-main/src/features/orchestrator-chat/`
-
-### Phase 4 (HITL)
-- Service: `python/src/agent_work_orders/services/pause_service.py`
-- API: `python/src/agent_work_orders/api/pause_routes.py`
-- Component: `archon-ui-main/src/features/agent-work-orders/components/PauseStateCard.tsx`
-- Hook: `archon-ui-main/src/features/agent-work-orders/hooks/usePauseQueries.ts`
-
-### Phase 5 (CLI Adapters)
-- Base: `python/src/agent_work_orders/cli_adapters/base.py`
-- Claude: `python/src/agent_work_orders/cli_adapters/claude_adapter.py`
-- Gemini: `python/src/agent_work_orders/cli_adapters/gemini_adapter.py`
-- Factory: `python/src/agent_work_orders/cli_adapters/factory.py`
-- Tests: `python/tests/agent_work_orders/cli_adapters/`
-
----
-
-## Troubleshooting
-
-### "Templates stored but work orders still use .md files"
-**Expected in**: Phase 1, Phase 2
-**Resolution**: This is correct! Templates not used until Phase 3A + flag enabled.
-
-### "Template execution errors after Phase 3A"
-**Check**:
-1. Is use_template_execution flag enabled for repository?
-2. Does workflow template exist in database?
-3. Do all step templates referenced exist?
-4. Do all agent templates referenced exist?
-5. Check logs for specific error
-
-### "Sub-workflow not executing"
-**Check**:
-1. Is use_template_execution=true?
-2. Does step template have sub_steps array populated?
-3. Are all agent_template_slugs valid?
-4. Check sub_workflow_orchestrator logs
-
-### "Orchestrator not responding"
-**Check**:
-1. Is Phase 3A complete (template execution working)?
-2. Is model configured in Archon settings?
-3. Is API key valid?
-4. Check orchestrator service logs
-
-### "Workflow not pausing"
-**Check**:
-1. Is Phase 4 implemented?
-2. Does workflow template have pause_after=true?
-3. Is pause_service initialized in orchestrator?
-4. Check pause state table
-
-### "CLI adapter not found"
-**Check**:
-1. Is CLI installed? `which claude` or `which gemini`
-2. Is CLAUDE_CLI_PATH or GEMINI_CLI_PATH set?
-3. Check adapter factory registry
-4. Fallback should use Claude
+### Qualitative
+- [ ] Users can create custom templates without code changes
+- [ ] Multi-agent workflows produce higher quality output
+- [ ] Orchestrator recommendations are helpful
+- [ ] HITL checkpoints prevent wasted work
+- [ ] CLI switching works seamlessly
 
 ---
 
 ## Next Steps
 
-1. **Review All Documents**:
-   - Read `IMPLEMENTATION_TRACKER.md` in full
-   - Review `PHASE_DEPENDENCY_DIAGRAM.md` for visual understanding
-   - Skim all 6 PRP files to understand scope
+**Ready to Begin Phase 0:**
+1. Review database schema in `story_phase0_database_setup.md`
+2. Create migration files
+3. Run migrations in Supabase
+4. Verify seed data
+5. Update IMPLEMENTATION_TRACKER.md
 
-2. **Prepare Development Environment**:
-   - Ensure Supabase project is ready
-   - Install all CLI tools (Claude CLI required, Gemini CLI optional)
-   - Set up test repository for validation
+**Track Progress:** Update `IMPLEMENTATION_TRACKER.md` after each task completion.
 
-3. **Begin Phase 1**:
-   - Start with database migrations
-   - Follow PRP task list in order
-   - Run validation commands after each task
-   - Update IMPLEMENTATION_TRACKER.md after each completed task
-
-4. **Maintain Discipline**:
-   - Do not skip validation gates
-   - Do not move to next phase until current phase 100% complete
-   - Do not skip backward compatibility tests
-   - Do not merge breaking changes
-
----
-
-**Ready to begin implementation?** Start with Phase 1: `story_phase1_template_system_backend.md`
-
-**Questions?** Refer to `IMPLEMENTATION_TRACKER.md` for detailed checklists and validation criteria.
-
-**Track Progress**: Update `IMPLEMENTATION_TRACKER.md` after each task completion.
+**Questions?** Refer to individual phase PRPs for detailed implementation guides.
 
 <!-- EOF -->
