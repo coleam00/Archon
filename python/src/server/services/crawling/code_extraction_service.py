@@ -1278,15 +1278,39 @@ class CodeExtractionService:
         import re
 
         # First, handle span tags that wrap individual tokens
-        # Check if spans are being used for syntax highlighting (no spaces between tags)
-        if "</span><span" in text:
-            # This indicates syntax highlighting - preserve the structure
+        # Check if spans are being used for syntax highlighting by detecting
+        # programming punctuation in/around spans (not just adjacent spans)
+        syntax_highlight_indicators = [
+            "</span><span",      # Adjacent spans (most common pattern)
+            "</span>/", "/</span>",   # Slashes (import paths, URLs)
+            "</span>.", ".</span>",   # Dots (method chaining, paths)
+            "</span>:", ":</span>",   # Colons (URLs, types)
+            "</span>@", "@</span>",   # At-signs (Next.js imports)
+            "</span>-", "-</span>",   # Hyphens (operators, kebab-case)
+            "</span>>", "></span>",   # Greater than (arrows, comparison)
+            "</span>=", "=</span>",   # Equals (assignment, comparison)
+            "</span>+", "+</span>",   # Plus (operators, concatenation)
+            "</span>*", "*</span>",   # Asterisk (multiplication, pointers)
+            "</span>&", "&</span>",   # Ampersand (logical AND, references)
+            "</span>|", "|</span>",   # Pipe (logical OR, union types)
+            "</span>?", "?</span>",   # Question mark (ternary, optional)
+        ]
+
+        is_syntax_highlighted = any(indicator in text for indicator in syntax_highlight_indicators)
+
+        if is_syntax_highlighted:
+            # Syntax highlighting detected - remove all spans without adding spaces
             text = re.sub(r"</span>", "", text)
             text = re.sub(r"<span[^>]*>", "", text)
         else:
-            # Normal span usage - might need spacing
-            # Only add space if there isn't already whitespace
-            text = re.sub(r"</span>(?=[A-Za-z0-9])", " ", text)
+            # Normal HTML span usage - add spaces only between word boundaries
+            # Use negative lookahead to NEVER add space before:
+            # - whitespace, tags, or programming punctuation
+            text = re.sub(
+                r"</span>(?!\s|<|/|\.|\:|\@|\-|\>|\=|\+|\*|\&|\||\?|\$)(?=[A-Za-z0-9])",
+                " ",
+                text
+            )
             text = re.sub(r"<span[^>]*>", "", text)
 
         # Remove any other HTML tags but preserve their content
