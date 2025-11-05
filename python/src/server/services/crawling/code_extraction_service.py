@@ -1280,26 +1280,64 @@ class CodeExtractionService:
         # First, handle span tags that wrap individual tokens
         # Check if spans are being used for syntax highlighting by detecting
         # programming punctuation in/around spans (not just adjacent spans)
+
+        # Check for multiple span tags (strong indicator of syntax highlighting)
+        # If there are 3+ span tags, it's almost certainly syntax highlighting
+        span_count = text.count("<span")
+
+        # Also check for specific patterns (with or without whitespace between spans)
+        # Normalize whitespace first to catch patterns like "</span> <span>"
+        text_normalized = re.sub(r'\s+', ' ', text)
+
         syntax_highlight_indicators = [
-            "</span><span",      # Adjacent spans (most common pattern)
-            "</span>/", "/</span>",   # Slashes (import paths, URLs)
-            "</span>.", ".</span>",   # Dots (method chaining, paths)
-            "</span>:", ":</span>",   # Colons (URLs, types)
-            "</span>@", "@</span>",   # At-signs (Next.js imports)
-            "</span>-", "-</span>",   # Hyphens (operators, kebab-case)
-            "</span>>", "></span>",   # Greater than (arrows, comparison)
-            "</span>=", "=</span>",   # Equals (assignment, comparison)
-            "</span>+", "+</span>",   # Plus (operators, concatenation)
-            "</span>*", "*</span>",   # Asterisk (multiplication, pointers)
-            "</span>&", "&</span>",   # Ampersand (logical AND, references)
-            "</span>|", "|</span>",   # Pipe (logical OR, union types)
-            "</span>?", "?</span>",   # Question mark (ternary, optional)
+            "</span><span", "</span> <span",  # Adjacent spans (with/without space)
+            "</span>/", "/</span>", "</span> /",  # Slashes (import paths, URLs)
+            "</span>.", ".</span>", "</span> .",  # Dots (method chaining, paths)
+            "</span>:", ":</span>", "</span> :",  # Colons (URLs, types)
+            "</span>@", "@</span>", "</span> @",  # At-signs (Next.js imports)
+            "</span>-", "-</span>", "</span> -",  # Hyphens (operators, kebab-case)
+            "</span>>", "></span>",  # Greater than (arrows, comparison)
+            "</span>=", "=</span>", "</span> =",  # Equals (assignment, comparison)
+            "</span>+", "+</span>",  # Plus (operators, concatenation)
+            "</span>*", "*</span>",  # Asterisk (multiplication, pointers)
+            "</span>&", "&</span>",  # Ampersand (logical AND, references)
+            "</span>|", "|</span>",  # Pipe (logical OR, union types)
+            "</span>?", "?</span>",  # Question mark (ternary, optional)
         ]
 
-        is_syntax_highlighted = any(indicator in text for indicator in syntax_highlight_indicators)
+        is_syntax_highlighted = (span_count >= 3) or any(indicator in text_normalized for indicator in syntax_highlight_indicators)
 
         if is_syntax_highlighted:
             # Syntax highlighting detected - remove all spans without adding spaces
+            # First, collapse whitespace between spans ONLY around programming punctuation
+            # This fixes Crawl4AI adding spaces: </span> @ </span> -> </span>@</span>
+            # But preserves intentional spaces: </span> + </span> -> </span> + </span>
+            punctuation_patterns = [
+                (r'</span>\s+(/)\s*<span', r'</span>\1<span'),  # Slashes
+                (r'</span>\s+(\.)\s*<span', r'</span>\1<span'),  # Dots
+                (r'</span>\s+(:)\s*<span', r'</span>\1<span'),  # Colons
+                (r'</span>\s+(@)\s*<span', r'</span>\1<span'),  # At-signs
+                (r'</span>\s+(-)\s*<span', r'</span>\1<span'),  # Hyphens
+                (r'</span>\s+(>)\s*<span', r'</span>\1<span'),  # Greater than
+                (r'</span>\s+(\?)\s*<span', r'</span>\1<span'),  # Question mark
+                # Also handle punctuation at the start/end of spans
+                (r'</span>\s+<span[^>]*>(/)', r'</span><span>\1'),
+                (r'</span>\s+<span[^>]*>(\.)', r'</span><span>\1'),
+                (r'</span>\s+<span[^>]*>(:)', r'</span><span>\1'),
+                (r'</span>\s+<span[^>]*>(@)', r'</span><span>\1'),
+                (r'(/)</span>\s+<span', r'\1</span><span'),
+                (r'(\.)</span>\s+<span', r'\1</span><span'),
+                (r'(:)</span>\s+<span', r'\1</span><span'),
+                (r'(@)</span>\s+<span', r'\1</span><span'),
+                # Handle quotes and string delimiters
+                (r'''</span>\s+<span[^>]*>(['"``])''', r"</span><span>\1"),
+                (r'''(['"``])</span>\s+<span''', r"\1</span><span"),
+            ]
+
+            for pattern, replacement in punctuation_patterns:
+                text = re.sub(pattern, replacement, text)
+
+            # Remove span tags without adding spaces
             text = re.sub(r"</span>", "", text)
             text = re.sub(r"<span[^>]*>", "", text)
         else:
