@@ -662,11 +662,107 @@ Add route:
 
 ---
 
-### TASK 13: Add Navigation Link with Feature Toggle
+### TASK 13: Add Feature Toggle to Settings Context
+
+**File**: `archon-ui-main/src/contexts/SettingsContext.tsx`
+
+**Add to interface**:
+```typescript
+interface SettingsContextType {
+  // ... existing ...
+  contextHubEnabled: boolean;
+  setContextHubEnabled: (enabled: boolean) => Promise<void>;
+}
+```
+
+**Add state and handlers** (follows Projects pattern):
+```typescript
+const [contextHubEnabled, setContextHubEnabledState] = useState(false); // Default: OFF
+
+// Load setting
+const contextHubResponse = await credentialsService.getCredential('CONTEXT_HUB_ENABLED');
+if (contextHubResponse.value !== undefined) {
+  setContextHubEnabledState(contextHubResponse.value === 'true');
+} else {
+  setContextHubEnabledState(false); // Default: OFF (no credential = disabled)
+}
+
+// Set handler - creates credential on first toggle
+const setContextHubEnabled = async (enabled: boolean) => {
+  setContextHubEnabledState(enabled);
+  await credentialsService.createCredential({
+    key: 'CONTEXT_HUB_ENABLED',
+    value: enabled.toString(),
+    is_encrypted: false,
+    category: 'features',
+    description: 'Enable Context Engineering Hub for template management'
+  });
+};
+```
+
+**Key Point**: Credential is created by application code when user first toggles, NOT in migration.
+
+**Default**: `false` (disabled until user enables)
+
+**VALIDATE**: Settings context compiles
+
+---
+
+### TASK 14: Add Feature Toggle Card to Settings UI
+
+**File**: `archon-ui-main/src/components/settings/FeaturesSection.tsx`
+
+**Add toggle card**:
+```typescript
+import { Brain } from 'lucide-react';
+
+{/* Context Hub Toggle */}
+<div className="flex items-center gap-4 p-4 rounded-xl bg-gradient-to-br from-indigo-500/10 to-indigo-600/5 backdrop-blur-sm border border-indigo-500/20 shadow-lg">
+  <div className="flex-1 min-w-0">
+    <p className="font-medium text-gray-800 dark:text-white">
+      Context Hub
+    </p>
+    <p className="text-sm text-gray-500 dark:text-gray-400">
+      Template library for workflows, agents, and coding standards
+    </p>
+  </div>
+  <div className="flex-shrink-0">
+    <Switch
+      size="lg"
+      checked={contextHubEnabledLocal}
+      onCheckedChange={handleContextHubToggle}
+      color="indigo"
+      icon={<Brain className="w-5 h-5" />}
+      disabled={loading}
+    />
+  </div>
+</div>
+```
+
+**Handler**:
+```typescript
+const handleContextHubToggle = async (checked: boolean) => {
+  setContextHubEnabledLocal(checked);
+  await setContextHubContext(checked); // Calls SettingsContext.setContextHubEnabled
+  showToast(
+    checked ? 'Context Hub Enabled' : 'Context Hub Disabled',
+    checked ? 'success' : 'warning'
+  );
+};
+```
+
+**Icon**: `Brain` from `lucide-react`
+**Color**: `indigo`
+
+**VALIDATE**: Toggle appears in Settings → Features
+
+---
+
+### TASK 15: Add Navigation Link with Conditional Rendering
 
 **File**: `archon-ui-main/src/components/layout/Navigation.tsx`
 
-**CRITICAL**: Use Brain icon, show/hide based on `contextHubEnabled` toggle:
+**Add conditional link**:
 
 ```typescript
 import { Brain } from 'lucide-react';

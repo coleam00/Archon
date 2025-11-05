@@ -17,10 +17,7 @@
 
 BEGIN;
 
--- =====================================================
--- STEP 1: Create workflow step type enum
--- =====================================================
-
+-- Create workflow step type enum
 DO $$ BEGIN
   CREATE TYPE workflow_step_type AS ENUM (
     'planning',    -- Requirements analysis, design (≥1 required in workflow)
@@ -33,12 +30,7 @@ EXCEPTION
   WHEN duplicate_object THEN NULL;
 END $$;
 
-RAISE NOTICE '✓ Step 1: workflow_step_type enum created';
-
--- =====================================================
--- STEP 2: Create archon_agent_templates table
--- =====================================================
-
+-- Create archon_agent_templates table
 CREATE TABLE IF NOT EXISTS archon_agent_templates (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   slug TEXT UNIQUE NOT NULL,
@@ -47,8 +39,8 @@ CREATE TABLE IF NOT EXISTS archon_agent_templates (
   system_prompt TEXT NOT NULL,
   model TEXT DEFAULT 'sonnet',
   temperature REAL DEFAULT 0.0,
-  tools JSONB DEFAULT '[]', -- Array of tool names: ["Read", "Write", "Edit", "Bash"]
-  standards JSONB DEFAULT '{}', -- Default coding standards for this agent
+  tools JSONB DEFAULT '[]',
+  standards JSONB DEFAULT '{}',
   metadata JSONB DEFAULT '{}',
   is_active BOOLEAN DEFAULT TRUE,
   version INTEGER DEFAULT 1,
@@ -69,12 +61,7 @@ COMMENT ON COLUMN archon_agent_templates.tools IS 'Array of tool names this agen
 COMMENT ON COLUMN archon_agent_templates.standards IS 'Default coding standards for this agent (JSONB)';
 COMMENT ON COLUMN archon_agent_templates.version IS 'Version number for template versioning (updates create new versions)';
 
-RAISE NOTICE '✓ Step 2: archon_agent_templates table created';
-
--- =====================================================
--- STEP 3: Create archon_step_templates table
--- =====================================================
-
+-- Create archon_step_templates table
 CREATE TABLE IF NOT EXISTS archon_step_templates (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   step_type workflow_step_type NOT NULL,
@@ -83,7 +70,7 @@ CREATE TABLE IF NOT EXISTS archon_step_templates (
   description TEXT,
   prompt_template TEXT NOT NULL,
   agent_template_id UUID REFERENCES archon_agent_templates(id) ON DELETE SET NULL,
-  sub_steps JSONB DEFAULT '[]', -- Array of sub-step configs for multi-agent workflows
+  sub_steps JSONB DEFAULT '[]',
   metadata JSONB DEFAULT '{}',
   is_active BOOLEAN DEFAULT TRUE,
   version INTEGER DEFAULT 1,
@@ -104,18 +91,13 @@ COMMENT ON TABLE archon_step_templates IS 'Workflow step templates with support 
 COMMENT ON COLUMN archon_step_templates.sub_steps IS 'Array of sub-step configs: [{order, name, agent_template_slug, prompt_template, required}, ...]';
 COMMENT ON COLUMN archon_step_templates.step_type IS 'Type of step: planning, implement, validate, prime, or git';
 
-RAISE NOTICE '✓ Step 3: archon_step_templates table created';
-
--- =====================================================
--- STEP 4: Create archon_workflow_templates table
--- =====================================================
-
+-- Create archon_workflow_templates table
 CREATE TABLE IF NOT EXISTS archon_workflow_templates (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   slug TEXT UNIQUE NOT NULL,
   name TEXT NOT NULL,
   description TEXT,
-  steps JSONB NOT NULL, -- Array of step configs: [{step_type, order, step_template_slug, pause_after}, ...]
+  steps JSONB NOT NULL,
   metadata JSONB DEFAULT '{}',
   is_active BOOLEAN DEFAULT TRUE,
   created_by TEXT,
@@ -129,19 +111,14 @@ CREATE INDEX IF NOT EXISTS idx_workflow_templates_active ON archon_workflow_temp
 COMMENT ON TABLE archon_workflow_templates IS 'Complete workflow sequences (must have ≥1 planning, implement, validate step)';
 COMMENT ON COLUMN archon_workflow_templates.steps IS 'Array of workflow steps (planning/implement/validate/prime/git)';
 
-RAISE NOTICE '✓ Step 4: archon_workflow_templates table created';
-
--- =====================================================
--- STEP 5: Create archon_coding_standards table
--- =====================================================
-
+-- Create archon_coding_standards table
 CREATE TABLE IF NOT EXISTS archon_coding_standards (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   slug TEXT UNIQUE NOT NULL,
   name TEXT NOT NULL,
-  language TEXT NOT NULL, -- 'typescript', 'python', 'rust', etc.
+  language TEXT NOT NULL,
   description TEXT,
-  standards JSONB NOT NULL, -- Linter config, rules, min coverage, etc.
+  standards JSONB NOT NULL,
   metadata JSONB DEFAULT '{}',
   is_active BOOLEAN DEFAULT TRUE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -155,12 +132,6 @@ CREATE INDEX IF NOT EXISTS idx_coding_standards_active ON archon_coding_standard
 COMMENT ON TABLE archon_coding_standards IS 'Reusable coding standards library for different languages and tools';
 COMMENT ON COLUMN archon_coding_standards.language IS 'Programming language: typescript, python, rust, etc.';
 COMMENT ON COLUMN archon_coding_standards.standards IS 'Linter config, rules, min coverage (JSONB)';
-
-RAISE NOTICE '✓ Step 5: archon_coding_standards table created';
-
--- =====================================================
--- STEP 6: Seed default templates
--- =====================================================
 
 -- Seed agent templates
 INSERT INTO archon_agent_templates (slug, name, description, system_prompt, model, tools, metadata)
@@ -177,8 +148,6 @@ VALUES
    'You are a frontend development expert specializing in React, TypeScript, TanStack Query, and modern UI development. You build responsive, accessible, and performant user interfaces.',
    'sonnet', '["Read", "Write", "Edit", "Grep"]'::jsonb, '{"tags": ["react", "frontend", "typescript"]}'::jsonb)
 ON CONFLICT (slug, version) DO NOTHING;
-
-RAISE NOTICE '✓ Step 6a: Seeded 3 agent templates';
 
 -- Seed step templates
 INSERT INTO archon_step_templates (step_type, slug, name, description, prompt_template, agent_template_id, sub_steps)
@@ -221,8 +190,6 @@ SELECT
   '[]'::jsonb
 WHERE NOT EXISTS (SELECT 1 FROM archon_step_templates WHERE slug = 'create-pr');
 
-RAISE NOTICE '✓ Step 6b: Seeded 5 step templates';
-
 -- Seed workflow templates
 INSERT INTO archon_workflow_templates (slug, name, description, steps)
 SELECT
@@ -246,8 +213,6 @@ SELECT
   ]'::jsonb
 WHERE NOT EXISTS (SELECT 1 FROM archon_workflow_templates WHERE slug = 'fullstack-workflow');
 
-RAISE NOTICE '✓ Step 6c: Seeded 2 workflow templates';
-
 -- Seed coding standards
 INSERT INTO archon_coding_standards (slug, name, language, description, standards)
 VALUES
@@ -261,12 +226,7 @@ VALUES
    '{"linter": "biome", "rules": ["react-hooks", "react-jsx-key"], "jsx": true, "formatting": {"line_width": 120}}'::jsonb)
 ON CONFLICT (slug) DO NOTHING;
 
-RAISE NOTICE '✓ Step 6d: Seeded 3 coding standards';
-
--- =====================================================
--- STEP 7: Create triggers for updated_at timestamps
--- =====================================================
-
+-- Create triggers for updated_at timestamps
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -295,54 +255,4 @@ CREATE TRIGGER update_coding_standards_updated_at
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at_column();
 
-RAISE NOTICE '✓ Step 7: Triggers created for updated_at timestamps';
-
--- =====================================================
--- STEP 8: Enable Context Hub feature by default
--- =====================================================
-
-INSERT INTO archon_credentials (key, value, is_encrypted, category, description)
-VALUES (
-  'CONTEXT_HUB_ENABLED',
-  'true',
-  FALSE,
-  'features',
-  'Enable Context Engineering Hub for template management'
-)
-ON CONFLICT (key) DO NOTHING;
-
-RAISE NOTICE '✓ Step 8: Context Hub feature enabled';
-
 COMMIT;
-
--- =====================================================
--- Migration Summary
--- =====================================================
-
-DO $$
-DECLARE
-  agent_count INT;
-  step_count INT;
-  workflow_count INT;
-  standards_count INT;
-BEGIN
-  SELECT COUNT(*) INTO agent_count FROM archon_agent_templates;
-  SELECT COUNT(*) INTO step_count FROM archon_step_templates;
-  SELECT COUNT(*) INTO workflow_count FROM archon_workflow_templates;
-  SELECT COUNT(*) INTO standards_count FROM archon_coding_standards;
-
-  RAISE NOTICE '';
-  RAISE NOTICE '========================================';
-  RAISE NOTICE 'Context Engineering Hub Migration Complete';
-  RAISE NOTICE '========================================';
-  RAISE NOTICE 'Agent Templates: %', agent_count;
-  RAISE NOTICE 'Step Templates: %', step_count;
-  RAISE NOTICE 'Workflow Templates: %', workflow_count;
-  RAISE NOTICE 'Coding Standards: %', standards_count;
-  RAISE NOTICE '';
-  RAISE NOTICE 'Next Steps:';
-  RAISE NOTICE '1. Restart Archon services: docker compose restart';
-  RAISE NOTICE '2. Enable Context Hub in Settings UI';
-  RAISE NOTICE '3. Navigate to /context-hub to create templates';
-  RAISE NOTICE '========================================';
-END $$;

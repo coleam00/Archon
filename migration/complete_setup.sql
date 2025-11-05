@@ -1539,17 +1539,6 @@ VALUES
   ('react-best-practices', 'React Best Practices', 'javascript', 'React development standards and best practices',
    '{"linter": "biome", "rules": ["react-hooks", "react-jsx-key"], "jsx": true, "formatting": {"line_width": 120}}'::jsonb);
 
--- Enable Context Hub feature by default
-INSERT INTO archon_credentials (key, value, is_encrypted, category, description)
-VALUES (
-  'CONTEXT_HUB_ENABLED',
-  'true',
-  FALSE,
-  'features',
-  'Enable Context Engineering Hub for template management'
-)
-ON CONFLICT (key) DO NOTHING;
-
 -- =====================================================
 -- SETUP COMPLETE
 -- =====================================================
