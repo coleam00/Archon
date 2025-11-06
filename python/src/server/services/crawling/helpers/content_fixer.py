@@ -5,6 +5,10 @@ Handles post-processing of content from Crawl4AI to fix known issues.
 """
 import re
 
+from ....config.logfire_config import get_logger
+
+logger = get_logger(__name__)
+
 
 def fix_code_span_spaces(markdown: str) -> str:
     """
@@ -32,7 +36,13 @@ def fix_code_span_spaces(markdown: str) -> str:
 
     def fix_code_block(match):
         language = match.group(1) or ''
-        code = match.group(2)
+        code_before = match.group(2)
+        code = code_before
+
+        # DEBUG: Log the code block before any fixes
+        if ' / ' in code or ' - ' in code:
+            logger.info(f"🔍 DEBUG: Found code block with spaces to fix (lang={language})")
+            logger.info(f"📝 DEBUG: Code BEFORE fixes (first 200 chars): {code[:200]}")
 
         # Fix import/require paths: 'next / headers' -> 'next/headers'
         code = re.sub(r"'([^']*?)\s+/\s+([^']*?)'", r"'\1/\2'", code)
@@ -54,9 +64,18 @@ def fix_code_span_spaces(markdown: str) -> str:
         code = re.sub(r"'([a-z]+)\s+-\s+([a-z]+)'", r"'\1-\2'", code)
         code = re.sub(r'"([a-z]+)\s+-\s+([a-z]+)"', r'"\1-\2"', code)
 
+        # DEBUG: Log the code block after fixes if it changed
+        if code != code_before:
+            logger.info(f"✅ DEBUG: Code AFTER fixes (first 200 chars): {code[:200]}")
+
         return f'```{language}\n{code}\n```'
 
     # Process all code blocks
-    markdown = re.sub(code_block_pattern, fix_code_block, markdown, flags=re.DOTALL)
+    fixed_markdown = re.sub(code_block_pattern, fix_code_block, markdown, flags=re.DOTALL)
 
-    return markdown
+    # DEBUG: Log summary if changes were made
+    if fixed_markdown != markdown:
+        changes = len(markdown) - len(fixed_markdown)
+        logger.info(f"✨ DEBUG: Content fixer made changes (size diff: {changes} chars)")
+
+    return fixed_markdown

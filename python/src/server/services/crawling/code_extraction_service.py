@@ -302,6 +302,15 @@ class CodeExtractionService:
                     f"Document content check | url={source_url} | has_html={bool(html_content)} | has_markdown={bool(md)} | html_len={len(html_content) if html_content else 0} | md_len={len(md) if md else 0}"
                 )
 
+                # DEBUG: Check for spaces in markdown code blocks
+                if md and "```" in md:
+                    code_start = md.find('```')
+                    if code_start >= 0:
+                        code_sample = md[code_start:code_start+400]
+                        if ' / ' in code_sample or ' - ' in code_sample:
+                            safe_logfire_info(f"⚠️ DEBUG CODE EXTRACTION: Found spaces in markdown for {source_url}")
+                            safe_logfire_info(f"📝 DEBUG: Markdown sample with spaces: {code_sample[:200]}")
+
                 # Get dynamic minimum length based on document context
 
                 # Check markdown first to see if it has code blocks
@@ -1277,6 +1286,11 @@ class CodeExtractionService:
         """Decode common HTML entities and clean HTML tags from code."""
         import re
 
+        # DEBUG: Log if we're processing HTML with spaces
+        if '<span' in text and (' / ' in text or ' - ' in text):
+            safe_logfire_info(f"🔍 DEBUG _decode_html_entities: Processing HTML with spaces")
+            safe_logfire_info(f"📝 DEBUG: Input text sample (first 300 chars): {text[:300]}")
+
         # First, handle span tags that wrap individual tokens
         # Check if spans are being used for syntax highlighting by detecting
         # programming punctuation in/around spans (not just adjacent spans)
@@ -1386,6 +1400,10 @@ class CodeExtractionService:
             cleaned_lines.append(line)
 
         text = "\n".join(cleaned_lines)
+
+        # DEBUG: Log output if we processed HTML with spaces
+        if '<span' in text[:300] or (' / ' in text[:300] and 'import' in text[:300]):
+            safe_logfire_info(f"✅ DEBUG _decode_html_entities: Output text sample (first 300 chars): {text[:300]}")
 
         return text
 

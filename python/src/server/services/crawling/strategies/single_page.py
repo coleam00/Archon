@@ -305,8 +305,22 @@ class SinglePageCrawlStrategy:
                     processed_pages=1
                 )
 
+                # DEBUG: Log markdown from Crawl4AI before fixing
+                if result.markdown and ('```' in result.markdown):
+                    logger.info(f"🌐 DEBUG: Crawl4AI returned markdown for {original_url}")
+                    # Find first code block to sample
+                    code_start = result.markdown.find('```')
+                    if code_start >= 0:
+                        code_sample = result.markdown[code_start:code_start+300]
+                        logger.info(f"📄 DEBUG: Raw markdown sample from Crawl4AI: {code_sample}")
+
                 # Fix spaces in code paths that Crawl4AI/BeautifulSoup adds
                 cleaned_markdown = fix_code_span_spaces(result.markdown)
+
+                # DEBUG: Log after fixing
+                if cleaned_markdown != result.markdown:
+                    logger.info(f"🔧 DEBUG: Markdown was modified by content_fixer for {original_url}")
+
                 return [{'url': original_url, 'markdown': cleaned_markdown, 'html': result.html}]
             else:
                 logger.error(f"Failed to crawl {url}: {result.error_message}")
