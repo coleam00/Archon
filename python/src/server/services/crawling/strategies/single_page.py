@@ -11,6 +11,7 @@ from typing import Any
 from crawl4ai import CacheMode, CrawlerRunConfig
 
 from ....config.logfire_config import get_logger
+from ..helpers.content_fixer import fix_code_span_spaces
 
 logger = get_logger(__name__)
 
@@ -304,7 +305,9 @@ class SinglePageCrawlStrategy:
                     processed_pages=1
                 )
 
-                return [{'url': original_url, 'markdown': result.markdown, 'html': result.html}]
+                # Fix spaces in code paths that Crawl4AI/BeautifulSoup adds
+                cleaned_markdown = fix_code_span_spaces(result.markdown)
+                return [{'url': original_url, 'markdown': cleaned_markdown, 'html': result.html}]
             else:
                 logger.error(f"Failed to crawl {url}: {result.error_message}")
                 return []
