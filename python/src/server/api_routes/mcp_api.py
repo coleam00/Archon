@@ -96,7 +96,7 @@ async def get_status():
 
 @router.get("/config")
 async def get_mcp_config():
-    """Get MCP server configuration."""
+    """Get MCP server configuration with dual transport support."""
     with safe_span("api_get_mcp_config") as span:
         safe_set_attribute(span, "endpoint", "/api/mcp/config")
         safe_set_attribute(span, "method", "GET")
@@ -106,12 +106,41 @@ async def get_mcp_config():
 
             # Get actual MCP port from environment or use default
             mcp_port = int(os.getenv("ARCHON_MCP_PORT", "8051"))
+            host = os.getenv("ARCHON_HOST", "localhost")
 
-            # Configuration for streamable-http mode with actual port
+            # Check which transports are enabled
+            enable_sse = os.getenv("ARCHON_MCP_ENABLE_SSE", "true").lower() == "true"
+            enable_http = os.getenv("ARCHON_MCP_ENABLE_STREAMABLE_HTTP", "true").lower() == "true"
+
+            # Build transport endpoints array
+            transport_endpoints = []
+
+            if enable_http:
+                transport_endpoints.append({
+                    "url": f"http://{host}:{mcp_port}/mcp",
+                    "transport_type": "streamable-http",
+                    "status": "enabled",
+                    "recommended": True
+                })
+
+            if enable_sse:
+                transport_endpoints.append({
+                    "url": f"http://{host}:{mcp_port}/sse",
+                    "transport_type": "sse",
+                    "status": "enabled",
+                    "recommended": False,
+                    "legacy": True
+                })
+
+            # Primary transport (prefer streamable-http)
+            primary_transport = "streamable-http" if enable_http else "sse"
+
+            # Configuration with dual transport support
             config = {
-                "host": os.getenv("ARCHON_HOST", "localhost"),
+                "host": host,
                 "port": mcp_port,
-                "transport": "streamable-http",
+                "transport": primary_transport,  # Backward compatibility
+                "transport_endpoints": transport_endpoints,
             }
 
             # Get only model choice from database (simplified)
@@ -126,10 +155,11 @@ async def get_mcp_config():
                 # Fallback to default model
                 config["model_choice"] = "gpt-4o-mini"
 
-            api_logger.info("MCP configuration (streamable-http mode)")
+            api_logger.info(f"MCP configuration (dual transport mode) - enabled_transports={[e['transport_type'] for e in transport_endpoints]}")
             safe_set_attribute(span, "host", config["host"])
             safe_set_attribute(span, "port", config["port"])
-            safe_set_attribute(span, "transport", "streamable-http")
+            safe_set_attribute(span, "primary_transport", primary_transport)
+            safe_set_attribute(span, "enabled_transports", len(transport_endpoints))
             safe_set_attribute(span, "model_choice", config.get("model_choice", "gpt-4o-mini"))
 
             return config

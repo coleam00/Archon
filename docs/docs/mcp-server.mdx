@@ -78,10 +78,36 @@ AGENTS_BASE_URL=http://archon-agents:8052
 # Authentication
 MCP_SERVICE_KEY=your-service-key
 
+# Transport Configuration
+ARCHON_MCP_ENABLE_STREAMABLE_HTTP=true  # Enable Streamable HTTP at /mcp (recommended)
+ARCHON_MCP_ENABLE_SSE=true              # Enable SSE at /sse (legacy support)
+# Note: At least one transport must be enabled
+
 # Unified Logging Configuration (Optional)
 LOGFIRE_ENABLED=false              # true=Logfire logging, false=standard logging
 LOGFIRE_TOKEN=your-logfire-token    # Only required when LOGFIRE_ENABLED=true
 ```
+
+### Transport Configuration
+
+Control which transport protocols the MCP server exposes:
+
+- **`ARCHON_MCP_ENABLE_STREAMABLE_HTTP`** (default: `true`): Enable modern Streamable HTTP transport at `/mcp`
+- **`ARCHON_MCP_ENABLE_SSE`** (default: `true`): Enable legacy SSE transport at `/sse`
+
+Both transports are enabled by default for maximum compatibility. You can disable one if you only need a single transport:
+
+```bash
+# Streamable HTTP only (recommended for new deployments)
+ARCHON_MCP_ENABLE_STREAMABLE_HTTP=true
+ARCHON_MCP_ENABLE_SSE=false
+
+# SSE only (legacy systems)
+ARCHON_MCP_ENABLE_STREAMABLE_HTTP=false
+ARCHON_MCP_ENABLE_SSE=true
+```
+
+> **Important**: At least one transport must be enabled. The server will fail to start if both are disabled.
 
 ### Docker Service
 
@@ -95,14 +121,60 @@ archon-mcp:
   command: ["python", "-m", "src.mcp.mcp_server"]
 ```
 
+## Transport Support
+
+Archon MCP server supports **dual transport** for maximum compatibility:
+
+### Available Transports
+
+| Transport | Endpoint | Status | Recommended |
+|-----------|----------|--------|-------------|
+| **Streamable HTTP** | `/mcp` | Active | ✅ Modern MCP clients |
+| **SSE** | `/sse` | Legacy | ⚠️ Backward compatibility only |
+
+### When to Use Each Transport
+
+**Use Streamable HTTP (`/mcp`) when:**
+- Using modern MCP clients (Claude Code, Claude Desktop, latest Cursor)
+- Starting new integrations
+- You want the latest MCP protocol features (2025-03-26 spec)
+
+**Use SSE (`/sse`) when:**
+- Maintaining existing integrations that rely on SSE
+- Using older MCP clients that don't support Streamable HTTP
+- You need backward compatibility with legacy systems
+
+> **Migration Note**: SSE transport is maintained for backward compatibility but is considered legacy. New integrations should use Streamable HTTP (`/mcp`).
+
 ## Client Configuration
 
-Archon MCP server uses **SSE (Server-Sent Events) transport only**.
+### Claude Code (Recommended)
+
+**Streamable HTTP (Recommended):**
+```bash
+claude mcp add archon http://localhost:8051/mcp
+```
+
+**SSE (Legacy):**
+```bash
+claude mcp add --transport sse archon http://localhost:8051/sse
+```
 
 ### Cursor IDE
 
-Add to MCP settings:
+**Streamable HTTP (Recommended):**
+```json
+{
+  "mcpServers": {
+    "archon": {
+      "url": "http://localhost:8051/mcp",
+      "transport": "streamable-http"
+    }
+  }
+}
+```
 
+**SSE (Legacy):**
 ```json
 {
   "mcpServers": {
@@ -113,16 +185,21 @@ Add to MCP settings:
 }
 ```
 
-### Claude Code
-
-```bash
-claude mcp add --transport sse archon http://localhost:8051/sse
-```
-
 ### Windsurf IDE
 
-Add to settings:
+**Streamable HTTP (Recommended):**
+```json
+{
+  "mcp.servers": {
+    "archon": {
+      "url": "http://localhost:8051/mcp",
+      "transport": "streamable-http"
+    }
+  }
+}
+```
 
+**SSE (Legacy):**
 ```json
 {
   "mcp.servers": {

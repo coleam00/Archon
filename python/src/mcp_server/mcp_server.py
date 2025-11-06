@@ -31,6 +31,8 @@ from typing import Any
 from dotenv import load_dotenv
 
 from mcp.server.fastmcp import Context, FastMCP
+import uvicorn
+from starlette.applications import Starlette
 
 # Add the project root to Python path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -547,19 +549,80 @@ except Exception as e:
 
 
 def main():
-    """Main entry point for the MCP server."""
+    """Main entry point for the MCP server with dual transport support."""
     try:
         # Initialize Logfire first
         setup_logfire(service_name="archon-mcp-server")
 
+        # Read configuration for transport options
+        enable_sse = os.getenv("ARCHON_MCP_ENABLE_SSE", "true").lower() == "true"
+        enable_http = os.getenv("ARCHON_MCP_ENABLE_STREAMABLE_HTTP", "true").lower() == "true"
+
+        # Validate configuration
+        if not enable_sse and not enable_http:
+            raise ValueError(
+                "At least one transport must be enabled. "
+                "Set ARCHON_MCP_ENABLE_SSE=true or ARCHON_MCP_ENABLE_STREAMABLE_HTTP=true"
+            )
+
         logger.info("🚀 Starting Archon MCP Server")
-        logger.info("   Mode: Streamable HTTP")
-        logger.info(f"   URL: http://{server_host}:{server_port}/mcp")
+        logger.info("   Mode: Dual Transport")
+
+        enabled_transports = []
+        if enable_http:
+            enabled_transports.append("Streamable HTTP at /mcp")
+        if enable_sse:
+            enabled_transports.append("SSE at /sse")
+
+        logger.info(f"   Enabled: {', '.join(enabled_transports)}")
+        logger.info(f"   URL: http://{server_host}:{server_port}")
 
         mcp_logger.info("🔥 Logfire initialized for MCP server")
-        mcp_logger.info(f"🌟 Starting MCP server - host={server_host}, port={server_port}")
+        mcp_logger.info(f"🌟 Starting MCP server - host={server_host}, port={server_port}, transports={enabled_transports}")
 
-        mcp.run(transport="streamable-http")
+        # Create ASGI apps for enabled transports
+        # We need to use one of the apps directly since they already include
+        # the routes and lifespan context configured by FastMCP
+
+        if enable_http and enable_sse:
+            # Both enabled: create primary app with streamable HTTP
+            # and manually add SSE routes to it
+            logger.info("✓ Creating Streamable HTTP app at /mcp")
+            app = mcp.streamable_http_app()
+            logger.info("✓ Streamable HTTP transport configured")
+
+            logger.info("✓ Adding SSE routes at /sse")
+            sse_app = mcp.sse_app()
+            # Add SSE routes to the combined app
+            app.routes.extend(sse_app.routes)
+            logger.info("✓ SSE transport configured")
+
+        elif enable_http:
+            # Only streamable HTTP
+            logger.info("✓ Creating Streamable HTTP app at /mcp")
+            app = mcp.streamable_http_app()
+            logger.info("✓ Streamable HTTP transport configured")
+
+        else:
+            # Only SSE
+            logger.info("✓ Creating SSE app at /sse")
+            app = mcp.sse_app()
+            logger.info("✓ SSE transport configured")
+
+        logger.info("✓ Combined transport app created")
+        logger.info(f"📡 Server starting on http://{server_host}:{server_port}")
+        if enable_http:
+            logger.info(f"   → Streamable HTTP: http://{server_host}:{server_port}/mcp")
+        if enable_sse:
+            logger.info(f"   → SSE: http://{server_host}:{server_port}/sse")
+
+        # Run with uvicorn
+        uvicorn.run(
+            app,
+            host=server_host,
+            port=server_port,
+            log_level="info",
+        )
 
     except Exception as e:
         mcp_logger.error(f"💥 Fatal error in main - error={str(e)}, error_type={type(e).__name__}")
