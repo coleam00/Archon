@@ -161,11 +161,7 @@ export const WorkflowStepButton: React.FC<WorkflowStepButtonProps> = ({
       <span
         className={cn(
           "text-xs font-medium transition-colors",
-          isCompleted
-            ? labelColor
-            : isActive
-              ? labelColor
-              : "text-gray-500 dark:text-gray-400",
+          isCompleted ? labelColor : isActive ? labelColor : "text-gray-500 dark:text-gray-400",
         )}
       >
         {stepName}

@@ -31,7 +31,12 @@ const WORKFLOW_STEPS: { value: WorkflowStep; label: string; description: string;
   { value: "create-branch", label: "Create Branch", description: "Create a new git branch for isolated work" },
   { value: "planning", label: "Planning", description: "Generate implementation plan" },
   { value: "execute", label: "Execute", description: "Implement the planned changes" },
-  { value: "prp-review", label: "Review/Fix", description: "Review implementation and fix issues", dependsOn: ["execute"] },
+  {
+    value: "prp-review",
+    label: "Review/Fix",
+    description: "Review implementation and fix issues",
+    dependsOn: ["execute"],
+  },
   { value: "commit", label: "Commit", description: "Commit changes to git", dependsOn: ["execute"] },
   { value: "create-pr", label: "Create PR", description: "Create pull request", dependsOn: ["commit"] },
 ];
@@ -110,9 +115,7 @@ export function EditRepositoryModal({ open, onOpenChange }: EditRepositoryModalP
       setIsSubmitting(true);
 
       // Sort selected steps by WORKFLOW_STEPS order before sending to backend
-      const sortedSteps = WORKFLOW_STEPS
-        .filter(step => selectedSteps.includes(step.value))
-        .map(step => step.value);
+      const sortedSteps = WORKFLOW_STEPS.filter((step) => selectedSteps.includes(step.value)).map((step) => step.value);
 
       await updateRepository.mutateAsync({
         id: repository.id,
@@ -188,12 +191,13 @@ export function EditRepositoryModal({ open, onOpenChange }: EditRepositoryModalP
             <div className="space-y-4">
               <Label>Default Workflow Steps</Label>
               <TooltipProvider>
-              <div className="space-y-2">
-                {WORKFLOW_STEPS.map((step) => {
-                  const isSelected = selectedSteps.includes(step.value);
+                <div className="space-y-2">
+                  {WORKFLOW_STEPS.map((step) => {
+                    const isSelected = selectedSteps.includes(step.value);
                     const isDisabledForEnable = isStepDisabled(step);
 
-                    const tooltipMessage = isDisabledForEnable && step.dependsOn
+                    const tooltipMessage =
+                      isDisabledForEnable && step.dependsOn
                         ? `Requires: ${step.dependsOn.map((dep) => WORKFLOW_STEPS.find((s) => s.value === dep)?.label ?? dep).join(", ")}`
                         : undefined;
 
@@ -228,12 +232,12 @@ export function EditRepositoryModal({ open, onOpenChange }: EditRepositoryModalP
                               : "cursor-pointer"
                           }
                         >
-                        {step.label}
-                      </Label>
-                    </div>
-                  );
-                })}
-              </div>
+                          {step.label}
+                        </Label>
+                      </div>
+                    );
+                  })}
+                </div>
               </TooltipProvider>
               <p className="text-xs text-gray-500 dark:text-gray-400">Commit and PR require Execute</p>
             </div>

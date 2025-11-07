@@ -16,6 +16,7 @@ import { ProjectPage } from './pages/ProjectPage';
 import StyleGuidePage from './pages/StyleGuidePage';
 import { AgentWorkOrdersPage } from './pages/AgentWorkOrdersPage';
 import { AgentWorkOrderDetailPage } from './pages/AgentWorkOrderDetailPage';
+import { ContextHubPage } from './pages/ContextHubPage';
 import { DisconnectScreenOverlay } from './components/DisconnectScreenOverlay';
 import { ErrorBoundaryWithBugReport } from './components/bug-report/ErrorBoundaryWithBugReport';
 import { MigrationBanner } from './components/ui/MigrationBanner';
@@ -24,7 +25,7 @@ import { useMigrationStatus } from './hooks/useMigrationStatus';
 
 
 const AppRoutes = () => {
-  const { projectsEnabled, styleGuideEnabled, agentWorkOrdersEnabled } = useSettings();
+  const { projectsEnabled, styleGuideEnabled, agentWorkOrdersEnabled, contextHubEnabled } = useSettings();
 
   return (
     <Routes>
@@ -52,6 +53,11 @@ const AppRoutes = () => {
         </>
       ) : (
         <Route path="/agent-work-orders" element={<Navigate to="/" replace />} />
+      )}
+      {contextHubEnabled ? (
+        <Route path="/context-hub/:tab?" element={<ContextHubPage />} />
+      ) : (
+        <Route path="/context-hub" element={<Navigate to="/" replace />} />
       )}
     </Routes>
   );

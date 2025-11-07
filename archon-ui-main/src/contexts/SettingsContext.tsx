@@ -8,6 +8,8 @@ interface SettingsContextType {
   setStyleGuideEnabled: (enabled: boolean) => Promise<void>;
   agentWorkOrdersEnabled: boolean;
   setAgentWorkOrdersEnabled: (enabled: boolean) => Promise<void>;
+  contextHubEnabled: boolean;
+  setContextHubEnabled: (enabled: boolean) => Promise<void>;
   loading: boolean;
   refreshSettings: () => Promise<void>;
 }
@@ -30,17 +32,19 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({ children }) 
   const [projectsEnabled, setProjectsEnabledState] = useState(true);
   const [styleGuideEnabled, setStyleGuideEnabledState] = useState(false);
   const [agentWorkOrdersEnabled, setAgentWorkOrdersEnabledState] = useState(false);
+  const [contextHubEnabled, setContextHubEnabledState] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const loadSettings = async () => {
     try {
       setLoading(true);
 
-      // Load Projects, Style Guide, and Agent Work Orders settings
-      const [projectsResponse, styleGuideResponse, agentWorkOrdersResponse] = await Promise.all([
+      // Load Projects, Style Guide, Agent Work Orders, and Context Hub settings
+      const [projectsResponse, styleGuideResponse, agentWorkOrdersResponse, contextHubResponse] = await Promise.all([
         credentialsService.getCredential('PROJECTS_ENABLED').catch(() => ({ value: undefined })),
         credentialsService.getCredential('STYLE_GUIDE_ENABLED').catch(() => ({ value: undefined })),
-        credentialsService.getCredential('AGENT_WORK_ORDERS_ENABLED').catch(() => ({ value: undefined }))
+        credentialsService.getCredential('AGENT_WORK_ORDERS_ENABLED').catch(() => ({ value: undefined })),
+        credentialsService.getCredential('CONTEXT_HUB_ENABLED').catch(() => ({ value: undefined }))
       ]);
 
       if (projectsResponse.value !== undefined) {
@@ -61,11 +65,18 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({ children }) 
         setAgentWorkOrdersEnabledState(false); // Default to false
       }
 
+      if (contextHubResponse.value !== undefined) {
+        setContextHubEnabledState(contextHubResponse.value === 'true');
+      } else {
+        setContextHubEnabledState(false); // Default to false
+      }
+
     } catch (error) {
       console.error('Failed to load settings:', error);
       setProjectsEnabledState(true);
       setStyleGuideEnabledState(false);
       setAgentWorkOrdersEnabledState(false);
+      setContextHubEnabledState(false);
     } finally {
       setLoading(false);
     }
@@ -138,6 +149,27 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({ children }) 
     }
   };
 
+  const setContextHubEnabled = async (enabled: boolean) => {
+    try {
+      // Update local state immediately
+      setContextHubEnabledState(enabled);
+
+      // Save to backend
+      await credentialsService.createCredential({
+        key: 'CONTEXT_HUB_ENABLED',
+        value: enabled.toString(),
+        is_encrypted: false,
+        category: 'features',
+        description: 'Enable Context Engineering Hub for template management'
+      });
+    } catch (error) {
+      console.error('Failed to update context hub setting:', error);
+      // Revert on error
+      setContextHubEnabledState(!enabled);
+      throw error;
+    }
+  };
+
   const refreshSettings = async () => {
     await loadSettings();
   };
@@ -149,6 +181,8 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({ children }) 
     setStyleGuideEnabled,
     agentWorkOrdersEnabled,
     setAgentWorkOrdersEnabled,
+    contextHubEnabled,
+    setContextHubEnabled,
     loading,
     refreshSettings
   };

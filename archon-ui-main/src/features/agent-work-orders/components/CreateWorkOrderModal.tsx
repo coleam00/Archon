@@ -51,7 +51,14 @@ export function CreateWorkOrderModal({ open, onOpenChange }: CreateWorkOrderModa
   const [sandboxType, setSandboxType] = useState<SandboxType>("git_worktree");
   const [userRequest, setUserRequest] = useState("");
   const [githubIssueNumber, setGithubIssueNumber] = useState("");
-  const [selectedCommands, setSelectedCommands] = useState<WorkflowStep[]>(["create-branch", "planning", "execute", "prp-review", "commit", "create-pr"]);
+  const [selectedCommands, setSelectedCommands] = useState<WorkflowStep[]>([
+    "create-branch",
+    "planning",
+    "execute",
+    "prp-review",
+    "commit",
+    "create-pr",
+  ]);
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -158,9 +165,9 @@ export function CreateWorkOrderModal({ open, onOpenChange }: CreateWorkOrderModa
 
       // Sort selected commands by WORKFLOW_STEPS order before sending to backend
       // This ensures correct execution order regardless of checkbox click order
-      const sortedCommands = WORKFLOW_STEPS
-        .filter(step => selectedCommands.includes(step.value))
-        .map(step => step.value);
+      const sortedCommands = WORKFLOW_STEPS.filter((step) => selectedCommands.includes(step.value)).map(
+        (step) => step.value,
+      );
 
       await createWorkOrder.mutateAsync({
         repository_url: repositoryUrl,
@@ -179,7 +186,7 @@ export function CreateWorkOrderModal({ open, onOpenChange }: CreateWorkOrderModa
       // while keeping the UI readable
       const maxLength = 500;
       let userMessage = "Failed to create work order. Please try again.";
-      
+
       if (err instanceof Error && err.message) {
         if (err.message.length <= maxLength) {
           userMessage = err.message;
@@ -188,7 +195,7 @@ export function CreateWorkOrderModal({ open, onOpenChange }: CreateWorkOrderModa
           userMessage = `${err.message.slice(0, maxLength)}... (truncated, ${err.message.length - maxLength} more characters)`;
         }
       }
-      
+
       setError(userMessage);
     } finally {
       setIsSubmitting(false);

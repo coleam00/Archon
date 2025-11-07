@@ -30,7 +30,12 @@ const WORKFLOW_STEPS: { value: WorkflowStep; label: string; description: string;
   { value: "create-branch", label: "Create Branch", description: "Create a new git branch for isolated work" },
   { value: "planning", label: "Planning", description: "Generate implementation plan" },
   { value: "execute", label: "Execute", description: "Implement the planned changes" },
-  { value: "prp-review", label: "Review/Fix", description: "Review implementation and fix issues", dependsOn: ["execute"] },
+  {
+    value: "prp-review",
+    label: "Review/Fix",
+    description: "Review implementation and fix issues",
+    dependsOn: ["execute"],
+  },
   { value: "commit", label: "Commit", description: "Commit changes to git", dependsOn: ["execute"] },
   { value: "create-pr", label: "Create PR", description: "Create pull request", dependsOn: ["commit"] },
 ];

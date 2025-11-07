@@ -298,7 +298,8 @@ export function AgentWorkOrderDetailView() {
                       <div>
                         <p className="text-xs text-gray-500 dark:text-gray-400">Steps Completed</p>
                         <p className="text-2xl font-bold text-gray-900 dark:text-white mt-0.5">
-                          {stepHistory.steps.filter((s) => s.success).length} / {liveProgress?.totalSteps ?? stepHistory.steps.length}
+                          {stepHistory.steps.filter((s) => s.success).length} /{" "}
+                          {liveProgress?.totalSteps ?? stepHistory.steps.length}
                         </p>
                       </div>
                     </div>

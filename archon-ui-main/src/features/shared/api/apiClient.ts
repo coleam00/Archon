@@ -41,6 +41,9 @@ function buildFullUrl(cleanEndpoint: string): string {
  * For file uploads or FormData requests, use fetch() directly.
  */
 export async function callAPIWithETag<T = unknown>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  console.log('[API CLIENT] Input endpoint:', endpoint);
+  console.log('[API CLIENT] API_BASE_URL:', API_BASE_URL);
+
   try {
     // Handle absolute URLs (direct service connections)
     const isAbsoluteUrl = endpoint.startsWith("http://") || endpoint.startsWith("https://");
@@ -49,10 +52,13 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
     if (isAbsoluteUrl) {
       // Use absolute URL as-is (for direct service connections)
       fullUrl = endpoint;
+      console.log('[API CLIENT] Using absolute URL:', fullUrl);
     } else {
       // Clean endpoint and build relative URL
       const cleanEndpoint = endpoint.startsWith("/api") ? endpoint.substring(4) : endpoint;
       fullUrl = buildFullUrl(cleanEndpoint);
+      console.log('[API CLIENT] Cleaned endpoint:', cleanEndpoint);
+      console.log('[API CLIENT] Final URL:', fullUrl);
     }
 
     // Build headers - only set Content-Type for requests with a body

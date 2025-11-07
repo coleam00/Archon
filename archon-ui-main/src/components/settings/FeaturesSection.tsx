@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Moon, Sun, FileText, Layout, Bot, Settings, Palette, Flame, Monitor } from 'lucide-react';
+import { Moon, Sun, FileText, Layout, Bot, Settings, Palette, Flame, Monitor, Brain } from 'lucide-react';
 import { Switch } from '@/features/ui/primitives/switch';
 import { Card } from '../ui/Card';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -18,12 +18,15 @@ export const FeaturesSection = () => {
     styleGuideEnabled,
     setStyleGuideEnabled: setStyleGuideContext,
     agentWorkOrdersEnabled,
-    setAgentWorkOrdersEnabled: setAgentWorkOrdersContext
+    setAgentWorkOrdersEnabled: setAgentWorkOrdersContext,
+    contextHubEnabled,
+    setContextHubEnabled: setContextHubContext
   } = useSettings();
   const isDarkMode = theme === 'dark';
   const [projectsEnabled, setProjectsEnabled] = useState(true);
   const [styleGuideEnabledLocal, setStyleGuideEnabledLocal] = useState(styleGuideEnabled);
   const [agentWorkOrdersEnabledLocal, setAgentWorkOrdersEnabledLocal] = useState(agentWorkOrdersEnabled);
+  const [contextHubEnabledLocal, setContextHubEnabledLocal] = useState(contextHubEnabled);
 
   // Commented out for future release
   const [agUILibraryEnabled, setAgUILibraryEnabled] = useState(false);
@@ -47,6 +50,10 @@ export const FeaturesSection = () => {
   useEffect(() => {
     setAgentWorkOrdersEnabledLocal(agentWorkOrdersEnabled);
   }, [agentWorkOrdersEnabled]);
+
+  useEffect(() => {
+    setContextHubEnabledLocal(contextHubEnabled);
+  }, [contextHubEnabled]);
 
   const loadSettings = async () => {
     try {
@@ -257,6 +264,29 @@ export const FeaturesSection = () => {
     }
   };
 
+  const handleContextHubToggle = async (checked: boolean) => {
+    if (loading) return;
+
+    try {
+      setLoading(true);
+      setContextHubEnabledLocal(checked);
+
+      // Update context which will save to backend
+      await setContextHubContext(checked);
+
+      showToast(
+        checked ? 'Context Hub Enabled' : 'Context Hub Disabled',
+        checked ? 'success' : 'warning'
+      );
+    } catch (error) {
+      console.error('Failed to update context hub setting:', error);
+      setContextHubEnabledLocal(!checked);
+      showToast('Failed to update context hub setting', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <>
       <div className="grid grid-cols-2 gap-4">
@@ -348,6 +378,28 @@ export const FeaturesSection = () => {
                 onCheckedChange={handleAgentWorkOrdersToggle}
                 color="green"
                 icon={<Bot className="w-5 h-5" />}
+                disabled={loading}
+              />
+            </div>
+          </div>
+
+          {/* Context Hub Toggle */}
+          <div className="flex items-center gap-4 p-4 rounded-xl bg-gradient-to-br from-indigo-500/10 to-indigo-600/5 backdrop-blur-sm border border-indigo-500/20 shadow-lg">
+            <div className="flex-1 min-w-0">
+              <p className="font-medium text-gray-800 dark:text-white">
+                Context Hub
+              </p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                Template library for workflows, agents, and coding standards
+              </p>
+            </div>
+            <div className="flex-shrink-0">
+              <Switch
+                size="lg"
+                checked={contextHubEnabledLocal}
+                onCheckedChange={handleContextHubToggle}
+                color="blue"
+                icon={<Brain className="w-5 h-5" />}
                 disabled={loading}
               />
             </div>

@@ -328,7 +328,7 @@ class CodeExtractionService:
                     ".html",
                     ".htm",
                 )) or "text/plain" in doc.get("content_type", "") or "text/markdown" in doc.get("content_type", "")
-                
+
                 is_pdf_file = source_url.endswith(".pdf") or "application/pdf" in doc.get("content_type", "")
 
                 if is_text_file:
@@ -978,33 +978,33 @@ class CodeExtractionService:
         This uses a much simpler approach - look for distinct code segments separated by prose.
         """
         import re
-        
+
         safe_logfire_info(f"🔍 PDF CODE EXTRACTION START | url={url} | content_length={len(content)}")
-        
+
         code_blocks = []
         min_length = await self._get_min_code_length()
-        
+
         # Split content into paragraphs/sections
         # Use double newlines and page breaks as natural boundaries
         sections = re.split(r'\n\n+|--- Page \d+ ---', content)
-        
+
         safe_logfire_info(f"📄 Split PDF into {len(sections)} sections")
-        
+
         for i, section in enumerate(sections):
             section = section.strip()
             if not section or len(section) < 50:  # Skip very short sections
                 continue
-                
+
             # Check if this section looks like code
             if self._is_pdf_section_code_like(section):
                 safe_logfire_info(f"🔍 Analyzing section {i} as potential code (length: {len(section)})")
-                
+
                 # Try to detect language
                 language = self._detect_language_from_content(section)
-                
+
                 # Clean the content
                 cleaned_code = self._clean_code_content(section, language)
-                
+
                 # Check length after cleaning
                 if len(cleaned_code) >= min_length:
                     # Validate quality
@@ -1012,7 +1012,7 @@ class CodeExtractionService:
                         # Get context from adjacent sections
                         context_before = sections[i-1].strip() if i > 0 else ""
                         context_after = sections[i+1].strip() if i < len(sections)-1 else ""
-                        
+
                         safe_logfire_info(f"✅ PDF code section | language={language} | length={len(cleaned_code)}")
                         code_blocks.append({
                             "code": cleaned_code,
@@ -1028,20 +1028,20 @@ class CodeExtractionService:
                     safe_logfire_info(f"❌ PDF section too short after cleaning: {len(cleaned_code)} < {min_length}")
             else:
                 safe_logfire_info(f"📝 Section {i} identified as prose/documentation")
-        
+
         safe_logfire_info(f"🔍 PDF CODE EXTRACTION COMPLETE | total_blocks={len(code_blocks)} | url={url}")
         return code_blocks
-    
+
     def _is_pdf_section_code_like(self, section: str) -> bool:
         """
         Determine if a PDF section contains code rather than prose.
         """
         import re
-        
+
         # Count code indicators vs prose indicators
         code_score = 0
         prose_score = 0
-        
+
         # Code indicators (higher weight for stronger indicators)
         code_patterns = [
             (r'\bfrom \w+(?:\.\w+)* import\b', 3),  # Python imports (strong)
@@ -1057,8 +1057,8 @@ class CodeExtractionService:
             (r':\s*\n\s+\w+:', 2),  # YAML structure (medium)
             (r'\blambda\s+\w+:', 2),  # Lambda functions (medium)
         ]
-        
-        # Prose indicators  
+
+        # Prose indicators
         prose_patterns = [
             (r'\b(the|this|that|these|those|are|is|was|were|will|would|should|could|have|has|had)\b', 1),
             (r'[.!?]\s+[A-Z]', 2),  # Sentence endings
@@ -1066,34 +1066,34 @@ class CodeExtractionService:
             (r'\bTable of Contents\b', 3),
             (r'\bAPI Reference\b', 2),
         ]
-        
+
         # Count patterns
         for pattern, weight in code_patterns:
             matches = len(re.findall(pattern, section, re.IGNORECASE | re.MULTILINE))
             code_score += matches * weight
-            
+
         for pattern, weight in prose_patterns:
             matches = len(re.findall(pattern, section, re.IGNORECASE | re.MULTILINE))
             prose_score += matches * weight
-        
+
         # Additional checks
         lines = section.split('\n')
         non_empty_lines = [line.strip() for line in lines if line.strip()]
-        
+
         if not non_empty_lines:
             return False
-            
+
         # If section is mostly single words or very short lines, probably not code
         short_lines = sum(1 for line in non_empty_lines if len(line.split()) < 3)
         if len(non_empty_lines) > 0 and short_lines / len(non_empty_lines) > 0.7:
             prose_score += 3
-            
+
         # If section has common code structure indicators
         if any('(' in line and ')' in line for line in non_empty_lines[:5]):
             code_score += 2
-            
+
         safe_logfire_info(f"📊 Section scoring: code_score={code_score}, prose_score={prose_score}")
-        
+
         # Code-like if code score significantly higher than prose score
         return code_score > prose_score and code_score > 2
 

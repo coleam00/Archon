@@ -9,7 +9,7 @@ Handles:
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.utils import format_datetime
 from typing import Any
 
@@ -595,7 +595,7 @@ async def list_project_tasks(
                     parsed_updated = None
 
             if parsed_updated is not None:
-                parsed_updated = parsed_updated.astimezone(timezone.utc)
+                parsed_updated = parsed_updated.astimezone(UTC)
                 if last_modified_dt is None or parsed_updated > last_modified_dt:
                     last_modified_dt = parsed_updated
 
@@ -626,7 +626,7 @@ async def list_project_tasks(
             response.headers["ETag"] = current_etag
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
             response.headers["Last-Modified"] = format_datetime(
-                last_modified_dt or datetime.now(timezone.utc)
+                last_modified_dt or datetime.now(UTC)
             )
             logfire.debug(f"Tasks unchanged, returning 304 | project_id={project_id} | etag={current_etag}")
             return None
@@ -635,7 +635,7 @@ async def list_project_tasks(
         response.headers["ETag"] = current_etag
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
         response.headers["Last-Modified"] = format_datetime(
-            last_modified_dt or datetime.now(timezone.utc)
+            last_modified_dt or datetime.now(UTC)
         )
 
         logfire.debug(

@@ -8,13 +8,6 @@ with unified error handling and sanitization patterns.
 import re
 from abc import ABC, abstractmethod
 
-from .embedding_exceptions import (
-    EmbeddingAPIError,
-    EmbeddingAuthenticationError,
-    EmbeddingQuotaExhaustedError,
-    EmbeddingRateLimitError,
-)
-
 
 class ProviderErrorAdapter(ABC):
     """Abstract base class for provider-specific error handling."""
@@ -37,7 +30,7 @@ class OpenAIErrorAdapter(ProviderErrorAdapter):
             return "OpenAI API encountered an error. Please verify your API key and quota."
 
         sanitized = message
-        
+
         # Comprehensive OpenAI patterns with case-insensitive matching
         patterns = [
             (r'sk-[a-zA-Z0-9]{48}', '[REDACTED_KEY]'),                 # OpenAI API keys
@@ -68,7 +61,7 @@ class GoogleAIErrorAdapter(ProviderErrorAdapter):
             return "Google AI API encountered an error. Please verify your API key."
 
         sanitized = message
-        
+
         # Comprehensive Google AI patterns
         patterns = [
             (r'AIza[a-zA-Z0-9_-]{35}', '[REDACTED_KEY]'),                     # Google AI API keys
@@ -99,7 +92,7 @@ class AnthropicErrorAdapter(ProviderErrorAdapter):
             return "Anthropic API encountered an error. Please verify your API key."
 
         sanitized = message
-        
+
         # Comprehensive Anthropic patterns
         patterns = [
             (r'sk-ant-[a-zA-Z0-9_-]{10,}', '[REDACTED_KEY]'),                 # Anthropic API keys
@@ -141,20 +134,20 @@ class ProviderErrorFactory:
         """Detect provider from error message with comprehensive pattern matching."""
         if not error_str:
             return "openai"
-            
+
         error_lower = error_str.lower()
-        
+
         # Case-insensitive provider detection with multiple patterns
-        if ("anthropic" in error_lower or 
+        if ("anthropic" in error_lower or
             re.search(r'sk-ant-[a-zA-Z0-9_-]+', error_str, re.IGNORECASE) or
             "claude" in error_lower):
             return "anthropic"
-        elif ("google" in error_lower or 
+        elif ("google" in error_lower or
               re.search(r'AIza[a-zA-Z0-9_-]+', error_str, re.IGNORECASE) or
-              "googleapis" in error_lower or 
+              "googleapis" in error_lower or
               "vertex" in error_lower):
             return "google"
-        elif ("openai" in error_lower or 
+        elif ("openai" in error_lower or
               re.search(r'sk-[a-zA-Z0-9]{48}', error_str, re.IGNORECASE) or
               "gpt" in error_lower):
             return "openai"

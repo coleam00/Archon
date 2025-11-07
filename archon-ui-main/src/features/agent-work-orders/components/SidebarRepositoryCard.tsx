@@ -6,11 +6,11 @@
  */
 
 import { Activity, CheckCircle2, Clock, Copy, Edit, Pin, Trash2 } from "lucide-react";
+import { copyToClipboard } from "@/features/shared/utils/clipboard";
 import { StatPill } from "@/features/ui/primitives/pill";
 import { SelectableCard } from "@/features/ui/primitives/selectable-card";
 import { cn } from "@/features/ui/primitives/styles";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/features/ui/primitives/tooltip";
-import { copyToClipboard } from "@/features/shared/utils/clipboard";
 import { useAgentWorkOrdersStore } from "../state/agentWorkOrdersStore";
 import type { ConfiguredRepository } from "../types/repository";
 
