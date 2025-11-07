@@ -712,6 +712,8 @@ async def refresh_knowledge_item(source_id: str):
                     safe_logfire_info(
                         f"Cleaned up refresh task from registry | progress_id={progress_id}"
                     )
+                # Close crawl_service to release resources
+                await crawl_service.close()
 
         # Start the wrapper task - we don't need to track it since we'll track the actual crawl task
         asyncio.create_task(_perform_refresh_with_semaphore())
@@ -889,6 +891,8 @@ async def _perform_crawl_with_progress(
                 safe_logfire_info(
                     f"Cleaned up crawl task from registry | progress_id={progress_id}"
                 )
+            # Close orchestration_service to release resources
+            await orchestration_service.close()
 
 
 @router.post("/documents/upload")

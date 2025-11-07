@@ -275,3 +275,34 @@ def get_mcp_monitoring_config() -> MCPMonitoringConfig:
         enable_docker_socket=str_to_bool(os.getenv("ENABLE_DOCKER_SOCKET_MONITORING")),
         health_check_timeout=int(os.getenv("MCP_HEALTH_CHECK_TIMEOUT", "5")),
     )
+
+
+def get_crawler_config() -> dict:
+    """Get crawler configuration from environment.
+
+    Returns a dictionary with crawler settings including User-Agent,
+    robots.txt compliance settings, and caching configuration.
+
+    Environment Variables:
+        CRAWLER_USER_AGENT: Custom User-Agent string (default: "Archon-Crawler/{version} (+{repo_url})")
+        ROBOTS_RESPECT: Whether to respect robots.txt (default: "true")
+        ROBOTS_DEFAULT_CRAWL_DELAY: Default delay between requests in seconds (default: "10.0")
+        ROBOTS_CACHE_SIZE: Max number of domains to cache (default: "1000")
+        ROBOTS_CACHE_TTL: Cache TTL in seconds (default: "86400" = 24 hours)
+
+    Returns:
+        dict with keys: user_agent, respect_robots, default_crawl_delay,
+                       robots_cache_size, robots_cache_ttl
+    """
+    from .version import ARCHON_VERSION, GITHUB_REPO_NAME, GITHUB_REPO_OWNER
+
+    repo_url = f"https://github.com/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}"
+    default_ua = f"Archon-Crawler/{ARCHON_VERSION} (+{repo_url})"
+
+    return {
+        "user_agent": os.getenv("CRAWLER_USER_AGENT", default_ua),
+        "respect_robots": os.getenv("ROBOTS_RESPECT", "true").lower() == "true",
+        "default_crawl_delay": float(os.getenv("ROBOTS_DEFAULT_CRAWL_DELAY", "10.0")),
+        "robots_cache_size": int(os.getenv("ROBOTS_CACHE_SIZE", "1000")),
+        "robots_cache_ttl": int(os.getenv("ROBOTS_CACHE_TTL", "86400")),  # 24 hours
+    }
