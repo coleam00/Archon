@@ -5,6 +5,7 @@ All models follow exact naming from the PRD specification.
 
 from datetime import UTC, datetime
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -207,6 +208,24 @@ class ConfiguredRepository(BaseModel):
     created_at: datetime = Field(..., description="Timestamp when repository configuration was created")
     updated_at: datetime = Field(..., description="Timestamp when repository configuration was last updated")
 
+    # Phase 2: Template linking fields
+    workflow_template_id: str | None = Field(
+        None,
+        description="UUID of workflow template from Context Hub (archon_workflow_templates)"
+    )
+    coding_standard_ids: list[str] = Field(
+        default_factory=list,
+        description="List of coding standard UUIDs from Context Hub (archon_coding_standards)"
+    )
+    priming_context: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Repository-specific priming context (paths, architecture, conventions)"
+    )
+    use_template_execution: bool = Field(
+        default=False,
+        description="Flag to enable template-based execution (Phase 3). Default: false (hardcoded .md files)"
+    )
+
 
 class CreateRepositoryRequest(BaseModel):
     """Request to create a new configured repository
@@ -221,6 +240,11 @@ class CreateRepositoryRequest(BaseModel):
         default=True,
         description="Whether to verify repository access via GitHub API and extract metadata"
     )
+
+
+class ApplyWorkflowTemplateRequest(BaseModel):
+    """Request to apply or clear a workflow template"""
+    workflow_template_id: str | None = Field(None, description="Workflow template UUID, or None to clear")
 
 
 class UpdateRepositoryRequest(BaseModel):
@@ -238,6 +262,44 @@ class UpdateRepositoryRequest(BaseModel):
         None,
         description="Update the default workflow commands for this repository"
     )
+
+
+class RepositoryAgentOverride(BaseModel):
+    """Agent tool/standard overrides for a specific repository
+
+    Allows repository-specific customizations of agent templates without
+    modifying the template itself. NULL values mean "use template default".
+    """
+
+    id: str = Field(..., description="Unique UUID for this override")
+    repository_id: str = Field(..., description="FK to archon_configured_repositories")
+    agent_template_id: str = Field(..., description="FK to archon_agent_templates")
+    override_tools: list[str] | None = Field(
+        None,
+        description="Override tools list (NULL = use template default)"
+    )
+    override_standards: dict[str, Any] | None = Field(
+        None,
+        description="Override standards dict (NULL = use template default)"
+    )
+    created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Last update timestamp")
+
+
+class CreateRepositoryAgentOverrideRequest(BaseModel):
+    """Request to create agent override for repository"""
+
+    repository_id: str
+    agent_template_id: str
+    override_tools: list[str] | None = None
+    override_standards: dict[str, Any] | None = None
+
+
+class UpdateRepositoryAgentOverrideRequest(BaseModel):
+    """Request to update agent override"""
+
+    override_tools: list[str] | None = None
+    override_standards: dict[str, Any] | None = None
 
 
 class GitHubPullRequest(BaseModel):

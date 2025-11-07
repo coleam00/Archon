@@ -42,6 +42,19 @@ export interface ConfiguredRepository {
   /** Default workflow commands for work orders */
   default_commands: WorkflowStep[];
 
+  // Phase 2: Template linking fields
+  /** UUID of workflow template from Context Hub */
+  workflow_template_id: string | null;
+
+  /** List of coding standard UUIDs from Context Hub */
+  coding_standard_ids: string[];
+
+  /** Repository-specific priming context (paths, architecture, conventions) */
+  priming_context: Record<string, any>;
+
+  /** Flag to enable template-based execution (Phase 3). Default: false (hardcoded .md files) */
+  use_template_execution: boolean;
+
   /** Timestamp when repository configuration was created */
   created_at: string;
 
@@ -79,4 +92,68 @@ export interface UpdateRepositoryRequest {
 
   /** Update the default workflow commands for this repository */
   default_commands?: WorkflowStep[];
+}
+
+/**
+ * Agent tool/standard overrides for a specific repository
+ *
+ * Allows repository-specific customizations of agent templates without
+ * modifying the template itself. NULL values mean "use template default".
+ */
+export interface RepositoryAgentOverride {
+  /** Unique UUID for this override */
+  id: string;
+
+  /** FK to archon_configured_repositories */
+  repository_id: string;
+
+  /** FK to archon_agent_templates */
+  agent_template_id: string;
+
+  /** Override tools list (null = use template default) */
+  override_tools: string[] | null;
+
+  /** Override standards dict (null = use template default) */
+  override_standards: Record<string, any> | null;
+
+  /** Creation timestamp */
+  created_at: string;
+
+  /** Last update timestamp */
+  updated_at: string;
+}
+
+/**
+ * Request to apply workflow template to repository
+ */
+export interface ApplyWorkflowTemplateRequest {
+  /** Workflow template UUID from Context Hub */
+  workflow_template_id: string;
+}
+
+/**
+ * Request to update repository priming context
+ */
+export interface UpdatePrimingContextRequest {
+  /** Priming context dict (paths, architecture, etc.) */
+  priming_context: Record<string, any>;
+}
+
+/**
+ * Request to assign coding standards to repository
+ */
+export interface AssignCodingStandardsRequest {
+  /** List of coding standard UUIDs from Context Hub */
+  coding_standard_ids: string[];
+}
+
+/**
+ * Request to create or update agent override
+ */
+export interface UpsertAgentOverrideRequest {
+  /** Override tools list (null = use template default) */
+  override_tools?: string[] | null;
+
+  /** Override standards dict (null = use template default) */
+  override_standards?: Record<string, any> | null;
 }

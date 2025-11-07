@@ -6,7 +6,16 @@
  */
 
 import { callAPIWithETag } from "@/features/shared/api/apiClient";
-import type { ConfiguredRepository, CreateRepositoryRequest, UpdateRepositoryRequest } from "../types/repository";
+import type {
+  ApplyWorkflowTemplateRequest,
+  AssignCodingStandardsRequest,
+  ConfiguredRepository,
+  CreateRepositoryRequest,
+  RepositoryAgentOverride,
+  UpdatePrimingContextRequest,
+  UpdateRepositoryRequest,
+  UpsertAgentOverrideRequest,
+} from "../types/repository";
 
 /**
  * List all configured repositories
@@ -74,6 +83,131 @@ export async function verifyRepositoryAccess(id: string): Promise<{ is_accessibl
   );
 }
 
+// Phase 2: Template Linking
+
+/**
+ * Apply workflow template to repository, or clear it with null
+ * @param repositoryId - Repository ID
+ * @param workflowTemplateId - Workflow template UUID from Context Hub, or null to clear
+ * @returns The updated repository
+ */
+export async function applyWorkflowTemplate(
+  repositoryId: string,
+  workflowTemplateId: string | null
+): Promise<ConfiguredRepository> {
+  return callAPIWithETag<ConfiguredRepository>(
+    `/api/agent-work-orders/repositories/${repositoryId}/workflow-template`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ workflow_template_id: workflowTemplateId }),
+    },
+  );
+}
+
+/**
+ * Update repository priming context
+ * @param repositoryId - Repository ID
+ * @param primingContext - Priming context dict (paths, architecture, etc.)
+ * @returns The updated repository
+ */
+export async function updatePrimingContext(
+  repositoryId: string,
+  primingContext: Record<string, any>
+): Promise<ConfiguredRepository> {
+  return callAPIWithETag<ConfiguredRepository>(
+    `/api/agent-work-orders/repositories/${repositoryId}/priming-context`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(primingContext),
+    },
+  );
+}
+
+/**
+ * Assign coding standards to repository
+ * @param repositoryId - Repository ID
+ * @param codingStandardIds - List of coding standard UUIDs from Context Hub
+ * @returns The updated repository
+ */
+export async function assignCodingStandards(
+  repositoryId: string,
+  codingStandardIds: string[]
+): Promise<ConfiguredRepository> {
+  return callAPIWithETag<ConfiguredRepository>(
+    `/api/agent-work-orders/repositories/${repositoryId}/coding-standards`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ coding_standard_ids: codingStandardIds }),
+    },
+  );
+}
+
+/**
+ * List all agent overrides for a repository
+ * @param repositoryId - Repository ID
+ * @returns Array of agent overrides
+ */
+export async function listAgentOverrides(
+  repositoryId: string
+): Promise<RepositoryAgentOverride[]> {
+  return callAPIWithETag<RepositoryAgentOverride[]>(
+    `/api/agent-work-orders/repositories/${repositoryId}/agent-overrides`,
+    {
+      method: "GET",
+    },
+  );
+}
+
+/**
+ * Create or update agent override for repository
+ * @param repositoryId - Repository ID
+ * @param agentTemplateId - Agent template UUID
+ * @param request - Override request with tools and/or standards
+ * @returns The created or updated agent override
+ */
+export async function upsertAgentOverride(
+  repositoryId: string,
+  agentTemplateId: string,
+  request: UpsertAgentOverrideRequest
+): Promise<RepositoryAgentOverride> {
+  return callAPIWithETag<RepositoryAgentOverride>(
+    `/api/agent-work-orders/repositories/${repositoryId}/agent-overrides/${agentTemplateId}`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    },
+  );
+}
+
+/**
+ * Delete agent override for repository
+ * @param repositoryId - Repository ID
+ * @param agentTemplateId - Agent template UUID
+ */
+export async function deleteAgentOverride(
+  repositoryId: string,
+  agentTemplateId: string
+): Promise<void> {
+  await callAPIWithETag<void>(
+    `/api/agent-work-orders/repositories/${repositoryId}/agent-overrides/${agentTemplateId}`,
+    {
+      method: "DELETE",
+    },
+  );
+}
+
 // Export all methods as named exports and default object
 export const repositoryService = {
   listRepositories,
@@ -81,6 +215,13 @@ export const repositoryService = {
   updateRepository,
   deleteRepository,
   verifyRepositoryAccess,
+  // Phase 2: Template Linking
+  applyWorkflowTemplate,
+  updatePrimingContext,
+  assignCodingStandards,
+  listAgentOverrides,
+  upsertAgentOverride,
+  deleteAgentOverride,
 };
 
 export default repositoryService;

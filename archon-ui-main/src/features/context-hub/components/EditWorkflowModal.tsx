@@ -13,7 +13,7 @@ import {
 import { Input } from "@/features/ui/primitives/input";
 import { useUpdateWorkflowTemplate, useWorkflowTemplate } from "../hooks/useWorkflowTemplates";
 import type { UpdateWorkflowTemplateRequest, WorkflowStep } from "../types";
-import { WorkflowBuilder } from "./WorkflowBuilder";
+import { WorkflowFlowBuilder } from "./workflow-builder/WorkflowFlowBuilder";
 
 interface EditWorkflowModalProps {
   open: boolean;
@@ -109,9 +109,9 @@ export const EditWorkflowModal: React.FC<EditWorkflowModalProps> = ({ open, onOp
             <DialogDescription>Update workflow configuration and step sequence.</DialogDescription>
           </DialogHeader>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 my-6 flex-1 overflow-y-auto">
-            {/* Left Column: Basic Info - Takes 1/3 width on large screens */}
-            <div className="lg:col-span-1 space-y-4">
+          <div className="space-y-6 my-6 flex-1 overflow-hidden flex flex-col">
+            {/* Top Row: Workflow Name (1/3) and Description (2/3) */}
+            <div className="grid grid-cols-3 gap-4">
               <div>
                 <label htmlFor={nameId} className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Workflow Name
@@ -125,7 +125,7 @@ export const EditWorkflowModal: React.FC<EditWorkflowModalProps> = ({ open, onOp
                 />
               </div>
 
-              <div>
+              <div className="col-span-2">
                 <label
                   htmlFor={descriptionId}
                   className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
@@ -140,20 +140,15 @@ export const EditWorkflowModal: React.FC<EditWorkflowModalProps> = ({ open, onOp
                   disabled={updateMutation.isPending}
                 />
               </div>
-
-              <div className="p-4 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-500/30">
-                <p className="text-sm text-gray-700 dark:text-gray-300">
-                  <strong>Slug:</strong> {template.slug}
-                </p>
-                <p className="text-sm text-gray-700 dark:text-gray-300 mt-1">
-                  <strong>Steps:</strong> {workflowSteps.length} configured
-                </p>
-              </div>
             </div>
 
-            {/* Right Column: Workflow Builder - Takes 2/3 width on large screens */}
-            <div className="lg:col-span-2">
-              <WorkflowBuilder steps={workflowSteps} onChange={setWorkflowSteps} disabled={updateMutation.isPending} />
+            {/* Full Width: Workflow Flow Builder */}
+            <div className="flex flex-col flex-1 min-h-[600px] overflow-hidden">
+              <WorkflowFlowBuilder
+                steps={workflowSteps}
+                onChange={setWorkflowSteps}
+                disabled={updateMutation.isPending}
+              />
             </div>
           </div>
 

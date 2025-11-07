@@ -121,6 +121,11 @@ class RepositoryConfigRepository:
             default_commands=default_commands,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            # Phase 2: Template linking fields
+            workflow_template_id=row.get("workflow_template_id"),
+            coding_standard_ids=row.get("coding_standard_ids", []),
+            priming_context=row.get("priming_context", {}),
+            use_template_execution=row.get("use_template_execution", False),
         )
 
     async def list_repositories(self) -> list[ConfiguredRepository]:
@@ -351,3 +356,79 @@ class RepositoryConfigRepository:
                 error=str(e)
             )
             raise
+
+    async def apply_workflow_template(
+        self,
+        repository_id: str,
+        workflow_template_id: str | None
+    ) -> ConfiguredRepository | None:
+        """Apply a workflow template to a repository, or clear it with None
+
+        Args:
+            repository_id: Repository UUID
+            workflow_template_id: Workflow template UUID from Context Hub, or None to clear
+
+        Returns:
+            Updated ConfiguredRepository or None if not found
+        """
+        return await self.update_repository(
+            repository_id,
+            workflow_template_id=workflow_template_id
+        )
+
+    async def update_priming_context(
+        self,
+        repository_id: str,
+        priming_context: dict[str, Any]
+    ) -> ConfiguredRepository | None:
+        """Update repository priming context
+
+        Args:
+            repository_id: Repository UUID
+            priming_context: Priming context dict (paths, architecture, etc.)
+
+        Returns:
+            Updated ConfiguredRepository or None if not found
+        """
+        return await self.update_repository(
+            repository_id,
+            priming_context=priming_context
+        )
+
+    async def assign_coding_standards(
+        self,
+        repository_id: str,
+        coding_standard_ids: list[str]
+    ) -> ConfiguredRepository | None:
+        """Assign coding standards to repository
+
+        Args:
+            repository_id: Repository UUID
+            coding_standard_ids: List of coding standard UUIDs from Context Hub
+
+        Returns:
+            Updated ConfiguredRepository or None if not found
+        """
+        return await self.update_repository(
+            repository_id,
+            coding_standard_ids=coding_standard_ids
+        )
+
+    async def toggle_template_execution(
+        self,
+        repository_id: str,
+        enabled: bool
+    ) -> ConfiguredRepository | None:
+        """Toggle template execution mode for repository
+
+        Args:
+            repository_id: Repository UUID
+            enabled: True to use templates (Phase 3+), False for hardcoded .md files
+
+        Returns:
+            Updated ConfiguredRepository or None if not found
+        """
+        return await self.update_repository(
+            repository_id,
+            use_template_execution=enabled
+        )

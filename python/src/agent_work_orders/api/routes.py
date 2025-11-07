@@ -8,7 +8,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 from sse_starlette.sse import EventSourceResponse
 
 from ..agent_executor.agent_cli_executor import AgentCLIExecutor
@@ -17,6 +17,7 @@ from ..github_integration.github_client import GitHubClient
 from ..models import (
     AgentPromptRequest,
     AgentWorkflowPhase,
+    ApplyWorkflowTemplateRequest,
     AgentWorkOrder,
     AgentWorkOrderResponse,
     AgentWorkOrderState,
@@ -24,13 +25,17 @@ from ..models import (
     ConfiguredRepository,
     CreateAgentWorkOrderRequest,
     CreateRepositoryRequest,
+    CreateRepositoryAgentOverrideRequest,
     GitHubRepositoryVerificationRequest,
     GitHubRepositoryVerificationResponse,
     GitProgressSnapshot,
+    RepositoryAgentOverride,
     StepHistory,
+    UpdateRepositoryAgentOverrideRequest,
     UpdateRepositoryRequest,
 )
 from ..sandbox_manager.sandbox_factory import SandboxFactory
+from ..state_manager.repository_agent_override_repository import RepositoryAgentOverrideRepository
 from ..state_manager.repository_config_repository import RepositoryConfigRepository
 from ..state_manager.repository_factory import create_repository
 from ..utils.id_generator import generate_work_order_id
@@ -576,6 +581,242 @@ async def verify_repository_access(repository_id: str) -> dict[str, bool | str]:
             error=str(e)
         )
         raise HTTPException(status_code=500, detail=f"Failed to verify repository: {e}") from e
+
+
+# Phase 2: Repository Template Linking
+
+
+@router.put(
+    "/repositories/{repository_id}/workflow-template",
+    response_model=ConfiguredRepository,
+    summary="Apply workflow template to repository"
+)
+async def apply_workflow_template_to_repository(
+    repository_id: str,
+    request: ApplyWorkflowTemplateRequest
+) -> ConfiguredRepository:
+    """Apply a Context Hub workflow template to a repository, or clear it by passing null"""
+    try:
+        workflow_template_id = request.workflow_template_id
+        # Allow None/null to clear the template
+
+        repo_repository = RepositoryConfigRepository()
+        repository = await repo_repository.apply_workflow_template(
+            repository_id,
+            workflow_template_id
+        )
+
+        if not repository:
+            raise HTTPException(404, f"Repository {repository_id} not found")
+
+        logger.info(
+            "workflow_template_applied",
+            repository_id=repository_id,
+            workflow_template_id=workflow_template_id
+        )
+
+        return repository
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(
+            "apply_workflow_template_failed",
+            repository_id=repository_id,
+            error=str(e)
+        )
+        raise HTTPException(500, f"Failed to apply template: {str(e)}") from e
+
+
+@router.put(
+    "/repositories/{repository_id}/priming-context",
+    response_model=ConfiguredRepository,
+    summary="Update repository priming context"
+)
+async def update_repository_priming_context(
+    repository_id: str,
+    priming_context: dict[str, Any]
+) -> ConfiguredRepository:
+    """Update repository-specific priming context"""
+    try:
+        repo_repository = RepositoryConfigRepository()
+        repository = await repo_repository.update_priming_context(
+            repository_id,
+            priming_context
+        )
+
+        if not repository:
+            raise HTTPException(404, f"Repository {repository_id} not found")
+
+        logger.info(
+            "priming_context_updated",
+            repository_id=repository_id,
+            context_keys=list(priming_context.keys())
+        )
+
+        return repository
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(
+            "update_priming_context_failed",
+            repository_id=repository_id,
+            error=str(e)
+        )
+        raise HTTPException(500, f"Failed to update priming context: {str(e)}") from e
+
+
+@router.put(
+    "/repositories/{repository_id}/coding-standards",
+    response_model=ConfiguredRepository,
+    summary="Assign coding standards to repository"
+)
+async def assign_coding_standards_to_repository(
+    repository_id: str,
+    request: dict[str, list[str]]  # {"coding_standard_ids": ["uuid1", "uuid2"]}
+) -> ConfiguredRepository:
+    """Assign coding standards from Context Hub to repository"""
+    try:
+        coding_standard_ids = request.get("coding_standard_ids", [])
+
+        repo_repository = RepositoryConfigRepository()
+        repository = await repo_repository.assign_coding_standards(
+            repository_id,
+            coding_standard_ids
+        )
+
+        if not repository:
+            raise HTTPException(404, f"Repository {repository_id} not found")
+
+        logger.info(
+            "coding_standards_assigned",
+            repository_id=repository_id,
+            standard_count=len(coding_standard_ids)
+        )
+
+        return repository
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(
+            "assign_coding_standards_failed",
+            repository_id=repository_id,
+            error=str(e)
+        )
+        raise HTTPException(500, f"Failed to assign coding standards: {str(e)}") from e
+
+
+@router.get(
+    "/repositories/{repository_id}/agent-overrides",
+    response_model=list[RepositoryAgentOverride],
+    summary="List agent overrides for repository"
+)
+async def list_repository_agent_overrides(
+    repository_id: str
+) -> list[RepositoryAgentOverride]:
+    """List all agent overrides for a repository"""
+    try:
+        override_repository = RepositoryAgentOverrideRepository()
+        return await override_repository.list_by_repository(repository_id)
+
+    except Exception as e:
+        logger.exception(
+            "list_agent_overrides_failed",
+            repository_id=repository_id,
+            error=str(e)
+        )
+        raise HTTPException(500, f"Failed to list agent overrides: {str(e)}") from e
+
+
+@router.put(
+    "/repositories/{repository_id}/agent-overrides/{agent_template_id}",
+    response_model=RepositoryAgentOverride,
+    summary="Create or update agent override"
+)
+async def upsert_agent_override(
+    repository_id: str,
+    agent_template_id: str,
+    request: UpdateRepositoryAgentOverrideRequest
+) -> RepositoryAgentOverride:
+    """Create or update agent tool/standard override for repository"""
+    try:
+        override_repository = RepositoryAgentOverrideRepository()
+
+        # Extract override values from request
+        override_tools = request.override_tools
+        override_standards = request.override_standards
+
+        # Check if override exists
+        existing = await override_repository.get_override(
+            repository_id,
+            agent_template_id
+        )
+
+        if existing:
+            # Update existing
+            updated = await override_repository.update_override(
+                repository_id,
+                agent_template_id,
+                override_tools=override_tools,
+                override_standards=override_standards
+            )
+            if not updated:
+                raise HTTPException(404, "Override not found")
+            return updated
+        else:
+            # Create new
+            return await override_repository.create_override(
+                repository_id=repository_id,
+                agent_template_id=agent_template_id,
+                override_tools=override_tools,
+                override_standards=override_standards
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(
+            "upsert_agent_override_failed",
+            repository_id=repository_id,
+            agent_template_id=agent_template_id,
+            error=str(e)
+        )
+        raise HTTPException(500, f"Failed to upsert agent override: {str(e)}") from e
+
+
+@router.delete(
+    "/repositories/{repository_id}/agent-overrides/{agent_template_id}",
+    summary="Delete agent override"
+)
+async def delete_agent_override(
+    repository_id: str,
+    agent_template_id: str
+) -> dict[str, str]:
+    """Delete agent override for repository"""
+    try:
+        override_repository = RepositoryAgentOverrideRepository()
+        deleted = await override_repository.delete_override(
+            repository_id,
+            agent_template_id
+        )
+
+        if not deleted:
+            raise HTTPException(404, "Override not found")
+
+        return {"message": "Agent override deleted successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(
+            "delete_agent_override_failed",
+            repository_id=repository_id,
+            agent_template_id=agent_template_id,
+            error=str(e)
+        )
+        raise HTTPException(500, f"Failed to delete agent override: {str(e)}") from e
 
 
 @router.get("/{agent_work_order_id}")
