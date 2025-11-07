@@ -313,6 +313,7 @@ class CrawlingService:
             max_concurrent,
             progress_callback,
             self._check_cancellation,  # Pass cancellation check
+            self.robots_checker,  # Pass robots checker for URL validation
         )
 
     # Orchestration methods
