@@ -26,6 +26,7 @@ from pydantic import BaseModel
 # Import our PydanticAI agents
 from .document_agent import DocumentAgent
 from .rag_agent import RagAgent
+from .webdev_agent import WebDeveloperAgent
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -55,6 +56,7 @@ class AgentResponse(BaseModel):
 AVAILABLE_AGENTS = {
     "document": DocumentAgent,
     "rag": RagAgent,
+    "webdev": WebDeveloperAgent,
 }
 
 # Global credentials storage
@@ -241,6 +243,16 @@ async def stream_agent(agent_type: str, request: AgentRequest):
 
                 deps = DocumentDependencies(
                     project_id=request.context.get("project_id") if request.context else None,
+                    user_id=request.context.get("user_id") if request.context else None,
+                )
+            elif agent_type == "webdev":
+                from .webdev_agent import WebDevDependencies
+
+                deps = WebDevDependencies(
+                    project_id=request.context.get("project_id") if request.context else None,
+                    file_path=request.context.get("file_path") if request.context else None,
+                    language=request.context.get("language") if request.context else None,
+                    framework=request.context.get("framework") if request.context else None,
                     user_id=request.context.get("user_id") if request.context else None,
                 )
             else:
