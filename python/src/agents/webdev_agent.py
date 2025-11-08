@@ -71,7 +71,7 @@ class WebDeveloperAgent(BaseAgent[WebDevDependencies, str]):
     - Answer web development questions
     """
 
-    def __init__(self, model: str = None, **kwargs):
+    def __init__(self, model: str | None = None, **kwargs):
         if model is None:
             model = os.getenv("WEBDEV_AGENT_MODEL", "openai:gpt-4o")
 
@@ -303,7 +303,7 @@ class WebDeveloperAgent(BaseAgent[WebDevDependencies, str]):
             # Generate component
             component_code = f'''import React from 'react';
 
-{props_interface}export const {component_name}: React.FC{f"<{component_name}Props>" if props else ""} = ({f"{{ /* props */ }}" if props else ""}) => {{
+{props_interface}export const {component_name}: React.FC{f"<{component_name}Props>" if props else ""} = ({"{ /* props */ }" if props else ""}) => {{
   // {description}
 
   return (
@@ -659,17 +659,17 @@ async def {self._to_snake_case(endpoint_path.split("/")[-1])}({params}):
             sql.append(f"-- Enable Row Level Security for {table_name}")
             sql.append(f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY;")
             sql.append("")
-            sql.append(f"-- RLS Policy: Users can view their own records")
+            sql.append("-- RLS Policy: Users can view their own records")
             sql.append(f"CREATE POLICY select_{table_name}_policy ON {table_name}")
             sql.append("    FOR SELECT")
             sql.append("    USING (auth.uid() = created_by);")
             sql.append("")
-            sql.append(f"-- RLS Policy: Users can insert their own records")
+            sql.append("-- RLS Policy: Users can insert their own records")
             sql.append(f"CREATE POLICY insert_{table_name}_policy ON {table_name}")
             sql.append("    FOR INSERT")
             sql.append("    WITH CHECK (auth.uid() = created_by);")
 
-            return f"```sql\n" + "\n".join(sql) + "\n```"
+            return "```sql\n" + "\n".join(sql) + "\n```"
 
         return agent
 
@@ -714,8 +714,8 @@ async def {self._to_snake_case(endpoint_path.split("/")[-1])}({params}):
         file_path: str | None = None,
         language: str | None = None,
         framework: str | None = None,
-        user_id: str = None,
-        progress_callback: Any = None,
+        user_id: str | None = None,
+        progress_callback: Any | None = None,
     ) -> str:
         """
         Run the agent for web development assistance.
