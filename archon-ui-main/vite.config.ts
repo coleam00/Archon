@@ -27,7 +27,13 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
   return {
     plugins: [
       tailwindcss(),
-      react(),
+      react({
+        babel: {
+          plugins: [
+            ['babel-plugin-react-compiler', {}],
+          ],
+        },
+      }),
       // Custom plugin to add test endpoint
       {
         name: 'test-runner',
