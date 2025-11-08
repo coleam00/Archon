@@ -904,6 +904,43 @@ class CrawlingService:
                                             same_domain_links.append((link, text))
                                             logger.debug(f"Found same-domain link: {link}")
 
+                            # Apply glob pattern filtering or selected URLs
+                            if same_domain_links:
+                                original_count = len(same_domain_links)
+
+                                # Extract filtering parameters from request
+                                include_patterns = request.get("url_include_patterns", [])
+                                exclude_patterns = request.get("url_exclude_patterns", [])
+                                selected_urls = request.get("selected_urls")
+
+                                # Option 1: Use selected_urls from review modal (takes precedence)
+                                if selected_urls:
+                                    selected_urls_set = set(selected_urls)
+                                    same_domain_links = [
+                                        (link, text) for link, text in same_domain_links
+                                        if link in selected_urls_set
+                                    ]
+                                    logger.info(
+                                        f"Applied selected_urls filter: {original_count} → {len(same_domain_links)} links "
+                                        f"({original_count - len(same_domain_links)} filtered)"
+                                    )
+
+                                # Option 2: Apply glob pattern filtering
+                                elif include_patterns or exclude_patterns:
+                                    filtered_links = []
+                                    for link, text in same_domain_links:
+                                        if self.url_handler.matches_glob_patterns(link, include_patterns, exclude_patterns):
+                                            filtered_links.append((link, text))
+
+                                    filtered_count = original_count - len(filtered_links)
+                                    same_domain_links = filtered_links
+
+                                    logger.info(
+                                        f"Applied glob pattern filter: {original_count} → {len(same_domain_links)} links "
+                                        f"({filtered_count} filtered) | "
+                                        f"include={include_patterns} | exclude={exclude_patterns}"
+                                    )
+
                             if same_domain_links:
                                 # Build mapping and extract just URLs
                                 url_to_link_text = dict(same_domain_links)

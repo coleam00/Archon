@@ -15,6 +15,7 @@ import type { CrawlRequest, UploadMetadata } from "../types";
 import { KnowledgeTypeSelector } from "./KnowledgeTypeSelector";
 import { LevelSelector } from "./LevelSelector";
 import { TagInput } from "./TagInput";
+import { LinkReviewModal } from "./LinkReviewModal";
 
 interface AddKnowledgeDialogProps {
   open: boolean;
@@ -44,6 +45,15 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
   const [maxDepth, setMaxDepth] = useState("2");
   const [tags, setTags] = useState<string[]>([]);
 
+  // Glob pattern filtering state
+  const [includePatterns, setIncludePatterns] = useState("");
+  const [excludePatterns, setExcludePatterns] = useState("");
+  const [reviewLinksEnabled, setReviewLinksEnabled] = useState(true);
+
+  // Link review modal state
+  const [showLinkReviewModal, setShowLinkReviewModal] = useState(false);
+  const [previewData, setPreviewData] = useState<any>(null);
+
   // Upload form state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadType, setUploadType] = useState<"technical" | "business">("technical");
@@ -54,6 +64,9 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
     setCrawlType("technical");
     setMaxDepth("2");
     setTags([]);
+    setIncludePatterns("");
+    setExcludePatterns("");
+    setReviewLinksEnabled(true);
     setSelectedFile(null);
     setUploadType("technical");
     setUploadTags([]);
@@ -66,11 +79,54 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
     }
 
     try {
+      // Parse patterns from comma-separated strings
+      const includePatternArray = includePatterns
+        .split(",")
+        .map((p) => p.trim())
+        .filter((p) => p.length > 0);
+      const excludePatternArray = excludePatterns
+        .split(",")
+        .map((p) => p.trim())
+        .filter((p) => p.length > 0);
+
+      // If review is enabled, call preview endpoint first
+      if (reviewLinksEnabled) {
+        const previewResponse = await fetch("http://localhost:8181/api/crawl/preview-links", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: crawlUrl,
+            url_include_patterns: includePatternArray,
+            url_exclude_patterns: excludePatternArray,
+          }),
+        });
+
+        if (!previewResponse.ok) {
+          throw new Error("Failed to preview links");
+        }
+
+        const previewData = await previewResponse.json();
+
+        // If it's a link collection, show the review modal
+        if (previewData.is_link_collection) {
+          setPreviewData(previewData);
+          setShowLinkReviewModal(true);
+          return; // Don't proceed with crawl yet
+        }
+
+        // Not a link collection - proceed with normal crawl
+        showToast("Not a link collection - proceeding with normal crawl", "info");
+      }
+
+      // Build crawl request (for non-link collections or when review is disabled)
       const request: CrawlRequest = {
         url: crawlUrl,
         knowledge_type: crawlType,
         max_depth: parseInt(maxDepth, 10),
         tags: tags.length > 0 ? tags : undefined,
+        url_include_patterns: includePatternArray.length > 0 ? includePatternArray : undefined,
+        url_exclude_patterns: excludePatternArray.length > 0 ? excludePatternArray : undefined,
+        skip_link_review: !reviewLinksEnabled,
       };
 
       const response = await crawlMutation.mutateAsync(request);
@@ -86,6 +142,48 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
       onOpenChange(false);
     } catch (error) {
       // Display the actual error message from backend
+      const message = error instanceof Error ? error.message : "Failed to start crawl";
+      showToast(message, "error");
+    }
+  };
+
+  // Handle link review modal submission
+  const handleLinkReviewSubmit = async (selectedUrls: string[]) => {
+    try {
+      const includePatternArray = includePatterns
+        .split(",")
+        .map((p) => p.trim())
+        .filter((p) => p.length > 0);
+      const excludePatternArray = excludePatterns
+        .split(",")
+        .map((p) => p.trim())
+        .filter((p) => p.length > 0);
+
+      const request: CrawlRequest = {
+        url: crawlUrl,
+        knowledge_type: crawlType,
+        max_depth: parseInt(maxDepth, 10),
+        tags: tags.length > 0 ? tags : undefined,
+        url_include_patterns: includePatternArray.length > 0 ? includePatternArray : undefined,
+        url_exclude_patterns: excludePatternArray.length > 0 ? excludePatternArray : undefined,
+        selected_urls: selectedUrls,
+        skip_link_review: false,
+      };
+
+      const response = await crawlMutation.mutateAsync(request);
+
+      // Notify parent about the new crawl operation
+      if (response?.progressId && onCrawlStarted) {
+        onCrawlStarted(response.progressId);
+      }
+
+      showToast(`Crawl started with ${selectedUrls.length} selected links`, "success");
+      resetForm();
+      setShowLinkReviewModal(false);
+      setPreviewData(null);
+      onSuccess();
+      onOpenChange(false);
+    } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to start crawl";
       showToast(message, "error");
     }
@@ -172,6 +270,78 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
                     "border-gray-300/60 dark:border-gray-600/60 focus:border-cyan-400/70",
                   )}
                 />
+              </div>
+            </div>
+
+            {/* Glob Pattern Filtering Section */}
+            <div className="space-y-4 border-t border-gray-200/50 dark:border-gray-700/50 pt-4">
+              {/* Review Links Checkbox */}
+              <div className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  id="reviewLinksCheck"
+                  checked={reviewLinksEnabled}
+                  onChange={(e) => setReviewLinksEnabled(e.target.checked)}
+                  disabled={isProcessing}
+                  className="h-4 w-4 text-cyan-600 focus:ring-cyan-500 border-gray-300 rounded"
+                />
+                <Label
+                  htmlFor="reviewLinksCheck"
+                  className="text-sm font-medium text-gray-900 dark:text-white/90 cursor-pointer"
+                >
+                  Review discovered links before crawling?
+                </Label>
+              </div>
+              <div className="text-xs text-gray-500 dark:text-gray-400 ml-6">
+                When enabled, you'll preview and select links from llms.txt or sitemap files before crawling starts
+              </div>
+
+              {/* Include Patterns Input */}
+              <div className="space-y-2">
+                <Label htmlFor="includePatterns" className="text-sm font-medium text-gray-900 dark:text-white/90">
+                  Include URL Patterns (optional)
+                </Label>
+                <Input
+                  id="includePatterns"
+                  type="text"
+                  placeholder="e.g., **/en/**, **/docs/**"
+                  value={includePatterns}
+                  onChange={(e) => setIncludePatterns(e.target.value)}
+                  disabled={isProcessing}
+                  className={cn(
+                    "h-10",
+                    glassCard.blur.sm,
+                    glassCard.transparency.medium,
+                    "border-gray-300/60 dark:border-gray-600/60 focus:border-cyan-400/70",
+                  )}
+                />
+                <div className="text-xs text-gray-500 dark:text-gray-400">
+                  Only crawl URLs matching these glob patterns (comma-separated). Leave empty to include all.
+                </div>
+              </div>
+
+              {/* Exclude Patterns Input */}
+              <div className="space-y-2">
+                <Label htmlFor="excludePatterns" className="text-sm font-medium text-gray-900 dark:text-white/90">
+                  Exclude URL Patterns (optional)
+                </Label>
+                <Input
+                  id="excludePatterns"
+                  type="text"
+                  placeholder="e.g., **/fr/**, **/de/**, **/ja/**"
+                  value={excludePatterns}
+                  onChange={(e) => setExcludePatterns(e.target.value)}
+                  disabled={isProcessing}
+                  className={cn(
+                    "h-10",
+                    glassCard.blur.sm,
+                    glassCard.transparency.medium,
+                    "border-gray-300/60 dark:border-gray-600/60 focus:border-cyan-400/70",
+                  )}
+                />
+                <div className="text-xs text-gray-500 dark:text-gray-400">
+                  Skip URLs matching these glob patterns (comma-separated). Leave empty to exclude none.
+                </div>
               </div>
             </div>
 
@@ -301,6 +471,21 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
           </TabsContent>
         </Tabs>
       </DialogContent>
+
+      {/* Link Review Modal */}
+      {showLinkReviewModal && previewData && (
+        <LinkReviewModal
+          open={showLinkReviewModal}
+          previewData={previewData}
+          initialIncludePatterns={includePatterns}
+          initialExcludePatterns={excludePatterns}
+          onProceed={handleLinkReviewSubmit}
+          onCancel={() => {
+            setShowLinkReviewModal(false);
+            setPreviewData(null);
+          }}
+        />
+      )}
     </Dialog>
   );
 };

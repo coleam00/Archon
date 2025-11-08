@@ -151,6 +151,12 @@ class KnowledgeItemRequest(BaseModel):
     update_frequency: int = 7
     max_depth: int = 2  # Maximum crawl depth (1-5)
     extract_code_examples: bool = True  # Whether to extract code examples
+    # Glob pattern filtering
+    url_include_patterns: list[str] = []  # Include URL patterns (e.g., ["**/en/**"])
+    url_exclude_patterns: list[str] = []  # Exclude URL patterns (e.g., ["**/fr/**", "**/de/**"])
+    # Link review mode
+    selected_urls: list[str] | None = None  # Specific URLs to crawl (from review modal)
+    skip_link_review: bool = False  # If True, apply patterns automatically without review
 
     class Config:
         schema_extra = {
@@ -161,6 +167,9 @@ class KnowledgeItemRequest(BaseModel):
                 "update_frequency": 7,
                 "max_depth": 2,
                 "extract_code_examples": True,
+                "url_include_patterns": ["**/en/**"],
+                "url_exclude_patterns": ["**/fr/**", "**/de/**"],
+                "skip_link_review": False,
             }
         }
 
@@ -171,6 +180,27 @@ class CrawlRequest(BaseModel):
     tags: list[str] = []
     update_frequency: int = 7
     max_depth: int = 2  # Maximum crawl depth (1-5)
+    # Glob pattern filtering
+    url_include_patterns: list[str] = []  # Include URL patterns (e.g., ["**/en/**"])
+    url_exclude_patterns: list[str] = []  # Exclude URL patterns (e.g., ["**/fr/**", "**/de/**"])
+    # Link review mode
+    selected_urls: list[str] | None = None  # Specific URLs to crawl (from review modal)
+    skip_link_review: bool = False  # If True, apply patterns automatically without review
+
+
+class LinkPreviewRequest(BaseModel):
+    url: str
+    url_include_patterns: list[str] = []
+    url_exclude_patterns: list[str] = []
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "url": "https://docs.example.com/llms.txt",
+                "url_include_patterns": ["**/en/**"],
+                "url_exclude_patterns": ["**/fr/**", "**/de/**"],
+            }
+        }
 
 
 class RagQueryRequest(BaseModel):
@@ -725,6 +755,156 @@ async def refresh_knowledge_item(source_id: str):
             f"Failed to refresh knowledge item | error={str(e)} | source_id={source_id}"
         )
         raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
+@router.post("/crawl/preview-links")
+async def preview_link_collection(request: LinkPreviewRequest):
+    """
+    Preview links from a link collection (llms.txt, sitemap.xml) without crawling.
+
+    This endpoint fetches and parses link collection files to show what would be crawled,
+    allowing users to review and filter links before starting the actual crawl operation.
+    """
+    try:
+        # Validate URL
+        if not request.url:
+            raise HTTPException(status_code=422, detail="URL is required")
+
+        if not request.url.startswith(("http://", "https://")):
+            raise HTTPException(status_code=422, detail="URL must start with http:// or https://")
+
+        safe_logfire_info(f"Preview link collection request | url={request.url}")
+
+        # Initialize crawler and service
+        crawler = await get_crawler()
+        if crawler is None:
+            raise HTTPException(status_code=500, detail="Crawler not available")
+
+        crawling_service = CrawlingService(crawler=crawler, supabase_client=get_supabase_client())
+
+        # Detect link collection type
+        from ..services.crawling.helpers.url_handler import URLHandler
+        url_handler = URLHandler()
+
+        is_sitemap = url_handler.is_sitemap(request.url)
+        is_txt = url_handler.is_txt(request.url)
+        is_markdown = url_handler.is_markdown(request.url)
+
+        # Track collection type
+        collection_type = None
+        links_data = []
+
+        if is_sitemap:
+            # Parse sitemap
+            collection_type = "sitemap"
+            try:
+                sitemap_urls = crawling_service.parse_sitemap(request.url)
+                # Sitemaps don't have link text, just URLs
+                links_data = [(url, "") for url in sitemap_urls]
+            except Exception as e:
+                safe_logfire_error(f"Failed to parse sitemap: {e}")
+                raise HTTPException(status_code=400, detail=f"Failed to parse sitemap: {str(e)}")
+
+        elif is_txt or is_markdown:
+            # Fetch text/markdown file with simple HTTP request (no browser needed)
+            collection_type = "llms-txt" if "llms" in request.url.lower() else "text_file"
+            try:
+                import aiohttp
+
+                # Fetch file content with aiohttp (faster than full browser crawl)
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(request.url, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                        if response.status != 200:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"Failed to fetch file: HTTP {response.status}"
+                            )
+
+                        content = await response.text()
+
+                        if not content:
+                            raise HTTPException(status_code=400, detail="File content is empty")
+
+                        # Check if it's a link collection
+                        if url_handler.is_link_collection_file(request.url, content):
+                            # Extract links with text
+                            links_data = url_handler.extract_markdown_links_with_text(content, request.url)
+                        else:
+                            # Not a link collection
+                            return {
+                                "is_link_collection": False,
+                                "collection_type": None,
+                                "source_url": request.url,
+                                "message": "The provided URL is not a link collection file"
+                            }
+
+            except aiohttp.ClientError as e:
+                safe_logfire_error(f"Failed to fetch text file: {e}")
+                raise HTTPException(status_code=400, detail=f"Failed to fetch file: {str(e)}")
+            except Exception as e:
+                safe_logfire_error(f"Failed to fetch text file: {e}")
+                raise HTTPException(status_code=400, detail=f"Failed to fetch file: {str(e)}")
+
+        else:
+            # Not a recognized link collection type
+            return {
+                "is_link_collection": False,
+                "collection_type": None,
+                "source_url": request.url,
+                "message": "The provided URL does not appear to be a link collection (expected: sitemap.xml, llms.txt, or similar)"
+            }
+
+        # Filter out binary files and self-referential links
+        filtered_links_data = []
+        for link, text in links_data:
+            if not url_handler.is_binary_file(link):
+                filtered_links_data.append((link, text))
+
+        # Apply glob patterns and build response
+        from urllib.parse import urlparse
+        response_links = []
+
+        for link, text in filtered_links_data:
+            # Parse URL to extract path
+            parsed = urlparse(link)
+            path = parsed.path
+
+            # Check if link matches glob patterns
+            matches_filter = url_handler.matches_glob_patterns(
+                link,
+                request.url_include_patterns if request.url_include_patterns else None,
+                request.url_exclude_patterns if request.url_exclude_patterns else None
+            )
+
+            response_links.append({
+                "url": link,
+                "text": text if text else "",
+                "path": path,
+                "matches_filter": matches_filter
+            })
+
+        # Count matching links
+        matching_count = sum(1 for link in response_links if link["matches_filter"])
+
+        safe_logfire_info(
+            f"Preview completed | collection_type={collection_type} | "
+            f"total_links={len(response_links)} | matching={matching_count}"
+        )
+
+        return {
+            "is_link_collection": True,
+            "collection_type": collection_type,
+            "source_url": request.url,
+            "total_links": len(response_links),
+            "matching_links": matching_count,
+            "links": response_links
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        safe_logfire_error(f"Failed to preview link collection | error={str(e)} | url={request.url}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/knowledge-items/crawl")
