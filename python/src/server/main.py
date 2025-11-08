@@ -174,12 +174,23 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # Add security headers middleware
 app.add_middleware(SecurityHeadersMiddleware)
 
-# Configure CORS
+# Configure CORS with security best practices
+# SECURITY: Never use allow_origins=["*"] with allow_credentials=True
+# This allows any website to access your API with user credentials
+ALLOWED_ORIGINS = os.getenv(
+    "ALLOWED_ORIGINS",
+    # Default safe origins for local development
+    "http://localhost:3737,http://localhost:3000,http://127.0.0.1:3737,http://127.0.0.1:3000"
+).split(",")
+
+# Trim whitespace from each origin
+ALLOWED_ORIGINS = [origin.strip() for origin in ALLOWED_ORIGINS]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for development
+    allow_origins=ALLOWED_ORIGINS,  # Whitelist specific origins only
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["*"],
 )
 
