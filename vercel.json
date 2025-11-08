@@ -1,0 +1,25 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "cd archon-ui-main && npm install --legacy-peer-deps && npm run build",
+  "outputDirectory": "archon-ui-main/dist",
+  "framework": null,
+  "installCommand": "npm install --legacy-peer-deps",
+  "devCommand": "cd archon-ui-main && npm run dev",
+  "headers": [
+    {
+      "source": "/assets/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
