@@ -41,7 +41,7 @@
     "@radix-ui/react-tabs": "^1.1.13",
     "@radix-ui/react-toast": "^1.2.15",
     "@radix-ui/react-tooltip": "^1.2.8",
-    "@sentry/react": "^7.100.0",
+    "@sentry/react": "^10.0.0",
     "@tanstack/react-query": "^5.85.8",
     "@tanstack/react-query-devtools": "^5.85.8",
     "clsx": "latest",
@@ -63,7 +63,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.2",
-    "@sentry/vite-plugin": "^2.14.0",
+    "@sentry/vite-plugin": "^3.0.0",
     "@tailwindcss/postcss": "4.1.2",
     "@tailwindcss/vite": "4.1.2",
     "@testing-library/jest-dom": "^6.4.6",

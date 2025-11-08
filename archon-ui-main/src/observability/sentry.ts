@@ -37,13 +37,13 @@ export function initSentry() {
     dsn,
     environment: import.meta.env.MODE,
     integrations: [
-      new Sentry.BrowserTracing({
+      Sentry.browserTracingIntegration({
         tracePropagationTargets: [
           "localhost",
           /^https:\/\/api\.archon\.dev/,
         ],
       }),
-      new Sentry.Replay({
+      Sentry.replayIntegration({
         maskAllText: true,
         blockAllMedia: true,
       }),
