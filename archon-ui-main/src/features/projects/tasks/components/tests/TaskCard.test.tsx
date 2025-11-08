@@ -1,9 +1,9 @@
-import { describe, it, expect, vi } from "vitest";
 import { DndProvider } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
+import { describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../../testing/test-utils";
-import { TaskCard } from "../TaskCard";
 import type { Task } from "../../types";
+import { TaskCard } from "../TaskCard";
 
 // Mock hooks
 vi.mock("../../hooks", () => ({
@@ -34,7 +34,7 @@ describe("TaskCard", () => {
     return renderWithProviders(
       <DndProvider backend={HTML5Backend}>
         <TaskCard {...props} />
-      </DndProvider>
+      </DndProvider>,
     );
   };
 

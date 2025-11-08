@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen } from "@testing-library/react";
 import { BrowserRouter } from "react-router-dom";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../testing/test-utils";
 import { ProjectsView } from "../ProjectsView";
 
@@ -67,7 +67,7 @@ describe("ProjectsView", () => {
     return renderWithProviders(
       <BrowserRouter>
         <ProjectsView />
-      </BrowserRouter>
+      </BrowserRouter>,
     );
   };
 

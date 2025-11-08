@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Settings, Check, Save, Loader, ChevronDown, ChevronUp, Zap, Database, Trash2, Cog } from 'lucide-react';
+import { Check, Save, Loader, ChevronDown, ChevronUp, Zap, Database, Cog } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Input } from '../ui/Input';
 import { Select } from '../ui/Select';
@@ -417,7 +417,7 @@ export const RAGSettings = ({
   useEffect(() => {
     // Only update if this is a user‐initiated change, not a sync from ragSettings
     if (updateChatRagSettingsRef.current && chatProvider !== ragSettings.LLM_PROVIDER) {
-      setRagSettings(prev => ({
+      setRagSettings((prev: typeof ragSettings) => ({
         ...prev,
         LLM_PROVIDER: chatProvider
       }));
@@ -428,7 +428,7 @@ export const RAGSettings = ({
   useEffect(() => {
     // Only update if this is a user‐initiated change, not a sync from ragSettings
     if (updateEmbeddingRagSettingsRef.current && embeddingProvider && embeddingProvider !== ragSettings.EMBEDDING_PROVIDER) {
-      setRagSettings(prev => ({
+      setRagSettings((prev: typeof ragSettings) => ({
         ...prev,
         EMBEDDING_PROVIDER: embeddingProvider
       }));
@@ -438,8 +438,8 @@ export const RAGSettings = ({
 
 
   // Status tracking
-  const [llmStatus, setLLMStatus] = useState({ online: false, responseTime: null, checking: false });
-  const [embeddingStatus, setEmbeddingStatus] = useState({ online: false, responseTime: null, checking: false });
+  const [llmStatus, setLLMStatus] = useState<{ online: boolean; responseTime: number | null; checking: boolean }>({ online: false, responseTime: null, checking: false });
+  const [embeddingStatus, setEmbeddingStatus] = useState<{ online: boolean; responseTime: number | null; checking: boolean }>({ online: false, responseTime: null, checking: false });
   const llmRetryTimeoutRef = useRef<number | null>(null);
   const embeddingRetryTimeoutRef = useRef<number | null>(null);
   
@@ -1315,7 +1315,7 @@ const manualTestConnection = async (
                     setChatProvider(providerKey);
                     // Update chat model when switching providers
                     const savedModels = providerModels[providerKey] || getDefaultModels(providerKey);
-                    setRagSettings(prev => ({
+                    setRagSettings((prev: typeof ragSettings) => ({
                       ...prev,
                       MODEL_CHOICE: savedModels.chatModel
                     }));
@@ -1323,7 +1323,7 @@ const manualTestConnection = async (
                     setEmbeddingProvider(providerKey);
                     // Update embedding model when switching providers
                     const savedModels = providerModels[providerKey] || getDefaultModels(providerKey);
-                    setRagSettings(prev => ({
+                    setRagSettings((prev: typeof ragSettings) => ({
                       ...prev,
                       EMBEDDING_MODEL: savedModels.embeddingModel
                     }));

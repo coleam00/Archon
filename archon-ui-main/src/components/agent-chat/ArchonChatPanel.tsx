@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Send, User, WifiOff, RefreshCw, BookOpen, Search } from 'lucide-react';
+import { Send, User, WifiOff, RefreshCw } from 'lucide-react';
 import { ArchonLoadingSpinner, EdgeLitEffect } from '../animations/Animations';
 import { agentChatService, ChatMessage } from '../../services/agentChatService';
 
@@ -23,11 +23,11 @@ export const ArchonChatPanel: React.FC<ArchonChatPanelProps> = props => {
   // State for input field, panel width, loading state, and dragging state
   const [inputValue, setInputValue] = useState('');
   const [width, setWidth] = useState(416); // Default width - increased by 30% from 320px
-  const [isTyping, setIsTyping] = useState(false);
+  const [isTyping] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
-  const [streamingMessage, setStreamingMessage] = useState<string>('');
-  const [isStreaming, setIsStreaming] = useState(false);
+  const [streamingMessage] = useState<string>('');
+  const [isStreaming] = useState(false);
   
   // Add connection status state
   const [connectionStatus, setConnectionStatus] = useState<'online' | 'offline' | 'connecting'>('connecting');
@@ -190,14 +190,8 @@ export const ArchonChatPanel: React.FC<ArchonChatPanelProps> = props => {
     if (!inputValue.trim() || !sessionId) return;
 
     try {
-      // Add context for RAG agent
-      const context = {
-        match_count: 5,
-        // Can add source_filter here if needed in the future
-      };
-      
       // Send message to agent via service
-      await agentChatService.sendMessage(sessionId, inputValue.trim(), context);
+      await agentChatService.sendMessage(sessionId, inputValue.trim());
       setInputValue('');
       setConnectionError(null);
     } catch (error) {
@@ -225,7 +219,8 @@ export const ArchonChatPanel: React.FC<ArchonChatPanelProps> = props => {
     setConnectionError('Attempting to reconnect...');
     
     try {
-      const success = await agentChatService.manualReconnect(sessionId);
+      // Manual reconnection logic would go here
+      const success = false; // Placeholder until manualReconnect method is implemented
       if (success) {
         setConnectionError(null);
         setConnectionStatus('online');

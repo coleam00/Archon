@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Key, Plus, Trash2, Save, Lock, Unlock, Eye, EyeOff } from 'lucide-react';
-import { Input } from '../ui/Input';
+import { Plus, Trash2, Save, Lock, Unlock, Eye, EyeOff } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
-import { credentialsService, Credential } from '../../services/credentialsService';
+import { credentialsService } from '../../services/credentialsService';
 import { useToast } from '../../features/shared/hooks/useToast';
 
 interface CustomCredential {
@@ -53,8 +52,6 @@ export const APIKeysSection = () => {
       
       // Convert to UI format
       const uiCredentials = apiKeys.map(cred => {
-        const isEncryptedFromBackend = cred.is_encrypted && cred.value === '[ENCRYPTED]';
-        
         return {
           key: cred.key,
           value: cred.value || '',

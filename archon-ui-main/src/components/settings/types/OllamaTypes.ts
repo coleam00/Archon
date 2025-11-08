@@ -157,13 +157,13 @@ export type OllamaEvent =
   | { type: 'CONFIGURATION_CHANGED'; payload: OllamaConfiguration };
 
 // API Response types (re-export from service for convenience)
-export type { 
+export type {
   ModelDiscoveryResponse,
   InstanceHealthResponse,
   InstanceValidationResponse,
   EmbeddingRouteResponse,
-  EmbeddingRoutesResponse 
-} from '../../services/ollamaService';
+  EmbeddingRoutesResponse
+} from '@/services/ollamaService';
 
 // Error handling types
 export interface OllamaError {

@@ -19,11 +19,11 @@ from ..credential_service import credential_service
 # Import strategies
 # Import operations
 from .document_storage_operations import DocumentStorageOperations
-from .page_storage_operations import PageStorageOperations
 from .helpers.site_config import SiteConfig
 
 # Import helpers
 from .helpers.url_handler import URLHandler
+from .page_storage_operations import PageStorageOperations
 from .progress_mapper import ProgressMapper
 from .strategies.batch import BatchCrawlStrategy
 from .strategies.recursive import RecursiveCrawlStrategy
@@ -531,7 +531,7 @@ class CrawlingService:
                     logger.error("Code extraction failed, continuing crawl without code examples", exc_info=True)
                     safe_logfire_error(f"Code extraction failed | error={e}")
                     code_examples_count = 0
-                    
+
                     # Report code extraction failure to progress tracker
                     if self.progress_tracker:
                         await self.progress_tracker.update(

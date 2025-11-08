@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Code, Check, Save, Loader } from 'lucide-react';
+import { Check, Save, Loader } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
@@ -81,7 +81,7 @@ export const CodeExtractionSettings = ({
                 MIN_CODE_BLOCK_LENGTH: parseInt(e.target.value, 10) || 250
               })}
               placeholder="250"
-              accentColor="orange"
+              accentColor="purple"
               min="50"
               max="2000"
             />
@@ -94,7 +94,7 @@ export const CodeExtractionSettings = ({
                 MAX_CODE_BLOCK_LENGTH: parseInt(e.target.value, 10) || 5000
               })}
               placeholder="5000"
-              accentColor="orange"
+              accentColor="purple"
               min="1000"
               max="20000"
             />
@@ -194,7 +194,7 @@ export const CodeExtractionSettings = ({
                 MAX_PROSE_RATIO: parseFloat(e.target.value) || 0.15
               })}
               placeholder="0.15"
-              accentColor="orange"
+              accentColor="purple"
               min="0"
               max="1"
               step="0.05"
@@ -208,7 +208,7 @@ export const CodeExtractionSettings = ({
                 MIN_CODE_INDICATORS: parseInt(e.target.value, 10) || 3
               })}
               placeholder="3"
-              accentColor="orange"
+              accentColor="purple"
               min="1"
               max="10"
             />
@@ -221,7 +221,7 @@ export const CodeExtractionSettings = ({
                 CONTEXT_WINDOW_SIZE: parseInt(e.target.value, 10) || 1000
               })}
               placeholder="1000"
-              accentColor="orange"
+              accentColor="purple"
               min="100"
               max="5000"
             />
@@ -234,7 +234,7 @@ export const CodeExtractionSettings = ({
                 CODE_EXTRACTION_MAX_WORKERS: parseInt(e.target.value, 10) || 3
               })}
               placeholder="3"
-              accentColor="orange"
+              accentColor="purple"
               min="1"
               max="10"
             />

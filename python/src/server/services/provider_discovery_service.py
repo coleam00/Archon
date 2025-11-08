@@ -123,13 +123,13 @@ class ProviderDiscoveryService:
         """
         try:
             import openai
-            
+
             # Use OpenAI-compatible client for function calling test
             client = openai.AsyncOpenAI(
                 base_url=f"{api_url}/v1",
                 api_key="ollama"  # Dummy API key for Ollama
             )
-            
+
             # Define a simple test function
             test_function = {
                 "name": "test_function",
@@ -145,7 +145,7 @@ class ProviderDiscoveryService:
                     "required": ["test_param"]
                 }
             }
-            
+
             # Try to make a function calling request
             response = await client.chat.completions.create(
                 model=model_name,
@@ -154,22 +154,22 @@ class ProviderDiscoveryService:
                 max_tokens=50,
                 timeout=5  # Short timeout for quick testing
             )
-            
+
             # Check if the model attempted to use the function
             if response.choices and len(response.choices) > 0:
                 choice = response.choices[0]
                 if hasattr(choice.message, 'tool_calls') and choice.message.tool_calls:
                     logger.info(f"Model {model_name} supports tool calling")
                     return True
-            
+
             return False
-            
+
         except Exception as e:
             logger.debug(f"Tool support test failed for {model_name}: {e}")
             # Fall back to name-based heuristics for known models
-            return any(pattern in model_name.lower() 
+            return any(pattern in model_name.lower()
                       for pattern in CHAT_MODEL_PATTERNS)
-        
+
         finally:
             if 'client' in locals():
                 await client.close()
@@ -287,7 +287,7 @@ class ProviderDiscoveryService:
                             supports_tools = await self._test_tool_support(model_name, api_url)
                             # Vision support is typically indicated by name patterns (reliable indicator)
                             supports_vision = any(pattern in model_name.lower() for pattern in VISION_MODEL_PATTERNS)
-                            # Embedding support is typically indicated by name patterns (reliable indicator)  
+                            # Embedding support is typically indicated by name patterns (reliable indicator)
                             supports_embeddings = any(pattern in model_name.lower() for pattern in EMBEDDING_MODEL_PATTERNS)
 
                             # Estimate context window based on model family

@@ -1,21 +1,17 @@
 # Server Service - Web crawling and document processing microservice
-FROM python:3.12 AS builder
+FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
-# Install build dependencies and uv
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/* \
-    && pip install --no-cache-dir uv
+# Install uv from official image
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Copy pyproject.toml for dependency installation
-COPY pyproject.toml .
+# Copy dependency files
+COPY pyproject.toml uv.lock* ./
 
 # Install server dependencies to a virtual environment using uv
 RUN uv venv /venv && \
-    . /venv/bin/activate && \
-    uv pip install --group server --group server-reranking
+    uv sync --frozen --no-dev --group server --group server-reranking
 
 # Runtime stage
 FROM python:3.12-slim
@@ -56,10 +52,9 @@ ENV PATH=/venv/bin:$PATH
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN playwright install chromium
 
-# Copy server code and tests
+# Copy server code only (no tests in production)
 COPY src/server/ src/server/
 COPY src/__init__.py src/
-COPY tests/ tests/
 
 # Set environment variables
 ENV PYTHONPATH="/app:$PYTHONPATH"
@@ -76,4 +71,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD sh -c "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:${ARCHON_SERVER_PORT}/health')\""
 
 # Run the Server service
-CMD sh -c "python -m uvicorn src.server.main:socket_app --host 0.0.0.0 --port ${ARCHON_SERVER_PORT} --workers 1"
+CMD sh -c "python -m uvicorn src.server.main:app --host 0.0.0.0 --port ${ARCHON_SERVER_PORT} --workers 1"

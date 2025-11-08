@@ -60,7 +60,10 @@ const AppContent = () => {
   useEffect(() => {
     // Load initial settings
     const settings = serverHealthService.getSettings();
-    setDisconnectScreenSettings(settings);
+    setDisconnectScreenSettings({
+      enabled: settings.enabled,
+      delay: disconnectScreenSettings.delay
+    });
 
     // Stop any existing monitoring before starting new one to prevent multiple intervals
     serverHealthService.stopMonitoring();

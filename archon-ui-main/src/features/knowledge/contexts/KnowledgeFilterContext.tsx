@@ -3,7 +3,7 @@
  * Provides current filter state to mutation hooks for optimistic updates
  */
 
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, type ReactNode, useContext, useState } from "react";
 import type { KnowledgeItemsFilter } from "../types";
 
 interface KnowledgeFilterContextValue {
@@ -17,9 +17,7 @@ export function KnowledgeFilterProvider({ children }: { children: ReactNode }) {
   const [currentFilter, setFilter] = useState<KnowledgeItemsFilter>({});
 
   return (
-    <KnowledgeFilterContext.Provider value={{ currentFilter, setFilter }}>
-      {children}
-    </KnowledgeFilterContext.Provider>
+    <KnowledgeFilterContext.Provider value={{ currentFilter, setFilter }}>{children}</KnowledgeFilterContext.Provider>
   );
 }
 

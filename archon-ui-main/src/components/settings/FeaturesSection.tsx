@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { Moon, Sun, FileText, Layout, Bot, Settings, Palette, Flame, Monitor } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Moon, Sun, FileText, Palette, Flame, Monitor } from 'lucide-react';
 import { Switch } from '@/features/ui/primitives/switch';
-import { Card } from '../ui/Card';
 import { useTheme } from '../../contexts/ThemeContext';
 import { credentialsService } from '../../services/credentialsService';
 import { useToast } from '../../features/shared/hooks/useToast';
@@ -18,10 +17,6 @@ export const FeaturesSection = () => {
   const isDarkMode = theme === 'dark';
   const [projectsEnabled, setProjectsEnabled] = useState(true);
   const [styleGuideEnabledLocal, setStyleGuideEnabledLocal] = useState(styleGuideEnabled);
-
-  // Commented out for future release
-  const [agUILibraryEnabled, setAgUILibraryEnabled] = useState(false);
-  const [agentsEnabled, setAgentsEnabled] = useState(false);
 
   const [logfireEnabled, setLogfireEnabled] = useState(false);
   const [disconnectScreenEnabled, setDisconnectScreenEnabled] = useState(true);

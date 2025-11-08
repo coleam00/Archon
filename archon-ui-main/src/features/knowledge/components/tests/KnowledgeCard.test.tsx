@@ -1,7 +1,7 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render } from "../../../testing/test-utils";
-import { KnowledgeCard } from "../KnowledgeCard";
 import type { KnowledgeItem } from "../../types";
+import { KnowledgeCard } from "../KnowledgeCard";
 
 // Mock hooks
 vi.mock("../../hooks", () => ({
@@ -48,57 +48,31 @@ describe("KnowledgeCard", () => {
   };
 
   it("renders knowledge card correctly", () => {
-    const { container } = render(
-      <KnowledgeCard
-        item={mockItem}
-        onViewDocument={vi.fn()}
-        onDeleteSuccess={vi.fn()}
-      />
-    );
+    const { container } = render(<KnowledgeCard item={mockItem} onViewDocument={vi.fn()} onDeleteSuccess={vi.fn()} />);
     expect(container).toBeTruthy();
   });
 
   it("displays item title", () => {
-    const { getByText } = render(
-      <KnowledgeCard
-        item={mockItem}
-        onViewDocument={vi.fn()}
-        onDeleteSuccess={vi.fn()}
-      />
-    );
+    const { getByText } = render(<KnowledgeCard item={mockItem} onViewDocument={vi.fn()} onDeleteSuccess={vi.fn()} />);
     expect(getByText("Test Knowledge Item")).toBeInTheDocument();
   });
 
   it("displays document count", () => {
     const { getByLabelText } = render(
-      <KnowledgeCard
-        item={mockItem}
-        onViewDocument={vi.fn()}
-        onDeleteSuccess={vi.fn()}
-      />
+      <KnowledgeCard item={mockItem} onViewDocument={vi.fn()} onDeleteSuccess={vi.fn()} />,
     );
     expect(getByLabelText("Documents count")).toBeInTheDocument();
   });
 
   it("displays code examples count", () => {
     const { getByLabelText } = render(
-      <KnowledgeCard
-        item={mockItem}
-        onViewDocument={vi.fn()}
-        onDeleteSuccess={vi.fn()}
-      />
+      <KnowledgeCard item={mockItem} onViewDocument={vi.fn()} onDeleteSuccess={vi.fn()} />,
     );
     expect(getByLabelText("Code examples count")).toBeInTheDocument();
   });
 
   it("matches snapshot", () => {
-    const { container } = render(
-      <KnowledgeCard
-        item={mockItem}
-        onViewDocument={vi.fn()}
-        onDeleteSuccess={vi.fn()}
-      />
-    );
+    const { container } = render(<KnowledgeCard item={mockItem} onViewDocument={vi.fn()} onDeleteSuccess={vi.fn()} />);
     expect(container).toMatchSnapshot();
   });
 });

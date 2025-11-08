@@ -1,0 +1,222 @@
+src/App.tsx(63,33): error TS2345: Argument of type '{ enabled: boolean; }' is not assignable to parameter of type 'SetStateAction<{ enabled: boolean; delay: number; }>'.
+  Property 'delay' is missing in type '{ enabled: boolean; }' but required in type '{ enabled: boolean; delay: number; }'.
+src/components/DisconnectScreenOverlay.tsx(2,13): error TS6133: 'Wifi' is declared but its value is never read.
+src/components/DisconnectScreenOverlay.tsx(2,19): error TS6133: 'WifiOff' is declared but its value is never read.
+src/components/agent-chat/ArchonChatPanel.tsx(2,42): error TS6133: 'BookOpen' is declared but its value is never read.
+src/components/agent-chat/ArchonChatPanel.tsx(2,52): error TS6133: 'Search' is declared but its value is never read.
+src/components/agent-chat/ArchonChatPanel.tsx(26,20): error TS6133: 'setIsTyping' is declared but its value is never read.
+src/components/agent-chat/ArchonChatPanel.tsx(29,28): error TS6133: 'setStreamingMessage' is declared but its value is never read.
+src/components/agent-chat/ArchonChatPanel.tsx(30,23): error TS6133: 'setIsStreaming' is declared but its value is never read.
+src/components/agent-chat/ArchonChatPanel.tsx(56,71): error TS2345: Argument of type 'undefined' is not assignable to parameter of type 'string'.
+src/components/agent-chat/ArchonChatPanel.tsx(200,72): error TS2554: Expected 2 arguments, but got 3.
+src/components/agent-chat/ArchonChatPanel.tsx(228,46): error TS2339: Property 'manualReconnect' does not exist on type 'AgentChatService'.
+src/components/bug-report/BugReportModal.tsx(3,30): error TS6133: 'ExternalLink' is declared but its value is never read.
+src/components/bug-report/ErrorBoundaryWithBugReport.tsx(1,8): error TS6133: 'React' is declared but its value is never read.
+src/components/code/CodeViewerModal.tsx(9,3): error TS6133: 'FileText' is declared but its value is never read.
+src/components/settings/APIKeysSection.tsx(2,10): error TS6133: 'Key' is declared but its value is never read.
+src/components/settings/APIKeysSection.tsx(3,1): error TS6133: 'Input' is declared but its value is never read.
+src/components/settings/APIKeysSection.tsx(6,30): error TS6133: 'Credential' is declared but its value is never read.
+src/components/settings/APIKeysSection.tsx(56,15): error TS6133: 'isEncryptedFromBackend' is declared but its value is never read.
+src/components/settings/APIKeysSection.tsx(68,32): error TS2339: Property 'isNew' does not exist on type 'Credential'.
+src/components/settings/ButtonPlayground.tsx(207,9): error TS6133: 'getSizePadding' is declared but its value is never read.
+src/components/settings/ButtonPlayground.tsx(266,9): error TS6133: 'getGradient' is declared but its value is never read.
+src/components/settings/ButtonPlayground.tsx(271,9): error TS6133: 'getBorderColor' is declared but its value is never read.
+src/components/settings/CodeExtractionSettings.tsx(2,10): error TS6133: 'Code' is declared but its value is never read.
+src/components/settings/CodeExtractionSettings.tsx(84,15): error TS2322: Type '"orange"' is not assignable to type '"purple" | "blue" | "green" | "pink" | undefined'.
+src/components/settings/CodeExtractionSettings.tsx(97,15): error TS2322: Type '"orange"' is not assignable to type '"purple" | "blue" | "green" | "pink" | undefined'.
+src/components/settings/CodeExtractionSettings.tsx(197,15): error TS2322: Type '"orange"' is not assignable to type '"purple" | "blue" | "green" | "pink" | undefined'.
+src/components/settings/CodeExtractionSettings.tsx(211,15): error TS2322: Type '"orange"' is not assignable to type '"purple" | "blue" | "green" | "pink" | undefined'.
+src/components/settings/CodeExtractionSettings.tsx(224,15): error TS2322: Type '"orange"' is not assignable to type '"purple" | "blue" | "green" | "pink" | undefined'.
+src/components/settings/CodeExtractionSettings.tsx(237,15): error TS2322: Type '"orange"' is not assignable to type '"purple" | "blue" | "green" | "pink" | undefined'.
+src/components/settings/FeaturesSection.tsx(1,8): error TS6133: 'React' is declared but its value is never read.
+src/components/settings/FeaturesSection.tsx(2,31): error TS6133: 'Layout' is declared but its value is never read.
+src/components/settings/FeaturesSection.tsx(2,39): error TS6133: 'Bot' is declared but its value is never read.
+src/components/settings/FeaturesSection.tsx(2,44): error TS6133: 'Settings' is declared but its value is never read.
+src/components/settings/FeaturesSection.tsx(4,1): error TS6133: 'Card' is declared but its value is never read.
+src/components/settings/FeaturesSection.tsx(23,10): error TS6133: 'agUILibraryEnabled' is declared but its value is never read.
+src/components/settings/FeaturesSection.tsx(23,30): error TS6133: 'setAgUILibraryEnabled' is declared but its value is never read.
+src/components/settings/FeaturesSection.tsx(24,10): error TS6133: 'agentsEnabled' is declared but its value is never read.
+src/components/settings/FeaturesSection.tsx(24,25): error TS6133: 'setAgentsEnabled' is declared but its value is never read.
+src/components/settings/FeaturesSection.tsx(189,48): error TS2559: Type 'boolean' has no properties in common with type '{ enabled?: boolean | undefined; }'.
+src/components/settings/IDEGlobalRules.tsx(2,10): error TS6133: 'FileCode' is declared but its value is never read.
+src/components/settings/IDEGlobalRules.tsx(201,9): error TS6133: 'codeBlockLang' is declared but its value is never read.
+src/components/settings/IDEGlobalRules.tsx(202,11): error TS6133: 'listStack' is declared but its value is never read.
+src/components/settings/OllamaConfigurationPanel.tsx(9,10): error TS2614: Module '"./OllamaModelDiscoveryModal"' has no exported member 'OllamaModelDiscoveryModal'. Did you mean to use 'import OllamaModelDiscoveryModal from "./OllamaModelDiscoveryModal"' instead?
+src/components/settings/OllamaConfigurationPanel.tsx(10,1): error TS6133: 'OllamaInstanceType' is declared but its value is never read.
+src/components/settings/OllamaConfigurationPanel.tsx(33,10): error TS6133: 'loading' is declared but its value is never read.
+src/components/settings/OllamaConfigurationPanel.tsx(39,10): error TS6133: 'discoveringModels' is declared but its value is never read.
+src/components/settings/OllamaConfigurationPanel.tsx(39,29): error TS6133: 'setDiscoveringModels' is declared but its value is never read.
+src/components/settings/OllamaConfigurationPanel.tsx(40,10): error TS6133: 'modelDiscoveryResults' is declared but its value is never read.
+src/components/settings/OllamaConfigurationPanel.tsx(40,33): error TS6133: 'setModelDiscoveryResults' is declared but its value is never read.
+src/components/settings/OllamaConfigurationPanel.tsx(702,21): error TS2322: Type '"outline" | "solid"' is not assignable to type '"outline" | "ghost" | "primary" | "secondary" | undefined'.
+  Type '"solid"' is not assignable to type '"outline" | "ghost" | "primary" | "secondary" | undefined'.
+src/components/settings/OllamaConfigurationPanel.tsx(714,21): error TS2322: Type '"outline" | "solid"' is not assignable to type '"outline" | "ghost" | "primary" | "secondary" | undefined'.
+  Type '"solid"' is not assignable to type '"outline" | "ghost" | "primary" | "secondary" | undefined'.
+src/components/settings/OllamaModelDiscoveryModal.tsx(6,34): error TS6133: 'Zap' is declared but its value is never read.
+src/components/settings/OllamaModelDiscoveryModal.tsx(6,39): error TS6133: 'Clock' is declared but its value is never read.
+src/components/settings/OllamaModelDiscoveryModal.tsx(7,37): error TS6133: 'Filter' is declared but its value is never read.
+src/components/settings/OllamaModelDiscoveryModal.tsx(7,45): error TS6133: 'Download' is declared but its value is never read.
+src/components/settings/OllamaModelDiscoveryModal.tsx(17,48): error TS6133: 'ModelDiscoveryResponse' is declared but its value is never read.
+src/components/settings/OllamaModelDiscoveryModal.tsx(629,19): error TS2322: Type '"outline" | "solid"' is not assignable to type '"outline" | "ghost" | "primary" | "secondary" | undefined'.
+  Type '"solid"' is not assignable to type '"outline" | "ghost" | "primary" | "secondary" | undefined'.
+src/components/settings/OllamaModelDiscoveryModal.tsx(642,19): error TS2322: Type '"outline" | "solid"' is not assignable to type '"outline" | "ghost" | "primary" | "secondary" | undefined'.
+  Type '"solid"' is not assignable to type '"outline" | "ghost" | "primary" | "secondary" | undefined'.
+src/components/settings/OllamaModelDiscoveryModal.tsx(807,37): error TS2322: Type '"outline" | "solid"' is not assignable to type '"outline" | "ghost" | "primary" | "secondary" | undefined'.
+  Type '"solid"' is not assignable to type '"outline" | "ghost" | "primary" | "secondary" | undefined'.
+src/components/settings/OllamaModelDiscoveryModal.tsx(817,37): error TS2322: Type '"outline" | "solid"' is not assignable to type '"outline" | "ghost" | "primary" | "secondary" | undefined'.
+  Type '"solid"' is not assignable to type '"outline" | "ghost" | "primary" | "secondary" | undefined'.
+src/components/settings/OllamaModelSelectionModal.tsx(3,37): error TS6133: 'Server' is declared but its value is never read.
+src/components/settings/OllamaModelSelectionModal.tsx(3,70): error TS6133: 'Box' is declared but its value is never read.
+src/components/settings/OllamaModelSelectionModal.tsx(5,1): error TS6133: 'Input' is declared but its value is never read.
+src/components/settings/OllamaModelSelectionModal.tsx(326,47): error TS2339: Property 'format' does not exist on type 'string | { family?: string | undefined; parameter_size?: string | undefined; quantization?: string | undefined; format?: string | undefined; }'.
+  Property 'format' does not exist on type 'string'.
+src/components/settings/OllamaModelSelectionModal.tsx(330,97): error TS2339: Property 'format' does not exist on type 'string | { family?: string | undefined; parameter_size?: string | undefined; quantization?: string | undefined; format?: string | undefined; }'.
+  Property 'format' does not exist on type 'string'.
+src/components/settings/OllamaModelSelectionModal.tsx(661,15): error TS2353: Object literal may only specify known properties, and 'dimensions' does not exist in type 'ModelInfo'.
+src/components/settings/OllamaModelSelectionModal.tsx(808,43): error TS7006: Parameter 'model' implicitly has an 'any' type.
+src/components/settings/OllamaModelSelectionModal.tsx(856,48): error TS7006: Parameter 'model' implicitly has an 'any' type.
+src/components/settings/RAGSettings.tsx(2,10): error TS6133: 'Settings' is declared but its value is never read.
+src/components/settings/RAGSettings.tsx(2,80): error TS6133: 'Trash2' is declared but its value is never read.
+src/components/settings/RAGSettings.tsx(420,22): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+src/components/settings/RAGSettings.tsx(431,22): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+src/components/settings/RAGSettings.tsx(573,9): error TS6133: 'testConnection' is declared but its value is never read.
+src/components/settings/RAGSettings.tsx(715,9): error TS6133: 'handleDeleteLLMInstance' is declared but its value is never read.
+src/components/settings/RAGSettings.tsx(726,14): error TS2790: The operand of a 'delete' operator must be optional.
+src/components/settings/RAGSettings.tsx(737,9): error TS6133: 'handleDeleteEmbeddingInstance' is declared but its value is never read.
+src/components/settings/RAGSettings.tsx(842,9): error TS6133: 'lastTestedLLMConfigRef' is declared but its value is never read.
+src/components/settings/RAGSettings.tsx(843,9): error TS6133: 'lastTestedEmbeddingConfigRef' is declared but its value is never read.
+src/components/settings/RAGSettings.tsx(912,7): error TS2322: Type '{ provider: string | undefined; embProvider: ProviderKey; llmUrl: string; embUrl: string; llmOnline: boolean; embOnline: boolean; }' is not assignable to type '{ provider: string; embProvider: string; llmUrl: string; embUrl: string; llmOnline: boolean; embOnline: boolean; }'.
+  Types of property 'provider' are incompatible.
+    Type 'string | undefined' is not assignable to type 'string'.
+      Type 'undefined' is not assignable to type 'string'.
+src/components/settings/RAGSettings.tsx(1054,9): error TS2345: Argument of type 'Dispatch<SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>>' is not assignable to parameter of type 'Dispatch<SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean; }>>'.
+  Type 'SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean; }>' is not assignable to type 'SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>'.
+    Type '{ online: boolean; responseTime: number | null; checking: boolean; }' is not assignable to type 'SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>'.
+      Type '{ online: boolean; responseTime: number | null; checking: boolean; }' is not assignable to type '{ online: boolean; responseTime: null; checking: boolean; }'.
+        Types of property 'responseTime' are incompatible.
+          Type 'number | null' is not assignable to type 'null'.
+            Type 'number' is not assignable to type 'null'.
+src/components/settings/RAGSettings.tsx(1112,9): error TS2345: Argument of type 'Dispatch<SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>>' is not assignable to parameter of type 'Dispatch<SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean; }>>'.
+  Type 'SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean; }>' is not assignable to type 'SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>'.
+    Type '{ online: boolean; responseTime: number | null; checking: boolean; }' is not assignable to type 'SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>'.
+      Type '{ online: boolean; responseTime: number | null; checking: boolean; }' is not assignable to type '{ online: boolean; responseTime: null; checking: boolean; }'.
+        Types of property 'responseTime' are incompatible.
+          Type 'number | null' is not assignable to type 'null'.
+            Type 'number' is not assignable to type 'null'.
+src/components/settings/RAGSettings.tsx(1170,13): error TS2345: Argument of type 'Dispatch<SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>>' is not assignable to parameter of type 'Dispatch<SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean; }>>'.
+  Type 'SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean; }>' is not assignable to type 'SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>'.
+    Type '{ online: boolean; responseTime: number | null; checking: boolean; }' is not assignable to type 'SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>'.
+      Type '{ online: boolean; responseTime: number | null; checking: boolean; }' is not assignable to type '{ online: boolean; responseTime: null; checking: boolean; }'.
+        Types of property 'responseTime' are incompatible.
+          Type 'number | null' is not assignable to type 'null'.
+            Type 'number' is not assignable to type 'null'.
+src/components/settings/RAGSettings.tsx(1184,13): error TS2345: Argument of type 'Dispatch<SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>>' is not assignable to parameter of type 'Dispatch<SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean; }>>'.
+  Type 'SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean; }>' is not assignable to type 'SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>'.
+    Type '{ online: boolean; responseTime: number | null; checking: boolean; }' is not assignable to type 'SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>'.
+      Type '{ online: boolean; responseTime: number | null; checking: boolean; }' is not assignable to type '{ online: boolean; responseTime: null; checking: boolean; }'.
+        Types of property 'responseTime' are incompatible.
+          Type 'number | null' is not assignable to type 'null'.
+            Type 'number' is not assignable to type 'null'.
+src/components/settings/RAGSettings.tsx(1200,13): error TS2345: Argument of type 'Dispatch<SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>>' is not assignable to parameter of type 'Dispatch<SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean; }>>'.
+  Type 'SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean; }>' is not assignable to type 'SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>'.
+    Type '{ online: boolean; responseTime: number | null; checking: boolean; }' is not assignable to type 'SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>'.
+      Type '{ online: boolean; responseTime: number | null; checking: boolean; }' is not assignable to type '{ online: boolean; responseTime: null; checking: boolean; }'.
+        Types of property 'responseTime' are incompatible.
+          Type 'number | null' is not assignable to type 'null'.
+            Type 'number' is not assignable to type 'null'.
+src/components/settings/RAGSettings.tsx(1214,13): error TS2345: Argument of type 'Dispatch<SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>>' is not assignable to parameter of type 'Dispatch<SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean; }>>'.
+  Type 'SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean; }>' is not assignable to type 'SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>'.
+    Type '{ online: boolean; responseTime: number | null; checking: boolean; }' is not assignable to type 'SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>'.
+      Type '{ online: boolean; responseTime: number | null; checking: boolean; }' is not assignable to type '{ online: boolean; responseTime: null; checking: boolean; }'.
+        Types of property 'responseTime' are incompatible.
+          Type 'number | null' is not assignable to type 'null'.
+            Type 'number' is not assignable to type 'null'.
+src/components/settings/RAGSettings.tsx(1318,36): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+src/components/settings/RAGSettings.tsx(1326,36): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+src/components/settings/RAGSettings.tsx(1562,33): error TS2345: Argument of type 'Dispatch<SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>>' is not assignable to parameter of type 'Dispatch<SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean; }>>'.
+  Type 'SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean; }>' is not assignable to type 'SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>'.
+    Type '{ online: boolean; responseTime: number | null; checking: boolean; }' is not assignable to type 'SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>'.
+      Type '{ online: boolean; responseTime: number | null; checking: boolean; }' is not assignable to type '{ online: boolean; responseTime: null; checking: boolean; }'.
+        Types of property 'responseTime' are incompatible.
+          Type 'number | null' is not assignable to type 'null'.
+            Type 'number' is not assignable to type 'null'.
+src/components/settings/RAGSettings.tsx(1638,33): error TS2345: Argument of type 'Dispatch<SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>>' is not assignable to parameter of type 'Dispatch<SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean; }>>'.
+  Type 'SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean; }>' is not assignable to type 'SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>'.
+    Type '{ online: boolean; responseTime: number | null; checking: boolean; }' is not assignable to type 'SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>'.
+      Type '{ online: boolean; responseTime: number | null; checking: boolean; }' is not assignable to type '{ online: boolean; responseTime: null; checking: boolean; }'.
+        Types of property 'responseTime' are incompatible.
+          Type 'number | null' is not assignable to type 'null'.
+            Type 'number' is not assignable to type 'null'.
+src/components/settings/RAGSettings.tsx(2215,25): error TS2345: Argument of type 'Dispatch<SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>>' is not assignable to parameter of type 'Dispatch<SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean; }>>'.
+  Type 'SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean; }>' is not assignable to type 'SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>'.
+    Type '{ online: boolean; responseTime: number | null; checking: boolean; }' is not assignable to type 'SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>'.
+      Type '{ online: boolean; responseTime: number | null; checking: boolean; }' is not assignable to type '{ online: boolean; responseTime: null; checking: boolean; }'.
+        Types of property 'responseTime' are incompatible.
+          Type 'number | null' is not assignable to type 'null'.
+            Type 'number' is not assignable to type 'null'.
+src/components/settings/RAGSettings.tsx(2275,25): error TS2345: Argument of type 'Dispatch<SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>>' is not assignable to parameter of type 'Dispatch<SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean; }>>'.
+  Type 'SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean; }>' is not assignable to type 'SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>'.
+    Type '{ online: boolean; responseTime: number | null; checking: boolean; }' is not assignable to type 'SetStateAction<{ online: boolean; responseTime: null; checking: boolean; }>'.
+      Type '{ online: boolean; responseTime: number | null; checking: boolean; }' is not assignable to type '{ online: boolean; responseTime: null; checking: boolean; }'.
+        Types of property 'responseTime' are incompatible.
+          Type 'number | null' is not assignable to type 'null'.
+            Type 'number' is not assignable to type 'null'.
+src/components/settings/types/OllamaTypes.ts(166,8): error TS2307: Cannot find module '../../services/ollamaService' or its corresponding type declarations.
+src/components/ui/GlassCrawlDepthSelector.tsx(63,17): error TS6133: 'isHovered' is declared but its value is never read.
+src/features/knowledge/components/tests/KnowledgeCard.test.tsx(33,9): error TS2741: Property 'id' is missing in type '{ source_id: string; url: string; source_type: "url"; status: "completed"; title: string; knowledge_type: "technical"; document_count: number; code_examples_count: number; created_at: string; updated_at: string; metadata: { ...; }; }' but required in type 'KnowledgeItem'.
+src/features/mcp/components/McpConfigSection.tsx(323,75): error TS2339: Property 'yellow' does not exist on type '{ subtle: string; strong: string; card: string; cyan: string; blue: string; purple: string; }'.
+src/features/mcp/components/McpConfigSection.tsx(323,104): error TS2339: Property 'yellow' does not exist on type '{ default: string; cyan: string; blue: string; purple: string; focus: string; hover: string; }'.
+src/features/progress/hooks/tests/useProgressQueries.test.ts(2,10): error TS6133: 'act' is declared but its value is never read.
+src/features/progress/hooks/tests/useProgressQueries.test.ts(68,9): error TS2353: Object literal may only specify known properties, and 'details' does not exist in type 'ProgressResponse'.
+src/features/progress/hooks/tests/useProgressQueries.test.ts(91,9): error TS2353: Object literal may only specify known properties, and 'details' does not exist in type 'ProgressResponse'.
+src/features/progress/hooks/tests/useProgressQueries.test.ts(147,13): error TS2561: Object literal may only specify known properties, but 'sourceId' does not exist in type 'ActiveOperation'. Did you mean to write 'source_id'?
+src/features/progress/hooks/tests/useProgressQueries.test.ts(154,13): error TS2561: Object literal may only specify known properties, but 'sourceId' does not exist in type 'ActiveOperation'. Did you mean to write 'source_id'?
+src/features/progress/hooks/tests/useProgressQueries.test.ts(193,13): error TS2561: Object literal may only specify known properties, but 'sourceId' does not exist in type 'ActiveOperation'. Did you mean to write 'source_id'?
+src/features/progress/hooks/tests/useProgressQueries.test.ts(215,13): error TS2741: Property 'timestamp' is missing in type '{ operations: never[]; count: number; }' but required in type 'ActiveOperationsResponse'.
+src/features/progress/hooks/tests/useProgressQueries.test.ts(238,13): error TS2561: Object literal may only specify known properties, but 'sourceId' does not exist in type 'ActiveOperation'. Did you mean to write 'source_id'?
+src/features/projects/documents/DocsTab.tsx(9,15): error TS2305: Module '"./types"' has no exported member 'DocumentContent'.
+src/features/projects/tasks/components/KanbanColumn.tsx(6,10): error TS6133: 'getColumnColor' is declared but its value is never read.
+src/features/projects/tasks/components/KanbanColumn.tsx(24,3): error TS6133: 'title' is declared but its value is never read.
+src/features/projects/tasks/hooks/tests/useTaskQueries.test.ts(6,52): error TS6133: 'useTaskCounts' is declared but its value is never read.
+src/features/projects/tasks/services/tests/taskService.test.ts(35,11): error TS2322: Type '{ created_at: string; updated_at: string; project_id: string; title: string; description: string; status?: DatabaseTaskStatus; assignee?: Assignee; task_order?: number; ... 5 more ...; id: string; }' is not assignable to type 'Task'.
+  Types of property 'status' are incompatible.
+    Type 'DatabaseTaskStatus | undefined' is not assignable to type 'DatabaseTaskStatus'.
+      Type 'undefined' is not assignable to type 'DatabaseTaskStatus'.
+src/features/projects/tasks/services/tests/taskService.test.ts(289,13): error TS2322: Type '{ created_at: string; updated_at: string; sources: never[]; code_examples: never[]; project_id: string; title: string; description: string; status?: DatabaseTaskStatus; assignee?: Assignee; ... 4 more ...; id: string; }' is not assignable to type 'Task'.
+  Types of property 'status' are incompatible.
+    Type 'DatabaseTaskStatus | undefined' is not assignable to type 'DatabaseTaskStatus'.
+      Type 'undefined' is not assignable to type 'DatabaseTaskStatus'.
+src/features/projects/views/ProjectsView.tsx(3,44): error TS6133: 'LayoutGrid' is declared but its value is never read.
+src/features/shared/api/apiClient.ts(63,11): error TS6133: 'method' is declared but its value is never read.
+src/features/shared/api/tests/apiClient.test.ts(13,9): error TS2774: This condition will always return true since this function is always defined. Did you mean to call it instead?
+src/features/shared/api/tests/apiClient.test.ts(35,16): error TS2774: This condition will always return true since this function is always defined. Did you mean to call it instead?
+src/features/shared/api/tests/apiClient.test.ts(409,14): error TS18046: 'result2' is of type 'unknown'.
+src/features/shared/api/tests/apiClient.test.ts(409,47): error TS18046: 'result1' is of type 'unknown'.
+src/features/shared/utils/tests/optimistic.test.ts(40,9): error TS2345: Argument of type '{ name: string; }' is not assignable to parameter of type 'Omit<{ id: string; name: string; status: string; }, keyof OptimisticEntity | "id">'.
+  Property 'status' is missing in type '{ name: string; }' but required in type 'Omit<{ id: string; name: string; status: string; }, keyof OptimisticEntity | "id">'.
+src/features/ui/primitives/draggable-card.tsx(3,21): error TS2459: Module '"./card"' declares 'CardProps' locally, but it is not exported.
+src/features/ui/primitives/draggable-card.tsx(31,12): error TS6133: 'isOver' is declared but its value is never read.
+src/features/ui/primitives/selectable-card.tsx(3,21): error TS2459: Module '"./card"' declares 'CardProps' locally, but it is not exported.
+src/hooks/useStaggeredEntrance.ts(9,42): error TS6133: 'items' is declared but its value is never read.
+src/index.tsx(2,1): error TS6133: 'React' is declared but its value is never read.
+src/pages/OnboardingPage.tsx(91,17): error TS2322: Type '{ children: string; variant: "primary"; size: "lg"; icon: Element; iconPosition: string; onClick: () => void; className: string; }' is not assignable to type 'IntrinsicAttributes & ButtonProps'.
+  Property 'iconPosition' does not exist on type 'IntrinsicAttributes & ButtonProps'.
+src/pages/SettingsPage.tsx(6,3): error TS6133: 'ChevronUp' is declared but its value is never read.
+src/pages/SettingsPage.tsx(77,31): error TS6133: 'isRetry' is declared but its value is never read.
+src/pages/SettingsPage.tsx(236,15): error TS2322: Type '{ children: Element; title: string; icon: ForwardRefExoticComponent<Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>>; iconColor: string; borderColor: string; defaultExpanded: false; }' is not assignable to type 'IntrinsicAttributes & CollapsibleSettingsCardProps'.
+  Property 'iconColor' does not exist on type 'IntrinsicAttributes & CollapsibleSettingsCardProps'.
+src/services/agentChatService.ts(35,11): error TS6133: 'serverStatus' is declared but its value is never read.
+src/services/agentChatService.ts(285,53): error TS2339: Property 'isHealthy' does not exist on type 'ServerHealthService'.
+src/services/bugReportService.ts(135,31): error TS6133: 'limit' is declared but its value is never read.
+src/services/credentialsService.ts(396,13): error TS2322: Type 'number' is not assignable to type 'never'.
+src/services/credentialsService.ts(402,11): error TS2322: Type 'boolean' is not assignable to type 'never'.
+tests/integration/knowledge/knowledge-api.test.ts(8,1): error TS6192: All imports in import declaration are unused.
+tests/integration/knowledge/progress-api.test.ts(7,33): error TS2307: Cannot find module '../../../src/features/knowledge/progress/services' or its corresponding type declarations.
+tests/integration/knowledge/progress-api.test.ts(9,1): error TS6133: 'ProgressResponse' is declared but its value is never read.
+tests/integration/knowledge/progress-api.test.ts(9,39): error TS2307: Cannot find module '../../../src/features/knowledge/progress/types' or its corresponding type declarations.
+tests/integration/setup.ts(4,10): error TS6133: 'expect' is declared but its value is never read.
+tests/manual/test-knowledge-api.ts(11,33): error TS2307: Cannot find module '../../src/features/knowledge/progress/services/progressService' or its corresponding type declarations.
+tests/manual/test-knowledge-api.ts(16,45): error TS2307: Cannot find module 'node-fetch' or its corresponding type declarations.
+tests/manual/test-knowledge-api.ts(17,3): error TS2578: Unused '@ts-expect-error' directive.
+tests/manual/test-knowledge-api.ts(67,13): error TS6133: 'searchResults' is declared but its value is never read.
+tests/setup.ts(1,10): error TS6133: 'expect' is declared but its value is never read.

@@ -51,7 +51,6 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
         optimistic && "opacity-80 ring-1 ring-cyan-400/30",
       )}
     >
-
       {/* Main content area with padding */}
       <div className="flex-1 p-4 pb-2">
         {/* Title section */}

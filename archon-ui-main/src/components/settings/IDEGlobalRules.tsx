@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { FileCode, Copy, Check } from 'lucide-react';
+import { Copy, Check } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { useToast } from '../../features/shared/hooks/useToast';

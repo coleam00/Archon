@@ -123,7 +123,7 @@ export function useCrawlUrl() {
 
       // Snapshot the previous values for rollback
       const previousSummaries = queryClient.getQueryData<KnowledgeItemsResponse>(
-        knowledgeKeys.summaries(currentFilter)
+        knowledgeKeys.summaries(currentFilter),
       );
       const previousOperations = queryClient.getQueryData<ActiveOperationsResponse>(progressKeys.active());
 
@@ -296,7 +296,7 @@ export function useUploadDocument() {
 
       // Snapshot the previous values for rollback
       const previousSummaries = queryClient.getQueryData<KnowledgeItemsResponse>(
-        knowledgeKeys.summaries(currentFilter)
+        knowledgeKeys.summaries(currentFilter),
       );
       const previousOperations = queryClient.getQueryData<ActiveOperationsResponse>(progressKeys.active());
 

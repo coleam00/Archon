@@ -45,6 +45,7 @@ server = [
     "asyncpg>=0.29.0",
     # AI/ML libraries
     "openai==1.71.0",
+    "anthropic>=0.18.0",
     # Document processing
     "pypdf2>=3.0.1",
     "pdfplumber>=0.11.6",
@@ -59,8 +60,15 @@ server = [
     "pydantic>=2.0.0",
     "python-dotenv>=1.0.0",
     "docker>=6.1.0",
-    # Logging
+    # Logging and Observability
     "logfire>=0.30.0",
+    "opentelemetry-api>=1.21.0",
+    "opentelemetry-sdk>=1.21.0",
+    "opentelemetry-instrumentation-fastapi>=0.42b0",
+    "opentelemetry-instrumentation-httpx>=0.42b0",
+    "opentelemetry-exporter-otlp>=1.21.0",
+    "sentry-sdk[fastapi]>=1.40.0",
+    "python-json-logger>=2.0.7",
     # Testing (needed for UI-triggered tests)
     "pytest>=8.0.0",
     "pytest-asyncio>=0.21.0",
@@ -107,6 +115,7 @@ all = [
     "crawl4ai==0.7.4",
     "supabase==2.15.1",
     "asyncpg>=0.29.0",
+    "anthropic>=0.18.0",
     "openai==1.71.0",
     "pypdf2>=3.0.1",
     "pdfplumber>=0.11.6",
@@ -117,6 +126,13 @@ all = [
     "slowapi>=0.1.9",
     "docker>=6.1.0",
     "logfire>=0.30.0",
+    "opentelemetry-api>=1.21.0",
+    "opentelemetry-sdk>=1.21.0",
+    "opentelemetry-instrumentation-fastapi>=0.42b0",
+    "opentelemetry-instrumentation-httpx>=0.42b0",
+    "opentelemetry-exporter-otlp>=1.21.0",
+    "sentry-sdk[fastapi]>=1.40.0",
+    "python-json-logger>=2.0.7",
     # MCP specific (mcp version)
     "mcp==1.12.2",
     # Agents specific

@@ -6,7 +6,7 @@ import { Badge } from '../ui/Badge';
 import { useToast } from '../../features/shared/hooks/useToast';
 import { cn } from '../../lib/utils';
 import { credentialsService, OllamaInstance } from '../../services/credentialsService';
-import { OllamaModelDiscoveryModal } from './OllamaModelDiscoveryModal';
+import OllamaModelDiscoveryModal from './OllamaModelDiscoveryModal';
 import type { OllamaInstance as OllamaInstanceType } from './types/OllamaTypes';
 
 interface OllamaConfigurationPanelProps {
@@ -699,19 +699,19 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
                 </label>
                 <div className="flex gap-2">
                   <Button
-                    variant={newInstanceType === 'chat' ? 'solid' : 'outline'}
+                    variant={newInstanceType === 'chat' ? 'primary' : 'outline'}
                     size="sm"
                     onClick={() => setNewInstanceType('chat')}
                     className={cn(
-                      newInstanceType === 'chat' 
-                        ? 'bg-blue-600 text-white' 
+                      newInstanceType === 'chat'
+                        ? 'bg-blue-600 text-white'
                         : 'text-blue-600 border-blue-600'
                     )}
                   >
                     LLM Chat
                   </Button>
                   <Button
-                    variant={newInstanceType === 'embedding' ? 'solid' : 'outline'}
+                    variant={newInstanceType === 'embedding' ? 'primary' : 'outline'}
                     size="sm"
                     onClick={() => setNewInstanceType('embedding')}
                     className={cn(

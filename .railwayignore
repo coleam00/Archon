@@ -1,0 +1,83 @@
+# Git and version control
+.git
+.github
+.gitignore
+
+# Node modules
+node_modules
+npm-debug.log
+yarn-error.log
+
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist/
+build/
+*.whl
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Virtual environments
+.env
+.venv
+venv/
+ENV/
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test coverage
+.coverage
+htmlcov/
+coverage/
+.tox/
+.nox/
+
+# Documentation and planning
+PRPs/
+docs/
+*.md
+!README.md
+!RAILWAY_DEPLOYMENT.md
+!DEPLOYMENT_CHECKLIST.md
+
+# Tests
+tests/
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+
+# Development files
+.env.local
+.env.development
+.env.test
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Lock files (include these for reproducible builds)
+# package-lock.json
+# yarn.lock
+# uv.lock

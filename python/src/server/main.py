@@ -17,6 +17,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+
+from .observability import setup_sentry, setup_tracing
 
 from .api_routes.agent_chat_api import router as agent_chat_router
 from .api_routes.bug_report_api import router as bug_report_router
@@ -29,10 +34,13 @@ from .api_routes.pages_api import router as pages_router
 from .api_routes.progress_api import router as progress_router
 from .api_routes.projects_api import router as projects_router
 from .api_routes.providers_api import router as providers_router
-from .api_routes.version_api import router as version_router
 
 # Import modular API routers
 from .api_routes.settings_api import router as settings_router
+from .api_routes.version_api import router as version_router
+
+# Import middleware
+from .middleware.security import SecurityHeadersMiddleware
 
 # Import Logfire configuration
 from .config.logfire_config import api_logger, setup_logfire
@@ -48,6 +56,9 @@ except ImportError:
     # These are optional dependencies for full functionality
     AsyncWebCrawler = None
     BrowserConfig = None
+
+# Initialize Sentry early for error tracking
+setup_sentry()
 
 # Logger will be initialized after credentials are loaded
 logger = logging.getLogger(__name__)
@@ -118,7 +129,7 @@ async def lifespan(app: FastAPI):
         _initialization_complete = True
         api_logger.info("🎉 Archon backend started successfully!")
 
-    except Exception as e:
+    except Exception:
         api_logger.error("❌ Failed to start backend", exc_info=True)
         raise
 
@@ -140,7 +151,7 @@ async def lifespan(app: FastAPI):
 
         api_logger.info("✅ Cleanup completed")
 
-    except Exception as e:
+    except Exception:
         api_logger.error("❌ Error during shutdown", exc_info=True)
 
 
@@ -151,6 +162,17 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+# Setup OpenTelemetry tracing
+setup_tracing(app)
+
+# Configure rate limiting
+limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Add security headers middleware
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Configure CORS
 app.add_middleware(
@@ -198,6 +220,7 @@ app.include_router(migration_router)
 
 # Root endpoint
 @app.get("/")
+@limiter.limit("100/minute")
 async def root():
     """Root endpoint returning API information."""
     return {
@@ -211,6 +234,7 @@ async def root():
 
 # Health check endpoint
 @app.get("/health")
+@limiter.limit("200/minute")
 async def health_check(response: Response):
     """Health check endpoint that indicates true readiness including credential loading."""
     from datetime import datetime
@@ -253,6 +277,7 @@ async def health_check(response: Response):
 
 # API health check endpoint (alias for /health at /api/health)
 @app.get("/api/health")
+@limiter.limit("200/minute")
 async def api_health_check(response: Response):
     """API health check endpoint - alias for /health."""
     return await health_check(response)

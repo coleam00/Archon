@@ -626,10 +626,10 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
               {/* Filters */}
               <div className="flex gap-2">
                 <Button
-                  variant={selectionState.showOnlyChat ? "solid" : "outline"}
+                  variant={selectionState.showOnlyChat ? "primary" : "outline"}
                   size="sm"
-                  onClick={() => setSelectionState(prev => ({ 
-                    ...prev, 
+                  onClick={() => setSelectionState(prev => ({
+                    ...prev,
                     showOnlyChat: !prev.showOnlyChat,
                     showOnlyEmbedding: false
                   }))}
@@ -639,7 +639,7 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
                   Chat Only
                 </Button>
                 <Button
-                  variant={selectionState.showOnlyEmbedding ? "solid" : "outline"}
+                  variant={selectionState.showOnlyEmbedding ? "primary" : "outline"}
                   size="sm"
                   onClick={() => setSelectionState(prev => ({ 
                     ...prev, 
@@ -804,7 +804,7 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
                                 {model.capabilities.includes('chat') && (
                                   <Button
                                     size="sm"
-                                    variant={isChatSelected ? "solid" : "outline"}
+                                    variant={isChatSelected ? "primary" : "outline"}
                                     onClick={() => handleModelSelect(model, 'chat')}
                                     className="text-xs"
                                   >
@@ -814,7 +814,7 @@ const OllamaModelDiscoveryModal: React.FC<OllamaModelDiscoveryModalProps> = ({
                                 {model.capabilities.includes('embedding') && (
                                   <Button
                                     size="sm"
-                                    variant={isEmbeddingSelected ? "solid" : "outline"}
+                                    variant={isEmbeddingSelected ? "primary" : "outline"}
                                     onClick={() => handleModelSelect(model, 'embedding')}
                                     className="text-xs"
                                   >

@@ -4,6 +4,12 @@
 # Usage:
 #   docker compose up                        # Starts server, mcp, frontend (agents disabled)
 #   docker compose --profile agents up -d    # Also starts archon-agents
+#
+# Railway Deployment:
+# - Railway auto-detects this file and creates services automatically
+# - Set environment variables in Railway dashboard (see railway.env.template)
+# - Railway injects PORT variable, but we use service-specific ports (ARCHON_*_PORT)
+# - Ensure SERVICE_DISCOVERY_MODE=railway for proper internal networking
 
 services:
   # Server Service (FastAPI + Socket.IO + Crawling)

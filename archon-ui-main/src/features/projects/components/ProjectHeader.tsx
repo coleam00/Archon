@@ -1,7 +1,7 @@
 import { motion } from "framer-motion";
 import { LayoutGrid, List, Plus, Search, X } from "lucide-react";
 import type React from "react";
-import { ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Button } from "../../ui/primitives/button";
 import { Input } from "../../ui/primitives/input";
 import { cn } from "../../ui/primitives/styles";

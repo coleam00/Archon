@@ -143,7 +143,7 @@ class KnowledgeItemService:
                     display_url = source_url
                 else:
                     display_url = first_urls.get(source_id, f"source://{source_id}")
-                
+
                 code_examples_count = code_example_counts.get(source_id, 0)
                 chunks_count = chunk_counts.get(source_id, 0)
 
