@@ -58,7 +58,8 @@
     "react-markdown": "^10.1.0",
     "react-router-dom": "^6.26.2",
     "tailwind-merge": "latest",
-    "zod": "^3.25.46"
+    "zod": "^3.25.46",
+    "zustand": "^5.0.8"
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.2",

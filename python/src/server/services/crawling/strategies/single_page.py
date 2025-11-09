@@ -229,17 +229,43 @@ class SinglePageCrawlStrategy:
     ) -> list[dict[str, Any]]:
         """
         Crawl a .txt or markdown file with comprehensive error handling and progress reporting.
-        
+
         Args:
             url: URL of the text/markdown file
             transform_url_func: Function to transform URLs (e.g., GitHub URLs)
             progress_callback: Optional callback for progress updates
-            start_progress: Starting progress percentage
-            end_progress: Ending progress percentage
-            
+            start_progress: Starting progress percentage (must be 0-100)
+            end_progress: Ending progress percentage (must be 0-100 and > start_progress)
+
         Returns:
             List containing the crawled document
+
+        Raises:
+            ValueError: If start_progress or end_progress are invalid
         """
+        # Validate progress parameters before any async work or progress reporting
+        if not isinstance(start_progress, (int, float)) or not isinstance(end_progress, (int, float)):
+            raise ValueError(
+                f"start_progress and end_progress must be int or float, "
+                f"got start_progress={type(start_progress).__name__}, end_progress={type(end_progress).__name__}"
+            )
+
+        if not (0 <= start_progress <= 100):
+            raise ValueError(
+                f"start_progress must be in range [0, 100], got {start_progress}"
+            )
+
+        if not (0 <= end_progress <= 100):
+            raise ValueError(
+                f"end_progress must be in range [0, 100], got {end_progress}"
+            )
+
+        if start_progress >= end_progress:
+            raise ValueError(
+                f"start_progress must be less than end_progress, "
+                f"got start_progress={start_progress}, end_progress={end_progress}"
+            )
+
         try:
             # Transform GitHub URLs to raw content URLs if applicable
             original_url = url

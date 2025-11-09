@@ -1,13 +1,13 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { Activity, CheckCircle2, FileText, LayoutGrid, List, ListTodo, Pin } from "lucide-react";
+import { Activity, CheckCircle2, FileText, List, ListTodo, Pin } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useStaggeredEntrance } from "../../../hooks/useStaggeredEntrance";
 import { isOptimistic } from "../../shared/utils/optimistic";
 import { DeleteConfirmModal } from "../../ui/components/DeleteConfirmModal";
-import { OptimisticIndicator } from "../../ui/primitives/OptimisticIndicator";
 import { Button, PillNavigation, SelectableCard } from "../../ui/primitives";
+import { OptimisticIndicator } from "../../ui/primitives/OptimisticIndicator";
 import { StatPill } from "../../ui/primitives/pill";
 import { cn } from "../../ui/primitives/styles";
 import { NewProjectModal } from "../components/NewProjectModal";
@@ -71,7 +71,7 @@ export function ProjectsView({ className = "", "data-id": dataId }: ProjectsView
   const sortedProjects = useMemo(() => {
     // Filter by search query
     const filtered = (projects as Project[]).filter((project) =>
-      project.title.toLowerCase().includes(searchQuery.toLowerCase())
+      project.title.toLowerCase().includes(searchQuery.toLowerCase()),
     );
 
     // Sort: pinned first, then alphabetically

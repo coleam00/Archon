@@ -67,6 +67,11 @@ components/          # Legacy components (migrating)
 **Purpose**: Document processing, code analysis, project generation
 **Port**: 8052
 
+### Agent Work Orders (Optional)
+**Location**: `python/src/agent_work_orders/`
+**Purpose**: Workflow execution engine using Claude Code CLI
+**Port**: 8053
+
 ## API Structure
 
 ### RESTful Endpoints

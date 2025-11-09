@@ -164,7 +164,7 @@ export const ComboBox = React.forwardRef<HTMLButtonElement, ComboBoxProps>(
         const highlightedElement = optionsRef.current.querySelector('[data-highlighted="true"]');
         highlightedElement?.scrollIntoView({ block: "nearest" });
       }
-    }, [highlightedIndex, open]);
+    }, [open, highlightedIndex]);
 
     return (
       <Popover.Root open={open} onOpenChange={setOpen}>

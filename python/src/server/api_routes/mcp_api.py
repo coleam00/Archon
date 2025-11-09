@@ -3,23 +3,93 @@ MCP API endpoints for Archon
 
 Provides status and configuration endpoints for the MCP service.
 The MCP container is managed by docker-compose, not by this API.
+
+Status monitoring uses HTTP health checks by default (secure, portable).
+Docker socket mode available via ENABLE_DOCKER_SOCKET_MONITORING (legacy, security risk).
 """
 
 import os
 from typing import Any
 
-import docker
-from docker.errors import NotFound
+import httpx
 from fastapi import APIRouter, HTTPException
 
 # Import unified logging
+from ..config.config import get_mcp_monitoring_config
 from ..config.logfire_config import api_logger, safe_set_attribute, safe_span
+from ..config.service_discovery import get_mcp_url
 
 router = APIRouter(prefix="/api/mcp", tags=["mcp"])
 
 
-def get_container_status() -> dict[str, Any]:
-    """Get simple MCP container status without Docker management."""
+async def get_container_status_http() -> dict[str, Any]:
+    """Get MCP server status via HTTP health check endpoint.
+
+    This is the secure, recommended approach that doesn't require Docker socket.
+    Works across all deployment environments (Docker, Kubernetes, bare metal).
+
+    Returns:
+        Status dict: {"status": str, "uptime": int|None, "logs": []}
+    """
+    config = get_mcp_monitoring_config()
+    mcp_url = get_mcp_url()
+
+    try:
+        # Use async context manager for proper connection cleanup
+        async with httpx.AsyncClient(timeout=config.health_check_timeout) as client:
+            response = await client.get(f"{mcp_url}/health")
+            response.raise_for_status()
+
+            # MCP health endpoint returns: {"success": bool, "uptime_seconds": int, "health": {...}}
+            data = response.json()
+
+            # Transform to expected API contract
+            uptime_value = data.get("uptime_seconds")
+            return {
+                "status": "running" if data.get("success") else "unhealthy",
+                "uptime": int(uptime_value) if uptime_value is not None else None,
+                "logs": [],  # Historical artifact, kept for API compatibility
+            }
+
+    except httpx.ConnectError:
+        # MCP container not running or unreachable
+        api_logger.warning("MCP server unreachable via HTTP health check")
+        return {
+            "status": "unreachable",
+            "uptime": None,
+            "logs": [],
+        }
+    except httpx.TimeoutException:
+        # MCP responding too slowly
+        api_logger.warning(f"MCP server health check timed out after {config.health_check_timeout}s")
+        return {
+            "status": "unhealthy",
+            "uptime": None,
+            "logs": [],
+        }
+    except Exception:
+        # Unexpected error
+        api_logger.error("Failed to check MCP server health via HTTP", exc_info=True)
+        return {
+            "status": "error",
+            "uptime": None,
+            "logs": [],
+        }
+
+
+def get_container_status_docker() -> dict[str, Any]:
+    """Get MCP container status via Docker socket (legacy mode).
+
+    SECURITY WARNING: Requires Docker socket mounted, granting root-equivalent host access.
+    Only enable this mode if you specifically need Docker container status details.
+    Set ENABLE_DOCKER_SOCKET_MONITORING=true to use this mode.
+
+    Returns:
+        Status dict: {"status": str, "uptime": int|None, "logs": []}
+    """
+    import docker
+    from docker.errors import NotFound
+
     docker_client = None
     try:
         docker_client = docker.from_env()
@@ -34,6 +104,7 @@ def get_container_status() -> dict[str, Any]:
             # Try to get uptime from container info
             try:
                 from datetime import datetime
+
                 started_at = container.attrs["State"]["StartedAt"]
                 started_time = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
                 uptime = int((datetime.now(started_time.tzinfo) - started_time).total_seconds())
@@ -47,27 +118,26 @@ def get_container_status() -> dict[str, Any]:
             "status": status,
             "uptime": uptime,
             "logs": [],  # No log streaming anymore
-            "container_status": container_status
         }
 
     except NotFound:
+        api_logger.warning("MCP container not found via Docker socket")
         return {
             "status": "not_found",
             "uptime": None,
             "logs": [],
-            "container_status": "not_found",
-            "message": "MCP container not found. Run: docker compose up -d archon-mcp"
+            "message": "MCP container not found. Run: docker compose up -d archon-mcp",
         }
     except Exception as e:
-        api_logger.error("Failed to get container status", exc_info=True)
+        api_logger.error("Failed to get MCP container status via Docker", exc_info=True)
         return {
             "status": "error",
             "uptime": None,
             "logs": [],
-            "container_status": "error",
-            "error": str(e)
+            "error": str(e),
         }
     finally:
+        # CRITICAL: Always close Docker client to prevent connection leaks
         if docker_client is not None:
             try:
                 docker_client.close()
@@ -75,15 +145,38 @@ def get_container_status() -> dict[str, Any]:
                 pass
 
 
+async def get_container_status() -> dict[str, Any]:
+    """Get MCP server status using configured monitoring strategy.
+
+    Routes to HTTP health check (secure, default) or Docker socket (legacy).
+
+    Returns:
+        Status dict: {"status": str, "uptime": int|None, "logs": []}
+    """
+    config = get_mcp_monitoring_config()
+
+    if config.enable_docker_socket:
+        api_logger.info("Using Docker socket monitoring (ENABLE_DOCKER_SOCKET_MONITORING=true)")
+        # Docker mode is synchronous
+        return get_container_status_docker()
+    else:
+        # HTTP mode is asynchronous (default)
+        return await get_container_status_http()
+
+
 @router.get("/status")
 async def get_status():
-    """Get MCP server status."""
+    """Get MCP server status.
+
+    Returns container/server status, uptime, and logs (empty).
+    Monitoring strategy controlled by ENABLE_DOCKER_SOCKET_MONITORING env var.
+    """
     with safe_span("api_mcp_status") as span:
         safe_set_attribute(span, "endpoint", "/api/mcp/status")
         safe_set_attribute(span, "method", "GET")
 
         try:
-            status = get_container_status()
+            status = await get_container_status()
             api_logger.debug(f"MCP server status checked - status={status.get('status')}")
             safe_set_attribute(span, "status", status.get("status"))
             safe_set_attribute(span, "uptime", status.get("uptime"))
@@ -91,7 +184,7 @@ async def get_status():
         except Exception as e:
             api_logger.error(f"MCP server status API failed - error={str(e)}")
             safe_set_attribute(span, "error", str(e))
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/config")
@@ -118,9 +211,7 @@ async def get_mcp_config():
             try:
                 from ..services.credential_service import credential_service
 
-                model_choice = await credential_service.get_credential(
-                    "MODEL_CHOICE", "gpt-4o-mini"
-                )
+                model_choice = await credential_service.get_credential("MODEL_CHOICE", "gpt-4o-mini")
                 config["model_choice"] = model_choice
             except Exception:
                 # Fallback to default model
@@ -136,7 +227,7 @@ async def get_mcp_config():
         except Exception as e:
             api_logger.error("Failed to get MCP configuration", exc_info=True)
             safe_set_attribute(span, "error", str(e))
-            raise HTTPException(status_code=500, detail={"error": str(e)})
+            raise HTTPException(status_code=500, detail={"error": str(e)}) from e
 
 
 @router.get("/clients")
@@ -151,18 +242,11 @@ async def get_mcp_clients():
             # For now, return empty array as expected by frontend
             api_logger.debug("Getting MCP clients - returning empty array")
 
-            return {
-                "clients": [],
-                "total": 0
-            }
+            return {"clients": [], "total": 0}
         except Exception as e:
             api_logger.error(f"Failed to get MCP clients - error={str(e)}")
             safe_set_attribute(span, "error", str(e))
-            return {
-                "clients": [],
-                "total": 0,
-                "error": str(e)
-            }
+            return {"clients": [], "total": 0, "error": str(e)}
 
 
 @router.get("/sessions")
@@ -174,7 +258,7 @@ async def get_mcp_sessions():
 
         try:
             # Basic session info for now
-            status = get_container_status()
+            status = await get_container_status()
 
             session_info = {
                 "active_sessions": 0,  # TODO: Implement real session tracking
@@ -192,7 +276,7 @@ async def get_mcp_sessions():
         except Exception as e:
             api_logger.error(f"Failed to get MCP sessions - error={str(e)}")
             safe_set_attribute(span, "error", str(e))
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/health")

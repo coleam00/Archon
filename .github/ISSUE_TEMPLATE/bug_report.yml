@@ -22,6 +22,18 @@ body:
       required: true
 
   - type: dropdown
+    id: branch
+    attributes:
+      label: Branch
+      description: Which branch are you using?
+      options:
+        - "stable"
+        - "main"
+      default: 0
+    validations:
+      required: true
+
+  - type: dropdown
     id: severity
     attributes:
       label: Bug Severity

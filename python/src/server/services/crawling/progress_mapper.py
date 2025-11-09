@@ -18,14 +18,18 @@ class ProgressMapper:
         "error": (-1, -1),            # Special case for errors
         "cancelled": (-1, -1),        # Special case for cancellation
         "completed": (100, 100),
+        "complete": (100, 100),       # Alias
 
         # Crawl-specific stages - rebalanced based on actual time taken
         "analyzing": (1, 3),          # URL analysis is quick
-        "crawling": (3, 15),          # Crawling can take time for deep/many URLs
+        "discovery": (3, 4),          # File discovery is quick (new stage for discovery feature)
+        "crawling": (4, 15),          # Crawling can take time for deep/many URLs
         "processing": (15, 20),       # Content processing/chunking
         "source_creation": (20, 25),  # DB operations
         "document_storage": (25, 40), # Embeddings generation takes significant time
         "code_extraction": (40, 90),  # Code extraction + summaries - still longest but more balanced
+        "code_storage": (40, 90),     # Alias
+        "extracting": (40, 90),       # Alias for code_extraction
         "finalization": (90, 100),    # Final steps and cleanup
 
         # Upload-specific stages
@@ -65,7 +69,7 @@ class ProgressMapper:
         start, end = self.STAGE_RANGES[stage]
 
         # Handle completion
-        if stage == "completed":
+        if stage in ["completed", "complete"]:
             self.last_overall_progress = 100
             return 100
 

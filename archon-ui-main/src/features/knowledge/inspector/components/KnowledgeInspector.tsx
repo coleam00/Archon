@@ -36,7 +36,7 @@ export const KnowledgeInspector: React.FC<KnowledgeInspectorProps> = ({
   useEffect(() => {
     setViewMode(initialTab);
     setSelectedItem(null); // Clear selected item when switching tabs
-  }, [item.source_id, initialTab]);
+  }, [initialTab, item.source_id]);
 
   // Use pagination hook for current view mode
   const paginationData = useInspectorPagination({

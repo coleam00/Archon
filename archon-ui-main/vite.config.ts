@@ -294,35 +294,105 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
           : [];
         return [...new Set([...defaultHosts, ...hostFromEnv, ...customHosts])];
       })(),
-      proxy: {
-        '/api': {
+      proxy: (() => {
+        const proxyConfig: Record<string, any> = {};
+        
+        // Check if agent work orders service should be enabled
+        // This can be disabled via environment variable to prevent hard dependency
+        const agentWorkOrdersEnabled = env.AGENT_WORK_ORDERS_ENABLED !== 'false';
+        const agentWorkOrdersPort = env.AGENT_WORK_ORDERS_PORT || '8053';
+        
+        // Agent Work Orders API proxy (must come before general /api if enabled)
+        if (agentWorkOrdersEnabled) {
+          proxyConfig['/api/agent-work-orders'] = {
+            target: isDocker ? `http://archon-agent-work-orders:${agentWorkOrdersPort}` : `http://localhost:${agentWorkOrdersPort}`,
+          changeOrigin: true,
+          secure: false,
+            timeout: 10000, // 10 second timeout
+            configure: (proxy: any, options: any) => {
+              const targetUrl = isDocker ? `http://archon-agent-work-orders:${agentWorkOrdersPort}` : `http://localhost:${agentWorkOrdersPort}`;
+              
+              // Handle proxy errors (e.g., service is down)
+              proxy.on('error', (err: Error, req: any, res: any) => {
+              console.log('🚨 [VITE PROXY ERROR - Agent Work Orders]:', err.message);
+              console.log('🚨 [VITE PROXY ERROR] Target:', targetUrl);
+              console.log('🚨 [VITE PROXY ERROR] Request:', req.url);
+                
+                // Send proper error response instead of hanging
+                if (!res.headersSent) {
+                  res.writeHead(503, {
+                    'Content-Type': 'application/json',
+                    'X-Service-Unavailable': 'agent-work-orders'
+                  });
+                  res.end(JSON.stringify({
+                    error: 'Service Unavailable',
+                    message: 'Agent Work Orders service is not available',
+                    service: 'agent-work-orders',
+                    target: targetUrl
+                  }));
+                }
+              });
+              
+              // Handle connection timeout
+              proxy.on('proxyReq', (proxyReq: any, req: any, res: any) => {
+              console.log('🔄 [VITE PROXY - Agent Work Orders] Forwarding:', req.method, req.url, 'to', `${targetUrl}${req.url}`);
+                
+                // Set timeout for the proxy request
+                proxyReq.setTimeout(10000, () => {
+                  console.log('⏱️ [VITE PROXY - Agent Work Orders] Request timeout');
+                  if (!res.headersSent) {
+                    res.writeHead(504, {
+                      'Content-Type': 'application/json',
+                      'X-Service-Unavailable': 'agent-work-orders'
+                    });
+                    res.end(JSON.stringify({
+                      error: 'Gateway Timeout',
+                      message: 'Agent Work Orders service did not respond in time',
+                      service: 'agent-work-orders',
+                      target: targetUrl
+                    }));
+                  }
+                });
+              });
+            }
+          };
+        } else {
+          console.log('⚠️ [VITE PROXY] Agent Work Orders proxy disabled via AGENT_WORK_ORDERS_ENABLED=false');
+        }
+        
+        // General /api proxy (always enabled, comes after specific routes if agent work orders is enabled)
+        proxyConfig['/api'] = {
           target: `http://${proxyHost}:${port}`,
           changeOrigin: true,
           secure: false,
-          configure: (proxy, options) => {
-            proxy.on('error', (err, req, res) => {
+          configure: (proxy: any, options: any) => {
+            proxy.on('error', (err: Error, req: any, res: any) => {
               console.log('🚨 [VITE PROXY ERROR]:', err.message);
               console.log('🚨 [VITE PROXY ERROR] Target:', `http://${proxyHost}:${port}`);
               console.log('🚨 [VITE PROXY ERROR] Request:', req.url);
             });
-            proxy.on('proxyReq', (proxyReq, req, res) => {
+            proxy.on('proxyReq', (proxyReq: any, req: any, res: any) => {
               console.log('🔄 [VITE PROXY] Forwarding:', req.method, req.url, 'to', `http://${proxyHost}:${port}${req.url}`);
             });
           }
-        },
+        };
+        
         // Health check endpoint proxy
-        '/health': {
+        proxyConfig['/health'] = {
           target: `http://${host}:${port}`,
           changeOrigin: true,
           secure: false
-        },
+        };
+        
         // Socket.IO specific proxy configuration
-        '/socket.io': {
+        proxyConfig['/socket.io'] = {
           target: `http://${host}:${port}`,
           changeOrigin: true,
           ws: true
-        }
-      },
+        };
+        
+        return proxyConfig;
+      })(),
     },
     define: {
       // CRITICAL: Don't inject Docker internal hostname into the build

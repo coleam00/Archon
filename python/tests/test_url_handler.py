@@ -123,3 +123,119 @@ class TestURLHandler:
         # Should not transform non-GitHub URLs
         other = "https://example.com/file"
         assert handler.transform_github_url(other) == other
+
+    def test_is_robots_txt(self):
+        """Test robots.txt detection."""
+        handler = URLHandler()
+        
+        # Standard robots.txt URLs
+        assert handler.is_robots_txt("https://example.com/robots.txt") is True
+        assert handler.is_robots_txt("http://example.com/robots.txt") is True
+        assert handler.is_robots_txt("https://sub.example.com/robots.txt") is True
+        
+        # Case sensitivity
+        assert handler.is_robots_txt("https://example.com/ROBOTS.TXT") is True
+        assert handler.is_robots_txt("https://example.com/Robots.Txt") is True
+        
+        # With query parameters (should still be detected)
+        assert handler.is_robots_txt("https://example.com/robots.txt?v=1") is True
+        assert handler.is_robots_txt("https://example.com/robots.txt#section") is True
+        
+        # Not robots.txt files
+        assert handler.is_robots_txt("https://example.com/robots") is False
+        assert handler.is_robots_txt("https://example.com/robots.html") is False
+        assert handler.is_robots_txt("https://example.com/some-robots.txt") is False
+        assert handler.is_robots_txt("https://example.com/path/robots.txt") is False
+        assert handler.is_robots_txt("https://example.com/") is False
+        
+        # Edge case: malformed URL should not crash
+        assert handler.is_robots_txt("not-a-url") is False
+
+    def test_is_llms_variant(self):
+        """Test llms file variant detection."""
+        handler = URLHandler()
+        
+        # Standard llms.txt spec variants (only txt files)
+        assert handler.is_llms_variant("https://example.com/llms.txt") is True
+        assert handler.is_llms_variant("https://example.com/llms-full.txt") is True
+
+        # Case sensitivity
+        assert handler.is_llms_variant("https://example.com/LLMS.TXT") is True
+        assert handler.is_llms_variant("https://example.com/LLMS-FULL.TXT") is True
+
+        # With paths (should still detect)
+        assert handler.is_llms_variant("https://example.com/docs/llms.txt") is True
+        assert handler.is_llms_variant("https://example.com/public/llms-full.txt") is True
+
+        # With query parameters
+        assert handler.is_llms_variant("https://example.com/llms.txt?version=1") is True
+        assert handler.is_llms_variant("https://example.com/llms-full.txt#section") is True
+        
+        # Not llms files
+        assert handler.is_llms_variant("https://example.com/llms") is False
+        assert handler.is_llms_variant("https://example.com/llms.html") is False
+        assert handler.is_llms_variant("https://example.com/my-llms.txt") is False
+        assert handler.is_llms_variant("https://example.com/llms-guide.txt") is False
+        assert handler.is_llms_variant("https://example.com/readme.txt") is False
+        
+        # Edge case: malformed URL should not crash
+        assert handler.is_llms_variant("not-a-url") is False
+
+    def test_is_well_known_file(self):
+        """Test .well-known file detection."""
+        handler = URLHandler()
+        
+        # Standard .well-known files
+        assert handler.is_well_known_file("https://example.com/.well-known/ai.txt") is True
+        assert handler.is_well_known_file("https://example.com/.well-known/security.txt") is True
+        assert handler.is_well_known_file("https://example.com/.well-known/change-password") is True
+        
+        # Case sensitivity - RFC 8615 requires lowercase .well-known
+        assert handler.is_well_known_file("https://example.com/.WELL-KNOWN/ai.txt") is False
+        assert handler.is_well_known_file("https://example.com/.Well-Known/ai.txt") is False
+        
+        # With query parameters
+        assert handler.is_well_known_file("https://example.com/.well-known/ai.txt?v=1") is True
+        assert handler.is_well_known_file("https://example.com/.well-known/ai.txt#top") is True
+        
+        # Not .well-known files
+        assert handler.is_well_known_file("https://example.com/well-known/ai.txt") is False
+        assert handler.is_well_known_file("https://example.com/.wellknown/ai.txt") is False
+        assert handler.is_well_known_file("https://example.com/docs/.well-known/ai.txt") is False
+        assert handler.is_well_known_file("https://example.com/ai.txt") is False
+        assert handler.is_well_known_file("https://example.com/") is False
+        
+        # Edge case: malformed URL should not crash
+        assert handler.is_well_known_file("not-a-url") is False
+
+    def test_get_base_url(self):
+        """Test base URL extraction."""
+        handler = URLHandler()
+        
+        # Standard URLs
+        assert handler.get_base_url("https://example.com") == "https://example.com"
+        assert handler.get_base_url("https://example.com/") == "https://example.com"
+        assert handler.get_base_url("https://example.com/path/to/page") == "https://example.com"
+        assert handler.get_base_url("https://example.com/path/to/page?query=1") == "https://example.com"
+        assert handler.get_base_url("https://example.com/path/to/page#fragment") == "https://example.com"
+        
+        # HTTP vs HTTPS
+        assert handler.get_base_url("http://example.com/path") == "http://example.com"
+        assert handler.get_base_url("https://example.com/path") == "https://example.com"
+        
+        # Subdomains and ports
+        assert handler.get_base_url("https://api.example.com/v1/users") == "https://api.example.com"
+        assert handler.get_base_url("https://example.com:8080/api") == "https://example.com:8080"
+        assert handler.get_base_url("http://localhost:3000/dev") == "http://localhost:3000"
+        
+        # Complex cases
+        assert handler.get_base_url("https://user:pass@example.com/path") == "https://user:pass@example.com"
+        
+        # Edge cases - malformed URLs should return original
+        assert handler.get_base_url("not-a-url") == "not-a-url"
+        assert handler.get_base_url("") == ""
+        assert handler.get_base_url("ftp://example.com/file") == "ftp://example.com"
+        
+        # Missing scheme or netloc
+        assert handler.get_base_url("//example.com/path") == "//example.com/path"  # Should return original
+        assert handler.get_base_url("/path/to/resource") == "/path/to/resource"  # Should return original

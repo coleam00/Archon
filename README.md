@@ -113,7 +113,7 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
 
 Once everything is running:
 
-1. **Test Web Crawling**: Go to http://localhost:3737 → Knowledge Base → "Crawl Website" → Enter a doc URL (such as https://ai.pydantic.dev/llms-full.txt)
+1. **Test Web Crawling**: Go to http://localhost:3737 → Knowledge Base → "Crawl Website" → Enter a doc URL (such as https://ai.pydantic.dev/llms.txt)
 2. **Test Document Upload**: Knowledge Base → Upload a PDF
 3. **Test Projects**: Projects → Create a new project and add tasks
 4. **Integrate with your AI coding assistant**: MCP Dashboard → Copy connection config for your AI coding assistant 
@@ -204,12 +204,13 @@ The reset script safely removes all tables, functions, triggers, and policies wi
 
 ### Core Services
 
-| Service            | Container Name | Default URL           | Purpose                           |
-| ------------------ | -------------- | --------------------- | --------------------------------- |
-| **Web Interface**  | archon-ui      | http://localhost:3737 | Main dashboard and controls       |
-| **API Service**    | archon-server  | http://localhost:8181 | Web crawling, document processing |
-| **MCP Server**     | archon-mcp     | http://localhost:8051 | Model Context Protocol interface  |
-| **Agents Service** | archon-agents  | http://localhost:8052 | AI/ML operations, reranking       |
+| Service                    | Container Name             | Default URL           | Purpose                                    |
+| -------------------------- | -------------------------- | --------------------- | ------------------------------------------ |
+| **Web Interface**          | archon-ui                  | http://localhost:3737 | Main dashboard and controls                |
+| **API Service**            | archon-server              | http://localhost:8181 | Web crawling, document processing          |
+| **MCP Server**             | archon-mcp                 | http://localhost:8051 | Model Context Protocol interface           |
+| **Agents Service**         | archon-agents              | http://localhost:8052 | AI/ML operations, reranking                |
+| **Agent Work Orders** *(optional)* | archon-agent-work-orders | http://localhost:8053 | Workflow execution with Claude Code CLI    |  
 
 ## Upgrading
 
@@ -293,12 +294,13 @@ Archon uses true microservices architecture with clear separation of concerns:
 
 ### Service Responsibilities
 
-| Service        | Location             | Purpose                      | Key Features                                                       |
-| -------------- | -------------------- | ---------------------------- | ------------------------------------------------------------------ |
-| **Frontend**   | `archon-ui-main/`    | Web interface and dashboard  | React, TypeScript, TailwindCSS, Socket.IO client                   |
-| **Server**     | `python/src/server/` | Core business logic and APIs | FastAPI, service layer, Socket.IO broadcasts, all ML/AI operations |
-| **MCP Server** | `python/src/mcp/`    | MCP protocol interface       | Lightweight HTTP wrapper, MCP tools, session management            |
-| **Agents**     | `python/src/agents/` | PydanticAI agent hosting     | Document and RAG agents, streaming responses                       |
+| Service                  | Location                       | Purpose                          | Key Features                                                       |
+| ------------------------ | ------------------------------ | -------------------------------- | ------------------------------------------------------------------ |
+| **Frontend**             | `archon-ui-main/`              | Web interface and dashboard      | React, TypeScript, TailwindCSS, Socket.IO client                   |
+| **Server**               | `python/src/server/`           | Core business logic and APIs     | FastAPI, service layer, Socket.IO broadcasts, all ML/AI operations |
+| **MCP Server**           | `python/src/mcp/`              | MCP protocol interface           | Lightweight HTTP wrapper, MCP tools, session management            |
+| **Agents**               | `python/src/agents/`           | PydanticAI agent hosting         | Document and RAG agents, streaming responses                       |
+| **Agent Work Orders** *(optional)* | `python/src/agent_work_orders/` | Workflow execution engine | Claude Code CLI automation, repository management, SSE updates |
 
 ### Communication Patterns
 
@@ -321,8 +323,8 @@ By default, Archon services run on the following ports:
 - **archon-ui**: 3737
 - **archon-server**: 8181
 - **archon-mcp**: 8051
-- **archon-agents**: 8052
-- **archon-docs**: 3838 (optional)
+- **archon-agents**: 8052 (optional)
+- **archon-agent-work-orders**: 8053 (optional)
 
 ### Changing Ports
 
@@ -334,7 +336,7 @@ ARCHON_UI_PORT=3737
 ARCHON_SERVER_PORT=8181
 ARCHON_MCP_PORT=8051
 ARCHON_AGENTS_PORT=8052
-ARCHON_DOCS_PORT=3838
+AGENT_WORK_ORDERS_PORT=8053
 ```
 
 Example: Running on different ports:

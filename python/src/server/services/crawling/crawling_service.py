@@ -11,6 +11,8 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any, Optional
 
+import tldextract
+
 from ...config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
 from ...utils import get_supabase_client
 from ...utils.progress.progress_tracker import ProgressTracker
@@ -18,12 +20,13 @@ from ..credential_service import credential_service
 
 # Import strategies
 # Import operations
+from .discovery_service import DiscoveryService
 from .document_storage_operations import DocumentStorageOperations
-from .page_storage_operations import PageStorageOperations
 from .helpers.site_config import SiteConfig
 
 # Import helpers
 from .helpers.url_handler import URLHandler
+from .page_storage_operations import PageStorageOperations
 from .progress_mapper import ProgressMapper
 from .strategies.batch import BatchCrawlStrategy
 from .strategies.recursive import RecursiveCrawlStrategy
@@ -35,6 +38,34 @@ logger = get_logger(__name__)
 # Global registry to track active orchestration services for cancellation support
 _active_orchestrations: dict[str, "CrawlingService"] = {}
 _orchestration_lock: asyncio.Lock | None = None
+
+
+def get_root_domain(host: str) -> str:
+    """
+    Extract the root domain from a hostname using tldextract.
+    Handles multi-part public suffixes correctly (e.g., .co.uk, .com.au).
+
+    Args:
+        host: Hostname to extract root domain from
+
+    Returns:
+        Root domain (domain + suffix) or original host if extraction fails
+
+    Examples:
+        - "docs.example.com" -> "example.com"
+        - "api.example.co.uk" -> "example.co.uk"
+        - "localhost" -> "localhost"
+    """
+    try:
+        extracted = tldextract.extract(host)
+        # Return domain.suffix if both are present
+        if extracted.domain and extracted.suffix:
+            return f"{extracted.domain}.{extracted.suffix}"
+        # Fallback to original host if extraction yields no domain or suffix
+        return host
+    except Exception:
+        # If extraction fails, return original host
+        return host
 
 
 def _ensure_orchestration_lock() -> asyncio.Lock:
@@ -99,6 +130,7 @@ class CrawlingService:
 
         # Initialize operations
         self.doc_storage_ops = DocumentStorageOperations(self.supabase_client)
+        self.discovery_service = DiscoveryService()
         self.page_storage_ops = PageStorageOperations(self.supabase_client)
 
         # Track progress state across all stages to prevent UI resets
@@ -196,13 +228,16 @@ class CrawlingService:
         )
 
     async def crawl_markdown_file(
-        self, url: str, progress_callback: Callable[[str, int, str], Awaitable[None]] | None = None
+        self, url: str, progress_callback: Callable[[str, int, str], Awaitable[None]] | None = None,
+        start_progress: int = 10, end_progress: int = 20
     ) -> list[dict[str, Any]]:
         """Crawl a .txt or markdown file."""
         return await self.single_page_strategy.crawl_markdown_file(
             url,
             self.url_handler.transform_github_url,
             progress_callback,
+            start_progress,
+            end_progress,
         )
 
     def parse_sitemap(self, sitemap_url: str) -> list[str]:
@@ -351,15 +386,102 @@ class CrawlingService:
             # Check for cancellation before proceeding
             self._check_cancellation()
 
-            # Analyzing stage - report initial page count (at least 1)
-            await update_mapped_progress(
-                "analyzing", 50, f"Analyzing URL type for {url}",
-                total_pages=1,  # We know we have at least the start URL
-                processed_pages=0
+            # Discovery phase - find the single best related file
+            discovered_urls = []
+            # Skip discovery if the URL itself is already a discovery target (sitemap, llms file, etc.)
+            is_already_discovery_target = (
+                self.url_handler.is_sitemap(url) or
+                self.url_handler.is_llms_variant(url) or
+                self.url_handler.is_robots_txt(url) or
+                self.url_handler.is_well_known_file(url) or
+                self.url_handler.is_txt(url)  # Also skip for any .txt file that user provides directly
             )
 
-            # Detect URL type and perform crawl
-            crawl_results, crawl_type = await self._crawl_by_url_type(url, request)
+            if is_already_discovery_target:
+                safe_logfire_info(f"Skipping discovery - URL is already a discovery target file: {url}")
+
+            if request.get("auto_discovery", True) and not is_already_discovery_target:  # Default enabled, but skip if already a discovery file
+                await update_mapped_progress(
+                    "discovery", 25, f"Discovering best related file for {url}", current_url=url
+                )
+                try:
+                    # Offload potential sync I/O to avoid blocking the event loop
+                    discovered_file = await asyncio.to_thread(self.discovery_service.discover_files, url)
+
+                    # Add the single best discovered file to crawl list
+                    if discovered_file:
+                        safe_logfire_info(f"Discovery found file: {discovered_file}")
+                        # Filter through is_binary_file() check like existing code
+                        if not self.url_handler.is_binary_file(discovered_file):
+                            discovered_urls.append(discovered_file)
+                            safe_logfire_info(f"Adding discovered file to crawl: {discovered_file}")
+
+                            # Determine file type for user feedback
+                            discovered_file_type = "unknown"
+                            if self.url_handler.is_llms_variant(discovered_file):
+                                discovered_file_type = "llms.txt"
+                            elif self.url_handler.is_sitemap(discovered_file):
+                                discovered_file_type = "sitemap"
+                            elif self.url_handler.is_robots_txt(discovered_file):
+                                discovered_file_type = "robots.txt"
+
+                            await update_mapped_progress(
+                                "discovery", 100,
+                                f"Discovery completed: found {discovered_file_type} file",
+                                current_url=url,
+                                discovered_file=discovered_file,
+                                discovered_file_type=discovered_file_type
+                            )
+                        else:
+                            safe_logfire_info(f"Skipping binary file: {discovered_file}")
+                    else:
+                        safe_logfire_info(f"Discovery found no files for {url}")
+                        await update_mapped_progress(
+                            "discovery", 100,
+                            "Discovery completed: no special files found, will crawl main URL",
+                            current_url=url
+                        )
+
+                except Exception as e:
+                    safe_logfire_error(f"Discovery phase failed: {e}")
+                    # Continue with regular crawl even if discovery fails
+                    await update_mapped_progress(
+                        "discovery", 100, "Discovery phase failed, continuing with regular crawl", current_url=url
+                    )
+
+            # Analyzing stage - determine what to crawl
+            if discovered_urls:
+                # Discovery found a file - crawl ONLY the discovered file, not the main URL
+                total_urls_to_crawl = len(discovered_urls)
+                await update_mapped_progress(
+                    "analyzing", 50, f"Analyzing discovered file: {discovered_urls[0]}",
+                    total_pages=total_urls_to_crawl,
+                    processed_pages=0
+                )
+
+                # Crawl only the discovered file with discovery context
+                discovered_url = discovered_urls[0]
+                safe_logfire_info(f"Crawling discovered file instead of main URL: {discovered_url}")
+
+                # Mark this as a discovery target for domain filtering
+                discovery_request = request.copy()
+                discovery_request["is_discovery_target"] = True
+                discovery_request["original_domain"] = self.url_handler.get_base_url(discovered_url)
+
+                crawl_results, crawl_type = await self._crawl_by_url_type(discovered_url, discovery_request)
+
+            else:
+                # No discovery - crawl the main URL normally
+                total_urls_to_crawl = 1
+                await update_mapped_progress(
+                    "analyzing", 50, f"Analyzing URL type for {url}",
+                    total_pages=total_urls_to_crawl,
+                    processed_pages=0
+                )
+
+                # Crawl the main URL
+                safe_logfire_info(f"No discovery file found, crawling main URL: {url}")
+                crawl_results, crawl_type = await self._crawl_by_url_type(url, request)
 
             # Update progress tracker with crawl type
             if self.progress_tracker and crawl_type:
@@ -531,7 +653,7 @@ class CrawlingService:
                     logger.error("Code extraction failed, continuing crawl without code examples", exc_info=True)
                     safe_logfire_error(f"Code extraction failed | error={e}")
                     code_examples_count = 0
-                    
+
                     # Report code extraction failure to progress tracker
                     if self.progress_tracker:
                         await self.progress_tracker.update(
@@ -628,6 +750,66 @@ class CrawlingService:
                     f"Unregistered orchestration service on error | progress_id={self.progress_id}"
                 )
 
+    def _is_same_domain(self, url: str, base_domain: str) -> bool:
+        """
+        Check if a URL belongs to the same domain as the base domain.
+
+        Args:
+            url: URL to check
+            base_domain: Base domain URL to compare against
+
+        Returns:
+            True if the URL is from the same domain
+        """
+        try:
+            from urllib.parse import urlparse
+            u, b = urlparse(url), urlparse(base_domain)
+            url_host = (u.hostname or "").lower()
+            base_host = (b.hostname or "").lower()
+            return bool(url_host) and url_host == base_host
+        except Exception:
+            # If parsing fails, be conservative and exclude the URL
+            return False
+
+    def _is_same_domain_or_subdomain(self, url: str, base_domain: str) -> bool:
+        """
+        Check if a URL belongs to the same root domain or subdomain.
+
+        Examples:
+            - docs.supabase.com matches supabase.com (subdomain)
+            - api.supabase.com matches supabase.com (subdomain)
+            - supabase.com matches supabase.com (exact match)
+            - external.com does NOT match supabase.com
+
+        Args:
+            url: URL to check
+            base_domain: Base domain URL to compare against
+
+        Returns:
+            True if the URL is from the same root domain or subdomain
+        """
+        try:
+            from urllib.parse import urlparse
+            u, b = urlparse(url), urlparse(base_domain)
+            url_host = (u.hostname or "").lower()
+            base_host = (b.hostname or "").lower()
+
+            if not url_host or not base_host:
+                return False
+
+            # Exact match
+            if url_host == base_host:
+                return True
+
+            # Check if url_host is a subdomain of base_host using tldextract
+            url_root = get_root_domain(url_host)
+            base_root = get_root_domain(base_host)
+
+            return url_root == base_root
+        except Exception:
+            # If parsing fails, be conservative and exclude the URL
+            return False
+
     def _is_self_link(self, link: str, base_url: str) -> bool:
         """
         Check if a link is a self-referential link to the base URL.
@@ -700,6 +882,63 @@ class CrawlingService:
             if crawl_results and len(crawl_results) > 0:
                 content = crawl_results[0].get('markdown', '')
                 if self.url_handler.is_link_collection_file(url, content):
+                    # If this file was selected by discovery, check if it's an llms.txt file
+                    if request.get("is_discovery_target"):
+                        # Check if this is an llms.txt file (not sitemap or other discovery targets)
+                        is_llms_file = self.url_handler.is_llms_variant(url)
+
+                        if is_llms_file:
+                            logger.info(f"Discovery llms.txt mode: following ALL same-domain links from {url}")
+
+                            # Extract all links from the file
+                            extracted_links_with_text = self.url_handler.extract_markdown_links_with_text(content, url)
+
+                            # Filter for same-domain links (all types, not just llms.txt)
+                            same_domain_links = []
+                            if extracted_links_with_text:
+                                original_domain = request.get("original_domain")
+                                if original_domain:
+                                    for link, text in extracted_links_with_text:
+                                        # Check same domain/subdomain for ALL links
+                                        if self._is_same_domain_or_subdomain(link, original_domain):
+                                            same_domain_links.append((link, text))
+                                            logger.debug(f"Found same-domain link: {link}")
+
+                            if same_domain_links:
+                                # Build mapping and extract just URLs
+                                url_to_link_text = dict(same_domain_links)
+                                extracted_urls = [link for link, _ in same_domain_links]
+
+                                logger.info(f"Following {len(extracted_urls)} same-domain links from llms.txt")
+
+                                # Notify user about linked files being crawled
+                                await update_crawl_progress(
+                                    60,  # 60% of crawling stage
+                                    f"Found {len(extracted_urls)} links in llms.txt, crawling them now...",
+                                    crawl_type="llms_txt_linked_files",
+                                    linked_files=extracted_urls
+                                )
+
+                                # Crawl all same-domain links from llms.txt (no recursion, just one level)
+                                batch_results = await self.crawl_batch_with_progress(
+                                    extracted_urls,
+                                    max_concurrent=request.get('max_concurrent'),
+                                    progress_callback=await self._create_crawl_progress_callback("crawling"),
+                                    link_text_fallbacks=url_to_link_text,
+                                )
+
+                                # Combine original llms.txt with linked pages
+                                crawl_results.extend(batch_results)
+                                crawl_type = "llms_txt_with_linked_pages"
+                                logger.info(f"llms.txt crawling completed: {len(crawl_results)} total pages (1 llms.txt + {len(batch_results)} linked pages)")
+                                return crawl_results, crawl_type
+
+                        # For non-llms.txt discovery targets (sitemaps, robots.txt), keep single-file mode
+                        logger.info(f"Discovery single-file mode: skipping link extraction for {url}")
+                        crawl_type = "discovery_single_file"
+                        logger.info(f"Discovery file crawling completed: {len(crawl_results)} result")
+                        return crawl_results, crawl_type
+
                     # Extract links WITH text from the content
                     extracted_links_with_text = self.url_handler.extract_markdown_links_with_text(content, url)
 
@@ -714,6 +953,19 @@ class CrawlingService:
                         if self_filtered_count > 0:
                             logger.info(f"Filtered out {self_filtered_count} self-referential links from {original_count} extracted links")
 
+                    # For discovery targets, only follow same-domain links
+                    if extracted_links_with_text and request.get("is_discovery_target"):
+                        original_domain = request.get("original_domain")
+                        if original_domain:
+                            original_count = len(extracted_links_with_text)
+                            extracted_links_with_text = [
+                                (link, text) for link, text in extracted_links_with_text
+                                if self._is_same_domain(link, original_domain)
+                            ]
+                            domain_filtered_count = original_count - len(extracted_links_with_text)
+                            if domain_filtered_count > 0:
+                                safe_logfire_info(f"Discovery mode: filtered out {domain_filtered_count} external links, keeping {len(extracted_links_with_text)} same-domain links")
+
                     # Filter out binary files (PDFs, images, archives, etc.) to avoid wasteful crawling
                     if extracted_links_with_text:
                         original_count = len(extracted_links_with_text)
@@ -724,26 +976,39 @@ class CrawlingService:
 
                     if extracted_links_with_text:
                         # Build mapping of URL -> link text for title fallback
-                        url_to_link_text = {link: text for link, text in extracted_links_with_text}
+                        url_to_link_text = dict(extracted_links_with_text)
                         extracted_links = [link for link, _ in extracted_links_with_text]
 
-                        # Crawl the extracted links using batch crawling
-                        logger.info(f"Crawling {len(extracted_links)} extracted links from {url}")
-                        batch_results = await self.crawl_batch_with_progress(
-                            extracted_links,
-                            max_concurrent=request.get('max_concurrent'),  # None -> use DB settings
-                            progress_callback=await self._create_crawl_progress_callback("crawling"),
-                            link_text_fallbacks=url_to_link_text,  # Pass link text for title fallback
-                        )
+                        # For discovery targets, respect max_depth for same-domain links
+                        max_depth = request.get('max_depth', 2) if request.get("is_discovery_target") else request.get('max_depth', 1)
+
+                        if max_depth > 1 and request.get("is_discovery_target"):
+                            # Use recursive crawling to respect depth limit for same-domain links
+                            logger.info(f"Crawling {len(extracted_links)} same-domain links with max_depth={max_depth-1}")
+                            batch_results = await self.crawl_recursive_with_progress(
+                                extracted_links,
+                                max_depth=max_depth - 1,  # Reduce depth since we're already 1 level deep
+                                max_concurrent=request.get('max_concurrent'),
+                                progress_callback=await self._create_crawl_progress_callback("crawling"),
+                            )
+                        else:
+                            # Use normal batch crawling (with link text fallbacks)
+                            logger.info(f"Crawling {len(extracted_links)} extracted links from {url}")
+                            batch_results = await self.crawl_batch_with_progress(
+                                extracted_links,
+                                max_concurrent=request.get('max_concurrent'),  # None -> use DB settings
+                                progress_callback=await self._create_crawl_progress_callback("crawling"),
+                                link_text_fallbacks=url_to_link_text,  # Pass link text for title fallback
+                            )
 
                         # Combine original text file results with batch results
                         crawl_results.extend(batch_results)
                         crawl_type = "link_collection_with_crawled_links"
 
                         logger.info(f"Link collection crawling completed: {len(crawl_results)} total results (1 text file + {len(batch_results)} extracted links)")
-                    else:
-                        logger.info(f"No valid links found in link collection file: {url}")
-                        logger.info(f"Text file crawling completed: {len(crawl_results)} results")
+                else:
+                    logger.info(f"No valid links found in link collection file: {url}")
+                    logger.info(f"Text file crawling completed: {len(crawl_results)} results")
 
         elif self.url_handler.is_sitemap(url):
             # Handle sitemaps
@@ -753,6 +1018,20 @@ class CrawlingService:
                 "Detected sitemap, parsing URLs...",
                 crawl_type=crawl_type
             )
+
+            # If this sitemap was selected by discovery, just return the sitemap itself (single-file mode)
+            if request.get("is_discovery_target"):
+                logger.info(f"Discovery single-file mode: returning sitemap itself without crawling URLs from {url}")
+                crawl_type = "discovery_sitemap"
+                # Return the sitemap file as the result
+                crawl_results = [{
+                    'url': url,
+                    'markdown': f"# Sitemap: {url}\n\nThis is a sitemap file discovered and returned in single-file mode.",
+                    'title': f"Sitemap - {self.url_handler.extract_display_name(url)}",
+                    'crawl_type': crawl_type
+                }]
+                return crawl_results, crawl_type
+
             sitemap_urls = self.parse_sitemap(url)
 
             if sitemap_urls:

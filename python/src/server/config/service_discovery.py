@@ -32,7 +32,9 @@ class ServiceDiscovery:
         server_port = os.getenv("ARCHON_SERVER_PORT")
         mcp_port = os.getenv("ARCHON_MCP_PORT")
         agents_port = os.getenv("ARCHON_AGENTS_PORT")
+        agent_work_orders_port = os.getenv("AGENT_WORK_ORDERS_PORT")
 
+        # Required ports (core services)
         if not server_port:
             raise ValueError(
                 "ARCHON_SERVER_PORT environment variable is required. "
@@ -52,10 +54,13 @@ class ServiceDiscovery:
                 "Default value: 8052"
             )
 
+        # Optional ports (agent_work_orders is an optional feature)
+        # Store None if not configured to indicate feature is unavailable
         self.DEFAULT_PORTS = {
             "api": int(server_port),
             "mcp": int(mcp_port),
             "agents": int(agents_port),
+            "agent_work_orders": int(agent_work_orders_port) if agent_work_orders_port else None,
         }
 
         self.environment = self._detect_environment()
@@ -66,9 +71,11 @@ class ServiceDiscovery:
         "api": "archon-server",
         "mcp": "archon-mcp",
         "agents": "archon-agents",
+        "agent_work_orders": "archon-agent-work-orders",
         "archon-server": "archon-server",
         "archon-mcp": "archon-mcp",
         "archon-agents": "archon-agents",
+        "archon-agent-work-orders": "archon-agent-work-orders",
     }
 
     @staticmethod
@@ -81,7 +88,20 @@ class ServiceDiscovery:
         # Default to local development
         return Environment.LOCAL
 
-    def get_service_url(self, service: str, protocol: str = "http") -> str:
+    def is_service_available(self, service: str) -> bool:
+        """
+        Check if a service is available (configured).
+
+        Args:
+            service: Service name (e.g., "api", "mcp", "agents", "agent_work_orders")
+
+        Returns:
+            True if service is configured, False otherwise
+        """
+        port = self.DEFAULT_PORTS.get(service)
+        return port is not None
+
+    def get_service_url(self, service: str, protocol: str = "http") -> str | None:
         """
         Get the URL for a service based on the current environment.
 
@@ -90,7 +110,7 @@ class ServiceDiscovery:
             protocol: Protocol to use (default: "http")
 
         Returns:
-            Full service URL (e.g., "http://archon-api:8080")
+            Full service URL (e.g., "http://archon-api:8080") or None if service not configured
         """
         cache_key = f"{protocol}://{service}"
         if cache_key in self._cache:
@@ -99,10 +119,10 @@ class ServiceDiscovery:
         # Normalize service name
         service_name = self.SERVICE_NAMES.get(service, service)
         port = self.DEFAULT_PORTS.get(service)
+
+        # Return None for unavailable services (e.g., optional features not configured)
         if port is None:
-            raise ValueError(
-                f"Unknown service: {service}. Valid services are: {list(self.DEFAULT_PORTS.keys())}"
-            )
+            return None
 
         if self.environment == Environment.DOCKER_COMPOSE:
             # Docker Compose uses service names directly
@@ -117,9 +137,16 @@ class ServiceDiscovery:
         self._cache[cache_key] = url
         return url
 
-    def get_service_host_port(self, service: str) -> tuple[str, int]:
-        """Get host and port separately for a service"""
+    def get_service_host_port(self, service: str) -> tuple[str | None, int]:
+        """
+        Get host and port separately for a service.
+
+        Returns:
+            Tuple of (hostname, port). Hostname is None if service not configured.
+        """
         url = self.get_service_url(service)
+        if url is None:
+            return None, 0
         parsed = urlparse(url)
         return parsed.hostname, parsed.port or 80
 
@@ -225,6 +252,29 @@ def get_agents_url() -> str:
     return get_discovery().get_service_url("agents")
 
 
+def get_agent_work_orders_url() -> str | None:
+    """
+    Get the Agent Work Orders service URL.
+
+    Returns:
+        Service URL or None if agent work orders feature is not configured.
+    """
+    return get_discovery().get_service_url("agent_work_orders")
+
+
+def is_service_available(service: str) -> bool:
+    """
+    Check if a service is configured and available.
+
+    Args:
+        service: Service name (e.g., "api", "mcp", "agents", "agent_work_orders")
+
+    Returns:
+        True if service is configured, False otherwise
+    """
+    return get_discovery().is_service_available(service)
+
+
 async def is_service_healthy(service: str) -> bool:
     """Check if a service is healthy"""
     return await get_discovery().health_check(service)
@@ -238,5 +288,7 @@ __all__ = [
     "get_api_url",
     "get_mcp_url",
     "get_agents_url",
+    "get_agent_work_orders_url",
+    "is_service_available",
     "is_service_healthy",
 ]
