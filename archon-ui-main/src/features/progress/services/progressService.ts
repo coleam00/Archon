@@ -27,7 +27,20 @@ export const progressService = {
    * These are operations with error/failed status that persist for 5 minutes
    */
   async listFailedOperations(): Promise<FailedOperationsResponse> {
-    // Request failed operations using include_failed parameter
-    return callAPIWithETag<FailedOperationsResponse>("/api/progress/?include_failed=true");
+    // Request all operations including failed ones
+    const response = await callAPIWithETag<FailedOperationsResponse>(
+      "/api/progress/?include_failed=true"
+    );
+
+    // Filter to only return operations with error or failed status
+    const failedOperations = response.operations.filter(
+      (op) => op.status === "error" || op.status === "failed"
+    );
+
+    return {
+      operations: failedOperations,
+      count: failedOperations.length,
+      timestamp: response.timestamp,
+    };
   },
 };
