@@ -1,0 +1,31 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv for package management
+RUN pip install --no-cache-dir uv
+
+# Copy dependency files
+COPY pyproject.toml uv.lock* ./
+
+# Install Python dependencies
+RUN uv pip install --system httpx fastapi uvicorn pydantic anthropic openai python-dotenv
+
+# Copy source code
+COPY src/jarvis ./src/jarvis
+COPY src/server/config ./src/server/config
+
+# Create directory for BMAD integration
+RUN mkdir -p /app/bmad-integration
+
+# Expose port
+EXPOSE 8055
+
+# Run JARVIS
+CMD ["python", "-m", "uvicorn", "src.jarvis.main:app", "--host", "0.0.0.0", "--port", "8055", "--reload"]

@@ -1,0 +1,66 @@
+{
+  "version": "1.0.0",
+  "description": "BMAD Agent Registry for JARVIS",
+  "total_agents": 3,
+  "agents": {
+    "nenya": {
+      "id": "nenya",
+      "name": "Nenya",
+      "role": "Product Manager",
+      "prompt_path": "/app/bmad-integration/agents/nenya.md",
+      "capabilities": [
+        "requirements analysis",
+        "stakeholder mapping",
+        "user stories",
+        "prioritization"
+      ],
+      "triggers": [
+        "requirements",
+        "stakeholders",
+        "user stories",
+        "prioritization",
+        "user needs"
+      ]
+    },
+    "vilya": {
+      "id": "vilya",
+      "name": "Vilya",
+      "role": "System Architect",
+      "prompt_path": "/app/bmad-integration/agents/vilya.md",
+      "capabilities": [
+        "system design",
+        "architecture patterns",
+        "tech stack decisions",
+        "scalability planning"
+      ],
+      "triggers": [
+        "architecture",
+        "design",
+        "tech stack",
+        "patterns",
+        "system",
+        "scalability"
+      ]
+    },
+    "narya": {
+      "id": "narya",
+      "name": "Narya",
+      "role": "Research Analyst",
+      "prompt_path": "/app/bmad-integration/agents/narya.md",
+      "capabilities": [
+        "research",
+        "competitive analysis",
+        "feasibility studies",
+        "market analysis"
+      ],
+      "triggers": [
+        "research",
+        "analyze",
+        "compare",
+        "feasibility",
+        "investigate",
+        "competitive"
+      ]
+    }
+  }
+}

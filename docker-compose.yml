@@ -204,7 +204,7 @@ services:
       retries: 3
       start_period: 40s
 
-  # Frontend
+  # Frontend (Archon Control Center)
   archon-frontend:
     build: ./archon-ui-main
     container_name: archon-ui
@@ -233,6 +233,59 @@ services:
     depends_on:
       archon-server:
         condition: service_healthy
+
+  # JARVIS Brain - Core Intelligence
+  jarvis-brain:
+    build:
+      context: ./python
+      dockerfile: Dockerfile.jarvis
+    container_name: jarvis-brain
+    ports:
+      - "${JARVIS_PORT:-8055}:8055"
+    environment:
+      - JARVIS_USER_NAME=${JARVIS_USER_NAME:-Sir}
+      - ARCHON_MCP_URL=http://archon-mcp:${ARCHON_MCP_PORT:-8051}
+      - ARCHON_SERVER_URL=http://archon-server:${ARCHON_SERVER_PORT:-8181}
+      - AGENT_WORK_ORDERS_URL=http://archon-agent-work-orders:${AGENT_WORK_ORDERS_PORT:-8053}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - JARVIS_PORT=8055
+    volumes:
+      - ./python/src/jarvis:/app/src/jarvis
+      - ./bmad-integration:/app/bmad-integration
+    networks:
+      - app-network
+    depends_on:
+      - archon-mcp
+      - archon-server
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8055/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # JARVIS Voice Interface
+  jarvis-voice:
+    build: ./jarvis-voice-ui
+    container_name: jarvis-voice
+    ports:
+      - "${JARVIS_VOICE_PORT:-3738}:3738"
+    environment:
+      - JARVIS_URL=http://jarvis-brain:8055
+      - ARCHON_DASHBOARD_URL=http://${HOST:-localhost}:${ARCHON_UI_PORT:-3737}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - JARVIS_VOICE_PORT=3738
+    networks:
+      - app-network
+    depends_on:
+      - jarvis-brain
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3738/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
 networks:
   app-network:
