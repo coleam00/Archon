@@ -28,3 +28,4 @@ UAT/
 
 # Local release notes testing
 release-notes-*.md
+.env.local
