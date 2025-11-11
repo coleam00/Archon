@@ -165,6 +165,25 @@ async def get_conversation_history(limit: int = 10):
     }
 
 
+@app.get("/api/cost-stats")
+async def get_cost_stats():
+    """
+    Get JARVIS cost and usage statistics.
+
+    Returns API call counts, cache statistics, and estimated costs.
+    Useful for monitoring API usage and optimizing costs.
+    """
+    if not jarvis:
+        raise HTTPException(status_code=503, detail="JARVIS not initialized")
+
+    stats = jarvis.get_cost_stats()
+    return {
+        "success": True,
+        "stats": stats,
+        "timestamp": datetime.now().isoformat()
+    }
+
+
 if __name__ == "__main__":
     port = int(os.getenv("JARVIS_PORT", "8055"))
     uvicorn.run(app, host="0.0.0.0", port=port)

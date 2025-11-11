@@ -3,13 +3,19 @@ JARVIS Brain - Core Intelligence
 
 The main orchestration and intelligence layer for JARVIS.
 Coordinates specialist agents, manages knowledge, and provides intelligent assistance.
+
+Phase 1.5 Enhancements:
+- Smart model selection (Haiku 4.5 for most tasks, Sonnet 4.5 for complex tasks)
+- Response caching to reduce API costs
+- Cost tracking and optimization
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -25,6 +31,7 @@ class Intent(BaseModel):
     type: str  # information, agent_task, system_control, knowledge_management, general
     details: str
     confidence: float
+    complexity: float = 0.5  # 0.0-1.0, determines which model to use
     suggested_agents: List[str] = []
     requires_knowledge: bool = False
 
@@ -39,6 +46,13 @@ class Ring(BaseModel):
     triggers: List[str]
 
 
+class CachedResponse(BaseModel):
+    """Cached API response."""
+    response: Any
+    timestamp: datetime
+    model: str
+
+
 class JARVIS:
     """
     JARVIS - Just A Rather Very Intelligent System
@@ -47,6 +61,11 @@ class JARVIS:
     Inspired by Tony Stark's AI assistant, JARVIS coordinates
     specialist agents, manages your knowledge base, and provides
     proactive assistance across all your development work.
+
+    Phase 1.5 Features:
+    - Cost-optimized model selection (Haiku 4.5 vs Sonnet 4.5)
+    - Response caching to reduce API calls
+    - Smart complexity detection
     """
 
     def __init__(self, user_name: str = None):
@@ -63,6 +82,20 @@ class JARVIS:
         self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
 
+        # Model Configuration (Cost Optimization)
+        self.default_model = os.getenv("JARVIS_DEFAULT_MODEL", "claude-3-5-haiku-20241022")
+        self.advanced_model = os.getenv("JARVIS_ADVANCED_MODEL", "claude-3-5-sonnet-20241022")
+        self.complexity_threshold = float(os.getenv("JARVIS_COMPLEXITY_THRESHOLD", "0.8"))
+        self.enable_cache = os.getenv("JARVIS_ENABLE_CACHE", "true").lower() == "true"
+
+        # Response Cache
+        self.cache: Dict[str, CachedResponse] = {}
+        self.cache_ttl = timedelta(hours=1)  # Cache responses for 1 hour
+
+        # Cost Tracking
+        self.api_calls: Dict[str, int] = {"haiku": 0, "sonnet": 0}
+        self.cache_hits = 0
+
         # State
         self.conversation_history: List[Dict] = []
         self.active_agents: List[str] = []
@@ -74,6 +107,10 @@ class JARVIS:
         self._load_rings()
 
         logger.info(f"JARVIS initialized for {self.user_name}")
+        logger.info(f"Default model: {self.default_model}")
+        logger.info(f"Advanced model: {self.advanced_model}")
+        logger.info(f"Complexity threshold: {self.complexity_threshold}")
+        logger.info(f"Cache enabled: {self.enable_cache}")
 
     def _load_rings(self):
         """Load BMAD agent registry."""
@@ -114,6 +151,89 @@ class JARVIS:
 
         logger.info(f"Loaded {len(self.rings)} specialist rings")
 
+    def _get_cache_key(self, prompt: str, model: str) -> str:
+        """Generate cache key for a prompt."""
+        content = f"{prompt}:{model}"
+        return hashlib.md5(content.encode()).hexdigest()
+
+    def _get_cached_response(self, cache_key: str) -> Optional[Any]:
+        """Get cached response if available and not expired."""
+        if not self.enable_cache:
+            return None
+
+        if cache_key in self.cache:
+            cached = self.cache[cache_key]
+            age = datetime.now() - cached.timestamp
+
+            if age < self.cache_ttl:
+                self.cache_hits += 1
+                logger.info(f"Cache hit! Age: {age.total_seconds():.1f}s (Total hits: {self.cache_hits})")
+                return cached.response
+            else:
+                # Expired, remove from cache
+                del self.cache[cache_key]
+                logger.info("Cache expired, fetching fresh response")
+
+        return None
+
+    def _cache_response(self, cache_key: str, response: Any, model: str):
+        """Cache a response."""
+        if self.enable_cache:
+            self.cache[cache_key] = CachedResponse(
+                response=response,
+                timestamp=datetime.now(),
+                model=model
+            )
+            logger.info(f"Cached response (total cached: {len(self.cache)})")
+
+    def _select_model(self, complexity: float) -> str:
+        """
+        Select the appropriate model based on task complexity.
+
+        Uses Haiku 4.5 for simple tasks (cheap, fast)
+        Uses Sonnet 4.5 for complex tasks (expensive, more capable)
+
+        Args:
+            complexity: Float from 0.0 (simple) to 1.0 (complex)
+
+        Returns:
+            Model identifier string
+        """
+        if complexity >= self.complexity_threshold:
+            model = self.advanced_model
+            self.api_calls["sonnet"] += 1
+            logger.info(f"Selected {model} for complex task (complexity: {complexity:.2f})")
+        else:
+            model = self.default_model
+            self.api_calls["haiku"] += 1
+            logger.info(f"Selected {model} for simple task (complexity: {complexity:.2f})")
+
+        return model
+
+    def get_cost_stats(self) -> Dict[str, Any]:
+        """Get cost and usage statistics."""
+        total_calls = self.api_calls["haiku"] + self.api_calls["sonnet"]
+
+        # Approximate costs (per million tokens)
+        # Average command: ~300 input, ~150 output
+        haiku_cost_per_call = (300 * 0.25 / 1_000_000) + (150 * 1.25 / 1_000_000)  # ~$0.000263
+        sonnet_cost_per_call = (300 * 3.0 / 1_000_000) + (150 * 15.0 / 1_000_000)  # ~$0.003150
+
+        estimated_cost = (
+            self.api_calls["haiku"] * haiku_cost_per_call +
+            self.api_calls["sonnet"] * sonnet_cost_per_call
+        )
+
+        return {
+            "total_api_calls": total_calls,
+            "haiku_calls": self.api_calls["haiku"],
+            "sonnet_calls": self.api_calls["sonnet"],
+            "cache_hits": self.cache_hits,
+            "cache_size": len(self.cache),
+            "estimated_cost_usd": round(estimated_cost, 4),
+            "haiku_percentage": round(self.api_calls["haiku"] / total_calls * 100, 1) if total_calls > 0 else 0
+        }
+
     async def process_command(self, text: str, context: Optional[Dict] = None) -> Dict:
         """
         Process a natural language command from the user.
@@ -141,7 +261,7 @@ class JARVIS:
         try:
             # Step 1: Interpret intent
             intent = await self._interpret_intent(text)
-            logger.info(f"Intent classified as: {intent.type} (confidence: {intent.confidence})")
+            logger.info(f"Intent classified as: {intent.type} (confidence: {intent.confidence}, complexity: {intent.complexity:.2f})")
 
             # Step 2: Route to appropriate handler
             if intent.type == "information":
@@ -156,12 +276,18 @@ class JARVIS:
             # Store response in history
             conversation_entry["assistant"] = response
             conversation_entry["intent"] = intent.type
+            conversation_entry["complexity"] = intent.complexity
+
+            # Get cost stats
+            cost_stats = self.get_cost_stats()
 
             return {
                 "success": True,
                 "response": response,
                 "intent": intent.type,
                 "confidence": intent.confidence,
+                "complexity": intent.complexity,
+                "cost_stats": cost_stats,
                 "timestamp": datetime.now().isoformat()
             }
 
@@ -177,20 +303,31 @@ class JARVIS:
                 "timestamp": datetime.now().isoformat()
             }
 
-    async def _interpret_intent(self, text: str) -> Intent:
+    async def _call_claude_api(self, prompt: str, complexity: float = 0.5, max_tokens: int = 500) -> Optional[str]:
         """
-        Use Claude to interpret user intent.
+        Call Claude API with smart model selection and caching.
 
-        JARVIS uses Claude to understand what you want:
-        - Information retrieval ("What's the status...")
-        - Agent task ("Design a system...")
-        - Knowledge management ("Crawl the docs...")
-        - General conversation
+        Args:
+            prompt: The prompt to send to Claude
+            complexity: Task complexity (0.0-1.0)
+            max_tokens: Maximum tokens in response
+
+        Returns:
+            Response text or None if error
         """
         if not self.anthropic_api_key:
-            # Fallback to simple keyword matching if no API key
-            return self._simple_intent_classification(text)
+            return None
 
+        # Select model based on complexity
+        model = self._select_model(complexity)
+
+        # Check cache
+        cache_key = self._get_cache_key(prompt, model)
+        cached_response = self._get_cached_response(cache_key)
+        if cached_response:
+            return cached_response
+
+        # Make API call
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
@@ -201,11 +338,46 @@ class JARVIS:
                         "content-type": "application/json"
                     },
                     json={
-                        "model": "claude-3-5-sonnet-20241022",
-                        "max_tokens": 500,
+                        "model": model,
+                        "max_tokens": max_tokens,
                         "messages": [{
                             "role": "user",
-                            "content": f"""Analyze this command and determine the intent:
+                            "content": prompt
+                        }]
+                    }
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    content = result["content"][0]["text"]
+
+                    # Cache the response
+                    self._cache_response(cache_key, content, model)
+
+                    return content
+                else:
+                    logger.warning(f"Claude API error: {response.status_code}")
+                    return None
+
+        except Exception as e:
+            logger.error(f"Error calling Claude API: {e}")
+            return None
+
+    async def _interpret_intent(self, text: str) -> Intent:
+        """
+        Use Claude to interpret user intent.
+
+        JARVIS uses Claude (Haiku for speed) to understand what you want:
+        - Information retrieval ("What's the status...")
+        - Agent task ("Design a system...")
+        - Knowledge management ("Crawl the docs...")
+        - General conversation
+        """
+        if not self.anthropic_api_key:
+            # Fallback to simple keyword matching if no API key
+            return self._simple_intent_classification(text)
+
+        prompt = f"""Analyze this command and determine the intent:
 
 Command: "{text}"
 
@@ -219,6 +391,11 @@ Classify the intent as one of:
 3. knowledge_management - User wants to manage knowledge base (crawl, upload, search)
 4. general - Conversational, greeting, or unclear
 
+Also determine task complexity (0.0-1.0):
+- 0.0-0.3: Simple (greetings, status checks, basic queries)
+- 0.4-0.7: Moderate (information requests, simple analysis)
+- 0.8-1.0: Complex (multi-agent coordination, architecture decisions, technical analysis)
+
 Also suggest which specialist agents (rings) would be helpful:
 - nenya (Product Manager): requirements, user stories, stakeholder analysis
 - vilya (System Architect): architecture, design, tech stack decisions
@@ -229,34 +406,31 @@ Return ONLY valid JSON in this exact format:
   "type": "...",
   "details": "brief explanation",
   "confidence": 0.85,
+  "complexity": 0.5,
   "suggested_agents": ["agent_id"],
   "requires_knowledge": true/false
 }}"""
-                        }]
-                    }
-                )
 
-                if response.status_code == 200:
-                    result = response.json()
-                    content = result["content"][0]["text"]
+        # Intent classification is always low complexity - use Haiku
+        content = await self._call_claude_api(prompt, complexity=0.3, max_tokens=500)
 
-                    # Extract JSON from response
-                    # Claude might wrap it in markdown code blocks
-                    if "```json" in content:
-                        json_str = content.split("```json")[1].split("```")[0].strip()
-                    elif "```" in content:
-                        json_str = content.split("```")[1].split("```")[0].strip()
-                    else:
-                        json_str = content.strip()
-
-                    intent_data = json.loads(json_str)
-                    return Intent(**intent_data)
+        if content:
+            try:
+                # Extract JSON from response
+                # Claude might wrap it in markdown code blocks
+                if "```json" in content:
+                    json_str = content.split("```json")[1].split("```")[0].strip()
+                elif "```" in content:
+                    json_str = content.split("```")[1].split("```")[0].strip()
                 else:
-                    logger.warning(f"Claude API error: {response.status_code}")
-                    return self._simple_intent_classification(text)
+                    json_str = content.strip()
 
-        except Exception as e:
-            logger.error(f"Error interpreting intent: {e}")
+                intent_data = json.loads(json_str)
+                return Intent(**intent_data)
+            except Exception as e:
+                logger.error(f"Error parsing intent JSON: {e}")
+                return self._simple_intent_classification(text)
+        else:
             return self._simple_intent_classification(text)
 
     def _simple_intent_classification(self, text: str) -> Intent:
@@ -278,6 +452,7 @@ Return ONLY valid JSON in this exact format:
                 type="agent_task",
                 details="User wants specialist agent assistance",
                 confidence=0.7,
+                complexity=0.8,  # Agent tasks are complex
                 suggested_agents=suggested or ["vilya"],
                 requires_knowledge=True
             )
@@ -289,6 +464,7 @@ Return ONLY valid JSON in this exact format:
                 type="knowledge_management",
                 details="User wants to manage knowledge base",
                 confidence=0.8,
+                complexity=0.3,  # Simple task
                 suggested_agents=[],
                 requires_knowledge=False
             )
@@ -300,6 +476,7 @@ Return ONLY valid JSON in this exact format:
                 type="information",
                 details="User wants information",
                 confidence=0.7,
+                complexity=0.4,  # Moderate complexity
                 suggested_agents=[],
                 requires_knowledge=True
             )
@@ -309,6 +486,7 @@ Return ONLY valid JSON in this exact format:
             type="general",
             details="Conversational or unclear",
             confidence=0.5,
+            complexity=0.2,  # Very simple
             suggested_agents=[],
             requires_knowledge=False
         )
@@ -470,8 +648,13 @@ Return ONLY valid JSON in this exact format:
 
         # Status check
         if any(word in text_lower for word in ["status", "how are you", "systems"]):
+            cost_stats = self.get_cost_stats()
             return self.personality.custom_message(
-                "All systems operational, {user}. Ready to assist with your development work."
+                f"All systems operational, {{user}}. Ready to assist with your development work.\n\n"
+                f"**System Stats:**\n"
+                f"- API Calls: {cost_stats['total_api_calls']} ({cost_stats['haiku_percentage']}% Haiku)\n"
+                f"- Cache Hits: {cost_stats['cache_hits']}\n"
+                f"- Estimated Cost: ${cost_stats['estimated_cost_usd']:.4f}"
             )
 
         # Default
