@@ -83,8 +83,8 @@ class JARVIS:
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
 
         # Model Configuration (Cost Optimization)
-        self.default_model = os.getenv("JARVIS_DEFAULT_MODEL", "claude-3-5-haiku-20241022")
-        self.advanced_model = os.getenv("JARVIS_ADVANCED_MODEL", "claude-3-5-sonnet-20241022")
+        self.default_model = os.getenv("JARVIS_DEFAULT_MODEL", "claude-haiku-4-5-20251001")
+        self.advanced_model = os.getenv("JARVIS_ADVANCED_MODEL", "claude-sonnet-4-5-20250929")
         self.complexity_threshold = float(os.getenv("JARVIS_COMPLEXITY_THRESHOLD", "0.8"))
         self.enable_cache = os.getenv("JARVIS_ENABLE_CACHE", "true").lower() == "true"
 
@@ -216,7 +216,7 @@ class JARVIS:
 
         # Approximate costs (per million tokens)
         # Average command: ~300 input, ~150 output
-        haiku_cost_per_call = (300 * 0.25 / 1_000_000) + (150 * 1.25 / 1_000_000)  # ~$0.000263
+        haiku_cost_per_call = (300 * 1.0 / 1_000_000) + (150 * 5.0 / 1_000_000)  # ~$0.00105
         sonnet_cost_per_call = (300 * 3.0 / 1_000_000) + (150 * 15.0 / 1_000_000)  # ~$0.003150
 
         estimated_cost = (

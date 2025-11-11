@@ -79,8 +79,8 @@ All the same as [Archon](README.md), plus:
    JARVIS_USER_NAME=BMad  # Or your preferred name
 
    # Cost Optimization (Phase 1.5)
-   JARVIS_DEFAULT_MODEL=claude-3-5-haiku-20241022
-   JARVIS_ADVANCED_MODEL=claude-3-5-sonnet-20241022
+   JARVIS_DEFAULT_MODEL=claude-haiku-4-5-20251001
+   JARVIS_ADVANCED_MODEL=claude-sonnet-4-5-20250929
    JARVIS_COMPLEXITY_THRESHOLD=0.8
    JARVIS_ENABLE_CACHE=true
    ```
@@ -217,12 +217,12 @@ JARVIS Phase 1.5 introduces smart cost optimization to keep API costs minimal wh
 ### How It Works
 
 **Smart Model Selection**:
-- **Haiku 4.5** (default) - Fast and cheap for 90% of tasks
-  - Input: $0.25 per million tokens
-  - Output: $1.25 per million tokens
+- **Haiku 4.5** (`claude-haiku-4-5-20251001`) - Fast and cheap for 90% of tasks
+  - Input: $1 per million tokens
+  - Output: $5 per million tokens
   - Perfect for: greetings, status checks, intent classification
 
-- **Sonnet 4.5** (advanced) - Powerful for complex tasks
+- **Sonnet 4.5** (`claude-sonnet-4-5-20250929`) - Powerful for complex tasks
   - Input: $3 per million tokens
   - Output: $15 per million tokens
   - Used for: multi-agent coordination, technical analysis
@@ -242,10 +242,10 @@ JARVIS automatically analyzes each command and determines complexity:
 
 ```bash
 # Default model for most tasks (cheap, fast)
-JARVIS_DEFAULT_MODEL=claude-3-5-haiku-20241022
+JARVIS_DEFAULT_MODEL=claude-haiku-4-5-20251001
 
 # Advanced model for complex tasks (expensive, powerful)
-JARVIS_ADVANCED_MODEL=claude-3-5-sonnet-20241022
+JARVIS_ADVANCED_MODEL=claude-sonnet-4-5-20250929
 
 # Complexity threshold (0.0-1.0)
 # Higher = use Sonnet more often (more expensive)
@@ -258,23 +258,29 @@ JARVIS_ENABLE_CACHE=true
 
 ### Estimated Costs
 
-Based on typical usage patterns:
+Based on typical usage patterns (avg. 300 input tokens, 150 output tokens per command):
 
 **Light Use** (10 commands/day):
 - ~95% Haiku, ~5% Sonnet
-- **~$0.16/month**
+- Haiku: 9.5 calls/day × $0.00105 = $0.30/month
+- Sonnet: 0.5 calls/day × $0.00315 = $0.05/month
+- **Total: ~$0.35/month**
 
 **Moderate Use** (50 commands/day):
 - ~90% Haiku, ~10% Sonnet
-- **~$0.95/month**
+- Haiku: 45 calls/day × $0.00105 = $1.42/month
+- Sonnet: 5 calls/day × $0.00315 = $0.47/month
+- **Total: ~$1.89/month**
 
 **Heavy Use** (200 commands/day):
 - ~90% Haiku, ~10% Sonnet
-- **~$3.80/month**
+- Haiku: 180 calls/day × $0.00105 = $5.67/month
+- Sonnet: 20 calls/day × $0.00315 = $1.89/month
+- **Total: ~$7.56/month**
 
 **With Caching** (30% cache hit rate):
 - Reduces costs by ~30%
-- Heavy use: **~$2.66/month**
+- Heavy use: **~$5.29/month**
 
 ### Cost Monitoring
 
