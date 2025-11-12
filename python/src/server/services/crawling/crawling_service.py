@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 import tldextract
 
+from ...config.config import get_crawler_config
 from ...config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
 from ...utils import get_supabase_client
 from ...utils.progress.progress_tracker import ProgressTracker
@@ -28,6 +29,7 @@ from .helpers.site_config import SiteConfig
 from .helpers.url_handler import URLHandler
 from .page_storage_operations import PageStorageOperations
 from .progress_mapper import ProgressMapper
+from .robots_checker import RobotsChecker
 from .strategies.batch import BatchCrawlStrategy
 from .strategies.recursive import RecursiveCrawlStrategy
 from .strategies.single_page import SinglePageCrawlStrategy
@@ -133,6 +135,10 @@ class CrawlingService:
         self.discovery_service = DiscoveryService()
         self.page_storage_ops = PageStorageOperations(self.supabase_client)
 
+        # Initialize robots.txt checker
+        crawler_config = get_crawler_config()
+        self.robots_checker = RobotsChecker(crawler_config) if crawler_config.get("respect_robots") else None
+
         # Track progress state across all stages to prevent UI resets
         self.progress_state = {"progressId": self.progress_id} if self.progress_id else {}
         # Initialize progress mapper to prevent backwards jumps
@@ -161,6 +167,35 @@ class CrawlingService:
         """Check if cancelled and raise an exception if so."""
         if self._cancelled:
             raise asyncio.CancelledError("Crawl operation was cancelled by user")
+
+    async def _can_fetch_url(self, url: str) -> bool:
+        """
+        Check if URL is allowed by robots.txt.
+
+        Note: This method only validates URLs, it does NOT enforce crawl delays.
+        Crawl delays are handled by Crawl4AI's internal rate limiting and
+        concurrency controls. Enforcing delays during validation would cause
+        unacceptable performance (e.g., 540 seconds to validate 54 sitemap URLs).
+
+        Args:
+            url: URL to check
+
+        Returns:
+            True if crawling is allowed, False if blocked by robots.txt
+
+        Raises:
+            No exceptions - errors result in allowing the crawl (fail open)
+        """
+        if not self.robots_checker:
+            return True  # Robots checking disabled
+
+        try:
+            # Check if URL is allowed (no delay enforcement during validation)
+            return await self.robots_checker.can_fetch(url)
+        except Exception as e:
+            # Log error but allow crawl (fail open)
+            logger.warning(f"robots.txt check failed for {url}: {e}, allowing crawl")
+            return True
 
     async def _create_crawl_progress_callback(
         self, base_status: str
@@ -278,6 +313,7 @@ class CrawlingService:
             max_concurrent,
             progress_callback,
             self._check_cancellation,  # Pass cancellation check
+            self.robots_checker,  # Pass robots checker for URL validation
         )
 
     # Orchestration methods
@@ -909,6 +945,20 @@ class CrawlingService:
                                 url_to_link_text = dict(same_domain_links)
                                 extracted_urls = [link for link, _ in same_domain_links]
 
+                                # Filter URLs with robots.txt validation
+                                if self.robots_checker:
+                                    original_count = len(extracted_urls)
+                                    allowed_urls = []
+                                    for url_to_check in extracted_urls:
+                                        if await self._can_fetch_url(url_to_check):
+                                            allowed_urls.append(url_to_check)
+                                        else:
+                                            logger.info(f"Skipped (robots.txt): {url_to_check}")
+                                    extracted_urls = allowed_urls
+                                    robots_filtered = original_count - len(extracted_urls)
+                                    if robots_filtered > 0:
+                                        logger.info(f"Filtered out {robots_filtered} URLs by robots.txt from llms.txt links")
+
                                 logger.info(f"Following {len(extracted_urls)} same-domain links from llms.txt")
 
                                 # Notify user about linked files being crawled
@@ -979,6 +1029,20 @@ class CrawlingService:
                         url_to_link_text = dict(extracted_links_with_text)
                         extracted_links = [link for link, _ in extracted_links_with_text]
 
+                        # Filter URLs with robots.txt validation
+                        if self.robots_checker:
+                            original_count = len(extracted_links)
+                            allowed_links = []
+                            for url_to_check in extracted_links:
+                                if await self._can_fetch_url(url_to_check):
+                                    allowed_links.append(url_to_check)
+                                else:
+                                    logger.info(f"Skipped (robots.txt): {url_to_check}")
+                            extracted_links = allowed_links
+                            robots_filtered = original_count - len(extracted_links)
+                            if robots_filtered > 0:
+                                logger.info(f"Filtered out {robots_filtered} URLs by robots.txt from extracted links")
+
                         # For discovery targets, respect max_depth for same-domain links
                         max_depth = request.get('max_depth', 2) if request.get("is_discovery_target") else request.get('max_depth', 1)
 
@@ -1035,6 +1099,20 @@ class CrawlingService:
             sitemap_urls = self.parse_sitemap(url)
 
             if sitemap_urls:
+                # Filter URLs with robots.txt validation
+                if self.robots_checker:
+                    original_count = len(sitemap_urls)
+                    allowed_sitemap_urls = []
+                    for url_to_check in sitemap_urls:
+                        if await self._can_fetch_url(url_to_check):
+                            allowed_sitemap_urls.append(url_to_check)
+                        else:
+                            logger.info(f"Skipped (robots.txt): {url_to_check}")
+                    sitemap_urls = allowed_sitemap_urls
+                    robots_filtered = original_count - len(sitemap_urls)
+                    if robots_filtered > 0:
+                        logger.info(f"Filtered out {robots_filtered} URLs by robots.txt from sitemap")
+
                 # Update progress before starting batch crawl
                 await update_crawl_progress(
                     75,  # 75% of crawling stage
@@ -1068,6 +1146,15 @@ class CrawlingService:
             )
 
         return crawl_results, crawl_type
+
+    async def close(self) -> None:
+        """
+        Close resources and cleanup.
+
+        Note: robots_checker uses a shared HTTP client that is not closed per-instance.
+        This method is kept for API compatibility and future cleanup needs.
+        """
+        pass  # No per-instance cleanup needed currently
 
 
 # Alias for backward compatibility

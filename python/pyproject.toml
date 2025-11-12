@@ -39,7 +39,8 @@ server = [
     "python-multipart>=0.0.20",
     "watchfiles>=0.18",
     # Web crawling
-    "crawl4ai==0.7.4",
+    "crawl4ai==0.7.6",  # Updated from 0.7.4 for latest features and bug fixes (not required for robots.txt)
+    "protego>=0.3.1",  # robots.txt parser - 40% faster than stdlib, supports wildcards
     # Database and storage
     "supabase==2.15.1",
     "asyncpg>=0.29.0",
@@ -119,7 +120,8 @@ all = [
     "uvicorn>=0.24.0",
     "python-multipart>=0.0.20",
     "watchfiles>=0.18",
-    "crawl4ai==0.7.4",
+    "crawl4ai==0.7.6",
+    "protego>=0.3.1",
     "supabase==2.15.1",
     "asyncpg>=0.29.0",
     "openai==1.71.0",

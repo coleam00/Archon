@@ -61,8 +61,6 @@ class DiscoveryService:
         "llms-full.txt",     # Part of llms.txt spec - comprehensive content
         # Sitemap files (structural crawling guidance)
         "sitemap.xml",       # Universal standard for site structure
-        # Robots file (basic crawling rules)
-        "robots.txt",        # Universal standard for crawl directives
         # Well-known variants (alternative locations per RFC 8615)
         ".well-known/ai.txt",
         ".well-known/llms.txt",
