@@ -443,7 +443,7 @@ class CredentialService:
                 explicit_embedding_provider = rag_settings.get("EMBEDDING_PROVIDER")
 
                 # Validate that embedding provider actually supports embeddings
-                embedding_capable_providers = {"openai", "google", "ollama"}
+                embedding_capable_providers = {"openai", "google", "openrouter", "ollama"}
 
                 if (explicit_embedding_provider and
                     explicit_embedding_provider != "" and

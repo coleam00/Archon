@@ -66,6 +66,19 @@ def validate_openai_api_key(api_key: str) -> bool:
     return True
 
 
+def validate_openrouter_api_key(api_key: str) -> bool:
+    """Validate OpenRouter API key format."""
+    if not api_key:
+        raise ConfigurationError("OpenRouter API key cannot be empty")
+
+    if not api_key.startswith("sk-or-v1-"):
+        raise ConfigurationError(
+            "OpenRouter API key must start with 'sk-or-v1-'. " "Get your key at https://openrouter.ai/keys"
+        )
+
+    return True
+
+
 def validate_supabase_key(supabase_key: str) -> tuple[bool, str]:
     """Validate Supabase key type and return validation result.
 

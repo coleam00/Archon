@@ -554,12 +554,12 @@ async def _get_optimal_ollama_instance(instance_type: str | None = None,
                                        base_url_override: str | None = None) -> str:
     """
     Get the optimal Ollama instance URL based on configuration and health status.
-    
+
     Args:
         instance_type: Preferred instance type ('chat', 'embedding', 'both', or None)
         use_embedding_provider: Whether this is for embedding operations
         base_url_override: Override URL if specified
-        
+
     Returns:
         Best available Ollama instance URL
     """
@@ -655,8 +655,8 @@ async def get_embedding_model(provider: str | None = None) -> str:
             return "text-embedding-004"
         elif provider_name == "openrouter":
             # OpenRouter supports both OpenAI and Google embedding models
-            # Default to OpenAI's latest for compatibility
-            return "text-embedding-3-small"
+            # Model names MUST include provider prefix for OpenRouter API
+            return "openai/text-embedding-3-small"
         elif provider_name == "anthropic":
             # Anthropic supports OpenAI and Google embedding models through their API
             # Default to OpenAI's latest for compatibility
@@ -846,7 +846,7 @@ def _extract_reasoning_strings(value: Any) -> list[str]:
         text = value.strip()
         return [text] if text else []
 
-    if isinstance(value, (list, tuple, set)):
+    if isinstance(value, list | tuple | set):
         collected: list[str] = []
         for item in value:
             collected.extend(_extract_reasoning_strings(item))
@@ -1135,11 +1135,11 @@ def prepare_chat_completion_params(model: str, params: dict) -> dict:
 async def get_embedding_model_with_routing(provider: str | None = None, instance_url: str | None = None) -> tuple[str, str]:
     """
     Get the embedding model with intelligent routing for multi-instance setups.
-    
+
     Args:
         provider: Override provider selection
         instance_url: Specific instance URL to use
-        
+
     Returns:
         Tuple of (model_name, instance_url) for embedding operations
     """
@@ -1171,11 +1171,11 @@ async def get_embedding_model_with_routing(provider: str | None = None, instance
 async def validate_provider_instance(provider: str, instance_url: str | None = None) -> dict[str, any]:
     """
     Validate a provider instance and return health information.
-    
+
     Args:
         provider: Provider name (openai, ollama, google, etc.)
         instance_url: Instance URL for providers that support multiple instances
-        
+
     Returns:
         Dictionary with validation results and health status
     """

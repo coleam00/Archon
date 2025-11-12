@@ -15,7 +15,7 @@ import OllamaModelSelectionModal from './OllamaModelSelectionModal';
 type ProviderKey = 'openai' | 'google' | 'ollama' | 'anthropic' | 'grok' | 'openrouter';
 
 // Providers that support embedding models
-const EMBEDDING_CAPABLE_PROVIDERS: ProviderKey[] = ['openai', 'google', 'ollama'];
+const EMBEDDING_CAPABLE_PROVIDERS: ProviderKey[] = ['openai', 'google', 'openrouter', 'ollama'];
 
 interface ProviderModels {
   chatModel: string;
@@ -42,7 +42,7 @@ const getDefaultModels = (provider: ProviderKey): ProviderModels => {
     anthropic: 'text-embedding-3-small', // Fallback to OpenAI
     google: 'text-embedding-004',
     grok: 'text-embedding-3-small', // Fallback to OpenAI
-    openrouter: 'text-embedding-3-small',
+    openrouter: 'openai/text-embedding-3-small', // MUST include provider prefix for OpenRouter
     ollama: 'nomic-embed-text'
   };
 
@@ -1291,7 +1291,7 @@ const manualTestConnection = async (
             Select {activeSelection === 'chat' ? 'Chat' : 'Embedding'} Provider
           </label>
           <div className={`grid gap-3 mb-4 ${
-            activeSelection === 'chat' ? 'grid-cols-6' : 'grid-cols-3'
+            activeSelection === 'chat' ? 'grid-cols-6' : 'grid-cols-4'
           }`}>
             {[
               { key: 'openai', name: 'OpenAI', logo: '/img/OpenAI.png', color: 'green' },
