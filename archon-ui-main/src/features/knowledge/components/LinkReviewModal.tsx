@@ -11,6 +11,7 @@ import { Button, Input, Label } from "../../ui/primitives";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../ui/primitives/dialog";
 import { cn, glassCard } from "../../ui/primitives/styles";
 import type { LinkPreviewResponse, PreviewLink } from "../types";
+import { parseUrlPatterns } from "../utils";
 
 interface LinkReviewModalProps {
   open: boolean;
@@ -42,28 +43,6 @@ export const LinkReviewModal: React.FC<LinkReviewModalProps> = ({
   const [filteredLinks, setFilteredLinks] = useState<PreviewLink[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [isApplyingFilters, setIsApplyingFilters] = useState(false);
-
-  // Parse unified pattern string into separate include/exclude arrays.
-  // Patterns starting with ! are exclusions, others are inclusions.
-  // Example: "path1, !exclude1" -> { include: ["path1"], exclude: ["exclude1"] }
-  const parseUrlPatterns = (patterns: string): { include: string[]; exclude: string[] } => {
-    const include: string[] = [];
-    const exclude: string[] = [];
-
-    patterns
-      .split(",")
-      .map((p) => p.trim())
-      .filter((p) => p.length > 0)
-      .forEach((pattern) => {
-        if (pattern.startsWith("!")) {
-          exclude.push(pattern.substring(1).trim());
-        } else {
-          include.push(pattern);
-        }
-      });
-
-    return { include, exclude };
-  };
 
   // Initialize selected URLs when modal opens
   useEffect(() => {

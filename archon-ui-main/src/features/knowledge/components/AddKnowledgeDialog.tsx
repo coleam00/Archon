@@ -17,6 +17,7 @@ import { KnowledgeTypeSelector } from "./KnowledgeTypeSelector";
 import { LevelSelector } from "./LevelSelector";
 import { TagInput } from "./TagInput";
 import { LinkReviewModal } from "./LinkReviewModal";
+import { parseUrlPatterns } from "../utils";
 
 interface AddKnowledgeDialogProps {
   open: boolean;
@@ -97,30 +98,6 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
     setSelectedFile(null);
     setUploadType("technical");
     setUploadTags([]);
-  };
-
-  // Parse unified pattern string into separate include/exclude arrays.
-  // Patterns starting with ! are exclusions, others are inclusions.
-  // Example: "path1, path2, !exclude1" -> { include: ["path1", "path2"], exclude: ["exclude1"] }
-  const parseUrlPatterns = (patterns: string): { include: string[]; exclude: string[] } => {
-    const include: string[] = [];
-    const exclude: string[] = [];
-
-    patterns
-      .split(",")
-      .map((p) => p.trim())
-      .filter((p) => p.length > 0)
-      .forEach((pattern) => {
-        if (pattern.startsWith("!")) {
-          // Exclude pattern - remove the ! prefix
-          exclude.push(pattern.substring(1).trim());
-        } else {
-          // Include pattern
-          include.push(pattern);
-        }
-      });
-
-    return { include, exclude };
   };
 
   const handleCrawl = async () => {
