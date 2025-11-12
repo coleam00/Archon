@@ -42,6 +42,8 @@ class RecursiveCrawlStrategy:
         max_concurrent: int | None = None,
         progress_callback: Callable[..., Awaitable[None]] | None = None,
         cancellation_check: Callable[[], None] | None = None,
+        include_patterns: list[str] | None = None,
+        exclude_patterns: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Recursively crawl internal links from start URLs up to a maximum depth with progress reporting.
@@ -54,6 +56,8 @@ class RecursiveCrawlStrategy:
             max_concurrent: Maximum concurrent crawls
             progress_callback: Optional callback for progress updates
             cancellation_check: Optional function to check for cancellation
+            include_patterns: Optional list of glob patterns to include (e.g., ["**/en/**"])
+            exclude_patterns: Optional list of glob patterns to exclude (e.g., ["**/fr/**"])
 
         Returns:
             List of crawl results
@@ -165,6 +169,13 @@ class RecursiveCrawlStrategy:
         total_processed = 0
         total_discovered = len(current_urls)  # Track total URLs discovered (normalized & de-duped)
         cancelled = False
+
+        # Log pattern filtering configuration
+        if include_patterns or exclude_patterns:
+            logger.info(
+                f"Recursive crawl with glob filtering enabled | "
+                f"include={include_patterns} | exclude={exclude_patterns}"
+            )
 
         for depth in range(max_depth):
             # Check for cancellation at the start of each depth level
@@ -301,14 +312,31 @@ class RecursiveCrawlStrategy:
                         links = getattr(result, "links", {}) or {}
                         for link in links.get("internal", []):
                             next_url = normalize_url(link["href"])
-                            # Skip binary files and already visited URLs
+
+                            # Skip binary files
                             is_binary = self.url_handler.is_binary_file(next_url)
-                            if next_url not in visited and not is_binary:
-                                if next_url not in next_level_urls:
-                                    next_level_urls.add(next_url)
-                                    total_discovered += 1  # Increment when we discover a new URL
-                            elif is_binary:
+                            if is_binary:
                                 logger.debug(f"Skipping binary file from crawl queue: {next_url}")
+                                continue
+
+                            # Skip already visited URLs
+                            if next_url in visited:
+                                continue
+
+                            # Apply glob pattern filtering
+                            if include_patterns or exclude_patterns:
+                                if not self.url_handler.matches_glob_patterns(
+                                    next_url, include_patterns, exclude_patterns
+                                ):
+                                    logger.debug(
+                                        f"Skipping URL (glob filter) from crawl queue: {next_url}"
+                                    )
+                                    continue
+
+                            # Add to next level queue
+                            if next_url not in next_level_urls:
+                                next_level_urls.add(next_url)
+                                total_discovered += 1  # Increment when we discover a new URL
                     else:
                         logger.warning(
                             f"Failed to crawl {original_url}: {getattr(result, 'error_message', 'Unknown error')}"
