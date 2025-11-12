@@ -26,6 +26,7 @@ from pydantic import BaseModel
 # Import our PydanticAI agents
 from .document_agent import DocumentAgent
 from .rag_agent import RagAgent
+from .webdev_agent import WebDeveloperAgent
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -55,6 +56,7 @@ class AgentResponse(BaseModel):
 AVAILABLE_AGENTS = {
     "document": DocumentAgent,
     "rag": RagAgent,
+    "webdev": WebDeveloperAgent,
 }
 
 # Global credentials storage
@@ -104,7 +106,7 @@ async def fetch_credentials_from_server():
                 await asyncio.sleep(retry_delay)
             else:
                 logger.error(f"Failed to fetch credentials after {max_retries} attempts")
-                raise Exception("Could not fetch credentials from server")
+                raise Exception("Could not fetch credentials from server") from e
 
 
 # Lifespan context manager
@@ -227,6 +229,9 @@ async def stream_agent(agent_type: str, request: AgentRequest):
     async def generate() -> AsyncGenerator[str, None]:
         try:
             # Prepare dependencies based on agent type
+            from .base_agent import ArchonDependencies
+
+            deps: ArchonDependencies
             # Import dependency classes
             if agent_type == "rag":
                 from .rag_agent import RagDependencies
@@ -240,13 +245,21 @@ async def stream_agent(agent_type: str, request: AgentRequest):
                 from .document_agent import DocumentDependencies
 
                 deps = DocumentDependencies(
+                    project_id=request.context.get("project_id", "") if request.context else "",
+                    user_id=request.context.get("user_id") if request.context else None,
+                )
+            elif agent_type == "webdev":
+                from .webdev_agent import WebDevDependencies
+
+                deps = WebDevDependencies(
                     project_id=request.context.get("project_id") if request.context else None,
+                    file_path=request.context.get("file_path") if request.context else None,
+                    language=request.context.get("language") if request.context else None,
+                    framework=request.context.get("framework") if request.context else None,
                     user_id=request.context.get("user_id") if request.context else None,
                 )
             else:
                 # Default dependencies
-                from .base_agent import ArchonDependencies
-
                 deps = ArchonDependencies()
 
             # Use PydanticAI's run_stream method
