@@ -495,18 +495,37 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
       </DialogContent>
 
       {/* Link Review Modal */}
-      {showLinkReviewModal && previewData && (
-        <LinkReviewModal
-          open={showLinkReviewModal}
-          previewData={previewData}
-          initialUrlPatterns={urlPatterns}
-          onProceed={handleLinkReviewSubmit}
-          onCancel={() => {
-            setShowLinkReviewModal(false);
-            setPreviewData(null);
-          }}
-        />
-      )}
+      {showLinkReviewModal && previewData && (() => {
+        // Parse urlPatterns string into separate include/exclude arrays
+        const includePatterns: string[] = [];
+        const excludePatterns: string[] = [];
+
+        urlPatterns
+          .split(',')
+          .map(p => p.trim())
+          .filter(p => p.length > 0)
+          .forEach(pattern => {
+            if (pattern.startsWith('!')) {
+              excludePatterns.push(pattern.substring(1).trim());
+            } else {
+              includePatterns.push(pattern);
+            }
+          });
+
+        return (
+          <LinkReviewModal
+            open={showLinkReviewModal}
+            previewData={previewData}
+            initialIncludePatterns={includePatterns}
+            initialExcludePatterns={excludePatterns}
+            onProceed={handleLinkReviewSubmit}
+            onCancel={() => {
+              setShowLinkReviewModal(false);
+              setPreviewData(null);
+            }}
+          />
+        );
+      })()}
     </Dialog>
   );
 };

@@ -3,8 +3,10 @@
  * Displays links from link collections (llms.txt, sitemap.xml) for user review before crawling
  */
 
-import { CheckCircle2, Filter, XCircle } from "lucide-react";
+import { CheckCircle2, Filter, Loader2, XCircle } from "lucide-react";
 import { useState, useEffect } from "react";
+import { callAPIWithETag } from "@/features/shared/api/apiClient";
+import { useToast } from "@/features/shared/hooks/useToast";
 import { Button, Input, Label } from "../../ui/primitives";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../ui/primitives/dialog";
 import { cn, glassCard } from "../../ui/primitives/styles";
@@ -13,8 +15,8 @@ import type { LinkPreviewResponse, PreviewLink } from "../types";
 interface LinkReviewModalProps {
   open: boolean;
   previewData: LinkPreviewResponse | null;
-  initialIncludePatterns: string;
-  initialExcludePatterns: string;
+  initialIncludePatterns: string[];
+  initialExcludePatterns: string[];
   onProceed: (selectedUrls: string[]) => void;
   onCancel: () => void;
 }
@@ -27,11 +29,41 @@ export const LinkReviewModal: React.FC<LinkReviewModalProps> = ({
   onProceed,
   onCancel,
 }) => {
+  const { showToast } = useToast();
   const [selectedUrls, setSelectedUrls] = useState<Set<string>>(new Set());
-  const [includePatterns, setIncludePatterns] = useState(initialIncludePatterns);
-  const [excludePatterns, setExcludePatterns] = useState(initialExcludePatterns);
+
+  // Reconstruct unified pattern string from arrays
+  const initialUrlPatterns = [
+    ...initialIncludePatterns,
+    ...initialExcludePatterns.map(p => `!${p}`)
+  ].join(', ');
+
+  const [urlPatterns, setUrlPatterns] = useState(initialUrlPatterns);
   const [filteredLinks, setFilteredLinks] = useState<PreviewLink[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
+  const [isApplyingFilters, setIsApplyingFilters] = useState(false);
+
+  // Parse unified pattern string into separate include/exclude arrays.
+  // Patterns starting with ! are exclusions, others are inclusions.
+  // Example: "path1, !exclude1" -> { include: ["path1"], exclude: ["exclude1"] }
+  const parseUrlPatterns = (patterns: string): { include: string[]; exclude: string[] } => {
+    const include: string[] = [];
+    const exclude: string[] = [];
+
+    patterns
+      .split(",")
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0)
+      .forEach((pattern) => {
+        if (pattern.startsWith("!")) {
+          exclude.push(pattern.substring(1).trim());
+        } else {
+          include.push(pattern);
+        }
+      });
+
+    return { include, exclude };
+  };
 
   // Initialize selected URLs when modal opens
   useEffect(() => {
@@ -97,21 +129,15 @@ export const LinkReviewModal: React.FC<LinkReviewModalProps> = ({
   const handleApplyFilters = async () => {
     if (!previewData) return;
 
+    setIsApplyingFilters(true);
+
     try {
-      // Parse patterns
-      const includePatternArray = includePatterns
-        .split(",")
-        .map((p) => p.trim())
-        .filter((p) => p.length > 0);
-      const excludePatternArray = excludePatterns
-        .split(",")
-        .map((p) => p.trim())
-        .filter((p) => p.length > 0);
+      // Parse unified pattern string into include/exclude arrays
+      const { include: includePatternArray, exclude: excludePatternArray } = parseUrlPatterns(urlPatterns);
 
       // Re-fetch preview with new patterns
-      const response = await fetch("http://localhost:8181/api/crawl/preview-links", {
+      const updatedData = await callAPIWithETag<LinkPreviewResponse>("/crawl/preview-links", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           url: previewData.source_url,
           url_include_patterns: includePatternArray,
@@ -119,20 +145,21 @@ export const LinkReviewModal: React.FC<LinkReviewModalProps> = ({
         }),
       });
 
-      if (!response.ok) {
-        throw new Error("Failed to apply filters");
-      }
-
-      const updatedData = await response.json();
-
       // Update filtered links and auto-select matching ones
       setFilteredLinks(updatedData.links);
       const newSelection = new Set<string>(
         updatedData.links.filter((link: PreviewLink) => link.matches_filter).map((link: PreviewLink) => link.url)
       );
       setSelectedUrls(newSelection);
+
+      // Show success feedback
+      showToast(`Filters applied - ${newSelection.size} links match`, "success");
     } catch (error) {
       console.error("Failed to apply filters:", error);
+      const message = error instanceof Error ? error.message : "Failed to apply filters";
+      showToast(message, "error");
+    } finally {
+      setIsApplyingFilters(false);
     }
   };
 
@@ -147,7 +174,7 @@ export const LinkReviewModal: React.FC<LinkReviewModalProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onCancel()}>
-      <DialogContent className="sm:max-w-[800px] p-0 my-4" style={{ height: "90vh", maxHeight: "90vh" }}>
+      <DialogContent className="sm:max-w-[800px] p-0 my-4 h-[90vh] max-h-[90vh]">
         <div className="h-full flex flex-col">
           <div className="px-6 pt-4 pb-3 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
             <DialogHeader>
@@ -169,37 +196,37 @@ export const LinkReviewModal: React.FC<LinkReviewModalProps> = ({
                 <span className="text-sm font-medium text-gray-900 dark:text-white/90">Filter Patterns</span>
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div className="space-y-1">
-                  <Label htmlFor="modalInclude" className="text-xs">
-                    Include Patterns
-                  </Label>
-                  <Input
-                    id="modalInclude"
-                    value={includePatterns}
-                    onChange={(e) => setIncludePatterns(e.target.value)}
-                    placeholder="**/en/**"
-                    className="h-8 text-sm"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <Label htmlFor="modalExclude" className="text-xs">
-                    Exclude Patterns
-                  </Label>
-                  <Input
-                    id="modalExclude"
-                    value={excludePatterns}
-                    onChange={(e) => setExcludePatterns(e.target.value)}
-                    placeholder="**/fr/**, **/de/**"
-                    className="h-8 text-sm"
-                  />
-                </div>
+              <div className="space-y-1">
+                <Label htmlFor="modalPatterns" className="text-xs">
+                  URL Patterns (use ! to exclude, e.g., **/en/**, !**/api/**)
+                </Label>
+                <Input
+                  id="modalPatterns"
+                  value={urlPatterns}
+                  onChange={(e) => setUrlPatterns(e.target.value)}
+                  placeholder="**/en/**, **/docs/**, !**/api/**, !**/changelog/**"
+                  className="h-8 text-sm"
+                />
               </div>
 
-              <Button onClick={handleApplyFilters} variant="outline" size="sm" className="w-full h-8 text-xs">
-                <Filter className="w-3 h-3 mr-2" />
-                Apply Filters
+              <Button
+                onClick={handleApplyFilters}
+                variant="outline"
+                size="sm"
+                className="w-full h-8 text-xs"
+                disabled={isApplyingFilters}
+              >
+                {isApplyingFilters ? (
+                  <>
+                    <Loader2 className="w-3 h-3 mr-2 animate-spin" />
+                    Applying...
+                  </>
+                ) : (
+                  <>
+                    <Filter className="w-3 h-3 mr-2" />
+                    Apply Filters
+                  </>
+                )}
               </Button>
             </div>
 
@@ -225,6 +252,7 @@ export const LinkReviewModal: React.FC<LinkReviewModalProps> = ({
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-64 h-8 text-sm"
+                aria-label="Search links"
               />
             </div>
 
@@ -243,7 +271,10 @@ export const LinkReviewModal: React.FC<LinkReviewModalProps> = ({
                     <input
                       type="checkbox"
                       checked={selectedUrls.has(link.url)}
-                      onChange={() => handleToggleLink(link.url)}
+                      onChange={(e) => {
+                        e.stopPropagation(); // Prevent double-fire from parent div onClick
+                        handleToggleLink(link.url);
+                      }}
                       className="mt-1 h-4 w-4 text-cyan-600 focus:ring-cyan-500 border-gray-300 rounded"
                     />
 
