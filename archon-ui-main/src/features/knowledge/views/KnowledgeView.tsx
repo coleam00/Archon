@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useToast } from "@/features/shared/hooks/useToast";
 import { CrawlingProgress } from "../../progress/components/CrawlingProgress";
+import { FailedOperationsSection } from "../../progress/components/FailedOperationsSection";
 import type { ActiveOperation } from "../../progress/types";
 import { AddKnowledgeDialog } from "../components/AddKnowledgeDialog";
 import { KnowledgeHeader } from "../components/KnowledgeHeader";
@@ -148,6 +149,11 @@ export const KnowledgeView = () => {
             <CrawlingProgress onSwitchToBrowse={() => {}} />
           </div>
         )}
+
+        {/* Failed Operations - Show persistent error states */}
+        <div className="mb-6">
+          <FailedOperationsSection />
+        </div>
 
         {/* Knowledge Items List */}
         <KnowledgeList

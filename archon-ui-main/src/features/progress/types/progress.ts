@@ -156,7 +156,14 @@ export interface ProgressResponse {
   fileSize?: number;
   chunksProcessed?: number;
   totalChunks?: number;
-  logs?: string[];
+  logs?:
+    | string[]
+    | Array<{
+        timestamp: string;
+        message: string;
+        status?: string;
+        progress?: number;
+      }>;
   timestamp?: string;
   startedAt?: string; // ISO date string of when operation started
   stats?: {
@@ -171,4 +178,24 @@ export interface ProgressResponse {
     code_examples_found?: number;
     current_operation?: string;
   };
+}
+
+// Failed operation types for error visibility feature
+export interface FailedOperation extends ProgressResponse {
+  status: "error" | "failed";
+  error: string; // Error message (required for failed operations)
+  error_time?: string; // ISO timestamp of when error occurred
+  original_request?: {
+    // For retry functionality - original parameters
+    url: string;
+    max_depth?: number;
+    max_concurrent?: number;
+    tags?: string[];
+  };
+}
+
+export interface FailedOperationsResponse {
+  operations: FailedOperation[];
+  count: number;
+  timestamp: string;
 }

@@ -3,13 +3,20 @@
  * Handles polling for operation progress with TanStack Query
  */
 
-import { type UseQueryResult, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  type UseMutationResult,
+  type UseQueryResult,
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 import { DISABLED_QUERY_KEY, STALE_TIMES } from "../../shared/config/queryPatterns";
 import { useSmartPolling } from "../../shared/hooks";
 import { APIServiceError } from "../../shared/types/errors";
 import { progressService } from "../services";
-import type { ActiveOperationsResponse, ProgressResponse, ProgressStatus } from "../types";
+import type { ActiveOperationsResponse, FailedOperationsResponse, ProgressResponse, ProgressStatus } from "../types";
 
 // Query keys factory
 export const progressKeys = {
@@ -17,6 +24,7 @@ export const progressKeys = {
   lists: () => [...progressKeys.all, "list"] as const,
   detail: (id: string) => [...progressKeys.all, "detail", id] as const,
   active: () => [...progressKeys.all, "active"] as const,
+  failed: () => [...progressKeys.all, "failed"] as const,
 };
 
 // Terminal states that should stop polling
@@ -379,5 +387,49 @@ export function useMultipleOperations(
       isFailed: data?.status === "error" || data?.status === "failed",
       isActive: data ? !TERMINAL_STATES.includes(data.status) : false,
     };
+  });
+}
+
+/**
+ * Get all failed operations
+ * These are operations with error/failed status that persist for 5 minutes
+ * IMPORTANT: These are NOT auto-removed - user must explicitly dismiss
+ */
+export function useFailedOperations() {
+  return useQuery<FailedOperationsResponse>({
+    queryKey: progressKeys.failed(),
+    queryFn: () => progressService.listFailedOperations(),
+    enabled: true,
+    refetchInterval: 30000, // Poll every 30s - failed ops are mostly static
+    staleTime: STALE_TIMES.normal,
+    // CRITICAL: No auto-removal for failed operations
+    // User must explicitly click "Remove" button
+  });
+}
+
+/**
+ * Remove a failed operation from the list
+ * This is explicit user action, not automatic cleanup
+ */
+export function useRemoveFailedOperation(): UseMutationResult<{ progressId: string }, Error, string> {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (progressId: string) => {
+      // Just remove from cache - backend will auto-cleanup after 5 minutes
+      // No API call needed - this is client-side dismissal
+      return { progressId };
+    },
+
+    onSuccess: (_data, progressId) => {
+      // Remove specific operation
+      queryClient.removeQueries({
+        queryKey: progressKeys.detail(progressId),
+        exact: true,
+      });
+
+      // Refresh failed operations list
+      queryClient.invalidateQueries({ queryKey: progressKeys.failed() });
+    },
   });
 }
