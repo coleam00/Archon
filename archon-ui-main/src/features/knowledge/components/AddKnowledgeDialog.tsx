@@ -4,17 +4,20 @@
  */
 
 import { Globe, Loader2, Upload } from "lucide-react";
-import { useId, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { useToast } from "@/features/shared/hooks/useToast";
+import { callAPIWithETag } from "@/features/shared/api/apiClient";
 import { Button, Input, Label } from "../../ui/primitives";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/primitives/dialog";
 import { cn, glassCard } from "../../ui/primitives/styles";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/primitives/tabs";
 import { useCrawlUrl, useUploadDocument } from "../hooks";
-import type { CrawlRequest, UploadMetadata } from "../types";
+import type { CrawlRequest, UploadMetadata, LinkPreviewResponse } from "../types";
 import { KnowledgeTypeSelector } from "./KnowledgeTypeSelector";
 import { LevelSelector } from "./LevelSelector";
 import { TagInput } from "./TagInput";
+import { LinkReviewModal } from "./LinkReviewModal";
+import { parseUrlPatterns } from "../utils";
 
 interface AddKnowledgeDialogProps {
   open: boolean;
@@ -44,19 +47,73 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
   const [maxDepth, setMaxDepth] = useState("2");
   const [tags, setTags] = useState<string[]>([]);
 
+  // Glob pattern filtering state (unified field with ! prefix for exclusions)
+  const [urlPatterns, setUrlPatterns] = useState("");
+  const [reviewLinksEnabled, setReviewLinksEnabled] = useState(true);
+
+  // Link review modal state
+  const [showLinkReviewModal, setShowLinkReviewModal] = useState(false);
+  const [previewData, setPreviewData] = useState<LinkPreviewResponse | null>(null);
+
   // Upload form state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadType, setUploadType] = useState<"technical" | "business">("technical");
   const [uploadTags, setUploadTags] = useState<string[]>([]);
+
+  // Auto-detect GitHub repositories and populate smart defaults
+  useEffect(() => {
+    // Only auto-populate if the URL has changed and patterns are empty
+    if (!crawlUrl) return;
+
+    // Detect GitHub URL (supports https://, http://, or just github.com)
+    const githubUrlPattern = /^(?:https?:\/\/)?(?:www\.)?github\.com\/([^\/]+)\/([^\/\?#]+)/i;
+    const match = crawlUrl.match(githubUrlPattern);
+
+    if (match) {
+      // Only auto-populate if patterns are currently empty (don't override user edits)
+      if (!urlPatterns) {
+        // Use code-only patterns: only crawl tree (directories) and blob (files) pages
+        setUrlPatterns("**/tree/**, **/blob/**");
+      }
+
+      // Auto-add "GitHub Repo" tag if not already present
+      if (!tags.includes("GitHub Repo")) {
+        setTags((prevTags) => [...prevTags, "GitHub Repo"]);
+      }
+
+      // Set max depth to 3 for GitHub repos (to traverse nested directories)
+      if (maxDepth === "2") {
+        setMaxDepth("3");
+      }
+    }
+  }, [crawlUrl]); // Only depend on crawlUrl to avoid infinite loops
 
   const resetForm = () => {
     setCrawlUrl("");
     setCrawlType("technical");
     setMaxDepth("2");
     setTags([]);
+    setUrlPatterns("");
+    setReviewLinksEnabled(true);
     setSelectedFile(null);
     setUploadType("technical");
     setUploadTags([]);
+  };
+
+  // Helper: Build crawl request from current form state
+  const buildCrawlRequest = (selectedUrls?: string[]): CrawlRequest => {
+    const { include: includePatternArray, exclude: excludePatternArray } = parseUrlPatterns(urlPatterns);
+
+    return {
+      url: crawlUrl,
+      knowledge_type: crawlType,
+      max_depth: parseInt(maxDepth, 10),
+      tags: tags.length > 0 ? tags : undefined,
+      url_include_patterns: includePatternArray.length > 0 ? includePatternArray : undefined,
+      url_exclude_patterns: excludePatternArray.length > 0 ? excludePatternArray : undefined,
+      selected_urls: selectedUrls,
+      skip_link_review: selectedUrls ? false : !reviewLinksEnabled,
+    };
   };
 
   const handleCrawl = async () => {
@@ -66,12 +123,32 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
     }
 
     try {
-      const request: CrawlRequest = {
-        url: crawlUrl,
-        knowledge_type: crawlType,
-        max_depth: parseInt(maxDepth, 10),
-        tags: tags.length > 0 ? tags : undefined,
-      };
+      // If review is enabled, call preview endpoint first
+      if (reviewLinksEnabled) {
+        const { include: includePatternArray, exclude: excludePatternArray } = parseUrlPatterns(urlPatterns);
+
+        const previewData = await callAPIWithETag<LinkPreviewResponse>("/crawl/preview-links", {
+          method: "POST",
+          body: JSON.stringify({
+            url: crawlUrl,
+            url_include_patterns: includePatternArray,
+            url_exclude_patterns: excludePatternArray,
+          }),
+        });
+
+        // If it's a link collection, show the review modal
+        if (previewData.is_link_collection) {
+          setPreviewData(previewData);
+          setShowLinkReviewModal(true);
+          return; // Don't proceed with crawl yet
+        }
+
+        // Not a link collection - proceed with normal crawl
+        showToast("Not a link collection - proceeding with normal crawl", "info");
+      }
+
+      // Build crawl request (for non-link collections or when review is disabled)
+      const request = buildCrawlRequest();
 
       const response = await crawlMutation.mutateAsync(request);
 
@@ -86,6 +163,30 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
       onOpenChange(false);
     } catch (error) {
       // Display the actual error message from backend
+      const message = error instanceof Error ? error.message : "Failed to start crawl";
+      showToast(message, "error");
+    }
+  };
+
+  // Handle link review modal submission
+  const handleLinkReviewSubmit = async (selectedUrls: string[]) => {
+    try {
+      const request = buildCrawlRequest(selectedUrls);
+
+      const response = await crawlMutation.mutateAsync(request);
+
+      // Notify parent about the new crawl operation
+      if (response?.progressId && onCrawlStarted) {
+        onCrawlStarted(response.progressId);
+      }
+
+      showToast(`Crawl started with ${selectedUrls.length} selected links`, "success");
+      resetForm();
+      setShowLinkReviewModal(false);
+      setPreviewData(null);
+      onSuccess();
+      onOpenChange(false);
+    } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to start crawl";
       showToast(message, "error");
     }
@@ -125,6 +226,12 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
 
   const isProcessing = crawlMutation.isPending || uploadMutation.isPending;
 
+  // Parse URL patterns for LinkReviewModal (memoized to avoid re-parsing on every render)
+  const { include: parsedIncludePatterns, exclude: parsedExcludePatterns } = useMemo(
+    () => parseUrlPatterns(urlPatterns),
+    [urlPatterns]
+  );
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[600px]">
@@ -161,7 +268,7 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
                 <Input
                   id={urlId}
                   type="url"
-                  placeholder="https://docs.example.com or https://github.com/..."
+                  placeholder="https://docs.example.com or https://github.com/username/repo (auto-configured)"
                   value={crawlUrl}
                   onChange={(e) => setCrawlUrl(e.target.value)}
                   disabled={isProcessing}
@@ -172,6 +279,69 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
                     "border-gray-300/60 dark:border-gray-600/60 focus:border-cyan-400/70",
                   )}
                 />
+              </div>
+            </div>
+
+            {/* Glob Pattern Filtering Section */}
+            <div className="space-y-4 border-t border-gray-200/50 dark:border-gray-700/50 pt-4">
+              {/* GitHub Auto-Configuration Notice */}
+              {crawlUrl.match(/^(?:https?:\/\/)?(?:www\.)?github\.com\/([^\/]+)\/([^\/\?#]+)/i) && (
+                <div className="flex items-start space-x-2 p-3 bg-cyan-50/50 dark:bg-cyan-900/20 border border-cyan-200/50 dark:border-cyan-700/50 rounded-lg">
+                  <div className="flex-shrink-0 mt-0.5">
+                    <Globe className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
+                  </div>
+                  <div className="flex-1 text-xs text-cyan-800 dark:text-cyan-300">
+                    <strong>GitHub Repository Detected:</strong> Pattern auto-configured to crawl only this repository (depth=3).
+                    Add exclusions with <code className="px-1 py-0.5 bg-cyan-100 dark:bg-cyan-800 rounded">!**/issues**</code> if needed.
+                  </div>
+                </div>
+              )}
+
+              {/* Review Links Checkbox */}
+              <div className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  id="reviewLinksCheck"
+                  checked={reviewLinksEnabled}
+                  onChange={(e) => setReviewLinksEnabled(e.target.checked)}
+                  disabled={isProcessing}
+                  className="h-4 w-4 text-cyan-600 focus:ring-cyan-500 border-gray-300 rounded"
+                />
+                <Label
+                  htmlFor="reviewLinksCheck"
+                  className="text-sm font-medium text-gray-900 dark:text-white/90 cursor-pointer"
+                >
+                  Review discovered links before crawling?
+                </Label>
+              </div>
+              <div className="text-xs text-gray-500 dark:text-gray-400 ml-6">
+                When enabled, you'll preview and select links from llms.txt or sitemap files before crawling starts
+              </div>
+
+              {/* Unified URL Patterns Input */}
+              <div className="space-y-2">
+                <Label htmlFor="urlPatterns" className="text-sm font-medium text-gray-900 dark:text-white/90">
+                  URL Patterns (comma-separated, optional)
+                </Label>
+                <Input
+                  id="urlPatterns"
+                  type="text"
+                  placeholder="e.g., **/en/**, **/docs/**, !**/api/**, !**/changelog/** (use ! to exclude)"
+                  value={urlPatterns}
+                  onChange={(e) => setUrlPatterns(e.target.value)}
+                  disabled={isProcessing}
+                  className={cn(
+                    "h-10",
+                    glassCard.blur.sm,
+                    glassCard.transparency.medium,
+                    "border-gray-300/60 dark:border-gray-600/60 focus:border-cyan-400/70",
+                  )}
+                />
+                <div className="text-xs text-gray-500 dark:text-gray-400">
+                  <strong>Glob patterns:</strong> Include URLs with patterns like <code className="px-1 py-0.5 bg-gray-200 dark:bg-gray-700 rounded">**/en/**</code>.
+                  Exclude with <code className="px-1 py-0.5 bg-gray-200 dark:bg-gray-700 rounded">!**/api/**</code> prefix (like .gitignore).
+                  Leave empty to crawl all discovered links.
+                </div>
               </div>
             </div>
 
@@ -301,6 +471,21 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
           </TabsContent>
         </Tabs>
       </DialogContent>
+
+      {/* Link Review Modal */}
+      {showLinkReviewModal && previewData && (
+        <LinkReviewModal
+          open={showLinkReviewModal}
+          previewData={previewData}
+          initialIncludePatterns={parsedIncludePatterns}
+          initialExcludePatterns={parsedExcludePatterns}
+          onProceed={handleLinkReviewSubmit}
+          onCancel={() => {
+            setShowLinkReviewModal(false);
+            setPreviewData(null);
+          }}
+        />
+      )}
     </Dialog>
   );
 };
