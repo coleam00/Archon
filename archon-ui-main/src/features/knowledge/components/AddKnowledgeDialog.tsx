@@ -4,7 +4,7 @@
  */
 
 import { Globe, Loader2, Upload } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { useToast } from "@/features/shared/hooks/useToast";
 import { callAPIWithETag } from "@/features/shared/api/apiClient";
 import { Button, Input, Label } from "../../ui/primitives";
@@ -53,7 +53,7 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
 
   // Link review modal state
   const [showLinkReviewModal, setShowLinkReviewModal] = useState(false);
-  const [previewData, setPreviewData] = useState<any>(null);
+  const [previewData, setPreviewData] = useState<LinkPreviewResponse | null>(null);
 
   // Upload form state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -100,6 +100,22 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
     setUploadTags([]);
   };
 
+  // Helper: Build crawl request from current form state
+  const buildCrawlRequest = (selectedUrls?: string[]): CrawlRequest => {
+    const { include: includePatternArray, exclude: excludePatternArray } = parseUrlPatterns(urlPatterns);
+
+    return {
+      url: crawlUrl,
+      knowledge_type: crawlType,
+      max_depth: parseInt(maxDepth, 10),
+      tags: tags.length > 0 ? tags : undefined,
+      url_include_patterns: includePatternArray.length > 0 ? includePatternArray : undefined,
+      url_exclude_patterns: excludePatternArray.length > 0 ? excludePatternArray : undefined,
+      selected_urls: selectedUrls,
+      skip_link_review: selectedUrls ? false : !reviewLinksEnabled,
+    };
+  };
+
   const handleCrawl = async () => {
     if (!crawlUrl) {
       showToast("Please enter a URL to crawl", "error");
@@ -107,11 +123,10 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
     }
 
     try {
-      // Parse unified pattern string into include/exclude arrays
-      const { include: includePatternArray, exclude: excludePatternArray } = parseUrlPatterns(urlPatterns);
-
       // If review is enabled, call preview endpoint first
       if (reviewLinksEnabled) {
+        const { include: includePatternArray, exclude: excludePatternArray } = parseUrlPatterns(urlPatterns);
+
         const previewData = await callAPIWithETag<LinkPreviewResponse>("/crawl/preview-links", {
           method: "POST",
           body: JSON.stringify({
@@ -133,15 +148,7 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
       }
 
       // Build crawl request (for non-link collections or when review is disabled)
-      const request: CrawlRequest = {
-        url: crawlUrl,
-        knowledge_type: crawlType,
-        max_depth: parseInt(maxDepth, 10),
-        tags: tags.length > 0 ? tags : undefined,
-        url_include_patterns: includePatternArray.length > 0 ? includePatternArray : undefined,
-        url_exclude_patterns: excludePatternArray.length > 0 ? excludePatternArray : undefined,
-        skip_link_review: !reviewLinksEnabled,
-      };
+      const request = buildCrawlRequest();
 
       const response = await crawlMutation.mutateAsync(request);
 
@@ -164,19 +171,7 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
   // Handle link review modal submission
   const handleLinkReviewSubmit = async (selectedUrls: string[]) => {
     try {
-      // Parse unified pattern string into include/exclude arrays
-      const { include: includePatternArray, exclude: excludePatternArray } = parseUrlPatterns(urlPatterns);
-
-      const request: CrawlRequest = {
-        url: crawlUrl,
-        knowledge_type: crawlType,
-        max_depth: parseInt(maxDepth, 10),
-        tags: tags.length > 0 ? tags : undefined,
-        url_include_patterns: includePatternArray.length > 0 ? includePatternArray : undefined,
-        url_exclude_patterns: excludePatternArray.length > 0 ? excludePatternArray : undefined,
-        selected_urls: selectedUrls,
-        skip_link_review: false,
-      };
+      const request = buildCrawlRequest(selectedUrls);
 
       const response = await crawlMutation.mutateAsync(request);
 
@@ -230,6 +225,12 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
   };
 
   const isProcessing = crawlMutation.isPending || uploadMutation.isPending;
+
+  // Parse URL patterns for LinkReviewModal (memoized to avoid re-parsing on every render)
+  const { include: parsedIncludePatterns, exclude: parsedExcludePatterns } = useMemo(
+    () => parseUrlPatterns(urlPatterns),
+    [urlPatterns]
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -472,37 +473,19 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
       </DialogContent>
 
       {/* Link Review Modal */}
-      {showLinkReviewModal && previewData && (() => {
-        // Parse urlPatterns string into separate include/exclude arrays
-        const includePatterns: string[] = [];
-        const excludePatterns: string[] = [];
-
-        urlPatterns
-          .split(',')
-          .map(p => p.trim())
-          .filter(p => p.length > 0)
-          .forEach(pattern => {
-            if (pattern.startsWith('!')) {
-              excludePatterns.push(pattern.substring(1).trim());
-            } else {
-              includePatterns.push(pattern);
-            }
-          });
-
-        return (
-          <LinkReviewModal
-            open={showLinkReviewModal}
-            previewData={previewData}
-            initialIncludePatterns={includePatterns}
-            initialExcludePatterns={excludePatterns}
-            onProceed={handleLinkReviewSubmit}
-            onCancel={() => {
-              setShowLinkReviewModal(false);
-              setPreviewData(null);
-            }}
-          />
-        );
-      })()}
+      {showLinkReviewModal && previewData && (
+        <LinkReviewModal
+          open={showLinkReviewModal}
+          previewData={previewData}
+          initialIncludePatterns={parsedIncludePatterns}
+          initialExcludePatterns={parsedExcludePatterns}
+          onProceed={handleLinkReviewSubmit}
+          onCancel={() => {
+            setShowLinkReviewModal(false);
+            setPreviewData(null);
+          }}
+        />
+      )}
     </Dialog>
   );
 };
