@@ -15,12 +15,15 @@ def validate_url_against_ssrf(url: str) -> None:
     Validate URL to prevent SSRF (Server-Side Request Forgery) attacks.
 
     Blocks requests to:
-    - Private IP addresses (RFC 1918)
-    - Loopback addresses
-    - Link-local addresses
-    - localhost and 127.0.0.1
+    - Private IP addresses (RFC 1918) - both IPv4 and IPv6
+    - Loopback addresses (127.0.0.0/8, ::1)
+    - Link-local addresses (169.254.0.0/16, fe80::/10)
+    - localhost and common variations
     - File protocol
     - Other dangerous protocols
+
+    Validates both numeric IP addresses (IPv4/IPv6) and hostname resolution
+    to prevent bypasses via DNS rebinding or IPv6 literals.
 
     Args:
         url: The URL to validate
