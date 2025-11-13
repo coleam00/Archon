@@ -1028,6 +1028,10 @@ async def _perform_crawl_with_progress(
                 "max_depth": request.max_depth,
                 "extract_code_examples": request.extract_code_examples,
                 "generate_summary": True,
+                "url_include_patterns": request.url_include_patterns,
+                "url_exclude_patterns": request.url_exclude_patterns,
+                "selected_urls": request.selected_urls,
+                "skip_link_review": request.skip_link_review,
             }
 
             # Orchestrate the crawl - this returns immediately with task info including the actual task
