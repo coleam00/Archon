@@ -40,6 +40,7 @@ export const LinkReviewModal: React.FC<LinkReviewModalProps> = ({
   ].join(', ');
 
   const [urlPatterns, setUrlPatterns] = useState(initialUrlPatterns);
+  const [baseLinks, setBaseLinks] = useState<PreviewLink[]>([]);
   const [filteredLinks, setFilteredLinks] = useState<PreviewLink[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [isApplyingFilters, setIsApplyingFilters] = useState(false);
@@ -60,7 +61,10 @@ export const LinkReviewModal: React.FC<LinkReviewModalProps> = ({
   useEffect(() => {
     if (!previewData) return;
 
-    const filtered = previewData.links.filter((link) => {
+    // Filter from baseLinks if available, otherwise fall back to previewData.links
+    const linksToFilter = baseLinks.length > 0 ? baseLinks : previewData.links;
+
+    const filtered = linksToFilter.filter((link) => {
       if (!searchTerm) return true;
       const searchLower = searchTerm.toLowerCase();
       return (
@@ -71,7 +75,7 @@ export const LinkReviewModal: React.FC<LinkReviewModalProps> = ({
     });
 
     setFilteredLinks(filtered);
-  }, [searchTerm, previewData]);
+  }, [searchTerm, previewData, baseLinks]);
 
   const handleToggleLink = (url: string) => {
     setSelectedUrls((prev) => {
@@ -124,7 +128,8 @@ export const LinkReviewModal: React.FC<LinkReviewModalProps> = ({
         }),
       });
 
-      // Update filtered links and auto-select matching ones
+      // Update baseLinks first to preserve pattern filters across searches
+      setBaseLinks(updatedData.links);
       setFilteredLinks(updatedData.links);
       const newSelection = new Set<string>(
         updatedData.links.filter((link: PreviewLink) => link.matches_filter).map((link: PreviewLink) => link.url)

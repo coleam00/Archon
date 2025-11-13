@@ -8,7 +8,7 @@ Per Contributing Guidelines: Tests all required discovery types.
 """
 
 import pytest
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from fastapi import HTTPException
 
 
@@ -100,14 +100,14 @@ class TestPreviewLinksWithGlobPatterns:
         from src.server.api_routes.knowledge_api import preview_link_collection, LinkPreviewRequest
 
         # Mock HTTP response with proper async context manager
-        mock_response = AsyncMock()
+        mock_response = MagicMock()
         mock_response.status = 200
         mock_response.text = AsyncMock(return_value=SAMPLE_LLMS_TXT)
         mock_response.__aenter__ = AsyncMock(return_value=mock_response)
         mock_response.__aexit__ = AsyncMock(return_value=None)
 
-        mock_session_instance = AsyncMock()
-        mock_session_instance.get = AsyncMock(return_value=mock_response)
+        mock_session_instance = MagicMock()
+        mock_session_instance.get.return_value = mock_response
         mock_session_instance.__aenter__ = AsyncMock(return_value=mock_session_instance)
         mock_session_instance.__aexit__ = AsyncMock(return_value=None)
         mock_aiohttp_session.return_value = mock_session_instance
@@ -157,12 +157,15 @@ class TestPreviewLinksWithGlobPatterns:
         """Test llms.txt discovery with exclude pattern filtering."""
         from src.server.api_routes.knowledge_api import preview_link_collection, LinkPreviewRequest
 
-        # Mock HTTP response
-        mock_response = AsyncMock()
+        # Mock HTTP response (context manager)
+        mock_response = MagicMock()
         mock_response.status = 200
         mock_response.text = AsyncMock(return_value=SAMPLE_LLMS_TXT)
-        mock_session_instance = AsyncMock()
-        mock_session_instance.get = AsyncMock(return_value=mock_response)
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock()
+        # Mock session instance
+        mock_session_instance = MagicMock()
+        mock_session_instance.get.return_value = mock_response
         mock_session_instance.__aenter__ = AsyncMock(return_value=mock_session_instance)
         mock_session_instance.__aexit__ = AsyncMock()
         mock_aiohttp_session.return_value = mock_session_instance
@@ -195,12 +198,15 @@ class TestPreviewLinksWithGlobPatterns:
         """Test llms.txt with both include and exclude patterns."""
         from src.server.api_routes.knowledge_api import preview_link_collection, LinkPreviewRequest
 
-        # Mock HTTP response
-        mock_response = AsyncMock()
+        # Mock HTTP response (context manager)
+        mock_response = MagicMock()
         mock_response.status = 200
         mock_response.text = AsyncMock(return_value=SAMPLE_LLMS_TXT)
-        mock_session_instance = AsyncMock()
-        mock_session_instance.get = AsyncMock(return_value=mock_response)
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock()
+        # Mock session instance
+        mock_session_instance = MagicMock()
+        mock_session_instance.get.return_value = mock_response
         mock_session_instance.__aenter__ = AsyncMock(return_value=mock_session_instance)
         mock_session_instance.__aexit__ = AsyncMock()
         mock_aiohttp_session.return_value = mock_session_instance
@@ -235,12 +241,15 @@ class TestPreviewLinksWithGlobPatterns:
         """Test llms.txt with no patterns (accept all)."""
         from src.server.api_routes.knowledge_api import preview_link_collection, LinkPreviewRequest
 
-        # Mock HTTP response
-        mock_response = AsyncMock()
+        # Mock HTTP response (context manager)
+        mock_response = MagicMock()
         mock_response.status = 200
         mock_response.text = AsyncMock(return_value=SAMPLE_LLMS_TXT)
-        mock_session_instance = AsyncMock()
-        mock_session_instance.get = AsyncMock(return_value=mock_response)
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock()
+        # Mock session instance
+        mock_session_instance = MagicMock()
+        mock_session_instance.get.return_value = mock_response
         mock_session_instance.__aenter__ = AsyncMock(return_value=mock_session_instance)
         mock_session_instance.__aexit__ = AsyncMock()
         mock_aiohttp_session.return_value = mock_session_instance
@@ -386,11 +395,13 @@ class TestPreviewLinksWithGlobPatterns:
 """
 
         # Mock HTTP response
-        mock_response = AsyncMock()
+        mock_response = MagicMock()
         mock_response.status = 200
         mock_response.text = AsyncMock(return_value=claude_docs_llms_txt)
-        mock_session_instance = AsyncMock()
-        mock_session_instance.get = AsyncMock(return_value=mock_response)
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock()
+        mock_session_instance = MagicMock()
+        mock_session_instance.get.return_value = mock_response
         mock_session_instance.__aenter__ = AsyncMock(return_value=mock_session_instance)
         mock_session_instance.__aexit__ = AsyncMock()
         mock_aiohttp_session.return_value = mock_session_instance

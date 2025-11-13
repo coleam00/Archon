@@ -62,23 +62,41 @@ def validate_url_against_ssrf(url: str) -> None:
             )
 
         # Try to resolve hostname to IP and check if it's private
+        # Handle both numeric IPs (IPv4/IPv6) and hostnames
         try:
             import socket
-            # Get IP address from hostname
-            ip_str = socket.gethostbyname(hostname)
-            ip = ipaddress.ip_address(ip_str)
 
-            # Check if IP is private, loopback, or link-local
-            if ip.is_private or ip.is_loopback or ip.is_link_local:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Access to private/internal IP addresses is not allowed: {ip_str}"
-                )
+            # First, try parsing as a numeric IP address (handles both IPv4 and IPv6)
+            try:
+                ip = ipaddress.ip_address(hostname)
+                # Check if IP is private, loopback, or link-local
+                if ip.is_private or ip.is_loopback or ip.is_link_local:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Access to private/internal IP addresses is not allowed: {hostname}"
+                    )
+            except ValueError:
+                # Not a numeric IP, resolve hostname using getaddrinfo (handles both IPv4 and IPv6)
+                addr_info = socket.getaddrinfo(hostname, None)
+
+                # Check all resolved addresses (both IPv4 and IPv6)
+                for addr in addr_info:
+                    ip_str = addr[4][0]  # Extract IP address from addr tuple
+                    try:
+                        ip = ipaddress.ip_address(ip_str)
+
+                        # Check if any resolved IP is private, loopback, or link-local
+                        if ip.is_private or ip.is_loopback or ip.is_link_local:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"Access to private/internal IP addresses is not allowed: {ip_str}"
+                            )
+                    except ValueError:
+                        # Invalid IP address format in resolution result - skip this address
+                        continue
+
         except socket.gaierror:
             # DNS resolution failed - let it through, real request will fail naturally
-            pass
-        except ValueError:
-            # Invalid IP address format - let it through
             pass
 
     except HTTPException:
