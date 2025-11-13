@@ -7,10 +7,10 @@ combined with glob pattern filtering, which is the core feature of PR #847.
 Per Contributing Guidelines: Tests all required discovery types.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
-from fastapi import HTTPException
 
+import pytest
+from fastapi import HTTPException
 
 # Sample llms.txt content (from https://docs.mem0.ai/llms.txt)
 SAMPLE_LLMS_TXT = """# Mem0 Documentation
@@ -23,16 +23,17 @@ SAMPLE_LLMS_TXT = """# Mem0 Documentation
 - [German Guide](https://docs.mem0.ai/de/guides/intro)
 """
 
-# Sample llms-full.txt content
+# Sample llms-full.txt content (full documentation with embedded links)
 SAMPLE_LLMS_FULL_TXT = """# Introduction
 
-Welcome to Mem0 documentation.
+Welcome to Mem0 documentation. Read more at [Introduction](https://docs.mem0.ai/en/introduction).
 
 # Getting Started
 
 ## Installation
 
-Install via pip:
+Install via pip. See our [Getting Started Guide](https://docs.mem0.ai/en/getting-started).
+
 ```
 pip install mem0ai
 ```
@@ -43,7 +44,7 @@ pip install mem0ai
 
 ### POST /api/memories
 
-Create a new memory.
+Create a new memory. Full details at [API Reference](https://docs.mem0.ai/en/api/overview).
 """
 
 # Sample sitemap.xml content (from https://mem0.ai/sitemap.xml)
@@ -97,7 +98,7 @@ class TestPreviewLinksWithGlobPatterns:
         self, mock_aiohttp_session, mock_crawler, mock_supabase
     ):
         """Test llms.txt discovery with include pattern filtering."""
-        from src.server.api_routes.knowledge_api import preview_link_collection, LinkPreviewRequest
+        from src.server.api_routes.knowledge_api import LinkPreviewRequest, preview_link_collection
 
         # Mock HTTP response with proper async context manager
         mock_response = MagicMock()
@@ -155,7 +156,7 @@ class TestPreviewLinksWithGlobPatterns:
         self, mock_aiohttp_session, mock_crawler, mock_supabase
     ):
         """Test llms.txt discovery with exclude pattern filtering."""
-        from src.server.api_routes.knowledge_api import preview_link_collection, LinkPreviewRequest
+        from src.server.api_routes.knowledge_api import LinkPreviewRequest, preview_link_collection
 
         # Mock HTTP response (context manager)
         mock_response = MagicMock()
@@ -196,7 +197,7 @@ class TestPreviewLinksWithGlobPatterns:
         self, mock_aiohttp_session, mock_crawler, mock_supabase
     ):
         """Test llms.txt with both include and exclude patterns."""
-        from src.server.api_routes.knowledge_api import preview_link_collection, LinkPreviewRequest
+        from src.server.api_routes.knowledge_api import LinkPreviewRequest, preview_link_collection
 
         # Mock HTTP response (context manager)
         mock_response = MagicMock()
@@ -239,7 +240,7 @@ class TestPreviewLinksWithGlobPatterns:
         self, mock_aiohttp_session, mock_crawler, mock_supabase
     ):
         """Test llms.txt with no patterns (accept all)."""
-        from src.server.api_routes.knowledge_api import preview_link_collection, LinkPreviewRequest
+        from src.server.api_routes.knowledge_api import LinkPreviewRequest, preview_link_collection
 
         # Mock HTTP response (context manager)
         mock_response = MagicMock()
@@ -273,7 +274,7 @@ class TestPreviewLinksWithGlobPatterns:
         self, mock_aiohttp_session, mock_crawler, mock_supabase
     ):
         """Test sitemap.xml discovery with glob pattern filtering."""
-        from src.server.api_routes.knowledge_api import preview_link_collection, LinkPreviewRequest
+        from src.server.api_routes.knowledge_api import LinkPreviewRequest, preview_link_collection
         from src.server.services.crawling.crawling_service import CrawlingService
 
         # Mock sitemap parsing
@@ -311,7 +312,7 @@ class TestPreviewLinksWithGlobPatterns:
         self, mock_aiohttp_session, mock_crawler, mock_supabase
     ):
         """Test llms-full.txt discovery with glob patterns."""
-        from src.server.api_routes.knowledge_api import preview_link_collection, LinkPreviewRequest
+        from src.server.api_routes.knowledge_api import LinkPreviewRequest, preview_link_collection
 
         # Mock HTTP response
         mock_response = AsyncMock()
@@ -342,7 +343,7 @@ class TestPreviewLinksWithGlobPatterns:
         self, mock_aiohttp_session, mock_crawler, mock_supabase
     ):
         """Test that security validation (SSRF, sanitization) is applied."""
-        from src.server.api_routes.knowledge_api import preview_link_collection, LinkPreviewRequest
+        from src.server.api_routes.knowledge_api import LinkPreviewRequest, preview_link_collection
 
         # Test SSRF protection
         request_localhost = LinkPreviewRequest(
@@ -362,7 +363,7 @@ class TestPreviewLinksWithGlobPatterns:
         self, mock_aiohttp_session, mock_crawler, mock_supabase
     ):
         """Test that dangerous glob patterns are rejected."""
-        from src.server.api_routes.knowledge_api import preview_link_collection, LinkPreviewRequest
+        from src.server.api_routes.knowledge_api import LinkPreviewRequest, preview_link_collection
 
         # Test command injection attempt
         request_injection = LinkPreviewRequest(
@@ -382,7 +383,7 @@ class TestPreviewLinksWithGlobPatterns:
         self, mock_aiohttp_session, mock_crawler, mock_supabase
     ):
         """Test realistic documentation filtering scenario."""
-        from src.server.api_routes.knowledge_api import preview_link_collection, LinkPreviewRequest
+        from src.server.api_routes.knowledge_api import LinkPreviewRequest, preview_link_collection
 
         # Sample content mimicking Anthropic Claude docs
         claude_docs_llms_txt = """# Claude Documentation
@@ -435,7 +436,7 @@ class TestPreviewLinksEdgeCases:
     @pytest.mark.asyncio
     async def test_not_a_link_collection(self):
         """Test handling of regular HTML page (not link collection)."""
-        from src.server.api_routes.knowledge_api import preview_link_collection, LinkPreviewRequest
+        from src.server.api_routes.knowledge_api import LinkPreviewRequest, preview_link_collection
 
         with patch("aiohttp.ClientSession") as mock_session:
             # Mock HTML response (not a link collection)
@@ -468,7 +469,7 @@ class TestPreviewLinksEdgeCases:
     @pytest.mark.asyncio
     async def test_empty_llms_txt(self):
         """Test handling of empty llms.txt file."""
-        from src.server.api_routes.knowledge_api import preview_link_collection, LinkPreviewRequest
+        from src.server.api_routes.knowledge_api import LinkPreviewRequest, preview_link_collection
 
         with patch("aiohttp.ClientSession") as mock_session:
             # Mock empty response

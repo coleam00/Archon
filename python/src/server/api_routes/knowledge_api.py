@@ -31,6 +31,7 @@ from ..services.search.rag_service import RAGService
 from ..services.storage import DocumentStorageService
 from ..utils import get_supabase_client
 from ..utils.document_processing import extract_text_from_document
+from ..utils.url_validation import sanitize_glob_patterns, validate_url
 
 # Get logger for this module
 logger = get_logger(__name__)
@@ -773,6 +774,13 @@ async def preview_link_collection(request: LinkPreviewRequest):
         if not request.url.startswith(("http://", "https://")):
             raise HTTPException(status_code=422, detail="URL must start with http:// or https://")
 
+        # SSRF Protection: Validate URL to prevent internal network access
+        validate_url(request.url)
+
+        # Input validation: Sanitize glob patterns
+        sanitized_include = sanitize_glob_patterns(request.url_include_patterns)
+        sanitized_exclude = sanitize_glob_patterns(request.url_exclude_patterns)
+
         safe_logfire_info(f"Preview link collection request | url={request.url}")
 
         # Initialize crawler and service
@@ -869,11 +877,11 @@ async def preview_link_collection(request: LinkPreviewRequest):
             parsed = urlparse(link)
             path = parsed.path
 
-            # Check if link matches glob patterns
+            # Check if link matches glob patterns (use sanitized patterns)
             matches_filter = url_handler.matches_glob_patterns(
                 link,
-                request.url_include_patterns if request.url_include_patterns else None,
-                request.url_exclude_patterns if request.url_exclude_patterns else None
+                sanitized_include if sanitized_include else None,
+                sanitized_exclude if sanitized_exclude else None
             )
 
             response_links.append({
