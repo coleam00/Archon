@@ -7,10 +7,15 @@ Provides SSRF (Server-Side Request Forgery) protection and URL sanitization.
 import ipaddress
 import re
 from urllib.parse import urlparse
+
 from fastapi import HTTPException
 
+# Maximum patterns and length constraints for glob sanitization
+MAX_GLOB_PATTERNS = 50
+MAX_PATTERN_LENGTH = 200
 
-def validate_url_against_ssrf(url: str) -> None:
+
+def validate_url(url: str) -> None:
     """
     Validate URL to prevent SSRF (Server-Side Request Forgery) attacks.
 
@@ -128,11 +133,10 @@ def sanitize_glob_patterns(patterns: list[str] | None) -> list[str]:
         return []
 
     # Maximum number of patterns to prevent DoS
-    MAX_PATTERNS = 50
-    if len(patterns) > MAX_PATTERNS:
+    if len(patterns) > MAX_GLOB_PATTERNS:
         raise HTTPException(
             status_code=400,
-            detail=f"Too many patterns. Maximum {MAX_PATTERNS} allowed."
+            detail=f"Too many patterns. Maximum {MAX_GLOB_PATTERNS} allowed."
         )
 
     sanitized = []
@@ -149,10 +153,10 @@ def sanitize_glob_patterns(patterns: list[str] | None) -> list[str]:
             continue
 
         # Maximum length per pattern
-        if len(pattern) > 200:
+        if len(pattern) > MAX_PATTERN_LENGTH:
             raise HTTPException(
                 status_code=400,
-                detail=f"Pattern too long (max 200 characters): {pattern[:50]}..."
+                detail=f"Pattern too long (max {MAX_PATTERN_LENGTH} characters): {pattern[:50]}..."
             )
 
         # Check for dangerous characters
@@ -172,3 +176,7 @@ def sanitize_glob_patterns(patterns: list[str] | None) -> list[str]:
         sanitized.append(pattern)
 
     return sanitized
+
+
+# Backward compatibility alias
+validate_url_against_ssrf = validate_url

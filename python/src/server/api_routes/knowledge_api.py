@@ -19,7 +19,6 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 # Basic validation - simplified inline version
-
 # Import unified logging
 from ..config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
 from ..services.crawler_manager import get_crawler
@@ -31,6 +30,7 @@ from ..services.search.rag_service import RAGService
 from ..services.storage import DocumentStorageService
 from ..utils import get_supabase_client
 from ..utils.document_processing import extract_text_from_document
+from ..utils.url_validation import sanitize_glob_patterns, validate_url
 
 # Get logger for this module
 logger = get_logger(__name__)
@@ -62,7 +62,7 @@ active_crawl_tasks: dict[str, asyncio.Task] = {}
 async def _validate_provider_api_key(provider: str = None) -> None:
     """Validate LLM provider API key before starting operations."""
     logger.info("🔑 Starting API key validation...")
-    
+
     try:
         # Basic provider validation
         if not provider:
@@ -117,7 +117,7 @@ async def _validate_provider_api_key(provider: str = None) -> None:
                     "provider": provider,
                 },
             )
-            
+
         logger.info(f"✅ {provider.title()} API key validation successful")
 
     except HTTPException:
@@ -129,7 +129,7 @@ async def _validate_provider_api_key(provider: str = None) -> None:
         error_str = str(e)
         sanitized_error = ProviderErrorFactory.sanitize_provider_error(error_str, provider or "openai")
         logger.error(f"❌ Caught exception during API key validation: {sanitized_error}")
-        
+
         # Always fail for any exception during validation - better safe than sorry
         logger.error("🚨 API key validation failed - blocking crawl operation")
         raise HTTPException(
@@ -642,14 +642,14 @@ async def get_knowledge_item_code_examples(
 @router.post("/knowledge-items/{source_id}/refresh")
 async def refresh_knowledge_item(source_id: str):
     """Refresh a knowledge item by re-crawling its URL with the same metadata."""
-    
+
     # Validate API key before starting expensive refresh operation
     logger.info("🔍 About to validate API key for refresh...")
     provider_config = await credential_service.get_active_provider("embedding")
     provider = provider_config.get("provider", "openai")
     await _validate_provider_api_key(provider)
     logger.info("✅ API key validation completed successfully for refresh")
-    
+
     try:
         safe_logfire_info(f"Starting knowledge item refresh | source_id={source_id}")
 
@@ -764,6 +764,9 @@ async def preview_link_collection(request: LinkPreviewRequest):
 
     This endpoint fetches and parses link collection files to show what would be crawled,
     allowing users to review and filter links before starting the actual crawl operation.
+
+    Security: SSRF protection and input validation applied.
+    Note: Authentication and rate limiting should be added via middleware.
     """
     try:
         # Validate URL
@@ -772,6 +775,13 @@ async def preview_link_collection(request: LinkPreviewRequest):
 
         if not request.url.startswith(("http://", "https://")):
             raise HTTPException(status_code=422, detail="URL must start with http:// or https://")
+
+        # SSRF Protection: Validate URL to prevent internal network access
+        validate_url(request.url)
+
+        # Input validation: Sanitize glob patterns
+        sanitized_include = sanitize_glob_patterns(request.url_include_patterns)
+        sanitized_exclude = sanitize_glob_patterns(request.url_exclude_patterns)
 
         safe_logfire_info(f"Preview link collection request | url={request.url}")
 
@@ -810,6 +820,11 @@ async def preview_link_collection(request: LinkPreviewRequest):
             collection_type = "llms-txt" if "llms" in request.url.lower() else "text_file"
             try:
                 import aiohttp
+
+                # TODO: Performance optimization - Consider using a shared aiohttp ClientSession
+                # with connection pooling instead of creating a new session per request.
+                # This would reduce overhead and improve performance for multiple preview requests.
+                # See: https://docs.aiohttp.org/en/stable/client_advanced.html#client-session
 
                 # Fetch file content with aiohttp (faster than full browser crawl)
                 async with aiohttp.ClientSession() as session:
@@ -869,11 +884,11 @@ async def preview_link_collection(request: LinkPreviewRequest):
             parsed = urlparse(link)
             path = parsed.path
 
-            # Check if link matches glob patterns
+            # Check if link matches glob patterns (use sanitized patterns)
             matches_filter = url_handler.matches_glob_patterns(
                 link,
-                request.url_include_patterns if request.url_include_patterns else None,
-                request.url_exclude_patterns if request.url_exclude_patterns else None
+                sanitized_include if sanitized_include else None,
+                sanitized_exclude if sanitized_exclude else None
             )
 
             response_links.append({
@@ -1020,6 +1035,10 @@ async def _perform_crawl_with_progress(
                 "max_depth": request.max_depth,
                 "extract_code_examples": request.extract_code_examples,
                 "generate_summary": True,
+                "url_include_patterns": request.url_include_patterns or [],
+                "url_exclude_patterns": request.url_exclude_patterns or [],
+                "selected_urls": request.selected_urls,
+                "skip_link_review": request.skip_link_review,
             }
 
             # Orchestrate the crawl - this returns immediately with task info including the actual task
@@ -1079,14 +1098,14 @@ async def upload_document(
     extract_code_examples: bool = Form(True),
 ):
     """Upload and process a document with progress tracking."""
-    
-    # Validate API key before starting expensive upload operation  
+
+    # Validate API key before starting expensive upload operation
     logger.info("🔍 About to validate API key for upload...")
     provider_config = await credential_service.get_active_provider("embedding")
     provider = provider_config.get("provider", "openai")
     await _validate_provider_api_key(provider)
     logger.info("✅ API key validation completed successfully for upload")
-    
+
     try:
         # DETAILED LOGGING: Track knowledge_type parameter flow
         safe_logfire_info(
