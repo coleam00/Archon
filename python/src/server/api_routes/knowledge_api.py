@@ -806,7 +806,8 @@ async def preview_link_collection(request: LinkPreviewRequest):
             # Parse sitemap
             collection_type = "sitemap"
             try:
-                sitemap_urls = crawling_service.parse_sitemap(request.url)
+                # Run blocking parse_sitemap in thread pool to avoid blocking event loop
+                sitemap_urls = await asyncio.to_thread(crawling_service.parse_sitemap, request.url)
                 # Sitemaps don't have link text, just URLs
                 links_data = [(url, "") for url in sitemap_urls]
             except Exception as e:

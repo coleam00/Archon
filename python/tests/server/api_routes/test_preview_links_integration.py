@@ -311,17 +311,20 @@ class TestPreviewLinksWithGlobPatterns:
     async def test_llms_full_txt_with_patterns(
         self, mock_aiohttp_session, mock_crawler, mock_supabase
     ):
-        """Test llms-full.txt discovery with glob patterns."""
+        """Test llms-full.txt is NOT treated as a link collection (full-content behavior)."""
         from src.server.api_routes.knowledge_api import LinkPreviewRequest, preview_link_collection
 
         # Mock HTTP response
-        mock_response = AsyncMock()
+        mock_response = MagicMock()
         mock_response.status = 200
         mock_response.text = AsyncMock(return_value=SAMPLE_LLMS_FULL_TXT)
-        mock_session_instance = AsyncMock()
-        mock_session_instance.get = AsyncMock(return_value=mock_response)
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=None)
+
+        mock_session_instance = MagicMock()
+        mock_session_instance.get.return_value = mock_response
         mock_session_instance.__aenter__ = AsyncMock(return_value=mock_session_instance)
-        mock_session_instance.__aexit__ = AsyncMock()
+        mock_session_instance.__aexit__ = AsyncMock(return_value=None)
         mock_aiohttp_session.return_value = mock_session_instance
 
         # Create request
@@ -334,9 +337,11 @@ class TestPreviewLinksWithGlobPatterns:
         # Call endpoint
         result = await preview_link_collection(request)
 
-        # Verify collection type
-        assert result["collection_type"] == "llms-txt"  # llms-full detected as llms-txt
-        assert result["is_link_collection"] is True
+        # Verify: llms-full.txt is explicitly NOT treated as a link collection
+        # It should be crawled as a single page to preserve full-content behavior
+        assert result["is_link_collection"] is False
+        assert result["collection_type"] is None
+        assert "not a link collection" in result["message"].lower()
 
     @pytest.mark.asyncio
     async def test_security_validation_applied(
@@ -440,13 +445,16 @@ class TestPreviewLinksEdgeCases:
 
         with patch("aiohttp.ClientSession") as mock_session:
             # Mock HTML response (not a link collection)
-            mock_response = AsyncMock()
+            mock_response = MagicMock()
             mock_response.status = 200
             mock_response.text = AsyncMock(return_value="<html><body>Regular page</body></html>")
-            mock_session_instance = AsyncMock()
-            mock_session_instance.get = AsyncMock(return_value=mock_response)
+            mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+            mock_response.__aexit__ = AsyncMock(return_value=None)
+
+            mock_session_instance = MagicMock()
+            mock_session_instance.get.return_value = mock_response
             mock_session_instance.__aenter__ = AsyncMock(return_value=mock_session_instance)
-            mock_session_instance.__aexit__ = AsyncMock()
+            mock_session_instance.__aexit__ = AsyncMock(return_value=None)
             mock_session.return_value = mock_session_instance
 
             with patch("src.server.api_routes.knowledge_api.get_crawler") as mock_crawler:
@@ -473,13 +481,16 @@ class TestPreviewLinksEdgeCases:
 
         with patch("aiohttp.ClientSession") as mock_session:
             # Mock empty response
-            mock_response = AsyncMock()
+            mock_response = MagicMock()
             mock_response.status = 200
             mock_response.text = AsyncMock(return_value="# Title\n\n(no links)")
-            mock_session_instance = AsyncMock()
-            mock_session_instance.get = AsyncMock(return_value=mock_response)
+            mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+            mock_response.__aexit__ = AsyncMock(return_value=None)
+
+            mock_session_instance = MagicMock()
+            mock_session_instance.get.return_value = mock_response
             mock_session_instance.__aenter__ = AsyncMock(return_value=mock_session_instance)
-            mock_session_instance.__aexit__ = AsyncMock()
+            mock_session_instance.__aexit__ = AsyncMock(return_value=None)
             mock_session.return_value = mock_session_instance
 
             with patch("src.server.api_routes.knowledge_api.get_crawler") as mock_crawler:
