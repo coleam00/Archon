@@ -28,3 +28,10 @@ UAT/
 
 # Local release notes testing
 release-notes-*.md
+node_modules/
+
+# Docusaurus build artifacts
+docs/.docusaurus/
+docs/build/
+docs/.cache/
+docs/node_modules/
