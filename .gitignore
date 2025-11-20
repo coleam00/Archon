@@ -35,3 +35,4 @@ docs/.docusaurus/
 docs/build/
 docs/.cache/
 docs/node_modules/
+.vscode/settings.json
