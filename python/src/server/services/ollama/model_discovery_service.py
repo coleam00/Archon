@@ -119,13 +119,14 @@ class ModelDiscoveryService:
         self.model_cache[cache_key] = models
         logger.debug(f"Cached {len(models)} models for {instance_url}")
 
-    async def discover_models(self, instance_url: str, fetch_details: bool = False) -> list[OllamaModel]:
+    async def discover_models(self, instance_url: str, fetch_details: bool = False, auth_token: str | None = None) -> list[OllamaModel]:
         """
         Discover all available models from an Ollama instance.
 
         Args:
             instance_url: Base URL of the Ollama instance
             fetch_details: If True, fetch comprehensive model details via /api/show
+            auth_token: Optional authentication token for protected instances
 
         Returns:
             List of OllamaModel objects with discovered capabilities
@@ -188,7 +189,12 @@ class ModelDiscoveryService:
                 # Ollama API endpoint for listing models
                 tags_url = f"{base_url}/api/tags"
 
-                response = await client.get(tags_url)
+                # Prepare headers with optional auth token
+                headers = {}
+                if auth_token:
+                    headers["Authorization"] = f"Bearer {auth_token}"
+
+                response = await client.get(tags_url, headers=headers)
                 response.raise_for_status()
                 data = response.json()
 
@@ -955,12 +961,13 @@ class ModelDiscoveryService:
             logger.error(f"Error getting model info for {model_name}: {e}")
             return None
 
-    async def check_instance_health(self, instance_url: str) -> InstanceHealthStatus:
+    async def check_instance_health(self, instance_url: str, auth_token: str | None = None) -> InstanceHealthStatus:
         """
         Check the health status of an Ollama instance.
 
         Args:
             instance_url: Base URL of the Ollama instance
+            auth_token: Optional authentication token for protected instances
 
         Returns:
             InstanceHealthStatus with current health information
@@ -979,11 +986,16 @@ class ModelDiscoveryService:
         status = InstanceHealthStatus(is_healthy=False)
 
         try:
+            # Prepare headers with optional auth token
+            headers = {}
+            if auth_token:
+                headers["Authorization"] = f"Bearer {auth_token}"
+
             async with httpx.AsyncClient(timeout=httpx.Timeout(10)) as client:
                 # Try to ping the Ollama API
                 ping_url = f"{instance_url.rstrip('/')}/api/tags"
 
-                response = await client.get(ping_url)
+                response = await client.get(ping_url, headers=headers)
                 response.raise_for_status()
 
                 data = response.json()
@@ -1011,13 +1023,19 @@ class ModelDiscoveryService:
 
         return status
 
-    async def discover_models_from_multiple_instances(self, instance_urls: list[str], fetch_details: bool = False) -> dict[str, Any]:
+    async def discover_models_from_multiple_instances(
+        self,
+        instance_urls: list[str],
+        fetch_details: bool = False,
+        auth_tokens: dict[str, str] | None = None
+    ) -> dict[str, Any]:
         """
         Discover models from multiple Ollama instances concurrently.
 
         Args:
             instance_urls: List of Ollama instance URLs
             fetch_details: If True, fetch comprehensive model details via /api/show
+            auth_tokens: Optional dictionary mapping instance URLs to auth tokens
 
         Returns:
             Dictionary with discovery results and aggregated information
@@ -1034,7 +1052,11 @@ class ModelDiscoveryService:
         logger.info(f"Discovering models from {len(instance_urls)} Ollama instances with fetch_details={fetch_details}")
 
         # Discover models from all instances concurrently
-        tasks = [self.discover_models(url, fetch_details=fetch_details) for url in instance_urls]
+        auth_tokens = auth_tokens or {}
+        tasks = [
+            self.discover_models(url, fetch_details=fetch_details, auth_token=auth_tokens.get(url))
+            for url in instance_urls
+        ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Aggregate results
