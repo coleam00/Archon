@@ -588,13 +588,30 @@ async def http_health_endpoint(request: Request):
         }, status_code=500)
 
 
-# Register health endpoint using FastMCP's custom_route decorator
-try:
-    mcp.custom_route("/health", methods=["GET"])(http_health_endpoint)
-    logger.info("✓ HTTP /health endpoint registered successfully")
-except Exception as e:
-    logger.error(f"✗ Failed to register /health endpoint: {e}")
-    logger.error(traceback.format_exc())
+# Register health endpoint - defer until main() when the app is actually created
+# The FastMCP.run() method creates the Starlette app, so we can't register routes at module level
+# We'll register it in the main() function after mcp.run() is called
+
+def register_health_endpoint():
+    """Register health endpoint on the FastMCP instance.
+
+    This must be called after the FastMCP app is initialized but before mcp.run() is called.
+    """
+    try:
+        # FastMCP's custom_route should work if called correctly
+        # Let's try decorating a new function
+
+        @mcp.custom_route("/health", methods=["GET"])
+        async def health_route_handler(request: Request):
+            """Health endpoint registered via custom_route decorator."""
+            return await http_health_endpoint(request)
+
+        logger.info("✓ HTTP /health endpoint registered successfully")
+        return True
+    except Exception as e:
+        logger.error(f"✗ Failed to register /health endpoint: {e}")
+        logger.error(traceback.format_exc())
+        return False
 
 
 def main():
@@ -609,6 +626,9 @@ def main():
 
         mcp_logger.info("🔥 Logfire initialized for MCP server")
         mcp_logger.info(f"🌟 Starting MCP server - host={server_host}, port={server_port}")
+
+        # Register health endpoint before starting the server
+        register_health_endpoint()
 
         mcp.run(transport="streamable-http")
 
