@@ -95,26 +95,50 @@ async def discover_models_endpoint(
     """
     try:
         logger.info(f"Starting model discovery for {len(instance_urls)} instances with fetch_details={fetch_details}")
-        
+
+        # Get auth tokens from RAG settings
+        from ..services.credential_service import credential_service
+        rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+
+        # Extract configured instance URLs and their auth tokens (handle None values)
+        llm_base_url = (rag_settings.get("LLM_BASE_URL") or "").replace("/v1", "").rstrip("/")
+        embedding_base_url = (rag_settings.get("OLLAMA_EMBEDDING_URL") or "").replace("/v1", "").rstrip("/")
+
+        chat_auth_token = rag_settings.get("OLLAMA_CHAT_AUTH_TOKEN") or ""
+        embedding_auth_token = rag_settings.get("OLLAMA_EMBEDDING_AUTH_TOKEN") or ""
+
         # Validate instance URLs
         valid_urls = []
+        auth_tokens_map = {}
         for url in instance_urls:
             try:
                 # Basic URL validation
                 if not url.startswith(('http://', 'https://')):
                     logger.warning(f"Invalid URL format: {url}")
                     continue
-                valid_urls.append(url.rstrip('/'))
+                normalized_url = url.rstrip('/')
+                valid_urls.append(normalized_url)
+
+                # Determine which auth token to use based on URL matching
+                if normalized_url == llm_base_url and chat_auth_token:
+                    auth_tokens_map[normalized_url] = chat_auth_token
+                    logger.info(f"Using chat auth token for {normalized_url}")
+                elif normalized_url == embedding_base_url and embedding_auth_token:
+                    auth_tokens_map[normalized_url] = embedding_auth_token
+                    logger.info(f"Using embedding auth token for {normalized_url}")
+                else:
+                    logger.debug(f"No auth token configured for {normalized_url}")
             except Exception as e:
                 logger.warning(f"Error validating URL {url}: {e}")
 
         if not valid_urls:
             raise HTTPException(status_code=400, detail="No valid instance URLs provided")
 
-        # Perform model discovery with optional detailed fetching
+        # Perform model discovery with optional detailed fetching and auth tokens
         discovery_result = await model_discovery_service.discover_models_from_multiple_instances(
-            valid_urls, 
-            fetch_details=fetch_details
+            valid_urls,
+            fetch_details=fetch_details,
+            auth_tokens=auth_tokens_map
         )
 
         logger.info(f"Discovery complete: {discovery_result['total_models']} models found")
@@ -145,13 +169,28 @@ async def health_check_endpoint(
     include_models: bool = Query(False, description="Include model count in response")
 ) -> dict[str, Any]:
     """
-    Check health status of multiple Ollama instances.
-    
+    Check health status of multiple Ollama instances with auth token support.
+
     Provides real-time health monitoring with response times, model availability,
     and error diagnostics for distributed Ollama deployments.
     """
     try:
         logger.info(f"Checking health for {len(instance_urls)} instances")
+
+        # Get auth tokens from RAG settings for each instance
+        from ..services.credential_service import credential_service
+        rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+
+        # Debug: Log all RAG settings keys
+        logger.info(f"RAG settings keys: {list(rag_settings.keys())}")
+        logger.info(f"RAG settings: {rag_settings}")
+
+        # Extract configured instance URLs and their auth tokens (handle None values)
+        llm_base_url = (rag_settings.get("LLM_BASE_URL") or "").replace("/v1", "").rstrip("/")
+        embedding_base_url = (rag_settings.get("OLLAMA_EMBEDDING_URL") or "").replace("/v1", "").rstrip("/")
+
+        chat_auth_token = rag_settings.get("OLLAMA_CHAT_AUTH_TOKEN") or ""
+        embedding_auth_token = rag_settings.get("OLLAMA_EMBEDDING_AUTH_TOKEN") or ""
 
         health_results = {}
 
@@ -159,7 +198,23 @@ async def health_check_endpoint(
         for instance_url in instance_urls:
             try:
                 url = instance_url.rstrip('/')
-                health_status = await model_discovery_service.check_instance_health(url)
+
+                # Determine which auth token to use based on the URL
+                auth_token = None
+                logger.info(f"Checking instance: {url}")
+                logger.info(f"LLM base URL: {llm_base_url}, Chat token: {'set' if chat_auth_token else 'not set'}")
+                logger.info(f"Embedding base URL: {embedding_base_url}, Embedding token: {'set' if embedding_auth_token else 'not set'}")
+
+                if url == llm_base_url and chat_auth_token:
+                    auth_token = chat_auth_token
+                    logger.info(f"Using chat auth token for {url}")
+                elif url == embedding_base_url and embedding_auth_token:
+                    auth_token = embedding_auth_token
+                    logger.info(f"Using embedding auth token for {url}")
+                else:
+                    logger.warning(f"No matching auth token found for {url}")
+
+                health_status = await model_discovery_service.check_instance_health(url, auth_token=auth_token)
 
                 health_results[url] = {
                     "is_healthy": health_status.is_healthy,
