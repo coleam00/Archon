@@ -1004,22 +1004,46 @@ async def _perform_upload_with_progress(
 
 
         # Create extraction progress callback for granular updates
+        # Store progress updates in a shared dict that we'll check during extraction
+        progress_state = {"percentage": 0, "message": ""}
+
         def extraction_progress_callback(message: str, percentage: int):
             """Synchronous callback for PDF extraction progress"""
             # Map the extraction percentage to overall progress range (10-70%)
             # This maps 0-100% of extraction to 10-70% of overall upload progress
             mapped_percentage = int(10 + (percentage * 0.60))
 
-            # Create async task to update tracker (run in background)
-            async def update_async():
-                await tracker.update(
-                    status="processing",
-                    progress=mapped_percentage,
-                    log=message
-                )
+            # Store in shared state for async polling
+            progress_state["percentage"] = mapped_percentage
+            progress_state["message"] = message
 
-            # Schedule the async update
-            asyncio.create_task(update_async())
+            # Log progress for debugging
+            safe_logfire_info(
+                f"PDF extraction progress callback | percentage={percentage}% | mapped={mapped_percentage}% | message={message}"
+            )
+
+        # Start background task to poll progress_state and update tracker
+        async def poll_extraction_progress():
+            """Poll progress_state and update tracker"""
+            last_percentage = -1
+            while True:
+                current = progress_state["percentage"]
+                if current != last_percentage:
+                    await tracker.update(
+                        status="processing",
+                        progress=current,
+                        log=progress_state["message"]
+                    )
+                    last_percentage = current
+
+                # Stop polling when extraction is complete (100%)
+                if current >= 70:  # 70% is mapped from 100% extraction
+                    break
+
+                await asyncio.sleep(0.5)  # Poll every 500ms
+
+        # Start polling task
+        polling_task = asyncio.create_task(poll_extraction_progress())
 
         try:
             # Pass callback to extraction function for real-time progress
@@ -1029,6 +1053,9 @@ async def _perform_upload_with_progress(
                 content_type,
                 progress_callback=extraction_progress_callback
             )
+
+            # Wait for polling to finish
+            await polling_task
             safe_logfire_info(
                 f"Document text extracted | filename={filename} | extracted_length={len(extracted_text)} | content_type={content_type}"
             )
