@@ -115,11 +115,17 @@ class TestAsyncLLMProviderService:
                 mock_credential_service.get_active_provider.assert_called_once_with("llm")
 
     @pytest.mark.asyncio
-    async def test_get_llm_client_ollama_success(
+    async def test_get_llm_client_ollama_success_with_auth_token(
         self, mock_credential_service, ollama_provider_config
     ):
-        """Test successful Ollama client creation"""
+        """Test successful Ollama client creation with auth token"""
         mock_credential_service.get_active_provider.return_value = ollama_provider_config
+        # Mock RAG settings to provide the auth token
+        mock_credential_service.get_credentials_by_category.return_value = {
+            "OLLAMA_CHAT_AUTH_TOKEN": "test-ollama-token",
+            "OLLAMA_EMBEDDING_AUTH_TOKEN": "test-ollama-token",
+            "LLM_BASE_URL": "http://host.docker.internal:11434",
+        }
 
         with patch(
             "src.server.services.llm_provider_service.credential_service", mock_credential_service
@@ -133,7 +139,36 @@ class TestAsyncLLMProviderService:
                 async with get_llm_client() as client:
                     assert client == mock_client
                     mock_openai.assert_called_once_with(
-                        api_key="ollama", base_url="http://host.docker.internal:11434/v1"
+                        api_key="test-ollama-token", base_url="http://host.docker.internal:11434/v1"
+                    )
+
+    @pytest.mark.asyncio
+    async def test_get_llm_client_ollama_success_without_auth_token(
+        self, mock_credential_service, ollama_provider_config
+    ):
+        """Test successful Ollama client creation without auth token (local Ollama)"""
+        mock_credential_service.get_active_provider.return_value = ollama_provider_config
+        # Mock RAG settings without auth token (typical local Ollama setup)
+        mock_credential_service.get_credentials_by_category.return_value = {
+            "OLLAMA_CHAT_AUTH_TOKEN": "",
+            "OLLAMA_EMBEDDING_AUTH_TOKEN": "",
+            "LLM_BASE_URL": "http://host.docker.internal:11434",
+        }
+
+        with patch(
+            "src.server.services.llm_provider_service.credential_service", mock_credential_service
+        ):
+            with patch(
+                "src.server.services.llm_provider_service.openai.AsyncOpenAI"
+            ) as mock_openai:
+                mock_client = self._make_mock_client()
+                mock_openai.return_value = mock_client
+
+                async with get_llm_client() as client:
+                    assert client == mock_client
+                    # When no auth token is set, "required-but-ignored" is used as placeholder
+                    mock_openai.assert_called_once_with(
+                        api_key="required-but-ignored", base_url="http://host.docker.internal:11434/v1"
                     )
 
     @pytest.mark.asyncio
@@ -221,8 +256,11 @@ class TestAsyncLLMProviderService:
             "embedding_model": "text-embedding-3-small",
         }
         mock_credential_service.get_active_provider.return_value = config_without_key
+        # Mock RAG settings to provide the fallback Ollama config (no auth token = use placeholder)
         mock_credential_service.get_credentials_by_category = AsyncMock(return_value={
-            "LLM_BASE_URL": "http://host.docker.internal:11434"
+            "LLM_BASE_URL": "http://host.docker.internal:11434",
+            "OLLAMA_CHAT_AUTH_TOKEN": "",
+            "OLLAMA_EMBEDDING_AUTH_TOKEN": "",
         })
 
         with patch(
@@ -238,8 +276,9 @@ class TestAsyncLLMProviderService:
                 async with get_llm_client() as client:
                     assert client == mock_client
                     # Verify it created an Ollama client with correct params
+                    # When no auth token is set, "required-but-ignored" is used as placeholder
                     mock_openai.assert_called_once_with(
-                        api_key="ollama",
+                        api_key="required-but-ignored",
                         base_url="http://host.docker.internal:11434/v1"
                     )
 
@@ -494,6 +533,13 @@ class TestAsyncLLMProviderService:
                 "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
             },
         ]
+
+        # Mock RAG settings for Ollama provider (needed for auth token lookup)
+        mock_credential_service.get_credentials_by_category.return_value = {
+            "OLLAMA_CHAT_AUTH_TOKEN": "test-token",
+            "OLLAMA_EMBEDDING_AUTH_TOKEN": "test-token",
+            "LLM_BASE_URL": "http://host.docker.internal:11434",
+        }
 
         with patch(
             "src.server.services.llm_provider_service.credential_service", mock_credential_service

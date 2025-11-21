@@ -142,12 +142,12 @@ async def reconcile_state(
         # Clean up orphaned worktrees
         worktree_base = Path(config.WORKTREE_BASE_DIR)
         base_dir_resolved = os.path.abspath(os.path.normpath(str(worktree_base)))
-        
+
         for orphan_path in orphans:
             try:
                 # Safety check: verify orphan_path is inside worktree base directory
                 orphan_path_resolved = os.path.abspath(os.path.normpath(orphan_path))
-                
+
                 # Verify path is within base directory and not the base directory itself
                 try:
                     common_path = os.path.commonpath([base_dir_resolved, orphan_path_resolved])
@@ -164,11 +164,11 @@ async def reconcile_state(
                     is_inside_base = False
                     is_not_base = True
                     is_not_root = True
-                
+
                 if is_inside_base and is_not_base and is_not_root:
-                shutil.rmtree(orphan_path)
-                actions.append(f"Deleted orphaned worktree: {orphan_path}")
-                logger.info("orphaned_worktree_deleted", path=orphan_path)
+                    shutil.rmtree(orphan_path)
+                    actions.append(f"Deleted orphaned worktree: {orphan_path}")
+                    logger.info("orphaned_worktree_deleted", path=orphan_path)
                 else:
                     # Safety check failed - do not delete
                     actions.append(f"Skipped deletion of {orphan_path} (safety check failed: outside worktree base or invalid path)")
