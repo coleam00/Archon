@@ -213,7 +213,12 @@ def _clean_html_to_text(html_content: str) -> str:
     return processed_html.strip()
 
 
-def extract_text_from_document(file_content: bytes, filename: str, content_type: str) -> str:
+def extract_text_from_document(
+    file_content: bytes,
+    filename: str,
+    content_type: str,
+    progress_callback: callable = None
+) -> str:
     """
     Extract text from various document formats.
 
@@ -221,6 +226,7 @@ def extract_text_from_document(file_content: bytes, filename: str, content_type:
         file_content: Raw file bytes
         filename: Name of the file
         content_type: MIME type of the file
+        progress_callback: Optional callback function(message: str, percentage: int) for progress updates
 
     Returns:
         Extracted text content
@@ -232,7 +238,7 @@ def extract_text_from_document(file_content: bytes, filename: str, content_type:
     try:
         # PDF files
         if content_type == "application/pdf" or filename.lower().endswith(".pdf"):
-            return extract_text_from_pdf(file_content)
+            return extract_text_from_pdf(file_content, progress_callback)
 
         # Word documents
         elif content_type in [
@@ -279,7 +285,10 @@ def extract_text_from_document(file_content: bytes, filename: str, content_type:
         raise Exception(f"Failed to extract text from {filename}") from e
 
 
-def extract_text_from_pdf_docling(file_content: bytes) -> str:
+def extract_text_from_pdf_docling(
+    file_content: bytes,
+    progress_callback: callable = None
+) -> str:
     """
     Extract text from PDF using Docling (IBM's document converter).
 
@@ -289,6 +298,7 @@ def extract_text_from_pdf_docling(file_content: bytes) -> str:
 
     Args:
         file_content: Raw PDF bytes
+        progress_callback: Optional callback function(message: str, percentage: int) for progress updates
 
     Returns:
         Extracted text content in Markdown format
@@ -304,16 +314,28 @@ def extract_text_from_pdf_docling(file_content: bytes) -> str:
         import tempfile
         import os
 
+        if progress_callback:
+            progress_callback("Preparing PDF for processing...", 5)
+
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_file:
             tmp_file.write(file_content)
             tmp_path = tmp_file.name
 
         try:
+            if progress_callback:
+                progress_callback("Initializing Docling converter...", 15)
+
             # Initialize Docling converter
             converter = DocumentConverter()
 
+            if progress_callback:
+                progress_callback("Analyzing PDF structure with computer vision...", 25)
+
             # Convert PDF to document object
             result = converter.convert(tmp_path)
+
+            if progress_callback:
+                progress_callback("Extracting text and preserving layout...", 60)
 
             # Export to Markdown format
             markdown_text = result.document.export_to_markdown()
@@ -321,8 +343,14 @@ def extract_text_from_pdf_docling(file_content: bytes) -> str:
             if not markdown_text or len(markdown_text.strip()) < 10:
                 raise ValueError("Docling extracted insufficient text from PDF")
 
+            if progress_callback:
+                progress_callback("Fixing Unicode ligatures (fi, fl, ff)...", 85)
+
             # Fix Unicode ligatures (fi, fl, ff, etc.) that PDFs encode incorrectly
             markdown_text = _fix_unicode_ligatures(markdown_text)
+
+            if progress_callback:
+                progress_callback("PDF extraction complete!", 100)
 
             logger.info(f"🚀 Docling extracted {len(markdown_text)} characters from PDF")
             return markdown_text
@@ -337,7 +365,10 @@ def extract_text_from_pdf_docling(file_content: bytes) -> str:
         raise Exception(f"Docling failed to extract text from PDF: {e}") from e
 
 
-def extract_text_from_pdf(file_content: bytes) -> str:
+def extract_text_from_pdf(
+    file_content: bytes,
+    progress_callback: callable = None
+) -> str:
     """
     Extract text from PDF using the best available library.
 
@@ -348,6 +379,7 @@ def extract_text_from_pdf(file_content: bytes) -> str:
 
     Args:
         file_content: Raw PDF bytes
+        progress_callback: Optional callback function(message: str, percentage: int) for progress updates
 
     Returns:
         Extracted text content
@@ -360,65 +392,101 @@ def extract_text_from_pdf(file_content: bytes) -> str:
     # Try Docling first (best quality)
     if DOCLING_AVAILABLE:
         try:
-            return extract_text_from_pdf_docling(file_content)
+            return extract_text_from_pdf_docling(file_content, progress_callback)
         except Exception as e:
             logfire.warning(f"Docling extraction failed, trying fallback methods: {e}")
+            if progress_callback:
+                progress_callback("Docling failed, trying fallback parser...", 10)
 
     text_content = []
 
     # First try with pdfplumber (better for complex layouts)
     if PDFPLUMBER_AVAILABLE:
         try:
+            if progress_callback:
+                progress_callback("Using pdfplumber parser...", 15)
+
             with pdfplumber.open(io.BytesIO(file_content)) as pdf:
+                total_pages = len(pdf.pages)
                 for page_num, page in enumerate(pdf.pages):
                     try:
                         page_text = page.extract_text()
                         if page_text:
                             text_content.append(f"--- Page {page_num + 1} ---\n{page_text}")
+
+                        # Report progress per page
+                        if progress_callback and total_pages > 0:
+                            percentage = int(20 + ((page_num + 1) / total_pages) * 60)  # 20-80%
+                            progress_callback(f"Extracting page {page_num + 1}/{total_pages}...", percentage)
                     except Exception as e:
                         logfire.warning(f"pdfplumber failed on page {page_num + 1}: {e}")
                         continue
 
             # If pdfplumber got good results, use them
             if text_content and len("\n".join(text_content).strip()) > 100:
+                if progress_callback:
+                    progress_callback("Processing code blocks...", 85)
+
                 combined_text = "\n\n".join(text_content)
                 logger.info(f"🔍 PDF DEBUG: Extracted {len(text_content)} pages, total length: {len(combined_text)}")
                 logger.info(f"🔍 PDF DEBUG: First 500 chars: {repr(combined_text[:500])}")
-                
+
                 # Check for backticks before and after processing
                 backtick_count_before = combined_text.count("```")
                 logger.info(f"🔍 PDF DEBUG: Backticks found before processing: {backtick_count_before}")
-                
+
                 processed_text = _preserve_code_blocks_across_pages(combined_text)
                 backtick_count_after = processed_text.count("```")
                 logger.info(f"🔍 PDF DEBUG: Backticks found after processing: {backtick_count_after}")
-                
+
                 if backtick_count_after > 0:
                     logger.info(f"🔍 PDF DEBUG: Sample after processing: {repr(processed_text[:1000])}")
-                
+
+                if progress_callback:
+                    progress_callback("PDF extraction complete!", 100)
+
                 return processed_text
 
         except Exception as e:
             logfire.warning(f"pdfplumber extraction failed: {e}, trying PyPDF2")
+            if progress_callback:
+                progress_callback("pdfplumber failed, trying PyPDF2...", 15)
 
     # Fallback to PyPDF2
     if PYPDF2_AVAILABLE:
         try:
+            if progress_callback:
+                progress_callback("Using PyPDF2 parser...", 20)
+
             text_content = []
             pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_content))
+            total_pages = len(pdf_reader.pages)
 
             for page_num, page in enumerate(pdf_reader.pages):
                 try:
                     page_text = page.extract_text()
                     if page_text:
                         text_content.append(f"--- Page {page_num + 1} ---\n{page_text}")
+
+                    # Report progress per page
+                    if progress_callback and total_pages > 0:
+                        percentage = int(25 + ((page_num + 1) / total_pages) * 60)  # 25-85%
+                        progress_callback(f"Extracting page {page_num + 1}/{total_pages}...", percentage)
                 except Exception as e:
                     logfire.warning(f"PyPDF2 failed on page {page_num + 1}: {e}")
                     continue
 
             if text_content:
+                if progress_callback:
+                    progress_callback("Processing code blocks...", 90)
+
                 combined_text = "\n\n".join(text_content)
-                return _preserve_code_blocks_across_pages(combined_text)
+                processed_text = _preserve_code_blocks_across_pages(combined_text)
+
+                if progress_callback:
+                    progress_callback("PDF extraction complete!", 100)
+
+                return processed_text
             else:
                 raise ValueError(
                     "No text extracted from PDF: file may be empty, images-only, "

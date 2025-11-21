@@ -1003,16 +1003,32 @@ async def _perform_upload_with_progress(
         )
 
 
-        # Extract text from document with progress - use mapper for consistent progress
-        mapped_progress = progress_mapper.map_progress("processing", 50)
-        await tracker.update(
-            status="processing",
-            progress=mapped_progress,
-            log=f"Extracting text from {filename}"
-        )
+        # Create extraction progress callback for granular updates
+        def extraction_progress_callback(message: str, percentage: int):
+            """Synchronous callback for PDF extraction progress"""
+            # Map the extraction percentage to overall progress range (10-70%)
+            # This maps 0-100% of extraction to 10-70% of overall upload progress
+            mapped_percentage = int(10 + (percentage * 0.60))
+
+            # Create async task to update tracker (run in background)
+            async def update_async():
+                await tracker.update(
+                    status="processing",
+                    progress=mapped_percentage,
+                    log=message
+                )
+
+            # Schedule the async update
+            asyncio.create_task(update_async())
 
         try:
-            extracted_text = extract_text_from_document(file_content, filename, content_type)
+            # Pass callback to extraction function for real-time progress
+            extracted_text = extract_text_from_document(
+                file_content,
+                filename,
+                content_type,
+                progress_callback=extraction_progress_callback
+            )
             safe_logfire_info(
                 f"Document text extracted | filename={filename} | extracted_length={len(extracted_text)} | content_type={content_type}"
             )
