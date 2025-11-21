@@ -22,7 +22,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install runtime dependencies for Playwright (minimal set)
+# Install runtime dependencies for Playwright and Docling
 RUN apt-get update && apt-get install -y \
     wget \
     ca-certificates \
@@ -45,6 +45,9 @@ RUN apt-get update && apt-get install -y \
     libxkbcommon0 \
     libxrandr2 \
     xdg-utils \
+    libgl1 \
+    libglib2.0-0 \
+    libgomp1 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 

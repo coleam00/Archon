@@ -62,6 +62,8 @@ def extract_text_from_pdf(file_content: bytes) -> str:
 
 ## Installation
 
+### Local Development
+
 Docling is included in the server dependencies:
 
 ```bash
@@ -71,6 +73,20 @@ uv sync --group server
 
 # Docling and docling-core will be installed automatically
 ```
+
+### Docker Deployment
+
+Docling is automatically installed during Docker build:
+
+```bash
+# Build server container
+docker compose build archon-server
+
+# Or build and start all services
+docker compose up --build
+```
+
+**Note**: First build takes ~5-10 minutes due to Docling dependencies (torch, opencv-python, etc.)
 
 ## Testing
 
