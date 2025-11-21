@@ -254,10 +254,10 @@ async def health_check_endpoint(
 ```sql
              key             |                  value                  |   category
 -----------------------------+-----------------------------------------+--------------
- LLM_BASE_URL                | https://ollama.brusdeylins.info         | rag_strategy
- OLLAMA_CHAT_AUTH_TOKEN      | ollama_13107e338aa16a6a8295592ce050f6cb | rag_strategy
- OLLAMA_EMBEDDING_AUTH_TOKEN | ollama_13107e338aa16a6a8295592ce050f6cb | rag_strategy
- OLLAMA_EMBEDDING_URL        | https://ollama.brusdeylins.info         | rag_strategy
+ LLM_BASE_URL                | https://your-ollama-instance.example    | rag_strategy
+ OLLAMA_CHAT_AUTH_TOKEN      | ollama_xxx_placeholder_token            | rag_strategy
+ OLLAMA_EMBEDDING_AUTH_TOKEN | ollama_xxx_placeholder_token            | rag_strategy
+ OLLAMA_EMBEDDING_URL        | https://your-ollama-instance.example    | rag_strategy
 ```
 
 **Health-Check-Test**: Erfolgreiche Authentifizierung mit geschützter Instanz:
@@ -270,7 +270,7 @@ async def health_check_endpoint(
         "average_response_time_ms": 672.12
     },
     "instance_status": {
-        "https://ollama.brusdeylins.info": {
+        "https://your-ollama-instance.example": {
             "is_healthy": true,
             "response_time_ms": 672.12,
             "models_available": 5,

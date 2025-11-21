@@ -116,16 +116,17 @@ async def discover_models_endpoint(
                 if not url.startswith(('http://', 'https://')):
                     logger.warning(f"Invalid URL format: {url}")
                     continue
-                normalized_url = url.rstrip('/')
+                # Normalize URL: remove /v1 suffix and trailing slash for consistent comparison
+                normalized_url = url.replace("/v1", "").rstrip("/")
                 valid_urls.append(normalized_url)
 
                 # Determine which auth token to use based on URL matching
                 if normalized_url == llm_base_url and chat_auth_token:
                     auth_tokens_map[normalized_url] = chat_auth_token
-                    logger.info(f"Using chat auth token for {normalized_url}")
+                    logger.debug(f"Using chat auth token for {normalized_url}")
                 elif normalized_url == embedding_base_url and embedding_auth_token:
                     auth_tokens_map[normalized_url] = embedding_auth_token
-                    logger.info(f"Using embedding auth token for {normalized_url}")
+                    logger.debug(f"Using embedding auth token for {normalized_url}")
                 else:
                     logger.debug(f"No auth token configured for {normalized_url}")
             except Exception as e:
@@ -181,9 +182,8 @@ async def health_check_endpoint(
         from ..services.credential_service import credential_service
         rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
 
-        # Debug: Log all RAG settings keys
-        logger.info(f"RAG settings keys: {list(rag_settings.keys())}")
-        logger.info(f"RAG settings: {rag_settings}")
+        # Debug: Log available keys only (not values to avoid leaking secrets)
+        logger.debug(f"RAG settings keys: {list(rag_settings.keys())}")
 
         # Extract configured instance URLs and their auth tokens (handle None values)
         llm_base_url = (rag_settings.get("LLM_BASE_URL") or "").replace("/v1", "").rstrip("/")
@@ -197,22 +197,23 @@ async def health_check_endpoint(
         # Check health for each instance
         for instance_url in instance_urls:
             try:
-                url = instance_url.rstrip('/')
+                # Normalize both incoming URL and configured URLs the same way
+                # Remove /v1 suffix and trailing slash for consistent comparison
+                url = instance_url.replace("/v1", "").rstrip("/")
 
                 # Determine which auth token to use based on the URL
                 auth_token = None
-                logger.info(f"Checking instance: {url}")
-                logger.info(f"LLM base URL: {llm_base_url}, Chat token: {'set' if chat_auth_token else 'not set'}")
-                logger.info(f"Embedding base URL: {embedding_base_url}, Embedding token: {'set' if embedding_auth_token else 'not set'}")
+                logger.debug(f"Checking instance: {url} (original: {instance_url})")
+                logger.debug(f"LLM base URL: {llm_base_url}, Embedding base URL: {embedding_base_url}")
 
                 if url == llm_base_url and chat_auth_token:
                     auth_token = chat_auth_token
-                    logger.info(f"Using chat auth token for {url}")
+                    logger.debug(f"Using chat auth token for {url}")
                 elif url == embedding_base_url and embedding_auth_token:
                     auth_token = embedding_auth_token
-                    logger.info(f"Using embedding auth token for {url}")
+                    logger.debug(f"Using embedding auth token for {url}")
                 else:
-                    logger.warning(f"No matching auth token found for {url}")
+                    logger.debug(f"No matching auth token found for {url}")
 
                 health_status = await model_discovery_service.check_instance_health(url, auth_token=auth_token)
 

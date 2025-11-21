@@ -110,7 +110,8 @@ Erstellt folgende Tabellen:
 SUPABASE_URL=http://host.docker.internal:54321
 
 # JWT Service Role Key (generiert mit lokalem JWT_SECRET)
-SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UiLCJpYXQiOjE3NjM2NTg1MDYsImV4cCI6MjA3OTAxODUwNn0.HVH5TgwW70JZtiGdnjU4RGexDDVbGnI3mXt-diQhVy8
+# WICHTIG: Generiere dein eigenes Token mit dem Script in Abschnitt "JWT-Token-Problem und Lösung"
+SUPABASE_SERVICE_KEY=<YOUR_SUPABASE_SERVICE_KEY>
 
 # Service Ports
 ARCHON_SERVER_PORT=8181
