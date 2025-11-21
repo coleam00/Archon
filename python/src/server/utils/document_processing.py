@@ -31,6 +31,13 @@ try:
 except ImportError:
     DOCX_AVAILABLE = False
 
+try:
+    from docling.document_converter import DocumentConverter
+
+    DOCLING_AVAILABLE = True
+except ImportError:
+    DOCLING_AVAILABLE = False
+
 from ..config.logfire_config import get_logger, logfire
 
 logger = get_logger(__name__)
@@ -221,9 +228,69 @@ def extract_text_from_document(file_content: bytes, filename: str, content_type:
         raise Exception(f"Failed to extract text from {filename}") from e
 
 
+def extract_text_from_pdf_docling(file_content: bytes) -> str:
+    """
+    Extract text from PDF using Docling (IBM's document converter).
+
+    Docling provides superior layout recognition, table extraction, and formula handling
+    compared to traditional PDF parsers. It uses computer vision models to understand
+    document structure.
+
+    Args:
+        file_content: Raw PDF bytes
+
+    Returns:
+        Extracted text content in Markdown format
+
+    Raises:
+        Exception: If Docling extraction fails
+    """
+    if not DOCLING_AVAILABLE:
+        raise Exception("Docling library not available. Please install docling.")
+
+    try:
+        # Create temporary file from bytes (Docling requires file path)
+        import tempfile
+        import os
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_file:
+            tmp_file.write(file_content)
+            tmp_path = tmp_file.name
+
+        try:
+            # Initialize Docling converter
+            converter = DocumentConverter()
+
+            # Convert PDF to document object
+            result = converter.convert(tmp_path)
+
+            # Export to Markdown format
+            markdown_text = result.document.export_to_markdown()
+
+            if not markdown_text or len(markdown_text.strip()) < 10:
+                raise ValueError("Docling extracted insufficient text from PDF")
+
+            logger.info(f"🚀 Docling extracted {len(markdown_text)} characters from PDF")
+            return markdown_text
+
+        finally:
+            # Clean up temporary file
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+    except Exception as e:
+        logfire.warning(f"Docling PDF extraction failed: {e}")
+        raise Exception(f"Docling failed to extract text from PDF: {e}") from e
+
+
 def extract_text_from_pdf(file_content: bytes) -> str:
     """
-    Extract text from PDF using both PyPDF2 and pdfplumber for best results.
+    Extract text from PDF using the best available library.
+
+    Priority:
+    1. Docling (best quality, layout preservation, table extraction)
+    2. pdfplumber (good for complex layouts)
+    3. PyPDF2 (fallback for simple PDFs)
 
     Args:
         file_content: Raw PDF bytes
@@ -231,10 +298,17 @@ def extract_text_from_pdf(file_content: bytes) -> str:
     Returns:
         Extracted text content
     """
-    if not PDFPLUMBER_AVAILABLE and not PYPDF2_AVAILABLE:
+    if not DOCLING_AVAILABLE and not PDFPLUMBER_AVAILABLE and not PYPDF2_AVAILABLE:
         raise Exception(
-            "No PDF processing libraries available. Please install pdfplumber and PyPDF2."
+            "No PDF processing libraries available. Please install docling, pdfplumber, or PyPDF2."
         )
+
+    # Try Docling first (best quality)
+    if DOCLING_AVAILABLE:
+        try:
+            return extract_text_from_pdf_docling(file_content)
+        except Exception as e:
+            logfire.warning(f"Docling extraction failed, trying fallback methods: {e}")
 
     text_content = []
 
