@@ -43,42 +43,93 @@ from ..config.logfire_config import get_logger, logfire
 logger = get_logger(__name__)
 
 
+def _fix_unicode_ligatures(text: str) -> str:
+    """
+    Replace Unicode Private Use Area ligature codes with normal characters.
+
+    Many PDFs encode ligatures like 'fi', 'fl', 'ff' using Unicode Private Use Area
+    characters (U+FB00 to U+FB06). Docling sometimes preserves these as escaped codes
+    like '/uniFB01' instead of rendering them as normal text.
+
+    This function replaces both the escaped form and actual Unicode characters.
+    """
+    import re
+
+    # Map of ligature codes to their replacements
+    ligature_map = {
+        '/uniFB00': 'ff',
+        '/uniFB01': 'fi',
+        '/uniFB02': 'fl',
+        '/uniFB03': 'ffi',
+        '/uniFB04': 'ffl',
+        '/uniFB05': 'ft',
+        '/uniFB06': 'st',
+        '\ufb00': 'ff',  # Actual Unicode characters
+        '\ufb01': 'fi',
+        '\ufb02': 'fl',
+        '\ufb03': 'ffi',
+        '\ufb04': 'ffl',
+        '\ufb05': 'ft',
+        '\ufb06': 'st',
+    }
+
+    # Replace all ligatures
+    for ligature, replacement in ligature_map.items():
+        text = text.replace(ligature, replacement)
+
+    # Also handle any other /uniXXXX patterns (generic fallback)
+    # Pattern: /uni followed by 4 hex digits
+    def replace_uni_code(match):
+        hex_code = match.group(1)
+        try:
+            # Convert hex to Unicode character
+            char_code = int(hex_code, 16)
+            return chr(char_code)
+        except (ValueError, OverflowError):
+            # If conversion fails, return original
+            return match.group(0)
+
+    text = re.sub(r'/uni([0-9A-Fa-f]{4})', replace_uni_code, text)
+
+    return text
+
+
 def _preserve_code_blocks_across_pages(text: str) -> str:
     """
     Fix code blocks that were split across PDF page boundaries.
-    
+
     PDFs often break markdown code blocks with page headers like:
     ```python
     def hello():
     --- Page 2 ---
         return "world"
     ```
-    
+
     This function rejoins split code blocks by removing page separators
     that appear within code blocks.
     """
     import re
-    
+
     # Pattern to match page separators that split code blocks
     # Look for: ``` [content] --- Page N --- [content] ```
     page_break_in_code_pattern = r'(```\w*[^\n]*\n(?:[^`]|`(?!``))*)(\n--- Page \d+ ---\n)((?:[^`]|`(?!``))*)```'
-    
+
     # Keep merging until no more splits are found
     while True:
         matches = list(re.finditer(page_break_in_code_pattern, text, re.DOTALL))
         if not matches:
             break
-            
+
         # Replace each match by removing the page separator
         for match in reversed(matches):  # Reverse to maintain positions
             before_page_break = match.group(1)
-            page_separator = match.group(2) 
+            page_separator = match.group(2)
             after_page_break = match.group(3)
-            
+
             # Rejoin the code block without the page separator
             rejoined = f"{before_page_break}\n{after_page_break}```"
             text = text[:match.start()] + rejoined + text[match.end():]
-    
+
     return text
 
 
@@ -269,6 +320,9 @@ def extract_text_from_pdf_docling(file_content: bytes) -> str:
 
             if not markdown_text or len(markdown_text.strip()) < 10:
                 raise ValueError("Docling extracted insufficient text from PDF")
+
+            # Fix Unicode ligatures (fi, fl, ff, etc.) that PDFs encode incorrectly
+            markdown_text = _fix_unicode_ligatures(markdown_text)
 
             logger.info(f"🚀 Docling extracted {len(markdown_text)} characters from PDF")
             return markdown_text
