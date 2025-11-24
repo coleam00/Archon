@@ -1,0 +1,5 @@
+# Archon MCP Proxy Bundle - Minimal Dependencies
+# Python 3.12+ required
+
+# HTTP client for proxying requests to Archon
+httpx>=0.27.0
