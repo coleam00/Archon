@@ -33,6 +33,18 @@ except ImportError:
 
 from ..config.logfire_config import get_logger, logfire
 
+# Import Docling processing utilities
+try:
+    from .docling_processing import (
+        create_rag_chunks_with_docling,
+        is_docling_available,
+        process_document_with_docling,
+    )
+    
+    DOCLING_INTEGRATION_AVAILABLE = True
+except ImportError:
+    DOCLING_INTEGRATION_AVAILABLE = False
+
 logger = get_logger(__name__)
 
 
@@ -158,6 +170,8 @@ def _clean_html_to_text(html_content: str) -> str:
 def extract_text_from_document(file_content: bytes, filename: str, content_type: str) -> str:
     """
     Extract text from various document formats.
+    
+    Uses Docling for advanced processing when available, with fallback to legacy processors.
 
     Args:
         file_content: Raw file bytes
@@ -172,6 +186,23 @@ def extract_text_from_document(file_content: bytes, filename: str, content_type:
         Exception: If extraction fails
     """
     try:
+        # Try Docling first if available and format is supported
+        if DOCLING_INTEGRATION_AVAILABLE and is_docling_available():
+            try:
+                text, metadata = process_document_with_docling(file_content, filename, content_type)
+                if text and text.strip():
+                    logger.info(f"Successfully processed {filename} with Docling")
+                    return text
+                else:
+                    logger.warning(f"Docling returned empty text for {filename}, falling back to legacy processors")
+            except ValueError as docling_error:
+                # Docling doesn't support this format, continue to legacy processors
+                logger.debug(f"Docling doesn't support {filename}: {docling_error}")
+            except Exception as docling_error:
+                # Docling failed, log warning and continue to legacy processors
+                logger.warning(f"Docling processing failed for {filename}: {docling_error}. Falling back to legacy processors.")
+        
+        # Legacy document processing (existing logic)
         # PDF files
         if content_type == "application/pdf" or filename.lower().endswith(".pdf"):
             return extract_text_from_pdf(file_content)
@@ -342,3 +373,128 @@ def extract_text_from_docx(file_content: bytes) -> str:
 
     except Exception as e:
         raise Exception("Failed to extract text from Word document") from e
+
+
+def extract_and_chunk_for_rag(
+    file_content: bytes, 
+    filename: str, 
+    content_type: str,
+    max_tokens_per_chunk: int = 512
+) -> tuple[str, list[dict], dict]:
+    """
+    Extract text and create intelligent chunks optimized for RAG operations.
+    
+    Uses Docling's HybridChunker for semantic-aware chunking when available,
+    with fallback to basic text extraction and simple chunking.
+
+    Args:
+        file_content: Raw file bytes
+        filename: Name of the file
+        content_type: MIME type of the file
+        max_tokens_per_chunk: Maximum tokens per chunk for embeddings
+
+    Returns:
+        Tuple of (full_text, chunk_list, metadata)
+        - full_text: Complete extracted text
+        - chunk_list: List of chunk dictionaries with text and metadata
+        - metadata: Document-level metadata
+
+    Raises:
+        ValueError: If the file format is not supported
+        Exception: If extraction fails
+    """
+    try:
+        # Try Docling's complete RAG processing pipeline first
+        if DOCLING_INTEGRATION_AVAILABLE and is_docling_available():
+            try:
+                chunks, doc_metadata = create_rag_chunks_with_docling(
+                    file_content, filename, content_type, max_tokens_per_chunk
+                )
+                
+                # Reconstruct full text from chunks for backward compatibility
+                full_text = "\n\n".join(chunk["text"] for chunk in chunks)
+                
+                logger.info(
+                    f"Successfully processed {filename} with Docling RAG pipeline: "
+                    f"{len(chunks)} chunks created"
+                )
+                
+                return full_text, chunks, doc_metadata
+                
+            except ValueError as docling_error:
+                # Docling doesn't support this format, continue to legacy processing
+                logger.debug(f"Docling doesn't support {filename}: {docling_error}")
+            except Exception as docling_error:
+                # Docling failed, log warning and continue to legacy processing
+                logger.warning(
+                    f"Docling RAG processing failed for {filename}: {docling_error}. "
+                    f"Falling back to legacy processing with simple chunking."
+                )
+        
+        # Fallback to legacy extraction + simple chunking
+        full_text = extract_text_from_document(file_content, filename, content_type)
+        
+        # Create simple chunks as fallback
+        chunks = _create_simple_chunks(full_text, max_tokens_per_chunk)
+        
+        # Basic metadata
+        metadata = {
+            "docling_processed": False,
+            "original_filename": filename,
+            "content_type": content_type,
+            "extraction_method": "legacy",
+            "chunking_method": "simple_token_based",
+            "total_chunks": len(chunks),
+            "chunk_token_limit": max_tokens_per_chunk
+        }
+        
+        logger.info(
+            f"Processed {filename} with legacy methods: {len(chunks)} chunks created"
+        )
+        
+        return full_text, chunks, metadata
+        
+    except Exception as e:
+        logfire.error(
+            "Document RAG processing failed",
+            filename=filename,
+            content_type=content_type,
+            error=str(e),
+        )
+        raise Exception(f"Failed to process {filename} for RAG") from e
+
+
+def _create_simple_chunks(text: str, max_tokens_per_chunk: int = 512) -> list[dict]:
+    """
+    Create simple word-based chunks as fallback when Docling is not available.
+    
+    Args:
+        text: Text to chunk
+        max_tokens_per_chunk: Maximum tokens per chunk
+        
+    Returns:
+        List of chunk dictionaries
+    """
+    words = text.split()
+    # Rough estimation: 1 token ≈ 0.75 words for English text
+    words_per_chunk = int(max_tokens_per_chunk * 0.75)
+    
+    chunks = []
+    for i in range(0, len(words), words_per_chunk):
+        chunk_words = words[i:i + words_per_chunk]
+        chunk_text = " ".join(chunk_words)
+        
+        chunk_data = {
+            "text": chunk_text,
+            "chunk_index": i // words_per_chunk,
+            "chunk_type": "simple_word_based",
+            "token_count": len(chunk_words),  # Rough estimate
+            "metadata": {
+                "chunking_method": "simple_word_based",
+                "chunk_boundaries": "word_based",
+                "fallback_chunking": True
+            }
+        }
+        chunks.append(chunk_data)
+    
+    return chunks
