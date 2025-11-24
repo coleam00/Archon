@@ -275,3 +275,79 @@ def get_mcp_monitoring_config() -> MCPMonitoringConfig:
         enable_docker_socket=str_to_bool(os.getenv("ENABLE_DOCKER_SOCKET_MONITORING")),
         health_check_timeout=int(os.getenv("MCP_HEALTH_CHECK_TIMEOUT", "5")),
     )
+
+
+def get_crawler_config() -> dict:
+    """Get crawler configuration from environment with validation.
+
+    Returns a dictionary with crawler settings including User-Agent,
+    robots.txt compliance settings, and caching configuration.
+
+    Environment Variables:
+        CRAWLER_USER_AGENT: Custom User-Agent string (default: "Archon-Crawler/{version} (+{repo_url})")
+        ROBOTS_RESPECT: Whether to respect robots.txt (default: "true")
+        ROBOTS_DEFAULT_CRAWL_DELAY: Default delay between requests in seconds (default: "10.0", min: 0.0)
+        ROBOTS_CACHE_SIZE: Max number of domains to cache (default: "1000", min: 1)
+        ROBOTS_CACHE_TTL: Cache TTL in seconds (default: "86400" = 24 hours, min: 1)
+
+    Returns:
+        dict with keys: user_agent, respect_robots, default_crawl_delay,
+                       robots_cache_size, robots_cache_ttl
+
+    Raises:
+        ConfigurationError: If environment variable values are invalid or out of bounds
+    """
+    from .version import ARCHON_VERSION, GITHUB_REPO_NAME, GITHUB_REPO_OWNER
+
+    repo_url = f"https://github.com/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}"
+    default_ua = f"Archon-Crawler/{ARCHON_VERSION} (+{repo_url})"
+
+    # Parse and validate ROBOTS_DEFAULT_CRAWL_DELAY
+    crawl_delay_str = os.getenv("ROBOTS_DEFAULT_CRAWL_DELAY", "10.0")
+    try:
+        default_crawl_delay = float(crawl_delay_str)
+        if default_crawl_delay < 0.0:
+            raise ConfigurationError(
+                f"ROBOTS_DEFAULT_CRAWL_DELAY must be >= 0.0, got: {default_crawl_delay}. "
+                f"Use 0.0 to disable delays."
+            )
+    except ValueError as e:
+        raise ConfigurationError(
+            f"ROBOTS_DEFAULT_CRAWL_DELAY must be a valid number, got: '{crawl_delay_str}'"
+        ) from e
+
+    # Parse and validate ROBOTS_CACHE_SIZE
+    cache_size_str = os.getenv("ROBOTS_CACHE_SIZE", "1000")
+    try:
+        robots_cache_size = int(cache_size_str)
+        if robots_cache_size < 1:
+            raise ConfigurationError(
+                f"ROBOTS_CACHE_SIZE must be >= 1, got: {robots_cache_size}. "
+                f"Recommended: 100-10000"
+            )
+    except ValueError as e:
+        raise ConfigurationError(
+            f"ROBOTS_CACHE_SIZE must be a valid integer, got: '{cache_size_str}'"
+        ) from e
+
+    # Parse and validate ROBOTS_CACHE_TTL
+    cache_ttl_str = os.getenv("ROBOTS_CACHE_TTL", "86400")
+    try:
+        robots_cache_ttl = int(cache_ttl_str)
+        if robots_cache_ttl < 1:
+            raise ConfigurationError(
+                f"ROBOTS_CACHE_TTL must be >= 1 second, got: {robots_cache_ttl}. "
+                f"RFC 9309 recommends max 86400 (24 hours)"
+            )
+    except ValueError as e:
+        raise ConfigurationError(
+            f"ROBOTS_CACHE_TTL must be a valid integer, got: '{cache_ttl_str}'"
+        ) from e
+
+    return {
+        "user_agent": os.getenv("CRAWLER_USER_AGENT", default_ua),
+        "respect_robots": os.getenv("ROBOTS_RESPECT", "true").lower() == "true",
+        "default_crawl_delay": default_crawl_delay,
+        "robots_cache_size": robots_cache_size,
+        "robots_cache_ttl": robots_cache_ttl,
+    }
