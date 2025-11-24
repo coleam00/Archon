@@ -478,6 +478,125 @@ newgrp docker
   git config --global core.autocrlf false
   ```
 
+#### macOS/Apple Silicon (M1/M2/M3/M4) Specific Issues
+
+**Docker Platform Architecture Issues**
+
+Apple Silicon Macs use ARM64 architecture. If you encounter platform-related errors:
+
+```bash
+# Ensure Docker Desktop is configured for ARM64
+# Check Docker Desktop Settings > General > "Use Rosetta for x86/amd64 emulation on Apple Silicon"
+
+# Verify your architecture
+uname -m  # Should show "arm64"
+
+# Force rebuild with correct platform
+docker compose down
+docker compose build --no-cache
+docker compose up -d
+```
+
+**Port Binding Issues on macOS**
+
+macOS may have services already using common ports:
+
+```bash
+# Check what's using a port (macOS-specific command)
+sudo lsof -i :3737
+sudo lsof -i :8181
+sudo lsof -i :8051
+
+# Kill process using a port (replace PID with actual process ID)
+kill -9 <PID>
+```
+
+**Docker Desktop Performance on Apple Silicon**
+
+For optimal performance on M-series Macs:
+
+- Allocate sufficient resources in Docker Desktop Settings:
+  - Memory: At least 4GB (6GB+ recommended)
+  - CPUs: At least 4 cores
+- Enable VirtioFS for better file system performance (Settings > General)
+- Ensure you're running the latest Docker Desktop version
+
+**Volume Mount Performance**
+
+If you experience slow file operations:
+
+```bash
+# Use delegated volume mounts for better performance
+# This is already configured in docker-compose.yml, but verify:
+docker compose config | grep -A 2 "volumes:"
+```
+
+**"Cannot connect to Docker daemon" Error**
+
+```bash
+# Ensure Docker Desktop is running
+open -a Docker
+
+# Verify Docker is accessible
+docker ps
+
+# If still failing, restart Docker Desktop completely
+```
+
+**Rosetta 2 Issues**
+
+Some dependencies may require Rosetta 2 for x86_64 emulation:
+
+```bash
+# Install Rosetta 2 if not already installed
+softwareupdate --install-rosetta --agree-to-license
+```
+
+**Network Connectivity Issues**
+
+If services can't communicate:
+
+```bash
+# Reset Docker network
+docker compose down
+docker network prune -f
+docker compose up -d
+
+# Verify host.docker.internal is working
+docker compose exec archon-server ping host.docker.internal
+```
+
+**Known Working Configuration for M4 Pro**
+
+If you're still experiencing issues, try this known working setup:
+
+```bash
+# 1. Ensure you're on the stable branch
+git checkout stable
+git pull
+
+# 2. Clean slate
+docker compose down -v
+docker system prune -af
+
+# 3. Verify Docker Desktop settings
+# - Using Apple Silicon native (not Rosetta)
+# - VirtioFS enabled
+# - At least 4GB RAM, 4 CPUs allocated
+
+# 4. Fresh start
+docker compose up --build -d
+
+# 5. Check logs
+docker compose logs -f
+```
+
+If you continue to experience issues on Apple Silicon, please report them on [GitHub Issues](https://github.com/coleam00/Archon/issues) with:
+- Your macOS version
+- Docker Desktop version
+- Specific error messages
+- Output from `docker compose logs`
+
 #### Frontend Can't Connect to Backend
 
 - Check backend is running: `curl http://localhost:8181/health`
