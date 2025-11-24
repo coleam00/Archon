@@ -705,3 +705,75 @@ class URLHandler:
         except Exception as e:
             logger.warning(f"Error extracting base URL from {url}: {e}", exc_info=True)
             return url
+
+    @staticmethod
+    def matches_glob_patterns(
+        url: str,
+        include_patterns: list[str] | None = None,
+        exclude_patterns: list[str] | None = None
+    ) -> bool:
+        """
+        Check if URL path matches glob patterns.
+
+        Filtering logic:
+        1. If exclude patterns exist and URL matches any → reject (False)
+        2. If include patterns exist and URL matches at least one → accept (True)
+        3. If include patterns exist but URL matches none → reject (False)
+        4. If no patterns specified → accept (True)
+
+        Args:
+            url: The URL to check
+            include_patterns: List of glob patterns to include (e.g., ["**/en/**", "**/docs/**"])
+            exclude_patterns: List of glob patterns to exclude (e.g., ["**/fr/**", "**/de/**"])
+
+        Returns:
+            True if URL should be included, False if it should be filtered out
+
+        Examples:
+            >>> matches_glob_patterns("https://docs.example.com/en/intro", ["**/en/**"])
+            True
+            >>> matches_glob_patterns("https://docs.example.com/fr/intro", ["**/en/**"])
+            False
+            >>> matches_glob_patterns("https://docs.example.com/en/intro", ["**/en/**"], ["**/api/**"])
+            True
+            >>> matches_glob_patterns("https://docs.example.com/en/api/intro", ["**/en/**"], ["**/api/**"])
+            False
+        """
+        try:
+            from fnmatch import fnmatch
+
+            # Parse URL to get path
+            parsed = urlparse(url)
+            path = parsed.path
+
+            # Normalize path (ensure it starts with / for consistent matching)
+            if not path.startswith('/'):
+                path = '/' + path
+
+            # Check exclude patterns first (fast rejection)
+            if exclude_patterns:
+                for pattern in exclude_patterns:
+                    if fnmatch(path, pattern):
+                        logger.debug(f"URL excluded by pattern '{pattern}': {url}")
+                        return False
+
+            # Check include patterns (if specified)
+            if include_patterns:
+                matched = False
+                for pattern in include_patterns:
+                    if fnmatch(path, pattern):
+                        logger.debug(f"URL included by pattern '{pattern}': {url}")
+                        matched = True
+                        break
+
+                if not matched:
+                    logger.debug(f"URL does not match any include patterns: {url}")
+                    return False
+
+            # No patterns or passed all checks
+            return True
+
+        except Exception as e:
+            logger.warning(f"Error checking glob patterns for {url}: {e}", exc_info=True)
+            # On error, default to including the URL (safer than filtering)
+            return True

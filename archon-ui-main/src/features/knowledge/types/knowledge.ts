@@ -140,6 +140,36 @@ export interface CrawlRequest {
   update_frequency?: number;
   max_depth?: number;
   extract_code_examples?: boolean;
+  // Glob pattern filtering
+  url_include_patterns?: string[];
+  url_exclude_patterns?: string[];
+  // Link review mode
+  selected_urls?: string[];
+  skip_link_review?: boolean;
+}
+
+// Link preview request/response types
+export interface LinkPreviewRequest {
+  url: string;
+  url_include_patterns?: string[];
+  url_exclude_patterns?: string[];
+}
+
+export interface PreviewLink {
+  url: string;
+  text: string;
+  path: string;
+  matches_filter: boolean;
+}
+
+export interface LinkPreviewResponse {
+  is_link_collection: boolean;
+  collection_type: string | null;
+  source_url: string;
+  total_links: number;
+  matching_links: number;
+  links: PreviewLink[];
+  message?: string;
 }
 
 export interface UploadMetadata {
