@@ -16,6 +16,7 @@ dist-ssr
 coverage
 .nyc_output
 public/test-results
+test-results/
 test-results.json
 
 # Editor directories and files
