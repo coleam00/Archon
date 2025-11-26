@@ -169,6 +169,7 @@ services:
       dockerfile: Dockerfile
       target: development
     container_name: archon-ui
+    restart: unless-stopped
     ports:
       - "${BIND_IP:-127.0.0.1}:${ARCHON_UI_PORT:-3737}:3737"
     environment:
@@ -190,11 +191,11 @@ services:
       - app-network
       - proxy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3737"]
+      test: ["CMD-SHELL", "curl -f http://localhost:3737 || exit 1"]
       interval: 15s
-      timeout: 15s
-      retries: 5
-      start_period: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
     volumes:
       # Development volumes for live editing
       - ./archon-ui-main/src:/app/src
@@ -219,6 +220,7 @@ services:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:8181}
         VITE_ARCHON_SERVER_PORT: ${VITE_ARCHON_SERVER_PORT:-}
     container_name: archon-ui
+    restart: unless-stopped
     ports:
       - "${BIND_IP:-127.0.0.1}:${ARCHON_UI_PORT:-3737}:3737"
     environment:
@@ -240,11 +242,11 @@ services:
       - app-network
       - proxy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3737"]
+      test: ["CMD-SHELL", "curl -f http://localhost:3737 || exit 1"]
       interval: 15s
-      timeout: 15s
-      retries: 5
-      start_period: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
     # No volumes in production
     depends_on:
       archon-server:
