@@ -3,7 +3,7 @@
 from datetime import datetime
 from email.utils import formatdate
 
-from fastapi import APIRouter, Header, HTTPException, Response
+from fastapi import APIRouter, Header, HTTPException, Query, Response
 from fastapi import status as http_status
 
 from ..config.logfire_config import get_logger, logfire
@@ -98,14 +98,17 @@ async def get_progress(
 
 
 @router.get("/")
-async def list_active_operations():
+async def list_active_operations(include_failed: bool = Query(False, description="Include failed/error operations in response")):
     """
     List all active operations.
+
+    Args:
+        include_failed: If True, include failed/error operations in response
 
     This endpoint is useful for debugging and monitoring active operations.
     """
     try:
-        logfire.info("Listing active operations")
+        logfire.info(f"Listing active operations | include_failed={include_failed}")
 
         # Get all active operations from ProgressTracker
         active_operations = []
@@ -114,8 +117,14 @@ async def list_active_operations():
         # Include all non-completed statuses
         for op_id, operation in ProgressTracker.list_active().items():
             status = operation.get("status", "unknown")
-            # Include all operations that aren't in terminal states
-            if status not in TERMINAL_STATES:
+
+            # Include active operations OR failed operations when requested
+            should_include = (
+                status not in TERMINAL_STATES or  # Active operations
+                (include_failed and status in {"error", "failed"})  # Failed if requested
+            )
+
+            if should_include:
                 operation_data = {
                     "operation_id": op_id,
                     "operation_type": operation.get("type", "unknown"),
@@ -135,6 +144,11 @@ async def list_active_operations():
                     "total_pages": operation.get("total_pages"),
                     "documents_created": operation.get("documents_created") or operation.get("chunks_stored"),
                     "code_blocks_found": operation.get("code_blocks_found") or operation.get("code_examples_found"),
+                    # Include error information for failed operations
+                    "error": operation.get("error"),
+                    "error_time": operation.get("error_time"),
+                    # Include original request for retry functionality
+                    "original_request": operation.get("original_request"),
                 }
                 # Only include non-None values to keep response clean
                 active_operations.append({k: v for k, v in operation_data.items() if v is not None})

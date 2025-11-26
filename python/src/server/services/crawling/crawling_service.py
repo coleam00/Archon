@@ -732,12 +732,22 @@ class CrawlingService:
             error_message = f"Crawl failed: {str(e)}"
             # Use ProgressMapper to get proper progress value for error state
             error_progress = self.progress_mapper.map_progress("error", 0)
+
+            # Store original request parameters for retry functionality
+            original_request = {
+                "url": request.get("url"),
+                "max_depth": request.get("max_depth"),
+                "max_concurrent": request.get("max_concurrent"),
+                "tags": request.get("tags"),
+            }
+
             await self._handle_progress_update(
                 task_id, {
                     "status": "error",
                     "progress": error_progress,
                     "log": error_message,
-                    "error": str(e)
+                    "error": str(e),
+                    "original_request": original_request,
                 }
             )
             # Mark error in progress tracker with standardized schema
