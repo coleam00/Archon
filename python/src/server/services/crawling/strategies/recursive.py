@@ -13,6 +13,7 @@ from crawl4ai import CacheMode, CrawlerRunConfig, MemoryAdaptiveDispatcher
 
 from ....config.logfire_config import get_logger
 from ...credential_service import credential_service
+from ..helpers.content_fixer import fix_code_span_spaces
 from ..helpers.url_handler import URLHandler
 
 logger = get_logger(__name__)
@@ -289,9 +290,12 @@ class RecursiveCrawlStrategy:
                                 if extracted_title:
                                     title = extracted_title
 
+                        # Fix spaces in code paths that Crawl4AI/BeautifulSoup adds
+                        cleaned_markdown = fix_code_span_spaces(result.markdown.fit_markdown)
+
                         results_all.append({
                             "url": original_url,
-                            "markdown": result.markdown.fit_markdown,
+                            "markdown": cleaned_markdown,
                             "html": result.html,  # Always use raw HTML for code extraction
                             "title": title,
                         })
