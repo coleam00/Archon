@@ -290,16 +290,24 @@ class DiscoveryService:
             logger.warning(f"Error resolving hostname {hostname}: {e}")
             return False
 
+    # Expected content types for discovery files (to detect soft 404s)
+    EXPECTED_CONTENT_TYPES = {
+        '.txt': ['text/plain', 'text/markdown', 'text/x-markdown'],
+        '.md': ['text/plain', 'text/markdown', 'text/x-markdown'],
+        '.xml': ['text/xml', 'application/xml', 'application/rss+xml', 'application/atom+xml'],
+    }
+
     def _check_url_exists(self, url: str) -> bool:
         """
         Check if a URL exists and returns a successful response.
         Includes SSRF protection by validating hostnames and blocking private IPs.
+        Also validates content-type to detect soft 404s (HTML pages returned for missing files).
 
         Args:
             url: URL to check
 
         Returns:
-            True if URL returns 200, False otherwise
+            True if URL returns 200 with valid content-type, False otherwise
         """
         try:
             # Parse URL to extract hostname
@@ -358,9 +366,28 @@ class DiscoveryService:
                         return False
 
                 # Check response status
-                success = resp.status_code == 200
-                logger.debug(f"URL check: {url} -> {resp.status_code} ({'exists' if success else 'not found'})")
-                return success
+                if resp.status_code != 200:
+                    logger.debug(f"URL check: {url} -> {resp.status_code} (not found)")
+                    return False
+
+                # Validate content-type to detect soft 404s
+                content_type = resp.headers.get('content-type', '').lower().split(';')[0].strip()
+                url_path = parsed.path.lower()
+
+                # Check if URL has an extension we should validate
+                for ext, valid_types in self.EXPECTED_CONTENT_TYPES.items():
+                    if url_path.endswith(ext):
+                        if content_type and content_type not in valid_types:
+                            # Soft 404: server returned HTML for a text/xml file
+                            if content_type == 'text/html':
+                                logger.info(f"Soft 404 detected: {url} returned text/html instead of {valid_types}")
+                                return False
+                            # Log warning but allow other content types
+                            logger.debug(f"Unexpected content-type for {url}: {content_type} (expected {valid_types})")
+                        break
+
+                logger.debug(f"URL check: {url} -> 200 (exists, content-type: {content_type})")
+                return True
 
             finally:
                 if hasattr(resp, 'close'):
