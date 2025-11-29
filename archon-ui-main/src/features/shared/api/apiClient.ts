@@ -73,15 +73,19 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
       headers["Content-Type"] = "application/json";
     }
 
-    // Make the request with timeout
-    // NOTE: Increased to 20s due to database performance issues with large DELETE operations
-    // Root cause: Sequential scan on crawled_pages table when deleting sources with 7K+ rows
-    // takes 13+ seconds. This is a temporary fix until we implement batch deletion.
-    // See: DELETE FROM archon_crawled_pages WHERE source_id = '9529d5dabe8a726a' (7,073 rows)
+    // Make the request with method-specific timeout
+    // DELETE operations need extended timeout for large dataset deletions with batch processing
+    // Large sources (docs with 10K+ pages) require batch deletion across
+    // multiple tables (archon_crawled_pages, archon_code_examples, archon_page_metadata)
+    // which can take 30-60 seconds even with 500-row batches. The 320s timeout provides
+    // ample buffer for very large sources while preventing indefinite hangs.
+    const method = options.method?.toUpperCase() || "GET";
+    const timeoutMs = method === "DELETE" ? 320000 : 20000; // 320s for DELETE, 20s for others
+    
     const response = await fetch(fullUrl, {
       ...options,
       headers,
-      signal: options.signal ?? AbortSignal.timeout(20000), // 20 second timeout (was 10s)
+      signal: options.signal ?? AbortSignal.timeout(timeoutMs),
     });
 
     // Handle errors
