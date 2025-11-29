@@ -268,6 +268,8 @@ class CrawlingService:
         max_depth: int = 3,
         max_concurrent: int | None = None,
         progress_callback: Callable[[str, int, str], Awaitable[None]] | None = None,
+        include_patterns: list[str] | None = None,
+        exclude_patterns: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Recursively crawl internal links from start URLs."""
         return await self.recursive_strategy.crawl_recursive_with_progress(
@@ -278,6 +280,8 @@ class CrawlingService:
             max_concurrent,
             progress_callback,
             self._check_cancellation,  # Pass cancellation check
+            include_patterns,
+            exclude_patterns,
         )
 
     # Orchestration methods
@@ -345,6 +349,15 @@ class CrawlingService:
         try:
             url = str(request.get("url", ""))
             safe_logfire_info(f"Starting async crawl orchestration | url={url} | task_id={task_id}")
+
+            # Log crawl parameters for debugging
+            max_depth = request.get("max_depth", 1)
+            url_include_patterns = request.get("url_include_patterns", [])
+            url_exclude_patterns = request.get("url_exclude_patterns", [])
+            logger.info(
+                f"Crawl parameters: url={url} | max_depth={max_depth} | "
+                f"include_patterns={url_include_patterns} | exclude_patterns={url_exclude_patterns}"
+            )
 
             # Start the progress tracker if available
             if self.progress_tracker:
@@ -904,6 +917,43 @@ class CrawlingService:
                                             same_domain_links.append((link, text))
                                             logger.debug(f"Found same-domain link: {link}")
 
+                            # Apply glob pattern filtering or selected URLs
+                            if same_domain_links:
+                                original_count = len(same_domain_links)
+
+                                # Extract filtering parameters from request
+                                include_patterns = request.get("url_include_patterns", [])
+                                exclude_patterns = request.get("url_exclude_patterns", [])
+                                selected_urls = request.get("selected_urls")
+
+                                # Option 1: Use selected_urls from review modal (takes precedence)
+                                if selected_urls:
+                                    selected_urls_set = set(selected_urls)
+                                    same_domain_links = [
+                                        (link, text) for link, text in same_domain_links
+                                        if link in selected_urls_set
+                                    ]
+                                    logger.info(
+                                        f"Applied selected_urls filter: {original_count} → {len(same_domain_links)} links "
+                                        f"({original_count - len(same_domain_links)} filtered)"
+                                    )
+
+                                # Option 2: Apply glob pattern filtering
+                                elif include_patterns or exclude_patterns:
+                                    filtered_links = []
+                                    for link, text in same_domain_links:
+                                        if self.url_handler.matches_glob_patterns(link, include_patterns, exclude_patterns):
+                                            filtered_links.append((link, text))
+
+                                    filtered_count = original_count - len(filtered_links)
+                                    same_domain_links = filtered_links
+
+                                    logger.info(
+                                        f"Applied glob pattern filter: {original_count} → {len(same_domain_links)} links "
+                                        f"({filtered_count} filtered) | "
+                                        f"include={include_patterns} | exclude={exclude_patterns}"
+                                    )
+
                             if same_domain_links:
                                 # Build mapping and extract just URLs
                                 url_to_link_text = dict(same_domain_links)
@@ -1035,6 +1085,41 @@ class CrawlingService:
             sitemap_urls = self.parse_sitemap(url)
 
             if sitemap_urls:
+                original_count = len(sitemap_urls)
+
+                # Apply glob pattern filtering or selected URLs
+                include_patterns = request.get("url_include_patterns", [])
+                exclude_patterns = request.get("url_exclude_patterns", [])
+                selected_urls = request.get("selected_urls")
+
+                # Option 1: Use selected_urls from review modal (takes precedence)
+                if selected_urls:
+                    selected_urls_set = set(selected_urls)
+                    sitemap_urls = [
+                        url for url in sitemap_urls
+                        if url in selected_urls_set
+                    ]
+                    logger.info(
+                        f"Applied selected_urls filter to sitemap: {original_count} → {len(sitemap_urls)} URLs "
+                        f"({original_count - len(sitemap_urls)} filtered)"
+                    )
+
+                # Option 2: Apply glob pattern filtering
+                elif include_patterns or exclude_patterns:
+                    filtered_urls = []
+                    for sitemap_url in sitemap_urls:
+                        if self.url_handler.matches_glob_patterns(sitemap_url, include_patterns, exclude_patterns):
+                            filtered_urls.append(sitemap_url)
+
+                    filtered_count = original_count - len(filtered_urls)
+                    sitemap_urls = filtered_urls
+
+                    logger.info(
+                        f"Applied glob pattern filter to sitemap: {original_count} → {len(sitemap_urls)} URLs "
+                        f"({filtered_count} filtered) | "
+                        f"include={include_patterns} | exclude={exclude_patterns}"
+                    )
+
                 # Update progress before starting batch crawl
                 await update_crawl_progress(
                     75,  # 75% of crawling stage
@@ -1057,14 +1142,23 @@ class CrawlingService:
             )
 
             max_depth = request.get("max_depth", 1)
-            # Let the strategy handle concurrency from settings
-            # This will use CRAWL_MAX_CONCURRENT from database (default: 10)
+            include_patterns = request.get("url_include_patterns", [])
+            exclude_patterns = request.get("url_exclude_patterns", [])
+
+            # Log pattern configuration for debugging
+            if include_patterns or exclude_patterns:
+                logger.info(
+                    f"Recursive crawl with glob patterns | "
+                    f"include={include_patterns} | exclude={exclude_patterns}"
+                )
 
             crawl_results = await self.crawl_recursive_with_progress(
                 [url],
                 max_depth=max_depth,
                 max_concurrent=None,  # Let strategy use settings
                 progress_callback=await self._create_crawl_progress_callback("crawling"),
+                include_patterns=include_patterns,
+                exclude_patterns=exclude_patterns,
             )
 
         return crawl_results, crawl_type
