@@ -14,7 +14,6 @@ export const versionService = {
       const response = await callAPIWithETag("/api/version/check");
       return response as VersionCheckResponse;
     } catch (error) {
-      console.error("Error checking version:", error);
       throw error;
     }
   },
@@ -27,7 +26,6 @@ export const versionService = {
       const response = await callAPIWithETag("/api/version/current");
       return response as CurrentVersionResponse;
     } catch (error) {
-      console.error("Error getting current version:", error);
       throw error;
     }
   },
@@ -42,7 +40,6 @@ export const versionService = {
       });
       return response as { message: string; success: boolean };
     } catch (error) {
-      console.error("Error clearing version cache:", error);
       throw error;
     }
   },

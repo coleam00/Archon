@@ -39,37 +39,30 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # - name: Run ESLint
-      #   run: npm run lint
-# 
-      # - name: Run TypeScript type check
-      #   run: npx tsc --noEmit
-# 
-      # - name: Run Vitest tests with coverage
-      #   run: npm run test:coverage:run
-# 
-      # - name: Generate test summary
-      #   if: always()
-      #   run: npm run test:coverage:summary
-# 
-      # - name: Upload frontend test results
-      #   if: always()
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: frontend-test-results
-      #     path: |
-      #       archon-ui-main/coverage/test-results.json
-      #       archon-ui-main/public/test-results/
-      #     retention-days: 30
-# 
-      # - name: Upload frontend coverage to Codecov
-      #   if: always()
-      #   uses: codecov/codecov-action@v4
-      #   with:
-      #     files: ./archon-ui-main/public/test-results/coverage/lcov.info
-      #     flags: frontend
-      #     name: frontend-coverage
-      #     token: ${{ secrets.CODECOV_TOKEN }}
+      - name: Run TypeScript type check
+        continue-on-error: true
+        run: npx tsc --noEmit
+
+      - name: Run Vitest tests with coverage
+        run: npm run test:coverage:run
+
+      - name: Upload frontend test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-test-results
+          path: |
+            archon-ui-main/coverage/
+          retention-days: 30
+
+      - name: Upload frontend coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./archon-ui-main/coverage/lcov.info
+          flags: frontend
+          name: frontend-coverage
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   # Job 2: Backend Testing (Python/pytest)
   backend-tests:
@@ -294,7 +287,7 @@ jobs:
           # Architecture Context
           echo "## 🏗️ Architecture Tested" >> $GITHUB_STEP_SUMMARY
           echo "- **Frontend**: React + TypeScript + Vite (Port 3737)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Server**: FastAPI + Socket.IO + Python (Port 8181)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Server**: FastAPI + Python (Port 8181)" >> $GITHUB_STEP_SUMMARY
           echo "- **MCP Service**: MCP protocol server (Port 8051)" >> $GITHUB_STEP_SUMMARY
           echo "- **Agents Service**: PydanticAI agents (Port 8052)" >> $GITHUB_STEP_SUMMARY
           echo "- **Database**: Supabase (PostgreSQL + pgvector)" >> $GITHUB_STEP_SUMMARY

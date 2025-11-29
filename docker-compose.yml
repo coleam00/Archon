@@ -6,7 +6,7 @@
 #   docker compose --profile agents up -d    # Also starts archon-agents
 
 services:
-  # Server Service (FastAPI + Socket.IO + Crawling)
+  # Server Service (FastAPI + Crawling)
   archon-server:
     build:
       context: ./python

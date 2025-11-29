@@ -41,7 +41,6 @@ export const projectService = {
       // All projects processed
       return processedProjects;
     } catch (error) {
-      console.error("Failed to list projects:", error);
       throw error;
     }
   },
@@ -59,7 +58,6 @@ export const projectService = {
         updated: project.updated || formatRelativeTime(project.updated_at),
       };
     } catch (error) {
-      console.error(`Failed to get project ${projectId}:`, error);
       throw error;
     }
   },
@@ -97,13 +95,6 @@ export const projectService = {
       // Project creation response received
       return response;
     } catch (error) {
-      console.error("[PROJECT SERVICE] Failed to initiate project creation:", error);
-      if (error instanceof Error) {
-        console.error("[PROJECT SERVICE] Error details:", {
-          message: error.message,
-          name: error.name,
-        });
-      }
       throw error;
     }
   },
@@ -141,7 +132,6 @@ export const projectService = {
 
       return processedProject;
     } catch (error) {
-      console.error(`Failed to update project ${projectId}:`, error);
       throw error;
     }
   },
@@ -155,7 +145,6 @@ export const projectService = {
         method: "DELETE",
       });
     } catch (error) {
-      console.error(`Failed to delete project ${projectId}:`, error);
       throw error;
     }
   },
@@ -171,7 +160,6 @@ export const projectService = {
       }>(`/api/projects/${projectId}/features`);
       return response;
     } catch (error) {
-      console.error(`Failed to get features for project ${projectId}:`, error);
       throw error;
     }
   },

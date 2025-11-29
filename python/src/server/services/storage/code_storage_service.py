@@ -1041,7 +1041,7 @@ async def generate_code_summaries_batch(
                 max_workers = int(credential_service._cache["CODE_SUMMARY_MAX_WORKERS"])
             else:
                 max_workers = int(os.getenv("CODE_SUMMARY_MAX_WORKERS", "3"))
-        except:
+        except (ValueError, TypeError, AttributeError):
             max_workers = 3  # Default fallback
 
     search_logger.info(

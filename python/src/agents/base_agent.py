@@ -133,7 +133,7 @@ class RateLimitHandler:
             match = re.search(r"try again in (\d+(?:\.\d+)?)s", error_message)
             if match:
                 return float(match.group(1))
-        except:
+        except (ValueError, AttributeError, IndexError):
             pass
         return None
 

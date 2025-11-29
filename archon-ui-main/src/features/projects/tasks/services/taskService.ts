@@ -20,7 +20,6 @@ export const taskService = {
       // Return tasks as-is; UI uses DB status values (todo/doing/review/done)
       return tasks;
     } catch (error) {
-      console.error(`Failed to get tasks for project ${projectId}:`, error);
       throw error;
     }
   },
@@ -33,7 +32,6 @@ export const taskService = {
       const task = await callAPIWithETag<Task>(`/api/tasks/${taskId}`);
       return task;
     } catch (error) {
-      console.error(`Failed to get task ${taskId}:`, error);
       throw error;
     }
   },
@@ -60,7 +58,6 @@ export const taskService = {
 
       return response.task;
     } catch (error) {
-      console.error("Failed to create task:", error);
       throw error;
     }
   },
@@ -84,7 +81,6 @@ export const taskService = {
 
       return response.task;
     } catch (error) {
-      console.error(`Failed to update task ${taskId}:`, error);
       throw error;
     }
   },
@@ -112,7 +108,6 @@ export const taskService = {
 
       return response.task;
     } catch (error) {
-      console.error(`Failed to update task status ${taskId}:`, error);
       throw error;
     }
   },
@@ -126,7 +121,6 @@ export const taskService = {
         method: "DELETE",
       });
     } catch (error) {
-      console.error(`Failed to delete task ${taskId}:`, error);
       throw error;
     }
   },
@@ -148,7 +142,6 @@ export const taskService = {
 
       return task;
     } catch (error) {
-      console.error(`Failed to update task order for ${taskId}:`, error);
       throw error;
     }
   },
@@ -162,7 +155,6 @@ export const taskService = {
       // For now, we'll throw an error suggesting to use project-scoped queries
       throw new Error("getTasksByStatus requires cross-project access. Use getTasksByProject instead.");
     } catch (error) {
-      console.error(`Failed to get tasks by status ${status}:`, error);
       throw error;
     }
   },
@@ -176,7 +168,6 @@ export const taskService = {
       const response = await callAPIWithETag<Record<string, TaskCounts>>("/api/projects/task-counts");
       return response || {};
     } catch (error) {
-      console.error("Failed to get task counts for all projects:", error);
       throw error;
     }
   },

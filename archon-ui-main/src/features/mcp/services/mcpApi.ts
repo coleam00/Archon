@@ -7,7 +7,6 @@ export const mcpApi = {
       const response = await callAPIWithETag<McpServerStatus>("/api/mcp/status");
       return response;
     } catch (error) {
-      console.error("Failed to get MCP status:", error);
       throw error;
     }
   },
@@ -17,7 +16,6 @@ export const mcpApi = {
       const response = await callAPIWithETag<McpServerConfig>("/api/mcp/config");
       return response;
     } catch (error) {
-      console.error("Failed to get MCP config:", error);
       throw error;
     }
   },
@@ -27,7 +25,6 @@ export const mcpApi = {
       const response = await callAPIWithETag<McpSessionInfo>("/api/mcp/sessions");
       return response;
     } catch (error) {
-      console.error("Failed to get session info:", error);
       throw error;
     }
   },
@@ -37,7 +34,6 @@ export const mcpApi = {
       const response = await callAPIWithETag<{ clients: McpClient[] }>("/api/mcp/clients");
       return response.clients || [];
     } catch (error) {
-      console.error("Failed to get MCP clients:", error);
       throw error;
     }
   },

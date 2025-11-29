@@ -49,7 +49,7 @@ check:
 dev: check
 	@echo "Starting hybrid development..."
 	@echo "Backend: Docker | Frontend: Local with hot reload"
-	@$(COMPOSE) --profile backend up -d --build
+	@$(COMPOSE) up archon-server archon-mcp -d --build
 	@set -a; [ -f .env ] && . ./.env; set +a; \
 	echo "Backend running at http://$${HOST:-localhost}:$${ARCHON_SERVER_PORT:-8181}"
 	@echo "Starting frontend..."
@@ -61,7 +61,7 @@ dev: check
 # Full Docker development (backend + frontend, no work orders)
 dev-docker: check
 	@echo "Starting Docker environment (backend + frontend)..."
-	@$(COMPOSE) --profile full up -d --build
+	@$(COMPOSE) up archon-server archon-mcp archon-frontend -d --build
 	@echo "✓ Services running"
 	@echo "Frontend: http://localhost:3737"
 	@echo "API: http://localhost:8181"
@@ -124,7 +124,7 @@ dev-hybrid-work-orders: check
 # Stop all services
 stop:
 	@echo "Stopping all services..."
-	@$(COMPOSE) --profile backend --profile frontend --profile full --profile work-orders down
+	@$(COMPOSE) --profile agents --profile work-orders down
 	@echo "✓ Services stopped"
 
 # Run all tests

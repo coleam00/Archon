@@ -57,9 +57,8 @@ ENV PATH=/venv/bin:$PATH
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN playwright install chromium
 
-# Copy server code, agent work orders, and tests
+# Copy server code and tests
 COPY src/server/ src/server/
-COPY src/agent_work_orders/ src/agent_work_orders/
 COPY src/__init__.py src/
 COPY tests/ tests/
 
