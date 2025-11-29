@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from src.server.utils import get_supabase_client
+from src.server.utils.validation import is_valid_uuid
 
 from ...config.logfire_config import get_logger
 
@@ -368,6 +369,15 @@ class TaskService:
             Tuple of (success, result_dict)
         """
         try:
+            # Validate task_id format before proceeding
+            if not is_valid_uuid(task_id):
+                logger.error(
+                    f"Invalid task_id format | task_id={task_id} | type={type(task_id).__name__}"
+                )
+                return False, {
+                    "error": f"Invalid task ID format: '{task_id}'. Task ID must be a valid UUID."
+                }
+
             # Build update data
             update_data = {"updated_at": datetime.now().isoformat()}
 
@@ -419,7 +429,11 @@ class TaskService:
                 return False, {"error": f"Task with ID {task_id} not found"}
 
         except Exception as e:
-            logger.error(f"Error updating task: {e}")
+            logger.error(
+                f"Error updating task | task_id={task_id} | error={e} | "
+                f"update_fields={list(update_fields.keys())}",
+                exc_info=True
+            )
             return False, {"error": f"Error updating task: {str(e)}"}
 
     async def archive_task(

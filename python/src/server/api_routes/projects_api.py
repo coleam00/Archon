@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from ..config.logfire_config import get_logger, logfire
 from ..utils import get_supabase_client
 from ..utils.etag_utils import check_etag, generate_etag
+from ..utils.validation import is_valid_uuid
 
 logger = get_logger(__name__)
 
@@ -773,6 +774,19 @@ async def list_tasks(
 async def get_task(task_id: str):
     """Get a specific task by ID."""
     try:
+        # Validate task_id format at API boundary
+        if not is_valid_uuid(task_id):
+            logfire.error(
+                f"Invalid task_id received at GET endpoint | task_id={task_id}"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Invalid task ID format: '{task_id}'. Task ID must be a valid UUID.",
+                    "task_id": task_id
+                }
+            )
+
         # Use TaskService to get the task
         task_service = TaskService()
         success, result = task_service.get_task(task_id)
@@ -840,6 +854,19 @@ class RestoreVersionRequest(BaseModel):
 async def update_task(task_id: str, request: UpdateTaskRequest):
     """Update a task."""
     try:
+        # Validate task_id format at API boundary
+        if not is_valid_uuid(task_id):
+            logfire.error(
+                f"Invalid task_id received at PUT endpoint | task_id={task_id}"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Invalid task ID format: '{task_id}'. Task ID must be a valid UUID.",
+                    "task_id": task_id
+                }
+            )
+
         # Build update fields dictionary
         update_fields = {}
         if request.title is not None:
@@ -862,8 +889,11 @@ async def update_task(task_id: str, request: UpdateTaskRequest):
         success, result = await task_service.update_task(task_id, update_fields)
 
         if not success:
-            if "not found" in result.get("error", "").lower():
-                raise HTTPException(status_code=404, detail=result.get("error"))
+            error_msg = result.get("error", "Unknown error")
+            if "not found" in error_msg.lower():
+                raise HTTPException(status_code=404, detail=error_msg)
+            elif "invalid uuid" in error_msg.lower():
+                raise HTTPException(status_code=400, detail=error_msg)
             else:
                 raise HTTPException(status_code=500, detail=result)
 
@@ -878,7 +908,7 @@ async def update_task(task_id: str, request: UpdateTaskRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logfire.error(f"Failed to update task | error={str(e)} | task_id={task_id}")
+        logfire.error(f"Failed to update task | error={str(e)} | task_id={task_id}", exc_info=True)
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -886,6 +916,19 @@ async def update_task(task_id: str, request: UpdateTaskRequest):
 async def delete_task(task_id: str):
     """Archive a task (soft delete)."""
     try:
+        # Validate task_id format at API boundary
+        if not is_valid_uuid(task_id):
+            logfire.error(
+                f"Invalid task_id received at DELETE endpoint | task_id={task_id}"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Invalid task ID format: '{task_id}'. Task ID must be a valid UUID.",
+                    "task_id": task_id
+                }
+            )
+
         # Use TaskService to archive the task
         task_service = TaskService()
         success, result = await task_service.archive_task(task_id, archived_by="api")
@@ -916,6 +959,19 @@ async def delete_task(task_id: str):
 async def mcp_update_task_status(task_id: str, status: str):
     """Update task status via MCP tools."""
     try:
+        # Validate task_id format at API boundary
+        if not is_valid_uuid(task_id):
+            logfire.error(
+                f"Invalid task_id received at MCP endpoint | task_id={task_id}"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Invalid task ID format: '{task_id}'. Task ID must be a valid UUID.",
+                    "task_id": task_id
+                }
+            )
+
         logfire.info(f"MCP task status update | task_id={task_id} | status={status}")
 
         # Use TaskService to update the task
@@ -925,8 +981,11 @@ async def mcp_update_task_status(task_id: str, status: str):
         )
 
         if not success:
-            if "not found" in result.get("error", "").lower():
+            error_msg = result.get("error", "Unknown error")
+            if "not found" in error_msg.lower():
                 raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+            elif "invalid uuid" in error_msg.lower():
+                raise HTTPException(status_code=400, detail=error_msg)
             else:
                 raise HTTPException(status_code=500, detail=result)
 
@@ -943,7 +1002,8 @@ async def mcp_update_task_status(task_id: str, status: str):
         raise
     except Exception as e:
         logfire.error(
-            f"Failed to update task status | error={str(e)} | task_id={task_id}"
+            f"Failed to update task status | error={str(e)} | task_id={task_id}",
+            exc_info=True
         )
         raise HTTPException(status_code=500, detail=str(e))
 
