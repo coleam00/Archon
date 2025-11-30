@@ -164,6 +164,8 @@ class InMemorySitePagesRepository(ISitePagesRepository):
         for page in candidates:
             if page.embedding:
                 similarity = cosine_similarity(embedding, page.embedding)
+                # Clip similarity to [0, 1] range to avoid floating point precision issues
+                similarity = max(0.0, min(1.0, similarity))
                 results.append(SearchResult(page=page, similarity=similarity))
 
         # Sort by similarity (descending) and limit
