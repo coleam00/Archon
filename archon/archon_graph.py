@@ -8,7 +8,6 @@ from langgraph.config import get_stream_writer
 from langgraph.types import interrupt
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
-from supabase import Client
 import logfire
 import os
 import sys
@@ -27,7 +26,8 @@ from archon.refiner_agents.prompt_refiner_agent import prompt_refiner_agent
 from archon.refiner_agents.tools_refiner_agent import tools_refiner_agent, ToolsRefinerDeps
 from archon.refiner_agents.agent_refiner_agent import agent_refiner_agent, AgentRefinerDeps
 from archon.agent_tools import list_documentation_pages_tool
-from utils.utils import get_env_var, get_clients
+from utils.utils import get_env_var
+from archon.container import get_repository, get_embedding_service
 
 # Load environment variables
 load_dotenv()
@@ -63,8 +63,9 @@ end_conversation_agent = Agent(
     system_prompt='Your job is to end a conversation for creating an AI agent by giving instructions for how to execute the agent and they saying a nice goodbye to the user.',  
 )
 
-# Initialize clients
-embedding_client, supabase = get_clients()
+# Initialize repository and embedding service via container
+repository = get_repository()
+embedding_service = get_embedding_service()
 
 # Define state schema
 class AgentState(TypedDict):
@@ -82,7 +83,7 @@ class AgentState(TypedDict):
 # Scope Definition Node with Reasoner LLM
 async def define_scope_with_reasoner(state: AgentState):
     # First, get the documentation pages so the reasoner can decide which ones are necessary
-    documentation_pages = await list_documentation_pages_tool(supabase)
+    documentation_pages = await list_documentation_pages_tool(repository=repository)
     documentation_pages_str = "\n".join(documentation_pages)
 
     # Then, use the reasoner to define the scope
@@ -143,11 +144,11 @@ async def advisor_with_examples(state: AgentState):
     return {"file_list": file_list, "advisor_output": advisor_output}
 
 # Coding Node with Feedback Handling
-async def coder_agent(state: AgentState, writer):    
+async def coder_agent(state: AgentState, writer):
     # Prepare dependencies
     deps = PydanticAIDeps(
-        supabase=supabase,
-        embedding_client=embedding_client,
+        repository=repository,
+        embedding_service=embedding_service,
         reasoner_output=state['scope'],
         advisor_output=state['advisor_output']
     )
@@ -248,8 +249,8 @@ async def refine_prompt(state: AgentState):
 async def refine_tools(state: AgentState):
     # Prepare dependencies
     deps = ToolsRefinerDeps(
-        supabase=supabase,
-        embedding_client=embedding_client,
+        repository=repository,
+        embedding_service=embedding_service,
         file_list=state['file_list']
     )
 
@@ -269,8 +270,8 @@ async def refine_tools(state: AgentState):
 async def refine_agent(state: AgentState):
     # Prepare dependencies
     deps = AgentRefinerDeps(
-        supabase=supabase,
-        embedding_client=embedding_client
+        repository=repository,
+        embedding_service=embedding_service
     )
 
     # Get the message history into the format for Pydantic AI
