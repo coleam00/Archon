@@ -322,3 +322,214 @@ class DocumentStorageService(BaseStorageService):
         except Exception as e:
             logger.error(f"Error in store_code_examples: {e}")
             return False, {"error": str(e)}
+
+    async def upload_document_with_enhanced_chunking(
+        self,
+        file_content: bytes,
+        filename: str,
+        content_type: str,
+        source_id: str,
+        knowledge_type: str = "documentation",
+        tags: list[str] | None = None,
+        extract_code_examples: bool = True,
+        progress_callback: Any | None = None,
+        cancellation_check: Any | None = None,
+        max_tokens_per_chunk: int = 512,
+    ) -> tuple[bool, dict[str, Any]]:
+        """
+        Upload and process a document using enhanced Docling chunking.
+        
+        This method uses Docling's intelligent chunking when available,
+        falling back to legacy processing for unsupported formats.
+
+        Args:
+            file_content: Raw document bytes  
+            filename: Name of the file
+            content_type: MIME type of the file
+            source_id: Source identifier
+            knowledge_type: Type of knowledge
+            tags: Optional list of tags
+            extract_code_examples: Whether to extract code examples
+            progress_callback: Optional callback for progress
+            cancellation_check: Optional function to check for cancellation
+            max_tokens_per_chunk: Maximum tokens per chunk for embeddings
+
+        Returns:
+            Tuple of (success, result_dict)
+        """
+        from ...utils.document_processing import extract_and_chunk_for_rag
+        
+        logger.info(f"Enhanced document upload starting: {filename} as {knowledge_type} knowledge")
+
+        with safe_span(
+            "upload_document_enhanced",
+            filename=filename,
+            source_id=source_id,
+            content_length=len(file_content),
+            use_docling=True,
+        ) as span:
+            try:
+                # Progress reporting helper
+                async def report_progress(message: str, percentage: int, batch_info: dict = None):
+                    if progress_callback:
+                        await progress_callback(message, percentage, batch_info)
+
+                await report_progress("Starting enhanced document processing...", 10)
+
+                # Use enhanced extraction and chunking with Docling
+                full_text, docling_chunks, doc_metadata = extract_and_chunk_for_rag(
+                    file_content, filename, content_type, max_tokens_per_chunk
+                )
+
+                if not docling_chunks:
+                    raise ValueError(f"No content could be extracted from {filename}. The file may be empty, corrupted, or in an unsupported format.")
+
+                logger.info(
+                    f"Enhanced processing completed for {filename}: "
+                    f"{len(docling_chunks)} chunks created with {doc_metadata.get('extraction_method', 'unknown')} method"
+                )
+
+                await report_progress("Preparing enhanced document chunks...", 30)
+
+                # Prepare data for storage using Docling chunks
+                doc_url = f"file://{filename}"
+                urls = []
+                chunk_numbers = []
+                contents = []
+                metadatas = []
+                total_word_count = 0
+
+                # Process Docling chunks with enhanced metadata
+                for i, chunk in enumerate(docling_chunks):
+                    chunk_text = chunk["text"]
+                    chunk_metadata = chunk.get("metadata", {})
+                    
+                    # Combine base metadata with Docling metadata
+                    enhanced_meta = {
+                        "chunk_index": i,
+                        "url": doc_url,
+                        "source": source_id,
+                        "source_id": source_id,
+                        "knowledge_type": knowledge_type,
+                        "source_type": "file",
+                        "filename": filename,
+                        # Add Docling-specific metadata
+                        "docling_processed": doc_metadata.get("docling_processed", False),
+                        "chunking_method": chunk_metadata.get("chunking_method", "unknown"),
+                        "chunk_type": chunk.get("chunk_type", "unknown"),
+                        "estimated_tokens": chunk.get("token_count", 0),
+                        "extraction_method": doc_metadata.get("extraction_method", "legacy"),
+                    }
+                    
+                    # Add document-level metadata to first chunk
+                    if i == 0:
+                        enhanced_meta.update({
+                            "document_metadata": doc_metadata,
+                            "total_chunks": len(docling_chunks),
+                        })
+                    
+                    # Add tags if provided
+                    if tags:
+                        enhanced_meta["tags"] = tags
+
+                    urls.append(doc_url)
+                    chunk_numbers.append(i)
+                    contents.append(chunk_text)
+                    metadatas.append(enhanced_meta)
+                    total_word_count += len(chunk_text.split())
+
+                await report_progress(f"Processing {len(docling_chunks)} enhanced chunks...", 40)
+
+                # Store documents using existing document storage
+                url_to_full_document = {doc_url: full_text}
+                storage_result = await add_documents_to_supabase(
+                    self.supabase_client,
+                    urls,
+                    chunk_numbers,
+                    contents,
+                    metadatas,
+                    url_to_full_document,
+                    progress_callback=lambda stage, progress, message, **kwargs: report_progress(
+                        f"Storing: {message}", 40 + (progress * 0.5)
+                    ),
+                    cancellation_check=cancellation_check,
+                )
+
+                chunks_stored = storage_result.get("chunks_stored", 0)
+
+                await report_progress("Finalizing enhanced document upload...", 90)
+
+                # Extract code examples if requested
+                code_examples_count = 0
+                if extract_code_examples and len(docling_chunks) > 0:
+                    try:
+                        await report_progress("Extracting code examples...", 95)
+                        
+                        logger.info(f"🔍 DEBUG: Starting code extraction for {filename} (enhanced) | extract_code_examples={extract_code_examples}")
+                        
+                        # Import code extraction service
+                        from ..crawling.code_extraction_service import CodeExtractionService
+                        
+                        code_service = CodeExtractionService(self.supabase_client)
+                        
+                        # Create crawl_results format with enhanced metadata
+                        crawl_results = [{
+                            "url": doc_url,
+                            "markdown": full_text,  # Use full extracted text
+                            "html": "",  # Empty to prevent HTML extraction path
+                            "content_type": content_type,
+                            "docling_processed": doc_metadata.get("docling_processed", False),
+                            "extraction_method": doc_metadata.get("extraction_method", "legacy"),
+                        }]
+                        
+                        logger.info(f"🔍 DEBUG: Created enhanced crawl_results with url={doc_url}, content_length={len(full_text)}")
+                        
+                        # Create progress callback for code extraction
+                        async def code_progress_callback(data: dict):
+                            if progress_callback:
+                                raw_progress = data.get("progress", data.get("percentage", 0))
+                                mapped_progress = 95 + (raw_progress / 100.0) * 5  # 95% to 100%
+                                message = data.get("log", "Extracting code examples...")
+                                await progress_callback(message, int(mapped_progress))
+                        
+                        code_examples_count = await code_service.extract_and_store_code_examples(
+                            crawl_results=crawl_results,
+                            url_to_full_document=url_to_full_document,
+                            source_id=source_id,
+                            progress_callback=code_progress_callback,
+                            cancellation_check=cancellation_check,
+                        )
+                        
+                        logger.info(f"🔍 DEBUG: Enhanced code extraction completed: {code_examples_count} code examples found for {filename}")
+                        
+                    except Exception as e:
+                        logger.error(f"Code extraction failed for {filename}: {e}", exc_info=True)
+                        code_examples_count = 0
+
+                await report_progress("Enhanced document upload completed!", 100)
+
+                result_dict = {
+                    "source_id": source_id,
+                    "filename": filename,
+                    "chunks_stored": chunks_stored,
+                    "code_examples_stored": code_examples_count,
+                    "total_word_count": total_word_count,
+                    "processing_method": "docling_enhanced" if doc_metadata.get("docling_processed") else "legacy_fallback",
+                    "extraction_method": doc_metadata.get("extraction_method", "legacy"),
+                    "chunking_method": doc_metadata.get("chunking_method", "unknown"),
+                    "document_metadata": doc_metadata,
+                }
+
+                span.set_attribute("success", True)
+                span.set_attribute("chunks_stored", chunks_stored)
+                span.set_attribute("code_examples_stored", code_examples_count)
+                span.set_attribute("processing_method", result_dict["processing_method"])
+
+                logger.info(f"Enhanced document upload completed successfully: {filename}")
+                return True, result_dict
+
+            except Exception as e:
+                logger.error(f"Enhanced document upload failed: {filename}", exc_info=True)
+                span.set_attribute("success", False)
+                span.set_attribute("error", str(e))
+                return False, {"error": str(e), "filename": filename}
