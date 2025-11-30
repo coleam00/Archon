@@ -22,9 +22,12 @@ from utils.utils import get_env_var, get_clients
 
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
 
+# Import domain interfaces for dependency injection
+from archon.domain import ISitePagesRepository, IEmbeddingService
+
 load_dotenv()
 
-# Initialize embedding and Supabase clients
+# Initialize embedding and Supabase clients (fallback for backward compatibility)
 embedding_client, supabase = get_clients()
 
 # Define the embedding model for embedding the documentation for RAG
@@ -207,9 +210,26 @@ async def get_title_and_summary(chunk: str, url: str) -> Dict[str, str]:
         print(f"Error getting title and summary: {e}")
         return {"title": "Error processing title", "summary": "Error processing summary"}
 
-async def get_embedding(text: str) -> List[float]:
-    """Get embedding vector from OpenAI."""
+async def get_embedding(
+    text: str,
+    embedding_service: Optional[IEmbeddingService] = None
+) -> List[float]:
+    """Get embedding vector from OpenAI or injected embedding service.
+
+    Args:
+        text: Text to embed
+        embedding_service: Optional embedding service (if None, uses global client)
+
+    Returns:
+        List of floats representing the embedding vector
+    """
     try:
+        # Use injected embedding service if provided (new pattern)
+        if embedding_service is not None:
+            # IEmbeddingService.get_embedding is async
+            return await embedding_service.get_embedding(text)
+
+        # Fallback: use global embedding_client (backward compatibility)
         response = await embedding_client.embeddings.create(
             model=embedding_model,
             input=text
@@ -219,14 +239,29 @@ async def get_embedding(text: str) -> List[float]:
         print(f"Error getting embedding: {e}")
         return [0] * 1536  # Return zero vector on error
 
-async def process_chunk(chunk: str, chunk_number: int, url: str) -> ProcessedChunk:
-    """Process a single chunk of text."""
+async def process_chunk(
+    chunk: str,
+    chunk_number: int,
+    url: str,
+    embedding_service: Optional[IEmbeddingService] = None
+) -> ProcessedChunk:
+    """Process a single chunk of text.
+
+    Args:
+        chunk: Text chunk to process
+        chunk_number: Chunk number in document
+        url: Source URL
+        embedding_service: Optional embedding service for dependency injection
+
+    Returns:
+        ProcessedChunk with embedding and metadata
+    """
     # Get title and summary
     extracted = await get_title_and_summary(chunk, url)
-    
-    # Get embedding
-    embedding = await get_embedding(chunk)
-    
+
+    # Get embedding (use injected service if provided)
+    embedding = await get_embedding(chunk, embedding_service)
+
     # Create metadata
     metadata = {
         "source": "pydantic_ai_docs",
@@ -234,7 +269,7 @@ async def process_chunk(chunk: str, chunk_number: int, url: str) -> ProcessedChu
         "crawled_at": datetime.now(timezone.utc).isoformat(),
         "url_path": urlparse(url).path
     }
-    
+
     return ProcessedChunk(
         url=url,
         chunk_number=chunk_number,
@@ -245,9 +280,40 @@ async def process_chunk(chunk: str, chunk_number: int, url: str) -> ProcessedChu
         embedding=embedding
     )
 
-async def insert_chunk(chunk: ProcessedChunk):
-    """Insert a processed chunk into Supabase."""
+async def insert_chunk(
+    chunk: ProcessedChunk,
+    repository: Optional[ISitePagesRepository] = None
+):
+    """Insert a processed chunk into the database.
+
+    Args:
+        chunk: ProcessedChunk to insert
+        repository: Optional repository for dependency injection
+
+    Returns:
+        Result of the insert operation
+    """
     try:
+        # Use injected repository if provided (new pattern)
+        if repository is not None:
+            from archon.domain import SitePage
+
+            page = SitePage(
+                id=None,  # Will be assigned by database
+                url=chunk.url,
+                chunk_number=chunk.chunk_number,
+                title=chunk.title,
+                summary=chunk.summary,
+                content=chunk.content,
+                metadata=chunk.metadata,
+                embedding=chunk.embedding
+            )
+            # ISitePagesRepository.insert is async
+            result = await repository.insert(page)
+            print(f"Inserted chunk {chunk.chunk_number} for {chunk.url}")
+            return result
+
+        # Fallback: use global supabase client (backward compatibility)
         data = {
             "url": chunk.url,
             "chunk_number": chunk.chunk_number,
@@ -257,7 +323,7 @@ async def insert_chunk(chunk: ProcessedChunk):
             "metadata": chunk.metadata,
             "embedding": chunk.embedding
         }
-        
+
         result = supabase.table("site_pages").insert(data).execute()
         print(f"Inserted chunk {chunk.chunk_number} for {chunk.url}")
         return result
@@ -265,11 +331,25 @@ async def insert_chunk(chunk: ProcessedChunk):
         print(f"Error inserting chunk: {e}")
         return None
 
-async def process_and_store_document(url: str, markdown: str, tracker: Optional[CrawlProgressTracker] = None):
-    """Process a document and store its chunks in parallel."""
+async def process_and_store_document(
+    url: str,
+    markdown: str,
+    tracker: Optional[CrawlProgressTracker] = None,
+    repository: Optional[ISitePagesRepository] = None,
+    embedding_service: Optional[IEmbeddingService] = None
+):
+    """Process a document and store its chunks in parallel.
+
+    Args:
+        url: Source URL of the document
+        markdown: Markdown content to process
+        tracker: Optional progress tracker
+        repository: Optional repository for dependency injection
+        embedding_service: Optional embedding service for dependency injection
+    """
     # Split into chunks
     chunks = chunk_text(markdown)
-    
+
     if tracker:
         tracker.log(f"Split document into {len(chunks)} chunks for {url}")
         # Ensure UI gets updated
@@ -277,14 +357,14 @@ async def process_and_store_document(url: str, markdown: str, tracker: Optional[
             tracker.progress_callback(tracker.get_status())
     else:
         print(f"Split document into {len(chunks)} chunks for {url}")
-    
-    # Process chunks in parallel
+
+    # Process chunks in parallel (pass embedding_service)
     tasks = [
-        process_chunk(chunk, i, url) 
+        process_chunk(chunk, i, url, embedding_service)
         for i, chunk in enumerate(chunks)
     ]
     processed_chunks = await asyncio.gather(*tasks)
-    
+
     if tracker:
         tracker.log(f"Processed {len(processed_chunks)} chunks for {url}")
         # Ensure UI gets updated
@@ -292,14 +372,14 @@ async def process_and_store_document(url: str, markdown: str, tracker: Optional[
             tracker.progress_callback(tracker.get_status())
     else:
         print(f"Processed {len(processed_chunks)} chunks for {url}")
-    
-    # Store chunks in parallel
+
+    # Store chunks in parallel (pass repository)
     insert_tasks = [
-        insert_chunk(chunk) 
+        insert_chunk(chunk, repository)
         for chunk in processed_chunks
     ]
     await asyncio.gather(*insert_tasks)
-    
+
     if tracker:
         tracker.chunks_stored += len(processed_chunks)
         tracker.log(f"Stored {len(processed_chunks)} chunks for {url}")
@@ -329,11 +409,25 @@ def fetch_url_content(url: str) -> str:
     except Exception as e:
         raise Exception(f"Error fetching {url}: {str(e)}")
 
-async def crawl_parallel_with_requests(urls: List[str], tracker: Optional[CrawlProgressTracker] = None, max_concurrent: int = 5):
-    """Crawl multiple URLs in parallel with a concurrency limit using direct HTTP requests."""
+async def crawl_parallel_with_requests(
+    urls: List[str],
+    tracker: Optional[CrawlProgressTracker] = None,
+    max_concurrent: int = 5,
+    repository: Optional[ISitePagesRepository] = None,
+    embedding_service: Optional[IEmbeddingService] = None
+):
+    """Crawl multiple URLs in parallel with a concurrency limit using direct HTTP requests.
+
+    Args:
+        urls: List of URLs to crawl
+        tracker: Optional progress tracker
+        max_concurrent: Maximum concurrent requests
+        repository: Optional repository for dependency injection
+        embedding_service: Optional embedding service for dependency injection
+    """
     # Create a semaphore to limit concurrency
     semaphore = asyncio.Semaphore(max_concurrent)
-    
+
     async def process_url(url: str):
         async with semaphore:
             if tracker:
@@ -343,7 +437,7 @@ async def crawl_parallel_with_requests(urls: List[str], tracker: Optional[CrawlP
                     tracker.progress_callback(tracker.get_status())
             else:
                 print(f"Crawling: {url}")
-            
+
             try:
                 # Use a thread pool to run the blocking HTTP request
                 loop = asyncio.get_running_loop()
@@ -352,7 +446,7 @@ async def crawl_parallel_with_requests(urls: List[str], tracker: Optional[CrawlP
                 else:
                     print(f"Fetching content from: {url}")
                 markdown = await loop.run_in_executor(None, fetch_url_content, url)
-                
+
                 if markdown:
                     if tracker:
                         tracker.urls_succeeded += 1
@@ -362,8 +456,9 @@ async def crawl_parallel_with_requests(urls: List[str], tracker: Optional[CrawlP
                             tracker.progress_callback(tracker.get_status())
                     else:
                         print(f"Successfully crawled: {url}")
-                    
-                    await process_and_store_document(url, markdown, tracker)
+
+                    # Pass repository and embedding_service
+                    await process_and_store_document(url, markdown, tracker, repository, embedding_service)
                 else:
                     if tracker:
                         tracker.urls_failed += 1
@@ -390,7 +485,7 @@ async def crawl_parallel_with_requests(urls: List[str], tracker: Optional[CrawlP
                         tracker.progress_callback(tracker.get_status())
 
         time.sleep(2)
-    
+
     # Process all URLs in parallel with limited concurrency
     if tracker:
         tracker.log(f"Processing {len(urls)} URLs with concurrency {max_concurrent}")
@@ -420,9 +515,24 @@ def get_pydantic_ai_docs_urls() -> List[str]:
         print(f"Error fetching sitemap: {e}")
         return []
 
-def clear_existing_records():
-    """Clear all existing records with source='pydantic_ai_docs' from the site_pages table."""
+async def clear_existing_records(repository: Optional[ISitePagesRepository] = None):
+    """Clear all existing records with source='pydantic_ai_docs' from the site_pages table.
+
+    Args:
+        repository: Optional repository for dependency injection
+
+    Returns:
+        Number of deleted records or result object
+    """
     try:
+        # Use injected repository if provided (new pattern)
+        if repository is not None:
+            # ISitePagesRepository.delete_by_source is async
+            count = await repository.delete_by_source("pydantic_ai_docs")
+            print(f"Cleared {count} existing pydantic_ai_docs records from site_pages")
+            return count
+
+        # Fallback: use global supabase client (backward compatibility)
         result = supabase.table("site_pages").delete().eq("metadata->>source", "pydantic_ai_docs").execute()
         print("Cleared existing pydantic_ai_docs records from site_pages")
         return result
@@ -430,33 +540,43 @@ def clear_existing_records():
         print(f"Error clearing existing records: {e}")
         return None
 
-async def main_with_requests(tracker: Optional[CrawlProgressTracker] = None):
-    """Main function using direct HTTP requests instead of browser automation."""
+async def main_with_requests(
+    tracker: Optional[CrawlProgressTracker] = None,
+    repository: Optional[ISitePagesRepository] = None,
+    embedding_service: Optional[IEmbeddingService] = None
+):
+    """Main function using direct HTTP requests instead of browser automation.
+
+    Args:
+        tracker: Optional progress tracker
+        repository: Optional repository for dependency injection
+        embedding_service: Optional embedding service for dependency injection
+    """
     try:
         # Start tracking if tracker is provided
         if tracker:
             tracker.start()
         else:
             print("Starting crawling process...")
-        
-        # Clear existing records first
+
+        # Clear existing records first (pass repository)
         if tracker:
             tracker.log("Clearing existing Pydantic AI docs records...")
         else:
             print("Clearing existing Pydantic AI docs records...")
-        clear_existing_records()
+        await clear_existing_records(repository)
         if tracker:
             tracker.log("Existing records cleared")
         else:
             print("Existing records cleared")
-        
+
         # Get URLs from Pydantic AI docs
         if tracker:
             tracker.log("Fetching URLs from Pydantic AI sitemap...")
         else:
             print("Fetching URLs from Pydantic AI sitemap...")
         urls = get_pydantic_ai_docs_urls()
-        
+
         if not urls:
             if tracker:
                 tracker.log("No URLs found to crawl")
@@ -464,22 +584,28 @@ async def main_with_requests(tracker: Optional[CrawlProgressTracker] = None):
             else:
                 print("No URLs found to crawl")
             return
-        
+
         if tracker:
             tracker.urls_found = len(urls)
             tracker.log(f"Found {len(urls)} URLs to crawl")
         else:
             print(f"Found {len(urls)} URLs to crawl")
-        
-        # Crawl the URLs using direct HTTP requests
-        await crawl_parallel_with_requests(urls, tracker)
-        
+
+        # Crawl the URLs using direct HTTP requests (pass repository and embedding_service)
+        await crawl_parallel_with_requests(
+            urls,
+            tracker=tracker,
+            max_concurrent=5,
+            repository=repository,
+            embedding_service=embedding_service
+        )
+
         # Mark as complete if tracker is provided
         if tracker:
             tracker.complete()
         else:
             print("Crawling process completed")
-            
+
     except Exception as e:
         if tracker:
             tracker.log(f"Error in crawling process: {str(e)}")
@@ -487,23 +613,36 @@ async def main_with_requests(tracker: Optional[CrawlProgressTracker] = None):
         else:
             print(f"Error in crawling process: {str(e)}")
 
-def start_crawl_with_requests(progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None) -> CrawlProgressTracker:
-    """Start the crawling process using direct HTTP requests in a separate thread and return the tracker."""
+def start_crawl_with_requests(
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    repository: Optional[ISitePagesRepository] = None,
+    embedding_service: Optional[IEmbeddingService] = None
+) -> CrawlProgressTracker:
+    """Start the crawling process using direct HTTP requests in a separate thread and return the tracker.
+
+    Args:
+        progress_callback: Optional callback for progress updates
+        repository: Optional repository for dependency injection
+        embedding_service: Optional embedding service for dependency injection
+
+    Returns:
+        CrawlProgressTracker instance for monitoring progress
+    """
     tracker = CrawlProgressTracker(progress_callback)
-    
+
     def run_crawl():
         try:
-            asyncio.run(main_with_requests(tracker))
+            asyncio.run(main_with_requests(tracker, repository, embedding_service))
         except Exception as e:
             print(f"Error in crawl thread: {e}")
             tracker.log(f"Thread error: {str(e)}")
             tracker.complete()
-    
+
     # Start the crawling process in a separate thread
     thread = threading.Thread(target=run_crawl)
     thread.daemon = True
     thread.start()
-    
+
     return tracker
 
 if __name__ == "__main__":    
