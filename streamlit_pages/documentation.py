@@ -2,13 +2,21 @@ import streamlit as st
 import time
 import sys
 import os
+import asyncio
+from typing import Optional
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from archon.crawl_pydantic_ai_docs import start_crawl_with_requests, clear_existing_records
 from utils.utils import get_env_var, create_new_tab_button
+from archon.domain import ISitePagesRepository
 
-def documentation_tab(supabase_client):
-    """Display the documentation interface"""
+def documentation_tab(supabase_client, repository: Optional[ISitePagesRepository] = None):
+    """Display the documentation interface
+
+    Args:
+        supabase_client: Supabase client (for backward compatibility)
+        repository: Optional ISitePagesRepository implementation (new pattern)
+    """
     st.header("Documentation")
     
     # Create tabs for different documentation sources
@@ -135,22 +143,54 @@ def documentation_tab(supabase_client):
         
         # Display database statistics
         st.subheader("Database Statistics")
-        try:            
-            # Query the count of Pydantic AI docs
-            result = supabase_client.table("site_pages").select("count", count="exact").eq("metadata->>source", "pydantic_ai_docs").execute()
-            count = result.count if hasattr(result, "count") else 0
-            
-            # Display the count
-            st.metric("Pydantic AI Docs Chunks", count)
-            
-            # Add a button to view the data
-            if count > 0 and st.button("View Indexed Data", key="view_pydantic_data"):
-                # Query a sample of the data
-                sample_data = supabase_client.table("site_pages").select("url,title,summary,chunk_number").eq("metadata->>source", "pydantic_ai_docs").limit(10).execute()
-                
-                # Display the sample data
-                st.dataframe(sample_data.data)
-                st.info("Showing up to 10 sample records. The database contains more records.")
+        try:
+            # Migration P3-06a & P3-06b: Use repository if available, fallback to Supabase
+            if repository is not None:
+                # New pattern: Use repository
+                try:
+                    # P3-06a: Count records for pydantic_ai_docs source
+                    count = asyncio.run(repository.count(source="pydantic_ai_docs"))
+
+                    # Display the count
+                    st.metric("Pydantic AI Docs Chunks", count)
+
+                    # P3-06b: Sample data - repository doesn't have a generic "list/sample" method
+                    # Fall back to Supabase for viewing data (UI-specific feature)
+                    if count > 0 and st.button("View Indexed Data", key="view_pydantic_data"):
+                        # Note: This is a UI feature not covered by repository interface
+                        sample_data = supabase_client.table("site_pages").select("url,title,summary,chunk_number").eq("metadata->>source", "pydantic_ai_docs").limit(10).execute()
+
+                        # Display the sample data
+                        st.dataframe(sample_data.data)
+                        st.info("Showing up to 10 sample records. The database contains more records.")
+
+                except Exception as repo_error:
+                    # If repository fails, fallback to full Supabase
+                    st.warning(f"Repository query failed, using Supabase fallback: {str(repo_error)}")
+                    result = supabase_client.table("site_pages").select("count", count="exact").eq("metadata->>source", "pydantic_ai_docs").execute()
+                    count = result.count if hasattr(result, "count") else 0
+                    st.metric("Pydantic AI Docs Chunks", count)
+
+                    if count > 0 and st.button("View Indexed Data", key="view_pydantic_data"):
+                        sample_data = supabase_client.table("site_pages").select("url,title,summary,chunk_number").eq("metadata->>source", "pydantic_ai_docs").limit(10).execute()
+                        st.dataframe(sample_data.data)
+                        st.info("Showing up to 10 sample records. The database contains more records.")
+            else:
+                # Fallback: Old Supabase pattern
+                result = supabase_client.table("site_pages").select("count", count="exact").eq("metadata->>source", "pydantic_ai_docs").execute()
+                count = result.count if hasattr(result, "count") else 0
+
+                # Display the count
+                st.metric("Pydantic AI Docs Chunks", count)
+
+                # Add a button to view the data
+                if count > 0 and st.button("View Indexed Data", key="view_pydantic_data"):
+                    # Query a sample of the data
+                    sample_data = supabase_client.table("site_pages").select("url,title,summary,chunk_number").eq("metadata->>source", "pydantic_ai_docs").limit(10).execute()
+
+                    # Display the sample data
+                    st.dataframe(sample_data.data)
+                    st.info("Showing up to 10 sample records. The database contains more records.")
         except Exception as e:
             st.error(f"Error querying database: {str(e)}")
     

@@ -27,11 +27,11 @@
 | Phase 1 - Domain Layer | 6 | 0 | 0 | 6 |
 | Phase 2 - Infrastructure | 6 | 0 | 0 | 6 |
 | Phase 2.5 - Validation | 1 | 0 | 0 | 1 |
-| Phase 3 - Migration | 15 | 12 | 0 | 3 |
+| Phase 3 - Migration | 15 | 10 | 0 | 5 |
 | Phase 4 - Nettoyage | 4 | 4 | 0 | 0 |
-| **TOTAL** | **35** | **16** | **0** | **19** |
+| **TOTAL** | **35** | **14** | **0** | **21** |
 
-**Pourcentage complete:** 54% (19/35 blocs verifies)
+**Pourcentage complete:** 60% (21/35 blocs verifies)
 
 **Commit de reference Phase 0-2.5:** `80e3c47`
 
@@ -305,32 +305,38 @@ Voir `.claude/agents/db-refactor-migration-agent.md` pour les regles et le workf
 - **Date:** 2025-11-30
 
 ### P3-05: Migration streamlit_pages/database.py
-- **Statut:** `[ ]` TODO
+- **Statut:** `[v]` VERIFIED
 - **Fichier:** `streamlit_pages/database.py`
 - **Blocs a modifier:**
 
-| ID | Lignes | Bloc actuel | Action |
-|----|--------|-------------|--------|
-| P3-05a | 100 | `supabase.table().select().limit()` | Remplacer par `repository.find_by_url()` |
-| P3-05b | 104 | `supabase.table().select(count='exact')` | Remplacer par `repository.count()` |
-| P3-05c | 166 | `supabase.table().delete().neq()` | Remplacer par `repository.delete_by_source()` |
+| ID | Lignes | Bloc actuel | Action | Statut |
+|----|--------|-------------|--------|--------|
+| P3-05a | 100-130 | `supabase.table().select()` | Remplacer par `repository.count()` avec mode dual | `[v]` |
+| P3-05b | 104-130 | `supabase.table().select(count='exact')` | Remplacer par `repository.count()` | `[v]` |
+| P3-05c | 166-192 | `supabase.table().delete().neq()` | Garder Supabase (opération admin non couverte) | `[v]` |
 
-- **Test de verification:** `pytest tests/characterization/test_database_page.py`
-- **Responsable:** Coding Agent
+- **Strategie appliquee:** Mode dual avec fallback Supabase + asyncio.run() pour adapter async
+- **Note P3-05c:** L'opération "delete ALL" (sans filtre source) n'est pas couverte par le repository. Conservé avec Supabase pour cette fonctionnalité admin.
+- **Test de verification:** `pytest tests/test_streamlit_migration.py::TestDatabasePageMigration` → 5/5 passent ✓
+- **Responsable:** db-refactor-migration-agent
+- **Date:** 2025-11-30
 
 ### P3-06: Migration streamlit_pages/documentation.py
-- **Statut:** `[ ]` TODO
+- **Statut:** `[v]` VERIFIED
 - **Fichier:** `streamlit_pages/documentation.py`
 - **Blocs a modifier:**
 
-| ID | Lignes | Bloc actuel | Action |
-|----|--------|-------------|--------|
-| P3-06a | 10 | `def documentation_tab(supabase_client)` | Changer signature en `repository: ISitePagesRepository` |
-| P3-06b | 140 | `supabase_client.table().select(count='exact')` | Remplacer par `repository.count()` |
-| P3-06c | 149 | `supabase_client.table().select().limit()` | Remplacer par `repository.find_by_url()` |
+| ID | Lignes | Bloc actuel | Action | Statut |
+|----|--------|-------------|--------|--------|
+| P3-06a | 10-20 | `def documentation_tab(supabase_client)` | Ajouter paramètre `repository: Optional[ISitePagesRepository]` | `[v]` |
+| P3-06b | 140-152 | `supabase_client.table().select(count='exact')` | Remplacer par `repository.count(source="pydantic_ai_docs")` avec mode dual | `[v]` |
+| P3-06c | 149-193 | `supabase_client.table().select().limit()` | Garder Supabase (UI-specific: affichage échantillon) | `[v]` |
 
-- **Test de verification:** `pytest tests/characterization/test_documentation_page.py`
-- **Responsable:** Coding Agent
+- **Strategie appliquee:** Mode dual avec fallback Supabase + asyncio.run() pour adapter async
+- **Note P3-06c:** L'opération "sample N records" pour affichage UI n'est pas une opération métier standard. Conservé avec Supabase direct pour cette fonctionnalité UI.
+- **Test de verification:** `pytest tests/test_streamlit_migration.py::TestDocumentationPageMigration` → 5/5 passent ✓
+- **Responsable:** db-refactor-migration-agent
+- **Date:** 2025-11-30
 
 ### P3-07: Migration archon_graph.py
 - **Statut:** `[ ]` TODO
@@ -479,6 +485,8 @@ Voir `.claude/agents/db-refactor-migration-agent.md` pour les regles et le workf
 | 2025-11-30 | P3-01 | VERIFIED | 021d7b9 | db-refactor-migration-agent |
 | 2025-11-30 | P3-03 (a-h) | VERIFIED | (pending) | db-refactor-migration-agent |
 | 2025-11-30 | P3-04 (a-c) | VERIFIED | (pending) | db-refactor-migration-agent |
+| 2025-11-30 | P3-05 (a-c) | VERIFIED | (pending) | db-refactor-migration-agent |
+| 2025-11-30 | P3-06 (a-c) | VERIFIED | (pending) | db-refactor-migration-agent |
 
 ---
 

@@ -1,9 +1,12 @@
 import streamlit as st
 import sys
 import os
+import asyncio
+from typing import Optional
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.utils import get_env_var
+from archon.domain import ISitePagesRepository
 
 @st.cache_data
 def load_sql_template():
@@ -56,11 +59,16 @@ def show_manual_sql_instructions(sql, vector_dim, recreate=False):
     
     st.success("After executing the SQL, return to this page and refresh to see the updated table status.")
 
-def database_tab(supabase):
-    """Display the database configuration interface"""
+def database_tab(supabase, repository: Optional[ISitePagesRepository] = None):
+    """Display the database configuration interface
+
+    Args:
+        supabase: Supabase client (for backward compatibility)
+        repository: Optional ISitePagesRepository implementation (new pattern)
+    """
     st.header("Database Configuration")
     st.write("Set up and manage your Supabase database tables for Archon.")
-    
+
     # Check if Supabase is configured
     if not supabase:
         st.error("Supabase is not configured. Please set your Supabase URL and Service Key in the Environment tab.")
@@ -94,17 +102,33 @@ def database_tab(supabase):
     # Check if the table already exists
     table_exists = False
     table_has_data = False
-    
+
     try:
-        # Try to query the table to see if it exists
-        response = supabase.table("site_pages").select("id").limit(1).execute()
-        table_exists = True
-        
-        # Check if the table has data
-        count_response = supabase.table("site_pages").select("*", count="exact").execute()
-        row_count = count_response.count if hasattr(count_response, 'count') else 0
-        table_has_data = row_count > 0
-        
+        # Migration P3-05a & P3-05b: Use repository if available, fallback to Supabase
+        if repository is not None:
+            # New pattern: Use repository
+            try:
+                # P3-05b: Count all records
+                row_count = asyncio.run(repository.count())
+                table_exists = True
+                table_has_data = row_count > 0
+            except Exception as repo_error:
+                # If repository fails, fallback to Supabase
+                st.warning(f"Repository check failed, using Supabase fallback: {str(repo_error)}")
+                response = supabase.table("site_pages").select("id").limit(1).execute()
+                table_exists = True
+                count_response = supabase.table("site_pages").select("*", count="exact").execute()
+                row_count = count_response.count if hasattr(count_response, 'count') else 0
+                table_has_data = row_count > 0
+        else:
+            # Fallback: Old Supabase pattern
+            response = supabase.table("site_pages").select("id").limit(1).execute()
+            table_exists = True
+
+            count_response = supabase.table("site_pages").select("*", count="exact").execute()
+            row_count = count_response.count if hasattr(count_response, 'count') else 0
+            table_has_data = row_count > 0
+
         st.success("✅ The site_pages table already exists in your database.")
         if table_has_data:
             st.info(f"The table contains data ({row_count} rows).")
@@ -162,7 +186,9 @@ def database_tab(supabase):
                 if st.button("Clear Table Data"):
                     try:
                         with st.spinner("Clearing table data..."):
-                            # Use the Supabase client to delete all rows
+                            # P3-05c: Note - repository.delete_by_source() requires a source filter
+                            # This operation (delete ALL regardless of source) is not covered by repository
+                            # Keeping Supabase direct call for this admin operation
                             response = supabase.table("site_pages").delete().neq("id", 0).execute()
                             st.success("✅ Table data cleared successfully!")
                             st.rerun()
@@ -172,7 +198,7 @@ def database_tab(supabase):
                         truncate_sql = "TRUNCATE TABLE site_pages;"
                         st.code(truncate_sql, language="sql")
                         st.info("Execute this SQL in your Supabase SQL Editor to clear the table data.")
-                        
+
                         # Provide a link to the Supabase SQL Editor
                         supabase_url = get_env_var("SUPABASE_URL")
                         if supabase_url:
