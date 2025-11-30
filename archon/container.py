@@ -139,6 +139,27 @@ def get_embedding_service() -> IEmbeddingService:
     return _embedding_instance
 
 
+def get_documentation_service():
+    """
+    Retourne une instance du DocumentationService.
+
+    Returns:
+        DocumentationService: Service configure avec repository et embedding service
+
+    Example:
+        >>> from archon.container import get_documentation_service
+        >>> service = get_documentation_service()
+        >>> results = await service.search_documentation("agents")
+    """
+    from archon.services import DocumentationService
+
+    logger.debug("Creating DocumentationService instance")
+    return DocumentationService(
+        repository=get_repository(),
+        embedding_service=get_embedding_service()
+    )
+
+
 def reset() -> None:
     """
     Reset toutes les instances (utile pour les tests).
