@@ -42,6 +42,7 @@ class RecursiveCrawlStrategy:
         max_concurrent: int | None = None,
         progress_callback: Callable[..., Awaitable[None]] | None = None,
         cancellation_check: Callable[[], None] | None = None,
+        robots_checker=None,
     ) -> list[dict[str, Any]]:
         """
         Recursively crawl internal links from start URLs up to a maximum depth with progress reporting.
@@ -304,6 +305,16 @@ class RecursiveCrawlStrategy:
                             # Skip binary files and already visited URLs
                             is_binary = self.url_handler.is_binary_file(next_url)
                             if next_url not in visited and not is_binary:
+                                # Check robots.txt if enabled
+                                if robots_checker:
+                                    try:
+                                        allowed = await robots_checker.can_fetch(next_url)
+                                        if not allowed:
+                                            logger.info(f"Skipped (robots.txt): {next_url}")
+                                            continue
+                                    except Exception as e:
+                                        logger.warning(f"robots.txt check failed for {next_url}: {e}, allowing crawl")
+
                                 if next_url not in next_level_urls:
                                     next_level_urls.add(next_url)
                                     total_discovered += 1  # Increment when we discover a new URL

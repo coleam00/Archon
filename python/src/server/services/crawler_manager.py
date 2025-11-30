@@ -14,6 +14,7 @@ except ImportError:
     AsyncWebCrawler = None
     BrowserConfig = None
 
+from ..config.config import get_crawler_config
 from ..config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
 
 logger = get_logger(__name__)
@@ -59,14 +60,15 @@ class CrawlerManager:
 
             # Initialize browser config - same for Docker and local
             # crawl4ai/Playwright will handle Docker-specific settings internally
+            crawler_config = get_crawler_config()
             browser_config = BrowserConfig(
                 headless=True,
                 verbose=False,
                 # Set viewport for proper rendering
                 viewport_width=1920,
                 viewport_height=1080,
-                # Add user agent to appear as a real browser
-                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                # Use proper bot identification
+                user_agent=crawler_config["user_agent"],
                 # Set browser type
                 browser_type="chromium",
                 # Extra args for Chromium - optimized for speed
