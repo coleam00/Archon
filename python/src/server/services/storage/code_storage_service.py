@@ -1307,7 +1307,9 @@ async def add_code_examples_to_supabase(
             embedding_dim = len(embedding) if isinstance(embedding, list) else len(embedding.tolist())
             embedding_column = None
 
-            if embedding_dim == 768:
+            if embedding_dim == 384:
+                embedding_column = "embedding_384"
+            elif embedding_dim == 768:
                 embedding_column = "embedding_768"
             elif embedding_dim == 1024:
                 embedding_column = "embedding_1024"
