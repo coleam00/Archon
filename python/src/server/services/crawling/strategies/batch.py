@@ -12,6 +12,7 @@ from crawl4ai import CacheMode, CrawlerRunConfig, MemoryAdaptiveDispatcher
 
 from ....config.logfire_config import get_logger
 from ...credential_service import credential_service
+from ..helpers.content_fixer import fix_code_span_spaces
 
 logger = get_logger(__name__)
 
@@ -255,9 +256,12 @@ class BatchCrawlStrategy:
                         if fallback_text:
                             title = fallback_text
 
+                    # Fix spaces in code paths that Crawl4AI/BeautifulSoup adds
+                    cleaned_markdown = fix_code_span_spaces(result.markdown.fit_markdown)
+
                     successful_results.append({
                         "url": original_url,
-                        "markdown": result.markdown.fit_markdown,
+                        "markdown": cleaned_markdown,
                         "html": result.html,  # Use raw HTML
                         "title": title,
                     })

@@ -302,6 +302,15 @@ class CodeExtractionService:
                     f"Document content check | url={source_url} | has_html={bool(html_content)} | has_markdown={bool(md)} | html_len={len(html_content) if html_content else 0} | md_len={len(md) if md else 0}"
                 )
 
+                # DEBUG: Check for spaces in markdown code blocks
+                if md and "```" in md:
+                    code_start = md.find('```')
+                    if code_start >= 0:
+                        code_sample = md[code_start:code_start+400]
+                        if ' / ' in code_sample or ' - ' in code_sample:
+                            safe_logfire_info(f"⚠️ DEBUG CODE EXTRACTION: Found spaces in markdown for {source_url}")
+                            safe_logfire_info(f"📝 DEBUG: Markdown sample with spaces: {code_sample[:200]}")
+
                 # Get dynamic minimum length based on document context
 
                 # Check markdown first to see if it has code blocks
@@ -1277,16 +1286,83 @@ class CodeExtractionService:
         """Decode common HTML entities and clean HTML tags from code."""
         import re
 
+        # DEBUG: Log if we're processing HTML with spaces
+        if '<span' in text and (' / ' in text or ' - ' in text):
+            safe_logfire_info(f"🔍 DEBUG _decode_html_entities: Processing HTML with spaces")
+            safe_logfire_info(f"📝 DEBUG: Input text sample (first 300 chars): {text[:300]}")
+
         # First, handle span tags that wrap individual tokens
-        # Check if spans are being used for syntax highlighting (no spaces between tags)
-        if "</span><span" in text:
-            # This indicates syntax highlighting - preserve the structure
+        # Check if spans are being used for syntax highlighting by detecting
+        # programming punctuation in/around spans (not just adjacent spans)
+
+        # Check for multiple span tags (strong indicator of syntax highlighting)
+        # If there are 3+ span tags, it's almost certainly syntax highlighting
+        span_count = text.count("<span")
+
+        # Also check for specific patterns (with or without whitespace between spans)
+        # Normalize whitespace first to catch patterns like "</span> <span>"
+        text_normalized = re.sub(r'\s+', ' ', text)
+
+        syntax_highlight_indicators = [
+            "</span><span", "</span> <span",  # Adjacent spans (with/without space)
+            "</span>/", "/</span>", "</span> /",  # Slashes (import paths, URLs)
+            "</span>.", ".</span>", "</span> .",  # Dots (method chaining, paths)
+            "</span>:", ":</span>", "</span> :",  # Colons (URLs, types)
+            "</span>@", "@</span>", "</span> @",  # At-signs (Next.js imports)
+            "</span>-", "-</span>", "</span> -",  # Hyphens (operators, kebab-case)
+            "</span>>", "></span>",  # Greater than (arrows, comparison)
+            "</span>=", "=</span>", "</span> =",  # Equals (assignment, comparison)
+            "</span>+", "+</span>",  # Plus (operators, concatenation)
+            "</span>*", "*</span>",  # Asterisk (multiplication, pointers)
+            "</span>&", "&</span>",  # Ampersand (logical AND, references)
+            "</span>|", "|</span>",  # Pipe (logical OR, union types)
+            "</span>?", "?</span>",  # Question mark (ternary, optional)
+        ]
+
+        is_syntax_highlighted = (span_count >= 3) or any(indicator in text_normalized for indicator in syntax_highlight_indicators)
+
+        if is_syntax_highlighted:
+            # Syntax highlighting detected - remove all spans without adding spaces
+            # First, collapse whitespace between spans ONLY around programming punctuation
+            # This fixes Crawl4AI adding spaces: </span> @ </span> -> </span>@</span>
+            # But preserves intentional spaces: </span> + </span> -> </span> + </span>
+            punctuation_patterns = [
+                (r'</span>\s+(/)\s*<span', r'</span>\1<span'),  # Slashes
+                (r'</span>\s+(\.)\s*<span', r'</span>\1<span'),  # Dots
+                (r'</span>\s+(:)\s*<span', r'</span>\1<span'),  # Colons
+                (r'</span>\s+(@)\s*<span', r'</span>\1<span'),  # At-signs
+                (r'</span>\s+(-)\s*<span', r'</span>\1<span'),  # Hyphens
+                (r'</span>\s+(>)\s*<span', r'</span>\1<span'),  # Greater than
+                (r'</span>\s+(\?)\s*<span', r'</span>\1<span'),  # Question mark
+                # Also handle punctuation at the start/end of spans
+                (r'</span>\s+<span[^>]*>(/)', r'</span><span>\1'),
+                (r'</span>\s+<span[^>]*>(\.)', r'</span><span>\1'),
+                (r'</span>\s+<span[^>]*>(:)', r'</span><span>\1'),
+                (r'</span>\s+<span[^>]*>(@)', r'</span><span>\1'),
+                (r'(/)</span>\s+<span', r'\1</span><span'),
+                (r'(\.)</span>\s+<span', r'\1</span><span'),
+                (r'(:)</span>\s+<span', r'\1</span><span'),
+                (r'(@)</span>\s+<span', r'\1</span><span'),
+                # Handle quotes and string delimiters
+                (r'''</span>\s+<span[^>]*>(['"``])''', r"</span><span>\1"),
+                (r'''(['"``])</span>\s+<span''', r"\1</span><span"),
+            ]
+
+            for pattern, replacement in punctuation_patterns:
+                text = re.sub(pattern, replacement, text)
+
+            # Remove span tags without adding spaces
             text = re.sub(r"</span>", "", text)
             text = re.sub(r"<span[^>]*>", "", text)
         else:
-            # Normal span usage - might need spacing
-            # Only add space if there isn't already whitespace
-            text = re.sub(r"</span>(?=[A-Za-z0-9])", " ", text)
+            # Normal HTML span usage - add spaces only between word boundaries
+            # Use negative lookahead to NEVER add space before:
+            # - whitespace, tags, or programming punctuation
+            text = re.sub(
+                r"</span>(?!\s|<|/|\.|\:|\@|\-|\>|\=|\+|\*|\&|\||\?|\$)(?=[A-Za-z0-9])",
+                " ",
+                text
+            )
             text = re.sub(r"<span[^>]*>", "", text)
 
         # Remove any other HTML tags but preserve their content
@@ -1324,6 +1400,10 @@ class CodeExtractionService:
             cleaned_lines.append(line)
 
         text = "\n".join(cleaned_lines)
+
+        # DEBUG: Log output if we processed HTML with spaces
+        if '<span' in text[:300] or (' / ' in text[:300] and 'import' in text[:300]):
+            safe_logfire_info(f"✅ DEBUG _decode_html_entities: Output text sample (first 300 chars): {text[:300]}")
 
         return text
 
