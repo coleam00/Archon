@@ -1,6 +1,5 @@
 from typing import Dict, Any, List, Optional
 from openai import AsyncOpenAI
-from supabase import Client  # Garde pour retrocompatibilite
 import sys
 import os
 
@@ -47,7 +46,7 @@ async def get_embedding(
         return [0] * 1536  # Return zero vector on error
 
 async def retrieve_relevant_documentation_tool(
-    supabase: Optional[Client] = None,
+    supabase: Optional[Any] = None,  # Legacy fallback (deprecated)
     embedding_client: Optional[AsyncOpenAI] = None,
     repository: Optional[ISitePagesRepository] = None,
     embedding_service: Optional[IEmbeddingService] = None,
@@ -132,7 +131,7 @@ async def retrieve_relevant_documentation_tool(
         return f"Error retrieving documentation: {str(e)}" 
 
 async def list_documentation_pages_tool(
-    supabase: Optional[Client] = None,
+    supabase: Optional[Any] = None,  # Legacy fallback (deprecated)
     repository: Optional[ISitePagesRepository] = None
 ) -> List[str]:
     """
@@ -175,7 +174,7 @@ async def list_documentation_pages_tool(
         return []
 
 async def get_page_content_tool(
-    supabase: Optional[Client] = None,
+    supabase: Optional[Any] = None,  # Legacy fallback (deprecated)
     repository: Optional[ISitePagesRepository] = None,
     url: str = ""
 ) -> str:
