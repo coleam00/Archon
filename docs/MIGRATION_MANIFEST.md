@@ -27,11 +27,11 @@
 | Phase 1 - Domain Layer | 6 | 0 | 0 | 6 |
 | Phase 2 - Infrastructure | 6 | 0 | 0 | 6 |
 | Phase 2.5 - Validation | 1 | 0 | 0 | 1 |
-| Phase 3 - Migration | 15 | 10 | 0 | 5 |
+| Phase 3 - Migration | 15 | 4 | 0 | 11 |
 | Phase 4 - Nettoyage | 4 | 4 | 0 | 0 |
-| **TOTAL** | **35** | **14** | **0** | **21** |
+| **TOTAL** | **35** | **8** | **0** | **27** |
 
-**Pourcentage complete:** 60% (21/35 blocs verifies)
+**Pourcentage complete:** 77% (27/35 blocs verifies)
 
 **Commit de reference Phase 0-2.5:** `80e3c47`
 
@@ -339,87 +339,101 @@ Voir `.claude/agents/db-refactor-migration-agent.md` pour les regles et le workf
 - **Date:** 2025-11-30
 
 ### P3-07: Migration archon_graph.py
-- **Statut:** `[ ]` TODO
+- **Statut:** `[v]` VERIFIED
 - **Fichier:** `archon/archon_graph.py`
 - **Blocs a modifier:**
 
-| ID | Lignes | Bloc actuel | Action |
-|----|--------|-------------|--------|
-| P3-07a | 11 | `from supabase import Client` | Supprimer |
-| P3-07b | 67 | `embedding_client, supabase = get_clients()` | Utiliser `container.get_repository()` |
-| P3-07c | 85 | `await list_documentation_pages_tool(supabase)` | Passer `repository` |
-| P3-07d | 149 | `supabase=supabase` dans deps | Changer en `repository=repository` |
-| P3-07e | 251 | `supabase=supabase` dans deps | Changer en `repository=repository` |
-| P3-07f | 272 | `supabase=supabase` dans deps | Changer en `repository=repository` |
+| ID | Lignes | Bloc actuel | Action | Statut |
+|----|--------|-------------|--------|--------|
+| P3-07a | 11 | `from supabase import Client` | Supprimer | `[v]` |
+| P3-07b | 67 | `embedding_client, supabase = get_clients()` | Utiliser `container.get_repository()` | `[v]` |
+| P3-07c | 86 | `await list_documentation_pages_tool(supabase)` | Passer `repository` | `[v]` |
+| P3-07d | 150 | `supabase=supabase` dans deps | Changer en `repository=repository` | `[v]` |
+| P3-07e | 252 | `supabase=supabase` dans deps | Changer en `repository=repository` | `[v]` |
+| P3-07f | 273 | `supabase=supabase` dans deps | Changer en `repository=repository` | `[v]` |
 
-- **Test de verification:** `pytest tests/characterization/test_archon_graph.py`
-- **Responsable:** Coding Agent
+- **Test de verification:** `pytest tests/test_agents_migration.py::TestArchonGraphMigration` → 5/5 passent ✓
+- **Responsable:** db-refactor-migration-agent
+- **Date:** 2025-11-30
+- **Commit:** `60f5b6d`
 
 ### P3-08: Migration pydantic_ai_coder.py
-- **Statut:** `[ ]` TODO
+- **Statut:** `[v]` VERIFIED
 - **Fichier:** `archon/pydantic_ai_coder.py`
 - **Blocs a modifier:**
 
-| ID | Lignes | Bloc actuel | Action |
-|----|--------|-------------|--------|
-| P3-08a | 17 | `from supabase import Client` | Importer `ISitePagesRepository` |
-| P3-08b | 42 | `supabase: Client` dans dataclass | Changer en `repository: ISitePagesRepository` |
-| P3-08c | 66-102 | Tools utilisant `ctx.deps.supabase` | Utiliser `ctx.deps.repository` |
+| ID | Lignes | Bloc actuel | Action | Statut |
+|----|--------|-------------|--------|--------|
+| P3-08a | 17 | `from supabase import Client` | Supprimer + importer interfaces | `[v]` |
+| P3-08b | 42-43 | `supabase: Client`, `embedding_client: AsyncOpenAI` | Changer en `repository`, `embedding_service` | `[v]` |
+| P3-08c | 67-106 | 3 tools utilisant `ctx.deps.supabase/embedding_client` | Utiliser `ctx.deps.repository/embedding_service` | `[v]` |
 
-- **Test de verification:** `pytest tests/characterization/test_pydantic_ai_coder.py`
-- **Responsable:** Coding Agent
+- **Test de verification:** `pytest tests/test_agents_migration.py::TestPydanticAICoderMigration` → 3/3 passent ✓
+- **Responsable:** db-refactor-migration-agent
+- **Date:** 2025-11-30
+- **Commit:** `60f5b6d`
 
 ### P3-09: Migration advisor_agent.py
-- **Statut:** `[ ]` TODO
+- **Statut:** `[v]` VERIFIED
 - **Fichier:** `archon/advisor_agent.py`
 - **Blocs a modifier:**
 
-| ID | Lignes | Bloc actuel | Action |
-|----|--------|-------------|--------|
-| P3-09a | 17 | `from supabase import Client` | **Supprimer** (import non utilise) |
+| ID | Lignes | Bloc actuel | Action | Statut |
+|----|--------|-------------|--------|--------|
+| P3-09a | 17 | `from supabase import Client` | **Supprimer** (import non utilise) | `[v]` |
 
-- **Note:** L'import `Client` n'est pas utilise dans ce fichier. Simple nettoyage.
-- **Test de verification:** `pytest tests/characterization/test_advisor_agent.py`
-- **Responsable:** Coding Agent
+- **Note:** L'import `Client` n'etait pas utilise dans ce fichier. Simple nettoyage.
+- **Test de verification:** `pytest tests/test_agents_migration.py::TestAdvisorAgentMigration` → 1/1 passe ✓
+- **Responsable:** db-refactor-migration-agent
+- **Date:** 2025-11-30
+- **Commit:** `60f5b6d`
 
 ### P3-10: Migration tools_refiner_agent.py
-- **Statut:** `[ ]` TODO
+- **Statut:** `[v]` VERIFIED
 - **Fichier:** `archon/refiner_agents/tools_refiner_agent.py`
 - **Blocs a modifier:**
 
-| ID | Lignes | Bloc actuel | Action |
-|----|--------|-------------|--------|
-| P3-10a | 17 | `from supabase import Client` | Importer `ISitePagesRepository` |
-| P3-10b | 44 | `supabase: Client` dans dataclass | Changer en `repository: ISitePagesRepository` |
+| ID | Lignes | Bloc actuel | Action | Statut |
+|----|--------|-------------|--------|--------|
+| P3-10a | 17 | `from supabase import Client` | Supprimer + importer interfaces | `[v]` |
+| P3-10b | 44-45 | `supabase: Client`, `embedding_client: AsyncOpenAI` | Changer en `repository`, `embedding_service` | `[v]` |
+| P3-10c | 69-111 | 3 tools utilisant `ctx.deps.supabase/embedding_client` | Utiliser `ctx.deps.repository/embedding_service` | `[v]` |
 
-- **Test de verification:** `pytest tests/characterization/test_tools_refiner.py`
-- **Responsable:** Coding Agent
+- **Test de verification:** `pytest tests/test_agents_migration.py::TestToolsRefinerAgentMigration` → 2/2 passent ✓
+- **Responsable:** db-refactor-migration-agent
+- **Date:** 2025-11-30
+- **Commit:** `60f5b6d`
 
 ### P3-11: Migration agent_refiner_agent.py
-- **Statut:** `[ ]` TODO
+- **Statut:** `[v]` VERIFIED
 - **Fichier:** `archon/refiner_agents/agent_refiner_agent.py`
 - **Blocs a modifier:**
 
-| ID | Lignes | Bloc actuel | Action |
-|----|--------|-------------|--------|
-| P3-11a | 17 | `from supabase import Client` | Importer `ISitePagesRepository` |
-| P3-11b | 43 | `supabase: Client` dans dataclass | Changer en `repository: ISitePagesRepository` |
+| ID | Lignes | Bloc actuel | Action | Statut |
+|----|--------|-------------|--------|--------|
+| P3-11a | 17 | `from supabase import Client` | Supprimer + importer interfaces | `[v]` |
+| P3-11b | 43-44 | `supabase: Client`, `embedding_client: AsyncOpenAI` | Changer en `repository`, `embedding_service` | `[v]` |
+| P3-11c | 54-96 | 3 tools utilisant `ctx.deps.supabase/embedding_client` | Utiliser `ctx.deps.repository/embedding_service` | `[v]` |
 
-- **Test de verification:** `pytest tests/characterization/test_agent_refiner.py`
-- **Responsable:** Coding Agent
+- **Test de verification:** `pytest tests/test_agents_migration.py::TestAgentRefinerAgentMigration` → 2/2 passent ✓
+- **Responsable:** db-refactor-migration-agent
+- **Date:** 2025-11-30
+- **Commit:** `60f5b6d`
 
 ### P3-12: Migration prompt_refiner_agent.py
-- **Statut:** `[ ]` TODO
+- **Statut:** `[v]` VERIFIED
 - **Fichier:** `archon/refiner_agents/prompt_refiner_agent.py`
 - **Blocs a modifier:**
 
-| ID | Lignes | Bloc actuel | Action |
-|----|--------|-------------|--------|
-| P3-12a | 10 | `from supabase import Client` | **Supprimer** (import non utilise) |
+| ID | Lignes | Bloc actuel | Action | Statut |
+|----|--------|-------------|--------|--------|
+| P3-12a | 10 | `from supabase import Client` | **Supprimer** (import non utilise) | `[v]` |
 
-- **Note:** L'import `Client` n'est pas utilise dans ce fichier. Simple nettoyage.
-- **Test de verification:** `pytest tests/characterization/test_prompt_refiner.py`
-- **Responsable:** Coding Agent
+- **Note:** L'import `Client` n'etait pas utilise dans ce fichier. Simple nettoyage.
+- **Test de verification:** `pytest tests/test_agents_migration.py::TestPromptRefinerAgentMigration` → 1/1 passe ✓
+- **Responsable:** db-refactor-migration-agent
+- **Date:** 2025-11-30
+- **Commit:** `60f5b6d`
 
 ### P3-13: Services Layer
 - **Statut:** `[ ]` TODO
@@ -487,6 +501,12 @@ Voir `.claude/agents/db-refactor-migration-agent.md` pour les regles et le workf
 | 2025-11-30 | P3-04 (a-c) | VERIFIED | (pending) | db-refactor-migration-agent |
 | 2025-11-30 | P3-05 (a-c) | VERIFIED | (pending) | db-refactor-migration-agent |
 | 2025-11-30 | P3-06 (a-c) | VERIFIED | (pending) | db-refactor-migration-agent |
+| 2025-11-30 | P3-07 (a-f) | VERIFIED | 60f5b6d | db-refactor-migration-agent |
+| 2025-11-30 | P3-08 (a-c) | VERIFIED | 60f5b6d | db-refactor-migration-agent |
+| 2025-11-30 | P3-09a | VERIFIED | 60f5b6d | db-refactor-migration-agent |
+| 2025-11-30 | P3-10 (a-c) | VERIFIED | 60f5b6d | db-refactor-migration-agent |
+| 2025-11-30 | P3-11 (a-c) | VERIFIED | 60f5b6d | db-refactor-migration-agent |
+| 2025-11-30 | P3-12a | VERIFIED | 60f5b6d | db-refactor-migration-agent |
 
 ---
 
