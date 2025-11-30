@@ -1,0 +1,31 @@
+# Archon Staging Requirements
+# For PostgreSQL backend testing in staging environment
+# Usage: pip install -r requirements-staging.txt
+
+-r requirements-base.txt
+
+# Database - PostgreSQL natif (pas de Supabase)
+asyncpg>=0.29.0
+pgvector>=0.2.0
+
+# Note: supabase inclus pour compatibilité pendant la transition
+supabase>=2.0.0
+
+# Additional LLM providers needed for full functionality
+cohere>=5.18.0
+groq>=0.15.0
+mistralai>=1.2.6
+
+# Crawling (needed for documentation ingestion)
+Crawl4AI>=0.4.0
+beautifulsoup4>=4.12.0
+playwright>=1.49.0
+
+# Data processing
+pandas>=2.0.0
+numpy>=2.0.0
+tiktoken>=0.5.0
+
+# Testing in staging container
+pytest>=8.0.0
+pytest-mockito>=0.0.4

@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git:*)",
+      "Bash(docker:*)",
+      "Bash(docker ps:*)",
+      "Bash(docker inspect:*)",
+      "Bash(docker exec:*)",
+      "Bash(psql:*)",
+      "Bash(python:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(pytest:*)",
+      "Bash(pip:*)",
+      "Bash(pip install:*)",
+      "Bash(pip show:*)",
+      "Bash(dir:*)",
+      "Bash(ls:*)",
+      "Bash(cd:*)",
+      "Bash(cat:*)",
+      "Bash(findstr:*)",
+      "Bash(mkdir:*)",
+      "Bash(curl:*)",
+      "mcp__archon__find_projects"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

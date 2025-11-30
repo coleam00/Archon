@@ -1,11 +1,18 @@
 # Folders
 workbench
 __pycache__
-venv
 .langgraph_api
+
+# Virtual environments
+venv/
+.venv/
+venv-*/
+env/
+.env.local
 
 # Files
 .env
 .env.temp
 .env.test
 env_vars.json
+nul

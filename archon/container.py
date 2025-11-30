@@ -15,15 +15,18 @@ Usage:
 """
 from typing import Optional
 import logging
+import os
 
 from archon.domain import ISitePagesRepository, IEmbeddingService
 
 logger = logging.getLogger("archon.container")
 
-# Configuration globale
+# Configuration globale - permet override via variable d'environnement
+_default_repo_type = os.environ.get("REPOSITORY_TYPE", "supabase")
+
 _config = {
-    "repository_type": "supabase",  # "supabase" | "memory"
-    "embedding_type": "openai",      # "openai" | "mock"
+    "repository_type": _default_repo_type,  # "supabase" | "postgres" | "memory"
+    "embedding_type": "openai",              # "openai" | "mock"
 }
 
 # Instances singleton (lazy)
@@ -39,7 +42,7 @@ def configure(
     Configure le container.
 
     Args:
-        repository_type: "supabase" ou "memory"
+        repository_type: "supabase", "postgres", ou "memory"
         embedding_type: "openai" ou "mock"
     """
     global _repository_instance, _embedding_instance
@@ -85,6 +88,32 @@ def get_repository() -> ISitePagesRepository:
             _repository_instance = SupabaseSitePagesRepository(supabase_client)
             logger.info("Created SupabaseSitePagesRepository instance")
 
+        elif repo_type == "postgres":
+            # PostgreSQL direct with asyncpg + pgvector
+            import os
+            from archon.infrastructure.postgres import PostgresSitePagesRepository, create_pool
+
+            # Get PostgreSQL configuration from environment
+            postgres_config = {
+                "host": os.environ.get("POSTGRES_HOST", "localhost"),
+                "port": int(os.environ.get("POSTGRES_PORT", "5432")),
+                "database": os.environ.get("POSTGRES_DB", "archon"),
+                "user": os.environ.get("POSTGRES_USER", "postgres"),
+                "password": os.environ.get("POSTGRES_PASSWORD", ""),
+            }
+
+            # Create pool and repository synchronously
+            # Note: Pool creation must be done in an async context
+            # So we raise an error with instructions
+            raise RuntimeError(
+                "PostgreSQL repository requires async initialization. "
+                "Use get_repository_async() instead, or initialize manually:\n\n"
+                "  from archon.infrastructure.postgres import PostgresSitePagesRepository\n"
+                "  repo = await PostgresSitePagesRepository.create(**config)\n"
+                "  from archon.container import override_repository\n"
+                "  override_repository(repo)\n"
+            )
+
         elif repo_type == "memory":
             from archon.infrastructure.memory import InMemorySitePagesRepository
 
@@ -93,6 +122,52 @@ def get_repository() -> ISitePagesRepository:
 
         else:
             raise ValueError(f"Unknown repository type: {repo_type}")
+
+    return _repository_instance
+
+
+async def get_repository_async() -> ISitePagesRepository:
+    """
+    Async version of get_repository for backends that require async initialization.
+
+    Returns:
+        ISitePagesRepository: Implementation selon la configuration
+
+    Raises:
+        ValueError: Si le type de repository est inconnu
+
+    Example:
+        >>> repo = await get_repository_async()
+    """
+    global _repository_instance
+
+    if _repository_instance is None:
+        repo_type = _config["repository_type"]
+        logger.debug(f"Creating repository instance (async): {repo_type}")
+
+        if repo_type == "postgres":
+            # PostgreSQL direct with asyncpg + pgvector
+            import os
+            from archon.infrastructure.postgres import PostgresSitePagesRepository
+
+            # Get PostgreSQL configuration from environment
+            postgres_config = {
+                "host": os.environ.get("POSTGRES_HOST", "localhost"),
+                "port": int(os.environ.get("POSTGRES_PORT", "5432")),
+                "database": os.environ.get("POSTGRES_DB", "archon"),
+                "user": os.environ.get("POSTGRES_USER", "postgres"),
+                "password": os.environ.get("POSTGRES_PASSWORD", ""),
+            }
+
+            _repository_instance = await PostgresSitePagesRepository.create(**postgres_config)
+            logger.info(
+                f"Created PostgresSitePagesRepository instance "
+                f"({postgres_config['user']}@{postgres_config['host']}:{postgres_config['port']}/{postgres_config['database']})"
+            )
+
+        else:
+            # For non-async backends, use the sync version
+            return get_repository()
 
     return _repository_instance
 

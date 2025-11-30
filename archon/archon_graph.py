@@ -28,7 +28,7 @@ from archon.refiner_agents.tools_refiner_agent import tools_refiner_agent, Tools
 from archon.refiner_agents.agent_refiner_agent import agent_refiner_agent, AgentRefinerDeps
 from archon.agent_tools import list_documentation_pages_tool
 from utils.utils import get_env_var
-from archon.container import get_repository, get_embedding_service
+from archon.container import get_repository_async, get_embedding_service
 
 # Load environment variables
 load_dotenv()
@@ -46,27 +46,35 @@ is_openai = provider == "OpenAI"
 reasoner_llm_model_name = get_env_var('REASONER_MODEL') or 'o3-mini'
 reasoner_llm_model = AnthropicModel(reasoner_llm_model_name, api_key=api_key) if is_anthropic else OpenAIModel(reasoner_llm_model_name, provider=OpenAIProvider(base_url=base_url, api_key=api_key))
 
-reasoner = Agent(  
+reasoner = Agent(
     reasoner_llm_model,
-    system_prompt='You are an expert at coding AI agents with Pydantic AI and defining the scope for doing so.',  
+    system_prompt='You are an expert at coding AI agents with Pydantic AI and defining the scope for doing so.',
 )
 
 primary_llm_model_name = get_env_var('PRIMARY_MODEL') or 'gpt-4o-mini'
 primary_llm_model = AnthropicModel(primary_llm_model_name, api_key=api_key) if is_anthropic else OpenAIModel(primary_llm_model_name, provider=OpenAIProvider(base_url=base_url, api_key=api_key))
 
-router_agent = Agent(  
+router_agent = Agent(
     primary_llm_model,
-    system_prompt='Your job is to route the user message either to the end of the conversation or to continue coding the AI agent.',  
+    system_prompt='Your job is to route the user message either to the end of the conversation or to continue coding the AI agent.',
 )
 
-end_conversation_agent = Agent(  
+end_conversation_agent = Agent(
     primary_llm_model,
-    system_prompt='Your job is to end a conversation for creating an AI agent by giving instructions for how to execute the agent and they saying a nice goodbye to the user.',  
+    system_prompt='Your job is to end a conversation for creating an AI agent by giving instructions for how to execute the agent and they saying a nice goodbye to the user.',
 )
 
 # Initialize repository and embedding service via container
-repository = get_repository()
+# Repository will be lazy-initialized on first use (supports async backends like PostgreSQL)
+repository = None
 embedding_service = get_embedding_service()
+
+async def get_repository_instance():
+    """Get or create repository instance (lazy initialization for async backends)."""
+    global repository
+    if repository is None:
+        repository = await get_repository_async()
+    return repository
 
 # Define state schema
 class AgentState(TypedDict):
@@ -84,7 +92,8 @@ class AgentState(TypedDict):
 # Scope Definition Node with Reasoner LLM
 async def define_scope_with_reasoner(state: AgentState):
     # First, get the documentation pages so the reasoner can decide which ones are necessary
-    documentation_pages = await list_documentation_pages_tool(repository=repository)
+    repo = await get_repository_instance()
+    documentation_pages = await list_documentation_pages_tool(repository=repo)
     documentation_pages_str = "\n".join(documentation_pages)
 
     # Then, use the reasoner to define the scope
@@ -147,8 +156,9 @@ async def advisor_with_examples(state: AgentState):
 # Coding Node with Feedback Handling
 async def coder_agent(state: AgentState, writer):
     # Prepare dependencies
+    repo = await get_repository_instance()
     deps = PydanticAIDeps(
-        repository=repository,
+        repository=repo,
         embedding_service=embedding_service,
         reasoner_output=state['scope'],
         advisor_output=state['advisor_output']
@@ -249,8 +259,9 @@ async def refine_prompt(state: AgentState):
 # Refines the tools for the AI agent
 async def refine_tools(state: AgentState):
     # Prepare dependencies
+    repo = await get_repository_instance()
     deps = ToolsRefinerDeps(
-        repository=repository,
+        repository=repo,
         embedding_service=embedding_service,
         file_list=state['file_list']
     )
@@ -270,8 +281,9 @@ async def refine_tools(state: AgentState):
 # Refines the defintion for the AI agent
 async def refine_agent(state: AgentState):
     # Prepare dependencies
+    repo = await get_repository_instance()
     deps = AgentRefinerDeps(
-        repository=repository,
+        repository=repo,
         embedding_service=embedding_service
     )
 

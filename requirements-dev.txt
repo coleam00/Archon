@@ -1,0 +1,42 @@
+# Archon Development Requirements
+# For local development with full tooling
+# Usage: pip install -r requirements-dev.txt
+
+-r requirements-base.txt
+
+# Database - Supabase for dev (production backend)
+supabase>=2.0.0
+
+# PostgreSQL (for testing postgres backend)
+asyncpg>=0.29.0
+pgvector>=0.2.0
+
+# Additional LLM providers
+cohere>=5.18.0
+groq>=0.15.0
+mistralai>=1.2.6
+
+# Crawling
+Crawl4AI>=0.4.0
+beautifulsoup4>=4.12.0
+playwright>=1.49.0
+
+# Data processing
+pandas>=2.0.0
+numpy>=2.0.0
+tiktoken>=0.5.0
+
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.24.0
+pytest-cov>=4.0.0
+pytest-mockito>=0.0.4
+
+# Code quality
+black>=24.0.0
+ruff>=0.1.0
+mypy>=1.0.0
+
+# Debug & Development
+ipython>=8.0.0
+rich>=13.0.0

@@ -390,7 +390,7 @@ class TestGetEmbedding:
         """
         CARACTERISATION: get_embedding retourne une liste de floats.
         """
-        result = await get_embedding("test query", embedding_client)
+        result = await get_embedding("test query", embedding_client=embedding_client)
 
         assert isinstance(result, list), (
             f"Expected list, got {type(result).__name__}"
@@ -409,7 +409,7 @@ class TestGetEmbedding:
         Note: La dimension depend du modele configure (EMBEDDING_MODEL).
         text-embedding-3-small: 1536 dimensions par defaut
         """
-        result = await get_embedding("test query for dimension check", embedding_client)
+        result = await get_embedding("test query for dimension check", embedding_client=embedding_client)
 
         # La dimension attendue depend du modele
         # text-embedding-3-small peut retourner 1536 ou moins si configure
@@ -425,7 +425,7 @@ class TestGetEmbedding:
         """
         # Ce test capture le comportement actuel avec un texte vide
         try:
-            result = await get_embedding("", embedding_client)
+            result = await get_embedding("", embedding_client=embedding_client)
             assert isinstance(result, list)
         except Exception as e:
             # Capturer si une exception est levee
