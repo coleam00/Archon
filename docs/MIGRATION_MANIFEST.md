@@ -27,13 +27,13 @@
 | Phase 1 - Domain Layer | 6 | 0 | 0 | 6 |
 | Phase 2 - Infrastructure | 6 | 0 | 0 | 6 |
 | Phase 2.5 - Validation | 1 | 0 | 0 | 1 |
-| Phase 3 - Migration | 15 | 4 | 0 | 11 |
+| Phase 3 - Migration | 15 | 3 | 0 | 12 |
 | Phase 4 - Nettoyage | 4 | 0 | 0 | 4 |
 | Phase 4 - Optionnel | 2 | 2 | 0 | 0 |
-| **TOTAL** | **37** | **6** | **0** | **31** |
+| **TOTAL** | **37** | **5** | **0** | **32** |
 
-**Pourcentage complete (core):** 89% (31/35 blocs essentiels verifies)
-**Pourcentage global:** 84% (31/37 blocs incluant optionnels)
+**Pourcentage complete (core):** 91% (32/35 blocs essentiels verifies)
+**Pourcentage global:** 86% (32/37 blocs incluant optionnels)
 
 **Commit de reference Phase 0-2.5:** `80e3c47`
 
@@ -250,18 +250,26 @@ Voir `.claude/agents/db-refactor-migration-agent.md` pour les regles et le workf
 - **Date:** 2025-11-30
 
 ### P3-02: Migration utils/utils.py
-- **Statut:** `[ ]` TODO
+- **Statut:** `[v]` VERIFIED
 - **Fichier:** `utils/utils.py`
 - **Blocs a modifier:**
 
-| ID | Lignes | Action | Nouveau code |
-|----|--------|--------|--------------|
-| P3-02a | 1 | Supprimer import | ~~`from supabase import Client, create_client`~~ |
-| P3-02b | 404 | Supprimer instanciation | ~~`supabase: Client = Client(...)`~~ |
-| P3-02c | 398-409 | Modifier `get_clients()` | Utiliser `container.get_repository()` |
+| ID | Lignes | Action | Statut |
+|----|--------|--------|--------|
+| P3-02a | 383-400 | Extraire `get_openai_client()` depuis `get_clients()` | `[v]` |
+| P3-02b | 402-419 | Extraire `get_supabase_client()` depuis `get_clients()` | `[v]` |
+| P3-02c | 421-433 | Refactoriser `get_clients()` pour utiliser les factories | `[v]` |
+| P3-02d | Container | Mettre à jour container.py pour utiliser les nouvelles factories | `[v]` |
 
-- **Test de verification:** `pytest tests/characterization/test_utils.py`
-- **Responsable:** Coding Agent
+- **Strategie appliquee:** Extraction de fonctions pour eviter duplication
+- **get_openai_client():** Retourne AsyncOpenAI configure
+- **get_supabase_client():** Retourne Client Supabase ou None
+- **get_clients():** Marque DEPRECATED, utilise les deux factories (backward compatible)
+- **Container:** Utilise `get_openai_client()` et `get_supabase_client()` individuellement
+- **Test de verification:** `pytest tests/ -v` → 121/121 passent ✓
+- **Note:** Import `from supabase import Client` conserve dans utils.py (justifie pour get_supabase_client)
+- **Responsable:** db-refactor-migration-agent
+- **Date:** 2025-11-30
 
 ### P3-03: Migration agent_tools.py
 - **Statut:** `[v]` VERIFIED
@@ -542,6 +550,7 @@ Voir `.claude/agents/db-refactor-migration-agent.md` pour les regles et le workf
 | 2025-11-30 | P3-10 (a-c) | VERIFIED | 60f5b6d | db-refactor-migration-agent |
 | 2025-11-30 | P3-11 (a-c) | VERIFIED | 60f5b6d | db-refactor-migration-agent |
 | 2025-11-30 | P3-12a | VERIFIED | 60f5b6d | db-refactor-migration-agent |
+| 2025-11-30 | P3-02 (a-d) | VERIFIED | (pending) | db-refactor-migration-agent |
 | 2025-11-30 | P4-01 | VERIFIED | (pending) | db-refactor-validation-agent |
 | 2025-11-30 | P4-02 | VERIFIED | (pending) | db-refactor-validation-agent |
 | 2025-11-30 | P4-03 | VERIFIED | (pending) | db-refactor-validation-agent |

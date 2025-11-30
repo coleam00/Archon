@@ -380,30 +380,54 @@ def reload_archon_graph(show_reload_success=True):
         st.error(f"Error reloading Archon modules: {str(e)}")
         return False        
 
-def get_clients():
-    # LLM client setup
-    embedding_client = None
+def get_openai_client() -> Optional[AsyncOpenAI]:
+    """
+    Get the OpenAI/Ollama embedding client.
+
+    Returns:
+        AsyncOpenAI client configured from environment variables
+    """
     base_url = get_env_var('EMBEDDING_BASE_URL') or 'https://api.openai.com/v1'
     api_key = get_env_var('EMBEDDING_API_KEY') or 'no-api-key-provided'
     provider = get_env_var('EMBEDDING_PROVIDER') or 'OpenAI'
-    
-    # Setup OpenAI client for LLM
+
+    # Setup OpenAI client for embeddings
     if provider == "Ollama":
         if api_key == "NOT_REQUIRED":
             api_key = "ollama"  # Use a dummy key for Ollama
-        embedding_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+        return AsyncOpenAI(base_url=base_url, api_key=api_key)
     else:
-        embedding_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+        return AsyncOpenAI(base_url=base_url, api_key=api_key)
 
-    # Supabase client setup
-    supabase = None
+def get_supabase_client() -> Optional[Client]:
+    """
+    Get the Supabase client.
+
+    Returns:
+        Supabase Client if credentials are configured, None otherwise
+    """
     supabase_url = get_env_var("SUPABASE_URL")
     supabase_key = get_env_var("SUPABASE_SERVICE_KEY")
+
     if supabase_url and supabase_key:
         try:
-            supabase: Client = Client(supabase_url, supabase_key)
+            return Client(supabase_url, supabase_key)
         except Exception as e:
             print(f"Failed to initialize Supabase: {e}")
             write_to_log(f"Failed to initialize Supabase: {e}")
+            return None
+    return None
 
+def get_clients():
+    """
+    Get both OpenAI and Supabase clients.
+
+    DEPRECATED: Prefer using get_openai_client() and get_supabase_client() individually,
+    or use the dependency injection container (archon.container).
+
+    Returns:
+        Tuple of (AsyncOpenAI client, Supabase Client or None)
+    """
+    embedding_client = get_openai_client()
+    supabase = get_supabase_client()
     return embedding_client, supabase      

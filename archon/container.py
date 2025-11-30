@@ -73,10 +73,10 @@ def get_repository() -> ISitePagesRepository:
 
         if repo_type == "supabase":
             # Import lazy pour eviter les dependances circulaires
-            from utils.utils import get_clients
+            from utils.utils import get_supabase_client
             from archon.infrastructure.supabase import SupabaseSitePagesRepository
 
-            _, supabase_client = get_clients()
+            supabase_client = get_supabase_client()
             if supabase_client is None:
                 raise ValueError(
                     "Supabase client not available. "
@@ -114,10 +114,10 @@ def get_embedding_service() -> IEmbeddingService:
         logger.debug(f"Creating embedding service instance: {embed_type}")
 
         if embed_type == "openai":
-            from utils.utils import get_clients
+            from utils.utils import get_openai_client
             from archon.infrastructure.openai import OpenAIEmbeddingService
 
-            embedding_client, _ = get_clients()
+            embedding_client = get_openai_client()
             if embedding_client is None:
                 raise ValueError(
                     "OpenAI client not available. "
