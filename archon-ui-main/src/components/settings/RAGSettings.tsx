@@ -11,6 +11,7 @@ import { useToast } from '../../features/shared/hooks/useToast';
 import { credentialsService } from '../../services/credentialsService';
 import OllamaModelDiscoveryModal from './OllamaModelDiscoveryModal';
 import OllamaModelSelectionModal from './OllamaModelSelectionModal';
+import { syncEmbeddingFromLLM } from './utils/instanceConfigSync';
 
 type ProviderKey = 'openai' | 'google' | 'ollama' | 'anthropic' | 'grok' | 'openrouter';
 
@@ -2346,12 +2347,7 @@ const manualTestConnection = async (
                     onChange={(e) => {
                       if (e.target.checked) {
                         // Sync embedding instance with LLM instance (including auth settings)
-                        setEmbeddingInstanceConfig({
-                          name: llmInstanceConfig.name || 'Default Ollama',
-                          url: llmInstanceConfig.url,
-                          useAuth: llmInstanceConfig.useAuth,
-                          authToken: llmInstanceConfig.authToken
-                        });
+                        setEmbeddingInstanceConfig(syncEmbeddingFromLLM(llmInstanceConfig));
                       }
                     }}
                     className="w-4 h-4 text-purple-600 bg-gray-100 border-gray-300 rounded focus:ring-purple-500 dark:focus:ring-purple-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
