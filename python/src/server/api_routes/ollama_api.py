@@ -264,7 +264,7 @@ async def health_check_endpoint(
 async def validate_instance_endpoint(request: InstanceValidationRequest) -> InstanceValidationResponse:
     """
     Validate an Ollama instance with comprehensive capability testing.
-    
+
     Performs deep validation including connectivity, model availability,
     capability detection, and performance assessment.
     """
@@ -274,14 +274,38 @@ async def validate_instance_endpoint(request: InstanceValidationRequest) -> Inst
         # Clean up URL
         instance_url = request.instance_url.rstrip('/')
 
-        # Perform basic validation using the provider service
-        validation_result = await validate_provider_instance("ollama", instance_url)
+        # Get auth tokens from RAG settings
+        from ..services.credential_service import credential_service
+        rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+
+        # Extract configured instance URLs and their auth tokens
+        llm_base_url = (rag_settings.get("LLM_BASE_URL") or "").replace("/v1", "").rstrip("/")
+        embedding_base_url = (rag_settings.get("OLLAMA_EMBEDDING_URL") or "").replace("/v1", "").rstrip("/")
+        chat_auth_token = rag_settings.get("OLLAMA_CHAT_AUTH_TOKEN") or ""
+        embedding_auth_token = rag_settings.get("OLLAMA_EMBEDDING_AUTH_TOKEN") or ""
+
+        # Normalize the request URL for comparison
+        normalized_url = instance_url.replace("/v1", "").rstrip("/")
+
+        # Determine which auth token to use based on URL matching
+        auth_token = None
+        if normalized_url == llm_base_url and chat_auth_token:
+            auth_token = chat_auth_token
+            logger.debug(f"Using chat auth token for validation of {normalized_url}")
+        elif normalized_url == embedding_base_url and embedding_auth_token:
+            auth_token = embedding_auth_token
+            logger.debug(f"Using embedding auth token for validation of {normalized_url}")
+        else:
+            logger.debug(f"No matching auth token found for {normalized_url}")
+
+        # Perform basic validation using the provider service with auth token
+        validation_result = await validate_provider_instance("ollama", instance_url, auth_token=auth_token)
 
         capabilities = {}
         if validation_result["is_available"]:
             try:
-                # Get detailed model information for capability analysis
-                models = await model_discovery_service.discover_models(instance_url)
+                # Get detailed model information for capability analysis with auth token
+                models = await model_discovery_service.discover_models(instance_url, auth_token=auth_token)
 
                 capabilities = {
                     "total_models": len(models),

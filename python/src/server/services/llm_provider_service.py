@@ -1208,14 +1208,15 @@ async def get_embedding_model_with_routing(provider: str | None = None, instance
         return "text-embedding-3-small", None
 
 
-async def validate_provider_instance(provider: str, instance_url: str | None = None) -> dict[str, any]:
+async def validate_provider_instance(provider: str, instance_url: str | None = None, auth_token: str | None = None) -> dict[str, any]:
     """
     Validate a provider instance and return health information.
-    
+
     Args:
         provider: Provider name (openai, ollama, google, etc.)
         instance_url: Instance URL for providers that support multiple instances
-        
+        auth_token: Optional authentication token for protected instances
+
     Returns:
         Dictionary with validation results and health status
     """
@@ -1231,7 +1232,7 @@ async def validate_provider_instance(provider: str, instance_url: str | None = N
                 if instance_url.endswith('/v1'):
                     instance_url = instance_url[:-3]
 
-            health_status = await model_discovery_service.check_instance_health(instance_url)
+            health_status = await model_discovery_service.check_instance_health(instance_url, auth_token=auth_token)
 
             return {
                 "provider": provider,
