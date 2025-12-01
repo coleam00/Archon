@@ -75,21 +75,29 @@ class BaseStorageService(ABC):
             # Try to find a good break point
             chunk = text[start:end]
 
-            # First, try to break at a code block boundary
-            code_block_pos = chunk.rfind("```")
-            if code_block_pos != -1 and code_block_pos > chunk_size * 0.3:
-                end = start + code_block_pos
+            # Helper: check if position is inside a code block
+            def is_inside_code_block(text_segment: str, pos: int) -> bool:
+                return text_segment[:pos].count("```") % 2 == 1
 
-            # If no code block, try paragraph break
-            elif "\n\n" in chunk:
+            # Store original end for checking if we found a break point
+            original_end = end
+
+            # First, try to break at a heading boundary (# ## ### etc.)
+            heading_pos = chunk.rfind("\n#")
+            if heading_pos != -1 and heading_pos > chunk_size * 0.3:
+                if not is_inside_code_block(chunk, heading_pos):
+                    end = start + heading_pos
+
+            # If no heading, try paragraph break (but not inside code blocks)
+            if end == original_end and "\n\n" in chunk:
                 last_break = chunk.rfind("\n\n")
-                if last_break > chunk_size * 0.3:
+                if last_break > chunk_size * 0.3 and not is_inside_code_block(chunk, last_break):
                     end = start + last_break
 
-            # If no paragraph break, try sentence break
-            elif ". " in chunk:
+            # If no paragraph break, try sentence break (but not inside code blocks)
+            if end == original_end and ". " in chunk:
                 last_period = chunk.rfind(". ")
-                if last_period > chunk_size * 0.3:
+                if last_period > chunk_size * 0.3 and not is_inside_code_block(chunk, last_period):
                     end = start + last_period + 1
 
             # Extract chunk and clean it up
