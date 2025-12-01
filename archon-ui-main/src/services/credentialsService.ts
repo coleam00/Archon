@@ -16,7 +16,7 @@ export interface RagSettings {
   USE_HYBRID_SEARCH: boolean;
   USE_AGENTIC_RAG: boolean;
   USE_RERANKING: boolean;
-  MODEL_CHOICE: string;
+  MODEL_CHOICE?: string;
   CHAT_MODEL?: string;
   LLM_PROVIDER?: string;
   LLM_BASE_URL?: string;
@@ -24,6 +24,8 @@ export interface RagSettings {
   OLLAMA_EMBEDDING_URL?: string;
   OLLAMA_EMBEDDING_INSTANCE_NAME?: string;
   OLLAMA_API_MODE?: string;
+  OLLAMA_CHAT_AUTH_TOKEN?: string;
+  OLLAMA_EMBEDDING_AUTH_TOKEN?: string;
   EMBEDDING_MODEL?: string;
   EMBEDDING_PROVIDER?: string;
   // Crawling Performance Settings

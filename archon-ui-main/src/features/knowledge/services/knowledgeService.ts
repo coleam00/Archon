@@ -217,4 +217,41 @@ export const knowledgeService = {
   async getKnowledgeSources(): Promise<KnowledgeSource[]> {
     return callAPIWithETag<KnowledgeSource[]>("/api/knowledge-items/sources");
   },
+
+  /**
+   * Start re-embedding all documents with the current embedding model
+   */
+  async startReEmbed(): Promise<{ success: boolean; progressId: string; message: string }> {
+    return callAPIWithETag<{ success: boolean; progressId: string; message: string }>(
+      "/api/knowledge/re-embed",
+      { method: "POST" }
+    );
+  },
+
+  /**
+   * Stop a running re-embed operation
+   */
+  async stopReEmbed(progressId: string): Promise<{ success: boolean; message: string }> {
+    return callAPIWithETag<{ success: boolean; message: string }>(
+      `/api/knowledge/re-embed/stop/${progressId}`,
+      { method: "POST" }
+    );
+  },
+
+  /**
+   * Get statistics about documents that would be re-embedded
+   */
+  async getReEmbedStats(): Promise<{
+    success: boolean;
+    total_chunks: number;
+    embedding_models_in_use: string[];
+    estimated_time_seconds: number;
+  }> {
+    return callAPIWithETag<{
+      success: boolean;
+      total_chunks: number;
+      embedding_models_in_use: string[];
+      estimated_time_seconds: number;
+    }>("/api/knowledge/re-embed/stats");
+  },
 };

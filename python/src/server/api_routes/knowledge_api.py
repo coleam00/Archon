@@ -29,6 +29,7 @@ from ..services.embeddings.provider_error_adapters import ProviderErrorFactory
 from ..services.knowledge import DatabaseMetricsService, KnowledgeItemService, KnowledgeSummaryService
 from ..services.search.rag_service import RAGService
 from ..services.storage import DocumentStorageService
+from ..services.re_embed_service import ReEmbedService, active_re_embed_tasks
 from ..utils import get_supabase_client
 from ..utils.document_processing import extract_text_from_document
 
@@ -1279,6 +1280,87 @@ async def knowledge_health():
 
     return result
 
+
+
+@router.post("/knowledge/re-embed")
+async def start_re_embed():
+    """
+    Start a bulk re-embedding operation for all documents.
+
+    This re-creates embeddings for all existing document chunks using
+    the currently configured embedding model. Use this after changing
+    the embedding model to ensure all documents use the same model.
+
+    Returns:
+        progressId: ID for tracking the operation progress
+        message: Confirmation message
+    """
+    # Validate API key before starting expensive operation
+    logger.info("🔍 Validating API key for re-embed...")
+    provider_config = await credential_service.get_active_provider("embedding")
+    provider = provider_config.get("provider", "openai")
+    await _validate_provider_api_key(provider)
+    logger.info("✅ API key validation completed for re-embed")
+
+    try:
+        service = ReEmbedService(get_supabase_client())
+        result = await service.start_re_embed(provider=provider)
+
+        safe_logfire_info(f"Re-embed started | progress_id={result['progress_id']}")
+
+        return {
+            "success": True,
+            "progressId": result["progress_id"],
+            "message": result["message"]
+        }
+    except Exception as e:
+        safe_logfire_error(f"Failed to start re-embed | error={str(e)}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
+@router.post("/knowledge/re-embed/stop/{progress_id}")
+async def stop_re_embed_task(progress_id: str):
+    """Stop a running re-embed operation."""
+    try:
+        service = ReEmbedService(get_supabase_client())
+        stopped = await service.stop_re_embed(progress_id)
+
+        if stopped:
+            safe_logfire_info(f"Re-embed stopped | progress_id={progress_id}")
+            return {
+                "success": True,
+                "message": "Re-embed operation stopped",
+                "progressId": progress_id
+            }
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "No active re-embed task for given progress_id"}
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        safe_logfire_error(f"Failed to stop re-embed | error={str(e)} | progress_id={progress_id}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
+@router.get("/knowledge/re-embed/stats")
+async def get_re_embed_stats():
+    """
+    Get statistics about documents that would be re-embedded.
+
+    Returns:
+        total_chunks: Number of chunks to re-embed
+        embedding_models_in_use: List of currently used embedding models
+        estimated_time_seconds: Rough time estimate
+    """
+    try:
+        service = ReEmbedService(get_supabase_client())
+        stats = await service.get_re_embed_stats()
+        return {"success": True, **stats}
+    except Exception as e:
+        safe_logfire_error(f"Failed to get re-embed stats | error={str(e)}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
 @router.post("/knowledge-items/stop/{progress_id}")

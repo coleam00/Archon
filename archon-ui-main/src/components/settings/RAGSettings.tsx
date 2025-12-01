@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Settings, Check, Save, Loader, ChevronDown, ChevronUp, Zap, Database, Trash2, Cog, AlertTriangle } from 'lucide-react';
+import { Check, Save, Loader, ChevronDown, ChevronUp, Zap, Database, Cog, AlertTriangle } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Input } from '../ui/Input';
 import { Select } from '../ui/Select';
@@ -152,7 +152,7 @@ const normalizeBaseUrl = (url?: string | null): string | null => {
 
 interface RAGSettingsProps {
   ragSettings: {
-    MODEL_CHOICE: string;
+    MODEL_CHOICE?: string;
     CHAT_MODEL?: string;
     USE_CONTEXTUAL_EMBEDDINGS: boolean;
     CONTEXTUAL_EMBEDDINGS_MAX_WORKERS: number;
@@ -166,6 +166,10 @@ interface RAGSettingsProps {
     EMBEDDING_PROVIDER?: string;
     OLLAMA_EMBEDDING_URL?: string;
     OLLAMA_EMBEDDING_INSTANCE_NAME?: string;
+    // Ollama Settings
+    OLLAMA_CHAT_AUTH_TOKEN?: string;
+    OLLAMA_EMBEDDING_AUTH_TOKEN?: string;
+    OLLAMA_API_MODE?: string;
     // Crawling Performance Settings
     CRAWL_BATCH_SIZE?: number;
     CRAWL_MAX_CONCURRENT?: number;
@@ -211,6 +215,7 @@ export const RAGSettings = ({
     providerChange?: ProviderKey;
   } | null>(null);
   const [hasExistingDocuments, setHasExistingDocuments] = useState(false);
+  const [isReEmbedding, setIsReEmbedding] = useState(false);
 
   // Provider-specific model persistence state
   const [providerModels, setProviderModels] = useState<ProviderModelMap>(() => loadProviderModels());
@@ -448,7 +453,7 @@ export const RAGSettings = ({
   useEffect(() => {
     // Only update if this is a user‐initiated change, not a sync from ragSettings
     if (updateChatRagSettingsRef.current && chatProvider !== ragSettings.LLM_PROVIDER) {
-      setRagSettings(prev => ({
+      setRagSettings((prev: typeof ragSettings) => ({
         ...prev,
         LLM_PROVIDER: chatProvider
       }));
@@ -459,7 +464,7 @@ export const RAGSettings = ({
   useEffect(() => {
     // Only update if this is a user‐initiated change, not a sync from ragSettings
     if (updateEmbeddingRagSettingsRef.current && embeddingProvider && embeddingProvider !== ragSettings.EMBEDDING_PROVIDER) {
-      setRagSettings(prev => ({
+      setRagSettings((prev: typeof ragSettings) => ({
         ...prev,
         EMBEDDING_PROVIDER: embeddingProvider
       }));
@@ -469,8 +474,8 @@ export const RAGSettings = ({
 
 
   // Status tracking
-  const [llmStatus, setLLMStatus] = useState({ online: false, responseTime: null, checking: false });
-  const [embeddingStatus, setEmbeddingStatus] = useState({ online: false, responseTime: null, checking: false });
+  const [llmStatus, setLLMStatus] = useState<{ online: boolean; responseTime: number | null; checking: boolean }>({ online: false, responseTime: null, checking: false });
+  const [embeddingStatus, setEmbeddingStatus] = useState<{ online: boolean; responseTime: number | null; checking: boolean }>({ online: false, responseTime: null, checking: false });
   const llmRetryTimeoutRef = useRef<number | null>(null);
   const embeddingRetryTimeoutRef = useRef<number | null>(null);
   
@@ -602,60 +607,6 @@ export const RAGSettings = ({
     embeddingAvailableModels: [] as string[]
   });
   const { showToast } = useToast();
-
-  // Function to test connection status using backend proxy
-  const testConnection = async (url: string, setStatus: React.Dispatch<React.SetStateAction<{ online: boolean; responseTime: number | null; checking: boolean }>>) => {
-    setStatus(prev => ({ ...prev, checking: true }));
-    const startTime = Date.now();
-    
-    try {
-      // Strip /v1 suffix for backend health check (backend expects base Ollama URL)
-      const baseUrl = url.replace('/v1', '').replace(/\/$/, '');
-      
-      // Use the backend health check endpoint to avoid CORS issues
-      const backendHealthUrl = `/api/ollama/instances/health?instance_urls=${encodeURIComponent(baseUrl)}&include_models=true`;
-      
-      const response = await fetch(backendHealthUrl, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-        },
-        signal: AbortSignal.timeout(15000)
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        const instanceStatus = data.instance_status?.[baseUrl];
-        
-        if (instanceStatus?.is_healthy) {
-          const responseTime = Math.round(instanceStatus.response_time_ms || (Date.now() - startTime));
-          setStatus({ online: true, responseTime, checking: false });
-          console.log(`✅ ${url} online: ${responseTime}ms (${instanceStatus.models_available || 0} models)`);
-        } else {
-          setStatus({ online: false, responseTime: null, checking: false });
-          console.log(`❌ ${url} unhealthy: ${instanceStatus?.error_message || 'No status available'}`);
-        }
-      } else {
-        throw new Error(`Backend health check failed: HTTP ${response.status}`);
-      }
-      
-    } catch (error: any) {
-      const responseTime = Date.now() - startTime;
-      setStatus({ online: false, responseTime, checking: false });
-      
-      let errorMessage = 'Connection failed';
-      if (error.name === 'AbortError') {
-        errorMessage = 'Request timeout (>15s)';
-      } else if (error.message.includes('Backend health check failed')) {
-        errorMessage = 'Backend proxy error';
-      } else {
-        errorMessage = error.message || 'Unknown error';
-      }
-      
-      console.log(`❌ ${url} failed: ${errorMessage} (${responseTime}ms)`);
-    }
-  };
 
   // Load available models from Ollama instance
   const loadAvailableModels = async (url: string, context: 'chat' | 'embedding') => {
@@ -800,56 +751,6 @@ const manualTestConnection = async (
       }
 
       return false;
-    }
-  };
-
-  // Function to handle LLM instance deletion
-  const handleDeleteLLMInstance = () => {
-    if (window.confirm('Are you sure you want to delete the current LLM instance configuration?')) {
-      // Reset LLM instance configuration
-      setLLMInstanceConfig({
-        name: '',
-        url: '',
-        useAuth: false,
-        authToken: ''
-      });
-
-      // Clear related RAG settings
-      const updatedSettings = { ...ragSettings };
-      delete updatedSettings.LLM_BASE_URL;
-      delete updatedSettings.MODEL_CHOICE;
-      delete updatedSettings.OLLAMA_CHAT_AUTH_TOKEN;
-      setRagSettings(updatedSettings);
-      
-      // Reset status
-      setLLMStatus({ online: false, responseTime: null, checking: false });
-      
-      showToast('LLM instance configuration deleted', 'success');
-    }
-  };
-
-  // Function to handle Embedding instance deletion
-  const handleDeleteEmbeddingInstance = () => {
-    if (window.confirm('Are you sure you want to delete the current Embedding instance configuration?')) {
-      // Reset Embedding instance configuration
-      setEmbeddingInstanceConfig({
-        name: '',
-        url: '',
-        useAuth: false,
-        authToken: ''
-      });
-
-      // Clear related RAG settings
-      const updatedSettings = { ...ragSettings };
-      delete updatedSettings.OLLAMA_EMBEDDING_URL;
-      delete updatedSettings.EMBEDDING_MODEL;
-      delete updatedSettings.OLLAMA_EMBEDDING_AUTH_TOKEN;
-      setRagSettings(updatedSettings);
-      
-      // Reset status
-      setEmbeddingStatus({ online: false, responseTime: null, checking: false });
-      
-      showToast('Embedding instance configuration deleted', 'success');
     }
   };
 
@@ -1001,11 +902,42 @@ const manualTestConnection = async (
     setPendingEmbeddingChange(null);
   }, []);
 
+  // Re-embed documents with new model and apply the change
+  const reEmbedAndChange = useCallback(async () => {
+    if (!pendingEmbeddingChange) return;
+
+    setIsReEmbedding(true);
+
+    try {
+      // Apply the model change first
+      applyEmbeddingModelChange(
+        pendingEmbeddingChange.model,
+        pendingEmbeddingChange.providerChange
+      );
+
+      // Start re-embedding
+      const result = await knowledgeService.startReEmbed();
+
+      if (result.success) {
+        showToast(
+          `Re-embedding started. Track progress in Knowledge Base. (ID: ${result.progressId.slice(0, 8)}...)`,
+          'success'
+        );
+      } else {
+        showToast('Failed to start re-embedding. Please try from Knowledge Base page.', 'error');
+      }
+    } catch (error) {
+      console.error('Failed to start re-embed:', error);
+      showToast('Failed to start re-embedding. Model changed but documents need manual re-embed.', 'error');
+    } finally {
+      setIsReEmbedding(false);
+      setShowEmbeddingChangeWarning(false);
+      setPendingEmbeddingChange(null);
+    }
+  }, [pendingEmbeddingChange, applyEmbeddingModelChange, showToast]);
+
   // Auto-check status when instances are configured or when Ollama is selected
-  // Use refs to prevent infinite connection testing
-  const lastTestedLLMConfigRef = useRef({ url: '', name: '', provider: '' });
-  const lastTestedEmbeddingConfigRef = useRef({ url: '', name: '', provider: '' });
-  const lastMetricsFetchRef = useRef({ provider: '', embProvider: '', llmUrl: '', embUrl: '', llmOnline: false, embOnline: false });
+  const lastMetricsFetchRef = useRef<{ provider: string; embProvider: string; llmUrl: string; embUrl: string; llmOnline: boolean; embOnline: boolean }>({ provider: '', embProvider: '', llmUrl: '', embUrl: '', llmOnline: false, embOnline: false });
   
   // Auto-testing disabled to prevent API calls on every keystroke per user request
   // Connection testing should only happen on manual "Test Connection" or "Save Changes" button clicks
@@ -1055,7 +987,7 @@ const manualTestConnection = async (
 
   React.useEffect(() => {
     const current = {
-      provider: ragSettings.LLM_PROVIDER,
+      provider: ragSettings.LLM_PROVIDER ?? '',
       embProvider: embeddingProvider,
       llmUrl: normalizeBaseUrl(llmInstanceConfig.url) ?? '',
       embUrl: normalizeBaseUrl(embeddingInstanceConfig.url) ?? '',
@@ -1479,7 +1411,7 @@ const manualTestConnection = async (
                     setChatProvider(providerKey);
                     // Update chat model when switching providers
                     const savedModels = providerModels[providerKey] || getDefaultModels(providerKey);
-                    setRagSettings(prev => ({
+                    setRagSettings((prev: typeof ragSettings) => ({
                       ...prev,
                       MODEL_CHOICE: savedModels.chatModel
                     }));
@@ -2685,16 +2617,17 @@ const manualTestConnection = async (
                   Changing the embedding model will make these documents <strong>incompatible</strong> with search queries.
                   They won't appear in search results until re-embedded with the new model.
                 </p>
-                <p className="text-amber-400 text-xs">
-                  Tip: You can re-embed documents later from the Knowledge Base page.
+                <p className="text-cyan-400 text-xs">
+                  Recommended: Use "Re-embed & Change" to update all documents automatically.
                 </p>
               </AlertDialogDescription>
             </AlertDialogHeader>
-            <AlertDialogFooter className="gap-2 sm:gap-0">
+            <AlertDialogFooter className="flex-col sm:flex-row gap-2">
               <AlertDialogCancel asChild>
                 <GlowButton
                   variant="outline"
                   onClick={cancelEmbeddingChange}
+                  disabled={isReEmbedding}
                 >
                   Cancel
                 </GlowButton>
@@ -2703,10 +2636,29 @@ const manualTestConnection = async (
                 <GlowButton
                   variant="destructive"
                   onClick={confirmEmbeddingChange}
+                  disabled={isReEmbedding}
                 >
                   Change Anyway
                 </GlowButton>
               </AlertDialogAction>
+              <GlowButton
+                variant="default"
+                onClick={reEmbedAndChange}
+                disabled={isReEmbedding}
+                className="bg-cyan-600 hover:bg-cyan-700"
+              >
+                {isReEmbedding ? (
+                  <>
+                    <Loader className="w-4 h-4 mr-2 animate-spin" />
+                    Starting...
+                  </>
+                ) : (
+                  <>
+                    <Database className="w-4 h-4 mr-2" />
+                    Re-embed & Change
+                  </>
+                )}
+              </GlowButton>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
