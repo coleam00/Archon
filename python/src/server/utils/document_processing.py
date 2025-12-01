@@ -39,6 +39,7 @@ except ImportError:
     DOCX_AVAILABLE = False
 
 from ..config.logfire_config import get_logger, logfire
+from .ocr_processing import is_ocr_available, extract_text_with_ocr
 
 logger = get_logger(__name__)
 
@@ -312,16 +313,29 @@ def extract_text_from_pdf(file_content: bytes) -> str:
                 combined_text = "\n\n".join(text_content)
                 logger.info(f"PDF extracted with PyPDF2: {len(combined_text)} chars")
                 return _preserve_code_blocks_across_pages(combined_text)
-            else:
-                raise ValueError(
-                    "No text extracted from PDF: file may be empty, images-only, "
-                    "or scanned document without OCR"
-                )
+            # If no text, fall through to OCR
 
         except Exception as e:
-            raise Exception("PyPDF2 failed to extract text") from e
+            logfire.warning(f"PyPDF2 extraction failed: {e}, trying OCR")
 
-    raise Exception("Failed to extract text from PDF - all extraction methods failed")
+    # Final fallback: OCR for image-based/scanned PDFs
+    if is_ocr_available():
+        logger.info("No text extracted - attempting OCR for image-based PDF")
+        ocr_text = extract_text_with_ocr(file_content)
+        if ocr_text and len(ocr_text.strip()) > 50:
+            logger.info(f"PDF extracted with OCR (Tesseract): {len(ocr_text)} chars")
+            return ocr_text
+        else:
+            raise ValueError(
+                "No text extracted from PDF: OCR found no readable text. "
+                "File may be empty or contain only images without text."
+            )
+    else:
+        raise ValueError(
+            "No text extracted from PDF: file appears to be images-only or scanned. "
+            "Install OCR dependencies for scanned PDF support: "
+            "pip install pytesseract pdf2image (and install tesseract + poppler)"
+        )
 
 
 def extract_text_from_docx(file_content: bytes) -> str:
