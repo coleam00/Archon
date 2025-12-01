@@ -47,8 +47,18 @@ class BaseSearchStrategy:
         """
         with safe_span("base_vector_search", table=table_rpc, match_count=match_count) as span:
             try:
-                # Build RPC parameters
-                rpc_params = {"query_embedding": query_embedding, "match_count": match_count}
+                # Detect embedding dimension from the query vector
+                embedding_dimension = len(query_embedding)
+
+                # Use multi-dimensional RPC function to support all embedding models
+                multi_rpc = f"{table_rpc}_multi"
+
+                # Build RPC parameters with embedding dimension
+                rpc_params = {
+                    "query_embedding": query_embedding,
+                    "embedding_dimension": embedding_dimension,
+                    "match_count": match_count,
+                }
 
                 # Add filter parameters
                 if filter_metadata:
@@ -60,8 +70,9 @@ class BaseSearchStrategy:
                 else:
                     rpc_params["filter"] = {}
 
-                # Execute search
-                response = self.supabase_client.rpc(table_rpc, rpc_params).execute()
+                # Execute search using multi-dimensional RPC
+                logger.debug(f"Searching with {embedding_dimension}D embedding via {multi_rpc}")
+                response = self.supabase_client.rpc(multi_rpc, rpc_params).execute()
 
                 # Filter by similarity threshold
                 filtered_results = []

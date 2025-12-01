@@ -54,11 +54,16 @@ class HybridSearchStrategy:
                 filter_json = filter_metadata or {}
                 source_filter = filter_json.pop("source", None) if "source" in filter_json else None
 
-                # Call the hybrid search PostgreSQL function
+                # Detect embedding dimension from the query vector
+                embedding_dimension = len(query_embedding)
+
+                # Call the multi-dimensional hybrid search PostgreSQL function
+                logger.debug(f"Hybrid search with {embedding_dimension}D embedding")
                 response = self.supabase_client.rpc(
-                    "hybrid_search_archon_crawled_pages",
+                    "hybrid_search_archon_crawled_pages_multi",
                     {
                         "query_embedding": query_embedding,
+                        "embedding_dimension": embedding_dimension,
                         "query_text": query,
                         "match_count": match_count,
                         "filter": filter_json,
@@ -141,11 +146,16 @@ class HybridSearchStrategy:
                 if not final_source_filter and "source" in filter_json:
                     final_source_filter = filter_json.pop("source")
 
-                # Call the hybrid search PostgreSQL function
+                # Detect embedding dimension from the query vector
+                embedding_dimension = len(query_embedding)
+
+                # Call the multi-dimensional hybrid search PostgreSQL function
+                logger.debug(f"Hybrid code search with {embedding_dimension}D embedding")
                 response = self.supabase_client.rpc(
-                    "hybrid_search_archon_code_examples",
+                    "hybrid_search_archon_code_examples_multi",
                     {
                         "query_embedding": query_embedding,
+                        "embedding_dimension": embedding_dimension,
                         "query_text": query,
                         "match_count": match_count,
                         "filter": filter_json,
