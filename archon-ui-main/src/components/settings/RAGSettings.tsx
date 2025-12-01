@@ -790,13 +790,16 @@ const manualTestConnection = async (
       // Reset LLM instance configuration
       setLLMInstanceConfig({
         name: '',
-        url: ''
+        url: '',
+        useAuth: false,
+        authToken: ''
       });
-      
+
       // Clear related RAG settings
       const updatedSettings = { ...ragSettings };
       delete updatedSettings.LLM_BASE_URL;
       delete updatedSettings.MODEL_CHOICE;
+      delete updatedSettings.OLLAMA_CHAT_AUTH_TOKEN;
       setRagSettings(updatedSettings);
       
       // Reset status
@@ -812,13 +815,16 @@ const manualTestConnection = async (
       // Reset Embedding instance configuration
       setEmbeddingInstanceConfig({
         name: '',
-        url: ''
+        url: '',
+        useAuth: false,
+        authToken: ''
       });
-      
+
       // Clear related RAG settings
       const updatedSettings = { ...ragSettings };
       delete updatedSettings.OLLAMA_EMBEDDING_URL;
       delete updatedSettings.EMBEDDING_MODEL;
+      delete updatedSettings.OLLAMA_EMBEDDING_AUTH_TOKEN;
       setRagSettings(updatedSettings);
       
       // Reset status
@@ -2331,7 +2337,9 @@ const manualTestConnection = async (
                     if (!embeddingInstanceConfig.url || !embeddingInstanceConfig.name) {
                       setEmbeddingInstanceConfig({
                         name: llmInstanceConfig.name || 'Default Ollama',
-                        url: newUrl
+                        url: newUrl,
+                        useAuth: false,
+                        authToken: ''
                       });
                     }
                   }}

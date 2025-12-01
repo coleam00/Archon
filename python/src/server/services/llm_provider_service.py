@@ -1208,7 +1208,7 @@ async def get_embedding_model_with_routing(provider: str | None = None, instance
         return "text-embedding-3-small", None
 
 
-async def validate_provider_instance(provider: str, instance_url: str | None = None, auth_token: str | None = None) -> dict[str, any]:
+async def validate_provider_instance(provider: str, instance_url: str | None = None, auth_token: str | None = None) -> dict[str, Any]:
     """
     Validate a provider instance and return health information.
 
