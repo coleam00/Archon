@@ -91,10 +91,10 @@ class TestRAGServiceSearch:
         assert len(results) == 1
         assert results[0]["content"] == "Test content"
 
-        # Verify RPC was called correctly
+        # Verify RPC was called correctly (uses multi-dimensional variant for embedding model flexibility)
         mock_supabase.rpc.assert_called_once()
         call_args = mock_supabase.rpc.call_args[0]
-        assert call_args[0] == "match_archon_crawled_pages"
+        assert call_args[0] == "match_archon_crawled_pages_multi"
 
     @pytest.mark.asyncio
     async def test_search_documents_with_embedding(self, rag_service):

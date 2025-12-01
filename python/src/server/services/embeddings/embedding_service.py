@@ -83,10 +83,10 @@ class EmbeddingProviderAdapter(ABC):
 
 class OpenAICompatibleEmbeddingAdapter(EmbeddingProviderAdapter):
     """Adapter for providers using the OpenAI embeddings API shape."""
-    
+
     def __init__(self, client: Any):
         self._client = client
-    
+
     async def create_embeddings(
         self,
         texts: list[str],
@@ -99,7 +99,7 @@ class OpenAICompatibleEmbeddingAdapter(EmbeddingProviderAdapter):
         }
         if dimensions is not None:
             request_args["dimensions"] = dimensions
-            
+
         response = await self._client.embeddings.create(**request_args)
         return [item.embedding for item in response.data]
 
@@ -363,13 +363,13 @@ async def create_embedding(text: str, provider: str | None = None) -> list[float
         if "insufficient_quota" in error_msg:
             raise EmbeddingQuotaExhaustedError(
                 f"OpenAI quota exhausted: {error_msg}", text_preview=text
-            )
+            ) from e
         elif "rate_limit" in error_msg.lower():
-            raise EmbeddingRateLimitError(f"Rate limit hit: {error_msg}", text_preview=text)
+            raise EmbeddingRateLimitError(f"Rate limit hit: {error_msg}", text_preview=text) from e
         else:
             raise EmbeddingAPIError(
                 f"Embedding error: {error_msg}", text_preview=text, original_error=e
-            )
+            ) from e
 
 
 async def create_embeddings_batch(
@@ -478,8 +478,8 @@ async def create_embeddings_batch(
                     batch_index = i // batch_size
 
                     try:
-                        # Estimate tokens for this batch
-                        batch_tokens = sum(len(text.split()) for text in batch) * 1.3
+                        # Estimate tokens using character-based approximation (~3.5 chars per token)
+                        batch_tokens = sum(len(text) // 3 for text in batch)
                         total_tokens_used += batch_tokens
 
                         # Create rate limit progress callback if we have a progress callback
@@ -516,8 +516,6 @@ async def create_embeddings_batch(
                                     if "insufficient_quota" in error_message:
                                         # Quota exhausted is critical - stop everything
                                         tokens_so_far = total_tokens_used - batch_tokens
-                                        cost_so_far = (tokens_so_far / 1_000_000) * 0.02
-
                                         search_logger.error(
                                             f"⚠️ QUOTA EXHAUSTED at batch {batch_index}! "
                                             f"Processed {result.success_count} texts successfully.",
