@@ -486,3 +486,212 @@ class TestRAGConfiguration:
             assert success is True
             # Should still return results from basic search
             assert "results" in result
+
+
+class TestEmbeddingModelFilter:
+    """Test embedding model filtering in search strategies"""
+
+    @pytest.fixture
+    def mock_supabase_client(self):
+        """Mock Supabase client"""
+        return MagicMock()
+
+    @pytest.fixture
+    def rag_service(self, mock_supabase_client):
+        """Create RAGService instance"""
+        from src.server.services.search import RAGService
+
+        return RAGService(supabase_client=mock_supabase_client)
+
+    @pytest.fixture
+    def base_strategy(self, mock_supabase_client):
+        """Create BaseSearchStrategy instance"""
+        from src.server.services.search.base_search_strategy import BaseSearchStrategy
+
+        return BaseSearchStrategy(mock_supabase_client)
+
+    @pytest.fixture
+    def hybrid_strategy(self, mock_supabase_client, base_strategy):
+        """Create HybridSearchStrategy instance"""
+        from src.server.services.search import HybridSearchStrategy
+
+        return HybridSearchStrategy(mock_supabase_client, base_strategy)
+
+    @pytest.mark.asyncio
+    async def test_get_current_embedding_model(self, rag_service):
+        """Test _get_current_embedding_model retrieves model name"""
+        with patch(
+            "src.server.services.search.rag_service.get_embedding_model"
+        ) as mock_get_model:
+            mock_get_model.return_value = "text-embedding-3-small"
+
+            result = await rag_service._get_current_embedding_model()
+
+            assert result == "text-embedding-3-small"
+            mock_get_model.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_current_embedding_model_handles_error(self, rag_service):
+        """Test _get_current_embedding_model returns None on error"""
+        with patch(
+            "src.server.services.search.rag_service.get_embedding_model"
+        ) as mock_get_model:
+            mock_get_model.side_effect = Exception("Connection failed")
+
+            result = await rag_service._get_current_embedding_model()
+
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_vector_search_passes_embedding_model_filter(self, base_strategy, mock_supabase_client):
+        """Test that vector_search passes embedding_model_filter to RPC"""
+        mock_rpc = MagicMock()
+        mock_rpc.execute.return_value = MagicMock(data=[])
+        mock_supabase_client.rpc.return_value = mock_rpc
+
+        query_embedding = [0.1] * 1536
+
+        await base_strategy.vector_search(
+            query_embedding=query_embedding,
+            match_count=10,
+            embedding_model_filter="text-embedding-3-small",
+        )
+
+        # Verify RPC was called with embedding_model_filter
+        mock_supabase_client.rpc.assert_called_once()
+        call_args = mock_supabase_client.rpc.call_args
+        rpc_params = call_args[0][1]  # Second positional arg is params dict
+
+        assert rpc_params.get("embedding_model_filter") == "text-embedding-3-small"
+
+    @pytest.mark.asyncio
+    async def test_vector_search_without_embedding_model_filter(self, base_strategy, mock_supabase_client):
+        """Test that vector_search works without embedding_model_filter"""
+        mock_rpc = MagicMock()
+        mock_rpc.execute.return_value = MagicMock(data=[])
+        mock_supabase_client.rpc.return_value = mock_rpc
+
+        query_embedding = [0.1] * 1536
+
+        await base_strategy.vector_search(
+            query_embedding=query_embedding,
+            match_count=10,
+        )
+
+        # Verify RPC was called without embedding_model_filter
+        mock_supabase_client.rpc.assert_called_once()
+        call_args = mock_supabase_client.rpc.call_args
+        rpc_params = call_args[0][1]
+
+        assert "embedding_model_filter" not in rpc_params
+
+    @pytest.mark.asyncio
+    async def test_hybrid_search_documents_passes_embedding_model_filter(
+        self, hybrid_strategy, mock_supabase_client
+    ):
+        """Test that hybrid document search passes embedding_model_filter to RPC"""
+        mock_rpc = MagicMock()
+        mock_rpc.execute.return_value = MagicMock(data=[])
+        mock_supabase_client.rpc.return_value = mock_rpc
+
+        query_embedding = [0.1] * 1536
+
+        await hybrid_strategy.search_documents_hybrid(
+            query="test query",
+            query_embedding=query_embedding,
+            match_count=10,
+            embedding_model_filter="text-embedding-3-large",
+        )
+
+        # Verify RPC was called with embedding_model_filter
+        mock_supabase_client.rpc.assert_called_once()
+        call_args = mock_supabase_client.rpc.call_args
+        rpc_params = call_args[0][1]
+
+        assert rpc_params.get("embedding_model_filter") == "text-embedding-3-large"
+
+    @pytest.mark.asyncio
+    async def test_search_documents_uses_current_embedding_model(self, rag_service):
+        """Test that search_documents automatically filters by current embedding model"""
+        with (
+            patch(
+                "src.server.services.search.rag_service.create_embedding"
+            ) as mock_embedding,
+            patch.object(rag_service, "_get_current_embedding_model") as mock_get_model,
+            patch.object(rag_service.base_strategy, "vector_search") as mock_search,
+        ):
+            mock_embedding.return_value = [0.1] * 1536
+            mock_get_model.return_value = "text-embedding-3-small"
+            mock_search.return_value = []
+
+            await rag_service.search_documents(
+                query="test query",
+                match_count=10,
+                use_hybrid_search=False,
+            )
+
+            # Verify vector_search was called with embedding_model_filter
+            mock_search.assert_called_once()
+            call_kwargs = mock_search.call_args[1]
+
+            assert call_kwargs.get("embedding_model_filter") == "text-embedding-3-small"
+
+    @pytest.mark.asyncio
+    async def test_search_code_examples_uses_current_embedding_model(self, rag_service):
+        """Test that search_code_examples filters by current embedding model"""
+        with (
+            patch.object(rag_service, "_get_current_embedding_model") as mock_get_model,
+            patch.object(rag_service.agentic_strategy, "search_code_examples") as mock_search,
+        ):
+            mock_get_model.return_value = "nomic-embed-text"
+            mock_search.return_value = []
+
+            await rag_service.search_code_examples(
+                query="python function",
+                match_count=5,
+            )
+
+            # Verify search_code_examples was called with embedding_model_filter
+            mock_search.assert_called_once()
+            call_kwargs = mock_search.call_args[1]
+
+            assert call_kwargs.get("embedding_model_filter") == "nomic-embed-text"
+
+    @pytest.mark.asyncio
+    async def test_embedding_dimension_detected_from_query(self, base_strategy, mock_supabase_client):
+        """Test that embedding dimension is correctly detected from query vector"""
+        mock_rpc = MagicMock()
+        mock_rpc.execute.return_value = MagicMock(data=[])
+        mock_supabase_client.rpc.return_value = mock_rpc
+
+        # Test 768-dimensional embedding (common for smaller models)
+        query_embedding_768 = [0.1] * 768
+        await base_strategy.vector_search(
+            query_embedding=query_embedding_768,
+            match_count=10,
+        )
+
+        call_args = mock_supabase_client.rpc.call_args
+        rpc_params = call_args[0][1]
+
+        assert rpc_params.get("embedding_dimension") == 768
+
+    @pytest.mark.asyncio
+    async def test_multi_rpc_function_used(self, base_strategy, mock_supabase_client):
+        """Test that _multi RPC functions are called for all searches"""
+        mock_rpc = MagicMock()
+        mock_rpc.execute.return_value = MagicMock(data=[])
+        mock_supabase_client.rpc.return_value = mock_rpc
+
+        query_embedding = [0.1] * 1536
+
+        await base_strategy.vector_search(
+            query_embedding=query_embedding,
+            match_count=10,
+        )
+
+        # Verify _multi RPC function was called
+        call_args = mock_supabase_client.rpc.call_args
+        rpc_name = call_args[0][0]
+
+        assert rpc_name.endswith("_multi")

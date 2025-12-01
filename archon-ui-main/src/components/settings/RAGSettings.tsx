@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Settings, Check, Save, Loader, ChevronDown, ChevronUp, Zap, Database, Trash2, Cog } from 'lucide-react';
+import { Settings, Check, Save, Loader, ChevronDown, ChevronUp, Zap, Database, Trash2, Cog, AlertTriangle } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Input } from '../ui/Input';
 import { Select } from '../ui/Select';
@@ -12,6 +12,17 @@ import { credentialsService } from '../../services/credentialsService';
 import OllamaModelDiscoveryModal from './OllamaModelDiscoveryModal';
 import OllamaModelSelectionModal from './OllamaModelSelectionModal';
 import { syncEmbeddingFromLLM } from './utils/instanceConfigSync';
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from '../../features/ui/primitives/alert-dialog';
+import { knowledgeService } from '../../features/knowledge/services/knowledgeService';
 
 type ProviderKey = 'openai' | 'google' | 'ollama' | 'anthropic' | 'grok' | 'openrouter';
 
@@ -192,6 +203,14 @@ export const RAGSettings = ({
   // Model selection modals state
   const [showLLMModelSelectionModal, setShowLLMModelSelectionModal] = useState(false);
   const [showEmbeddingModelSelectionModal, setShowEmbeddingModelSelectionModal] = useState(false);
+
+  // Embedding model change warning dialog state
+  const [showEmbeddingChangeWarning, setShowEmbeddingChangeWarning] = useState(false);
+  const [pendingEmbeddingChange, setPendingEmbeddingChange] = useState<{
+    model: string;
+    providerChange?: ProviderKey;
+  } | null>(null);
+  const [hasExistingDocuments, setHasExistingDocuments] = useState(false);
 
   // Provider-specific model persistence state
   const [providerModels, setProviderModels] = useState<ProviderModelMap>(() => loadProviderModels());
@@ -917,6 +936,71 @@ const manualTestConnection = async (
     }
   };
 
+  // Handler for embedding model changes - checks for existing documents first
+  const handleEmbeddingModelChange = useCallback(async (
+    newModel: string,
+    providerChange?: ProviderKey
+  ) => {
+    // If model is the same, no warning needed
+    const currentModel = ragSettings.EMBEDDING_MODEL || '';
+    if (newModel === currentModel && !providerChange) {
+      return;
+    }
+
+    try {
+      // Check if there are existing documents in the knowledge base
+      const summaries = await knowledgeService.getKnowledgeSummaries({ per_page: 1 });
+      const documentsExist = summaries.total > 0;
+      setHasExistingDocuments(documentsExist);
+
+      if (documentsExist) {
+        // Store pending change and show warning dialog
+        setPendingEmbeddingChange({ model: newModel, providerChange });
+        setShowEmbeddingChangeWarning(true);
+      } else {
+        // No documents, apply change directly
+        applyEmbeddingModelChange(newModel, providerChange);
+      }
+    } catch (error) {
+      console.error('Failed to check for existing documents:', error);
+      // On error, proceed with change but log warning
+      applyEmbeddingModelChange(newModel, providerChange);
+    }
+  }, [ragSettings.EMBEDDING_MODEL]);
+
+  // Apply the embedding model change (called after user confirms or when no documents exist)
+  const applyEmbeddingModelChange = useCallback((
+    newModel: string,
+    providerChange?: ProviderKey
+  ) => {
+    if (providerChange) {
+      setEmbeddingProvider(providerChange);
+    }
+    setRagSettings((prev: typeof ragSettings) => ({
+      ...prev,
+      EMBEDDING_MODEL: newModel
+    }));
+  }, [setRagSettings]);
+
+  // Confirm embedding model change from warning dialog
+  const confirmEmbeddingChange = useCallback(() => {
+    if (pendingEmbeddingChange) {
+      applyEmbeddingModelChange(
+        pendingEmbeddingChange.model,
+        pendingEmbeddingChange.providerChange
+      );
+      showToast('Embedding model changed. Existing documents may not appear in search results.', 'info');
+    }
+    setShowEmbeddingChangeWarning(false);
+    setPendingEmbeddingChange(null);
+  }, [pendingEmbeddingChange, applyEmbeddingModelChange, showToast]);
+
+  // Cancel embedding model change
+  const cancelEmbeddingChange = useCallback(() => {
+    setShowEmbeddingChangeWarning(false);
+    setPendingEmbeddingChange(null);
+  }, []);
+
   // Auto-check status when instances are configured or when Ollama is selected
   // Use refs to prevent infinite connection testing
   const lastTestedLLMConfigRef = useRef({ url: '', name: '', provider: '' });
@@ -1400,13 +1484,9 @@ const manualTestConnection = async (
                       MODEL_CHOICE: savedModels.chatModel
                     }));
                   } else {
-                    setEmbeddingProvider(providerKey);
-                    // Update embedding model when switching providers
+                    // Check for existing documents before changing embedding provider/model
                     const savedModels = providerModels[providerKey] || getDefaultModels(providerKey);
-                    setRagSettings(prev => ({
-                      ...prev,
-                      EMBEDDING_MODEL: savedModels.embeddingModel
-                    }));
+                    handleEmbeddingModelChange(savedModels.embeddingModel, providerKey);
                   }
                 }}
                 className={`
@@ -2556,8 +2636,9 @@ const manualTestConnection = async (
             modelType="embedding"
             selectedInstanceUrl={normalizeBaseUrl(embeddingInstanceConfig.url) ?? ''}
             onSelectModel={(modelName: string) => {
-              setRagSettings({ ...ragSettings, EMBEDDING_MODEL: modelName });
-              showToast(`Selected embedding model: ${modelName}`, 'success');
+              // Check for existing documents before changing embedding model
+              handleEmbeddingModelChange(modelName);
+              setShowEmbeddingModelSelectionModal(false);
             }}
           />
         )}
@@ -2569,14 +2650,17 @@ const manualTestConnection = async (
             onClose={() => setShowModelDiscoveryModal(false)}
             instances={[]}
             onSelectModels={(selection: { chatModel?: string; embeddingModel?: string }) => {
-              const updatedSettings = { ...ragSettings };
+              // Chat model can be set directly
               if (selection.chatModel) {
-                updatedSettings.MODEL_CHOICE = selection.chatModel;
+                setRagSettings((prev: typeof ragSettings) => ({
+                  ...prev,
+                  MODEL_CHOICE: selection.chatModel
+                }));
               }
+              // Embedding model needs document check
               if (selection.embeddingModel) {
-                updatedSettings.EMBEDDING_MODEL = selection.embeddingModel;
+                handleEmbeddingModelChange(selection.embeddingModel);
               }
-              setRagSettings(updatedSettings);
               setShowModelDiscoveryModal(false);
               // Refresh metrics after model discovery
               fetchOllamaMetrics();
@@ -2584,6 +2668,48 @@ const manualTestConnection = async (
             }}
           />
         )}
+
+        {/* Embedding Model Change Warning Dialog */}
+        <AlertDialog open={showEmbeddingChangeWarning} onOpenChange={setShowEmbeddingChangeWarning}>
+          <AlertDialogContent variant="destructive">
+            <AlertDialogHeader>
+              <AlertDialogTitle className="flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-amber-500" />
+                Embedding Model Change
+              </AlertDialogTitle>
+              <AlertDialogDescription className="space-y-3">
+                <p>
+                  You have <strong>{hasExistingDocuments ? 'existing documents' : 'documents'}</strong> in your knowledge base.
+                </p>
+                <p>
+                  Changing the embedding model will make these documents <strong>incompatible</strong> with search queries.
+                  They won't appear in search results until re-embedded with the new model.
+                </p>
+                <p className="text-amber-400 text-xs">
+                  Tip: You can re-embed documents later from the Knowledge Base page.
+                </p>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter className="gap-2 sm:gap-0">
+              <AlertDialogCancel asChild>
+                <GlowButton
+                  variant="outline"
+                  onClick={cancelEmbeddingChange}
+                >
+                  Cancel
+                </GlowButton>
+              </AlertDialogCancel>
+              <AlertDialogAction asChild>
+                <GlowButton
+                  variant="destructive"
+                  onClick={confirmEmbeddingChange}
+                >
+                  Change Anyway
+                </GlowButton>
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
     </Card>;
 };
 

@@ -71,6 +71,7 @@ class AgenticRAGStrategy:
         match_count: int = 10,
         filter_metadata: dict[str, Any] | None = None,
         source_id: str | None = None,
+        embedding_model_filter: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Search for code examples using vector similarity.
@@ -80,6 +81,7 @@ class AgenticRAGStrategy:
             match_count: Maximum number of results to return
             filter_metadata: Optional metadata filter
             source_id: Optional source ID to filter results
+            embedding_model_filter: Optional filter to only return results from specific embedding model
 
         Returns:
             List of matching code examples
@@ -106,6 +108,7 @@ class AgenticRAGStrategy:
                     match_count=match_count,
                     filter_metadata=combined_filter,
                     table_rpc="match_archon_code_examples",
+                    embedding_model_filter=embedding_model_filter,
                 )
 
                 span.set_attribute("results_found", len(results))
@@ -165,7 +168,6 @@ class AgenticRAGStrategy:
                     match_count=match_count,
                     filter_metadata=filter_metadata,
                     source_id=source_id,
-                    use_enhancement=True,
                 )
 
                 # Format results for API response

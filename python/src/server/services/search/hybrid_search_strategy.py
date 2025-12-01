@@ -2,7 +2,7 @@
 Hybrid Search Strategy
 
 Implements hybrid search combining vector similarity search with full-text search
-using PostgreSQL's ts_vector for improved recall and precision in document and 
+using PostgreSQL's ts_vector for improved recall and precision in document and
 code example retrieval.
 
 Strategy combines:
@@ -34,9 +34,10 @@ class HybridSearchStrategy:
         query_embedding: list[float],
         match_count: int,
         filter_metadata: dict | None = None,
+        embedding_model_filter: str | None = None,
     ) -> list[dict[str, Any]]:
         """
-        Perform hybrid search on archon_crawled_pages table using the PostgreSQL 
+        Perform hybrid search on archon_crawled_pages table using the PostgreSQL
         hybrid search function that combines vector and full-text search.
 
         Args:
@@ -44,6 +45,7 @@ class HybridSearchStrategy:
             query_embedding: Pre-computed query embedding
             match_count: Number of results to return
             filter_metadata: Optional metadata filter dict
+            embedding_model_filter: Optional filter to only return results from specific embedding model
 
         Returns:
             List of matching documents from both vector and text search
@@ -57,18 +59,25 @@ class HybridSearchStrategy:
                 # Detect embedding dimension from the query vector
                 embedding_dimension = len(query_embedding)
 
+                # Build RPC parameters
+                rpc_params = {
+                    "query_embedding": query_embedding,
+                    "embedding_dimension": embedding_dimension,
+                    "query_text": query,
+                    "match_count": match_count,
+                    "filter": filter_json,
+                    "source_filter": source_filter,
+                }
+
+                # Add embedding model filter if provided
+                if embedding_model_filter:
+                    rpc_params["embedding_model_filter"] = embedding_model_filter
+
                 # Call the multi-dimensional hybrid search PostgreSQL function
                 logger.debug(f"Hybrid search with {embedding_dimension}D embedding")
                 response = self.supabase_client.rpc(
                     "hybrid_search_archon_crawled_pages_multi",
-                    {
-                        "query_embedding": query_embedding,
-                        "embedding_dimension": embedding_dimension,
-                        "query_text": query,
-                        "match_count": match_count,
-                        "filter": filter_json,
-                        "source_filter": source_filter,
-                    },
+                    rpc_params,
                 ).execute()
 
                 if not response.data:
@@ -116,9 +125,10 @@ class HybridSearchStrategy:
         match_count: int,
         filter_metadata: dict | None = None,
         source_id: str | None = None,
+        embedding_model_filter: str | None = None,
     ) -> list[dict[str, Any]]:
         """
-        Perform hybrid search on archon_code_examples table using the PostgreSQL 
+        Perform hybrid search on archon_code_examples table using the PostgreSQL
         hybrid search function that combines vector and full-text search.
 
         Args:
@@ -126,6 +136,7 @@ class HybridSearchStrategy:
             match_count: Number of results to return
             filter_metadata: Optional metadata filter dict
             source_id: Optional source ID to filter results
+            embedding_model_filter: Optional filter to only return results from specific embedding model
 
         Returns:
             List of matching code examples from both vector and text search
@@ -149,18 +160,25 @@ class HybridSearchStrategy:
                 # Detect embedding dimension from the query vector
                 embedding_dimension = len(query_embedding)
 
+                # Build RPC parameters
+                rpc_params = {
+                    "query_embedding": query_embedding,
+                    "embedding_dimension": embedding_dimension,
+                    "query_text": query,
+                    "match_count": match_count,
+                    "filter": filter_json,
+                    "source_filter": final_source_filter,
+                }
+
+                # Add embedding model filter if provided
+                if embedding_model_filter:
+                    rpc_params["embedding_model_filter"] = embedding_model_filter
+
                 # Call the multi-dimensional hybrid search PostgreSQL function
                 logger.debug(f"Hybrid code search with {embedding_dimension}D embedding")
                 response = self.supabase_client.rpc(
                     "hybrid_search_archon_code_examples_multi",
-                    {
-                        "query_embedding": query_embedding,
-                        "embedding_dimension": embedding_dimension,
-                        "query_text": query,
-                        "match_count": match_count,
-                        "filter": filter_json,
-                        "source_filter": final_source_filter,
-                    },
+                    rpc_params,
                 ).execute()
 
                 if not response.data:

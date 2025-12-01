@@ -30,6 +30,7 @@ class BaseSearchStrategy:
         match_count: int,
         filter_metadata: dict | None = None,
         table_rpc: str = "match_archon_crawled_pages",
+        embedding_model_filter: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Perform basic vector similarity search.
@@ -41,6 +42,7 @@ class BaseSearchStrategy:
             match_count: Number of results to return
             filter_metadata: Optional metadata filters
             table_rpc: The RPC function to call (match_archon_crawled_pages or match_archon_code_examples)
+            embedding_model_filter: Optional filter to only return results from specific embedding model
 
         Returns:
             List of matching documents with similarity scores
@@ -69,6 +71,10 @@ class BaseSearchStrategy:
                         rpc_params["filter"] = filter_metadata
                 else:
                     rpc_params["filter"] = {}
+
+                # Add embedding model filter if provided
+                if embedding_model_filter:
+                    rpc_params["embedding_model_filter"] = embedding_model_filter
 
                 # Execute search using multi-dimensional RPC
                 logger.debug(f"Searching with {embedding_dimension}D embedding via {multi_rpc}")
