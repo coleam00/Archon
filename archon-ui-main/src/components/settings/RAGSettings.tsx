@@ -2345,12 +2345,12 @@ const manualTestConnection = async (
                     checked={llmInstanceConfig.url === embeddingInstanceConfig.url && llmInstanceConfig.url !== ''}
                     onChange={(e) => {
                       if (e.target.checked) {
-                        // Sync embedding instance with LLM instance
+                        // Sync embedding instance with LLM instance (including auth settings)
                         setEmbeddingInstanceConfig({
                           name: llmInstanceConfig.name || 'Default Ollama',
                           url: llmInstanceConfig.url,
-                          useAuth: embeddingInstanceConfig.useAuth,
-                          authToken: embeddingInstanceConfig.authToken
+                          useAuth: llmInstanceConfig.useAuth,
+                          authToken: llmInstanceConfig.authToken
                         });
                       }
                     }}
