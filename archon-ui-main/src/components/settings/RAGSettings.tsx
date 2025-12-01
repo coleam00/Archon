@@ -1890,11 +1890,11 @@ const manualTestConnection = async (
                         <td className="py-2">
                           {activeSelection === 'chat' ? (
                             <span className="text-white">
-                              {ragSettings.CHAT_MODEL || <span className="text-gray-500 italic">Not selected</span>}
+                              {getDisplayedChatModel(ragSettings) || <span className="text-gray-500 italic">Not selected</span>}
                             </span>
                           ) : (
                             <span className="text-white">
-                              {ragSettings.EMBEDDING_MODEL || <span className="text-gray-500 italic">Not selected</span>}
+                              {getDisplayedEmbeddingModel(ragSettings) || <span className="text-gray-500 italic">Not selected</span>}
                             </span>
                           )}
                         </td>
