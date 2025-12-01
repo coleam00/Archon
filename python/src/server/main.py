@@ -26,6 +26,7 @@ from .api_routes.knowledge_api import router as knowledge_router
 from .api_routes.mcp_api import router as mcp_router
 from .api_routes.migration_api import router as migration_router
 from .api_routes.ollama_api import router as ollama_router
+from .api_routes.openrouter_api import router as openrouter_router
 from .api_routes.pages_api import router as pages_router
 from .api_routes.progress_api import router as progress_router
 from .api_routes.projects_api import router as projects_router
@@ -187,6 +188,7 @@ app.include_router(mcp_router)
 app.include_router(knowledge_router)
 app.include_router(pages_router)
 app.include_router(ollama_router)
+app.include_router(openrouter_router)
 app.include_router(projects_router)
 app.include_router(progress_router)
 app.include_router(agent_chat_router)
