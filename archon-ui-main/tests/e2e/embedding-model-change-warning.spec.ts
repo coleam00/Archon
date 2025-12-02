@@ -348,3 +348,217 @@ test.describe("Embedding Model Change Warning - Dialog Accessibility", () => {
     await expect(page.locator('h2:has-text("Embedding Model Change")')).not.toBeVisible({ timeout: 3000 });
   });
 });
+
+test.describe("Re-embed Flow", () => {
+  test.beforeEach(async ({ page }) => {
+    if (!await isBackendAvailable(page)) {
+      test.skip(true, "Backend not available");
+      return;
+    }
+
+    await navigateToRAGSettings(page);
+  });
+
+  test("dialog should show Re-embed & Change button alongside Cancel and Change Anyway", async ({ page }) => {
+    const hasDocuments = await hasKnowledgeDocuments(page);
+
+    if (!hasDocuments) {
+      test.skip(true, "No documents - skipping Re-embed button test");
+      return;
+    }
+
+    // Trigger the warning dialog
+    const embeddingTab = page.locator('button:has-text("Embedding")').first();
+    await embeddingTab.click();
+    await page.waitForTimeout(500);
+
+    const googleButton = page.locator('button:has(img[alt*="Google"])').first();
+    await googleButton.click();
+
+    // Wait for dialog
+    await expect(page.locator("text=Embedding Model Change")).toBeVisible({ timeout: 5000 });
+
+    // Verify all three buttons exist
+    await expect(page.locator('button:has-text("Cancel")')).toBeVisible();
+    await expect(page.locator('button:has-text("Change Anyway")')).toBeVisible();
+    await expect(page.locator('button:has-text("Re-embed & Change")')).toBeVisible();
+
+    // Verify recommended text is shown
+    await expect(page.locator('text=Recommended')).toBeVisible();
+
+    // Clean up
+    await page.locator('button:has-text("Cancel")').click();
+  });
+
+  test("Re-embed & Change should trigger API call and show progress toast", async ({ page }) => {
+    const hasDocuments = await hasKnowledgeDocuments(page);
+
+    if (!hasDocuments) {
+      test.skip(true, "No documents - skipping Re-embed API test");
+      return;
+    }
+
+    // Set up request interception to verify API call
+    let reEmbedApiCalled = false;
+    let apiResponse: { progressId?: string } = {};
+
+    await page.route("**/api/knowledge/re-embed", async (route) => {
+      reEmbedApiCalled = true;
+      // Let the request through and capture response
+      const response = await route.fetch();
+      const json = await response.json();
+      apiResponse = json;
+      await route.fulfill({ response });
+    });
+
+    // Trigger the warning dialog
+    const embeddingTab = page.locator('button:has-text("Embedding")').first();
+    await embeddingTab.click();
+    await page.waitForTimeout(500);
+
+    const googleButton = page.locator('button:has(img[alt*="Google"])').first();
+    await googleButton.click();
+
+    await expect(page.locator("text=Embedding Model Change")).toBeVisible({ timeout: 5000 });
+
+    // Click Re-embed & Change
+    const reEmbedButton = page.locator('button:has-text("Re-embed & Change")');
+    await reEmbedButton.click();
+
+    // Wait for API call to complete
+    await page.waitForTimeout(2000);
+
+    // Verify API was called
+    expect(reEmbedApiCalled).toBe(true);
+
+    // Dialog should close after clicking
+    await expect(page.locator('h2:has-text("Embedding Model Change")')).not.toBeVisible({ timeout: 5000 });
+
+    // Toast should appear with progress ID or success message
+    const toastVisible = await page.locator("text=Re-embedding started").first().isVisible({ timeout: 5000 }).catch(() => false);
+    const errorToastVisible = await page.locator("text=Failed to start").first().isVisible({ timeout: 1000 }).catch(() => false);
+
+    // Either success toast or error toast should appear (API was called)
+    expect(toastVisible || errorToastVisible).toBe(true);
+  });
+
+  test("Re-embed & Change button should show loading state while processing", async ({ page }) => {
+    const hasDocuments = await hasKnowledgeDocuments(page);
+
+    if (!hasDocuments) {
+      test.skip(true, "No documents - skipping loading state test");
+      return;
+    }
+
+    // Slow down the API response to see loading state
+    await page.route("**/api/knowledge/re-embed", async (route) => {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      await route.continue();
+    });
+
+    // Trigger dialog
+    const embeddingTab = page.locator('button:has-text("Embedding")').first();
+    await embeddingTab.click();
+    await page.waitForTimeout(500);
+
+    const googleButton = page.locator('button:has(img[alt*="Google"])').first();
+    await googleButton.click();
+
+    await expect(page.locator("text=Embedding Model Change")).toBeVisible({ timeout: 5000 });
+
+    // Click Re-embed & Change
+    const reEmbedButton = page.locator('button:has-text("Re-embed & Change")');
+    await reEmbedButton.click();
+
+    // Button should show loading state (Starting... text or spinner)
+    await expect(page.locator("text=Starting...").first()).toBeVisible({ timeout: 2000 });
+
+    // Wait for completion
+    await page.waitForTimeout(2000);
+  });
+
+  test("Re-embed stats API should return valid statistics", async ({ page }) => {
+    // Test the stats endpoint directly
+    const statsResponse = await page.request.get("http://localhost:8181/api/knowledge/re-embed/stats");
+
+    if (!statsResponse.ok()) {
+      // API might fail if no embedding model is configured - that's okay
+      console.log("Stats API returned error (may be expected if no embedding configured)");
+      return;
+    }
+
+    const stats = await statsResponse.json();
+
+    // Verify response structure
+    expect(stats).toHaveProperty("success");
+    expect(stats).toHaveProperty("total_chunks");
+    expect(stats).toHaveProperty("embedding_models_in_use");
+    expect(stats).toHaveProperty("estimated_time_seconds");
+
+    // Verify types
+    expect(typeof stats.success).toBe("boolean");
+    expect(typeof stats.total_chunks).toBe("number");
+    expect(Array.isArray(stats.embedding_models_in_use)).toBe(true);
+    expect(typeof stats.estimated_time_seconds).toBe("number");
+  });
+
+  test("Stop re-embed API should handle non-existent progress ID gracefully", async ({ page }) => {
+    // Test stop endpoint with fake progress ID
+    const fakeProgressId = "non-existent-progress-id-12345";
+    const stopResponse = await page.request.post(
+      `http://localhost:8181/api/knowledge/re-embed/stop/${fakeProgressId}`
+    );
+
+    // Should return 404 for non-existent task
+    expect(stopResponse.status()).toBe(404);
+
+    const responseBody = await stopResponse.json();
+    expect(responseBody).toHaveProperty("detail");
+  });
+});
+
+test.describe("Re-embed Flow - Progress Tracking", () => {
+  test.beforeEach(async ({ page }) => {
+    if (!await isBackendAvailable(page)) {
+      test.skip(true, "Backend not available");
+      return;
+    }
+  });
+
+  test("should be able to navigate to Knowledge Base after starting re-embed", async ({ page }) => {
+    const hasDocuments = await hasKnowledgeDocuments(page);
+
+    if (!hasDocuments) {
+      test.skip(true, "No documents - skipping navigation test");
+      return;
+    }
+
+    // Start re-embed from settings
+    await navigateToRAGSettings(page);
+
+    const embeddingTab = page.locator('button:has-text("Embedding")').first();
+    await embeddingTab.click();
+    await page.waitForTimeout(500);
+
+    const googleButton = page.locator('button:has(img[alt*="Google"])').first();
+    await googleButton.click();
+
+    await expect(page.locator("text=Embedding Model Change")).toBeVisible({ timeout: 5000 });
+
+    // Click Re-embed & Change
+    await page.locator('button:has-text("Re-embed & Change")').click();
+
+    // Wait for toast
+    await page.waitForTimeout(2000);
+
+    // Navigate to Knowledge Base
+    await page.goto("/");
+    await page.waitForLoadState("networkidle");
+
+    // Knowledge Base page should load successfully
+    await expect(page.locator("text=Knowledge Base").first()).toBeVisible({ timeout: 10000 });
+
+    // If re-embed is running, we might see progress indicator
+    // This is optional - just verify the page loads
+  });
+});

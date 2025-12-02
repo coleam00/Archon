@@ -1102,11 +1102,14 @@ const manualTestConnection = async (
   let providerAlertClassName = '';
 
   if (activeProviderKey === 'ollama') {
-    if (ollamaServerStatus === 'offline') {
-      providerAlertMessage = 'Local Ollama service is not running. Start the Ollama server and ensure it is reachable at the configured URL.';
+    if (ollamaServerStatus === 'unknown') {
+      providerAlertMessage = 'Checking Ollama service availability...';
+      providerAlertClassName = 'bg-blue-500/10 border-blue-500/30 text-blue-300';
+    } else if (ollamaServerStatus === 'offline') {
+      providerAlertMessage = 'Ollama service is not reachable. Ensure the Ollama server is running and accessible at the configured URL.';
       providerAlertClassName = providerErrorAlertStyle;
     } else if (selectedProviderStatus === 'partial' && ollamaServerStatus === 'online') {
-      providerAlertMessage = 'Local Ollama service detected. Click "Test Connection" to confirm model availability.';
+      providerAlertMessage = 'Ollama service detected. Click "Test Connection" to confirm model availability.';
       providerAlertClassName = providerWarningAlertStyle;
     }
   } else if (activeProviderKey && selectedProviderStatus === 'missing') {
