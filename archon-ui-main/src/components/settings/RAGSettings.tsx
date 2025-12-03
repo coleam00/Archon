@@ -2046,7 +2046,7 @@ const manualTestConnection = async (
                     </div>
                   </div>
                   <label className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    Max
+                    Workers
                   </label>
                 </div>
               )}
@@ -2054,7 +2054,10 @@ const manualTestConnection = async (
           <div className="col-span-3">
             {ragSettings.USE_CONTEXTUAL_EMBEDDINGS && (
               <p className="text-xs text-green-900 dark:text-blue-600 mt-2">
-                Controls parallel processing for embeddings (1-10)
+                Parallel API calls for context generation. Higher = faster but may hit rate limits.
+                <span className="block mt-0.5 text-gray-500 dark:text-gray-400">
+                  Recommended: 3-5 for cloud APIs (OpenAI, etc.), up to 10 for local Ollama
+                </span>
               </p>
             )}
           </div>
