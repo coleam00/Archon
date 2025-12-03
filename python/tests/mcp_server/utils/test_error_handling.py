@@ -4,7 +4,6 @@ import json
 from unittest.mock import MagicMock
 
 import httpx
-import pytest
 
 from src.mcp_server.utils.error_handling import MCPErrorFormatter
 

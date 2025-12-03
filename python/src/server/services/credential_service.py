@@ -456,7 +456,7 @@ class CredentialService:
                     if explicit_embedding_provider and explicit_embedding_provider not in embedding_capable_providers:
                         logger.warning(f"Invalid embedding provider '{explicit_embedding_provider}' doesn't support embeddings, defaulting to OpenAI")
                     provider = "openai"
-                    logger.debug(f"No explicit embedding provider set, defaulting to OpenAI for backward compatibility")
+                    logger.debug("No explicit embedding provider set, defaulting to OpenAI for backward compatibility")
             else:
                 provider = rag_settings.get("LLM_PROVIDER", "openai")
                 # Ensure provider is a valid string, not a boolean or other type

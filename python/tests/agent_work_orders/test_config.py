@@ -156,8 +156,8 @@ def test_config_explicit_url_overrides_discovery_mode():
 @pytest.mark.unit
 def test_config_state_storage_type():
     """Test STATE_STORAGE_TYPE configuration"""
-    import os
     import importlib
+    import os
 
     # Temporarily set the environment variable
     old_value = os.environ.get("STATE_STORAGE_TYPE")

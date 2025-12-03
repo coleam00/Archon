@@ -350,6 +350,8 @@ test.describe("Embedding Model Change Warning - Dialog Accessibility", () => {
 });
 
 test.describe("Re-embed Flow", () => {
+  test.setTimeout(120000); // 2 minutes - Ollama model loading can take up to 60s
+
   test.beforeEach(async ({ page }) => {
     if (!await isBackendAvailable(page)) {
       test.skip(true, "Backend not available");
@@ -400,15 +402,11 @@ test.describe("Re-embed Flow", () => {
 
     // Set up request interception to verify API call
     let reEmbedApiCalled = false;
-    let apiResponse: { progressId?: string } = {};
 
     await page.route("**/api/knowledge/re-embed", async (route) => {
       reEmbedApiCalled = true;
-      // Let the request through and capture response
-      const response = await route.fetch();
-      const json = await response.json();
-      apiResponse = json;
-      await route.fulfill({ response });
+      // Let the request through
+      await route.continue();
     });
 
     // Trigger the warning dialog
@@ -425,14 +423,17 @@ test.describe("Re-embed Flow", () => {
     const reEmbedButton = page.locator('button:has-text("Re-embed & Change")');
     await reEmbedButton.click();
 
-    // Wait for API call to complete
-    await page.waitForTimeout(2000);
+    // Wait for button to show loading state (API call started)
+    await expect(page.locator("text=Starting...")).toBeVisible({ timeout: 5000 });
 
-    // Verify API was called
+    // Verify API was called (route intercept triggered)
     expect(reEmbedApiCalled).toBe(true);
 
-    // Dialog should close after clicking
-    await expect(page.locator('h2:has-text("Embedding Model Change")')).not.toBeVisible({ timeout: 5000 });
+    // Dialog should close after API completes - with Ollama this can take up to 60s for model loading
+    await expect(page.locator('h2:has-text("Embedding Model Change")')).not.toBeVisible({ timeout: 90000 });
+
+    // Cleanup routes before checking toast to avoid test flakiness
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
 
     // Toast should appear with progress ID or success message
     const toastVisible = await page.locator("text=Re-embedding started").first().isVisible({ timeout: 5000 }).catch(() => false);

@@ -10,7 +10,7 @@ Tests the bulk re-embedding service including:
 """
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 

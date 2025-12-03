@@ -206,7 +206,7 @@ class TestCrawlProgressResponse:
     def test_status_validation(self):
         """Test that only valid crawl statuses are accepted."""
         valid_statuses = [
-            "starting", "analyzing", "crawling", "processing",
+            "starting", "discovery", "analyzing", "crawling", "processing",
             "source_creation", "document_storage", "code_extraction", "code_storage",
             "finalization", "completed", "failed", "cancelled", "stopping", "error"
         ]

@@ -5,7 +5,7 @@ Stores repository metadata, verification status, and per-repository preferences.
 """
 
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from supabase import Client, create_client
@@ -228,7 +228,7 @@ class RepositoryConfigRepository:
 
             # Set last_verified_at if verified
             if is_verified:
-                data["last_verified_at"] = datetime.now(timezone.utc).isoformat()
+                data["last_verified_at"] = datetime.now(UTC).isoformat()
 
             response = self.client.table(self.table_name).insert(data).execute()
 
@@ -280,7 +280,7 @@ class RepositoryConfigRepository:
                     prepared_updates[key] = value
 
             # Always update updated_at timestamp
-            prepared_updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+            prepared_updates["updated_at"] = datetime.now(UTC).isoformat()
 
             response = (
                 self.client.table(self.table_name)

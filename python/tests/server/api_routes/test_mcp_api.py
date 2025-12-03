@@ -3,7 +3,6 @@ Tests for MCP API endpoints with HTTP and Docker socket modes.
 """
 
 import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx

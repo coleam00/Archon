@@ -8,12 +8,11 @@ from pathlib import Path
 import pytest
 
 from src.server.utils.ocr_processing import (
-    is_ocr_available,
-    extract_text_with_ocr,
     PDF2IMAGE_AVAILABLE,
     PYTESSERACT_AVAILABLE,
+    extract_text_with_ocr,
+    is_ocr_available,
 )
-
 
 # Path to test PDFs
 TEST_PDF_DIR = Path(__file__).parent.parent.parent.parent.parent / "test-pdf"

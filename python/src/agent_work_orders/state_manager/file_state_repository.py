@@ -6,7 +6,7 @@ Enables state persistence across service restarts and debugging.
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -203,7 +203,7 @@ class FileStateRepository:
                 return
 
             data["metadata"]["status"] = status
-            data["metadata"]["updated_at"] = datetime.now(timezone.utc).isoformat()
+            data["metadata"]["updated_at"] = datetime.now(UTC).isoformat()
 
             for key, value in kwargs.items():
                 data["metadata"][key] = value
@@ -235,7 +235,7 @@ class FileStateRepository:
                 return
 
             data["state"]["git_branch_name"] = git_branch_name
-            data["metadata"]["updated_at"] = datetime.now(timezone.utc).isoformat()
+            data["metadata"]["updated_at"] = datetime.now(UTC).isoformat()
 
             await self._write_state_file(agent_work_order_id, data)
 
@@ -264,7 +264,7 @@ class FileStateRepository:
                 return
 
             data["state"]["agent_session_id"] = agent_session_id
-            data["metadata"]["updated_at"] = datetime.now(timezone.utc).isoformat()
+            data["metadata"]["updated_at"] = datetime.now(UTC).isoformat()
 
             await self._write_state_file(agent_work_order_id, data)
 

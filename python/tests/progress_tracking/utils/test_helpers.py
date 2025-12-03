@@ -1,13 +1,12 @@
 """Test helpers and fixtures for progress tracking tests."""
 
-import asyncio
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
-from typing import Any, Dict, List, Optional, Callable
 
 import pytest
 
-from src.server.utils.progress.progress_tracker import ProgressTracker
 from src.server.services.crawling.progress_mapper import ProgressMapper
+from src.server.utils.progress.progress_tracker import ProgressTracker
 
 
 @pytest.fixture
@@ -23,18 +22,18 @@ def mock_progress_tracker():
         "progress": 0,
         "logs": [],
     }
-    
+
     # Mock async methods
     tracker.start = AsyncMock()
     tracker.update = AsyncMock()
     tracker.complete = AsyncMock()
     tracker.error = AsyncMock()
     tracker.update_batch_progress = AsyncMock()
-    
+
     # Mock class methods
     tracker.get_progress = MagicMock(return_value=tracker.state)
     tracker.clear_progress = MagicMock()
-    
+
     return tracker
 
 
@@ -44,7 +43,7 @@ def progress_mapper():
     return ProgressMapper()
 
 
-@pytest.fixture  
+@pytest.fixture
 def sample_progress_data():
     """Sample progress data for testing."""
     return {
@@ -62,7 +61,7 @@ def sample_progress_data():
         "processed_pages": 60,
         "logs": [
             "Starting crawl",
-            "Analyzing URL", 
+            "Analyzing URL",
             "Crawling pages",
             "Processing batch 1/6",
             "Processing batch 2/6",
@@ -76,38 +75,38 @@ def mock_progress_callback():
     """Create a mock progress callback for testing."""
     callback = AsyncMock()
     callback.call_history = []
-    
+
     async def track_calls(*args, **kwargs):
         callback.call_history.append((args, kwargs))
         return await callback(*args, **kwargs)
-    
+
     callback.side_effect = track_calls
     return callback
 
 
 class ProgressTestHelper:
     """Helper class for testing progress tracking functionality."""
-    
+
     @staticmethod
     def assert_progress_update(
         tracker_mock: MagicMock,
         expected_status: str,
         expected_progress: int,
         expected_message: str,
-        expected_kwargs: Optional[Dict[str, Any]] = None
+        expected_kwargs: dict[str, Any] | None = None
     ):
         """Assert that progress tracker was updated with expected values."""
         tracker_mock.update.assert_called()
         call_args = tracker_mock.update.call_args
-        
+
         assert call_args[1]["status"] == expected_status
         assert call_args[1]["progress"] == expected_progress
         assert call_args[1]["log"] == expected_message
-        
+
         if expected_kwargs:
             for key, value in expected_kwargs.items():
                 assert call_args[1][key] == value
-    
+
     @staticmethod
     def assert_batch_progress(
         callback_mock: AsyncMock,
@@ -120,15 +119,15 @@ class ProgressTestHelper:
         for call_args, call_kwargs in callback_mock.call_history:
             if "current_batch" in call_kwargs:
                 assert call_kwargs["current_batch"] == expected_current_batch
-                assert call_kwargs["total_batches"] == expected_total_batches  
+                assert call_kwargs["total_batches"] == expected_total_batches
                 assert call_kwargs["completed_batches"] == expected_completed_batches
                 found_batch_call = True
                 break
-        
+
         assert found_batch_call, "No batch progress call found in callback history"
-    
+
     @staticmethod
-    def create_crawl_results(count: int = 5) -> List[Dict[str, Any]]:
+    def create_crawl_results(count: int = 5) -> list[dict[str, Any]]:
         """Create sample crawl results for testing."""
         return [
             {
@@ -139,9 +138,9 @@ class ProgressTestHelper:
             }
             for i in range(1, count + 1)
         ]
-    
+
     @staticmethod
-    def simulate_progress_sequence() -> List[Dict[str, Any]]:
+    def simulate_progress_sequence() -> list[dict[str, Any]]:
         """Create a realistic progress sequence for testing."""
         return [
             {"status": "starting", "progress": 0, "message": "Initializing crawl"},

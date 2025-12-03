@@ -10,8 +10,8 @@ import logging
 from urllib.parse import urljoin
 
 import httpx
-
 from mcp.server.fastmcp import Context, FastMCP
+
 from src.mcp_server.utils.error_handling import MCPErrorFormatter
 from src.mcp_server.utils.timeout_config import (
     get_default_timeout,
@@ -36,17 +36,17 @@ def truncate_text(text: str, max_length: int = MAX_DESCRIPTION_LENGTH) -> str:
 def optimize_project_response(project: dict) -> dict:
     """Optimize project object for MCP response."""
     project = project.copy()  # Don't modify original
-    
+
     # Truncate description if present
     if "description" in project and project["description"]:
         project["description"] = truncate_text(project["description"])
-    
+
     # Remove or summarize large fields
     if "features" in project and isinstance(project["features"], list):
         project["features_count"] = len(project["features"])
         if len(project["features"]) > 3:
             project["features"] = project["features"][:3]  # Keep first 3
-    
+
     return project
 
 
@@ -81,12 +81,12 @@ def register_project_tools(mcp: FastMCP):
         try:
             api_url = get_api_url()
             timeout = get_default_timeout()
-            
+
             # Single project get mode
             if project_id:
                 async with httpx.AsyncClient(timeout=timeout) as client:
                     response = await client.get(urljoin(api_url, f"/api/projects/{project_id}"))
-                    
+
                     if response.status_code == 200:
                         project = response.json()
                         # Don't optimize single project get - return full details
@@ -100,15 +100,15 @@ def register_project_tools(mcp: FastMCP):
                         )
                     else:
                         return MCPErrorFormatter.from_http_error(response, "get project")
-            
+
             # List mode
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.get(urljoin(api_url, "/api/projects"))
-                
+
                 if response.status_code == 200:
                     data = response.json()
                     projects = data.get("projects", [])
-                    
+
                     # Apply search filter if provided
                     if query:
                         query_lower = query.lower()
@@ -117,15 +117,15 @@ def register_project_tools(mcp: FastMCP):
                             if query_lower in p.get("title", "").lower()
                             or query_lower in p.get("description", "").lower()
                         ]
-                    
+
                     # Apply pagination
                     start_idx = (page - 1) * per_page
                     end_idx = start_idx + per_page
                     paginated = projects[start_idx:end_idx]
-                    
+
                     # Optimize project responses
                     optimized = [optimize_project_response(p) for p in paginated]
-                    
+
                     return json.dumps({
                         "success": True,
                         "projects": optimized,
@@ -137,7 +137,7 @@ def register_project_tools(mcp: FastMCP):
                     })
                 else:
                     return MCPErrorFormatter.from_http_error(response, "list projects")
-                    
+
         except httpx.RequestError as e:
             return MCPErrorFormatter.from_exception(e, "list projects")
         except Exception as e:
@@ -173,7 +173,7 @@ def register_project_tools(mcp: FastMCP):
         try:
             api_url = get_api_url()
             timeout = get_default_timeout()
-            
+
             async with httpx.AsyncClient(timeout=timeout) as client:
                 if action == "create":
                     if not title:
@@ -181,7 +181,7 @@ def register_project_tools(mcp: FastMCP):
                             "validation_error",
                             "title required for create"
                         )
-                    
+
                     response = await client.post(
                         urljoin(api_url, "/api/projects"),
                         json={
@@ -190,29 +190,29 @@ def register_project_tools(mcp: FastMCP):
                             "github_repo": github_repo
                         }
                     )
-                    
+
                     if response.status_code == 200:
                         result = response.json()
-                        
+
                         # Handle async project creation with polling
                         if "progress_id" in result:
                             max_attempts = get_max_polling_attempts()
                             polling_timeout = get_polling_timeout()
-                            
+
                             for attempt in range(max_attempts):
                                 try:
                                     # Exponential backoff
                                     sleep_interval = get_polling_interval(attempt)
                                     await asyncio.sleep(sleep_interval)
-                                    
+
                                     async with httpx.AsyncClient(timeout=polling_timeout) as poll_client:
                                         poll_response = await poll_client.get(
                                             urljoin(api_url, f"/api/progress/{result['progress_id']}")
                                         )
-                                        
+
                                         if poll_response.status_code == 200:
                                             poll_data = poll_response.json()
-                                            
+
                                             if poll_data.get("status") == "completed":
                                                 project = poll_data.get("result", {}).get("project", {})
                                                 return json.dumps({
@@ -229,7 +229,7 @@ def register_project_tools(mcp: FastMCP):
                                                     details=poll_data.get("details")
                                                 )
                                             # Continue polling if still processing
-                                            
+
                                 except httpx.RequestError as poll_error:
                                     logger.warning(f"Polling attempt {attempt + 1} failed: {poll_error}")
                                     if attempt == max_attempts - 1:
@@ -238,7 +238,7 @@ def register_project_tools(mcp: FastMCP):
                                             "Project creation timed out",
                                             suggestion="Check project status manually"
                                         )
-                            
+
                             return MCPErrorFormatter.format_error(
                                 "timeout",
                                 "Project creation timed out after maximum attempts",
@@ -255,14 +255,14 @@ def register_project_tools(mcp: FastMCP):
                             })
                     else:
                         return MCPErrorFormatter.from_http_error(response, "create project")
-                        
+
                 elif action == "update":
                     if not project_id:
                         return MCPErrorFormatter.format_error(
                             "validation_error",
                             "project_id required for update"
                         )
-                    
+
                     update_data = {}
                     if title is not None:
                         update_data["title"] = title
@@ -270,25 +270,25 @@ def register_project_tools(mcp: FastMCP):
                         update_data["description"] = description
                     if github_repo is not None:
                         update_data["github_repo"] = github_repo
-                    
+
                     if not update_data:
                         return MCPErrorFormatter.format_error(
                             "validation_error",
                             "No fields to update"
                         )
-                    
+
                     response = await client.put(
                         urljoin(api_url, f"/api/projects/{project_id}"),
                         json=update_data
                     )
-                    
+
                     if response.status_code == 200:
                         result = response.json()
                         project = result.get("project")
-                        
+
                         if project:
                             project = optimize_project_response(project)
-                        
+
                         return json.dumps({
                             "success": True,
                             "project": project,
@@ -296,18 +296,18 @@ def register_project_tools(mcp: FastMCP):
                         })
                     else:
                         return MCPErrorFormatter.from_http_error(response, "update project")
-                        
+
                 elif action == "delete":
                     if not project_id:
                         return MCPErrorFormatter.format_error(
                             "validation_error",
                             "project_id required for delete"
                         )
-                    
+
                     response = await client.delete(
                         urljoin(api_url, f"/api/projects/{project_id}")
                     )
-                    
+
                     if response.status_code == 200:
                         result = response.json()
                         return json.dumps({
@@ -316,13 +316,13 @@ def register_project_tools(mcp: FastMCP):
                         })
                     else:
                         return MCPErrorFormatter.from_http_error(response, "delete project")
-                        
+
                 else:
                     return MCPErrorFormatter.format_error(
                         "invalid_action",
                         f"Unknown action: {action}"
                     )
-                    
+
         except httpx.RequestError as e:
             return MCPErrorFormatter.from_exception(e, f"{action} project")
         except Exception as e:

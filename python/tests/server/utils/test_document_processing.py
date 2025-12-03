@@ -7,9 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from src.server.utils.document_processing import extract_text_from_pdf
 from src.server.services.storage.base_storage_service import BaseStorageService
-
+from src.server.utils.document_processing import extract_text_from_pdf
 
 # Path to test PDFs
 TEST_PDF_DIR = Path(__file__).parent.parent.parent.parent.parent / "test-pdf"

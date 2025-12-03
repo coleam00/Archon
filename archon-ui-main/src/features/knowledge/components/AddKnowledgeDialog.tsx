@@ -97,25 +97,27 @@ export const AddKnowledgeDialog: React.FC<AddKnowledgeDialogProps> = ({
       return;
     }
 
-    try {
-      const metadata: UploadMetadata = {
-        knowledge_type: uploadType,
-        tags: uploadTags.length > 0 ? uploadTags : undefined,
-      };
+    const fileToUpload = selectedFile;
+    const metadata: UploadMetadata = {
+      knowledge_type: uploadType,
+      tags: uploadTags.length > 0 ? uploadTags : undefined,
+    };
 
-      const response = await uploadMutation.mutateAsync({ file: selectedFile, metadata });
+    // Close modal immediately - upload will continue in background
+    resetForm();
+    onOpenChange(false);
+    showToast(`Starting upload for ${fileToUpload.name}...`, "info");
+
+    try {
+      const response = await uploadMutation.mutateAsync({
+        file: fileToUpload,
+        metadata,
+      });
 
       // Notify parent about the new upload operation if it has a progressId
       if (response?.progressId && onCrawlStarted) {
         onCrawlStarted(response.progressId);
       }
-
-      // Upload happens in background - show appropriate message
-      showToast(`Upload started for ${selectedFile.name}. Processing in background...`, "info");
-      resetForm();
-      // Don't call onSuccess here - the upload hasn't actually succeeded yet
-      // onSuccess should be called when polling shows completion
-      onOpenChange(false);
     } catch (error) {
       // Display the actual error message from backend
       const message = error instanceof Error ? error.message : "Failed to upload document";

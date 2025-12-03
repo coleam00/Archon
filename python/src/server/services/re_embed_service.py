@@ -9,13 +9,12 @@ import asyncio
 import uuid
 from typing import Any
 
-from ..config.logfire_config import get_logger, safe_logfire_info, safe_logfire_error
+from ..config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
 from ..utils import get_supabase_client
 from ..utils.progress.progress_tracker import ProgressTracker
-from .embeddings.embedding_service import create_embeddings_batch, _maybe_await
-from .llm_provider_service import get_embedding_model
 from . import credential_service
-
+from .embeddings.embedding_service import _maybe_await, create_embeddings_batch
+from .llm_provider_service import get_embedding_model
 
 logger = get_logger(__name__)
 

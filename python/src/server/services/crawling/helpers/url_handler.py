@@ -6,7 +6,6 @@ Handles URL transformations and validations.
 
 import hashlib
 import re
-from typing import List, Optional
 from urllib.parse import urljoin, urlparse
 
 from ....config.logfire_config import get_logger
@@ -295,7 +294,7 @@ class URLHandler:
         return [url for url, _ in links_with_text]
 
     @staticmethod
-    def extract_markdown_links_with_text(content: str, base_url: Optional[str] = None) -> List[tuple[str, str]]:
+    def extract_markdown_links_with_text(content: str, base_url: str | None = None) -> list[tuple[str, str]]:
         """
         Extract markdown-style links from text content with their link text.
 
