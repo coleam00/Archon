@@ -396,7 +396,8 @@ CREATE OR REPLACE FUNCTION match_archon_crawled_pages_multi (
   embedding_dimension INTEGER,
   match_count INT DEFAULT 10,
   filter JSONB DEFAULT '{}'::jsonb,
-  source_filter TEXT DEFAULT NULL
+  source_filter TEXT DEFAULT NULL,
+  embedding_model_filter TEXT DEFAULT NULL
 ) RETURNS TABLE (
   id BIGINT,
   url VARCHAR,
@@ -423,7 +424,7 @@ BEGIN
     ELSE RAISE EXCEPTION 'Unsupported embedding dimension: %', embedding_dimension;
   END CASE;
 
-  -- Build dynamic query
+  -- Build dynamic query with optional embedding model filter
   sql_query := format('
     SELECT id, url, chunk_number, content, metadata, source_id,
            1 - (%I <=> $1) AS similarity
@@ -431,12 +432,13 @@ BEGIN
     WHERE (%I IS NOT NULL)
       AND metadata @> $3
       AND ($4 IS NULL OR source_id = $4)
+      AND ($5 IS NULL OR embedding_model = $5)
     ORDER BY %I <=> $1
     LIMIT $2',
     embedding_column, embedding_column, embedding_column);
 
   -- Execute dynamic query
-  RETURN QUERY EXECUTE sql_query USING query_embedding, match_count, filter, source_filter;
+  RETURN QUERY EXECUTE sql_query USING query_embedding, match_count, filter, source_filter, embedding_model_filter;
 END;
 $$;
 
@@ -468,7 +470,8 @@ CREATE OR REPLACE FUNCTION match_archon_code_examples_multi (
   embedding_dimension INTEGER,
   match_count INT DEFAULT 10,
   filter JSONB DEFAULT '{}'::jsonb,
-  source_filter TEXT DEFAULT NULL
+  source_filter TEXT DEFAULT NULL,
+  embedding_model_filter TEXT DEFAULT NULL
 ) RETURNS TABLE (
   id BIGINT,
   url VARCHAR,
@@ -496,7 +499,7 @@ BEGIN
     ELSE RAISE EXCEPTION 'Unsupported embedding dimension: %', embedding_dimension;
   END CASE;
 
-  -- Build dynamic query
+  -- Build dynamic query with optional embedding model filter
   sql_query := format('
     SELECT id, url, chunk_number, content, summary, metadata, source_id,
            1 - (%I <=> $1) AS similarity
@@ -504,12 +507,13 @@ BEGIN
     WHERE (%I IS NOT NULL)
       AND metadata @> $3
       AND ($4 IS NULL OR source_id = $4)
+      AND ($5 IS NULL OR embedding_model = $5)
     ORDER BY %I <=> $1
     LIMIT $2',
     embedding_column, embedding_column, embedding_column);
 
   -- Execute dynamic query
-  RETURN QUERY EXECUTE sql_query USING query_embedding, match_count, filter, source_filter;
+  RETURN QUERY EXECUTE sql_query USING query_embedding, match_count, filter, source_filter, embedding_model_filter;
 END;
 $$;
 
@@ -547,7 +551,8 @@ CREATE OR REPLACE FUNCTION hybrid_search_archon_crawled_pages_multi(
     query_text TEXT,
     match_count INT DEFAULT 10,
     filter JSONB DEFAULT '{}'::jsonb,
-    source_filter TEXT DEFAULT NULL
+    source_filter TEXT DEFAULT NULL,
+    embedding_model_filter TEXT DEFAULT NULL
 )
 RETURNS TABLE (
     id BIGINT,
@@ -581,12 +586,12 @@ BEGIN
     -- Calculate how many results to fetch from each search type
     max_vector_results := match_count;
     max_text_results := match_count;
-    
-    -- Build dynamic query with proper embedding column
+
+    -- Build dynamic query with proper embedding column and optional model filter
     sql_query := format('
     WITH vector_results AS (
         -- Vector similarity search
-        SELECT 
+        SELECT
             cp.id,
             cp.url,
             cp.chunk_number,
@@ -597,13 +602,14 @@ BEGIN
         FROM archon_crawled_pages cp
         WHERE cp.metadata @> $4
             AND ($5 IS NULL OR cp.source_id = $5)
+            AND ($7 IS NULL OR cp.embedding_model = $7)
             AND cp.%I IS NOT NULL
         ORDER BY cp.%I <=> $1
         LIMIT $2
     ),
     text_results AS (
         -- Full-text search with ranking
-        SELECT 
+        SELECT
             cp.id,
             cp.url,
             cp.chunk_number,
@@ -614,13 +620,14 @@ BEGIN
         FROM archon_crawled_pages cp
         WHERE cp.metadata @> $4
             AND ($5 IS NULL OR cp.source_id = $5)
+            AND ($7 IS NULL OR cp.embedding_model = $7)
             AND cp.content_search_vector @@ plainto_tsquery(''english'', $6)
         ORDER BY text_sim DESC
         LIMIT $3
     ),
     combined_results AS (
         -- Combine results from both searches
-        SELECT 
+        SELECT
             COALESCE(v.id, t.id) AS id,
             COALESCE(v.url, t.url) AS url,
             COALESCE(v.chunk_number, t.chunk_number) AS chunk_number,
@@ -630,7 +637,7 @@ BEGIN
             -- Use vector similarity if available, otherwise text similarity
             COALESCE(v.vector_sim, t.text_sim, 0)::float8 AS similarity,
             -- Determine match type
-            CASE 
+            CASE
                 WHEN v.id IS NOT NULL AND t.id IS NOT NULL THEN ''hybrid''
                 WHEN v.id IS NOT NULL THEN ''vector''
                 ELSE ''keyword''
@@ -640,11 +647,11 @@ BEGIN
     )
     SELECT * FROM combined_results
     ORDER BY similarity DESC
-    LIMIT $2', 
+    LIMIT $2',
     embedding_column, embedding_column, embedding_column);
 
     -- Execute dynamic query
-    RETURN QUERY EXECUTE sql_query USING query_embedding, max_vector_results, max_text_results, filter, source_filter, query_text;
+    RETURN QUERY EXECUTE sql_query USING query_embedding, max_vector_results, max_text_results, filter, source_filter, query_text, embedding_model_filter;
 END;
 $$;
 
@@ -680,7 +687,8 @@ CREATE OR REPLACE FUNCTION hybrid_search_archon_code_examples_multi(
     query_text TEXT,
     match_count INT DEFAULT 10,
     filter JSONB DEFAULT '{}'::jsonb,
-    source_filter TEXT DEFAULT NULL
+    source_filter TEXT DEFAULT NULL,
+    embedding_model_filter TEXT DEFAULT NULL
 )
 RETURNS TABLE (
     id BIGINT,
@@ -715,12 +723,12 @@ BEGIN
     -- Calculate how many results to fetch from each search type
     max_vector_results := match_count;
     max_text_results := match_count;
-    
+
     -- Build dynamic query with proper embedding column
     sql_query := format('
     WITH vector_results AS (
         -- Vector similarity search
-        SELECT 
+        SELECT
             ce.id,
             ce.url,
             ce.chunk_number,
@@ -732,13 +740,14 @@ BEGIN
         FROM archon_code_examples ce
         WHERE ce.metadata @> $4
             AND ($5 IS NULL OR ce.source_id = $5)
+            AND ($7 IS NULL OR ce.embedding_model = $7)
             AND ce.%I IS NOT NULL
         ORDER BY ce.%I <=> $1
         LIMIT $2
     ),
     text_results AS (
         -- Full-text search with ranking (searches both content and summary)
-        SELECT 
+        SELECT
             ce.id,
             ce.url,
             ce.chunk_number,
@@ -750,13 +759,14 @@ BEGIN
         FROM archon_code_examples ce
         WHERE ce.metadata @> $4
             AND ($5 IS NULL OR ce.source_id = $5)
+            AND ($7 IS NULL OR ce.embedding_model = $7)
             AND ce.content_search_vector @@ plainto_tsquery(''english'', $6)
         ORDER BY text_sim DESC
         LIMIT $3
     ),
     combined_results AS (
         -- Combine results from both searches
-        SELECT 
+        SELECT
             COALESCE(v.id, t.id) AS id,
             COALESCE(v.url, t.url) AS url,
             COALESCE(v.chunk_number, t.chunk_number) AS chunk_number,
@@ -767,7 +777,7 @@ BEGIN
             -- Use vector similarity if available, otherwise text similarity
             COALESCE(v.vector_sim, t.text_sim, 0)::float8 AS similarity,
             -- Determine match type
-            CASE 
+            CASE
                 WHEN v.id IS NOT NULL AND t.id IS NOT NULL THEN ''hybrid''
                 WHEN v.id IS NOT NULL THEN ''vector''
                 ELSE ''keyword''
@@ -777,11 +787,11 @@ BEGIN
     )
     SELECT * FROM combined_results
     ORDER BY similarity DESC
-    LIMIT $2', 
+    LIMIT $2',
     embedding_column, embedding_column, embedding_column);
 
     -- Execute dynamic query
-    RETURN QUERY EXECUTE sql_query USING query_embedding, max_vector_results, max_text_results, filter, source_filter, query_text;
+    RETURN QUERY EXECUTE sql_query USING query_embedding, max_vector_results, max_text_results, filter, source_filter, query_text, embedding_model_filter;
 END;
 $$;
 

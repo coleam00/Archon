@@ -83,10 +83,10 @@ class EmbeddingProviderAdapter(ABC):
 
 class OpenAICompatibleEmbeddingAdapter(EmbeddingProviderAdapter):
     """Adapter for providers using the OpenAI embeddings API shape."""
-    
+
     def __init__(self, client: Any):
         self._client = client
-    
+
     async def create_embeddings(
         self,
         texts: list[str],
@@ -99,9 +99,76 @@ class OpenAICompatibleEmbeddingAdapter(EmbeddingProviderAdapter):
         }
         if dimensions is not None:
             request_args["dimensions"] = dimensions
-            
+
         response = await self._client.embeddings.create(**request_args)
         return [item.embedding for item in response.data]
+
+
+class NativeOllamaEmbeddingAdapter(EmbeddingProviderAdapter):
+    """Adapter for Ollama's native /api/embeddings endpoint."""
+
+    def __init__(self, base_url: str, auth_token: str | None = None):
+        self._base_url = base_url.rstrip("/")
+        self._auth_token = auth_token
+
+    async def create_embeddings(
+        self,
+        texts: list[str],
+        model: str,
+        dimensions: int | None = None,
+    ) -> list[list[float]]:
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as http_client:
+                embeddings = await asyncio.gather(
+                    *(
+                        self._fetch_single_embedding(http_client, model, text)
+                        for text in texts
+                    )
+                )
+            return embeddings
+        except httpx.HTTPStatusError as error:
+            error_content = error.response.text
+            search_logger.error(
+                f"Ollama native API returned {error.response.status_code} - {error_content}",
+                exc_info=True,
+            )
+            raise EmbeddingAPIError(
+                f"Ollama native API error: {error.response.status_code} - {error_content}",
+                original_error=error,
+            ) from error
+        except Exception as error:
+            search_logger.error(f"Error calling Ollama native API: {error}", exc_info=True)
+            raise EmbeddingAPIError(
+                f"Ollama native API error: {str(error)}", original_error=error
+            ) from error
+
+    async def _fetch_single_embedding(
+        self,
+        http_client: httpx.AsyncClient,
+        model: str,
+        text: str,
+    ) -> list[float]:
+        url = f"{self._base_url}/api/embeddings"
+        headers = {"Content-Type": "application/json"}
+
+        if self._auth_token:
+            headers["Authorization"] = f"Bearer {self._auth_token}"
+
+        payload = {
+            "model": model,
+            "prompt": text,
+        }
+
+        response = await http_client.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+
+        result = response.json()
+        embedding = result.get("embedding")
+
+        if not isinstance(embedding, list):
+            raise EmbeddingAPIError(f"Invalid embedding response from Ollama: {result}")
+
+        return embedding
 
 
 class GoogleEmbeddingAdapter(EmbeddingProviderAdapter):
@@ -217,10 +284,22 @@ class GoogleEmbeddingAdapter(EmbeddingProviderAdapter):
             return embedding
 
 
-def _get_embedding_adapter(provider: str, client: Any) -> EmbeddingProviderAdapter:
+def _get_embedding_adapter(
+    provider: str, client: Any, base_url: str | None = None, auth_token: str | None = None, api_mode: str | None = None
+) -> EmbeddingProviderAdapter:
     provider_name = (provider or "").lower()
     if provider_name == "google":
+        search_logger.info("Using Google native embedding adapter")
         return GoogleEmbeddingAdapter()
+    if provider_name == "ollama" and base_url:
+        # Check API mode - default to native if not specified or if set to native
+        if (api_mode or "native") == "native":
+            search_logger.info(f"Using Ollama native API adapter with base URL: {base_url}")
+            return NativeOllamaEmbeddingAdapter(base_url, auth_token)
+        else:
+            search_logger.info(f"Using OpenAI-compatible adapter for Ollama with base URL: {getattr(client, 'base_url', 'N/A')}")
+            return OpenAICompatibleEmbeddingAdapter(client)
+    search_logger.info(f"Using OpenAI-compatible embedding adapter for provider: {provider_name}")
     return OpenAICompatibleEmbeddingAdapter(client)
 
 
@@ -284,13 +363,13 @@ async def create_embedding(text: str, provider: str | None = None) -> list[float
         if "insufficient_quota" in error_msg:
             raise EmbeddingQuotaExhaustedError(
                 f"OpenAI quota exhausted: {error_msg}", text_preview=text
-            )
+            ) from e
         elif "rate_limit" in error_msg.lower():
-            raise EmbeddingRateLimitError(f"Rate limit hit: {error_msg}", text_preview=text)
+            raise EmbeddingRateLimitError(f"Rate limit hit: {error_msg}", text_preview=text) from e
         else:
             raise EmbeddingAPIError(
                 f"Embedding error: {error_msg}", text_preview=text, original_error=e
-            )
+            ) from e
 
 
 async def create_embeddings_batch(
@@ -365,6 +444,9 @@ async def create_embeddings_batch(
 
             search_logger.info(f"Using embedding provider: '{embedding_provider}' (from EMBEDDING_PROVIDER setting)")
             async with get_llm_client(provider=embedding_provider, use_embedding_provider=True) as client:
+                # Log client configuration for debugging
+                search_logger.info(f"Embedding client base URL: {getattr(client, 'base_url', 'N/A')}")
+                search_logger.info(f"Embedding client has API key: {bool(getattr(client, 'api_key', None))}")
                 # Load batch size and dimensions from settings
                 try:
                     rag_settings = await _maybe_await(
@@ -372,13 +454,23 @@ async def create_embeddings_batch(
                     )
                     batch_size = int(rag_settings.get("EMBEDDING_BATCH_SIZE", "100"))
                     embedding_dimensions = int(rag_settings.get("EMBEDDING_DIMENSIONS", "1536"))
+
+                    # For Ollama, get native API URL, auth token, and API mode
+                    ollama_base_url = rag_settings.get("OLLAMA_EMBEDDING_URL", "").rstrip("/v1").rstrip("/")
+                    ollama_auth_token = rag_settings.get("OLLAMA_EMBEDDING_AUTH_TOKEN", "")
+                    ollama_api_mode = rag_settings.get("OLLAMA_API_MODE", "native")
                 except Exception as e:
                     search_logger.warning(f"Failed to load embedding settings: {e}, using defaults")
                     batch_size = 100
                     embedding_dimensions = 1536
+                    ollama_base_url = ""
+                    ollama_auth_token = ""
+                    ollama_api_mode = "native"
 
                 total_tokens_used = 0
-                adapter = _get_embedding_adapter(embedding_provider, client)
+                adapter = _get_embedding_adapter(
+                    embedding_provider, client, base_url=ollama_base_url, auth_token=ollama_auth_token, api_mode=ollama_api_mode
+                )
                 dimensions_to_use = embedding_dimensions if embedding_dimensions > 0 else None
 
                 for i in range(0, len(texts), batch_size):
@@ -386,8 +478,8 @@ async def create_embeddings_batch(
                     batch_index = i // batch_size
 
                     try:
-                        # Estimate tokens for this batch
-                        batch_tokens = sum(len(text.split()) for text in batch) * 1.3
+                        # Estimate tokens using character-based approximation (~3.5 chars per token)
+                        batch_tokens = sum(len(text) // 3 for text in batch)
                         total_tokens_used += batch_tokens
 
                         # Create rate limit progress callback if we have a progress callback
@@ -424,8 +516,6 @@ async def create_embeddings_batch(
                                     if "insufficient_quota" in error_message:
                                         # Quota exhausted is critical - stop everything
                                         tokens_so_far = total_tokens_used - batch_tokens
-                                        cost_so_far = (tokens_so_far / 1_000_000) * 0.02
-
                                         search_logger.error(
                                             f"⚠️ QUOTA EXHAUSTED at batch {batch_index}! "
                                             f"Processed {result.success_count} texts successfully.",

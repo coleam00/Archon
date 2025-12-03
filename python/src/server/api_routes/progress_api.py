@@ -134,7 +134,15 @@ async def list_active_operations():
                     "pages_crawled": operation.get("pages_crawled") or operation.get("processed_pages"),
                     "total_pages": operation.get("total_pages"),
                     "documents_created": operation.get("documents_created") or operation.get("chunks_stored"),
-                    "code_blocks_found": operation.get("code_blocks_found") or operation.get("code_examples_found"),
+                    "code_blocks_found": operation.get("code_blocks_found") or operation.get("code_examples_found") or operation.get("code_examples_stored"),
+                    # Batch processing stats (for embedding progress)
+                    "current_batch": operation.get("current_batch"),
+                    "total_batches": operation.get("total_batches"),
+                    "completed_batches": operation.get("completed_batches"),
+                    "chunks_stored": operation.get("chunks_stored"),
+                    # Upload-specific stats
+                    "pages_extracted": operation.get("pages_extracted"),
+                    "chunks_created": operation.get("chunks_created"),
                 }
                 # Only include non-None values to keep response clean
                 active_operations.append({k: v for k, v in operation_data.items() if v is not None})

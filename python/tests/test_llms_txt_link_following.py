@@ -1,6 +1,8 @@
 """Integration tests for llms.txt link following functionality."""
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+
 from src.server.services.crawling.crawling_service import CrawlingService
 
 

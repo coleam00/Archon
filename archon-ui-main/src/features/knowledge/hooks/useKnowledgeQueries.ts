@@ -298,92 +298,51 @@ export function useCrawlUrl() {
 }
 
 /**
- * Upload document mutation with optimistic updates
+ * Upload document mutation with optimistic updates and upload progress tracking
+ * The modal closes immediately and upload progress is shown in the progress panel
  */
 export function useUploadDocument() {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
+
+  // Store the progress updater function between onMutate and mutationFn
+  const progressUpdaterRef = { current: null as ((percent: number, stage: "uploading" | "processing") => void) | null };
 
   return useMutation<
     { progressId: string; message: string },
     Error,
     { file: File; metadata: UploadMetadata },
     {
-      previousSummaries?: Array<[readonly unknown[], KnowledgeItemsResponse | undefined]>;
       previousOperations?: ActiveOperationsResponse;
       tempProgressId: string;
     }
   >({
-    mutationFn: ({ file, metadata }: { file: File; metadata: UploadMetadata }) =>
-      knowledgeService.uploadDocument(file, metadata),
-    onMutate: async ({ file, metadata }) => {
+    mutationFn: ({ file, metadata }) =>
+      knowledgeService.uploadDocumentWithProgress(file, metadata, (percent, stage) => {
+        // Use the progress updater that was set in onMutate
+        progressUpdaterRef.current?.(percent, stage);
+      }),
+    onMutate: async ({ file }) => {
       // Cancel any outgoing refetches to prevent race conditions
-      await queryClient.cancelQueries({ queryKey: knowledgeKeys.summariesPrefix() });
       await queryClient.cancelQueries({ queryKey: progressKeys.active() });
 
       // Snapshot the previous values for rollback
-      const previousSummaries = queryClient.getQueriesData<KnowledgeItemsResponse>({
-        queryKey: knowledgeKeys.summariesPrefix(),
-      });
       const previousOperations = queryClient.getQueryData<ActiveOperationsResponse>(progressKeys.active());
 
       const tempProgressId = createOptimisticId();
 
-      // Create optimistic knowledge item for the upload
-      const optimisticItem = createOptimisticEntity<KnowledgeItem>({
-        title: file.name,
-        url: `file://${file.name}`,
-        source_id: tempProgressId,
-        source_type: "file",
-        knowledge_type: metadata.knowledge_type || "technical",
-        status: "processing",
-        document_count: 0,
-        code_examples_count: 0,
-        metadata: {
-          knowledge_type: metadata.knowledge_type || "technical",
-          tags: metadata.tags || [],
-          source_type: "file",
-          status: "processing",
-          description: `Uploading ${file.name}`,
-          file_name: file.name,
-        },
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      } as Omit<KnowledgeItem, "id">);
-
-      // Respect each cache's filter (knowledge_type, tags, etc.)
-      const entries = queryClient.getQueriesData<KnowledgeItemsResponse>({
-        queryKey: knowledgeKeys.summariesPrefix(),
-      });
-      for (const [qk, old] of entries) {
-        const filter = qk[qk.length - 1] as KnowledgeItemsFilter | undefined;
-        const matchesType = !filter?.knowledge_type || optimisticItem.knowledge_type === filter.knowledge_type;
-        const matchesTags =
-          !filter?.tags || filter.tags.every((t) => (optimisticItem.metadata?.tags ?? []).includes(t));
-        if (!(matchesType && matchesTags)) continue;
-        if (!old) {
-          queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
-            items: [optimisticItem],
-            total: 1,
-            page: 1,
-            per_page: 100,
-          });
-        } else {
-          queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
-            ...old,
-            items: [optimisticItem, ...old.items],
-            total: (old.total ?? old.items.length) + 1,
-          });
-        }
-      }
+      // NOTE: We intentionally do NOT create an optimistic knowledge item here
+      // Creating optimistic items causes duplicate card issues due to race conditions
+      // with polling. Instead, we only create an optimistic operation (shown in Active
+      // Operations panel) and wait for the actual knowledge item from the server.
 
       // Create optimistic progress operation for upload
       const optimisticOperation: ActiveOperation = {
         operation_id: tempProgressId,
         operation_type: "upload",
-        status: "starting",
+        status: "uploading",
         progress: 0,
-        message: `Uploading ${file.name}`,
+        message: `Uploading ${file.name}...`,
         started_at: new Date().toISOString(),
         progressId: tempProgressId,
         type: "upload",
@@ -407,63 +366,57 @@ export function useUploadDocument() {
         };
       });
 
-      return { previousSummaries, previousOperations, tempProgressId, tempItemId: tempProgressId };
-    },
-    onSuccess: (response, _variables, context) => {
-      // Replace temporary IDs with real ones from the server
-      if (context && response?.progressId) {
-        // Update summaries cache with real progress ID
-        queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summariesPrefix() }, (old) => {
-          if (!old) return old;
-          return {
-            ...old,
-            items: old.items.map((item) => {
-              if (item.source_id === context.tempProgressId) {
-                return {
-                  ...item,
-                  source_id: response.progressId,
-                };
-              }
-              return item;
-            }),
-          };
-        });
-
-        // Update progress operation with real progress ID
+      // Set up progress updater function for mutationFn to use
+      progressUpdaterRef.current = (percent: number, stage: "uploading" | "processing") => {
         queryClient.setQueryData<ActiveOperationsResponse>(progressKeys.active(), (old) => {
           if (!old) return old;
           return {
             ...old,
             operations: old.operations.map((op) => {
-              if (op.operation_id === context.tempProgressId) {
+              if (op.operation_id === tempProgressId) {
                 return {
                   ...op,
-                  operation_id: response.progressId,
-                  progressId: response.progressId,
-                  source_id: response.progressId,
-                  message: response.message || op.message,
+                  status: stage,
+                  progress: stage === "uploading" ? Math.round(percent * 0.1) : 10, // Upload is 0-10% of total
+                  message: stage === "uploading"
+                    ? `Uploading ${file.name}... ${percent}%`
+                    : `Processing ${file.name}...`,
                 };
               }
               return op;
             }),
           };
         });
+      };
+
+      return { previousOperations, tempProgressId };
+    },
+    onSuccess: (response, _variables, context) => {
+      // Remove the optimistic operation - server operation will replace it via polling
+      // We remove instead of update to avoid race conditions where both appear
+      if (context) {
+        queryClient.setQueryData<ActiveOperationsResponse>(progressKeys.active(), (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            operations: old.operations.filter((op) => op.operation_id !== context.tempProgressId),
+            count: Math.max(0, old.count - 1),
+          };
+        });
       }
 
-      // Only invalidate progress to start tracking the new operation
-      // The lists/summaries will refresh automatically via polling when operations are active
+      // Invalidate progress queries to fetch server operation with real progressId
       queryClient.invalidateQueries({ queryKey: progressKeys.active() });
+
+      // Invalidate knowledge summaries so the new item appears in the list
+      // The server creates the source entry early, so it should be available
+      queryClient.invalidateQueries({ queryKey: knowledgeKeys.summariesPrefix() });
 
       // Don't show success here - upload is just starting in background
       // Success/failure will be shown via progress polling
     },
     onError: (error, _variables, context) => {
-      // Rollback optimistic updates on error
-      if (context?.previousSummaries) {
-        for (const [queryKey, data] of context.previousSummaries) {
-          queryClient.setQueryData(queryKey, data);
-        }
-      }
+      // Rollback optimistic operation on error
       if (context?.previousOperations) {
         queryClient.setQueryData(progressKeys.active(), context.previousOperations);
       }

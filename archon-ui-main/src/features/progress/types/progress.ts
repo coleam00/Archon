@@ -6,6 +6,7 @@
 export type ProgressStatus =
   | "starting"
   | "initializing"
+  | "uploading"  // File transfer to server (before processing starts)
   | "discovery"
   | "analyzing"
   | "crawling"
@@ -118,6 +119,14 @@ export interface ActiveOperation {
   discovered_file?: string;
   discovered_file_type?: string;
   linked_files?: string[];
+  // Batch processing (for embedding progress)
+  current_batch?: number;
+  total_batches?: number;
+  completed_batches?: number;
+  chunks_stored?: number;
+  // Upload-specific stats
+  pages_extracted?: number;
+  chunks_created?: number;
 }
 
 export interface ActiveOperationsResponse {

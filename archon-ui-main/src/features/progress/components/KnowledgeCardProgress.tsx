@@ -18,6 +18,7 @@ export const KnowledgeCardProgress: React.FC<KnowledgeCardProgressProps> = ({ op
   const progressPercentage = typeof operation.progress === "number" ? Math.round(operation.progress) : 0;
 
   // Check if operation is active - same logic as CrawlingProgress
+  // Include both crawl and upload statuses
   const isActive = [
     "crawling",
     "processing",
@@ -28,6 +29,13 @@ export const KnowledgeCardProgress: React.FC<KnowledgeCardProgressProps> = ({ op
     "source_creation",
     "document_storage",
     "code_extraction",
+    // Upload-specific statuses
+    "uploading",
+    "storing",
+    "reading",
+    "text_extraction",
+    "chunking",
+    "summarizing",
   ].includes(operation.status);
 
   // Don't show if not active
@@ -62,8 +70,14 @@ export const KnowledgeCardProgress: React.FC<KnowledgeCardProgressProps> = ({ op
     }
   };
 
-  // Format the status text
-  const currentStep = operation.message || operation.status.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+  // Extract rate limit info from message (if present)
+  const rateLimitMatch = operation.message?.match(/Rate limited: waiting ([\d.]+s)/i);
+  const rateLimitInfo = rateLimitMatch ? rateLimitMatch[1] : null;
+
+  // Format the status text - use clean status, not rate limit message
+  const currentStep = rateLimitInfo
+    ? operation.status.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase())
+    : operation.message || operation.status.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
   const stats = operation.stats || operation.progress_data;
 
   return (
@@ -87,24 +101,59 @@ export const KnowledgeCardProgress: React.FC<KnowledgeCardProgressProps> = ({ op
             <span className="text-xs text-gray-500">{Math.round(progressPercentage)}%</span>
           </div>
 
-          {/* Progress bar */}
-          <div className="relative h-1.5 bg-black/40 rounded-full overflow-hidden">
-            <motion.div
-              className="absolute inset-y-0 left-0 bg-gradient-to-r from-cyan-500 to-blue-600"
-              initial={{ width: 0 }}
-              animate={{ width: `${progressPercentage}%` }}
-              transition={{ duration: 0.5, ease: "easeOut" }}
-            />
+          {/* Progress bar with rate limit info */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-400 min-w-[50px]">
+              Progress
+              {rateLimitInfo && <span className="text-gray-500 ml-1">(waiting {rateLimitInfo})</span>}
+            </span>
+            <div className="flex-1 relative h-1.5 bg-black/40 rounded-full overflow-hidden">
+              <motion.div
+                className="absolute inset-y-0 left-0 bg-gradient-to-r from-cyan-500 to-blue-600"
+                initial={{ width: 0 }}
+                animate={{ width: `${progressPercentage}%` }}
+                transition={{ duration: 0.5, ease: "easeOut" }}
+              />
+            </div>
           </div>
 
-          {/* Stats - simplified to match CrawlingProgress */}
+          {/* Stats - supports both crawl and upload operations */}
           <div className="flex items-center gap-4 text-xs text-gray-500">
+            {/* Crawl stats: pages crawled */}
             {(operation.pages_crawled !== undefined || stats?.pages_crawled !== undefined) && (
               <div className="flex items-center gap-1">
                 <Link className="w-3 h-3" />
                 <span>{operation.pages_crawled || stats?.pages_crawled || 0} pages</span>
               </div>
             )}
+            {/* Upload stats: pages extracted */}
+            {operation.pages_extracted !== undefined && (
+              <div className="flex items-center gap-1">
+                <FileText className="w-3 h-3 text-purple-400" />
+                <span>{operation.pages_extracted} pages</span>
+              </div>
+            )}
+            {/* Upload stats: total pages */}
+            {operation.total_pages !== undefined && operation.pages_extracted === undefined && (
+              <div className="flex items-center gap-1">
+                <FileText className="w-3 h-3 text-purple-400" />
+                <span>{operation.total_pages} pages</span>
+              </div>
+            )}
+            {/* Batch progress for uploads */}
+            {operation.current_batch !== undefined && operation.total_batches !== undefined && (
+              <div className="flex items-center gap-1">
+                <span className="text-cyan-400">Batch {operation.current_batch}/{operation.total_batches}</span>
+              </div>
+            )}
+            {/* Upload stats: chunks created */}
+            {operation.chunks_created !== undefined && (
+              <div className="flex items-center gap-1">
+                <FileText className="w-3 h-3 text-cyan-400" />
+                <span>{operation.chunks_created} chunks</span>
+              </div>
+            )}
+            {/* Crawl stats: documents created */}
             {(operation.documents_created !== undefined ||
               (stats && "documents_created" in stats && stats.documents_created !== undefined)) && (
               <div className="flex items-center gap-1">
@@ -115,6 +164,7 @@ export const KnowledgeCardProgress: React.FC<KnowledgeCardProgressProps> = ({ op
                 </span>
               </div>
             )}
+            {/* Code blocks found */}
             {operation.code_blocks_found !== undefined && (
               <div className="flex items-center gap-1">
                 <Code className="w-3 h-3 text-green-500" />

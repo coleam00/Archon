@@ -2,7 +2,6 @@
 Unit tests for version_service.py
 """
 
-import json
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 

@@ -3,14 +3,15 @@ Unit tests for Supabase key validation functionality.
 Tests the JWT-based validation of anon vs service keys.
 """
 
+from unittest.mock import patch
+
 import pytest
 from jose import jwt
-from unittest.mock import patch, MagicMock
 
 from src.server.config.config import (
-    validate_supabase_key,
     ConfigurationError,
     load_environment_config,
+    validate_supabase_key,
 )
 
 
@@ -77,7 +78,7 @@ def test_config_raises_on_anon_key():
     with patch.dict(
         "os.environ",
         {
-            "SUPABASE_URL": "https://test.supabase.co", 
+            "SUPABASE_URL": "https://test.supabase.co",
             "SUPABASE_SERVICE_KEY": mock_anon_key,
             "OPENAI_API_KEY": ""  # Clear any existing key
         }
@@ -100,7 +101,7 @@ def test_config_accepts_service_key():
     with patch.dict(
         "os.environ",
         {
-            "SUPABASE_URL": "https://test.supabase.co", 
+            "SUPABASE_URL": "https://test.supabase.co",
             "SUPABASE_SERVICE_KEY": mock_service_key,
             "PORT": "8051",  # Required for config
             "OPENAI_API_KEY": ""  # Clear any existing key
@@ -116,7 +117,7 @@ def test_config_handles_invalid_jwt():
     with patch.dict(
         "os.environ",
         {
-            "SUPABASE_URL": "https://test.supabase.co", 
+            "SUPABASE_URL": "https://test.supabase.co",
             "SUPABASE_SERVICE_KEY": "invalid-jwt-key",
             "PORT": "8051",  # Required for config
             "OPENAI_API_KEY": ""  # Clear any existing key
@@ -137,7 +138,7 @@ def test_config_fails_on_unknown_role():
     with patch.dict(
         "os.environ",
         {
-            "SUPABASE_URL": "https://test.supabase.co", 
+            "SUPABASE_URL": "https://test.supabase.co",
             "SUPABASE_SERVICE_KEY": mock_unknown_key,
             "PORT": "8051",  # Required for config
             "OPENAI_API_KEY": ""  # Clear any existing key
@@ -161,7 +162,7 @@ def test_config_raises_on_anon_key_with_port():
     with patch.dict(
         "os.environ",
         {
-            "SUPABASE_URL": "https://test.supabase.co", 
+            "SUPABASE_URL": "https://test.supabase.co",
             "SUPABASE_SERVICE_KEY": mock_anon_key,
             "PORT": "8051",
             "OPENAI_API_KEY": "sk-test123"  # Valid OpenAI key

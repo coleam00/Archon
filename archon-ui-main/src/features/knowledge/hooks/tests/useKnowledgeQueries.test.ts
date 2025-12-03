@@ -14,6 +14,7 @@ vi.mock("../../services", () => ({
     crawlUrl: vi.fn(),
     refreshKnowledgeItem: vi.fn(),
     uploadDocument: vi.fn(),
+    uploadDocumentWithProgress: vi.fn(),
     stopCrawl: vi.fn(),
     getKnowledgeItemChunks: vi.fn(),
     getCodeExamples: vi.fn(),
@@ -214,14 +215,12 @@ describe("useKnowledgeQueries", () => {
       };
 
       const mockResponse = {
-        success: true,
         progressId: "upload-456",
         message: "Upload started",
-        filename: "test.pdf",
       };
 
       const { knowledgeService } = await import("../../services");
-      vi.mocked(knowledgeService.uploadDocument).mockResolvedValue(mockResponse);
+      vi.mocked(knowledgeService.uploadDocumentWithProgress).mockResolvedValue(mockResponse);
 
       const wrapper = createWrapper();
       const { result } = renderHook(() => useUploadDocument(), { wrapper });
@@ -229,13 +228,18 @@ describe("useKnowledgeQueries", () => {
       const response = await result.current.mutateAsync({ file, metadata });
 
       expect(response).toEqual(mockResponse);
-      expect(knowledgeService.uploadDocument).toHaveBeenCalledWith(file, metadata);
+      // The function is called with file, metadata, and a progress callback
+      expect(knowledgeService.uploadDocumentWithProgress).toHaveBeenCalledWith(
+        file,
+        metadata,
+        expect.any(Function),
+      );
     });
 
     it("should handle upload error", async () => {
       const file = new File(["test"], "test.txt", { type: "text/plain" });
       const { knowledgeService } = await import("../../services");
-      vi.mocked(knowledgeService.uploadDocument).mockRejectedValue(new Error("File too large"));
+      vi.mocked(knowledgeService.uploadDocumentWithProgress).mockRejectedValue(new Error("File too large"));
 
       const wrapper = createWrapper();
       const { result } = renderHook(() => useUploadDocument(), { wrapper });

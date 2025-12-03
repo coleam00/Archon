@@ -18,6 +18,7 @@ from typing import Any
 from ...config.logfire_config import get_logger, safe_span
 from ...utils import get_supabase_client
 from ..embeddings.embedding_service import create_embedding
+from ..llm_provider_service import get_embedding_model
 from .agentic_rag_strategy import AgenticRAGStrategy
 
 # Import all strategies
@@ -84,6 +85,20 @@ class RAGService:
         value = self.get_setting(key, "false" if not default else "true")
         return value.lower() in ("true", "1", "yes", "on")
 
+    async def _get_current_embedding_model(self) -> str | None:
+        """
+        Get the currently configured embedding model name.
+
+        Returns:
+            The embedding model name or None if not configured
+        """
+        try:
+            model_name = await get_embedding_model()
+            return model_name if model_name else None
+        except Exception as e:
+            logger.warning(f"Failed to get embedding model: {e}")
+            return None
+
     async def search_documents(
         self,
         query: str,
@@ -119,6 +134,9 @@ class RAGService:
                     logger.error("Failed to create embedding for query")
                     return []
 
+                # Get current embedding model for filtering
+                embedding_model = await self._get_current_embedding_model()
+
                 if use_hybrid_search:
                     # Use hybrid strategy
                     results = await self.hybrid_strategy.search_documents_hybrid(
@@ -126,6 +144,7 @@ class RAGService:
                         query_embedding=query_embedding,
                         match_count=match_count,
                         filter_metadata=filter_metadata,
+                        embedding_model_filter=embedding_model,
                     )
                     span.set_attribute("search_mode", "hybrid")
                 else:
@@ -134,6 +153,7 @@ class RAGService:
                         query_embedding=query_embedding,
                         match_count=match_count,
                         filter_metadata=filter_metadata,
+                        embedding_model_filter=embedding_model,
                     )
                     span.set_attribute("search_mode", "vector")
 
@@ -164,12 +184,15 @@ class RAGService:
         Returns:
             List of matching code examples
         """
+        # Get current embedding model for filtering
+        embedding_model = await self._get_current_embedding_model()
+
         return await self.agentic_strategy.search_code_examples(
             query=query,
             match_count=match_count,
             filter_metadata=filter_metadata,
             source_id=source_id,
-            use_enhancement=True,
+            embedding_model_filter=embedding_model,
         )
 
     async def _group_chunks_by_pages(
@@ -202,7 +225,7 @@ class RAGService:
             page_groups[group_key]["total_similarity"] += result.get("similarity_score", 0.0)
 
         page_results = []
-        for group_key, data in page_groups.items():
+        for _group_key, data in page_groups.items():
             avg_similarity = data["total_similarity"] / data["chunk_matches"]
             match_boost = min(0.2, data["chunk_matches"] * 0.02)
             aggregate_score = avg_similarity * (1 + match_boost)
@@ -421,6 +444,9 @@ class RAGService:
                     search_match_count = match_count * 5
                     logger.debug(f"Reranking enabled for code search - fetching {search_match_count} candidates")
 
+                # Get current embedding model for filtering
+                embedding_model = await self._get_current_embedding_model()
+
                 # Prepare filter
                 filter_metadata = {"source": source_id} if source_id and source_id.strip() else None
 
@@ -431,6 +457,7 @@ class RAGService:
                         match_count=search_match_count,
                         filter_metadata=filter_metadata,
                         source_id=source_id,
+                        embedding_model_filter=embedding_model,
                     )
                 else:
                     # Use standard agentic search
@@ -439,6 +466,7 @@ class RAGService:
                         match_count=search_match_count,
                         filter_metadata=filter_metadata,
                         source_id=source_id,
+                        embedding_model_filter=embedding_model,
                     )
 
                 # Apply reranking if we have a strategy

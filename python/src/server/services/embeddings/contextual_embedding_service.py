@@ -5,12 +5,11 @@ Handles generation of contextual embeddings for improved RAG retrieval.
 Includes proper rate limiting for OpenAI API calls.
 """
 
-import os
+import json
 
 import openai
 
 from ...config.logfire_config import search_logger
-from ..credential_service import credential_service
 from ..llm_provider_service import (
     extract_message_text,
     get_llm_client,
@@ -36,22 +35,15 @@ async def generate_contextual_embedding(
         - The contextual text that situates the chunk within the document
         - Boolean indicating if contextual embedding was performed
     """
-    # Model choice is a RAG setting, get from credential service
-    try:
-        model_choice = await credential_service.get_credential("MODEL_CHOICE", "gpt-4.1-nano")
-    except Exception as e:
-        # Fallback to environment variable or default
-        search_logger.warning(
-            f"Failed to get MODEL_CHOICE from credential service: {e}, using fallback"
-        )
-        model_choice = os.getenv("MODEL_CHOICE", "gpt-4.1-nano")
-
-    search_logger.debug(f"Using MODEL_CHOICE: {model_choice}")
-
     threading_service = get_threading_service()
 
-    # Estimate tokens: document preview (5000 chars ≈ 1250 tokens) + chunk + prompt
-    estimated_tokens = 1250 + len(chunk.split()) + 100  # Rough estimate
+    # Estimate tokens using character-based approximation (more accurate than word count)
+    # ~4 chars per token for English text, ~3 chars for code/technical content
+    # Using 3.5 as middle ground for mixed content
+    doc_preview_tokens = min(len(full_document), 5000) // 4  # Document preview
+    chunk_tokens = len(chunk) // 3  # Chunks often contain code, use conservative estimate
+    prompt_overhead = 150  # System prompt + formatting
+    estimated_tokens = doc_preview_tokens + chunk_tokens + prompt_overhead
 
     try:
         # Use rate limiting before making the API call
@@ -199,7 +191,8 @@ async def generate_contextual_embeddings_batch(
 
             batch_prompt += (
                 "For each chunk, provide a short succinct context to situate it within the overall document for improving search retrieval. "
-                "Format your response as:\nCHUNK 1: [context]\nCHUNK 2: [context]\netc."
+                "Respond ONLY with valid JSON in this exact format (no markdown, no explanation):\n"
+                '{"1": "context for chunk 1", "2": "context for chunk 2", ...}'
             )
 
             # Make single API call for ALL chunks
@@ -228,24 +221,45 @@ async def generate_contextual_embeddings_batch(
                 )
                 return [(chunk, False) for chunk in chunks]
 
-            # Extract contexts from response
-            lines = response_text.strip().split("\n")
+            # Extract contexts from response - try JSON first, fallback to text parsing
             chunk_contexts = {}
 
-            for line in lines:
-                if line.strip().startswith("CHUNK"):
-                    parts = line.split(":", 1)
-                    if len(parts) == 2:
-                        chunk_num = int(parts[0].strip().split()[1]) - 1
-                        context = parts[1].strip()
-                        chunk_contexts[chunk_num] = context
+            # Try JSON parsing first (more robust)
+            try:
+                # Strip markdown code blocks if present
+                clean_response = response_text.strip()
+                if clean_response.startswith("```"):
+                    clean_response = clean_response.split("```")[1]
+                    if clean_response.startswith("json"):
+                        clean_response = clean_response[4:]
+                    clean_response = clean_response.strip()
+
+                parsed = json.loads(clean_response)
+                for key, context in parsed.items():
+                    chunk_num = int(key) - 1  # Convert to 0-indexed
+                    chunk_contexts[chunk_num] = context
+                search_logger.debug(f"Parsed {len(chunk_contexts)} contexts via JSON")
+            except (json.JSONDecodeError, ValueError, KeyError) as parse_error:
+                # Fallback to text parsing for backwards compatibility
+                search_logger.debug(f"JSON parse failed ({parse_error}), falling back to text parsing")
+                lines = response_text.strip().split("\n")
+                for line in lines:
+                    if line.strip().upper().startswith("CHUNK"):
+                        parts = line.split(":", 1)
+                        if len(parts) == 2:
+                            try:
+                                chunk_num = int(parts[0].strip().split()[1]) - 1
+                                context = parts[1].strip()
+                                chunk_contexts[chunk_num] = context
+                            except (ValueError, IndexError):
+                                continue
 
             # Build results
             results = []
             for i, chunk in enumerate(chunks):
                 if i in chunk_contexts:
                     # Combine context with full chunk (not truncated)
-                    contextual_text = chunk_contexts[i] + "\\n\\n" + chunk
+                    contextual_text = chunk_contexts[i] + "\n\n" + chunk
                     results.append((contextual_text, True))
                 else:
                     results.append((chunk, False))

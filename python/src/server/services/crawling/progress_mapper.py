@@ -32,13 +32,13 @@ class ProgressMapper:
         "extracting": (40, 90),       # Alias for code_extraction
         "finalization": (90, 100),    # Final steps and cleanup
 
-        # Upload-specific stages
-        "reading": (0, 5),
-        "text_extraction": (5, 10),   # Clear name for text extraction from files
-        "chunking": (10, 15),
+        # Upload-specific stages - rebalanced for PDF page progress visibility
+        "reading": (0, 2),
+        "text_extraction": (2, 20),   # Expanded for page-by-page PDF/OCR progress
+        "chunking": (20, 25),
         # Note: source_creation is defined above at (20, 25) for all operations
-        "summarizing": (25, 35),
-        "storing": (35, 100),
+        "summarizing": (25, 30),
+        "storing": (30, 100),         # Embeddings + code extraction
     }
 
     def __init__(self):

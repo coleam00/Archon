@@ -1,5 +1,6 @@
 """Unit tests for CrawlingService subdomain checking functionality."""
 import pytest
+
 from src.server.services.crawling.crawling_service import CrawlingService
 
 

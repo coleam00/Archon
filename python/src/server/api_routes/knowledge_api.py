@@ -19,7 +19,6 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 # Basic validation - simplified inline version
-
 # Import unified logging
 from ..config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
 from ..services.crawler_manager import get_crawler
@@ -27,10 +26,11 @@ from ..services.crawling import CrawlingService
 from ..services.credential_service import credential_service
 from ..services.embeddings.provider_error_adapters import ProviderErrorFactory
 from ..services.knowledge import DatabaseMetricsService, KnowledgeItemService, KnowledgeSummaryService
+from ..services.re_embed_service import ReEmbedService
 from ..services.search.rag_service import RAGService
 from ..services.storage import DocumentStorageService
 from ..utils import get_supabase_client
-from ..utils.document_processing import extract_text_from_document
+from ..utils.document_processing import extract_text_from_document, extract_text_from_document_async
 
 # Get logger for this module
 logger = get_logger(__name__)
@@ -62,7 +62,7 @@ active_crawl_tasks: dict[str, asyncio.Task] = {}
 async def _validate_provider_api_key(provider: str = None) -> None:
     """Validate LLM provider API key before starting operations."""
     logger.info("🔑 Starting API key validation...")
-    
+
     try:
         # Basic provider validation
         if not provider:
@@ -117,7 +117,7 @@ async def _validate_provider_api_key(provider: str = None) -> None:
                     "provider": provider,
                 },
             )
-            
+
         logger.info(f"✅ {provider.title()} API key validation successful")
 
     except HTTPException:
@@ -129,7 +129,7 @@ async def _validate_provider_api_key(provider: str = None) -> None:
         error_str = str(e)
         sanitized_error = ProviderErrorFactory.sanitize_provider_error(error_str, provider or "openai")
         logger.error(f"❌ Caught exception during API key validation: {sanitized_error}")
-        
+
         # Always fail for any exception during validation - better safe than sorry
         logger.error("🚨 API key validation failed - blocking crawl operation")
         raise HTTPException(
@@ -612,14 +612,14 @@ async def get_knowledge_item_code_examples(
 @router.post("/knowledge-items/{source_id}/refresh")
 async def refresh_knowledge_item(source_id: str):
     """Refresh a knowledge item by re-crawling its URL with the same metadata."""
-    
+
     # Validate API key before starting expensive refresh operation
     logger.info("🔍 About to validate API key for refresh...")
     provider_config = await credential_service.get_active_provider("embedding")
     provider = provider_config.get("provider", "openai")
     await _validate_provider_api_key(provider)
     logger.info("✅ API key validation completed successfully for refresh")
-    
+
     try:
         safe_logfire_info(f"Starting knowledge item refresh | source_id={source_id}")
 
@@ -899,14 +899,14 @@ async def upload_document(
     extract_code_examples: bool = Form(True),
 ):
     """Upload and process a document with progress tracking."""
-    
-    # Validate API key before starting expensive upload operation  
+
+    # Validate API key before starting expensive upload operation
     logger.info("🔍 About to validate API key for upload...")
     provider_config = await credential_service.get_active_provider("embedding")
     provider = provider_config.get("provider", "openai")
     await _validate_provider_api_key(provider)
     logger.info("✅ API key validation completed successfully for upload")
-    
+
     try:
         # DETAILED LOGGING: Track knowledge_type parameter flow
         safe_logfire_info(
@@ -1002,17 +1002,50 @@ async def _perform_upload_with_progress(
             f"Starting document upload with progress tracking | progress_id={progress_id} | filename={filename} | content_type={content_type}"
         )
 
+        # Use progress_id as source_id for consistency with frontend optimistic updates
+        # The frontend updates optimistic items to use progressId as source_id after upload starts
+        # Define this early so it's available in all callbacks
+        source_id = progress_id
 
-        # Extract text from document with progress - use mapper for consistent progress
-        mapped_progress = progress_mapper.map_progress("processing", 50)
+        # Create progress callback for text extraction (pages)
+        async def extraction_progress_callback(pages_extracted: int, total_pages: int, message: str):
+            """Progress callback for PDF/OCR page extraction"""
+            # Map page progress to extraction stage (5-20%)
+            if total_pages > 0:
+                page_percent = (pages_extracted / total_pages) * 100
+                mapped_progress = progress_mapper.map_progress("text_extraction", page_percent)
+            else:
+                mapped_progress = progress_mapper.map_progress("text_extraction", 50)
+
+            await tracker.update(
+                status="text_extraction",
+                progress=mapped_progress,
+                log=message,
+                pages_extracted=pages_extracted,
+                total_pages=total_pages,
+                # Include source_id for frontend matching with knowledge card
+                source_id=source_id,
+            )
+
+        # Extract text from document with progress tracking
         await tracker.update(
-            status="processing",
-            progress=mapped_progress,
-            log=f"Extracting text from {filename}"
+            status="text_extraction",
+            progress=progress_mapper.map_progress("text_extraction", 0),
+            log=f"Starting text extraction from {filename}...",
+            # Include source_id for frontend matching with knowledge card
+            source_id=source_id,
         )
 
         try:
-            extracted_text = extract_text_from_document(file_content, filename, content_type)
+            # Use async version with progress callback for PDFs
+            if content_type == "application/pdf" or filename.lower().endswith(".pdf"):
+                extracted_text = await extract_text_from_document_async(
+                    file_content, filename, content_type, extraction_progress_callback
+                )
+            else:
+                # Non-PDF files are usually fast, use sync version
+                extracted_text = extract_text_from_document(file_content, filename, content_type)
+
             safe_logfire_info(
                 f"Document text extracted | filename={filename} | extracted_length={len(extracted_text)} | content_type={content_type}"
             )
@@ -1030,9 +1063,6 @@ async def _perform_upload_with_progress(
         # Use DocumentStorageService to handle the upload
         doc_storage_service = DocumentStorageService(get_supabase_client())
 
-        # Generate source_id from filename with UUID to prevent collisions
-        source_id = f"file_{filename.replace(' ', '_').replace('.', '_')}_{uuid.uuid4().hex[:8]}"
-
         # Create progress callback for tracking document processing
         async def document_progress_callback(
             message: str, percentage: int, batch_info: dict = None
@@ -1047,6 +1077,8 @@ async def _perform_upload_with_progress(
                 progress=mapped_percentage,
                 log=message,
                 currentUrl=f"file://{filename}",
+                # Include source_id for frontend matching with knowledge card
+                source_id=source_id,
                 **(batch_info or {})
             )
 
@@ -1279,6 +1311,87 @@ async def knowledge_health():
 
     return result
 
+
+
+@router.post("/knowledge/re-embed")
+async def start_re_embed():
+    """
+    Start a bulk re-embedding operation for all documents.
+
+    This re-creates embeddings for all existing document chunks using
+    the currently configured embedding model. Use this after changing
+    the embedding model to ensure all documents use the same model.
+
+    Returns:
+        progressId: ID for tracking the operation progress
+        message: Confirmation message
+    """
+    # Validate API key before starting expensive operation
+    logger.info("🔍 Validating API key for re-embed...")
+    provider_config = await credential_service.get_active_provider("embedding")
+    provider = provider_config.get("provider", "openai")
+    await _validate_provider_api_key(provider)
+    logger.info("✅ API key validation completed for re-embed")
+
+    try:
+        service = ReEmbedService(get_supabase_client())
+        result = await service.start_re_embed(provider=provider)
+
+        safe_logfire_info(f"Re-embed started | progress_id={result['progress_id']}")
+
+        return {
+            "success": True,
+            "progressId": result["progress_id"],
+            "message": result["message"]
+        }
+    except Exception as e:
+        safe_logfire_error(f"Failed to start re-embed | error={str(e)}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
+@router.post("/knowledge/re-embed/stop/{progress_id}")
+async def stop_re_embed_task(progress_id: str):
+    """Stop a running re-embed operation."""
+    try:
+        service = ReEmbedService(get_supabase_client())
+        stopped = await service.stop_re_embed(progress_id)
+
+        if stopped:
+            safe_logfire_info(f"Re-embed stopped | progress_id={progress_id}")
+            return {
+                "success": True,
+                "message": "Re-embed operation stopped",
+                "progressId": progress_id
+            }
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "No active re-embed task for given progress_id"}
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        safe_logfire_error(f"Failed to stop re-embed | error={str(e)} | progress_id={progress_id}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
+@router.get("/knowledge/re-embed/stats")
+async def get_re_embed_stats():
+    """
+    Get statistics about documents that would be re-embedded.
+
+    Returns:
+        total_chunks: Number of chunks to re-embed
+        embedding_models_in_use: List of currently used embedding models
+        estimated_time_seconds: Rough time estimate
+    """
+    try:
+        service = ReEmbedService(get_supabase_client())
+        stats = await service.get_re_embed_stats()
+        return {"success": True, **stats}
+    except Exception as e:
+        safe_logfire_error(f"Failed to get re-embed stats | error={str(e)}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
 @router.post("/knowledge-items/stop/{progress_id}")

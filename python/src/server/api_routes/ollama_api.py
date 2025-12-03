@@ -95,26 +95,51 @@ async def discover_models_endpoint(
     """
     try:
         logger.info(f"Starting model discovery for {len(instance_urls)} instances with fetch_details={fetch_details}")
-        
+
+        # Get auth tokens from RAG settings
+        from ..services.credential_service import credential_service
+        rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+
+        # Extract configured instance URLs and their auth tokens (handle None values)
+        llm_base_url = (rag_settings.get("LLM_BASE_URL") or "").replace("/v1", "").rstrip("/")
+        embedding_base_url = (rag_settings.get("OLLAMA_EMBEDDING_URL") or "").replace("/v1", "").rstrip("/")
+
+        chat_auth_token = rag_settings.get("OLLAMA_CHAT_AUTH_TOKEN") or ""
+        embedding_auth_token = rag_settings.get("OLLAMA_EMBEDDING_AUTH_TOKEN") or ""
+
         # Validate instance URLs
         valid_urls = []
+        auth_tokens_map = {}
         for url in instance_urls:
             try:
                 # Basic URL validation
                 if not url.startswith(('http://', 'https://')):
                     logger.warning(f"Invalid URL format: {url}")
                     continue
-                valid_urls.append(url.rstrip('/'))
+                # Normalize URL: remove /v1 suffix and trailing slash for consistent comparison
+                normalized_url = url.replace("/v1", "").rstrip("/")
+                valid_urls.append(normalized_url)
+
+                # Determine which auth token to use based on URL matching
+                if normalized_url == llm_base_url and chat_auth_token:
+                    auth_tokens_map[normalized_url] = chat_auth_token
+                    logger.debug(f"Using chat auth token for {normalized_url}")
+                elif normalized_url == embedding_base_url and embedding_auth_token:
+                    auth_tokens_map[normalized_url] = embedding_auth_token
+                    logger.debug(f"Using embedding auth token for {normalized_url}")
+                else:
+                    logger.debug(f"No auth token configured for {normalized_url}")
             except Exception as e:
                 logger.warning(f"Error validating URL {url}: {e}")
 
         if not valid_urls:
             raise HTTPException(status_code=400, detail="No valid instance URLs provided")
 
-        # Perform model discovery with optional detailed fetching
+        # Perform model discovery with optional detailed fetching and auth tokens
         discovery_result = await model_discovery_service.discover_models_from_multiple_instances(
-            valid_urls, 
-            fetch_details=fetch_details
+            valid_urls,
+            fetch_details=fetch_details,
+            auth_tokens=auth_tokens_map
         )
 
         logger.info(f"Discovery complete: {discovery_result['total_models']} models found")
@@ -145,21 +170,52 @@ async def health_check_endpoint(
     include_models: bool = Query(False, description="Include model count in response")
 ) -> dict[str, Any]:
     """
-    Check health status of multiple Ollama instances.
-    
+    Check health status of multiple Ollama instances with auth token support.
+
     Provides real-time health monitoring with response times, model availability,
     and error diagnostics for distributed Ollama deployments.
     """
     try:
         logger.info(f"Checking health for {len(instance_urls)} instances")
 
+        # Get auth tokens from RAG settings for each instance
+        from ..services.credential_service import credential_service
+        rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+
+        # Debug: Log available keys only (not values to avoid leaking secrets)
+        logger.debug(f"RAG settings keys: {list(rag_settings.keys())}")
+
+        # Extract configured instance URLs and their auth tokens (handle None values)
+        llm_base_url = (rag_settings.get("LLM_BASE_URL") or "").replace("/v1", "").rstrip("/")
+        embedding_base_url = (rag_settings.get("OLLAMA_EMBEDDING_URL") or "").replace("/v1", "").rstrip("/")
+
+        chat_auth_token = rag_settings.get("OLLAMA_CHAT_AUTH_TOKEN") or ""
+        embedding_auth_token = rag_settings.get("OLLAMA_EMBEDDING_AUTH_TOKEN") or ""
+
         health_results = {}
 
         # Check health for each instance
         for instance_url in instance_urls:
             try:
-                url = instance_url.rstrip('/')
-                health_status = await model_discovery_service.check_instance_health(url)
+                # Normalize both incoming URL and configured URLs the same way
+                # Remove /v1 suffix and trailing slash for consistent comparison
+                url = instance_url.replace("/v1", "").rstrip("/")
+
+                # Determine which auth token to use based on the URL
+                auth_token = None
+                logger.debug(f"Checking instance: {url} (original: {instance_url})")
+                logger.debug(f"LLM base URL: {llm_base_url}, Embedding base URL: {embedding_base_url}")
+
+                if url == llm_base_url and chat_auth_token:
+                    auth_token = chat_auth_token
+                    logger.debug(f"Using chat auth token for {url}")
+                elif url == embedding_base_url and embedding_auth_token:
+                    auth_token = embedding_auth_token
+                    logger.debug(f"Using embedding auth token for {url}")
+                else:
+                    logger.debug(f"No matching auth token found for {url}")
+
+                health_status = await model_discovery_service.check_instance_health(url, auth_token=auth_token)
 
                 health_results[url] = {
                     "is_healthy": health_status.is_healthy,
@@ -208,7 +264,7 @@ async def health_check_endpoint(
 async def validate_instance_endpoint(request: InstanceValidationRequest) -> InstanceValidationResponse:
     """
     Validate an Ollama instance with comprehensive capability testing.
-    
+
     Performs deep validation including connectivity, model availability,
     capability detection, and performance assessment.
     """
@@ -218,14 +274,38 @@ async def validate_instance_endpoint(request: InstanceValidationRequest) -> Inst
         # Clean up URL
         instance_url = request.instance_url.rstrip('/')
 
-        # Perform basic validation using the provider service
-        validation_result = await validate_provider_instance("ollama", instance_url)
+        # Get auth tokens from RAG settings
+        from ..services.credential_service import credential_service
+        rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+
+        # Extract configured instance URLs and their auth tokens
+        llm_base_url = (rag_settings.get("LLM_BASE_URL") or "").replace("/v1", "").rstrip("/")
+        embedding_base_url = (rag_settings.get("OLLAMA_EMBEDDING_URL") or "").replace("/v1", "").rstrip("/")
+        chat_auth_token = rag_settings.get("OLLAMA_CHAT_AUTH_TOKEN") or ""
+        embedding_auth_token = rag_settings.get("OLLAMA_EMBEDDING_AUTH_TOKEN") or ""
+
+        # Normalize the request URL for comparison
+        normalized_url = instance_url.replace("/v1", "").rstrip("/")
+
+        # Determine which auth token to use based on URL matching
+        auth_token = None
+        if normalized_url == llm_base_url and chat_auth_token:
+            auth_token = chat_auth_token
+            logger.debug(f"Using chat auth token for validation of {normalized_url}")
+        elif normalized_url == embedding_base_url and embedding_auth_token:
+            auth_token = embedding_auth_token
+            logger.debug(f"Using embedding auth token for validation of {normalized_url}")
+        else:
+            logger.debug(f"No matching auth token found for {normalized_url}")
+
+        # Perform basic validation using the provider service with auth token
+        validation_result = await validate_provider_instance("ollama", instance_url, auth_token=auth_token)
 
         capabilities = {}
         if validation_result["is_available"]:
             try:
-                # Get detailed model information for capability analysis
-                models = await model_discovery_service.discover_models(instance_url)
+                # Get detailed model information for capability analysis with auth token
+                models = await model_discovery_service.discover_models(instance_url, auth_token=auth_token)
 
                 capabilities = {
                     "total_models": len(models),
@@ -525,7 +605,7 @@ async def get_stored_models_endpoint() -> ModelListResponse:
 
         models_data = json.loads(models_setting) if isinstance(models_setting, str) else models_setting
         from datetime import datetime
-        
+
         # Handle both old format (direct list) and new format (object with models key)
         if isinstance(models_data, list):
             # Old format - direct list of models
@@ -539,7 +619,7 @@ async def get_stored_models_endpoint() -> ModelListResponse:
             total_count = models_data.get("total_count", len(models_list))
             instances_checked = models_data.get("instances_checked", 0)
             last_discovery = models_data.get("last_discovery")
-        
+
         # Convert to StoredModelInfo objects, handling missing fields
         stored_models = []
         for model in models_list:
@@ -603,27 +683,27 @@ async def _assess_archon_compatibility_with_testing(model, instance_url: str) ->
     """Assess Archon compatibility for a given model using actual capability testing."""
     model_name = model.name.lower()
     capabilities = getattr(model, 'capabilities', [])
-    
+
     # Test actual model capabilities
     function_calling_supported = await _test_function_calling_capability(model.name, instance_url)
     structured_output_supported = await _test_structured_output_capability(model.name, instance_url)
-    
+
     # Determine compatibility level based on actual test results
     compatibility_level = 'limited'
     features = ['Local Processing']  # All Ollama models support local processing
     limitations = []
-    
+
     # Check for chat capability
     if 'chat' in capabilities:
         features.append('Text Generation')
         features.append('MCP Integration')  # All chat models can integrate with MCP
         features.append('Streaming')  # All Ollama models support streaming
-        
+
         # Add advanced features based on actual testing
         if function_calling_supported:
             features.append('Function Calls')
             compatibility_level = 'full'  # Function calling indicates full support
-        
+
         if structured_output_supported:
             features.append('Structured Output')
             if compatibility_level != 'full':
@@ -631,18 +711,18 @@ async def _assess_archon_compatibility_with_testing(model, instance_url: str) ->
         else:
             if compatibility_level != 'full':  # Only add limitation if not already full support
                 limitations.append('Limited structured output support')
-    
+
     # Add embedding capability
     if 'embedding' in capabilities:
         features.append('High-quality embeddings')
         if compatibility_level == 'limited':
             compatibility_level = 'full'  # Embedding models are considered full support for their purpose
-    
+
     # If no advanced features detected, remain limited
     if not function_calling_supported and not structured_output_supported and 'embedding' not in capabilities:
         compatibility_level = 'limited'
         limitations.append('Compatibility not fully tested')
-    
+
     return {
         'level': compatibility_level,
         'features': features,
@@ -853,12 +933,12 @@ async def _test_function_calling_capability(model_name: str, instance_url: str) 
     try:
         # Import here to avoid circular imports
         from ..services.llm_provider_service import get_llm_client
-        
+
         # Use OpenAI-compatible client for function calling test
         async with get_llm_client(provider="ollama") as client:
             # Set base_url for this specific instance
             client.base_url = f"{instance_url.rstrip('/')}/v1"
-            
+
             # Define a simple test function
             test_function = {
                 "name": "get_weather",
@@ -874,7 +954,7 @@ async def _test_function_calling_capability(model_name: str, instance_url: str) 
                     "required": ["location"]
                 }
             }
-            
+
             # Try to make a function calling request
             response = await client.chat.completions.create(
                 model=model_name,
@@ -883,16 +963,16 @@ async def _test_function_calling_capability(model_name: str, instance_url: str) 
                 max_tokens=50,
                 timeout=10
             )
-            
+
             # Check if the model attempted to use the function
             if response.choices and len(response.choices) > 0:
                 choice = response.choices[0]
                 if hasattr(choice.message, 'tool_calls') and choice.message.tool_calls:
                     logger.info(f"Model {model_name} supports function calling")
                     return True
-            
+
         return False
-        
+
     except Exception as e:
         logger.debug(f"Function calling test failed for {model_name}: {e}")
         return False
@@ -912,24 +992,24 @@ async def _test_structured_output_capability(model_name: str, instance_url: str)
     try:
         # Import here to avoid circular imports
         from ..services.llm_provider_service import get_llm_client
-        
+
         # Use OpenAI-compatible client for structured output test
         async with get_llm_client(provider="ollama") as client:
             # Set base_url for this specific instance
             client.base_url = f"{instance_url.rstrip('/')}/v1"
-            
+
             # Test structured output with JSON format
             response = await client.chat.completions.create(
                 model=model_name,
                 messages=[{
-                    "role": "user", 
+                    "role": "user",
                     "content": "Return a JSON object with the structure: {\"city\": \"Paris\", \"country\": \"France\", \"population\": 2140000}. Only return the JSON, no other text."
                 }],
                 max_tokens=100,
                 timeout=10,
                 temperature=0.1  # Low temperature for more consistent output
             )
-            
+
             if response.choices and len(response.choices) > 0:
                 content = response.choices[0].message.content
                 if content:
@@ -946,9 +1026,9 @@ async def _test_structured_output_capability(model_name: str, instance_url: str)
                         if '{' in content and '}' in content and '"' in content:
                             logger.info(f"Model {model_name} has partial structured output support")
                             return True
-            
+
         return False
-        
+
     except Exception as e:
         logger.debug(f"Structured output test failed for {model_name}: {e}")
         return False
@@ -1058,7 +1138,7 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
                                 features = ['Local Processing', 'Text Generation', 'Chat Support']
                                 limitations = []
                                 compatibility_level = 'full'  # Assume full for now
-                                
+
                                 compatibility = {
                                     'level': compatibility_level,
                                     'features': features,
@@ -1111,7 +1191,7 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
             "instances_checked": instances_checked,
             "total_count": len(stored_models)
         }
-        
+
         # Debug log to check what's in stored_models
         embedding_models_with_dims = [m for m in stored_models if m.get('model_type') == 'embedding' and m.get('embedding_dimensions')]
         logger.info(f"Storing {len(embedding_models_with_dims)} embedding models with dimensions: {[(m['name'], m.get('embedding_dimensions')) for m in embedding_models_with_dims]}")
@@ -1138,10 +1218,10 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
         embedding_models = []
         host_status = {}
         unique_model_names = set()
-        
+
         for model in stored_models:
             unique_model_names.add(model['name'])
-            
+
             # Build host status
             host = model['host'].replace('/v1', '').rstrip('/')
             if host not in host_status:
@@ -1151,7 +1231,7 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
                     "instance_url": model['host']
                 }
             host_status[host]["models_count"] += 1
-            
+
             # Categorize models
             if model['model_type'] == 'embedding':
                 embedding_models.append({
@@ -1166,7 +1246,7 @@ async def discover_models_with_real_details(request: ModelDiscoveryAndStoreReque
                     "instance_url": model['host'],
                     "size": model.get('size_mb', 0) * 1024 * 1024 if model.get('size_mb') else 0
                 })
-        
+
         return ModelDiscoveryResponse(
             total_models=len(stored_models),
             chat_models=chat_models,
@@ -1238,13 +1318,13 @@ async def test_model_capabilities_endpoint(request: ModelCapabilityTestRequest) 
     """
     import time
     start_time = time.time()
-    
+
     try:
         logger.info(f"Testing capabilities for model {request.model_name} on {request.instance_url}")
-        
+
         test_results = {}
         errors = []
-        
+
         # Test function calling if requested
         if request.test_function_calling:
             try:
@@ -1260,7 +1340,7 @@ async def test_model_capabilities_endpoint(request: ModelCapabilityTestRequest) 
                 error_msg = f"Function calling test failed: {str(e)}"
                 errors.append(error_msg)
                 test_results["function_calling"] = {"supported": False, "error": error_msg}
-        
+
         # Test structured output if requested
         if request.test_structured_output:
             try:
@@ -1276,34 +1356,34 @@ async def test_model_capabilities_endpoint(request: ModelCapabilityTestRequest) 
                 error_msg = f"Structured output test failed: {str(e)}"
                 errors.append(error_msg)
                 test_results["structured_output"] = {"supported": False, "error": error_msg}
-        
+
         # Assess compatibility based on test results
         compatibility_level = 'limited'
         features = ['Local Processing', 'Text Generation', 'MCP Integration', 'Streaming']
         limitations = []
-        
+
         # Determine compatibility level based on test results
         function_calling_works = test_results.get("function_calling", {}).get("supported", False)
         structured_output_works = test_results.get("structured_output", {}).get("supported", False)
-        
+
         if function_calling_works:
             features.append('Function Calls')
             compatibility_level = 'full'
-        
+
         if structured_output_works:
             features.append('Structured Output')
             if compatibility_level == 'limited':
                 compatibility_level = 'partial'
-        
+
         # Add limitations based on what doesn't work
         if not function_calling_works:
             limitations.append('No function calling support detected')
         if not structured_output_works:
             limitations.append('Limited structured output support')
-        
+
         if compatibility_level == 'limited':
             limitations.append('Basic text generation only')
-        
+
         compatibility_assessment = {
             'level': compatibility_level,
             'features': features,
@@ -1311,11 +1391,11 @@ async def test_model_capabilities_endpoint(request: ModelCapabilityTestRequest) 
             'testing_method': 'Real-time API testing',
             'confidence': 'High' if not errors else 'Medium'
         }
-        
+
         duration = time.time() - start_time
-        
+
         logger.info(f"Capability testing complete for {request.model_name}: {compatibility_level} support detected in {duration:.2f}s")
-        
+
         return ModelCapabilityTestResponse(
             model_name=request.model_name,
             instance_url=request.instance_url,
@@ -1324,7 +1404,7 @@ async def test_model_capabilities_endpoint(request: ModelCapabilityTestRequest) 
             test_duration_seconds=duration,
             errors=errors
         )
-        
+
     except Exception as e:
         duration = time.time() - start_time
         logger.error(f"Error testing model capabilities: {e}")

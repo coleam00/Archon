@@ -217,19 +217,19 @@ class GitWorktreeSandbox:
                 self.sandbox_identifier,
                 self._logger
             )
-            
+
             if not worktree_success:
                 self._logger.error(
                     "worktree_sandbox_cleanup_failed",
                     error=error
                 )
-            
+
             # Delete the temporary branch if it was created
             # Always try to delete branch even if worktree removal failed,
             # as the branch may still exist and need cleanup
             if self.temp_branch:
                 await self._delete_temp_branch()
-            
+
             # Only log success if worktree removal succeeded
             if worktree_success:
                 self._logger.info("worktree_sandbox_cleanup_completed")

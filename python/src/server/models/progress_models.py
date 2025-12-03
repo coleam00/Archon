@@ -69,7 +69,7 @@ class CrawlProgressResponse(BaseProgressResponse):
     """Progress response for crawl operations."""
 
     status: Literal[
-        "starting", "analyzing", "crawling", "processing",
+        "starting", "discovery", "analyzing", "crawling", "processing",
         "source_creation", "document_storage", "code_extraction", "code_storage",
         "finalization", "completed", "failed", "cancelled", "stopping", "error"
     ]

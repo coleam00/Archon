@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Wifi, WifiOff } from 'lucide-react';
+import { X } from 'lucide-react';
 import { DisconnectScreen } from './animations/DisconnectScreenAnimations';
 import { NeonButton } from './ui/NeonButton';
 

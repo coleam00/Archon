@@ -35,6 +35,8 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
   const [newInstanceUrl, setNewInstanceUrl] = useState('');
   const [newInstanceName, setNewInstanceName] = useState('');
   const [newInstanceType, setNewInstanceType] = useState<'chat' | 'embedding'>('chat');
+  const [newInstanceUseAuth, setNewInstanceUseAuth] = useState(false);
+  const [newInstanceAuthToken, setNewInstanceAuthToken] = useState('');
   const [showAddInstance, setShowAddInstance] = useState(false);
   const [discoveringModels, setDiscoveringModels] = useState(false);
   const [modelDiscoveryResults, setModelDiscoveryResults] = useState<any>(null);
@@ -233,7 +235,8 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
       isEnabled: true,
       isPrimary: false,
       loadBalancingWeight: 100,
-      instanceType: separateHosts ? newInstanceType : 'both'
+      instanceType: separateHosts ? newInstanceType : 'both',
+      ...(newInstanceUseAuth && newInstanceAuthToken.trim() && { authToken: newInstanceAuthToken.trim() })
     };
 
     try {
@@ -246,6 +249,8 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
       setNewInstanceUrl('');
       setNewInstanceName('');
       setNewInstanceType('chat');
+      setNewInstanceUseAuth(false);
+      setNewInstanceAuthToken('');
       setShowAddInstance(false);
       
       showToast(`Added new Ollama instance: ${newInstance.name}`, 'success');
@@ -703,8 +708,8 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
                     size="sm"
                     onClick={() => setNewInstanceType('chat')}
                     className={cn(
-                      newInstanceType === 'chat' 
-                        ? 'bg-blue-600 text-white' 
+                      newInstanceType === 'chat'
+                        ? 'bg-blue-600 text-white'
                         : 'text-blue-600 border-blue-600'
                     )}
                   >
@@ -715,8 +720,8 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
                     size="sm"
                     onClick={() => setNewInstanceType('embedding')}
                     className={cn(
-                      newInstanceType === 'embedding' 
-                        ? 'bg-blue-600 text-white' 
+                      newInstanceType === 'embedding'
+                        ? 'bg-blue-600 text-white'
                         : 'text-blue-600 border-blue-600'
                     )}
                   >
@@ -725,7 +730,29 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
                 </div>
               </div>
             )}
-            
+
+            {/* Authentication Settings */}
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm font-medium text-blue-900 dark:text-blue-100 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newInstanceUseAuth}
+                  onChange={(e) => setNewInstanceUseAuth(e.target.checked)}
+                  className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                />
+                Use Authentication
+              </label>
+              {newInstanceUseAuth && (
+                <Input
+                  type="password"
+                  placeholder="Auth Token"
+                  value={newInstanceAuthToken}
+                  onChange={(e) => setNewInstanceAuthToken(e.target.value)}
+                  className="text-sm"
+                />
+              )}
+            </div>
+
             <div className="flex gap-2">
               <Button
                 size="sm"
@@ -742,6 +769,8 @@ const OllamaConfigurationPanel: React.FC<OllamaConfigurationPanelProps> = ({
                   setNewInstanceUrl('');
                   setNewInstanceName('');
                   setNewInstanceType('chat');
+                  setNewInstanceUseAuth(false);
+                  setNewInstanceAuthToken('');
                 }}
               >
                 Cancel

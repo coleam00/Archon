@@ -102,7 +102,7 @@ class EmbeddingAPIError(EmbeddingError):
 class EmbeddingAuthenticationError(EmbeddingError):
     """
     Raised when API authentication fails (invalid or expired API key).
-    
+
     This is a CRITICAL error that should stop the entire process
     as continuing would be pointless without valid API access.
     """

@@ -2,7 +2,6 @@
 Tests for ProgressMapper
 """
 
-import pytest
 
 from src.server.services.crawling.progress_mapper import ProgressMapper
 
@@ -126,13 +125,13 @@ class TestProgressMapper:
         assert mapper.STAGE_RANGES["finalization"] == (90, 100)
         assert mapper.STAGE_RANGES["completed"] == (100, 100)
 
-        # Upload-specific stages
-        assert mapper.STAGE_RANGES["reading"] == (0, 5)
-        assert mapper.STAGE_RANGES["text_extraction"] == (5, 10)
-        assert mapper.STAGE_RANGES["chunking"] == (10, 15)
+        # Upload-specific stages - rebalanced for PDF page progress visibility
+        assert mapper.STAGE_RANGES["reading"] == (0, 2)
+        assert mapper.STAGE_RANGES["text_extraction"] == (2, 20)  # Expanded for page-by-page progress
+        assert mapper.STAGE_RANGES["chunking"] == (20, 25)
         # Note: source_creation is shared between crawl and upload operations at (20, 25)
-        assert mapper.STAGE_RANGES["summarizing"] == (25, 35)
-        assert mapper.STAGE_RANGES["storing"] == (35, 100)
+        assert mapper.STAGE_RANGES["summarizing"] == (25, 30)
+        assert mapper.STAGE_RANGES["storing"] == (30, 100)
 
     def test_calculate_stage_progress(self):
         """Test calculating percentage within a stage"""

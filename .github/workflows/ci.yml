@@ -144,11 +144,62 @@ jobs:
           name: backend-coverage
           token: ${{ secrets.CODECOV_TOKEN }}
 
-  # Job 3: Docker Build Test
+  # Job 3: Multi-Platform Server Build (OCR Dependencies)
+  # Tests that tesseract-ocr and poppler-utils install correctly on both architectures
+  platform-compatibility:
+    name: Platform Compatibility (Server + OCR)
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux/amd64
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            arch: ARM64
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build server image (${{ matrix.arch }})
+        run: |
+          docker build \
+            --file python/Dockerfile.server \
+            --tag archon-server:${{ matrix.arch }} \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            python/
+
+      - name: Verify OCR dependencies (${{ matrix.arch }})
+        run: |
+          echo "🔍 Testing OCR dependencies on ${{ matrix.arch }}..."
+
+          # Test tesseract is installed and working
+          docker run --rm archon-server:${{ matrix.arch }} tesseract --version
+
+          # Test poppler-utils (pdftoppm) is installed
+          docker run --rm archon-server:${{ matrix.arch }} pdftoppm -v
+
+          # Test Python imports work
+          docker run --rm archon-server:${{ matrix.arch }} python -c "
+          import pytesseract
+          import pdf2image
+          print('✅ pytesseract imported successfully')
+          print('✅ pdf2image imported successfully')
+          print(f'Tesseract version: {pytesseract.get_tesseract_version()}')
+          "
+
+          echo "✅ All OCR dependencies verified on ${{ matrix.arch }}"
+
+  # Job 4: Docker Build Test (all services)
   docker-build-test:
     name: Docker Build Tests
     runs-on: ubuntu-latest
-    
+
     strategy:
       matrix:
         service: [server, mcp, agents, frontend]
@@ -241,11 +292,11 @@ jobs:
           docker stop test-${{ matrix.service }} || true
           docker rm test-${{ matrix.service }} || true
 
-  # Job 4: Test Results Summary
+  # Job 5: Test Results Summary
   test-summary:
     name: Test Results Summary
     runs-on: ubuntu-latest
-    needs: [frontend-tests, backend-tests, docker-build-test]
+    needs: [frontend-tests, backend-tests, platform-compatibility, docker-build-test]
     if: always()
 
     steps:
@@ -281,6 +332,13 @@ jobs:
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
           
+          # Platform Compatibility Results
+          echo "## 🖥️ Platform Compatibility" >> $GITHUB_STEP_SUMMARY
+          echo "Server image built and OCR dependencies verified on:" >> $GITHUB_STEP_SUMMARY
+          echo "- **x86_64** (ubuntu-latest)" >> $GITHUB_STEP_SUMMARY
+          echo "- **ARM64** (ubuntu-24.04-arm)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
           # Docker Build Results
           echo "## 🐳 Docker Build Tests" >> $GITHUB_STEP_SUMMARY
           echo "Docker build tests completed - check individual job results" >> $GITHUB_STEP_SUMMARY

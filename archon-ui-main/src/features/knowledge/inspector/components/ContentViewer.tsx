@@ -39,16 +39,13 @@ export const ContentViewer: React.FC<ContentViewerProps> = ({ selectedItem, onCo
   // Highlight code with Prism
   const highlightCode = (code: string, language?: string): string => {
     try {
-      // Escape HTML entities FIRST per Prism documentation requirement
-      // Prism expects pre-escaped input to prevent XSS
-      const escaped = code.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
       const lang = language?.toLowerCase() || "javascript";
       const grammar = Prism.languages[lang] || Prism.languages.javascript;
-      return Prism.highlight(escaped, grammar, lang);
+      // Prism handles escaping internally - pass raw code directly
+      return Prism.highlight(code, grammar, lang);
     } catch (error) {
       console.error("Prism highlighting failed:", error);
-      // Return escaped code on error
+      // Return escaped code on error (manual escaping for safety)
       return code.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
   };
