@@ -280,6 +280,23 @@ class DocumentStorageOperations:
         chunk_count = len(all_contents)
         chunks_stored = storage_stats.get("chunks_stored", 0)
 
+        # Update chunk_count on each page after chunks are stored
+        if url_to_page_id and chunks_stored > 0:
+            # Count chunks per page_id from metadata
+            page_chunk_counts: dict[str, int] = {}
+            for metadata in all_metadatas:
+                page_id = metadata.get("page_id")
+                if page_id:
+                    page_chunk_counts[page_id] = page_chunk_counts.get(page_id, 0) + 1
+
+            # Update each page with its chunk count
+            for page_id, count in page_chunk_counts.items():
+                await page_storage_ops.update_page_chunk_count(page_id, count)
+
+            safe_logfire_info(
+                f"Updated chunk_count for {len(page_chunk_counts)} pages"
+            )
+
         return {
             'chunk_count': chunk_count,
             'chunks_stored': chunks_stored,

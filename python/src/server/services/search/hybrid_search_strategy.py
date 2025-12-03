@@ -2,7 +2,7 @@
 Hybrid Search Strategy
 
 Implements hybrid search combining vector similarity search with full-text search
-using PostgreSQL's ts_vector for improved recall and precision in document and 
+using PostgreSQL's ts_vector for improved recall and precision in document and
 code example retrieval.
 
 Strategy combines:
@@ -17,6 +17,7 @@ from supabase import Client
 
 from ...config.logfire_config import get_logger, safe_span
 from ..embeddings.embedding_service import create_embedding
+from .base_search_strategy import SUPPORTED_DIMENSIONS
 
 logger = get_logger(__name__)
 
@@ -28,6 +29,27 @@ class HybridSearchStrategy:
         self.supabase_client = supabase_client
         self.base_strategy = base_strategy
 
+    def _get_embedding_dimension(self, query_embedding: list[float]) -> int:
+        """
+        Detect the embedding dimension and validate it's supported.
+
+        Args:
+            query_embedding: The embedding vector
+
+        Returns:
+            The dimension of the embedding
+
+        Raises:
+            ValueError: If the dimension is not supported
+        """
+        dimension = len(query_embedding)
+        if dimension not in SUPPORTED_DIMENSIONS:
+            raise ValueError(
+                f"Unsupported embedding dimension: {dimension}. "
+                f"Supported dimensions are: {sorted(SUPPORTED_DIMENSIONS)}"
+            )
+        return dimension
+
     async def search_documents_hybrid(
         self,
         query: str,
@@ -36,7 +58,7 @@ class HybridSearchStrategy:
         filter_metadata: dict | None = None,
     ) -> list[dict[str, Any]]:
         """
-        Perform hybrid search on archon_crawled_pages table using the PostgreSQL 
+        Perform hybrid search on archon_crawled_pages table using the PostgreSQL
         hybrid search function that combines vector and full-text search.
 
         Args:
@@ -50,15 +72,24 @@ class HybridSearchStrategy:
         """
         with safe_span("hybrid_search_documents") as span:
             try:
+                # Detect embedding dimension
+                embedding_dimension = self._get_embedding_dimension(query_embedding)
+                span.set_attribute("embedding_dimension", embedding_dimension)
+
                 # Prepare filter and source parameters
                 filter_json = filter_metadata or {}
                 source_filter = filter_json.pop("source", None) if "source" in filter_json else None
 
-                # Call the hybrid search PostgreSQL function
+                logger.debug(
+                    f"Using hybrid_search_archon_crawled_pages_multi with dimension={embedding_dimension}"
+                )
+
+                # Call the multi-dimensional hybrid search PostgreSQL function
                 response = self.supabase_client.rpc(
-                    "hybrid_search_archon_crawled_pages",
+                    "hybrid_search_archon_crawled_pages_multi",
                     {
                         "query_embedding": query_embedding,
+                        "embedding_dimension": embedding_dimension,
                         "query_text": query,
                         "match_count": match_count,
                         "filter": filter_json,
@@ -113,7 +144,7 @@ class HybridSearchStrategy:
         source_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """
-        Perform hybrid search on archon_code_examples table using the PostgreSQL 
+        Perform hybrid search on archon_code_examples table using the PostgreSQL
         hybrid search function that combines vector and full-text search.
 
         Args:
@@ -134,6 +165,10 @@ class HybridSearchStrategy:
                     logger.error("Failed to create embedding for code example query")
                     return []
 
+                # Detect embedding dimension
+                embedding_dimension = self._get_embedding_dimension(query_embedding)
+                span.set_attribute("embedding_dimension", embedding_dimension)
+
                 # Prepare filter and source parameters
                 filter_json = filter_metadata or {}
                 # Use source_id parameter if provided, otherwise check filter_metadata
@@ -141,11 +176,16 @@ class HybridSearchStrategy:
                 if not final_source_filter and "source" in filter_json:
                     final_source_filter = filter_json.pop("source")
 
-                # Call the hybrid search PostgreSQL function
+                logger.debug(
+                    f"Using hybrid_search_archon_code_examples_multi with dimension={embedding_dimension}"
+                )
+
+                # Call the multi-dimensional hybrid search PostgreSQL function
                 response = self.supabase_client.rpc(
-                    "hybrid_search_archon_code_examples",
+                    "hybrid_search_archon_code_examples_multi",
                     {
                         "query_embedding": query_embedding,
+                        "embedding_dimension": embedding_dimension,
                         "query_text": query,
                         "match_count": match_count,
                         "filter": filter_json,

@@ -357,5 +357,76 @@ def register_rag_tools(mcp: FastMCP):
             logger.error(f"Error reading page: {e}")
             return json.dumps({"success": False, "page": None, "error": str(e)}, indent=2)
 
+    @mcp.tool()
+    async def rag_recalculate_chunk_counts(ctx: Context, source_id: str) -> str:
+        """
+        Recalculate chunk_count for all pages in a source.
+
+        Use this to fix pages where chunk_count shows 0 but chunks actually exist.
+        This counts actual chunks in the database and updates the page metadata.
+
+        Args:
+            source_id: The source ID to recalculate (from rag_get_available_sources())
+
+        Returns:
+            JSON string with structure:
+            - success: bool - Operation success status
+            - source_id: str - The source ID that was recalculated
+            - pages_updated: int - Number of pages that were updated
+            - updated_counts: dict - Mapping of page_id to new chunk_count
+            - message: str - Summary message
+            - error: str|null - Error description if success=false
+        """
+        try:
+            api_url = get_api_url()
+            timeout = httpx.Timeout(60.0, connect=5.0)  # Longer timeout for bulk operation
+
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    urljoin(api_url, "/api/pages/recalculate-chunk-counts"),
+                    params={"source_id": source_id}
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    return json.dumps(
+                        {
+                            "success": True,
+                            "source_id": result.get("source_id", source_id),
+                            "pages_updated": result.get("pages_updated", 0),
+                            "updated_counts": result.get("updated_counts", {}),
+                            "message": result.get("message", ""),
+                            "error": None,
+                        },
+                        indent=2,
+                    )
+                else:
+                    error_detail = response.text
+                    return json.dumps(
+                        {
+                            "success": False,
+                            "source_id": source_id,
+                            "pages_updated": 0,
+                            "updated_counts": {},
+                            "message": "",
+                            "error": f"HTTP {response.status_code}: {error_detail}",
+                        },
+                        indent=2,
+                    )
+
+        except Exception as e:
+            logger.error(f"Error recalculating chunk counts for source {source_id}: {e}")
+            return json.dumps(
+                {
+                    "success": False,
+                    "source_id": source_id,
+                    "pages_updated": 0,
+                    "updated_counts": {},
+                    "message": "",
+                    "error": str(e),
+                },
+                indent=2,
+            )
+
     # Log successful registration
     logger.info("✓ RAG tools registered (HTTP-based version)")
