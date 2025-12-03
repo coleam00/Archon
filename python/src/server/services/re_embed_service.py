@@ -12,8 +12,9 @@ from typing import Any
 from ..config.logfire_config import get_logger, safe_logfire_info, safe_logfire_error
 from ..utils import get_supabase_client
 from ..utils.progress.progress_tracker import ProgressTracker
-from .embeddings.embedding_service import create_embeddings_batch
+from .embeddings.embedding_service import create_embeddings_batch, _maybe_await
 from .llm_provider_service import get_embedding_model
+from . import credential_service
 
 
 logger = get_logger(__name__)
@@ -27,6 +28,19 @@ class ReEmbedService:
 
     def __init__(self, supabase_client=None):
         self.client = supabase_client or get_supabase_client()
+
+    async def _get_embedding_batch_size(self) -> int:
+        """Load embedding batch size from settings (same as embedding_service uses)."""
+        try:
+            rag_settings = await _maybe_await(
+                credential_service.get_credentials_by_category("rag_strategy")
+            )
+            batch_size = int(rag_settings.get("EMBEDDING_BATCH_SIZE", "100"))
+            # Clamp to sane values (matching UI limits: 20-200)
+            return max(20, min(200, batch_size))
+        except Exception as e:
+            logger.warning(f"Failed to load EMBEDDING_BATCH_SIZE from settings: {e}, using default 100")
+            return 100
 
     async def start_re_embed(self, provider: str | None = None) -> dict[str, Any]:
         """
@@ -54,6 +68,10 @@ class ReEmbedService:
             "progress_id": progress_id,
             "message": "Re-embedding started"
         }
+
+    def _is_cancelled(self, progress_id: str) -> bool:
+        """Check if this re-embed operation has been cancelled."""
+        return progress_id not in active_re_embed_tasks
 
     async def _perform_re_embed(
         self,
@@ -117,14 +135,16 @@ class ReEmbedService:
                 log=f"Processing {total_chunks} chunks..."
             )
 
-            # Process in batches
-            embedding_batch_size = 50
+            # Process in batches - use configured batch size from settings
+            embedding_batch_size = await self._get_embedding_batch_size()
+            safe_logfire_info(f"Re-embed using batch size: {embedding_batch_size}")
             processed = 0
             failed = 0
 
             for batch_start in range(0, total_chunks, embedding_batch_size):
-                # Check for cancellation
-                if progress_id not in active_re_embed_tasks:
+                # Check for cancellation before each batch
+                if self._is_cancelled(progress_id):
+                    safe_logfire_info(f"Re-embed cancelled by user | progress_id={progress_id}")
                     await tracker.update(
                         status="cancelled",
                         progress=int(15 + (processed / total_chunks) * 80),
@@ -145,6 +165,16 @@ class ReEmbedService:
                         provider=provider
                     )
 
+                    # Check for cancellation after embedding API call
+                    if self._is_cancelled(progress_id):
+                        safe_logfire_info(f"Re-embed cancelled after embedding | progress_id={progress_id}")
+                        await tracker.update(
+                            status="cancelled",
+                            progress=int(15 + (processed / total_chunks) * 80),
+                            log="Re-embedding cancelled by user"
+                        )
+                        return
+
                     if result.has_failures:
                         failed += result.failure_count
                         safe_logfire_error(
@@ -154,6 +184,16 @@ class ReEmbedService:
 
                     # Update database with new embeddings
                     for idx, (embedding, text) in enumerate(zip(result.embeddings, result.texts_processed, strict=False)):
+                        # Check for cancellation during DB updates
+                        if self._is_cancelled(progress_id):
+                            safe_logfire_info(f"Re-embed cancelled during DB update | progress_id={progress_id}")
+                            await tracker.update(
+                                status="cancelled",
+                                progress=int(15 + (processed / total_chunks) * 80),
+                                log="Re-embedding cancelled by user"
+                            )
+                            return
+
                         # Find the chunk that matches this text
                         chunk_idx = None
                         for i, chunk in enumerate(batch_chunks):
@@ -200,6 +240,15 @@ class ReEmbedService:
 
                     processed += len(batch_chunks)
 
+                except asyncio.CancelledError:
+                    # Handle asyncio cancellation
+                    safe_logfire_info(f"Re-embed task cancelled | progress_id={progress_id}")
+                    await tracker.update(
+                        status="cancelled",
+                        progress=int(15 + (processed / total_chunks) * 80) if total_chunks > 0 else 15,
+                        log="Re-embedding cancelled by user"
+                    )
+                    raise  # Re-raise to exit the task
                 except Exception as e:
                     safe_logfire_error(f"Re-embed batch error: {e}")
                     failed += len(batch_chunks)
@@ -215,7 +264,7 @@ class ReEmbedService:
                     chunks_failed=failed
                 )
 
-                # Small delay to prevent overwhelming
+                # Small delay to prevent overwhelming and allow cancellation check
                 await asyncio.sleep(0.1)
 
             # Complete
@@ -241,16 +290,30 @@ class ReEmbedService:
                 del active_re_embed_tasks[progress_id]
 
     async def stop_re_embed(self, progress_id: str) -> bool:
-        """Stop a running re-embed operation."""
+        """Stop a running re-embed operation.
+
+        The cancellation works by:
+        1. First removing the progress_id from active_re_embed_tasks (signals cancellation)
+        2. Then cancelling the asyncio task
+        3. The _perform_re_embed function checks _is_cancelled() frequently
+        """
         if progress_id in active_re_embed_tasks:
             task = active_re_embed_tasks[progress_id]
+            # First remove from dictionary - this signals cancellation to the running task
+            del active_re_embed_tasks[progress_id]
+            safe_logfire_info(f"Re-embed stop requested | progress_id={progress_id}")
+
             if not task.done():
+                # Cancel the asyncio task
                 task.cancel()
                 try:
-                    await asyncio.wait_for(task, timeout=2.0)
-                except (TimeoutError, asyncio.CancelledError):
+                    # Wait for task to finish (it should exit quickly after seeing cancellation)
+                    await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+                except (TimeoutError, asyncio.CancelledError, Exception):
+                    # Task may already be cancelled or finished
                     pass
-            del active_re_embed_tasks[progress_id]
+
+            safe_logfire_info(f"Re-embed stopped | progress_id={progress_id}")
             return True
         return False
 
