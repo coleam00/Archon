@@ -238,46 +238,59 @@ async def add_documents_to_supabase(
                     contextual_batch_size = 50
 
                 try:
-                    # Process in smaller sub-batches to avoid token limits
+                    # Process in smaller sub-batches with PARALLEL execution
+                    # Use semaphore to limit concurrent API calls to max_workers
+                    semaphore = asyncio.Semaphore(max_workers)
+
+                    async def process_sub_batch(ctx_i: int) -> list[tuple[str, bool]]:
+                        """Process a single sub-batch with semaphore limiting."""
+                        async with semaphore:
+                            # Check for cancellation
+                            if cancellation_check:
+                                try:
+                                    cancellation_check()
+                                except asyncio.CancelledError:
+                                    raise
+
+                            ctx_end = min(ctx_i + contextual_batch_size, len(batch_contents))
+                            sub_batch_contents = batch_contents[ctx_i:ctx_end]
+                            sub_batch_docs = full_documents[ctx_i:ctx_end]
+
+                            return await generate_contextual_embeddings_batch(
+                                sub_batch_docs, sub_batch_contents
+                            )
+
+                    # Create tasks for all sub-batches
+                    sub_batch_starts = list(range(0, len(batch_contents), contextual_batch_size))
+                    tasks = [process_sub_batch(ctx_i) for ctx_i in sub_batch_starts]
+
+                    # Execute all sub-batches in parallel (limited by semaphore)
+                    all_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                    # Flatten results and track successes
                     contextual_contents = []
                     successful_count = 0
+                    chunk_idx = 0
 
-                    for ctx_i in range(0, len(batch_contents), contextual_batch_size):
-                        # Check for cancellation before each contextual sub-batch
-                        if cancellation_check:
-                            try:
-                                cancellation_check()
-                            except asyncio.CancelledError:
-                                if progress_callback:
-                                    await progress_callback(
-                                        "cancelled",
-                                        99,
-                                        "Storage cancelled during contextual embedding",
-                                        current_batch=batch_num,
-                                        total_batches=total_batches
-                                    )
-                                raise
-
-                        ctx_end = min(ctx_i + contextual_batch_size, len(batch_contents))
-
-                        sub_batch_contents = batch_contents[ctx_i:ctx_end]
-                        sub_batch_docs = full_documents[ctx_i:ctx_end]
-
-                        # Process sub-batch with a single API call
-                        sub_results = await generate_contextual_embeddings_batch(
-                            sub_batch_docs, sub_batch_contents
-                        )
-
-                        # Extract results from this sub-batch
-                        for idx, (contextual_text, success) in enumerate(sub_results):
-                            contextual_contents.append(contextual_text)
-                            if success:
-                                original_idx = ctx_i + idx
-                                batch_metadatas[original_idx]["contextual_embedding"] = True
-                                successful_count += 1
+                    for batch_idx, sub_results in enumerate(all_results):
+                        if isinstance(sub_results, Exception):
+                            # If a sub-batch failed, use original content
+                            ctx_i = sub_batch_starts[batch_idx]
+                            ctx_end = min(ctx_i + contextual_batch_size, len(batch_contents))
+                            for j in range(ctx_i, ctx_end):
+                                contextual_contents.append(batch_contents[j])
+                            search_logger.warning(f"Sub-batch {batch_idx} failed: {sub_results}")
+                        else:
+                            for idx, (contextual_text, success) in enumerate(sub_results):
+                                contextual_contents.append(contextual_text)
+                                if success:
+                                    original_idx = sub_batch_starts[batch_idx] + idx
+                                    batch_metadatas[original_idx]["contextual_embedding"] = True
+                                    successful_count += 1
 
                     search_logger.info(
-                        f"Batch {batch_num}: Generated {successful_count}/{len(batch_contents)} contextual embeddings using batch API (sub-batch size: {contextual_batch_size})"
+                        f"Batch {batch_num}: Generated {successful_count}/{len(batch_contents)} contextual embeddings "
+                        f"using PARALLEL batch API (sub-batch size: {contextual_batch_size}, workers: {max_workers})"
                     )
 
                 except Exception as e:

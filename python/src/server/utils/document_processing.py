@@ -11,6 +11,13 @@ import io
 
 # Import document processing libraries with availability checks
 try:
+    import pymupdf4llm
+
+    PYMUPDF4LLM_AVAILABLE = True
+except ImportError:
+    PYMUPDF4LLM_AVAILABLE = False
+
+try:
     import PyPDF2
 
     PYPDF2_AVAILABLE = True
@@ -32,6 +39,7 @@ except ImportError:
     DOCX_AVAILABLE = False
 
 from ..config.logfire_config import get_logger, logfire
+from .ocr_processing import is_ocr_available, extract_text_with_ocr
 
 logger = get_logger(__name__)
 
@@ -223,24 +231,51 @@ def extract_text_from_document(file_content: bytes, filename: str, content_type:
 
 def extract_text_from_pdf(file_content: bytes) -> str:
     """
-    Extract text from PDF using both PyPDF2 and pdfplumber for best results.
+    Extract text from PDF with Markdown structure preservation.
+
+    Uses pymupdf4llm as primary (best word separation and Markdown output),
+    falls back to pdfplumber, then PyPDF2.
 
     Args:
         file_content: Raw PDF bytes
 
     Returns:
-        Extracted text content
+        Extracted text content (Markdown format when possible)
     """
-    if not PDFPLUMBER_AVAILABLE and not PYPDF2_AVAILABLE:
+    if not PYMUPDF4LLM_AVAILABLE and not PDFPLUMBER_AVAILABLE and not PYPDF2_AVAILABLE:
         raise Exception(
-            "No PDF processing libraries available. Please install pdfplumber and PyPDF2."
+            "No PDF processing libraries available. Install pymupdf4llm, pdfplumber, or PyPDF2."
         )
 
-    text_content = []
+    # Primary: pymupdf4llm (best quality - proper word separation and Markdown)
+    if PYMUPDF4LLM_AVAILABLE:
+        try:
+            import tempfile
+            import os
 
-    # First try with pdfplumber (better for complex layouts)
+            # pymupdf4llm requires a file path, so write to temp file
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                tmp.write(file_content)
+                tmp_path = tmp.name
+
+            try:
+                markdown_text = pymupdf4llm.to_markdown(tmp_path)
+
+                if markdown_text and len(markdown_text.strip()) > 100:
+                    logger.info(f"PDF extracted with pymupdf4llm: {len(markdown_text)} chars")
+                    return markdown_text
+                else:
+                    logfire.warning("pymupdf4llm returned insufficient text, trying fallback")
+            finally:
+                os.unlink(tmp_path)
+
+        except Exception as e:
+            logfire.warning(f"pymupdf4llm extraction failed: {e}, trying pdfplumber")
+
+    # Fallback 1: pdfplumber
     if PDFPLUMBER_AVAILABLE:
         try:
+            text_content = []
             with pdfplumber.open(io.BytesIO(file_content)) as pdf:
                 for page_num, page in enumerate(pdf.pages):
                     try:
@@ -251,29 +286,15 @@ def extract_text_from_pdf(file_content: bytes) -> str:
                         logfire.warning(f"pdfplumber failed on page {page_num + 1}: {e}")
                         continue
 
-            # If pdfplumber got good results, use them
             if text_content and len("\n".join(text_content).strip()) > 100:
                 combined_text = "\n\n".join(text_content)
-                logger.info(f"🔍 PDF DEBUG: Extracted {len(text_content)} pages, total length: {len(combined_text)}")
-                logger.info(f"🔍 PDF DEBUG: First 500 chars: {repr(combined_text[:500])}")
-                
-                # Check for backticks before and after processing
-                backtick_count_before = combined_text.count("```")
-                logger.info(f"🔍 PDF DEBUG: Backticks found before processing: {backtick_count_before}")
-                
-                processed_text = _preserve_code_blocks_across_pages(combined_text)
-                backtick_count_after = processed_text.count("```")
-                logger.info(f"🔍 PDF DEBUG: Backticks found after processing: {backtick_count_after}")
-                
-                if backtick_count_after > 0:
-                    logger.info(f"🔍 PDF DEBUG: Sample after processing: {repr(processed_text[:1000])}")
-                
-                return processed_text
+                logger.info(f"PDF extracted with pdfplumber: {len(combined_text)} chars")
+                return _preserve_code_blocks_across_pages(combined_text)
 
         except Exception as e:
             logfire.warning(f"pdfplumber extraction failed: {e}, trying PyPDF2")
 
-    # Fallback to PyPDF2
+    # Fallback 2: PyPDF2
     if PYPDF2_AVAILABLE:
         try:
             text_content = []
@@ -290,18 +311,31 @@ def extract_text_from_pdf(file_content: bytes) -> str:
 
             if text_content:
                 combined_text = "\n\n".join(text_content)
+                logger.info(f"PDF extracted with PyPDF2: {len(combined_text)} chars")
                 return _preserve_code_blocks_across_pages(combined_text)
-            else:
-                raise ValueError(
-                    "No text extracted from PDF: file may be empty, images-only, "
-                    "or scanned document without OCR"
-                )
+            # If no text, fall through to OCR
 
         except Exception as e:
-            raise Exception("PyPDF2 failed to extract text") from e
+            logfire.warning(f"PyPDF2 extraction failed: {e}, trying OCR")
 
-    # If we get here, no libraries worked
-    raise Exception("Failed to extract text from PDF - no working PDF libraries available")
+    # Final fallback: OCR for image-based/scanned PDFs
+    if is_ocr_available():
+        logger.info("No text extracted - attempting OCR for image-based PDF")
+        ocr_text = extract_text_with_ocr(file_content)
+        if ocr_text and len(ocr_text.strip()) > 50:
+            logger.info(f"PDF extracted with OCR (Tesseract): {len(ocr_text)} chars")
+            return ocr_text
+        else:
+            raise ValueError(
+                "No text extracted from PDF: OCR found no readable text. "
+                "File may be empty or contain only images without text."
+            )
+    else:
+        raise ValueError(
+            "No text extracted from PDF: file appears to be images-only or scanned. "
+            "Install OCR dependencies for scanned PDF support: "
+            "pip install pytesseract pdf2image (and install tesseract + poppler)"
+        )
 
 
 def extract_text_from_docx(file_content: bytes) -> str:

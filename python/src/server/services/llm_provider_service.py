@@ -412,15 +412,32 @@ async def get_llm_client(
                     if not ollama_base_url:
                         raise RuntimeError("No Ollama base URL resolved")
 
+                    # Check for auth token in RAG settings for fallback
+                    cache_key = "rag_strategy_settings"
+                    rag_settings = _get_cached_settings(cache_key)
+                    if rag_settings is None:
+                        rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+                        _set_cached_settings(cache_key, rag_settings)
+
+                    # Get correct auth token based on operation type
+                    if use_embedding_provider:
+                        ollama_auth_token = rag_settings.get("OLLAMA_EMBEDDING_AUTH_TOKEN", "")
+                    else:
+                        ollama_auth_token = rag_settings.get("OLLAMA_CHAT_AUTH_TOKEN", "")
+
+                    # Use "required-but-ignored" as default if no token is set (Ollama doesn't validate when auth is disabled)
+                    if not ollama_auth_token:
+                        ollama_auth_token = "required-but-ignored"
+
                     client = openai.AsyncOpenAI(
-                        api_key="ollama",
+                        api_key=ollama_auth_token,
                         base_url=ollama_base_url,
                     )
                     logger.info(
                         f"Ollama fallback client created successfully with base URL: {ollama_base_url}"
                     )
                     provider_name = "ollama"
-                    api_key = "ollama"
+                    api_key = ollama_auth_token
                     base_url = ollama_base_url
                 except Exception as fallback_error:
                     raise ValueError(
@@ -435,9 +452,29 @@ async def get_llm_client(
                 base_url_override=base_url,
             )
 
-            # Ollama requires an API key in the client but doesn't actually use it
+            # Check for auth token in RAG settings
+            cache_key = "rag_strategy_settings"
+            rag_settings = _get_cached_settings(cache_key)
+            if rag_settings is None:
+                rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+                _set_cached_settings(cache_key, rag_settings)
+
+            # Get correct auth token based on operation type
+            if use_embedding_provider or instance_type == "embedding":
+                ollama_auth_token = rag_settings.get("OLLAMA_EMBEDDING_AUTH_TOKEN", "")
+                logger.info(f"Using OLLAMA_EMBEDDING_AUTH_TOKEN (length: {len(ollama_auth_token) if ollama_auth_token else 0})")
+            else:
+                ollama_auth_token = rag_settings.get("OLLAMA_CHAT_AUTH_TOKEN", "")
+                logger.info(f"Using OLLAMA_CHAT_AUTH_TOKEN (length: {len(ollama_auth_token) if ollama_auth_token else 0})")
+
+            # Use "required-but-ignored" as default if no token is set (Ollama doesn't validate when auth is disabled)
+            if not ollama_auth_token:
+                ollama_auth_token = "required-but-ignored"
+                logger.warning("No Ollama auth token found, using placeholder 'required-but-ignored'")
+
+            # Ollama requires an API key in the client but may not use it unless auth is enabled
             client = openai.AsyncOpenAI(
-                api_key="ollama",  # Required but unused by Ollama
+                api_key=ollama_auth_token,
                 base_url=ollama_base_url,
             )
             logger.info(f"Ollama client created successfully with base URL: {ollama_base_url}")
@@ -578,8 +615,11 @@ async def _get_optimal_ollama_instance(instance_type: str | None = None,
         # Check if we need embedding provider and have separate embedding URL
         if use_embedding_provider or instance_type == "embedding":
             embedding_url = rag_settings.get("OLLAMA_EMBEDDING_URL")
+            logger.info(f"Embedding URL from settings: {embedding_url}")
             if embedding_url:
-                return embedding_url if embedding_url.endswith('/v1') else f"{embedding_url}/v1"
+                final_url = embedding_url if embedding_url.endswith('/v1') else f"{embedding_url}/v1"
+                logger.info(f"Resolved embedding URL: {final_url}")
+                return final_url
 
         # Default to LLM base URL for chat operations
         fallback_url = rag_settings.get("LLM_BASE_URL", "http://host.docker.internal:11434")
@@ -1168,13 +1208,14 @@ async def get_embedding_model_with_routing(provider: str | None = None, instance
         return "text-embedding-3-small", None
 
 
-async def validate_provider_instance(provider: str, instance_url: str | None = None) -> dict[str, any]:
+async def validate_provider_instance(provider: str, instance_url: str | None = None, auth_token: str | None = None) -> dict[str, Any]:
     """
     Validate a provider instance and return health information.
 
     Args:
         provider: Provider name (openai, ollama, google, etc.)
         instance_url: Instance URL for providers that support multiple instances
+        auth_token: Optional authentication token for protected instances
 
     Returns:
         Dictionary with validation results and health status
@@ -1191,7 +1232,7 @@ async def validate_provider_instance(provider: str, instance_url: str | None = N
                 if instance_url.endswith('/v1'):
                     instance_url = instance_url[:-3]
 
-            health_status = await model_discovery_service.check_instance_health(instance_url)
+            health_status = await model_discovery_service.check_instance_health(instance_url, auth_token=auth_token)
 
             return {
                 "provider": provider,

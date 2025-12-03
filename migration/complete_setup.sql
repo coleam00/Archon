@@ -537,17 +537,22 @@ END;
 $$;
 
 -- =====================================================
--- SECTION 5B: HYBRID SEARCH FUNCTIONS WITH TS_VECTOR
+-- SECTION 5B: HYBRID SEARCH WITH RECIPROCAL RANK FUSION (RRF)
+-- =====================================================
+-- Uses RRF to properly combine vector and text search results.
+-- RRF_score = 1/(vector_rank + k) + 1/(text_rank + k), where k=60
+-- This is scale-independent and works across domains without tuning.
 -- =====================================================
 
--- Multi-dimensional hybrid search function for archon_crawled_pages
+-- Multi-dimensional hybrid search with RRF for archon_crawled_pages
 CREATE OR REPLACE FUNCTION hybrid_search_archon_crawled_pages_multi(
     query_embedding VECTOR,
     embedding_dimension INTEGER,
     query_text TEXT,
     match_count INT DEFAULT 10,
     filter JSONB DEFAULT '{}'::jsonb,
-    source_filter TEXT DEFAULT NULL
+    source_filter TEXT DEFAULT NULL,
+    embedding_model_filter TEXT DEFAULT NULL
 )
 RETURNS TABLE (
     id BIGINT,
@@ -563,10 +568,10 @@ LANGUAGE plpgsql
 AS $$
 #variable_conflict use_column
 DECLARE
-    max_vector_results INT;
-    max_text_results INT;
+    candidate_count INT;
     sql_query TEXT;
     embedding_column TEXT;
+    rrf_k INT := 60;  -- RRF constant (experimentally optimal)
 BEGIN
     -- Determine which embedding column to use based on dimension
     CASE embedding_dimension
@@ -578,59 +583,59 @@ BEGIN
         ELSE RAISE EXCEPTION 'Unsupported embedding dimension: %', embedding_dimension;
     END CASE;
 
-    -- Calculate how many results to fetch from each search type
-    max_vector_results := match_count;
-    max_text_results := match_count;
-    
-    -- Build dynamic query with proper embedding column
+    -- Fetch more candidates for better RRF fusion
+    candidate_count := LEAST(match_count * 3, 100);
+
+    -- Build dynamic query with RRF scoring
     sql_query := format('
     WITH vector_results AS (
-        -- Vector similarity search
-        SELECT 
+        SELECT
             cp.id,
             cp.url,
             cp.chunk_number,
             cp.content,
             cp.metadata,
             cp.source_id,
-            1 - (cp.%I <=> $1) AS vector_sim
+            ROW_NUMBER() OVER (ORDER BY cp.%I <=> $1) AS vector_rank
         FROM archon_crawled_pages cp
         WHERE cp.metadata @> $4
             AND ($5 IS NULL OR cp.source_id = $5)
+            AND ($7 IS NULL OR cp.embedding_model = $7)
             AND cp.%I IS NOT NULL
         ORDER BY cp.%I <=> $1
         LIMIT $2
     ),
     text_results AS (
-        -- Full-text search with ranking
-        SELECT 
+        SELECT
             cp.id,
             cp.url,
             cp.chunk_number,
             cp.content,
             cp.metadata,
             cp.source_id,
-            ts_rank_cd(cp.content_search_vector, plainto_tsquery(''english'', $6)) AS text_sim
+            ROW_NUMBER() OVER (ORDER BY ts_rank_cd(cp.content_search_vector, plainto_tsquery(''english'', $6)) DESC) AS text_rank
         FROM archon_crawled_pages cp
         WHERE cp.metadata @> $4
             AND ($5 IS NULL OR cp.source_id = $5)
+            AND ($7 IS NULL OR cp.embedding_model = $7)
             AND cp.content_search_vector @@ plainto_tsquery(''english'', $6)
-        ORDER BY text_sim DESC
-        LIMIT $3
+        ORDER BY ts_rank_cd(cp.content_search_vector, plainto_tsquery(''english'', $6)) DESC
+        LIMIT $2
     ),
     combined_results AS (
-        -- Combine results from both searches
-        SELECT 
+        SELECT
             COALESCE(v.id, t.id) AS id,
             COALESCE(v.url, t.url) AS url,
             COALESCE(v.chunk_number, t.chunk_number) AS chunk_number,
             COALESCE(v.content, t.content) AS content,
             COALESCE(v.metadata, t.metadata) AS metadata,
             COALESCE(v.source_id, t.source_id) AS source_id,
-            -- Use vector similarity if available, otherwise text similarity
-            COALESCE(v.vector_sim, t.text_sim, 0)::float8 AS similarity,
-            -- Determine match type
-            CASE 
+            -- RRF Score: 1/(rank + k) for each, summed
+            (
+                COALESCE(1.0 / (v.vector_rank + $8), 0) +
+                COALESCE(1.0 / (t.text_rank + $8), 0)
+            )::float8 AS similarity,
+            CASE
                 WHEN v.id IS NOT NULL AND t.id IS NOT NULL THEN ''hybrid''
                 WHEN v.id IS NOT NULL THEN ''vector''
                 ELSE ''keyword''
@@ -640,11 +645,10 @@ BEGIN
     )
     SELECT * FROM combined_results
     ORDER BY similarity DESC
-    LIMIT $2', 
+    LIMIT $3',
     embedding_column, embedding_column, embedding_column);
 
-    -- Execute dynamic query
-    RETURN QUERY EXECUTE sql_query USING query_embedding, max_vector_results, max_text_results, filter, source_filter, query_text;
+    RETURN QUERY EXECUTE sql_query USING query_embedding, candidate_count, match_count, filter, source_filter, query_text, embedding_model_filter, rrf_k;
 END;
 $$;
 
@@ -669,18 +673,19 @@ RETURNS TABLE (
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    RETURN QUERY SELECT * FROM hybrid_search_archon_crawled_pages_multi(query_embedding, 1536, query_text, match_count, filter, source_filter);
+    RETURN QUERY SELECT * FROM hybrid_search_archon_crawled_pages_multi(query_embedding, 1536, query_text, match_count, filter, source_filter, NULL);
 END;
 $$;
 
--- Multi-dimensional hybrid search function for archon_code_examples
+-- Multi-dimensional hybrid search with RRF for archon_code_examples
 CREATE OR REPLACE FUNCTION hybrid_search_archon_code_examples_multi(
     query_embedding VECTOR,
     embedding_dimension INTEGER,
     query_text TEXT,
     match_count INT DEFAULT 10,
     filter JSONB DEFAULT '{}'::jsonb,
-    source_filter TEXT DEFAULT NULL
+    source_filter TEXT DEFAULT NULL,
+    embedding_model_filter TEXT DEFAULT NULL
 )
 RETURNS TABLE (
     id BIGINT,
@@ -697,10 +702,10 @@ LANGUAGE plpgsql
 AS $$
 #variable_conflict use_column
 DECLARE
-    max_vector_results INT;
-    max_text_results INT;
+    candidate_count INT;
     sql_query TEXT;
     embedding_column TEXT;
+    rrf_k INT := 60;
 BEGIN
     -- Determine which embedding column to use based on dimension
     CASE embedding_dimension
@@ -712,15 +717,13 @@ BEGIN
         ELSE RAISE EXCEPTION 'Unsupported embedding dimension: %', embedding_dimension;
     END CASE;
 
-    -- Calculate how many results to fetch from each search type
-    max_vector_results := match_count;
-    max_text_results := match_count;
-    
-    -- Build dynamic query with proper embedding column
+    -- Fetch more candidates for better fusion
+    candidate_count := LEAST(match_count * 3, 100);
+
+    -- Build dynamic query with RRF scoring
     sql_query := format('
     WITH vector_results AS (
-        -- Vector similarity search
-        SELECT 
+        SELECT
             ce.id,
             ce.url,
             ce.chunk_number,
@@ -728,17 +731,17 @@ BEGIN
             ce.summary,
             ce.metadata,
             ce.source_id,
-            1 - (ce.%I <=> $1) AS vector_sim
+            ROW_NUMBER() OVER (ORDER BY ce.%I <=> $1) AS vector_rank
         FROM archon_code_examples ce
         WHERE ce.metadata @> $4
             AND ($5 IS NULL OR ce.source_id = $5)
+            AND ($7 IS NULL OR ce.embedding_model = $7)
             AND ce.%I IS NOT NULL
         ORDER BY ce.%I <=> $1
         LIMIT $2
     ),
     text_results AS (
-        -- Full-text search with ranking (searches both content and summary)
-        SELECT 
+        SELECT
             ce.id,
             ce.url,
             ce.chunk_number,
@@ -746,17 +749,17 @@ BEGIN
             ce.summary,
             ce.metadata,
             ce.source_id,
-            ts_rank_cd(ce.content_search_vector, plainto_tsquery(''english'', $6)) AS text_sim
+            ROW_NUMBER() OVER (ORDER BY ts_rank_cd(ce.content_search_vector, plainto_tsquery(''english'', $6)) DESC) AS text_rank
         FROM archon_code_examples ce
         WHERE ce.metadata @> $4
             AND ($5 IS NULL OR ce.source_id = $5)
+            AND ($7 IS NULL OR ce.embedding_model = $7)
             AND ce.content_search_vector @@ plainto_tsquery(''english'', $6)
-        ORDER BY text_sim DESC
-        LIMIT $3
+        ORDER BY ts_rank_cd(ce.content_search_vector, plainto_tsquery(''english'', $6)) DESC
+        LIMIT $2
     ),
     combined_results AS (
-        -- Combine results from both searches
-        SELECT 
+        SELECT
             COALESCE(v.id, t.id) AS id,
             COALESCE(v.url, t.url) AS url,
             COALESCE(v.chunk_number, t.chunk_number) AS chunk_number,
@@ -764,10 +767,12 @@ BEGIN
             COALESCE(v.summary, t.summary) AS summary,
             COALESCE(v.metadata, t.metadata) AS metadata,
             COALESCE(v.source_id, t.source_id) AS source_id,
-            -- Use vector similarity if available, otherwise text similarity
-            COALESCE(v.vector_sim, t.text_sim, 0)::float8 AS similarity,
-            -- Determine match type
-            CASE 
+            -- RRF Score
+            (
+                COALESCE(1.0 / (v.vector_rank + $8), 0) +
+                COALESCE(1.0 / (t.text_rank + $8), 0)
+            )::float8 AS similarity,
+            CASE
                 WHEN v.id IS NOT NULL AND t.id IS NOT NULL THEN ''hybrid''
                 WHEN v.id IS NOT NULL THEN ''vector''
                 ELSE ''keyword''
@@ -777,11 +782,10 @@ BEGIN
     )
     SELECT * FROM combined_results
     ORDER BY similarity DESC
-    LIMIT $2', 
+    LIMIT $3',
     embedding_column, embedding_column, embedding_column);
 
-    -- Execute dynamic query
-    RETURN QUERY EXECUTE sql_query USING query_embedding, max_vector_results, max_text_results, filter, source_filter, query_text;
+    RETURN QUERY EXECUTE sql_query USING query_embedding, candidate_count, match_count, filter, source_filter, query_text, embedding_model_filter, rrf_k;
 END;
 $$;
 
@@ -807,15 +811,15 @@ RETURNS TABLE (
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    RETURN QUERY SELECT * FROM hybrid_search_archon_code_examples_multi(query_embedding, 1536, query_text, match_count, filter, source_filter);
+    RETURN QUERY SELECT * FROM hybrid_search_archon_code_examples_multi(query_embedding, 1536, query_text, match_count, filter, source_filter, NULL);
 END;
 $$;
 
--- Add comments to document the new functionality
-COMMENT ON FUNCTION hybrid_search_archon_crawled_pages_multi IS 'Multi-dimensional hybrid search combining vector similarity and full-text search with configurable embedding dimensions';
-COMMENT ON FUNCTION hybrid_search_archon_crawled_pages IS 'Legacy hybrid search function for backward compatibility (uses 1536D embeddings)';
-COMMENT ON FUNCTION hybrid_search_archon_code_examples_multi IS 'Multi-dimensional hybrid search on code examples with configurable embedding dimensions';
-COMMENT ON FUNCTION hybrid_search_archon_code_examples IS 'Legacy hybrid search function for code examples (uses 1536D embeddings)';
+-- Comments
+COMMENT ON FUNCTION hybrid_search_archon_crawled_pages_multi IS 'Hybrid search using Reciprocal Rank Fusion (RRF) for proper score combination';
+COMMENT ON FUNCTION hybrid_search_archon_crawled_pages IS 'Legacy hybrid search (1536D, no model filter)';
+COMMENT ON FUNCTION hybrid_search_archon_code_examples_multi IS 'Hybrid search on code examples using RRF scoring';
+COMMENT ON FUNCTION hybrid_search_archon_code_examples IS 'Legacy hybrid search for code examples (1536D)';
 
 -- =====================================================
 -- SECTION 6: RLS POLICIES FOR KNOWLEDGE BASE

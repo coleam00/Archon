@@ -13,6 +13,7 @@ export interface OllamaInstance {
   instanceType: 'chat' | 'embedding' | 'both';
   isEnabled: boolean;
   isPrimary: boolean;
+  authToken?: string;
   healthStatus: {
     isHealthy?: boolean;
     lastChecked: Date;
