@@ -228,7 +228,7 @@ export const RAGSettings = ({
   useEffect(() => {
     const newLLMUrl = ragSettings.LLM_BASE_URL || '';
     const newLLMName = ragSettings.LLM_INSTANCE_NAME || '';
-    const newAuthToken = (ragSettings as any).OLLAMA_CHAT_AUTH_TOKEN || '';
+    const newAuthToken = ragSettings.OLLAMA_CHAT_AUTH_TOKEN || '';
 
     if (newLLMUrl !== lastLLMConfigRef.current.url || newLLMName !== lastLLMConfigRef.current.name || newAuthToken !== lastLLMConfigRef.current.authToken) {
       lastLLMConfigRef.current = { url: newLLMUrl, name: newLLMName, authToken: newAuthToken };
@@ -246,12 +246,12 @@ export const RAGSettings = ({
         return prev;
       });
     }
-  }, [ragSettings.LLM_BASE_URL, ragSettings.LLM_INSTANCE_NAME, (ragSettings as any).OLLAMA_CHAT_AUTH_TOKEN]);
+  }, [ragSettings.LLM_BASE_URL, ragSettings.LLM_INSTANCE_NAME, ragSettings.OLLAMA_CHAT_AUTH_TOKEN]);
 
   useEffect(() => {
     const newEmbeddingUrl = ragSettings.OLLAMA_EMBEDDING_URL || '';
     const newEmbeddingName = ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME || '';
-    const newAuthToken = (ragSettings as any).OLLAMA_EMBEDDING_AUTH_TOKEN || '';
+    const newAuthToken = ragSettings.OLLAMA_EMBEDDING_AUTH_TOKEN || '';
 
     if (newEmbeddingUrl !== lastEmbeddingConfigRef.current.url || newEmbeddingName !== lastEmbeddingConfigRef.current.name || newAuthToken !== lastEmbeddingConfigRef.current.authToken) {
       lastEmbeddingConfigRef.current = { url: newEmbeddingUrl, name: newEmbeddingName, authToken: newAuthToken };
@@ -269,7 +269,7 @@ export const RAGSettings = ({
         return prev;
       });
     }
-  }, [ragSettings.OLLAMA_EMBEDDING_URL, ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME, (ragSettings as any).OLLAMA_EMBEDDING_AUTH_TOKEN]);
+  }, [ragSettings.OLLAMA_EMBEDDING_URL, ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME, ragSettings.OLLAMA_EMBEDDING_AUTH_TOKEN]);
 
   // Provider model persistence effects - separate for chat and embedding
   useEffect(() => {

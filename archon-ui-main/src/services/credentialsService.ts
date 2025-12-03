@@ -480,7 +480,8 @@ class CredentialsService {
             isHealthy: instance.isHealthy,
             responseTimeMs: instance.responseTimeMs,
             modelsAvailable: instance.modelsAvailable,
-            lastHealthCheck: instance.lastHealthCheck
+            lastHealthCheck: instance.lastHealthCheck,
+            authToken: instance.authToken
           });
         }
       });
@@ -526,7 +527,10 @@ class CredentialsService {
         if (instance.lastHealthCheck) {
           fields.lastHealthCheck = instance.lastHealthCheck;
         }
-        
+        if (instance.authToken) {
+          fields.authToken = instance.authToken;
+        }
+
         // Create a credential for each field
         Object.entries(fields).forEach(([field, value]) => {
           promises.push(
