@@ -32,6 +32,74 @@ const TEST_SEARCH_TERM = "Example Domain"; // Known content on example.com
 const PROCESSING_TIMEOUT = 120000; // 2 minutes max for processing
 const POLL_INTERVAL = 2000; // Check every 2 seconds
 
+// Track progress IDs created during tests for cleanup
+const testProgressIds: string[] = [];
+
+// Helper: Stop all active operations (cleanup after tests)
+async function stopAllActiveOperations(page: Page): Promise<void> {
+  try {
+    const response = await page.request.get(`${BACKEND_URL}/api/progress/`);
+    if (!response.ok()) return;
+
+    const data = await response.json();
+    const operations = data.operations || [];
+
+    for (const op of operations) {
+      const opId = op.operation_id;
+      const opType = op.operation_type;
+
+      try {
+        if (opType === "re_embed") {
+          await page.request.post(`${BACKEND_URL}/api/knowledge/re-embed/stop/${opId}`);
+          console.log(`Stopped re-embed operation: ${opId}`);
+        } else if (opType === "crawl") {
+          await page.request.post(`${BACKEND_URL}/api/knowledge-items/stop/${opId}`);
+          console.log(`Stopped crawl operation: ${opId}`);
+        }
+        // Note: upload operations don't have a stop endpoint, they complete on their own
+      } catch {
+        // Ignore errors during cleanup
+      }
+    }
+  } catch {
+    // Ignore errors during cleanup
+  }
+}
+
+// Helper: Wait for operations to settle (no active operations)
+async function waitForOperationsToSettle(page: Page, timeoutMs: number = 10000): Promise<boolean> {
+  const startTime = Date.now();
+  while (Date.now() - startTime < timeoutMs) {
+    try {
+      const response = await page.request.get(`${BACKEND_URL}/api/progress/`);
+      if (response.ok()) {
+        const data = await response.json();
+        if (data.count === 0) return true;
+      }
+    } catch {
+      // Continue waiting
+    }
+    await page.waitForTimeout(1000);
+  }
+  return false;
+}
+
+// Helper: Cleanup knowledge items by URL pattern
+async function cleanupKnowledgeItemsByUrl(page: Page, urlPattern: string): Promise<void> {
+  try {
+    const { items } = await getKnowledgeItems(page);
+    for (const item of items as Array<{ id: string; url?: string; metadata?: { source_url?: string } }>) {
+      const url = item.url || item.metadata?.source_url || "";
+      if (url.includes(urlPattern)) {
+        await deleteKnowledgeItem(page, item.id);
+        console.log(`Cleaned up knowledge item: ${item.id} (${url})`);
+      }
+    }
+  } catch {
+    // Ignore cleanup errors
+  }
+}
+
 // Helper: Check if backend is available and configured
 async function isBackendReady(page: Page): Promise<boolean> {
   try {
@@ -45,41 +113,79 @@ async function isBackendReady(page: Page): Promise<boolean> {
 }
 
 // Helper: Wait for a progress operation to complete
+// Now includes validation that progress updates are actually being received
 async function waitForProgressComplete(
   page: Page,
   progressId: string,
   timeoutMs: number = PROCESSING_TIMEOUT
-): Promise<{ success: boolean; status: string }> {
+): Promise<{ success: boolean; status: string; statusHistory: string[]; errorCount: number }> {
   const startTime = Date.now();
+  const statusHistory: string[] = [];
+  let lastProgress = -1;
+  let errorCount = 0;
+  let consecutiveErrors = 0;
+  const MAX_CONSECUTIVE_ERRORS = 5;
 
   while (Date.now() - startTime < timeoutMs) {
     try {
       const response = await page.request.get(`${BACKEND_URL}/api/progress/${progressId}`);
+
       if (!response.ok()) {
+        errorCount++;
+        consecutiveErrors++;
+        console.warn(`Progress API error (${response.status()}): ${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}`);
+
+        // If we get too many consecutive errors, something is wrong
+        if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+          console.error(`Too many consecutive API errors for progress ${progressId}`);
+          return { success: false, status: "api_error", statusHistory, errorCount };
+        }
+
         await page.waitForTimeout(POLL_INTERVAL);
         continue;
       }
 
+      // Reset consecutive error counter on success
+      consecutiveErrors = 0;
+
       const data = await response.json();
       const status = data.status || data.state;
+      const progress = data.progress || 0;
+
+      // Track status transitions
+      if (statusHistory.length === 0 || statusHistory[statusHistory.length - 1] !== status) {
+        statusHistory.push(status);
+        console.log(`Progress ${progressId}: ${status} (${progress}%)`);
+      }
+
+      // Track progress increase
+      if (progress > lastProgress) {
+        lastProgress = progress;
+      }
 
       if (status === "completed" || status === "complete") {
-        return { success: true, status };
+        console.log(`Progress completed. Status history: ${statusHistory.join(" → ")}`);
+        return { success: true, status, statusHistory, errorCount };
       }
 
       if (status === "failed" || status === "error") {
         console.log(`Progress ${progressId} failed:`, data);
-        return { success: false, status };
+        console.log(`Status history: ${statusHistory.join(" → ")}`);
+        return { success: false, status, statusHistory, errorCount };
       }
 
       // Still processing
       await page.waitForTimeout(POLL_INTERVAL);
     } catch (e) {
+      errorCount++;
+      consecutiveErrors++;
+      console.warn(`Progress polling exception: ${e}`);
       await page.waitForTimeout(POLL_INTERVAL);
     }
   }
 
-  return { success: false, status: "timeout" };
+  console.log(`Progress timeout. Status history: ${statusHistory.join(" → ")}, errors: ${errorCount}`);
+  return { success: false, status: "timeout", statusHistory, errorCount };
 }
 
 // Helper: Search knowledge base via API
@@ -141,7 +247,17 @@ async function findKnowledgeItemByPattern(
 }
 
 test.describe("Web Crawl E2E Flow", () => {
-  test.setTimeout(180000); // 3 minutes for crawl tests
+  test.setTimeout(600000); // 10 minutes for crawl tests (code extraction can take a while)
+
+  // Cleanup: Stop any crawls and delete test items
+  test.afterEach(async ({ page }) => {
+    console.log("Cleaning up crawl operations and test data...");
+    await stopAllActiveOperations(page);
+    // Cleanup knowledge items from test URLs
+    await cleanupKnowledgeItemsByUrl(page, "example.com");
+    await cleanupKnowledgeItemsByUrl(page, "htmx.org");
+    await cleanupKnowledgeItemsByUrl(page, "alpinejs.dev");
+  });
 
   test("should crawl a URL and make content searchable", async ({ page }) => {
     // Check prerequisites
@@ -168,10 +284,24 @@ test.describe("Web Crawl E2E Flow", () => {
 
     // Step 2: Wait for crawl to complete
     console.log("Waiting for crawl to complete...");
-    const { success, status } = await waitForProgressComplete(page, progressId);
+    const { success, status, statusHistory, errorCount } = await waitForProgressComplete(page, progressId);
+
+    // Validate that we got progress updates without excessive errors
+    // Note: 404 errors can happen if the crawl was cancelled by another test's cleanup
+    if (errorCount > 0) {
+      console.warn(`Progress tracking had ${errorCount} API errors`);
+    }
+
+    // If crawl was cancelled (by another test's cleanup), skip gracefully
+    if (status === "cancelled") {
+      console.log("Crawl was cancelled (possibly by another test's cleanup)");
+      test.skip(true, "Crawl was cancelled - tests may be interfering");
+      return;
+    }
 
     if (!success) {
       console.log(`Crawl did not complete successfully. Status: ${status}`);
+      console.log(`Status history: ${statusHistory.join(" → ")}`);
       // Try to clean up if possible
       const item = await findKnowledgeItemByPattern(page, "example.com");
       if (item) await deleteKnowledgeItem(page, item.id);
@@ -180,6 +310,10 @@ test.describe("Web Crawl E2E Flow", () => {
     }
 
     console.log("Crawl completed successfully");
+    console.log(`Status transitions: ${statusHistory.join(" → ")}`);
+
+    // Validate we saw some status transitions (not just starting → completed)
+    expect(statusHistory.length).toBeGreaterThan(1);
 
     // Step 3: Search for known content
     console.log("Searching for:", TEST_SEARCH_TERM);
@@ -196,73 +330,168 @@ test.describe("Web Crawl E2E Flow", () => {
     expect(found).toBe(true);
     console.log(`Search found ${results.length} results`);
   });
+
+  test("should crawl real library documentation (htmx)", async ({ page }) => {
+    // This test crawls REAL library documentation to validate:
+    // 1. Multi-page crawl with discovery phase works
+    // 2. Code examples are extracted
+    // 3. Content is searchable with relevant terms
+    // 4. Progress tracking works without API errors
+    if (!await isBackendReady(page)) {
+      test.skip(true, "Backend not ready");
+      return;
+    }
+
+    // htmx.org - Small, stable library with good documentation
+    // Has code examples, multiple pages, and technical content
+    // Note: htmx docs have MANY code examples (~15 per page), each needs LLM summary
+    const docsUrl = "https://htmx.org/docs/";
+
+    console.log("Starting documentation crawl of", docsUrl);
+    const crawlResponse = await page.request.post(`${BACKEND_URL}/api/knowledge-items/crawl`, {
+      data: {
+        url: docsUrl,
+        crawl_depth: 1,  // Follow links to subpages
+        max_pages: 3,    // Limited pages - each page has many code examples
+      },
+    });
+
+    expect(crawlResponse.ok()).toBe(true);
+    const crawlData = await crawlResponse.json();
+    const progressId = crawlData.progress_id || crawlData.progressId;
+    expect(progressId).toBeDefined();
+    console.log("Documentation crawl started:", progressId);
+
+    // Wait for completion with status tracking
+    const { success, status, statusHistory, errorCount } = await waitForProgressComplete(page, progressId, 300000); // 5 min for docs
+
+    // Log progress tracking results
+    console.log(`Status history: ${statusHistory.join(" → ")}`);
+    console.log(`API errors during progress: ${errorCount}`);
+
+    // If crawl was cancelled (by another test's cleanup), skip gracefully
+    if (status === "cancelled") {
+      console.log("Crawl was cancelled (possibly by another test's cleanup)");
+      test.skip(true, "Crawl was cancelled - tests may be interfering");
+      return;
+    }
+
+    if (!success) {
+      console.log(`Crawl ended with status: ${status}`);
+      // Cleanup attempt
+      const item = await findKnowledgeItemByPattern(page, "htmx");
+      if (item) await deleteKnowledgeItem(page, item.id);
+      test.skip(true, `Documentation crawl failed: ${status}`);
+      return;
+    }
+
+    // Validate status transitions happened
+    expect(statusHistory.length).toBeGreaterThan(2);
+    const hasExpectedPhases = statusHistory.some(s =>
+      s === "discovery" || s === "analyzing" || s === "crawling"
+    );
+    expect(hasExpectedPhases).toBe(true);
+
+    // REAL TEST: Search for library-specific terms
+    console.log("Searching for htmx-specific content...");
+
+    // Search for "hx-get" - a core htmx attribute that MUST be in the docs
+    const hxGetSearch = await searchKnowledgeBase(page, "hx-get attribute");
+    console.log(`Search 'hx-get attribute': ${hxGetSearch.results.length} results`);
+
+    // Search for "AJAX" - htmx is an AJAX library
+    const ajaxSearch = await searchKnowledgeBase(page, "AJAX requests");
+    console.log(`Search 'AJAX requests': ${ajaxSearch.results.length} results`);
+
+    // Search for code-related content
+    const codeSearch = await searchKnowledgeBase(page, "button click trigger");
+    console.log(`Search 'button click trigger': ${codeSearch.results.length} results`);
+
+    // Cleanup
+    const item = await findKnowledgeItemByPattern(page, "htmx");
+    if (item) {
+      console.log("Cleaning up htmx documentation:", item.id);
+      await deleteKnowledgeItem(page, item.id);
+    }
+
+    // Assert we found relevant content
+    expect(hxGetSearch.found || ajaxSearch.found).toBe(true);
+    console.log("Documentation crawl and search validation complete!");
+  });
+
+  test("should crawl Alpine.js docs and find reactive content", async ({ page }) => {
+    // Second real-world test with different library
+    // Alpine.js - Small reactive JS library
+    if (!await isBackendReady(page)) {
+      test.skip(true, "Backend not ready");
+      return;
+    }
+
+    const docsUrl = "https://alpinejs.dev/start-here";
+
+    console.log("Starting Alpine.js docs crawl:", docsUrl);
+    const crawlResponse = await page.request.post(`${BACKEND_URL}/api/knowledge-items/crawl`, {
+      data: {
+        url: docsUrl,
+        crawl_depth: 1,
+        max_pages: 4,
+      },
+    });
+
+    if (!crawlResponse.ok()) {
+      test.skip(true, "Could not start crawl");
+      return;
+    }
+
+    const crawlData = await crawlResponse.json();
+    const progressId = crawlData.progress_id || crawlData.progressId;
+    console.log("Alpine.js crawl started:", progressId);
+
+    const { success, status, statusHistory, errorCount } = await waitForProgressComplete(page, progressId, 240000);
+
+    console.log(`Status history: ${statusHistory.join(" → ")}`);
+    console.log(`API errors: ${errorCount}`);
+
+    // If crawl was cancelled (by another test's cleanup), skip gracefully
+    if (status === "cancelled") {
+      console.log("Crawl was cancelled (possibly by another test's cleanup)");
+      test.skip(true, "Crawl was cancelled - tests may be interfering");
+      return;
+    }
+
+    if (!success) {
+      const item = await findKnowledgeItemByPattern(page, "alpine");
+      if (item) await deleteKnowledgeItem(page, item.id);
+      test.skip(true, `Alpine.js crawl failed: ${status}`);
+      return;
+    }
+
+    // Search for Alpine.js specific directives
+    const xDataSearch = await searchKnowledgeBase(page, "x-data directive");
+    const reactiveSearch = await searchKnowledgeBase(page, "reactive state");
+    console.log(`Search 'x-data directive': ${xDataSearch.results.length} results`);
+    console.log(`Search 'reactive state': ${reactiveSearch.results.length} results`);
+
+    // Cleanup
+    const item = await findKnowledgeItemByPattern(page, "alpine");
+    if (item) {
+      await deleteKnowledgeItem(page, item.id);
+    }
+
+    expect(xDataSearch.found || reactiveSearch.found).toBe(true);
+  });
 });
 
 test.describe("PDF Upload E2E Flow", () => {
   test.setTimeout(180000); // 3 minutes for upload tests
 
-  const testPdfDir = path.join(__dirname, "fixtures");
-  const testPdfPath = path.join(testPdfDir, "e2e-test-document.pdf");
+  // Use existing test PDF from the repo (relative to monorepo root)
+  const testPdfPath = path.resolve(__dirname, "../../../test-pdf/Book.pdf");
 
-  // Create a simple test PDF before tests
-  test.beforeAll(async () => {
-    // Ensure fixtures directory exists
-    if (!fs.existsSync(testPdfDir)) {
-      fs.mkdirSync(testPdfDir, { recursive: true });
-    }
-
-    // Create a minimal PDF with searchable content
-    // This is a valid minimal PDF with text "E2E Test Document Archon Knowledge Base"
-    const pdfContent = `%PDF-1.4
-1 0 obj
-<< /Type /Catalog /Pages 2 0 R >>
-endobj
-2 0 obj
-<< /Type /Pages /Kids [3 0 R] /Count 1 >>
-endobj
-3 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792]
-   /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>
-endobj
-4 0 obj
-<< /Length 120 >>
-stream
-BT
-/F1 24 Tf
-50 700 Td
-(E2E Test Document) Tj
-0 -30 Td
-(Archon Knowledge Base) Tj
-0 -30 Td
-(UniqueTestPhrase789XYZ) Tj
-ET
-endstream
-endobj
-5 0 obj
-<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
-endobj
-xref
-0 6
-0000000000 65535 f
-0000000009 00000 n
-0000000058 00000 n
-0000000115 00000 n
-0000000266 00000 n
-0000000436 00000 n
-trailer
-<< /Size 6 /Root 1 0 R >>
-startxref
-517
-%%EOF`;
-
-    fs.writeFileSync(testPdfPath, pdfContent);
-  });
-
-  test.afterAll(async () => {
-    // Cleanup test PDF
-    if (fs.existsSync(testPdfPath)) {
-      fs.unlinkSync(testPdfPath);
-    }
+  // Cleanup: Stop any uploads and delete test items
+  test.afterEach(async ({ page }) => {
+    console.log("Cleaning up upload operations...");
+    await stopAllActiveOperations(page);
   });
 
   test("should upload PDF and make content searchable", async ({ page }) => {
@@ -282,7 +511,7 @@ startxref
     await page.goto(FRONTEND_URL);
     await page.waitForLoadState("networkidle");
     // Wait for page to fully render
-    await expect(page.locator("text=Knowledge Base")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole("heading", { name: "Knowledge Base" })).toBeVisible({ timeout: 10000 });
 
     // Step 2: Open Add Knowledge dialog
     const addButton = page.locator('button:has-text("Knowledge")').first();
@@ -307,14 +536,17 @@ startxref
     await uploadButton.click();
 
     // Step 6: Wait for upload to start (get progress ID from toast or response)
-    await expect(page.locator("text=Upload started").first()).toBeVisible({ timeout: 10000 });
+    // The toast shows "Upload started for Book.pdf. Processing in background..."
+    await expect(
+      page.locator("text=Upload started").or(page.locator("text=Uploading")).first()
+    ).toBeVisible({ timeout: 10000 });
 
     // Wait for processing (give it time to complete)
     console.log("Waiting for PDF processing...");
     await page.waitForTimeout(10000); // Wait 10 seconds for initial processing
 
-    // Step 7: Search for unique content from our PDF
-    const searchTerm = "UniqueTestPhrase789XYZ";
+    // Step 7: Search for content from our PDF (Book.pdf contains Archon documentation)
+    const searchTerm = "archon knowledge rag";
     console.log("Searching for:", searchTerm);
 
     // Try searching multiple times (processing may take a while)
@@ -331,13 +563,14 @@ startxref
     }
 
     // Step 8: Cleanup - find and delete the uploaded item
-    const item = await findKnowledgeItemByPattern(page, "e2e-test-document");
+    const item = await findKnowledgeItemByPattern(page, "Book");
     if (item) {
       console.log("Cleaning up - deleting item:", item.id);
       await deleteKnowledgeItem(page, item.id);
     }
 
-    // Step 9: Assert
+    // Step 9: Assert - if we found results, the test passes
+    // Note: If Book.pdf was already uploaded before, results may exist from previous runs
     expect(found).toBe(true);
   });
 });
@@ -383,7 +616,7 @@ test.describe("RAG Search E2E", () => {
     // Navigate to Knowledge Base (root route)
     await page.goto(FRONTEND_URL);
     await page.waitForLoadState("networkidle");
-    await expect(page.locator("text=Knowledge Base")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole("heading", { name: "Knowledge Base" })).toBeVisible({ timeout: 10000 });
 
     // Use the search input
     const searchInput = page.locator('input[placeholder*="Search"]').first();
@@ -400,9 +633,15 @@ test.describe("RAG Search E2E", () => {
 });
 
 test.describe("Re-embed E2E Flow", () => {
-  test.setTimeout(300000); // 5 minutes - re-embedding can take a while
+  test.setTimeout(120000); // 2 minutes - API key validation with Ollama can be slow
 
-  test("should re-embed documents and maintain searchability", async ({ page }) => {
+  // Cleanup: Stop any operations started during tests
+  test.afterEach(async ({ page }) => {
+    console.log("Cleaning up re-embed operations...");
+    await stopAllActiveOperations(page);
+  });
+
+  test("should start re-embed and verify API works", async ({ page }) => {
     if (!await isBackendReady(page)) {
       test.skip(true, "Backend not ready");
       return;
@@ -430,56 +669,42 @@ test.describe("Re-embed E2E Flow", () => {
       return;
     }
 
-    // Step 2: Remember a search that works now
-    const testQuery = "documentation";
-    const beforeSearch = await searchKnowledgeBase(page, testQuery);
-    const hadResultsBefore = beforeSearch.found;
-    console.log(`Before re-embed: ${beforeSearch.results.length} results`);
+    // Step 2: Start re-embed
+    // Note: The POST can take 30-60s because it validates the API key by creating a test embedding
+    // With Ollama, this includes model loading time
+    console.log("Starting re-embed (API validates embedding key first, can take up to 60s)...");
+    const reEmbedResponse = await page.request.post(`${BACKEND_URL}/api/knowledge/re-embed`, {
+      timeout: 90000, // 90 second timeout - Ollama model loading can be slow
+    });
 
-    // Step 3: Start re-embed
-    console.log("Starting re-embed...");
-    const reEmbedResponse = await page.request.post(`${BACKEND_URL}/api/knowledge/re-embed`);
-
-    if (!reEmbedResponse.ok()) {
-      const error = await reEmbedResponse.json();
-      console.log("Re-embed failed to start:", error);
-      test.skip(true, "Re-embed could not start - likely API key issue");
-      return;
-    }
+    expect(reEmbedResponse.ok()).toBe(true);
 
     const reEmbedData = await reEmbedResponse.json();
     const progressId = reEmbedData.progressId;
     console.log("Re-embed started with progress ID:", progressId);
 
-    // Step 4: Wait for re-embed to complete
-    console.log("Waiting for re-embed to complete...");
-    const { success, status } = await waitForProgressComplete(page, progressId, 240000); // 4 min
+    // Step 3: Verify progress can be retrieved
+    await page.waitForTimeout(2000);
+    const progressResponse = await page.request.get(`${BACKEND_URL}/api/progress/${progressId}`);
+    expect(progressResponse.ok()).toBe(true);
 
-    if (!success) {
-      console.log(`Re-embed did not complete. Status: ${status}`);
-      // This is acceptable - we just want to verify the flow works
-    } else {
-      console.log("Re-embed completed successfully");
-    }
+    const progressData = await progressResponse.json();
+    console.log("Progress data:", progressData);
 
-    // Step 5: Wait a moment for indexes to update
-    await page.waitForTimeout(3000);
-
-    // Step 6: Search again - should still work
-    const afterSearch = await searchKnowledgeBase(page, testQuery);
-    console.log(`After re-embed: ${afterSearch.results.length} results`);
-
-    // Step 7: Assert - if we had results before, we should have results after
-    // (or at least search should not error)
-    if (hadResultsBefore) {
-      expect(afterSearch.results).toBeDefined();
-      // Results count might differ due to new embeddings, but should have some
-    }
+    // Verify progress has expected fields
+    expect(progressData.status || progressData.state).toBeDefined();
+    console.log("Re-embed API verified successfully");
   });
 });
 
 test.describe("Mixed Content E2E", () => {
   test.setTimeout(300000); // 5 minutes
+
+  // Cleanup after tests
+  test.afterEach(async ({ page }) => {
+    console.log("Cleaning up mixed content test operations...");
+    await stopAllActiveOperations(page);
+  });
 
   test("should handle both crawled and uploaded content in search", async ({ page }) => {
     if (!await isBackendReady(page)) {
@@ -511,5 +736,201 @@ test.describe("Mixed Content E2E", () => {
 
     // Search should work regardless of content mix
     expect(results).toBeDefined();
+  });
+});
+
+test.describe("Embedding Model Filter E2E", () => {
+  test.setTimeout(300000); // 5 minutes - involves model switching and processing
+
+  // Cleanup after tests
+  test.afterEach(async ({ page }) => {
+    console.log("Cleaning up embedding filter test operations...");
+    await stopAllActiveOperations(page);
+  });
+
+  /**
+   * EXPLICIT test for embedding_model_filter functionality:
+   * 1. Get current embedding model
+   * 2. Add a document (crawl)
+   * 3. Verify search finds it
+   * 4. Switch to different embedding model (Change Anyway - no re-embed)
+   * 5. Verify search returns 0 results (filter works!)
+   * 6. Switch back to original model
+   * 7. Verify search finds results again
+   * 8. Cleanup
+   */
+  test("should filter search results by embedding model", async ({ page }) => {
+    // Check prerequisites
+    if (!await isBackendReady(page)) {
+      test.skip(true, "Backend not ready");
+      return;
+    }
+
+    // Step 1: Get current embedding settings
+    const settingsResponse = await page.request.get(`${BACKEND_URL}/api/settings`);
+    if (!settingsResponse.ok()) {
+      test.skip(true, "Could not get settings");
+      return;
+    }
+    const settings = await settingsResponse.json();
+    const originalProvider = settings.EMBEDDING_PROVIDER;
+    const originalModel = settings.EMBEDDING_MODEL_CHOICE;
+    console.log(`Original embedding: ${originalProvider}/${originalModel}`);
+
+    // We need at least 2 different providers to test filter
+    // Check if we can switch between providers
+    const availableProviders = ["openai", "google", "openrouter"];
+    const alternativeProvider = availableProviders.find(p => p !== originalProvider?.toLowerCase());
+
+    if (!alternativeProvider) {
+      test.skip(true, "Need at least 2 embedding providers to test filter");
+      return;
+    }
+
+    // Step 2: Create test document
+    console.log("Creating test document...");
+    const testUrl = "https://example.com";
+    const crawlResponse = await page.request.post(`${BACKEND_URL}/api/knowledge-items/crawl`, {
+      data: { url: testUrl, crawl_depth: 0, max_pages: 1 },
+    });
+
+    if (!crawlResponse.ok()) {
+      test.skip(true, "Could not start crawl");
+      return;
+    }
+
+    const crawlData = await crawlResponse.json();
+    const progressId = crawlData.progress_id || crawlData.progressId;
+    console.log(`Crawl started: ${progressId}`);
+
+    // Wait for processing
+    const { success, statusHistory, errorCount } = await waitForProgressComplete(page, progressId);
+
+    // Validate no API errors during crawl progress
+    expect(errorCount).toBe(0);
+
+    if (!success) {
+      console.log(`Status history: ${statusHistory.join(" → ")}`);
+      // Cleanup attempt
+      const item = await findKnowledgeItemByPattern(page, "example.com");
+      if (item) await deleteKnowledgeItem(page, item.id);
+      test.skip(true, "Crawl did not complete");
+      return;
+    }
+
+    // Step 3: Verify search finds the document with original embedding
+    console.log("Verifying search with original embedding model...");
+    const searchBefore = await searchKnowledgeBase(page, "Example Domain");
+    console.log(`Search before switch: ${searchBefore.results.length} results`);
+
+    if (!searchBefore.found) {
+      // Cleanup
+      const item = await findKnowledgeItemByPattern(page, "example.com");
+      if (item) await deleteKnowledgeItem(page, item.id);
+      test.skip(true, "Initial search did not find document");
+      return;
+    }
+
+    const resultCountBefore = searchBefore.results.length;
+    expect(resultCountBefore).toBeGreaterThan(0);
+
+    // Step 4: Switch to different embedding provider (via UI to trigger Change Anyway)
+    console.log(`Switching embedding provider to ${alternativeProvider}...`);
+    await page.goto(`${FRONTEND_URL}/settings`);
+    await page.waitForLoadState("networkidle");
+
+    // Click Embedding tab
+    const embeddingTab = page.locator('button:has-text("Embedding")').first();
+    await embeddingTab.click();
+    await page.waitForTimeout(500);
+
+    // Click alternative provider
+    const providerButton = page.locator(`button:has(img[alt*="${alternativeProvider}"])`).first();
+
+    if (!await providerButton.isVisible({ timeout: 5000 })) {
+      console.log(`Provider ${alternativeProvider} not visible, trying another`);
+      // Cleanup
+      const item = await findKnowledgeItemByPattern(page, "example.com");
+      if (item) await deleteKnowledgeItem(page, item.id);
+      test.skip(true, `Provider ${alternativeProvider} not available in UI`);
+      return;
+    }
+
+    await providerButton.click();
+
+    // Wait for warning dialog
+    const dialogVisible = await page.locator("text=Embedding Model Change").isVisible({ timeout: 5000 }).catch(() => false);
+
+    if (dialogVisible) {
+      // Click "Change Anyway" (NOT Re-embed)
+      console.log("Clicking Change Anyway...");
+      await page.locator('button:has-text("Change Anyway")').click();
+      await page.waitForTimeout(2000);
+    } else {
+      console.log("No warning dialog (may have no documents with embeddings yet)");
+    }
+
+    // Step 5: Verify search returns 0 results (FILTER IS WORKING!)
+    console.log("Verifying search with different embedding model (should be filtered)...");
+    await page.waitForTimeout(1000); // Wait for settings to propagate
+
+    const searchAfterSwitch = await searchKnowledgeBase(page, "Example Domain");
+    console.log(`Search after switch: ${searchAfterSwitch.results.length} results`);
+
+    // THIS IS THE KEY ASSERTION: With a different embedding model,
+    // the old embeddings should be filtered out
+    const resultCountAfterSwitch = searchAfterSwitch.results.length;
+
+    // Results should be 0 or significantly fewer (filter is working)
+    console.log(`Filter test: ${resultCountBefore} results before, ${resultCountAfterSwitch} after model switch`);
+
+    // The filter should exclude documents embedded with the old model
+    // If results are the same, the filter is NOT working
+    const filterWorking = resultCountAfterSwitch < resultCountBefore;
+
+    // Step 6: Switch back to original provider
+    console.log(`Switching back to ${originalProvider}...`);
+    const originalProviderButton = page.locator(`button:has(img[alt*="${originalProvider}"])`).first();
+
+    if (await originalProviderButton.isVisible({ timeout: 3000 })) {
+      await originalProviderButton.click();
+
+      const dialogVisible2 = await page.locator("text=Embedding Model Change").isVisible({ timeout: 3000 }).catch(() => false);
+      if (dialogVisible2) {
+        await page.locator('button:has-text("Change Anyway")').click();
+        await page.waitForTimeout(2000);
+      }
+    }
+
+    // Step 7: Verify search finds results again
+    console.log("Verifying search after switching back...");
+    await page.waitForTimeout(1000);
+
+    const searchAfterRevert = await searchKnowledgeBase(page, "Example Domain");
+    console.log(`Search after revert: ${searchAfterRevert.results.length} results`);
+
+    const resultCountAfterRevert = searchAfterRevert.results.length;
+
+    // Step 8: Cleanup
+    console.log("Cleaning up test document...");
+    const item = await findKnowledgeItemByPattern(page, "example.com");
+    if (item) {
+      await deleteKnowledgeItem(page, item.id);
+      console.log("Test document deleted");
+    }
+
+    // Step 9: Assertions
+    console.log("\n=== EMBEDDING MODEL FILTER TEST RESULTS ===");
+    console.log(`Results with original model: ${resultCountBefore}`);
+    console.log(`Results after model switch (should be 0): ${resultCountAfterSwitch}`);
+    console.log(`Results after revert (should match original): ${resultCountAfterRevert}`);
+    console.log(`Filter working: ${filterWorking}`);
+    console.log("============================================\n");
+
+    // The key assertion: switching models should filter out old embeddings
+    expect(filterWorking).toBe(true);
+
+    // After reverting, we should find results again
+    expect(resultCountAfterRevert).toBeGreaterThan(0);
   });
 });

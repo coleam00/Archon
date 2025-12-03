@@ -313,7 +313,6 @@ export function useUploadDocument() {
     Error,
     { file: File; metadata: UploadMetadata },
     {
-      previousSummaries?: Array<[readonly unknown[], KnowledgeItemsResponse | undefined]>;
       previousOperations?: ActiveOperationsResponse;
       tempProgressId: string;
     }
@@ -323,66 +322,19 @@ export function useUploadDocument() {
         // Use the progress updater that was set in onMutate
         progressUpdaterRef.current?.(percent, stage);
       }),
-    onMutate: async ({ file, metadata }) => {
+    onMutate: async ({ file }) => {
       // Cancel any outgoing refetches to prevent race conditions
-      await queryClient.cancelQueries({ queryKey: knowledgeKeys.summariesPrefix() });
       await queryClient.cancelQueries({ queryKey: progressKeys.active() });
 
       // Snapshot the previous values for rollback
-      const previousSummaries = queryClient.getQueriesData<KnowledgeItemsResponse>({
-        queryKey: knowledgeKeys.summariesPrefix(),
-      });
       const previousOperations = queryClient.getQueryData<ActiveOperationsResponse>(progressKeys.active());
 
       const tempProgressId = createOptimisticId();
 
-      // Create optimistic knowledge item for the upload
-      const optimisticItem = createOptimisticEntity<KnowledgeItem>({
-        title: file.name,
-        url: `file://${file.name}`,
-        source_id: tempProgressId,
-        source_type: "file",
-        knowledge_type: metadata.knowledge_type || "technical",
-        status: "processing",
-        document_count: 0,
-        code_examples_count: 0,
-        metadata: {
-          knowledge_type: metadata.knowledge_type || "technical",
-          tags: metadata.tags || [],
-          source_type: "file",
-          status: "processing",
-          description: `Uploading ${file.name}`,
-          file_name: file.name,
-        },
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      } as Omit<KnowledgeItem, "id">);
-
-      // Respect each cache's filter (knowledge_type, tags, etc.)
-      const entries = queryClient.getQueriesData<KnowledgeItemsResponse>({
-        queryKey: knowledgeKeys.summariesPrefix(),
-      });
-      for (const [qk, old] of entries) {
-        const filter = qk[qk.length - 1] as KnowledgeItemsFilter | undefined;
-        const matchesType = !filter?.knowledge_type || optimisticItem.knowledge_type === filter.knowledge_type;
-        const matchesTags =
-          !filter?.tags || filter.tags.every((t) => (optimisticItem.metadata?.tags ?? []).includes(t));
-        if (!(matchesType && matchesTags)) continue;
-        if (!old) {
-          queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
-            items: [optimisticItem],
-            total: 1,
-            page: 1,
-            per_page: 100,
-          });
-        } else {
-          queryClient.setQueryData<KnowledgeItemsResponse>(qk, {
-            ...old,
-            items: [optimisticItem, ...old.items],
-            total: (old.total ?? old.items.length) + 1,
-          });
-        }
-      }
+      // NOTE: We intentionally do NOT create an optimistic knowledge item here
+      // Creating optimistic items causes duplicate card issues due to race conditions
+      // with polling. Instead, we only create an optimistic operation (shown in Active
+      // Operations panel) and wait for the actual knowledge item from the server.
 
       // Create optimistic progress operation for upload
       const optimisticOperation: ActiveOperation = {
@@ -437,69 +389,34 @@ export function useUploadDocument() {
         });
       };
 
-      return { previousSummaries, previousOperations, tempProgressId, tempItemId: tempProgressId };
+      return { previousOperations, tempProgressId };
     },
     onSuccess: (response, _variables, context) => {
-      // Update optimistic entries with real progressId so they can be matched/replaced by server data
-      // The key insight: both optimistic items and server items will have source_id = progressId
-      // This allows React Query to properly dedupe when server data arrives
-      if (context && response?.progressId) {
-        // UPDATE the optimistic knowledge item's source_id to match server's progressId
-        queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summariesPrefix() }, (old) => {
-          if (!old) return old;
-          return {
-            ...old,
-            items: old.items.map((item) => {
-              if (item.source_id === context.tempProgressId) {
-                return {
-                  ...item,
-                  source_id: response.progressId,
-                };
-              }
-              return item;
-            }),
-          };
-        });
-
-        // UPDATE the optimistic operation to match server's progressId
-        // This allows the card to match with the operation while we wait for server data
+      // Remove the optimistic operation - server operation will replace it via polling
+      // We remove instead of update to avoid race conditions where both appear
+      if (context) {
         queryClient.setQueryData<ActiveOperationsResponse>(progressKeys.active(), (old) => {
           if (!old) return old;
           return {
             ...old,
-            operations: old.operations.map((op) => {
-              if (op.operation_id === context.tempProgressId) {
-                return {
-                  ...op,
-                  operation_id: response.progressId,
-                  progressId: response.progressId,
-                  source_id: response.progressId,
-                  status: "processing",
-                  message: "Processing document...",
-                  progress: 10,
-                };
-              }
-              return op;
-            }),
+            operations: old.operations.filter((op) => op.operation_id !== context.tempProgressId),
+            count: Math.max(0, old.count - 1),
           };
         });
       }
 
-      // Only invalidate progress queries - the server operation should be available immediately
-      // DON'T invalidate summaries here - the knowledge item may not exist in DB yet
-      // The item will appear naturally via polling when the operation completes
+      // Invalidate progress queries to fetch server operation with real progressId
       queryClient.invalidateQueries({ queryKey: progressKeys.active() });
+
+      // Invalidate knowledge summaries so the new item appears in the list
+      // The server creates the source entry early, so it should be available
+      queryClient.invalidateQueries({ queryKey: knowledgeKeys.summariesPrefix() });
 
       // Don't show success here - upload is just starting in background
       // Success/failure will be shown via progress polling
     },
     onError: (error, _variables, context) => {
-      // Rollback optimistic updates on error
-      if (context?.previousSummaries) {
-        for (const [queryKey, data] of context.previousSummaries) {
-          queryClient.setQueryData(queryKey, data);
-        }
-      }
+      // Rollback optimistic operation on error
       if (context?.previousOperations) {
         queryClient.setQueryData(progressKeys.active(), context.previousOperations);
       }

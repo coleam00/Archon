@@ -1,6 +1,5 @@
 import { test, expect } from "@playwright/test";
 import path from "path";
-import fs from "fs";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -23,52 +22,52 @@ const __dirname = path.dirname(__filename);
  * 6. Search for content from the document
  */
 
-// Create a test PDF file in the fixtures directory
-const fixturesDir = path.join(__dirname, "fixtures");
-const testPdfPath = path.join(fixturesDir, "test-document.txt");
+// Use existing test PDF from the repo (relative to monorepo root)
+const testPdfPath = path.resolve(__dirname, "../../../test-pdf/Book.pdf");
 
-test.beforeAll(async () => {
-  // Ensure fixtures directory exists
-  if (!fs.existsSync(fixturesDir)) {
-    fs.mkdirSync(fixturesDir, { recursive: true });
+// API base URL for cleanup
+const API_BASE = "http://localhost:8181/api";
+
+/**
+ * Cleanup any existing Book.pdf items to prevent duplicates
+ * This is important because multiple test files may upload the same file
+ */
+async function cleanupBookPdfItems(): Promise<void> {
+  try {
+    const response = await fetch(`${API_BASE}/knowledge-items/summary`);
+    if (!response.ok) return;
+
+    const data = await response.json();
+    const bookItems = data.items?.filter((item: any) =>
+      item.title === "Book.pdf" || item.metadata?.filename === "Book.pdf"
+    ) || [];
+
+    for (const item of bookItems) {
+      console.log(`Cleaning up existing Book.pdf item: ${item.source_id}`);
+      await fetch(`${API_BASE}/knowledge-items/${item.source_id}`, { method: "DELETE" });
+    }
+  } catch (error) {
+    // Ignore cleanup errors - backend might not be running
   }
-
-  // Create a simple test document (using .txt for simplicity - PDF would need binary)
-  const testContent = `
-# Test Document for E2E Testing
-
-This is a test document created for Archon E2E testing.
-
-## Section 1: Introduction
-Archon is a knowledge management system with AI capabilities.
-
-## Section 2: Features
-- Web crawling
-- Document upload with OCR support
-- RAG-based search
-- Multi-platform compatibility (ARM64 and x86_64)
-
-## Section 3: Technical Details
-The system uses PyMuPDF4LLM for PDF text extraction and Tesseract OCR
-for scanned documents. This enables processing of both text-based and
-image-based PDF files.
-
-Keywords: archon, knowledge, rag, ocr, tesseract, pymupdf
-`;
-
-  fs.writeFileSync(testPdfPath, testContent.trim());
-});
+}
 
 test.describe("PDF Upload Flow", () => {
+  // Clean up any existing Book.pdf items before each test to prevent duplicates
   test.beforeEach(async ({ page }) => {
+    // Clean up existing Book.pdf items from previous test runs
+    await cleanupBookPdfItems();
+
     // Navigate to Knowledge Base
-    await page.goto("/knowledge");
-    await page.waitForLoadState("networkidle");
+    await page.goto("/");
+    // Use domcontentloaded instead of networkidle to avoid timeout when uploads are in progress
+    await page.waitForLoadState("domcontentloaded");
+    // Wait for the Knowledge Base heading to appear
+    await page.waitForSelector("text=Knowledge Base", { timeout: 10000 });
   });
 
   test("should display Knowledge Base page with Add Knowledge button", async ({ page }) => {
-    // Verify page loaded
-    await expect(page.locator("text=Knowledge Base")).toBeVisible();
+    // Verify page loaded - use specific heading to avoid matching loading text
+    await expect(page.getByRole("heading", { name: "Knowledge Base" })).toBeVisible();
 
     // Verify Add Knowledge button exists
     const addButton = page.locator('button:has-text("Knowledge")').first();
@@ -83,12 +82,12 @@ test.describe("PDF Upload Flow", () => {
     // Wait for dialog to open
     await expect(page.locator("text=Add Knowledge")).toBeVisible();
 
-    // Verify both tabs exist
-    await expect(page.locator("text=Crawl Website")).toBeVisible();
-    await expect(page.locator("text=Upload Document")).toBeVisible();
+    // Verify both tabs exist (use role selector for better reliability)
+    await expect(page.getByRole("tab", { name: "Crawl Website" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Upload Document" })).toBeVisible();
 
     // Click Upload Document tab
-    await page.click("text=Upload Document");
+    await page.getByRole("tab", { name: "Upload Document" }).click();
     await page.waitForTimeout(300);
 
     // Verify upload area is visible
@@ -109,23 +108,24 @@ test.describe("PDF Upload Flow", () => {
     await addButton.click();
     await expect(page.locator("text=Add Knowledge")).toBeVisible();
 
-    // Switch to Upload tab
-    await page.click("text=Upload Document");
+    // Switch to Upload tab (use role selector)
+    await page.getByRole("tab", { name: "Upload Document" }).click();
     await page.waitForTimeout(300);
 
-    // Upload the test file
+    // Upload the test PDF file
     const fileInput = page.locator('input[type="file"]');
     await fileInput.setInputFiles(testPdfPath);
 
-    // Verify file is selected (filename should appear)
-    await expect(page.locator("text=test-document.txt")).toBeVisible();
+    // Verify file is selected (filename should appear in the dialog)
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.locator("text=Book.pdf")).toBeVisible();
 
-    // Click Upload button
-    const uploadButton = page.locator('button:has-text("Upload Document")');
+    // Click Upload button (not the tab - use the action button)
+    const uploadButton = page.locator('button:has-text("Upload Document"):not([role="tab"])');
     await uploadButton.click();
 
-    // Wait for upload to start (toast message)
-    await expect(page.locator("text=Upload started").first()).toBeVisible({ timeout: 10000 });
+    // Wait for upload to start (toast message or button state change)
+    await expect(page.locator("text=Upload started").or(page.locator("text=Uploading")).first()).toBeVisible({ timeout: 10000 });
   });
 
   test("should show uploaded document in Knowledge Base after processing", async ({ page }) => {
@@ -153,8 +153,9 @@ test.describe("PDF Upload Flow", () => {
 
 test.describe("Knowledge Base UI Elements", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto("/knowledge");
-    await page.waitForLoadState("networkidle");
+    await page.goto("/");
+    await page.waitForLoadState("domcontentloaded");
+    await page.waitForSelector("text=Knowledge Base", { timeout: 10000 });
   });
 
   test("should have working view mode toggles", async ({ page }) => {
@@ -209,15 +210,4 @@ test.describe("Knowledge Base UI Elements", () => {
     await searchInput.fill("");
     await expect(searchInput).toHaveValue("");
   });
-});
-
-test.afterAll(async () => {
-  // Cleanup test fixtures
-  if (fs.existsSync(testPdfPath)) {
-    fs.unlinkSync(testPdfPath);
-  }
-  // Remove fixtures dir if empty
-  if (fs.existsSync(fixturesDir) && fs.readdirSync(fixturesDir).length === 0) {
-    fs.rmdirSync(fixturesDir);
-  }
 });
