@@ -197,3 +197,49 @@ async def get_page_by_id(page_id: str):
         logger.error(f"Error getting page {page_id}: {e}", exc_info=True)
         safe_logfire_error(f"Failed to get page | page_id={page_id} | error={str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get page: {str(e)}") from e
+
+
+class RecalculateChunkCountsResponse(BaseModel):
+    """Response model for chunk count recalculation"""
+
+    success: bool
+    source_id: str
+    pages_updated: int
+    updated_counts: dict[str, int]
+    message: str
+
+
+@router.post("/pages/recalculate-chunk-counts")
+async def recalculate_chunk_counts(source_id: str = Query(..., description="Source ID to recalculate chunk counts for")):
+    """
+    Recalculate chunk_count for all pages in a source.
+
+    This fixes pages where chunk_count is 0 but chunks actually exist in the database.
+    Counts actual chunks in archon_crawled_pages and updates archon_page_metadata.
+
+    Args:
+        source_id: The source ID to recalculate chunk counts for
+
+    Returns:
+        RecalculateChunkCountsResponse with update statistics
+    """
+    try:
+        from ..services.crawling.page_storage_operations import PageStorageOperations
+
+        client = get_supabase_client()
+        page_ops = PageStorageOperations(client)
+
+        updated_counts = await page_ops.recalculate_chunk_counts_for_source(source_id)
+
+        return RecalculateChunkCountsResponse(
+            success=True,
+            source_id=source_id,
+            pages_updated=len(updated_counts),
+            updated_counts=updated_counts,
+            message=f"Updated chunk counts for {len(updated_counts)} pages",
+        )
+
+    except Exception as e:
+        logger.error(f"Error recalculating chunk counts for source {source_id}: {e}", exc_info=True)
+        safe_logfire_error(f"Failed to recalculate chunk counts | source_id={source_id} | error={str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to recalculate chunk counts: {str(e)}") from e

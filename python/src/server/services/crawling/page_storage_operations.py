@@ -246,3 +246,73 @@ class PageStorageOperations:
             logger.warning(
                 f"Unexpected error updating chunk_count for page {page_id}: {e}", exc_info=True
             )
+
+    async def recalculate_chunk_counts_for_source(self, source_id: str) -> dict[str, int]:
+        """
+        Recalculate and update chunk_count for all pages belonging to a source.
+
+        This fixes pages where chunk_count is 0 but chunks actually exist.
+        Counts actual chunks in archon_crawled_pages and updates archon_page_metadata.
+
+        Args:
+            source_id: The source_id to recalculate chunk counts for
+
+        Returns:
+            Dict mapping page_id to updated chunk_count
+        """
+        updated_counts: dict[str, int] = {}
+
+        try:
+            # Get all pages for this source
+            pages_result = (
+                self.supabase_client.table("archon_page_metadata")
+                .select("id, url, chunk_count")
+                .eq("source_id", source_id)
+                .execute()
+            )
+
+            if not pages_result.data:
+                logger.info(f"No pages found for source_id={source_id}")
+                return updated_counts
+
+            # Count chunks per page_id from the chunks table
+            for page in pages_result.data:
+                page_id = page["id"]
+
+                # Count actual chunks for this page
+                chunks_result = (
+                    self.supabase_client.table("archon_crawled_pages")
+                    .select("id", count="exact")
+                    .eq("page_id", page_id)
+                    .execute()
+                )
+
+                actual_count = chunks_result.count or 0
+                current_count = page.get("chunk_count", 0)
+
+                # Only update if the count differs
+                if actual_count != current_count:
+                    await self.update_page_chunk_count(page_id, actual_count)
+                    updated_counts[page_id] = actual_count
+                    logger.info(
+                        f"Updated page {page_id}: chunk_count {current_count} -> {actual_count}"
+                    )
+
+            safe_logfire_info(
+                f"Recalculated chunk counts for source {source_id}: {len(updated_counts)} pages updated"
+            )
+
+        except APIError as e:
+            logger.error(
+                f"Database error recalculating chunk counts for source {source_id}: {e}",
+                exc_info=True,
+            )
+            raise
+        except Exception as e:
+            logger.error(
+                f"Unexpected error recalculating chunk counts for source {source_id}: {e}",
+                exc_info=True,
+            )
+            raise
+
+        return updated_counts
