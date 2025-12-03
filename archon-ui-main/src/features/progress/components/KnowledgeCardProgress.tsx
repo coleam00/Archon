@@ -18,6 +18,7 @@ export const KnowledgeCardProgress: React.FC<KnowledgeCardProgressProps> = ({ op
   const progressPercentage = typeof operation.progress === "number" ? Math.round(operation.progress) : 0;
 
   // Check if operation is active - same logic as CrawlingProgress
+  // Include both crawl and upload statuses
   const isActive = [
     "crawling",
     "processing",
@@ -28,6 +29,13 @@ export const KnowledgeCardProgress: React.FC<KnowledgeCardProgressProps> = ({ op
     "source_creation",
     "document_storage",
     "code_extraction",
+    // Upload-specific statuses
+    "uploading",
+    "storing",
+    "reading",
+    "text_extraction",
+    "chunking",
+    "summarizing",
   ].includes(operation.status);
 
   // Don't show if not active
@@ -97,14 +105,30 @@ export const KnowledgeCardProgress: React.FC<KnowledgeCardProgressProps> = ({ op
             />
           </div>
 
-          {/* Stats - simplified to match CrawlingProgress */}
+          {/* Stats - supports both crawl and upload operations */}
           <div className="flex items-center gap-4 text-xs text-gray-500">
+            {/* Crawl stats: pages crawled */}
             {(operation.pages_crawled !== undefined || stats?.pages_crawled !== undefined) && (
               <div className="flex items-center gap-1">
                 <Link className="w-3 h-3" />
                 <span>{operation.pages_crawled || stats?.pages_crawled || 0} pages</span>
               </div>
             )}
+            {/* Upload stats: pages extracted */}
+            {operation.pages_extracted !== undefined && (
+              <div className="flex items-center gap-1">
+                <FileText className="w-3 h-3 text-purple-400" />
+                <span>{operation.pages_extracted} pages</span>
+              </div>
+            )}
+            {/* Upload stats: chunks created */}
+            {operation.chunks_created !== undefined && (
+              <div className="flex items-center gap-1">
+                <FileText className="w-3 h-3 text-cyan-400" />
+                <span>{operation.chunks_created} chunks</span>
+              </div>
+            )}
+            {/* Crawl stats: documents created */}
             {(operation.documents_created !== undefined ||
               (stats && "documents_created" in stats && stats.documents_created !== undefined)) && (
               <div className="flex items-center gap-1">
@@ -115,6 +139,7 @@ export const KnowledgeCardProgress: React.FC<KnowledgeCardProgressProps> = ({ op
                 </span>
               </div>
             )}
+            {/* Code blocks found */}
             {operation.code_blocks_found !== undefined && (
               <div className="flex items-center gap-1">
                 <Code className="w-3 h-3 text-green-500" />

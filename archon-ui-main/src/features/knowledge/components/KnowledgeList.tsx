@@ -69,13 +69,16 @@ export const KnowledgeList: React.FC<KnowledgeListProps> = ({
     }
 
     // Fallback: Check if any active operation is for this item's URL
+    // Note: For uploads, we rely solely on source_id matching (above) since filename matching
+    // would incorrectly match multiple cards with the same filename
     const itemUrl = item.metadata?.original_url || item.url;
     return activeOperations.find((op) => {
-      // Check various URL fields in the operation
+      // Check various URL fields in the operation (for crawl operations only)
       return (
         op.url === itemUrl ||
         op.current_url === itemUrl ||
         op.message?.includes(itemUrl) ||
+        // Match crawl operations by title
         (op.operation_type === "crawl" && op.message?.includes(item.title))
       );
     });

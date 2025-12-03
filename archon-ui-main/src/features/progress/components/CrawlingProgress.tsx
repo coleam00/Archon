@@ -138,6 +138,14 @@ export const CrawlingProgress: React.FC<CrawlingProgressProps> = ({ onSwitchToBr
             "code_extraction",
           ].includes(operation.status);
 
+          // Extract rate limit info from message if present
+          const rateLimitMatch = operation.message?.match(/Rate limited: waiting ([\d.]+s) more/i);
+          const rateLimitInfo = rateLimitMatch ? rateLimitMatch[1] : null;
+          // Get a clean title without rate limit info
+          const cleanTitle = rateLimitInfo
+            ? operation.current_url || `Processing ${operation.operation_type === "upload" ? "document" : "crawl"}...`
+            : operation.message || operation.current_url || "Processing...";
+
           return (
             <motion.div
               key={operation.operation_id}
@@ -160,7 +168,7 @@ export const CrawlingProgress: React.FC<CrawlingProgressProps> = ({ onSwitchToBr
                       <h3 className="text-lg font-semibold text-white/90 flex items-center gap-2">
                         {getStatusIcon(operation.status)}
                         <span className="truncate">
-                          {operation.message || operation.current_url || "Processing..."}
+                          {cleanTitle}
                         </span>
                       </h3>
                       <div className="flex items-center gap-2 mt-2">
@@ -204,7 +212,12 @@ export const CrawlingProgress: React.FC<CrawlingProgressProps> = ({ onSwitchToBr
                   {isActive && (
                     <div className="space-y-2">
                       <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-400">Progress</span>
+                        <span className="text-gray-400">
+                          Progress
+                          {rateLimitInfo && (
+                            <span className="text-gray-500 ml-2">(waiting {rateLimitInfo})</span>
+                          )}
+                        </span>
                         <span className="text-cyan-400 font-medium">{progress}%</span>
                       </div>
                       <div className="h-2 bg-black/30 rounded-full overflow-hidden">
@@ -216,25 +229,47 @@ export const CrawlingProgress: React.FC<CrawlingProgressProps> = ({ onSwitchToBr
                     </div>
                   )}
 
-                  {/* Statistics */}
+                  {/* Statistics - Dynamic based on operation type */}
                   <div className="grid grid-cols-3 gap-4 pt-2">
-                    {(operation.pages_crawled !== undefined || operation.stats?.pages_crawled !== undefined) && (
+                    {/* First stat: Pages (crawl) or Pages Extracted (upload) or Batch Progress */}
+                    {operation.pages_crawled !== undefined || operation.stats?.pages_crawled !== undefined ? (
                       <div className="text-center">
                         <div className="text-2xl font-bold text-cyan-400">
                           {operation.pages_crawled || operation.stats?.pages_crawled || 0}
                         </div>
                         <div className="text-xs text-gray-500">Pages Crawled</div>
                       </div>
-                    )}
+                    ) : operation.pages_extracted !== undefined ? (
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-cyan-400">
+                          {operation.pages_extracted}
+                        </div>
+                        <div className="text-xs text-gray-500">Pages Extracted</div>
+                      </div>
+                    ) : operation.current_batch !== undefined && operation.total_batches !== undefined ? (
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-cyan-400">
+                          {operation.current_batch}/{operation.total_batches}
+                        </div>
+                        <div className="text-xs text-gray-500">Batches</div>
+                      </div>
+                    ) : null}
+
+                    {/* Second stat: Documents (crawl) or Chunks (upload) */}
                     {(operation.documents_created !== undefined ||
-                      operation.stats?.documents_created !== undefined) && (
+                      operation.stats?.documents_created !== undefined ||
+                      operation.chunks_stored !== undefined) && (
                       <div className="text-center">
                         <div className="text-2xl font-bold text-green-400">
-                          {operation.documents_created || operation.stats?.documents_created || 0}
+                          {operation.documents_created || operation.stats?.documents_created || operation.chunks_stored || 0}
                         </div>
-                        <div className="text-xs text-gray-500">Documents</div>
+                        <div className="text-xs text-gray-500">
+                          {operation.operation_type === "upload" ? "Chunks" : "Documents"}
+                        </div>
                       </div>
                     )}
+
+                    {/* Third stat: Code Blocks (both) or Errors */}
                     {(operation.code_blocks_found !== undefined || operation.stats?.errors !== undefined) && (
                       <div className="text-center">
                         <div className="text-2xl font-bold text-yellow-400">

@@ -298,11 +298,15 @@ export function useCrawlUrl() {
 }
 
 /**
- * Upload document mutation with optimistic updates
+ * Upload document mutation with optimistic updates and upload progress tracking
+ * The modal closes immediately and upload progress is shown in the progress panel
  */
 export function useUploadDocument() {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
+
+  // Store the progress updater function between onMutate and mutationFn
+  const progressUpdaterRef = { current: null as ((percent: number, stage: "uploading" | "processing") => void) | null };
 
   return useMutation<
     { progressId: string; message: string },
@@ -314,8 +318,11 @@ export function useUploadDocument() {
       tempProgressId: string;
     }
   >({
-    mutationFn: ({ file, metadata }: { file: File; metadata: UploadMetadata }) =>
-      knowledgeService.uploadDocument(file, metadata),
+    mutationFn: ({ file, metadata }) =>
+      knowledgeService.uploadDocumentWithProgress(file, metadata, (percent, stage) => {
+        // Use the progress updater that was set in onMutate
+        progressUpdaterRef.current?.(percent, stage);
+      }),
     onMutate: async ({ file, metadata }) => {
       // Cancel any outgoing refetches to prevent race conditions
       await queryClient.cancelQueries({ queryKey: knowledgeKeys.summariesPrefix() });
@@ -381,9 +388,9 @@ export function useUploadDocument() {
       const optimisticOperation: ActiveOperation = {
         operation_id: tempProgressId,
         operation_type: "upload",
-        status: "starting",
+        status: "uploading",
         progress: 0,
-        message: `Uploading ${file.name}`,
+        message: `Uploading ${file.name}...`,
         started_at: new Date().toISOString(),
         progressId: tempProgressId,
         type: "upload",
@@ -407,12 +414,37 @@ export function useUploadDocument() {
         };
       });
 
+      // Set up progress updater function for mutationFn to use
+      progressUpdaterRef.current = (percent: number, stage: "uploading" | "processing") => {
+        queryClient.setQueryData<ActiveOperationsResponse>(progressKeys.active(), (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            operations: old.operations.map((op) => {
+              if (op.operation_id === tempProgressId) {
+                return {
+                  ...op,
+                  status: stage,
+                  progress: stage === "uploading" ? Math.round(percent * 0.1) : 10, // Upload is 0-10% of total
+                  message: stage === "uploading"
+                    ? `Uploading ${file.name}... ${percent}%`
+                    : `Processing ${file.name}...`,
+                };
+              }
+              return op;
+            }),
+          };
+        });
+      };
+
       return { previousSummaries, previousOperations, tempProgressId, tempItemId: tempProgressId };
     },
     onSuccess: (response, _variables, context) => {
-      // Replace temporary IDs with real ones from the server
+      // Update optimistic entries with real progressId so they can be matched/replaced by server data
+      // The key insight: both optimistic items and server items will have source_id = progressId
+      // This allows React Query to properly dedupe when server data arrives
       if (context && response?.progressId) {
-        // Update summaries cache with real progress ID
+        // UPDATE the optimistic knowledge item's source_id to match server's progressId
         queryClient.setQueriesData<KnowledgeItemsResponse>({ queryKey: knowledgeKeys.summariesPrefix() }, (old) => {
           if (!old) return old;
           return {
@@ -429,7 +461,8 @@ export function useUploadDocument() {
           };
         });
 
-        // Update progress operation with real progress ID
+        // UPDATE the optimistic operation to match server's progressId
+        // This allows the card to match with the operation while we wait for server data
         queryClient.setQueryData<ActiveOperationsResponse>(progressKeys.active(), (old) => {
           if (!old) return old;
           return {
@@ -441,7 +474,9 @@ export function useUploadDocument() {
                   operation_id: response.progressId,
                   progressId: response.progressId,
                   source_id: response.progressId,
-                  message: response.message || op.message,
+                  status: "processing",
+                  message: "Processing document...",
+                  progress: 10,
                 };
               }
               return op;
@@ -450,8 +485,9 @@ export function useUploadDocument() {
         });
       }
 
-      // Only invalidate progress to start tracking the new operation
-      // The lists/summaries will refresh automatically via polling when operations are active
+      // Only invalidate progress queries - the server operation should be available immediately
+      // DON'T invalidate summaries here - the knowledge item may not exist in DB yet
+      // The item will appear naturally via polling when the operation completes
       queryClient.invalidateQueries({ queryKey: progressKeys.active() });
 
       // Don't show success here - upload is just starting in background
