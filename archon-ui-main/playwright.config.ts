@@ -32,6 +32,9 @@ export default defineConfig({
     // Base URL to use in actions like `await page.goto('/')`
     baseURL: 'http://localhost:3737',
 
+    // Always run headless by default
+    headless: true,
+
     // Collect trace when retrying the failed test
     trace: 'on-first-retry',
 
