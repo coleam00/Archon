@@ -6,7 +6,6 @@ import {
   Copy,
   Check,
   Code as CodeIcon,
-  FileText,
   TagIcon,
   Info,
   Search,

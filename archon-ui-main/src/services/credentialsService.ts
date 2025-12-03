@@ -17,11 +17,13 @@ export interface RagSettings {
   USE_AGENTIC_RAG: boolean;
   USE_RERANKING: boolean;
   MODEL_CHOICE: string;
+  CHAT_MODEL?: string;
   LLM_PROVIDER?: string;
   LLM_BASE_URL?: string;
   LLM_INSTANCE_NAME?: string;
   OLLAMA_EMBEDDING_URL?: string;
   OLLAMA_EMBEDDING_INSTANCE_NAME?: string;
+  OLLAMA_API_MODE?: string;
   EMBEDDING_MODEL?: string;
   EMBEDDING_PROVIDER?: string;
   // Crawling Performance Settings
@@ -63,6 +65,7 @@ export interface OllamaInstance {
   baseUrl: string;
   isEnabled: boolean;
   isPrimary: boolean;
+  authToken?: string;
   instanceType?: 'chat' | 'embedding' | 'both';
   loadBalancingWeight?: number;
   isHealthy?: boolean;
@@ -196,11 +199,13 @@ class CredentialsService {
   USE_AGENTIC_RAG: true,
   USE_RERANKING: true,
   MODEL_CHOICE: "gpt-4.1-nano",
+  CHAT_MODEL: "",
   LLM_PROVIDER: "openai",
   LLM_BASE_URL: "",
   LLM_INSTANCE_NAME: "",
   OLLAMA_EMBEDDING_URL: "",
   OLLAMA_EMBEDDING_INSTANCE_NAME: "",
+  OLLAMA_API_MODE: "native",
   EMBEDDING_PROVIDER: "openai",
   EMBEDDING_MODEL: "",
       // Crawling Performance Settings defaults
@@ -228,11 +233,13 @@ class CredentialsService {
         if (
           [
             "MODEL_CHOICE",
+            "CHAT_MODEL",
             "LLM_PROVIDER",
             "LLM_BASE_URL",
             "LLM_INSTANCE_NAME",
             "OLLAMA_EMBEDDING_URL",
             "OLLAMA_EMBEDDING_INSTANCE_NAME",
+            "OLLAMA_API_MODE",
             "EMBEDDING_PROVIDER",
             "EMBEDDING_MODEL",
             "CRAWL_WAIT_STRATEGY",
@@ -473,7 +480,8 @@ class CredentialsService {
             isHealthy: instance.isHealthy,
             responseTimeMs: instance.responseTimeMs,
             modelsAvailable: instance.modelsAvailable,
-            lastHealthCheck: instance.lastHealthCheck
+            lastHealthCheck: instance.lastHealthCheck,
+            authToken: instance.authToken
           });
         }
       });
@@ -519,7 +527,10 @@ class CredentialsService {
         if (instance.lastHealthCheck) {
           fields.lastHealthCheck = instance.lastHealthCheck;
         }
-        
+        if (instance.authToken) {
+          fields.authToken = instance.authToken;
+        }
+
         // Create a credential for each field
         Object.entries(fields).forEach(([field, value]) => {
           promises.push(

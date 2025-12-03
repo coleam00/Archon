@@ -15,6 +15,7 @@ services:
         BUILDKIT_INLINE_CACHE: 1
         ARCHON_SERVER_PORT: ${ARCHON_SERVER_PORT:-8181}
     container_name: archon-server
+    restart: unless-stopped
     ports:
       - "${ARCHON_SERVER_PORT:-8181}:${ARCHON_SERVER_PORT:-8181}"
     environment:
@@ -78,6 +79,7 @@ services:
         BUILDKIT_INLINE_CACHE: 1
         ARCHON_MCP_PORT: ${ARCHON_MCP_PORT:-8051}
     container_name: archon-mcp
+    restart: unless-stopped
     ports:
       - "${ARCHON_MCP_PORT:-8051}:${ARCHON_MCP_PORT:-8051}"
     environment:
@@ -126,6 +128,7 @@ services:
         BUILDKIT_INLINE_CACHE: 1
         ARCHON_AGENTS_PORT: ${ARCHON_AGENTS_PORT:-8052}
     container_name: archon-agents
+    restart: unless-stopped
     ports:
       - "${ARCHON_AGENTS_PORT:-8052}:${ARCHON_AGENTS_PORT:-8052}"
     environment:
@@ -208,6 +211,7 @@ services:
   archon-frontend:
     build: ./archon-ui-main
     container_name: archon-ui
+    restart: unless-stopped
     ports:
       - "${ARCHON_UI_PORT:-3737}:3737"
     environment:

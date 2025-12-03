@@ -11,6 +11,7 @@ import { useToast } from '../../features/shared/hooks/useToast';
 import { credentialsService } from '../../services/credentialsService';
 import OllamaModelDiscoveryModal from './OllamaModelDiscoveryModal';
 import OllamaModelSelectionModal from './OllamaModelSelectionModal';
+import { syncEmbeddingFromLLM } from './utils/instanceConfigSync';
 
 type ProviderKey = 'openai' | 'google' | 'ollama' | 'anthropic' | 'grok' | 'openrouter';
 
@@ -141,6 +142,7 @@ const normalizeBaseUrl = (url?: string | null): string | null => {
 interface RAGSettingsProps {
   ragSettings: {
     MODEL_CHOICE: string;
+    CHAT_MODEL?: string;
     USE_CONTEXTUAL_EMBEDDINGS: boolean;
     CONTEXTUAL_EMBEDDINGS_MAX_WORKERS: number;
     USE_HYBRID_SEARCH: boolean;
@@ -207,57 +209,67 @@ export const RAGSettings = ({
   // Instance configurations
   const [llmInstanceConfig, setLLMInstanceConfig] = useState({
     name: '',
-    url: ragSettings.LLM_BASE_URL || 'http://host.docker.internal:11434/v1'
+    url: ragSettings.LLM_BASE_URL || 'http://host.docker.internal:11434/v1',
+    useAuth: false,
+    authToken: ''
   });
   const [embeddingInstanceConfig, setEmbeddingInstanceConfig] = useState({
-    name: '', 
-    url: ragSettings.OLLAMA_EMBEDDING_URL || 'http://host.docker.internal:11434/v1'
+    name: '',
+    url: ragSettings.OLLAMA_EMBEDDING_URL || 'http://host.docker.internal:11434/v1',
+    useAuth: false,
+    authToken: ''
   });
 
   // Update instance configs when ragSettings change (after loading from database)
   // Use refs to prevent infinite loops
-  const lastLLMConfigRef = useRef({ url: '', name: '' });
-  const lastEmbeddingConfigRef = useRef({ url: '', name: '' });
-  
+  const lastLLMConfigRef = useRef({ url: '', name: '', authToken: '' });
+  const lastEmbeddingConfigRef = useRef({ url: '', name: '', authToken: '' });
+
   useEffect(() => {
     const newLLMUrl = ragSettings.LLM_BASE_URL || '';
     const newLLMName = ragSettings.LLM_INSTANCE_NAME || '';
-    
-    if (newLLMUrl !== lastLLMConfigRef.current.url || newLLMName !== lastLLMConfigRef.current.name) {
-      lastLLMConfigRef.current = { url: newLLMUrl, name: newLLMName };
+    const newAuthToken = ragSettings.OLLAMA_CHAT_AUTH_TOKEN || '';
+
+    if (newLLMUrl !== lastLLMConfigRef.current.url || newLLMName !== lastLLMConfigRef.current.name || newAuthToken !== lastLLMConfigRef.current.authToken) {
+      lastLLMConfigRef.current = { url: newLLMUrl, name: newLLMName, authToken: newAuthToken };
       setLLMInstanceConfig(prev => {
         const newConfig = {
           url: newLLMUrl || prev.url,
-          name: newLLMName || prev.name
+          name: newLLMName || prev.name,
+          useAuth: !!newAuthToken,
+          authToken: newAuthToken || prev.authToken
         };
         // Only update if actually different to prevent loops
-        if (newConfig.url !== prev.url || newConfig.name !== prev.name) {
+        if (newConfig.url !== prev.url || newConfig.name !== prev.name || newConfig.authToken !== prev.authToken) {
           return newConfig;
         }
         return prev;
       });
     }
-  }, [ragSettings.LLM_BASE_URL, ragSettings.LLM_INSTANCE_NAME]);
+  }, [ragSettings.LLM_BASE_URL, ragSettings.LLM_INSTANCE_NAME, ragSettings.OLLAMA_CHAT_AUTH_TOKEN]);
 
   useEffect(() => {
     const newEmbeddingUrl = ragSettings.OLLAMA_EMBEDDING_URL || '';
     const newEmbeddingName = ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME || '';
-    
-    if (newEmbeddingUrl !== lastEmbeddingConfigRef.current.url || newEmbeddingName !== lastEmbeddingConfigRef.current.name) {
-      lastEmbeddingConfigRef.current = { url: newEmbeddingUrl, name: newEmbeddingName };
+    const newAuthToken = ragSettings.OLLAMA_EMBEDDING_AUTH_TOKEN || '';
+
+    if (newEmbeddingUrl !== lastEmbeddingConfigRef.current.url || newEmbeddingName !== lastEmbeddingConfigRef.current.name || newAuthToken !== lastEmbeddingConfigRef.current.authToken) {
+      lastEmbeddingConfigRef.current = { url: newEmbeddingUrl, name: newEmbeddingName, authToken: newAuthToken };
       setEmbeddingInstanceConfig(prev => {
         const newConfig = {
           url: newEmbeddingUrl || prev.url,
-          name: newEmbeddingName || prev.name
+          name: newEmbeddingName || prev.name,
+          useAuth: !!newAuthToken,
+          authToken: newAuthToken || prev.authToken
         };
         // Only update if actually different to prevent loops
-        if (newConfig.url !== prev.url || newConfig.name !== prev.name) {
+        if (newConfig.url !== prev.url || newConfig.name !== prev.name || newConfig.authToken !== prev.authToken) {
           return newConfig;
         }
         return prev;
       });
     }
-  }, [ragSettings.OLLAMA_EMBEDDING_URL, ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME]);
+  }, [ragSettings.OLLAMA_EMBEDDING_URL, ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME, ragSettings.OLLAMA_EMBEDDING_AUTH_TOKEN]);
 
   // Provider model persistence effects - separate for chat and embedding
   useEffect(() => {
@@ -565,7 +577,10 @@ export const RAGSettings = ({
     loading: true,
     // Per-instance model counts
     llmInstanceModels: { chat: 0, embedding: 0, total: 0 },
-    embeddingInstanceModels: { chat: 0, embedding: 0, total: 0 }
+    embeddingInstanceModels: { chat: 0, embedding: 0, total: 0 },
+    // Available model lists
+    llmAvailableModels: [] as string[],
+    embeddingAvailableModels: [] as string[]
   });
   const { showToast } = useToast();
 
@@ -622,6 +637,59 @@ export const RAGSettings = ({
       console.log(`❌ ${url} failed: ${errorMessage} (${responseTime}ms)`);
     }
   };
+
+  // Load available models from Ollama instance
+  const loadAvailableModels = async (url: string, context: 'chat' | 'embedding') => {
+    try {
+      const baseUrl = url.replace('/v1', '').replace(/\/$/, '');
+      const modelsUrl = `/api/ollama/models?instance_urls=${encodeURIComponent(baseUrl)}&include_capabilities=true&fetch_details=false`;
+
+      const response = await fetch(modelsUrl, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        signal: AbortSignal.timeout(15000)
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+
+        if (context === 'chat') {
+          const chatModelNames = (data.chat_models || []).map((m: any) => m.name);
+          setOllamaMetrics(prev => ({
+            ...prev,
+            llmAvailableModels: chatModelNames
+          }));
+          console.log(`✅ Loaded ${chatModelNames.length} chat models from ${url}`);
+        } else {
+          const embeddingModelNames = (data.embedding_models || []).map((m: any) => m.name);
+          setOllamaMetrics(prev => ({
+            ...prev,
+            embeddingAvailableModels: embeddingModelNames
+          }));
+          console.log(`✅ Loaded ${embeddingModelNames.length} embedding models from ${url}`);
+        }
+      }
+    } catch (error: any) {
+      console.warn(`Failed to load models from ${url}: ${error.message}`);
+      // Don't fail - just leave model list empty
+    }
+  };
+
+  // Auto-load available models when URLs are configured
+  useEffect(() => {
+    if (llmInstanceConfig.url && llmInstanceConfig.url !== 'http://host.docker.internal:11434/v1') {
+      loadAvailableModels(llmInstanceConfig.url, 'chat');
+    }
+  }, [llmInstanceConfig.url]);
+
+  useEffect(() => {
+    if (embeddingInstanceConfig.url && embeddingInstanceConfig.url !== 'http://host.docker.internal:11434/v1') {
+      loadAvailableModels(embeddingInstanceConfig.url, 'embedding');
+    }
+  }, [embeddingInstanceConfig.url]);
 
   // Manual test function with user feedback using backend proxy
 const manualTestConnection = async (
@@ -681,6 +749,11 @@ const manualTestConnection = async (
             fetchOllamaMetrics();
           }
 
+          // Load available models after successful health check
+          if (context) {
+            await loadAvailableModels(url, context);
+          }
+
           return true;
         } else {
           setStatus({ online: false, responseTime: null, checking: false });
@@ -717,13 +790,16 @@ const manualTestConnection = async (
       // Reset LLM instance configuration
       setLLMInstanceConfig({
         name: '',
-        url: ''
+        url: '',
+        useAuth: false,
+        authToken: ''
       });
-      
+
       // Clear related RAG settings
       const updatedSettings = { ...ragSettings };
       delete updatedSettings.LLM_BASE_URL;
       delete updatedSettings.MODEL_CHOICE;
+      delete updatedSettings.OLLAMA_CHAT_AUTH_TOKEN;
       setRagSettings(updatedSettings);
       
       // Reset status
@@ -739,13 +815,16 @@ const manualTestConnection = async (
       // Reset Embedding instance configuration
       setEmbeddingInstanceConfig({
         name: '',
-        url: ''
+        url: '',
+        useAuth: false,
+        authToken: ''
       });
-      
+
       // Clear related RAG settings
       const updatedSettings = { ...ragSettings };
       delete updatedSettings.OLLAMA_EMBEDDING_URL;
       delete updatedSettings.EMBEDDING_MODEL;
+      delete updatedSettings.OLLAMA_EMBEDDING_AUTH_TOKEN;
       setRagSettings(updatedSettings);
       
       // Reset status
@@ -809,7 +888,8 @@ const manualTestConnection = async (
         const totalModels = modelsData.total_models || 0;
         const activeHosts = (llmStatus.online ? 1 : 0) + (embeddingStatus.online ? 1 : 0);
 
-        setOllamaMetrics({
+        setOllamaMetrics(prev => ({
+          ...prev,
           totalModels: totalModels,
           chatModels: allChatModels.length,
           embeddingModels: allEmbeddingModels.length,
@@ -826,7 +906,7 @@ const manualTestConnection = async (
             embedding: embEmbeddingModels.length,
             total: embChatModels.length + embEmbeddingModels.length
           }
-        });
+        }));
       } else {
         console.error('Failed to fetch models:', modelsData);
         setOllamaMetrics(prev => ({ ...prev, loading: false }));
@@ -1519,13 +1599,72 @@ const manualTestConnection = async (
 
               {/* Configuration Content */}
               <div className="bg-black/40 rounded-lg p-4 shadow-[0_2px_8px_rgba(34,197,94,0.1)]">
+                {/* API Mode Selection */}
+                <div className="mb-4 pb-4 border-b border-green-500/20">
+                  <label className="block text-sm font-medium text-gray-300 mb-3">
+                    Ollama API Mode
+                  </label>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setRagSettings({ ...ragSettings, OLLAMA_API_MODE: 'native' })}
+                      className={`flex-1 p-3 rounded-lg border-2 transition-all duration-200 ${
+                        (!ragSettings.OLLAMA_API_MODE || ragSettings.OLLAMA_API_MODE === 'native')
+                          ? 'border-green-500 bg-green-500/10 shadow-[0_0_10px_rgba(34,197,94,0.3)]'
+                          : 'border-gray-600 hover:border-gray-500'
+                      }`}
+                    >
+                      <div className="flex items-center justify-center gap-2">
+                        <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                          (!ragSettings.OLLAMA_API_MODE || ragSettings.OLLAMA_API_MODE === 'native')
+                            ? 'border-green-500'
+                            : 'border-gray-500'
+                        }`}>
+                          {(!ragSettings.OLLAMA_API_MODE || ragSettings.OLLAMA_API_MODE === 'native') && (
+                            <div className="w-2 h-2 rounded-full bg-green-500" />
+                          )}
+                        </div>
+                        <span className="text-white font-medium">Native Ollama API</span>
+                      </div>
+                      <div className="text-xs text-gray-400 mt-1 text-center">
+                        Uses /api/embeddings endpoint
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRagSettings({ ...ragSettings, OLLAMA_API_MODE: 'openai-compatible' })}
+                      className={`flex-1 p-3 rounded-lg border-2 transition-all duration-200 ${
+                        ragSettings.OLLAMA_API_MODE === 'openai-compatible'
+                          ? 'border-green-500 bg-green-500/10 shadow-[0_0_10px_rgba(34,197,94,0.3)]'
+                          : 'border-gray-600 hover:border-gray-500'
+                      }`}
+                    >
+                      <div className="flex items-center justify-center gap-2">
+                        <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                          ragSettings.OLLAMA_API_MODE === 'openai-compatible'
+                            ? 'border-green-500'
+                            : 'border-gray-500'
+                        }`}>
+                          {ragSettings.OLLAMA_API_MODE === 'openai-compatible' && (
+                            <div className="w-2 h-2 rounded-full bg-green-500" />
+                          )}
+                        </div>
+                        <span className="text-white font-medium">OpenAI-Compatible</span>
+                      </div>
+                      <div className="text-xs text-gray-400 mt-1 text-center">
+                        Uses /v1/embeddings endpoint
+                      </div>
+                    </button>
+                  </div>
+                </div>
+
                 {activeSelection === 'chat' ? (
                   // Chat Model Configuration
                   <div>
-                    {llmInstanceConfig.name && llmInstanceConfig.url ? (
+                    {llmInstanceConfig.url ? (
                       <>
                         <div className="mb-3">
-                          <div className="text-white font-medium mb-1">{llmInstanceConfig.name}</div>
+                          <div className="text-white font-medium mb-1">{llmInstanceConfig.name || 'LLM Instance'}</div>
                           <div className="text-gray-400 text-sm font-mono">{llmInstanceConfig.url}</div>
                         </div>
 
@@ -1600,10 +1739,10 @@ const manualTestConnection = async (
                 ) : (
                   // Embedding Model Configuration
                   <div>
-                    {embeddingInstanceConfig.name && embeddingInstanceConfig.url ? (
+                    {embeddingInstanceConfig.url ? (
                       <>
                         <div className="mb-3">
-                          <div className="text-white font-medium mb-1">{embeddingInstanceConfig.name}</div>
+                          <div className="text-white font-medium mb-1">{embeddingInstanceConfig.name || 'Embedding Instance'}</div>
                           <div className="text-gray-400 text-sm font-mono">{embeddingInstanceConfig.url}</div>
                         </div>
 
@@ -1711,6 +1850,34 @@ const manualTestConnection = async (
                         </td>
                       </tr>
                       <tr>
+                        <td className="py-2 text-gray-400">Authentication</td>
+                        <td className="py-2">
+                          {activeSelection === 'chat' ? (
+                            llmInstanceConfig.authToken ? (
+                              <span className="text-teal-400 flex items-center">
+                                <svg className="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                                  <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
+                                </svg>
+                                Token configured
+                              </span>
+                            ) : (
+                              <span className="text-gray-500 italic">No authentication</span>
+                            )
+                          ) : (
+                            embeddingInstanceConfig.authToken ? (
+                              <span className="text-teal-400 flex items-center">
+                                <svg className="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                                  <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
+                                </svg>
+                                Token configured
+                              </span>
+                            ) : (
+                              <span className="text-gray-500 italic">No authentication</span>
+                            )
+                          )}
+                        </td>
+                      </tr>
+                      <tr>
                         <td className="py-2 text-gray-400">Status</td>
                         <td className="py-2">
                           {activeSelection === 'chat' ? (
@@ -1726,11 +1893,16 @@ const manualTestConnection = async (
                       </tr>
                       <tr>
                         <td className="py-2 text-gray-400">Selected Model</td>
-                        <td className="py-2 text-white">
-                          {activeSelection === 'chat'
-                            ? (getDisplayedChatModel(ragSettings) || <span className="text-gray-500 italic">No model selected</span>)
-                            : (getDisplayedEmbeddingModel(ragSettings) || <span className="text-gray-500 italic">No model selected</span>)
-                          }
+                        <td className="py-2">
+                          {activeSelection === 'chat' ? (
+                            <span className="text-white">
+                              {getDisplayedChatModel(ragSettings) || <span className="text-gray-500 italic">Not selected</span>}
+                            </span>
+                          ) : (
+                            <span className="text-white">
+                              {getDisplayedEmbeddingModel(ragSettings) || <span className="text-gray-500 italic">Not selected</span>}
+                            </span>
+                          )}
                         </td>
                       </tr>
                       <tr>
@@ -2165,7 +2337,9 @@ const manualTestConnection = async (
                     if (!embeddingInstanceConfig.url || !embeddingInstanceConfig.name) {
                       setEmbeddingInstanceConfig({
                         name: llmInstanceConfig.name || 'Default Ollama',
-                        url: newUrl
+                        url: newUrl,
+                        useAuth: false,
+                        authToken: ''
                       });
                     }
                   }}
@@ -2180,11 +2354,8 @@ const manualTestConnection = async (
                     checked={llmInstanceConfig.url === embeddingInstanceConfig.url && llmInstanceConfig.url !== ''}
                     onChange={(e) => {
                       if (e.target.checked) {
-                        // Sync embedding instance with LLM instance
-                        setEmbeddingInstanceConfig({
-                          name: llmInstanceConfig.name || 'Default Ollama',
-                          url: llmInstanceConfig.url
-                        });
+                        // Sync embedding instance with LLM instance (including auth settings)
+                        setEmbeddingInstanceConfig(syncEmbeddingFromLLM(llmInstanceConfig));
                       }
                     }}
                     className="w-4 h-4 text-purple-600 bg-gray-100 border-gray-300 rounded focus:ring-purple-500 dark:focus:ring-purple-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
@@ -2192,6 +2363,31 @@ const manualTestConnection = async (
                   <label htmlFor="use-same-host" className="text-sm text-gray-600 dark:text-gray-400">
                     Use same host for embedding instance
                   </label>
+                </div>
+
+                {/* Authentication Settings */}
+                <div className="space-y-2 mt-4">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="llm-use-auth"
+                      checked={llmInstanceConfig.useAuth}
+                      onChange={(e) => setLLMInstanceConfig({...llmInstanceConfig, useAuth: e.target.checked})}
+                      className="w-4 h-4 text-green-600 bg-gray-100 border-gray-300 rounded focus:ring-green-500 dark:focus:ring-green-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
+                    />
+                    <label htmlFor="llm-use-auth" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Use Authentication
+                    </label>
+                  </div>
+                  {llmInstanceConfig.useAuth && (
+                    <Input
+                      type="password"
+                      placeholder="Auth Token"
+                      value={llmInstanceConfig.authToken}
+                      onChange={(e) => setLLMInstanceConfig({...llmInstanceConfig, authToken: e.target.value})}
+                      className="text-sm"
+                    />
+                  )}
                 </div>
               </div>
               
@@ -2205,7 +2401,12 @@ const manualTestConnection = async (
                 </Button>
                 <Button
                   onClick={async () => {
-                    setRagSettings({...ragSettings, LLM_BASE_URL: llmInstanceConfig.url});
+                    const updatedSettings = {
+                      ...ragSettings,
+                      LLM_BASE_URL: llmInstanceConfig.url,
+                      OLLAMA_CHAT_AUTH_TOKEN: llmInstanceConfig.useAuth ? llmInstanceConfig.authToken : ''
+                    };
+                    setRagSettings(updatedSettings);
                     setShowEditLLMModal(false);
                     showToast('LLM instance updated successfully', 'success');
                     // Wait 1 second then automatically test connection and refresh models
@@ -2246,13 +2447,38 @@ const manualTestConnection = async (
                   onChange={(e) => setEmbeddingInstanceConfig({...embeddingInstanceConfig, name: e.target.value})}
                   placeholder="Enter instance name"
                 />
-                
+
                 <Input
                   label="Instance URL"
                   value={embeddingInstanceConfig.url}
                   onChange={(e) => setEmbeddingInstanceConfig({...embeddingInstanceConfig, url: e.target.value})}
                   placeholder="http://host.docker.internal:11434/v1"
                 />
+
+                {/* Authentication Settings */}
+                <div className="space-y-2 mt-4">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="embedding-use-auth"
+                      checked={embeddingInstanceConfig.useAuth}
+                      onChange={(e) => setEmbeddingInstanceConfig({...embeddingInstanceConfig, useAuth: e.target.checked})}
+                      className="w-4 h-4 text-purple-600 bg-gray-100 border-gray-300 rounded focus:ring-purple-500 dark:focus:ring-purple-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
+                    />
+                    <label htmlFor="embedding-use-auth" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Use Authentication
+                    </label>
+                  </div>
+                  {embeddingInstanceConfig.useAuth && (
+                    <Input
+                      type="password"
+                      placeholder="Auth Token"
+                      value={embeddingInstanceConfig.authToken}
+                      onChange={(e) => setEmbeddingInstanceConfig({...embeddingInstanceConfig, authToken: e.target.value})}
+                      className="text-sm"
+                    />
+                  )}
+                </div>
               </div>
               
               <div className="flex gap-2 mt-6">
@@ -2265,7 +2491,12 @@ const manualTestConnection = async (
                 </Button>
                 <Button
                   onClick={async () => {
-                    setRagSettings({...ragSettings, OLLAMA_EMBEDDING_URL: embeddingInstanceConfig.url});
+                    const updatedSettings = {
+                      ...ragSettings,
+                      OLLAMA_EMBEDDING_URL: embeddingInstanceConfig.url,
+                      OLLAMA_EMBEDDING_AUTH_TOKEN: embeddingInstanceConfig.useAuth ? embeddingInstanceConfig.authToken : ''
+                    };
+                    setRagSettings(updatedSettings);
                     setShowEditEmbeddingModal(false);
                     showToast('Embedding instance updated successfully', 'success');
                     // Wait 1 second then automatically test connection and refresh models
