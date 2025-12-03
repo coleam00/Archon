@@ -16,6 +16,7 @@ export interface RagSettings {
   USE_HYBRID_SEARCH: boolean;
   USE_AGENTIC_RAG: boolean;
   USE_RERANKING: boolean;
+  RERANKING_MODEL?: string;
   MODEL_CHOICE: string;
   CHAT_MODEL?: string;
   LLM_PROVIDER?: string;

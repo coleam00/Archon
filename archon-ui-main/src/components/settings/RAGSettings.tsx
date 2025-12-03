@@ -148,6 +148,7 @@ interface RAGSettingsProps {
     USE_HYBRID_SEARCH: boolean;
     USE_AGENTIC_RAG: boolean;
     USE_RERANKING: boolean;
+    RERANKING_MODEL?: string;
     LLM_PROVIDER?: string;
     LLM_BASE_URL?: string;
     LLM_INSTANCE_NAME?: string;
@@ -2087,21 +2088,45 @@ const manualTestConnection = async (
           </div>
         </div>
         
-        {/* Fourth row: Use Reranking */}
+        {/* Fourth row: Use Reranking + Model Selection */}
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <CustomCheckbox 
-              id="reranking" 
-              checked={ragSettings.USE_RERANKING} 
+            <CustomCheckbox
+              id="reranking"
+              checked={ragSettings.USE_RERANKING}
               onChange={e => setRagSettings({
                 ...ragSettings,
                 USE_RERANKING: e.target.checked
-              })} 
-              label="Use Reranking" 
-              description="Applies cross-encoder reranking to improve search result relevance" 
+              })}
+              label="Use Reranking"
+              description="Applies cross-encoder reranking to improve search result relevance"
             />
           </div>
-          <div>{/* Empty column */}</div>
+          <div>
+            {ragSettings.USE_RERANKING && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Reranking Model
+                </label>
+                <select
+                  value={ragSettings.RERANKING_MODEL || 'cross-encoder/ms-marco-MiniLM-L-6-v2'}
+                  onChange={e => setRagSettings({
+                    ...ragSettings,
+                    RERANKING_MODEL: e.target.value
+                  })}
+                  className="w-full px-3 py-2 border border-green-500/30 rounded-md bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white focus:border-green-500 focus:ring-1 focus:ring-green-500"
+                >
+                  <option value="cross-encoder/ms-marco-MiniLM-L-6-v2">MiniLM-L6 (fast, default)</option>
+                  <option value="cross-encoder/ms-marco-MiniLM-L-12-v2">MiniLM-L12 (better quality)</option>
+                  <option value="BAAI/bge-reranker-base">BGE Reranker Base (balanced)</option>
+                  <option value="BAAI/bge-reranker-large">BGE Reranker Large (best quality)</option>
+                </select>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Larger models = better results but slower
+                </p>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Crawling Performance Settings */}
