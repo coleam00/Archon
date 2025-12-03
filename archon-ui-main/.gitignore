@@ -19,6 +19,10 @@ public/test-results
 test-results/
 test-results.json
 
+# Playwright
+playwright-report/
+playwright/.cache/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
