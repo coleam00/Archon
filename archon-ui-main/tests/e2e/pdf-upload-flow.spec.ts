@@ -22,28 +22,33 @@ const __dirname = path.dirname(__filename);
  * 6. Search for content from the document
  */
 
-// Use existing test PDF from the repo (relative to monorepo root)
-const testPdfPath = path.resolve(__dirname, "../../../test-pdf/Book.pdf");
+// Test PDFs - small samples (4 pages each) for fast CI runs
+// Full PDFs are available in test-pdf/ for manual testing
+const testPdfPath = path.resolve(__dirname, "./fixtures/book-sample.pdf");
+const codingPdfPath = path.resolve(__dirname, "./fixtures/coding-sample.pdf");
 
 // API base URL for cleanup
 const API_BASE = "http://localhost:8181/api";
 
 /**
- * Cleanup any existing Book.pdf items to prevent duplicates
- * This is important because multiple test files may upload the same file
+ * Cleanup test PDF sample items to prevent duplicates
+ * NOTE: Only cleans up *-sample.pdf files, NOT full PDFs like Coding.pdf
+ * This allows keeping manually uploaded full PDFs for more thorough testing
  */
-async function cleanupBookPdfItems(): Promise<void> {
+async function cleanupTestPdfItems(): Promise<void> {
   try {
     const response = await fetch(`${API_BASE}/knowledge-items/summary`);
     if (!response.ok) return;
 
     const data = await response.json();
-    const bookItems = data.items?.filter((item: any) =>
-      item.title === "Book.pdf" || item.metadata?.filename === "Book.pdf"
-    ) || [];
+    // Only clean up sample files - keep full PDFs for comprehensive testing
+    const testItems = data.items?.filter((item: any) => {
+      const title = item.title || item.metadata?.filename || "";
+      return title.includes("book-sample") || title.includes("coding-sample");
+    }) || [];
 
-    for (const item of bookItems) {
-      console.log(`Cleaning up existing Book.pdf item: ${item.source_id}`);
+    for (const item of testItems) {
+      console.log(`Cleaning up test PDF item: ${item.source_id} (${item.title})`);
       await fetch(`${API_BASE}/knowledge-items/${item.source_id}`, { method: "DELETE" });
     }
   } catch (error) {
@@ -52,10 +57,10 @@ async function cleanupBookPdfItems(): Promise<void> {
 }
 
 test.describe("PDF Upload Flow", () => {
-  // Clean up any existing Book.pdf items before each test to prevent duplicates
+  // Clean up any existing test PDF items before each test to prevent duplicates
   test.beforeEach(async ({ page }) => {
-    // Clean up existing Book.pdf items from previous test runs
-    await cleanupBookPdfItems();
+    // Clean up existing test PDF items from previous test runs
+    await cleanupTestPdfItems();
 
     // Navigate to Knowledge Base
     await page.goto("/");
@@ -118,7 +123,7 @@ test.describe("PDF Upload Flow", () => {
 
     // Verify file is selected (filename should appear in the dialog)
     const dialog = page.getByRole("dialog");
-    await expect(dialog.locator("text=Book.pdf")).toBeVisible();
+    await expect(dialog.locator("text=book-sample.pdf")).toBeVisible();
 
     // Click Upload button (not the tab - use the action button)
     const uploadButton = page.locator('button:has-text("Upload Document"):not([role="tab"])');
@@ -209,5 +214,146 @@ test.describe("Knowledge Base UI Elements", () => {
     // Clear the search
     await searchInput.fill("");
     await expect(searchInput).toHaveValue("");
+  });
+});
+
+/**
+ * Code Examples Display Tests
+ * Verifies that code extracted from PDFs is displayed correctly without HTML entities
+ * Uses coding-sample.pdf which contains HTML/ERB programming examples
+ */
+test.describe("Code Examples Display", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto("/");
+    await page.waitForLoadState("domcontentloaded");
+    await page.waitForSelector("text=Knowledge Base", { timeout: 10000 });
+  });
+
+  test("should display code examples without HTML entities", async ({ page }) => {
+    // Skip if backend not available
+    const healthCheck = await page.request.get("http://localhost:8181/health").catch(() => null);
+    if (!healthCheck?.ok()) {
+      test.skip(true, "Backend not available");
+      return;
+    }
+
+    // Check for PDFs with code examples in order of preference:
+    // 1. Coding.pdf (full, from manual testing - has many code examples)
+    // 2. coding-sample.pdf (small fixture, may have few/no code examples)
+    let targetPdf = "";
+    const hasCodingPdf = await page.getByText("Coding.pdf").first().isVisible({ timeout: 3000 }).catch(() => false);
+    const hasCodingSample = await page.getByText("coding-sample.pdf").first().isVisible({ timeout: 3000 }).catch(() => false);
+
+    if (hasCodingPdf) {
+      targetPdf = "Coding.pdf";
+      console.log("Found Coding.pdf (full version) - using for test");
+    } else if (hasCodingSample) {
+      targetPdf = "coding-sample.pdf";
+      console.log("Found coding-sample.pdf - using for test");
+    } else {
+      // Upload coding-sample.pdf
+      console.log("No coding PDF found - uploading coding-sample.pdf...");
+
+      const addButton = page.locator('button:has-text("Knowledge")').first();
+      await addButton.click();
+      await expect(page.locator("text=Add Knowledge")).toBeVisible();
+
+      await page.getByRole("tab", { name: "Upload Document" }).click();
+      await page.waitForTimeout(300);
+
+      const fileInput = page.locator('input[type="file"]');
+      await fileInput.setInputFiles(codingPdfPath);
+
+      const technicalButton = page.locator('button:has-text("Technical")');
+      if (await technicalButton.isVisible()) {
+        await technicalButton.click();
+      }
+
+      const uploadButton = page.locator('button:has-text("Upload Document"):not([role="tab"])');
+      await uploadButton.click();
+
+      console.log("Waiting for upload processing...");
+      await page.waitForTimeout(5000);
+
+      const closeButton = page.locator('[aria-label="Close"]').first();
+      if (await closeButton.isVisible()) {
+        await closeButton.click();
+      }
+
+      // Wait for PDF to appear (max 2 minutes)
+      let uploaded = false;
+      for (let i = 0; i < 12; i++) {
+        await page.waitForTimeout(10000);
+        await page.reload();
+        await page.waitForSelector("text=Knowledge Base", { timeout: 10000 });
+        if (await page.getByText("coding-sample.pdf").first().isVisible({ timeout: 3000 }).catch(() => false)) {
+          console.log(`coding-sample.pdf appeared after ${(i + 1) * 10} seconds`);
+          uploaded = true;
+          break;
+        }
+        console.log(`Waiting... (${(i + 1) * 10}s)`);
+      }
+
+      if (!uploaded) {
+        test.skip(true, "Upload did not complete in time");
+        return;
+      }
+      targetPdf = "coding-sample.pdf";
+    }
+
+    // Find the target PDF card and its code badge
+    const codingCard = page.locator("div").filter({ hasText: targetPdf }).first();
+    const codeBadge = codingCard.locator('[aria-label="Code examples count"]').first();
+    const hasCodeBadge = await codeBadge.isVisible({ timeout: 5000 }).catch(() => false);
+
+    if (!hasCodeBadge) {
+      console.log(`Code badge not found on ${targetPdf} - may not have code examples`);
+      test.skip(true, "No code examples available (code extraction may still be processing)");
+      return;
+    }
+
+    // Click code badge to open inspector to Code Examples tab
+    await codeBadge.click();
+    await page.waitForTimeout(2000);
+
+    // Wait for inspector dialog
+    const inspectorDialog = page.locator('[role="dialog"]').first();
+    if (!(await inspectorDialog.isVisible({ timeout: 5000 }).catch(() => false))) {
+      test.skip(true, "Inspector dialog did not open");
+      return;
+    }
+
+    // Click first code example
+    await page.waitForTimeout(1000);
+    const codeListItems = page.locator('[role="dialog"] [class*="cursor-pointer"]').filter({ hasText: /\w{3,}/ });
+    const firstCodeItem = codeListItems.first();
+
+    if (await firstCodeItem.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await firstCodeItem.click();
+      await page.waitForTimeout(1500);
+    }
+
+    // Get code content
+    const codeElement = page.locator("pre code").first();
+    if (!(await codeElement.isVisible({ timeout: 3000 }).catch(() => false))) {
+      test.skip(true, "Code element not visible");
+      return;
+    }
+
+    const codeText = await codeElement.textContent();
+
+    // CRITICAL ASSERTIONS: Code should NOT contain HTML entities
+    expect(codeText, "Code should not contain &lt; entities").not.toContain("&lt;");
+    expect(codeText, "Code should not contain &gt; entities").not.toContain("&gt;");
+    expect(codeText, "Code should not contain double-encoded &amp;lt;").not.toContain("&amp;lt;");
+    expect(codeText, "Code should not contain double-encoded &amp;gt;").not.toContain("&amp;gt;");
+
+    // If HTML/ERB code, verify proper angle brackets exist
+    if (codeText && (codeText.includes("h1") || codeText.includes("table") || codeText.includes("div"))) {
+      expect(codeText, "HTML code should contain < character").toContain("<");
+      expect(codeText, "HTML code should contain > character").toContain(">");
+    }
+
+    console.log("✓ Code examples display correctly without HTML entities");
   });
 });

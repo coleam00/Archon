@@ -5,6 +5,7 @@ Handles extraction and storage of code examples from documents.
 """
 
 import asyncio
+import html
 import json
 import os
 import re
@@ -240,17 +241,23 @@ def _select_best_code_variant(similar_blocks: list[dict[str, Any]]) -> dict[str,
 
 
 
-def extract_code_blocks(markdown_content: str, min_length: int = None) -> list[dict[str, Any]]:
+def extract_code_blocks(markdown_content: str, min_length: int = None, _recursion_depth: int = 0) -> list[dict[str, Any]]:
     """
     Extract code blocks from markdown content along with context.
 
     Args:
         markdown_content: The markdown content to extract code blocks from
         min_length: Minimum length of code blocks to extract (default: from settings or 250)
+        _recursion_depth: Internal parameter to track recursion depth (do not use externally)
 
     Returns:
         List of dictionaries containing code blocks and their context
     """
+    # Prevent infinite recursion (max 3 levels of nested code block detection)
+    MAX_RECURSION_DEPTH = 3
+    if _recursion_depth >= MAX_RECURSION_DEPTH:
+        search_logger.warning(f"Max recursion depth ({MAX_RECURSION_DEPTH}) reached in extract_code_blocks")
+        return []
     # Load all code extraction settings with direct fallback
     try:
         def _get_setting_fallback(key: str, default: str) -> str:
@@ -311,7 +318,7 @@ def extract_code_blocks(markdown_content: str, min_length: int = None) -> list[d
             search_logger.info(
                 f"Attempting to extract from inner content (length: {len(inner_content)})"
             )
-            return extract_code_blocks(inner_content, min_length)
+            return extract_code_blocks(inner_content, min_length, _recursion_depth + 1)
         # For normal language identifiers (e.g., ```python, ```javascript), process normally
         # No need to skip anything - the extraction logic will handle it correctly
         start_offset = 0
@@ -517,7 +524,14 @@ def extract_code_blocks(markdown_content: str, min_length: int = None) -> list[d
         context_after = markdown_content[end_pos + 3 : context_end].strip()
 
         # Add the extracted code block
+        # Decode HTML entities to store raw code (e.g., &lt; -> <, &gt; -> >)
+        # This ensures code is human-readable and LLM-friendly in the database
+        # Apply iteratively to handle double/triple encoded entities
         stripped_code = code_content.strip()
+        prev_code = ""
+        while stripped_code != prev_code:
+            prev_code = stripped_code
+            stripped_code = html.unescape(stripped_code)
         code_blocks.append({
             "code": stripped_code,
             "language": language,
