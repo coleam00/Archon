@@ -5,6 +5,7 @@ Handles crawling of URLs from XML sitemaps.
 """
 import asyncio
 from collections.abc import Callable
+from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree
 
 import requests
@@ -20,13 +21,14 @@ class SitemapCrawlStrategy:
     def parse_sitemap(self, sitemap_url: str, cancellation_check: Callable[[], None] | None = None) -> list[str]:
         """
         Parse a sitemap and extract URLs with comprehensive error handling.
+        Automatically composes absolute URLs from relative paths.
         
         Args:
             sitemap_url: URL of the sitemap to parse
             cancellation_check: Optional function to check for cancellation
             
         Returns:
-            List of URLs extracted from the sitemap
+            List of absolute URLs extracted from the sitemap
         """
         urls = []
 
@@ -48,8 +50,35 @@ class SitemapCrawlStrategy:
 
             try:
                 tree = ElementTree.fromstring(resp.content)
-                urls = [loc.text for loc in tree.findall('.//{*}loc') if loc.text]
-                logger.info(f"Successfully extracted {len(urls)} URLs from sitemap")
+                raw_urls = [loc.text for loc in tree.findall('.//{*}loc') if loc.text]
+                
+                # Compose absolute URLs from relative paths
+                for raw_url in raw_urls:
+                    try:
+                        raw_url = raw_url.strip()
+                        if not raw_url:
+                            continue
+                        
+                        # Check if URL is already absolute
+                        parsed = urlparse(raw_url)
+                        if parsed.scheme and parsed.netloc:
+                            # Already absolute URL
+                            urls.append(raw_url)
+                        else:
+                            # Relative URL - compose with sitemap's base URL
+                            absolute_url = urljoin(sitemap_url, raw_url)
+                            # Validate composed URL
+                            parsed_absolute = urlparse(absolute_url)
+                            if parsed_absolute.scheme in ('http', 'https') and parsed_absolute.netloc:
+                                urls.append(absolute_url)
+                                logger.debug(f"Composed absolute URL: {raw_url} -> {absolute_url}")
+                            else:
+                                logger.warning(f"Failed to compose valid absolute URL from: {raw_url}")
+                    except Exception as e:
+                        logger.warning(f"Error processing URL '{raw_url}': {e}")
+                        continue
+                
+                logger.info(f"Successfully extracted {len(urls)} URLs from sitemap (composed {len(raw_urls) - len([u for u in raw_urls if urlparse(u.strip()).scheme])} relative URLs)")
 
             except ElementTree.ParseError:
                 logger.exception(f"Error parsing sitemap XML from {sitemap_url}")
