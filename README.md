@@ -105,6 +105,42 @@ After installation, follow the guided setup process in the Intro section of the 
 The Streamlit interface will guide you through each step with clear instructions and interactive elements.
 There are a good amount of steps for the setup but it goes quick!
 
+### Database Layer Architecture
+
+Archon uses a **clean architecture** approach for its knowledge base with support for multiple database backends:
+
+- **PostgreSQL** (recommended): Direct PostgreSQL with `asyncpg` and `pgvector` for high-performance vector search
+- **Supabase** (legacy): PostgreSQL + pgvector via Supabase SDK (still supported)
+- **In-Memory**: For testing without external dependencies
+
+The database layer follows the **Repository Pattern** with:
+- **Domain Layer**: Business logic and interfaces (framework-agnostic)
+- **Infrastructure Layer**: Concrete implementations (PostgreSQL, Supabase, Memory)
+- **Dependency Injection**: Easy switching between backends via environment variables
+
+#### Quick Start with PostgreSQL
+
+```bash
+# Configure environment
+REPOSITORY_TYPE=postgres
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=archon
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=your_password
+
+# Create database and enable pgvector extension
+psql -U postgres -c "CREATE DATABASE archon;"
+psql -U postgres -d archon -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+# Run Archon - it will auto-create tables
+python streamlit_ui.py
+```
+
+For detailed architecture documentation, migration guides, and examples, see:
+- [Architecture Documentation](docs/ARCHITECTURE.md) - Complete guide to the database layer
+- [PostgreSQL Migration Guide](docs/MIGRATION_POSTGRES.md) - Migrating from Supabase to PostgreSQL
+
 ### Troubleshooting
 
 If you encounter any errors when using Archon, please first check the logs in the "Agent Service" tab.
