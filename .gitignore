@@ -14,5 +14,6 @@ env/
 .env
 .env.temp
 .env.test
+.env.staging
 env_vars.json
 nul
