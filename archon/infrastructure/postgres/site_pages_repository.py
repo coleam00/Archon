@@ -121,7 +121,7 @@ class PostgresSitePagesRepository(ISitePagesRepository):
 
         except Exception as e:
             logger.error(f"get_by_id(id={id}) -> ERROR: {e}")
-            raise
+            raise RuntimeError(f"Failed to get page by id {id}") from e
 
     async def find_by_url(self, url: str) -> List[SitePage]:
         """
@@ -152,7 +152,7 @@ class PostgresSitePagesRepository(ISitePagesRepository):
 
         except Exception as e:
             logger.error(f"find_by_url(url={url}) -> ERROR: {e}")
-            raise
+            raise RuntimeError(f"Failed to find pages by URL {url}") from e
 
     async def search_similar(
         self,
@@ -205,7 +205,9 @@ class PostgresSitePagesRepository(ISitePagesRepository):
                 results = []
                 for row in rows:
                     page = self._row_to_site_page(row)
-                    similarity = float(row["similarity"])
+                    # Clip similarity to valid range [0, 1]
+                    # Note: Can be negative with poorly normalized embeddings
+                    similarity = max(0.0, min(1.0, float(row["similarity"])))
                     results.append(SearchResult(page=page, similarity=similarity))
 
                 logger.info(
@@ -216,7 +218,7 @@ class PostgresSitePagesRepository(ISitePagesRepository):
 
         except Exception as e:
             logger.error(f"search_similar() -> ERROR: {e}")
-            raise
+            raise RuntimeError("Failed to search similar pages") from e
 
     async def list_unique_urls(self, source: Optional[str] = None) -> List[str]:
         """
@@ -252,7 +254,7 @@ class PostgresSitePagesRepository(ISitePagesRepository):
 
         except Exception as e:
             logger.error(f"list_unique_urls(source={source}) -> ERROR: {e}")
-            raise
+            raise RuntimeError(f"Failed to list unique URLs for source {source}") from e
 
     async def insert(self, page: SitePage) -> SitePage:
         """
@@ -304,7 +306,7 @@ class PostgresSitePagesRepository(ISitePagesRepository):
 
         except Exception as e:
             logger.error(f"insert(url={page.url}) -> ERROR: {e}")
-            raise
+            raise RuntimeError(f"Failed to insert page {page.url}") from e
 
     async def insert_batch(self, pages: List[SitePage]) -> List[SitePage]:
         """
@@ -363,7 +365,7 @@ class PostgresSitePagesRepository(ISitePagesRepository):
 
         except Exception as e:
             logger.error(f"insert_batch(pages_count={len(pages)}) -> ERROR: {e}")
-            raise
+            raise RuntimeError(f"Failed to insert batch of {len(pages)} pages") from e
 
     async def delete_by_source(self, source: str) -> int:
         """
@@ -394,7 +396,7 @@ class PostgresSitePagesRepository(ISitePagesRepository):
 
         except Exception as e:
             logger.error(f"delete_by_source(source={source}) -> ERROR: {e}")
-            raise
+            raise RuntimeError(f"Failed to delete pages for source {source}") from e
 
     async def count(self, filter: Optional[Dict[str, Any]] = None) -> int:
         """
@@ -436,7 +438,7 @@ class PostgresSitePagesRepository(ISitePagesRepository):
 
         except Exception as e:
             logger.error(f"count(filter={filter}) -> ERROR: {e}")
-            raise
+            raise RuntimeError(f"Failed to count pages with filter {filter}") from e
 
     def _row_to_site_page(self, row: asyncpg.Record) -> SitePage:
         """
