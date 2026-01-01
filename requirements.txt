@@ -41,7 +41,7 @@ gotrue==2.11.1
 greenlet==3.1.1
 griffe==1.5.4
 groq>=0.15.0
-h11==0.14.0
+h11>=0.16.0  # Security fix for CVE-2025-43859
 h2==4.1.0
 hpack==4.0.0
 html2text==2024.2.26

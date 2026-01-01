@@ -17,6 +17,15 @@ from archon.domain.models.search_result import SearchResult
 
 logger = logging.getLogger("archon.repository.postgres")
 
+# Security: Whitelist of valid table names to prevent SQL injection
+VALID_TABLE_NAMES = frozenset({"site_pages", "crawled_pages"})
+
+# Security: Whitelist of valid column names for filtering
+VALID_COLUMN_NAMES = frozenset({
+    "id", "url", "chunk_number", "title", "summary",
+    "content", "metadata", "embedding", "created_at"
+})
+
 
 class PostgresSitePagesRepository(ISitePagesRepository):
     """
@@ -37,7 +46,16 @@ class PostgresSitePagesRepository(ISitePagesRepository):
         Args:
             pool: asyncpg connection pool
             table_name: Name of the table to use
+
+        Raises:
+            ValueError: If table_name is not in the whitelist
         """
+        # Security: Validate table_name against whitelist
+        if table_name not in VALID_TABLE_NAMES:
+            raise ValueError(
+                f"Invalid table name: {table_name}. "
+                f"Allowed values: {', '.join(sorted(VALID_TABLE_NAMES))}"
+            )
         self.pool = pool
         self.table_name = table_name
 
@@ -120,7 +138,7 @@ class PostgresSitePagesRepository(ISitePagesRepository):
                 return page
 
         except Exception as e:
-            logger.error(f"get_by_id(id={id}) -> ERROR: {e}")
+            logger.exception(f"get_by_id(id={id}) -> ERROR")
             raise RuntimeError(f"Failed to get page by id {id}") from e
 
     async def find_by_url(self, url: str) -> List[SitePage]:
@@ -151,7 +169,7 @@ class PostgresSitePagesRepository(ISitePagesRepository):
                 return pages
 
         except Exception as e:
-            logger.error(f"find_by_url(url={url}) -> ERROR: {e}")
+            logger.exception(f"find_by_url(url={url}) -> ERROR")
             raise RuntimeError(f"Failed to find pages by URL {url}") from e
 
     async def search_similar(
@@ -217,7 +235,7 @@ class PostgresSitePagesRepository(ISitePagesRepository):
                 return results
 
         except Exception as e:
-            logger.error(f"search_similar() -> ERROR: {e}")
+            logger.exception("search_similar() -> ERROR")
             raise RuntimeError("Failed to search similar pages") from e
 
     async def list_unique_urls(self, source: Optional[str] = None) -> List[str]:
@@ -253,7 +271,7 @@ class PostgresSitePagesRepository(ISitePagesRepository):
                 return urls
 
         except Exception as e:
-            logger.error(f"list_unique_urls(source={source}) -> ERROR: {e}")
+            logger.exception(f"list_unique_urls(source={source}) -> ERROR")
             raise RuntimeError(f"Failed to list unique URLs for source {source}") from e
 
     async def insert(self, page: SitePage) -> SitePage:
@@ -305,7 +323,7 @@ class PostgresSitePagesRepository(ISitePagesRepository):
                 return inserted_page
 
         except Exception as e:
-            logger.error(f"insert(url={page.url}) -> ERROR: {e}")
+            logger.exception(f"insert(url={page.url}) -> ERROR")
             raise RuntimeError(f"Failed to insert page {page.url}") from e
 
     async def insert_batch(self, pages: List[SitePage]) -> List[SitePage]:
@@ -364,7 +382,7 @@ class PostgresSitePagesRepository(ISitePagesRepository):
                 return inserted
 
         except Exception as e:
-            logger.error(f"insert_batch(pages_count={len(pages)}) -> ERROR: {e}")
+            logger.exception(f"insert_batch(pages_count={len(pages)}) -> ERROR")
             raise RuntimeError(f"Failed to insert batch of {len(pages)} pages") from e
 
     async def delete_by_source(self, source: str) -> int:
@@ -395,7 +413,7 @@ class PostgresSitePagesRepository(ISitePagesRepository):
                 return deleted_count
 
         except Exception as e:
-            logger.error(f"delete_by_source(source={source}) -> ERROR: {e}")
+            logger.exception(f"delete_by_source(source={source}) -> ERROR")
             raise RuntimeError(f"Failed to delete pages for source {source}") from e
 
     async def count(self, filter: Optional[Dict[str, Any]] = None) -> int:
@@ -419,11 +437,18 @@ class PostgresSitePagesRepository(ISitePagesRepository):
                 conditions = []
                 for key, value in filter.items():
                     if key.startswith("metadata."):
-                        # Handle metadata filters
+                        # Handle metadata filters (metadata keys are user data, validated separately)
                         metadata_key = key.replace("metadata.", "")
+                        # Sanitize metadata key: only allow alphanumeric and underscore
+                        if not metadata_key.replace("_", "").isalnum():
+                            logger.warning(f"Skipping invalid metadata key: {metadata_key}")
+                            continue
                         conditions.append(f"metadata->>'{metadata_key}' = ${param_idx}")
                     else:
-                        # Handle regular column filters
+                        # Security: Validate column name against whitelist
+                        if key not in VALID_COLUMN_NAMES:
+                            logger.warning(f"Skipping invalid column name: {key}")
+                            continue
                         conditions.append(f"{key} = ${param_idx}")
                     params.append(value)
                     param_idx += 1
@@ -437,7 +462,7 @@ class PostgresSitePagesRepository(ISitePagesRepository):
                 return count
 
         except Exception as e:
-            logger.error(f"count(filter={filter}) -> ERROR: {e}")
+            logger.exception(f"count(filter={filter}) -> ERROR")
             raise RuntimeError(f"Failed to count pages with filter {filter}") from e
 
     def _row_to_site_page(self, row: asyncpg.Record) -> SitePage:

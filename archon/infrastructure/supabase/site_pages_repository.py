@@ -14,6 +14,15 @@ from .mappers import dict_to_site_page, site_page_to_dict, dict_to_search_result
 
 logger = logging.getLogger("archon.repository.supabase")
 
+# Security: Whitelist of valid table names to prevent SQL injection
+VALID_TABLE_NAMES = frozenset({"site_pages", "crawled_pages"})
+
+# Security: Whitelist of valid column names for filtering
+VALID_COLUMN_NAMES = frozenset({
+    "id", "url", "chunk_number", "title", "summary",
+    "content", "metadata", "embedding", "created_at"
+})
+
 
 class SupabaseSitePagesRepository(ISitePagesRepository):
     """
@@ -60,7 +69,7 @@ class SupabaseSitePagesRepository(ISitePagesRepository):
             return page
 
         except Exception as e:
-            logger.error(f"get_by_id(id={id}) -> ERROR: {e}")
+            logger.exception(f"get_by_id(id={id}) -> ERROR")
             raise RuntimeError(f"Failed to get page by id {id}") from e
 
     async def find_by_url(self, url: str) -> List[SitePage]:
@@ -89,7 +98,7 @@ class SupabaseSitePagesRepository(ISitePagesRepository):
             return pages
 
         except Exception as e:
-            logger.error(f"find_by_url(url={url}) -> ERROR: {e}")
+            logger.exception(f"find_by_url(url={url}) -> ERROR")
             raise RuntimeError(f"Failed to find pages by URL {url}") from e
 
     async def search_similar(
@@ -138,7 +147,7 @@ class SupabaseSitePagesRepository(ISitePagesRepository):
             return search_results
 
         except Exception as e:
-            logger.error(f"search_similar() -> ERROR: {e}")
+            logger.exception("search_similar() -> ERROR")
             raise RuntimeError("Failed to search similar pages") from e
 
     async def list_unique_urls(self, source: Optional[str] = None) -> List[str]:
@@ -169,7 +178,7 @@ class SupabaseSitePagesRepository(ISitePagesRepository):
             return urls
 
         except Exception as e:
-            logger.error(f"list_unique_urls(source={source}) -> ERROR: {e}")
+            logger.exception(f"list_unique_urls(source={source}) -> ERROR")
             raise RuntimeError(f"Failed to list unique URLs for source {source}") from e
 
     async def insert(self, page: SitePage) -> SitePage:
@@ -201,7 +210,7 @@ class SupabaseSitePagesRepository(ISitePagesRepository):
             return inserted_page
 
         except Exception as e:
-            logger.error(f"insert(url={page.url}) -> ERROR: {e}")
+            logger.exception(f"insert(url={page.url}) -> ERROR")
             raise RuntimeError(f"Failed to insert page {page.url}") from e
 
     async def insert_batch(self, pages: List[SitePage]) -> List[SitePage]:
@@ -236,7 +245,7 @@ class SupabaseSitePagesRepository(ISitePagesRepository):
             return inserted_pages
 
         except Exception as e:
-            logger.error(f"insert_batch(pages_count={len(pages)}) -> ERROR: {e}")
+            logger.exception(f"insert_batch(pages_count={len(pages)}) -> ERROR")
             raise RuntimeError(f"Failed to insert batch of {len(pages)} pages") from e
 
     async def delete_by_source(self, source: str) -> int:
@@ -266,7 +275,7 @@ class SupabaseSitePagesRepository(ISitePagesRepository):
             return deleted_count
 
         except Exception as e:
-            logger.error(f"delete_by_source(source={source}) -> ERROR: {e}")
+            logger.exception(f"delete_by_source(source={source}) -> ERROR")
             raise RuntimeError(f"Failed to delete pages for source {source}") from e
 
     async def count(self, filter: Optional[Dict[str, Any]] = None) -> int:
@@ -290,8 +299,16 @@ class SupabaseSitePagesRepository(ISitePagesRepository):
                     # Handle metadata filters
                     if key.startswith("metadata."):
                         metadata_key = key.replace("metadata.", "")
+                        # Sanitize metadata key: only allow alphanumeric and underscore
+                        if not metadata_key.replace("_", "").isalnum():
+                            logger.warning(f"Skipping invalid metadata key: {metadata_key}")
+                            continue
                         query = query.eq(f"metadata->>{metadata_key}", value)
                     else:
+                        # Security: Validate column name against whitelist
+                        if key not in VALID_COLUMN_NAMES:
+                            logger.warning(f"Skipping invalid column name: {key}")
+                            continue
                         query = query.eq(key, value)
 
             result = query.execute()
@@ -303,5 +320,5 @@ class SupabaseSitePagesRepository(ISitePagesRepository):
             return count_result
 
         except Exception as e:
-            logger.error(f"count(filter={filter}) -> ERROR: {e}")
+            logger.exception(f"count(filter={filter}) -> ERROR")
             raise RuntimeError(f"Failed to count pages with filter {filter}") from e
