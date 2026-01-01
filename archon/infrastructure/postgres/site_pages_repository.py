@@ -186,7 +186,9 @@ class PostgresSitePagesRepository(ISitePagesRepository):
         Args:
             embedding: Query embedding vector (typically 1536 dimensions)
             limit: Maximum number of results to return
-            filter: Optional filter criteria (e.g., {"source": "pydantic_ai_docs"})
+            filter: Optional filter criteria. Only "source" key is supported
+                   (e.g., {"source": "pydantic_ai_docs"}). Other keys are
+                   logged as warnings and ignored.
 
         Returns:
             List of search results, ordered by similarity (highest first)
@@ -208,7 +210,15 @@ class PostgresSitePagesRepository(ISitePagesRepository):
             param_idx = 2
 
             # Apply filters if provided
+            # Note: Only "source" filter is supported for vector search
             if filter:
+                supported_keys = {"source"}
+                unsupported_keys = set(filter.keys()) - supported_keys
+                if unsupported_keys:
+                    logger.warning(
+                        f"search_similar(): Unsupported filter keys ignored: {unsupported_keys}. "
+                        f"Only 'source' filtering is supported for vector search."
+                    )
                 if "source" in filter:
                     query += f" AND metadata->>'source' = ${param_idx}"
                     params.append(filter["source"])

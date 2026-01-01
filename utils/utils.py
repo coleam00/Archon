@@ -1,4 +1,4 @@
-from supabase import Client, create_client
+from supabase import Client, create_client, AsyncClient, acreate_client
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from datetime import datetime
@@ -417,6 +417,35 @@ def get_supabase_client() -> Optional[Client]:
             write_to_log(f"Failed to initialize Supabase: {e}")
             return None
     return None
+
+
+async def get_supabase_async_client() -> Optional[AsyncClient]:
+    """
+    Get an async Supabase client.
+
+    This is the recommended client for async contexts as it doesn't
+    block the event loop during database operations.
+
+    Returns:
+        Supabase AsyncClient if credentials are configured, None otherwise
+
+    Example:
+        >>> client = await get_supabase_async_client()
+        >>> if client:
+        ...     result = await client.table("users").select("*").execute()
+    """
+    supabase_url = get_env_var("SUPABASE_URL")
+    supabase_key = get_env_var("SUPABASE_SERVICE_KEY")
+
+    if supabase_url and supabase_key:
+        try:
+            return await acreate_client(supabase_url, supabase_key)
+        except Exception as e:
+            print(f"Failed to initialize Supabase AsyncClient: {e}")
+            write_to_log(f"Failed to initialize Supabase AsyncClient: {e}")
+            return None
+    return None
+
 
 def get_clients():
     """

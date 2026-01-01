@@ -2,11 +2,12 @@
 Supabase implementation of the ISitePagesRepository interface.
 
 This module provides a concrete implementation using Supabase as the backend.
+Uses AsyncClient for proper async/await support without blocking the event loop.
 """
 
 import logging
-from typing import Optional, List, Dict, Any
-from supabase import Client
+from typing import Optional, List, Dict, Any, Union
+from supabase import Client, AsyncClient
 from archon.domain.interfaces.site_pages_repository import ISitePagesRepository
 from archon.domain.models.site_page import SitePage
 from archon.domain.models.search_result import SearchResult
@@ -28,22 +29,36 @@ class SupabaseSitePagesRepository(ISitePagesRepository):
     """
     Supabase implementation of the site pages repository.
 
-    This class uses the Supabase client to interact with the site_pages table.
-    It handles all CRUD operations and vector similarity search.
+    This class uses the Supabase AsyncClient for proper async/await support.
+    It handles all CRUD operations and vector similarity search without
+    blocking the event loop.
 
     Args:
-        client: Supabase client instance
+        client: Supabase AsyncClient instance (recommended) or sync Client
     """
 
-    def __init__(self, client: Client):
+    def __init__(self, client: Union[AsyncClient, Client]):
         """
         Initialize the repository with a Supabase client.
 
         Args:
-            client: Configured Supabase client
+            client: Configured Supabase AsyncClient (recommended) or sync Client.
+                   Using AsyncClient ensures proper async behavior without
+                   blocking the event loop.
+
+        Note:
+            Prefer using AsyncClient created via acreate_client() for
+            production use. The sync Client is supported for backwards
+            compatibility but will block the event loop.
         """
         self.client = client
         self.table_name = "site_pages"
+        self._is_async = isinstance(client, AsyncClient)
+        if not self._is_async:
+            logger.warning(
+                "SupabaseSitePagesRepository initialized with sync Client. "
+                "Consider using AsyncClient for better async performance."
+            )
 
     async def get_by_id(self, id: int) -> Optional[SitePage]:
         """
@@ -58,7 +73,8 @@ class SupabaseSitePagesRepository(ISitePagesRepository):
         logger.debug(f"get_by_id(id={id})")
 
         try:
-            result = self.client.from_(self.table_name).select("*").eq("id", id).execute()
+            query = self.client.from_(self.table_name).select("*").eq("id", id)
+            result = await query.execute() if self._is_async else query.execute()
 
             if not result.data:
                 logger.debug(f"get_by_id(id={id}) -> None")
@@ -85,13 +101,13 @@ class SupabaseSitePagesRepository(ISitePagesRepository):
         logger.debug(f"find_by_url(url={url})")
 
         try:
-            result = (
+            query = (
                 self.client.from_(self.table_name)
                 .select("*")
                 .eq("url", url)
                 .order("chunk_number")
-                .execute()
             )
+            result = await query.execute() if self._is_async else query.execute()
 
             pages = [dict_to_site_page(data) for data in result.data]
             logger.info(f"find_by_url(url={url}) -> {len(pages)} pages")
@@ -136,7 +152,8 @@ class SupabaseSitePagesRepository(ISitePagesRepository):
                 rpc_params["filter"] = filter
 
             # Call the Supabase RPC function
-            result = self.client.rpc("match_site_pages", rpc_params).execute()
+            query = self.client.rpc("match_site_pages", rpc_params)
+            result = await query.execute() if self._is_async else query.execute()
 
             # Convert results to SearchResult objects
             search_results = [dict_to_search_result(data) for data in result.data]
@@ -169,7 +186,7 @@ class SupabaseSitePagesRepository(ISitePagesRepository):
             if source:
                 query = query.eq("metadata->>source", source)
 
-            result = query.execute()
+            result = await query.execute() if self._is_async else query.execute()
 
             # Extract unique URLs and sort
             urls = sorted(set(doc["url"] for doc in result.data))
@@ -201,7 +218,8 @@ class SupabaseSitePagesRepository(ISitePagesRepository):
 
         try:
             data = site_page_to_dict(page)
-            result = self.client.table(self.table_name).insert(data).execute()
+            query = self.client.table(self.table_name).insert(data)
+            result = await query.execute() if self._is_async else query.execute()
 
             inserted_page = dict_to_site_page(result.data[0])
             logger.info(
@@ -236,7 +254,8 @@ class SupabaseSitePagesRepository(ISitePagesRepository):
             data_list = [site_page_to_dict(page) for page in pages]
 
             # Batch insert
-            result = self.client.table(self.table_name).insert(data_list).execute()
+            query = self.client.table(self.table_name).insert(data_list)
+            result = await query.execute() if self._is_async else query.execute()
 
             # Convert results back to domain models
             inserted_pages = [dict_to_site_page(data) for data in result.data]
@@ -261,12 +280,12 @@ class SupabaseSitePagesRepository(ISitePagesRepository):
         logger.debug(f"delete_by_source(source={source})")
 
         try:
-            result = (
+            query = (
                 self.client.table(self.table_name)
                 .delete()
                 .eq("metadata->>source", source)
-                .execute()
             )
+            result = await query.execute() if self._is_async else query.execute()
 
             # Count deleted rows
             deleted_count = len(result.data) if result.data else 0
@@ -311,7 +330,7 @@ class SupabaseSitePagesRepository(ISitePagesRepository):
                             continue
                         query = query.eq(key, value)
 
-            result = query.execute()
+            result = await query.execute() if self._is_async else query.execute()
 
             # Supabase returns count in the count attribute
             count_result = result.count if hasattr(result, "count") else len(result.data)

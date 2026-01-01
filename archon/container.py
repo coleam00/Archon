@@ -21,11 +21,10 @@ from archon.domain import ISitePagesRepository, IEmbeddingService
 
 logger = logging.getLogger("archon.container")
 
-# Configuration globale - permet override via variable d'environnement
-_default_repo_type = os.environ.get("REPOSITORY_TYPE", "supabase")
-
+# Configuration globale - valeurs par defaut
+# Note: la variable REPOSITORY_TYPE est lue au runtime dans get_repository()
 _config = {
-    "repository_type": _default_repo_type,  # "supabase" | "postgres" | "memory"
+    "repository_type": None,  # None = use REPOSITORY_TYPE env var, or "supabase" | "postgres" | "memory"
     "embedding_type": "openai",              # "openai" | "mock"
 }
 
@@ -71,7 +70,10 @@ def get_repository() -> ISitePagesRepository:
     global _repository_instance
 
     if _repository_instance is None:
+        # Read repo_type from config, fallback to env var, default to supabase
         repo_type = _config["repository_type"]
+        if repo_type is None:
+            repo_type = os.environ.get("REPOSITORY_TYPE", "supabase")
         logger.debug(f"Creating repository instance: {repo_type}")
 
         if repo_type == "supabase":
@@ -90,7 +92,6 @@ def get_repository() -> ISitePagesRepository:
 
         elif repo_type == "postgres":
             # PostgreSQL direct with asyncpg + pgvector
-            import os
             from archon.infrastructure.postgres import PostgresSitePagesRepository, create_pool
 
             # Get PostgreSQL configuration from environment
@@ -142,12 +143,28 @@ async def get_repository_async() -> ISitePagesRepository:
     global _repository_instance
 
     if _repository_instance is None:
+        # Read repo_type from config, fallback to env var, default to supabase
         repo_type = _config["repository_type"]
+        if repo_type is None:
+            repo_type = os.environ.get("REPOSITORY_TYPE", "supabase")
         logger.debug(f"Creating repository instance (async): {repo_type}")
 
-        if repo_type == "postgres":
+        if repo_type == "supabase":
+            # Supabase with AsyncClient for proper async support
+            from utils.utils import get_supabase_async_client
+            from archon.infrastructure.supabase import SupabaseSitePagesRepository
+
+            supabase_client = await get_supabase_async_client()
+            if supabase_client is None:
+                raise ValueError(
+                    "Supabase async client not available. "
+                    "Please configure SUPABASE_URL and SUPABASE_SERVICE_KEY in environment."
+                )
+            _repository_instance = SupabaseSitePagesRepository(supabase_client)
+            logger.info("Created SupabaseSitePagesRepository instance (async)")
+
+        elif repo_type == "postgres":
             # PostgreSQL direct with asyncpg + pgvector
-            import os
             from archon.infrastructure.postgres import PostgresSitePagesRepository
 
             # Get PostgreSQL configuration from environment
@@ -166,7 +183,7 @@ async def get_repository_async() -> ISitePagesRepository:
             )
 
         else:
-            # For non-async backends, use the sync version
+            # For non-async backends (memory), use the sync version
             return get_repository()
 
     return _repository_instance
