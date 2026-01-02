@@ -4,6 +4,7 @@ Supabase implementation of ICrawledPagesRepository.
 Uses Supabase PostgREST client for CRUD operations and RPC for vector search.
 """
 
+import json
 from typing import Any
 
 from supabase import Client
@@ -40,8 +41,15 @@ class SupabaseCrawledPagesRepository(ICrawledPagesRepository):
         """Convert a database row to a CrawledPage model."""
         metadata = row.get("metadata", {})
         if isinstance(metadata, str):
-            import json
-            metadata = json.loads(metadata)
+            try:
+                metadata = json.loads(metadata)
+            except json.JSONDecodeError as e:
+                self._logger.error(
+                    f"Failed to parse metadata JSON: {e}",
+                    id=row.get("id"),
+                    exc_info=True
+                )
+                metadata = {}  # Fall back to empty metadata
 
         return CrawledPage(
             id=str(row["id"]) if row.get("id") else None,
@@ -134,14 +142,10 @@ class SupabaseCrawledPagesRepository(ICrawledPagesRepository):
                 "match_count": match_count,
             }
 
-            # Add source filter
+            # Add source filter (preserve filter_metadata even when source_id is set)
             if source_id:
                 rpc_params["source_filter"] = source_id
-                rpc_params["filter"] = {}
-            elif filter_metadata:
-                rpc_params["filter"] = filter_metadata
-            else:
-                rpc_params["filter"] = {}
+            rpc_params["filter"] = filter_metadata or {}
 
             # Execute RPC
             response = self.client.rpc("match_archon_crawled_pages", rpc_params).execute()

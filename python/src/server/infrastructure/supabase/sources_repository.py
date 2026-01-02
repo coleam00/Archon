@@ -4,6 +4,7 @@ Supabase implementation of ISourcesRepository.
 Uses Supabase PostgREST client for CRUD operations on documentation sources.
 """
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -36,8 +37,15 @@ class SupabaseSourcesRepository(ISourcesRepository):
         """Convert a database row to a Source model."""
         metadata = row.get("metadata", {})
         if isinstance(metadata, str):
-            import json
-            metadata = json.loads(metadata)
+            try:
+                metadata = json.loads(metadata)
+            except json.JSONDecodeError as e:
+                self._logger.error(
+                    f"Failed to parse metadata JSON: {e}",
+                    source_id=row.get("source_id"),
+                    exc_info=True
+                )
+                metadata = {}  # Fall back to empty metadata
 
         return Source(
             source_id=row["source_id"],

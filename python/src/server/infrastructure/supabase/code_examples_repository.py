@@ -4,6 +4,7 @@ Supabase implementation of ICodeExamplesRepository.
 Uses Supabase PostgREST client for CRUD operations and RPC for vector search.
 """
 
+import json
 from typing import Any
 
 from supabase import Client
@@ -40,8 +41,15 @@ class SupabaseCodeExamplesRepository(ICodeExamplesRepository):
         """Convert a database row to a CodeExample model."""
         metadata = row.get("metadata", {})
         if isinstance(metadata, str):
-            import json
-            metadata = json.loads(metadata)
+            try:
+                metadata = json.loads(metadata)
+            except json.JSONDecodeError as e:
+                self._logger.error(
+                    f"Failed to parse metadata JSON: {e}",
+                    id=row.get("id"),
+                    exc_info=True
+                )
+                metadata = {}  # Fall back to empty metadata
 
         return CodeExample(
             id=str(row["id"]) if row.get("id") else None,
@@ -125,6 +133,12 @@ class SupabaseCodeExamplesRepository(ICodeExamplesRepository):
         Search for code examples similar to the given embedding.
 
         Uses the match_archon_code_examples RPC function for vector search.
+
+        Note:
+            Language filtering is applied post-query, which means fewer than
+            `match_count` results may be returned if many top matches don't
+            match the specified language. For guaranteed result counts with
+            language filtering, consider fetching more results and truncating.
         """
         try:
             # Build RPC parameters
