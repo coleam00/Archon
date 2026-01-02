@@ -77,7 +77,7 @@ class SupabaseCodeExamplesRepository(ICodeExamplesRepository):
             return self._row_to_model(response.data[0])
 
         except Exception as e:
-            self._logger.error(f"get_by_id failed: {e}", id=id)
+            self._logger.error(f"get_by_id failed: {e}", id=id, exc_info=True)
             raise
 
     async def find_by_source(self, source_id: str) -> list[CodeExample]:
@@ -94,7 +94,7 @@ class SupabaseCodeExamplesRepository(ICodeExamplesRepository):
             return [self._row_to_model(row) for row in response.data]
 
         except Exception as e:
-            self._logger.error(f"find_by_source failed: {e}", source_id=source_id)
+            self._logger.error(f"find_by_source failed: {e}", source_id=source_id, exc_info=True)
             raise
 
     async def find_by_page_url(self, page_url: str) -> list[CodeExample]:
@@ -111,7 +111,7 @@ class SupabaseCodeExamplesRepository(ICodeExamplesRepository):
             return [self._row_to_model(row) for row in response.data]
 
         except Exception as e:
-            self._logger.error(f"find_by_page_url failed: {e}", page_url=page_url)
+            self._logger.error(f"find_by_page_url failed: {e}", page_url=page_url, exc_info=True)
             raise
 
     async def search_similar(
@@ -163,7 +163,7 @@ class SupabaseCodeExamplesRepository(ICodeExamplesRepository):
             return results
 
         except Exception as e:
-            self._logger.error(f"search_similar failed: {e}")
+            self._logger.error(f"search_similar failed: {e}", exc_info=True)
             raise
 
     async def insert(self, example: CodeExampleCreate) -> CodeExample:
@@ -206,7 +206,7 @@ class SupabaseCodeExamplesRepository(ICodeExamplesRepository):
             return self._row_to_model(response.data[0])
 
         except Exception as e:
-            self._logger.error(f"insert failed: {e}", page_url=example.page_url)
+            self._logger.error(f"insert failed: {e}", page_url=example.page_url, exc_info=True)
             raise
 
     async def insert_batch(self, examples: list[CodeExampleCreate]) -> list[CodeExample]:
@@ -255,7 +255,7 @@ class SupabaseCodeExamplesRepository(ICodeExamplesRepository):
             return [self._row_to_model(row) for row in response.data]
 
         except Exception as e:
-            self._logger.error(f"insert_batch failed: {e}", count=len(examples))
+            self._logger.error(f"insert_batch failed: {e}", count=len(examples), exc_info=True)
             raise
 
     async def delete_by_source(self, source_id: str) -> int:
@@ -274,7 +274,7 @@ class SupabaseCodeExamplesRepository(ICodeExamplesRepository):
             return deleted_count
 
         except Exception as e:
-            self._logger.error(f"delete_by_source failed: {e}", source_id=source_id)
+            self._logger.error(f"delete_by_source failed: {e}", source_id=source_id, exc_info=True)
             raise
 
     async def delete_by_page_url(self, page_url: str) -> int:
@@ -293,7 +293,7 @@ class SupabaseCodeExamplesRepository(ICodeExamplesRepository):
             return deleted_count
 
         except Exception as e:
-            self._logger.error(f"delete_by_page_url failed: {e}", page_url=page_url)
+            self._logger.error(f"delete_by_page_url failed: {e}", page_url=page_url, exc_info=True)
             raise
 
     async def count(self, source_id: str | None = None) -> int:
@@ -309,7 +309,7 @@ class SupabaseCodeExamplesRepository(ICodeExamplesRepository):
             return response.count if response.count else 0
 
         except Exception as e:
-            self._logger.error(f"count failed: {e}", source_id=source_id)
+            self._logger.error(f"count failed: {e}", source_id=source_id, exc_info=True)
             raise
 
     async def list_languages(self, source_id: str | None = None) -> list[str]:
@@ -332,5 +332,5 @@ class SupabaseCodeExamplesRepository(ICodeExamplesRepository):
             return languages
 
         except Exception as e:
-            self._logger.error(f"list_languages failed: {e}", source_id=source_id)
+            self._logger.error(f"list_languages failed: {e}", source_id=source_id, exc_info=True)
             raise

@@ -77,7 +77,7 @@ class SupabaseCrawledPagesRepository(ICrawledPagesRepository):
             return self._row_to_model(response.data[0])
 
         except Exception as e:
-            self._logger.error(f"get_by_id failed: {e}", id=id)
+            self._logger.error(f"get_by_id failed: {e}", id=id, exc_info=True)
             raise
 
     async def find_by_url(self, url: str) -> list[CrawledPage]:
@@ -94,7 +94,7 @@ class SupabaseCrawledPagesRepository(ICrawledPagesRepository):
             return [self._row_to_model(row) for row in response.data]
 
         except Exception as e:
-            self._logger.error(f"find_by_url failed: {e}", url=url)
+            self._logger.error(f"find_by_url failed: {e}", url=url, exc_info=True)
             raise
 
     async def find_by_source(self, source_id: str) -> list[CrawledPage]:
@@ -112,7 +112,7 @@ class SupabaseCrawledPagesRepository(ICrawledPagesRepository):
             return [self._row_to_model(row) for row in response.data]
 
         except Exception as e:
-            self._logger.error(f"find_by_source failed: {e}", source_id=source_id)
+            self._logger.error(f"find_by_source failed: {e}", source_id=source_id, exc_info=True)
             raise
 
     async def search_similar(
@@ -164,7 +164,7 @@ class SupabaseCrawledPagesRepository(ICrawledPagesRepository):
             return results
 
         except Exception as e:
-            self._logger.error(f"search_similar failed: {e}")
+            self._logger.error(f"search_similar failed: {e}", exc_info=True)
             raise
 
     async def insert(self, page: CrawledPageCreate) -> CrawledPage:
@@ -207,7 +207,7 @@ class SupabaseCrawledPagesRepository(ICrawledPagesRepository):
             return self._row_to_model(response.data[0])
 
         except Exception as e:
-            self._logger.error(f"insert failed: {e}", url=page.url)
+            self._logger.error(f"insert failed: {e}", url=page.url, exc_info=True)
             raise
 
     async def insert_batch(self, pages: list[CrawledPageCreate]) -> list[CrawledPage]:
@@ -256,7 +256,7 @@ class SupabaseCrawledPagesRepository(ICrawledPagesRepository):
             return [self._row_to_model(row) for row in response.data]
 
         except Exception as e:
-            self._logger.error(f"insert_batch failed: {e}", count=len(pages))
+            self._logger.error(f"insert_batch failed: {e}", count=len(pages), exc_info=True)
             raise
 
     async def delete_by_url(self, url: str) -> int:
@@ -275,7 +275,7 @@ class SupabaseCrawledPagesRepository(ICrawledPagesRepository):
             return deleted_count
 
         except Exception as e:
-            self._logger.error(f"delete_by_url failed: {e}", url=url)
+            self._logger.error(f"delete_by_url failed: {e}", url=url, exc_info=True)
             raise
 
     async def delete_by_source(self, source_id: str) -> int:
@@ -294,7 +294,7 @@ class SupabaseCrawledPagesRepository(ICrawledPagesRepository):
             return deleted_count
 
         except Exception as e:
-            self._logger.error(f"delete_by_source failed: {e}", source_id=source_id)
+            self._logger.error(f"delete_by_source failed: {e}", source_id=source_id, exc_info=True)
             raise
 
     async def count(self, source_id: str | None = None) -> int:
@@ -310,7 +310,7 @@ class SupabaseCrawledPagesRepository(ICrawledPagesRepository):
             return response.count if response.count else 0
 
         except Exception as e:
-            self._logger.error(f"count failed: {e}", source_id=source_id)
+            self._logger.error(f"count failed: {e}", source_id=source_id, exc_info=True)
             raise
 
     async def list_unique_urls(self, source_id: str | None = None) -> list[str]:
@@ -329,5 +329,5 @@ class SupabaseCrawledPagesRepository(ICrawledPagesRepository):
             return urls
 
         except Exception as e:
-            self._logger.error(f"list_unique_urls failed: {e}", source_id=source_id)
+            self._logger.error(f"list_unique_urls failed: {e}", source_id=source_id, exc_info=True)
             raise

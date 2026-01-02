@@ -68,7 +68,7 @@ class SupabaseSourcesRepository(ISourcesRepository):
             return self._row_to_model(response.data[0])
 
         except Exception as e:
-            self._logger.error(f"get_by_id failed: {e}", source_id=source_id)
+            self._logger.error(f"get_by_id failed: {e}", source_id=source_id, exc_info=True)
             raise
 
     async def get_by_url(self, url: str) -> Source | None:
@@ -87,7 +87,7 @@ class SupabaseSourcesRepository(ISourcesRepository):
             return self._row_to_model(response.data[0])
 
         except Exception as e:
-            self._logger.error(f"get_by_url failed: {e}", url=url)
+            self._logger.error(f"get_by_url failed: {e}", url=url, exc_info=True)
             raise
 
     async def list_all(self) -> list[Source]:
@@ -103,7 +103,7 @@ class SupabaseSourcesRepository(ISourcesRepository):
             return [self._row_to_model(row) for row in response.data]
 
         except Exception as e:
-            self._logger.error(f"list_all failed: {e}")
+            self._logger.error(f"list_all failed: {e}", exc_info=True)
             raise
 
     async def search(self, query: str) -> list[Source]:
@@ -121,7 +121,7 @@ class SupabaseSourcesRepository(ISourcesRepository):
             return [self._row_to_model(row) for row in response.data]
 
         except Exception as e:
-            self._logger.error(f"search failed: {e}", query=query)
+            self._logger.error(f"search failed: {e}", query=query, exc_info=True)
             raise
 
     async def create(self, source: SourceCreate) -> Source:
@@ -152,7 +152,7 @@ class SupabaseSourcesRepository(ISourcesRepository):
             return self._row_to_model(response.data[0])
 
         except Exception as e:
-            self._logger.error(f"create failed: {e}", source_id=source.source_id)
+            self._logger.error(f"create failed: {e}", source_id=source.source_id, exc_info=True)
             raise
 
     async def update(self, source_id: str, updates: dict[str, Any]) -> Source | None:
@@ -176,7 +176,7 @@ class SupabaseSourcesRepository(ISourcesRepository):
             return self._row_to_model(response.data[0])
 
         except Exception as e:
-            self._logger.error(f"update failed: {e}", source_id=source_id)
+            self._logger.error(f"update failed: {e}", source_id=source_id, exc_info=True)
             raise
 
     async def update_counts(
@@ -202,7 +202,7 @@ class SupabaseSourcesRepository(ISourcesRepository):
             )
 
         except Exception as e:
-            self._logger.error(f"update_counts failed: {e}", source_id=source_id)
+            self._logger.error(f"update_counts failed: {e}", source_id=source_id, exc_info=True)
             raise
 
     async def update_status(self, source_id: str, status: str) -> None:
@@ -218,7 +218,7 @@ class SupabaseSourcesRepository(ISourcesRepository):
             self._logger.info(f"Updated status for source: {source_id}", status=status)
 
         except Exception as e:
-            self._logger.error(f"update_status failed: {e}", source_id=source_id)
+            self._logger.error(f"update_status failed: {e}", source_id=source_id, exc_info=True)
             raise
 
     async def delete(self, source_id: str) -> bool:
@@ -241,7 +241,7 @@ class SupabaseSourcesRepository(ISourcesRepository):
             return deleted
 
         except Exception as e:
-            self._logger.error(f"delete failed: {e}", source_id=source_id)
+            self._logger.error(f"delete failed: {e}", source_id=source_id, exc_info=True)
             raise
 
     async def count(self) -> int:
@@ -256,5 +256,5 @@ class SupabaseSourcesRepository(ISourcesRepository):
             return response.count if response.count else 0
 
         except Exception as e:
-            self._logger.error(f"count failed: {e}")
+            self._logger.error(f"count failed: {e}", exc_info=True)
             raise
