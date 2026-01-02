@@ -300,7 +300,7 @@ class SupabaseCrawledPagesRepository(ICrawledPagesRepository):
     async def count(self, source_id: str | None = None) -> int:
         """Count pages in the repository."""
         try:
-            query = self.client.table(self.table_name).select("*", count="exact")
+            query = self.client.table(self.table_name).select("id", count="exact")
 
             if source_id:
                 query = query.eq("source_id", source_id)

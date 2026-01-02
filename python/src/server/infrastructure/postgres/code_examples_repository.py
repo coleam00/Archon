@@ -205,7 +205,7 @@ class PostgresCodeExamplesRepository(ICodeExamplesRepository):
                 return results
 
         except Exception as e:
-            self._logger.error(f"search_similar failed: {e}")
+            self._logger.error(f"search_similar failed: {e}", exc_info=True)
             raise
 
     async def insert(self, example: CodeExampleCreate) -> CodeExample:
@@ -340,8 +340,12 @@ class PostgresCodeExamplesRepository(ICodeExamplesRepository):
                     source_id
                 )
 
-                # Parse "DELETE X" to get count
-                deleted_count = int(result.split()[-1])
+                # Parse "DELETE X" to get count (asyncpg returns "DELETE N")
+                try:
+                    deleted_count = int(result.split()[-1])
+                except (ValueError, IndexError):
+                    self._logger.warning(f"Could not parse delete result: {result}")
+                    deleted_count = 0
                 self._logger.info(f"delete_by_source deleted {deleted_count} examples", source_id=source_id)
 
                 return deleted_count
@@ -359,8 +363,12 @@ class PostgresCodeExamplesRepository(ICodeExamplesRepository):
                     page_url
                 )
 
-                # Parse "DELETE X" to get count
-                deleted_count = int(result.split()[-1])
+                # Parse "DELETE X" to get count (asyncpg returns "DELETE N")
+                try:
+                    deleted_count = int(result.split()[-1])
+                except (ValueError, IndexError):
+                    self._logger.warning(f"Could not parse delete result: {result}")
+                    deleted_count = 0
                 self._logger.info(f"delete_by_page_url deleted {deleted_count} examples", page_url=page_url)
 
                 return deleted_count

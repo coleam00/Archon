@@ -99,7 +99,7 @@ class PostgresSourcesRepository(ISourcesRepository):
                 return [self._row_to_model(row) for row in rows]
 
         except Exception as e:
-            self._logger.error(f"list_all failed: {e}")
+            self._logger.error(f"list_all failed: {e}", exc_info=True)
             raise
 
     async def search(self, query: str) -> list[Source]:
@@ -275,8 +275,12 @@ class PostgresSourcesRepository(ISourcesRepository):
                     source_id
                 )
 
-                # Parse "DELETE X" to get count
-                deleted_count = int(result.split()[-1])
+                # Parse "DELETE X" to get count (asyncpg returns "DELETE N")
+                try:
+                    deleted_count = int(result.split()[-1])
+                except (ValueError, IndexError):
+                    self._logger.warning(f"Could not parse delete result: {result}")
+                    deleted_count = 0
                 deleted = deleted_count > 0
 
                 if deleted:
@@ -301,5 +305,5 @@ class PostgresSourcesRepository(ISourcesRepository):
                 return count or 0
 
         except Exception as e:
-            self._logger.error(f"count failed: {e}")
+            self._logger.error(f"count failed: {e}", exc_info=True)
             raise

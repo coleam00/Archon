@@ -106,8 +106,7 @@ class InMemorySourcesRepository(ISourcesRepository):
 
             # Create updated source
             source_dict = source.model_dump()
-            source_dict.update(updates)
-            source_dict["updated_at"] = datetime.now(timezone.utc)
+            source_dict.update({**updates, "updated_at": datetime.now(timezone.utc)})
 
             updated_source = Source(**source_dict)
             self._sources[source_id] = updated_source

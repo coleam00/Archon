@@ -204,7 +204,7 @@ class PostgresCrawledPagesRepository(ICrawledPagesRepository):
                 return results
 
         except Exception as e:
-            self._logger.error(f"search_similar failed: {e}")
+            self._logger.error(f"search_similar failed: {e}", exc_info=True)
             raise
 
     async def insert(self, page: CrawledPageCreate) -> CrawledPage:
@@ -338,8 +338,12 @@ class PostgresCrawledPagesRepository(ICrawledPagesRepository):
                     url
                 )
 
-                # Parse "DELETE X" to get count
-                deleted_count = int(result.split()[-1])
+                # Parse "DELETE X" to get count (asyncpg returns "DELETE N")
+                try:
+                    deleted_count = int(result.split()[-1])
+                except (ValueError, IndexError):
+                    self._logger.warning(f"Could not parse delete result: {result}")
+                    deleted_count = 0
                 self._logger.info(f"delete_by_url deleted {deleted_count} chunks", url=url)
 
                 return deleted_count

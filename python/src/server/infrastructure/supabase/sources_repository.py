@@ -158,8 +158,8 @@ class SupabaseSourcesRepository(ISourcesRepository):
     async def update(self, source_id: str, updates: dict[str, Any]) -> Source | None:
         """Update an existing source."""
         try:
-            # Add updated_at timestamp
-            updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+            # Add updated_at timestamp (copy to avoid mutating original)
+            updates = {**updates, "updated_at": datetime.now(timezone.utc).isoformat()}
 
             response = (
                 self.client.table(self.table_name)
@@ -249,7 +249,7 @@ class SupabaseSourcesRepository(ISourcesRepository):
         try:
             response = (
                 self.client.table(self.table_name)
-                .select("*", count="exact")
+                .select("id", count="exact")
                 .execute()
             )
 

@@ -111,7 +111,7 @@ class Container:
             logger.info("Container initialized successfully")
 
         except Exception as e:
-            logger.error(f"Container initialization failed: {e}")
+            logger.error(f"Container initialization failed: {e}", exc_info=True)
             raise
 
     async def shutdown(self) -> None:
@@ -142,7 +142,7 @@ class Container:
             logger.info("Container shutdown complete")
 
         except Exception as e:
-            logger.error(f"Container shutdown error: {e}")
+            logger.error(f"Container shutdown error: {e}", exc_info=True)
             raise
 
     @property
@@ -211,6 +211,12 @@ class Container:
 
         For testing purposes only.
         """
+        if cls._instance is not None:
+            cls._instance._initialized = False
+            cls._instance._storage_type = None
+            # Remove _init_done to allow re-initialization
+            if hasattr(cls._instance, "_init_done"):
+                delattr(cls._instance, "_init_done")
         cls._instance = None
         logger.info("Container singleton reset")
 

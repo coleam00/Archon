@@ -30,8 +30,7 @@ mock_select.order.return_value = mock_select
 mock_table.select.return_value = mock_select
 mock_client.table.return_value = mock_table
 
-# Apply global patches immediately
-from unittest.mock import patch
+# Apply global patches immediately (patch already imported at line 4)
 _global_patches = [
     patch("supabase.create_client", return_value=mock_client),
     patch("src.server.services.client_manager.get_supabase_client", return_value=mock_client),
