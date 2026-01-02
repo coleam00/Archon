@@ -43,6 +43,9 @@ from .services.crawler_manager import cleanup_crawler, initialize_crawler
 # Import utilities and core classes
 from .services.credential_service import initialize_credentials
 
+# Import DI container for repository management
+from .container import container
+
 # Import missing dependencies that the modular APIs need
 try:
     from crawl4ai import AsyncWebCrawler, BrowserConfig
@@ -112,6 +115,13 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             api_logger.warning(f"Could not initialize prompt service: {e}")
 
+        # Initialize DI container (handles PostgreSQL pool if REPOSITORY_TYPE=postgres)
+        try:
+            await container.initialize()
+            api_logger.info(f"✅ Container initialized (storage: {container.storage_type})")
+        except Exception as e:
+            api_logger.warning(f"Could not initialize container: {e}")
+
 
         # MCP Client functionality removed from architecture
         # Agents now use MCP tools directly
@@ -139,6 +149,11 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             api_logger.warning("Could not cleanup crawling context: %s", e, exc_info=True)
 
+        # Shutdown DI container (closes PostgreSQL pool if active)
+        try:
+            await container.shutdown()
+        except Exception as e:
+            api_logger.warning("Could not shutdown container: %s", e, exc_info=True)
 
         api_logger.info("✅ Cleanup completed")
 

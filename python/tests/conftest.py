@@ -189,3 +189,91 @@ def test_knowledge_item():
         "content": "This is test content for knowledge base",
         "source_id": "test-source",
     }
+
+
+# =============================================================================
+# Repository Fixtures (InMemory for fast unit testing)
+# =============================================================================
+
+@pytest.fixture
+def memory_crawled_pages_repository():
+    """InMemory crawled pages repository for testing."""
+    from src.server.infrastructure.memory import InMemoryCrawledPagesRepository
+    repo = InMemoryCrawledPagesRepository()
+    yield repo
+    repo.clear()
+
+
+@pytest.fixture
+def memory_sources_repository():
+    """InMemory sources repository for testing."""
+    from src.server.infrastructure.memory import InMemorySourcesRepository
+    repo = InMemorySourcesRepository()
+    yield repo
+    repo.clear()
+
+
+@pytest.fixture
+def memory_code_examples_repository():
+    """InMemory code examples repository for testing."""
+    from src.server.infrastructure.memory import InMemoryCodeExamplesRepository
+    repo = InMemoryCodeExamplesRepository()
+    yield repo
+    repo.clear()
+
+
+@pytest.fixture
+def use_memory_repositories():
+    """
+    Fixture to use InMemory repositories via the container.
+
+    Sets REPOSITORY_TYPE=memory and resets the factory singletons.
+    """
+    from src.server.infrastructure.repository_factory import reset_repositories_sync
+
+    # Store original value
+    original_type = os.environ.get("REPOSITORY_TYPE")
+
+    # Set to memory
+    os.environ["REPOSITORY_TYPE"] = "memory"
+    reset_repositories_sync()
+
+    yield
+
+    # Restore original value
+    if original_type is not None:
+        os.environ["REPOSITORY_TYPE"] = original_type
+    else:
+        os.environ.pop("REPOSITORY_TYPE", None)
+    reset_repositories_sync()
+
+
+@pytest.fixture
+def container_with_memory():
+    """
+    Container fixture configured with InMemory repositories.
+
+    Useful for integration tests that need the full container.
+    """
+    from src.server.container import Container
+    from src.server.infrastructure.repository_factory import reset_repositories_sync
+
+    # Store original value
+    original_type = os.environ.get("REPOSITORY_TYPE")
+
+    # Set to memory and reset container
+    os.environ["REPOSITORY_TYPE"] = "memory"
+    Container.reset()
+    reset_repositories_sync()
+
+    from src.server.container import container
+
+    yield container
+
+    # Restore and cleanup
+    if original_type is not None:
+        os.environ["REPOSITORY_TYPE"] = original_type
+    else:
+        os.environ.pop("REPOSITORY_TYPE", None)
+    Container.reset()
+    reset_repositories_sync()
