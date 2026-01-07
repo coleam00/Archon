@@ -482,22 +482,42 @@ class TaskService:
         try:
             logger.debug("Fetching task counts for all projects in batch")
 
-            # Query all non-archived tasks grouped by project_id and status
-            response = (
-                self.supabase_client.table("archon_tasks")
-                .select("project_id, status")
-                .or_("archived.is.null,archived.is.false")
-                .execute()
-            )
+            # Query all non-archived tasks using pagination
+            # Supabase has a hard limit of 1000 rows per request
+            all_tasks = []
+            page_size = 1000
+            offset = 0
 
-            if not response.data:
+            while True:
+                response = (
+                    self.supabase_client.table("archon_tasks")
+                    .select("project_id, status")
+                    .or_("archived.is.null,archived.is.false")
+                    .range(offset, offset + page_size - 1)
+                    .execute()
+                )
+
+                if not response.data:
+                    break
+
+                all_tasks.extend(response.data)
+
+                # If we got fewer than page_size, we've reached the end
+                if len(response.data) < page_size:
+                    break
+
+                offset += page_size
+
+            if not all_tasks:
                 logger.debug("No tasks found")
                 return True, {}
+
+            logger.info(f"Task counts query returned {len(all_tasks)} tasks (paginated)")
 
             # Process results into counts by project and status
             counts_by_project = {}
 
-            for task in response.data:
+            for task in all_tasks:
                 project_id = task.get("project_id")
                 status = task.get("status")
 
