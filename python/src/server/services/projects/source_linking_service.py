@@ -92,7 +92,7 @@ class SourceLinkingService:
                             "project_id": project_id,
                             "source_id": source_id,
                             "notes": "technical",
-                        }).execute()
+                        }).select().execute()
                         result["technical_success"] += 1
                     except Exception as e:
                         result["technical_failed"] += 1
@@ -112,7 +112,7 @@ class SourceLinkingService:
                             "project_id": project_id,
                             "source_id": source_id,
                             "notes": "business",
-                        }).execute()
+                        }).select().execute()
                         result["business_success"] += 1
                     except Exception as e:
                         result["business_failed"] += 1

@@ -68,7 +68,7 @@ class ProjectCreationService:
                     project_data[key] = kwargs[key]
 
             # Create the project in database
-            response = self.supabase_client.table("archon_projects").insert(project_data).execute()
+            response = self.supabase_client.table("archon_projects").insert(project_data).select().execute()
             if hasattr(response, "error") and response.error:
                 raise RuntimeError(f"Supabase insert failed for project '{title}': {response.error}")
             if not response.data:

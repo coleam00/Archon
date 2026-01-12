@@ -288,7 +288,7 @@ async def update_source_info(
             if source_display_name:
                 upsert_data["source_display_name"] = source_display_name
 
-            client.table("archon_sources").upsert(upsert_data).execute()
+            client.table("archon_sources").upsert(upsert_data).select().execute()
 
             search_logger.info(
                 f"Updated source {source_id} while preserving title: {existing_title}"
@@ -351,7 +351,7 @@ async def update_source_info(
             if source_display_name:
                 upsert_data["source_display_name"] = source_display_name
 
-            client.table("archon_sources").upsert(upsert_data).execute()
+            client.table("archon_sources").upsert(upsert_data).select().execute()
             search_logger.info(f"Created/updated source {source_id} with title: {title}")
 
     except Exception as e:

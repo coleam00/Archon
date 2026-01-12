@@ -97,7 +97,7 @@ class PageStorageOperations:
                 result = (
                     self.supabase_client.table("archon_page_metadata")
                     .upsert(pages_to_insert, on_conflict="url")
-                    .execute()
+                    .select().execute()
                 )
 
                 # Build url → page_id mapping
@@ -196,7 +196,7 @@ class PageStorageOperations:
                 result = (
                     self.supabase_client.table("archon_page_metadata")
                     .upsert(pages_to_insert, on_conflict="url")
-                    .execute()
+                    .select().execute()
                 )
 
                 # Build url → page_id mapping
@@ -234,7 +234,7 @@ class PageStorageOperations:
         try:
             self.supabase_client.table("archon_page_metadata").update(
                 {"chunk_count": chunk_count}
-            ).eq("id", page_id).execute()
+            ).eq("id", page_id).select().execute()
 
             safe_logfire_info(f"Updated chunk_count={chunk_count} for page_id={page_id}")
 

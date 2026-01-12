@@ -71,7 +71,7 @@ class VersioningService:
             result = (
                 self.supabase_client.table("archon_document_versions")
                 .insert(version_data)
-                .execute()
+                .select().execute()
             )
 
             if result.data:
@@ -216,7 +216,7 @@ class VersioningService:
                 self.supabase_client.table("archon_projects")
                 .update(update_data)
                 .eq("id", project_id)
-                .execute()
+                .select().execute()
             )
 
             if restore_result.data:

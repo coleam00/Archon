@@ -1345,7 +1345,7 @@ async def add_code_examples_to_supabase(
 
         for retry in range(max_retries):
             try:
-                client.table("archon_code_examples").insert(batch_data).execute()
+                client.table("archon_code_examples").insert(batch_data).select().execute()
                 # Success - break out of retry loop
                 break
             except Exception as e:
@@ -1364,7 +1364,7 @@ async def add_code_examples_to_supabase(
                     successful_inserts = 0
                     for record in batch_data:
                         try:
-                            client.table("archon_code_examples").insert(record).execute()
+                            client.table("archon_code_examples").insert(record).select().execute()
                             successful_inserts += 1
                         except Exception as individual_error:
                             search_logger.error(

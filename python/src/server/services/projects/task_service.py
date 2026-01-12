@@ -111,7 +111,7 @@ class TaskService:
                         self.supabase_client.table("archon_tasks").update({
                             "task_order": new_order,
                             "updated_at": datetime.now().isoformat(),
-                        }).eq("id", existing_task["id"]).execute()
+                        }).eq("id", existing_task["id"]).select().execute()
 
             task_data = {
                 "project_id": project_id,
@@ -130,7 +130,7 @@ class TaskService:
             if feature:
                 task_data["feature"] = feature
 
-            response = self.supabase_client.table("archon_tasks").insert(task_data).execute()
+            response = self.supabase_client.table("archon_tasks").insert(task_data).select().execute()
 
             if response.data:
                 task = response.data[0]
@@ -407,7 +407,7 @@ class TaskService:
                 self.supabase_client.table("archon_tasks")
                 .update(update_data)
                 .eq("id", task_id)
-                .execute()
+                .select().execute()
             )
 
             if response.data:
@@ -456,7 +456,7 @@ class TaskService:
                 self.supabase_client.table("archon_tasks")
                 .update(archive_data)
                 .eq("id", task_id)
-                .execute()
+                .select().execute()
             )
 
             if response.data:

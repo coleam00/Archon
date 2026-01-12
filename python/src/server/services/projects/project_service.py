@@ -50,7 +50,7 @@ class ProjectService:
                 project_data["github_repo"] = github_repo.strip()
 
             # Insert project
-            response = self.supabase_client.table("archon_projects").insert(project_data).execute()
+            response = self.supabase_client.table("archon_projects").insert(project_data).select().execute()
 
             if not response.data:
                 logger.error("Supabase returned empty data for project creation")
@@ -352,7 +352,7 @@ class ProjectService:
                     .update({"pinned": False})
                     .neq("id", project_id)
                     .eq("pinned", True)
-                    .execute()
+                    .select().execute()
                 )
                 logger.debug(f"Unpinned {len(unpin_response.data or [])} other projects before pinning {project_id}")
 
@@ -361,7 +361,7 @@ class ProjectService:
                 self.supabase_client.table("archon_projects")
                 .update(update_data)
                 .eq("id", project_id)
-                .execute()
+                .select().execute()
             )
 
             if response.data and len(response.data) > 0:
