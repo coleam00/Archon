@@ -14,11 +14,11 @@ Note: Crawling and document upload operations are handled directly by the
 API service and frontend, not through MCP tools.
 """
 
+import asyncio
 import json
 import logging
 import os
 import sys
-import threading
 import time
 import traceback
 from collections.abc import AsyncIterator
@@ -64,7 +64,10 @@ from src.server.services.mcp_service_client import get_mcp_service_client
 from src.server.services.mcp_session_manager import get_session_manager
 
 # Global initialization lock and flag
-_initialization_lock = threading.Lock()
+# NOTE: asyncio.Lock is event-loop bound - safe for single Uvicorn worker (FastMCP's
+# intended deployment), but not across threads/loops. If multi-worker or cross-thread
+# access is needed, use threading.Lock with run_in_executor for async compatibility.
+_initialization_lock = asyncio.Lock()
 _initialization_complete = False
 _shared_context = None
 
@@ -134,58 +137,65 @@ async def perform_health_checks(context: ArchonContext):
 async def lifespan(server: FastMCP) -> AsyncIterator[ArchonContext]:
     """
     Lifecycle manager - no heavy dependencies.
+    Uses asyncio.Lock to avoid blocking the event loop.
     """
     global _initialization_complete, _shared_context
 
-    # Quick check without lock
-    if _initialization_complete and _shared_context:
+    # Quick check without lock (use 'is not None' for safety)
+    if _initialization_complete and _shared_context is not None:
         logger.info("♻️ Reusing existing context for new SSE connection")
         yield _shared_context
         return
 
-    # Acquire lock for initialization
-    with _initialization_lock:
-        # Double-check pattern
-        if _initialization_complete and _shared_context:
-            logger.info("♻️ Reusing existing context for new SSE connection")
-            yield _shared_context
-            return
+    # Capture context locally to avoid race between lock release and yield
+    ctx: ArchonContext | None = None
 
-        logger.info("🚀 Starting MCP server...")
+    # Acquire async lock for initialization (doesn't block event loop)
+    async with _initialization_lock:
+        # Double-check pattern (use 'is not None' for safety)
+        if _initialization_complete and _shared_context is not None:
+            logger.info("♻️ Reusing existing context for new SSE connection (after lock)")
+            ctx = _shared_context
+        else:
+            logger.info("🚀 Starting MCP server...")
 
-        try:
-            # Initialize session manager
-            logger.info("🔐 Initializing session manager...")
-            session_manager = get_session_manager()
-            logger.info("✓ Session manager initialized")
+            try:
+                # Initialize session manager
+                # NOTE: These sync calls run inside the lock. They don't cause deadlock
+                # (asyncio.Lock yields to other coroutines), but slow init here delays
+                # concurrent connection attempts. Consider run_in_executor if these
+                # become I/O-bound bottlenecks under load.
+                logger.info("🔐 Initializing session manager...")
+                session_manager = get_session_manager()
+                logger.info("✓ Session manager initialized")
 
-            # Initialize service client for HTTP calls
-            logger.info("🌐 Initializing service client...")
-            service_client = get_mcp_service_client()
-            logger.info("✓ Service client initialized")
+                # Initialize service client for HTTP calls
+                logger.info("🌐 Initializing service client...")
+                service_client = get_mcp_service_client()
+                logger.info("✓ Service client initialized")
 
-            # Create context
-            context = ArchonContext(service_client=service_client)
+                # Create context
+                ctx = ArchonContext(service_client=service_client)
 
-            # Perform initial health check
-            await perform_health_checks(context)
+                # Perform initial health check
+                await perform_health_checks(ctx)
 
-            logger.info("✓ MCP server ready")
+                logger.info("✓ MCP server ready")
 
-            # Store context globally
-            _shared_context = context
-            _initialization_complete = True
+                # Store context globally (assign last for atomicity)
+                _shared_context = ctx
+                _initialization_complete = True
 
-            yield context
+            except Exception as e:
+                logger.error(f"💥 Critical error in lifespan setup: {e}")
+                logger.error(traceback.format_exc())
+                raise
 
-        except Exception as e:
-            logger.error(f"💥 Critical error in lifespan setup: {e}")
-            logger.error(traceback.format_exc())
-            raise
-        finally:
-            # Clean up resources
-            logger.info("🧹 Cleaning up MCP server...")
-            logger.info("✅ MCP server shutdown complete")
+    # Yield outside the lock to allow concurrent connections
+    if ctx is not None:
+        yield ctx
+    else:
+        raise RuntimeError("MCP context initialization failed")
 
 
 # Define MCP instructions for Claude Code and other clients

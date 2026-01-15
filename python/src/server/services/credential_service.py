@@ -5,6 +5,7 @@ Handles loading, storing, and accessing credentials with encryption for sensitiv
 Credentials include API keys, service credentials, and application configuration.
 """
 
+import asyncio
 import base64
 import os
 import re
@@ -17,6 +18,7 @@ from typing import Any
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from postgrest.exceptions import APIError
 from supabase import Client, create_client
 
 from ..config.logfire_config import get_logger
@@ -125,37 +127,50 @@ class CredentialService:
 
     async def load_all_credentials(self) -> dict[str, Any]:
         """Load all credentials from database and cache them."""
-        try:
-            supabase = self._get_supabase_client()
+        supabase = self._get_supabase_client()
+        retries = 5
+        delay = 2
 
-            # Fetch all credentials
-            result = supabase.table("archon_settings").select("*").execute()
+        for attempt in range(1, retries + 1):
+            try:
+                result = supabase.table("archon_settings").select("*").execute()
 
-            credentials = {}
-            for item in result.data:
-                key = item["key"]
-                if item["is_encrypted"] and item["encrypted_value"]:
-                    # For encrypted values, we store the encrypted version
-                    # Decryption happens when the value is actually needed
-                    credentials[key] = {
-                        "encrypted_value": item["encrypted_value"],
-                        "is_encrypted": True,
-                        "category": item["category"],
-                        "description": item["description"],
-                    }
-                else:
-                    # Plain text values
-                    credentials[key] = item["value"]
+                credentials = {}
+                for item in result.data:
+                    key = item["key"]
+                    if item["is_encrypted"] and item["encrypted_value"]:
+                        credentials[key] = {
+                            "encrypted_value": item["encrypted_value"],
+                            "is_encrypted": True,
+                            "category": item["category"],
+                            "description": item["description"],
+                        }
+                    else:
+                        credentials[key] = item["value"]
 
-            self._cache = credentials
-            self._cache_initialized = True
-            logger.info(f"Loaded {len(credentials)} credentials from database")
+                self._cache = credentials
+                self._cache_initialized = True
+                logger.info(f"Loaded {len(credentials)} credentials from database")
+                return credentials
 
-            return credentials
+            except APIError as api_error:
+                if api_error.code == "PGRST205" and attempt < retries:
+                    logger.warning(
+                        "Supabase schema cache not ready (attempt %s/%s); retrying in %ss",
+                        attempt,
+                        retries,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 10)
+                    continue
+                logger.error(f"Error loading credentials: {api_error}")
+                raise
+            except Exception as e:
+                logger.error(f"Error loading credentials: {e}")
+                raise
 
-        except Exception as e:
-            logger.error(f"Error loading credentials: {e}")
-            raise
+        raise RuntimeError("Failed to load credentials after retries")
 
     async def get_credential(self, key: str, default: Any = None, decrypt: bool = True) -> Any:
         """Get a credential value by key."""

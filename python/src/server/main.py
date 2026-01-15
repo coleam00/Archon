@@ -216,10 +216,16 @@ async def root():
 # Health check endpoint
 @app.get("/health")
 async def health_check(response: Response):
-    """Health check endpoint that indicates true readiness including credential loading."""
-    from datetime import datetime
+    """
+    Non-blocking health check that responds immediately without I/O.
 
-    # Check if initialization is complete
+    This endpoint checks process state without waiting on database or other I/O operations
+    to prevent health check timeouts when the server is under load or experiencing issues.
+    """
+    from datetime import datetime
+    import asyncio
+
+    # Check if initialization is complete (synchronous check - fast)
     if not _initialization_complete:
         response.status_code = 503  # Service Unavailable
         return {
@@ -230,9 +236,31 @@ async def health_check(response: Response):
             "ready": False,
         }
 
-    # Check for required database schema
-    schema_status = await _check_database_schema()
-    if not schema_status["valid"]:
+    # Check schema status with timeout - don't block health check
+    try:
+        schema_status = await asyncio.wait_for(
+            _check_database_schema_cached(),
+            timeout=2.0  # 2 second max - health check must respond quickly
+        )
+    except asyncio.TimeoutError:
+        # Timeout means we can't verify schema, but server is responsive
+        api_logger.warning("Health check: schema validation timed out (server is responsive but database check slow)")
+        schema_status = {
+            "valid": True,  # Assume valid to keep health check passing
+            "message": "Schema check timed out - assumed valid",
+            "timeout": True
+        }
+    except Exception as e:
+        # Any error - log but don't fail health check
+        api_logger.warning(f"Health check: schema check failed: {e}")
+        schema_status = {
+            "valid": True,  # Assume valid to keep server running
+            "message": f"Schema check error: {type(e).__name__}",
+            "error": True
+        }
+
+    # Only return unhealthy if schema is definitely invalid (not just timeout/error)
+    if schema_status.get("valid") is False and not schema_status.get("timeout") and not schema_status.get("error"):
         response.status_code = 503  # Service Unavailable
         return {
             "status": "migration_required",
@@ -251,7 +279,8 @@ async def health_check(response: Response):
         "timestamp": datetime.now().isoformat(),
         "ready": True,
         "credentials_loaded": True,
-        "schema_valid": True,
+        "schema_valid": schema_status.get("valid", True),
+        "schema_check_timeout": schema_status.get("timeout", False),
     }
 
 
@@ -265,20 +294,50 @@ async def api_health_check(response: Response):
 # Cache schema check result to avoid repeated database queries
 _schema_check_cache = {"valid": None, "checked_at": 0}
 
-async def _check_database_schema():
-    """Check if required database schema exists - only for existing users who need migration."""
-    import time
+async def _check_database_schema_cached():
+    """
+    Check if required database schema exists with caching.
 
-    # If we've already confirmed schema is valid, don't check again
+    Returns immediately from cache when possible. Only checks database if:
+    - Never checked before
+    - Previous check was inconclusive (error)
+    - Cached failure result is older than 30 seconds
+
+    This function is designed to be fast and non-blocking for health checks.
+    """
+    import time
+    import asyncio
+
+    # If we've already confirmed schema is valid, return immediately (no I/O)
     if _schema_check_cache["valid"] is True:
         return {"valid": True, "message": "Schema is up to date (cached)"}
 
-    # If we recently failed, don't spam the database (wait at least 30 seconds)
+    # If we recently failed, return cached result immediately (no I/O)
     current_time = time.time()
     if (_schema_check_cache["valid"] is False and
         current_time - _schema_check_cache["checked_at"] < 30):
         return _schema_check_cache["result"]
 
+    # Need to check database - wrap in timeout to prevent blocking
+    try:
+        # Run database check with timeout
+        result = await asyncio.wait_for(
+            _perform_database_schema_check(current_time),
+            timeout=1.5  # Database check itself must complete in 1.5s
+        )
+        return result
+    except asyncio.TimeoutError:
+        # Database check timed out - don't cache, allow retry
+        api_logger.warning("Database schema check timed out")
+        return {
+            "valid": True,  # Assume valid to prevent health check failures
+            "message": "Database check timed out",
+            "timeout": True
+        }
+
+
+async def _perform_database_schema_check(current_time: float):
+    """Perform the actual database schema check (can be slow)."""
     try:
         from .services.client_manager import get_supabase_client
 

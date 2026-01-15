@@ -11,6 +11,12 @@ from typing import Any
 from ...config.logfire_config import safe_span, search_logger
 from ..embeddings.contextual_embedding_service import generate_contextual_embeddings_batch
 from ..embeddings.embedding_service import create_embeddings_batch
+from .embedding_schema_support import (
+    determine_embedding_column,
+    legacy_column_in_use,
+    note_multi_dim_success,
+    should_retry_with_legacy_column,
+)
 
 
 async def add_documents_to_supabase(
@@ -385,20 +391,14 @@ async def add_documents_to_supabase(
 
                 # Determine the correct embedding column based on dimension
                 embedding_dim = len(embedding) if isinstance(embedding, list) else len(embedding.tolist())
-                embedding_column = None
-                
-                if embedding_dim == 768:
-                    embedding_column = "embedding_768"
-                elif embedding_dim == 1024:
-                    embedding_column = "embedding_1024"
-                elif embedding_dim == 1536:
-                    embedding_column = "embedding_1536"
-                elif embedding_dim == 3072:
-                    embedding_column = "embedding_3072"
-                else:
-                    # Default to closest supported dimension
-                    search_logger.warning(f"Unsupported embedding dimension {embedding_dim}, using embedding_1536")
-                    embedding_column = "embedding_1536"
+                embedding_column = determine_embedding_column(embedding_dim)
+                if (
+                    not legacy_column_in_use()
+                    and embedding_column != f"embedding_{embedding_dim}"
+                ):
+                    search_logger.warning(
+                        f"Unsupported embedding dimension {embedding_dim}, using {embedding_column}"
+                    )
                 
                 # Get page_id for this URL if available
                 page_id = url_to_page_id.get(batch_urls[j]) if url_to_page_id else None
@@ -439,7 +439,12 @@ async def add_documents_to_supabase(
                         raise
 
                 try:
-                    client.table("archon_crawled_pages").insert(batch_data).execute()
+                    client.table("archon_crawled_pages").upsert(
+                        batch_data,
+                        on_conflict="url,chunk_number"
+                    ).execute()
+                    if not legacy_column_in_use():
+                        note_multi_dim_success()
                     total_chunks_stored += len(batch_data)
 
                     # Increment completed batches and report simple progress
@@ -468,6 +473,9 @@ async def add_documents_to_supabase(
                     break
 
                 except Exception as e:
+                    if should_retry_with_legacy_column(e, batch_data):
+                        retry_delay = 1.0
+                        continue
                     if retry < max_retries - 1:
                         search_logger.warning(
                             f"Error inserting batch (attempt {retry + 1}/{max_retries}): {e}"
@@ -497,7 +505,12 @@ async def add_documents_to_supabase(
                                     raise
 
                             try:
-                                client.table("archon_crawled_pages").insert(record).execute()
+                                client.table("archon_crawled_pages").upsert(
+                                    record,
+                                    on_conflict="url,chunk_number"
+                                ).execute()
+                                if not legacy_column_in_use():
+                                    note_multi_dim_success()
                                 successful_inserts += 1
                                 total_chunks_stored += 1
                             except Exception as individual_error:
