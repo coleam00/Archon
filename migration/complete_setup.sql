@@ -48,6 +48,22 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgname = 'update_archon_settings_updated_at'
+          AND tgrelid = 'archon_settings'::regclass
+    ) THEN
+        RAISE NOTICE 'Trigger update_archon_settings_updated_at already exists, dropping before recreation.';
+        EXECUTE 'DROP TRIGGER update_archon_settings_updated_at ON archon_settings';
+    ELSE
+        RAISE NOTICE 'Creating trigger update_archon_settings_updated_at.';
+    END IF;
+END
+$$;
+
 CREATE TRIGGER update_archon_settings_updated_at
     BEFORE UPDATE ON archon_settings
     FOR EACH ROW
@@ -72,7 +88,8 @@ INSERT INTO archon_settings (key, value, is_encrypted, category, description) VA
 ('MCP_TRANSPORT', 'dual', false, 'server_config', 'MCP server transport mode - sse (web clients), stdio (IDE clients), or dual (both)'),
 ('HOST', 'localhost', false, 'server_config', 'Host to bind to if using sse as the transport (leave empty if using stdio)'),
 ('PORT', '8051', false, 'server_config', 'Port to listen on if using sse as the transport (leave empty if using stdio)'),
-('MODEL_CHOICE', 'gpt-4.1-nano', false, 'rag_strategy', 'The LLM you want to use for summaries and contextual embeddings. Generally this is a very cheap and fast LLM like gpt-4.1-nano');
+('MODEL_CHOICE', 'gpt-4.1-nano', false, 'rag_strategy', 'The LLM you want to use for summaries and contextual embeddings. Generally this is a very cheap and fast LLM like gpt-4.1-nano')
+ON CONFLICT (key) DO NOTHING;
 
 -- RAG Strategy Configuration (all default to true)
 INSERT INTO archon_settings (key, value, is_encrypted, category, description) VALUES
@@ -80,12 +97,14 @@ INSERT INTO archon_settings (key, value, is_encrypted, category, description) VA
 ('CONTEXTUAL_EMBEDDINGS_MAX_WORKERS', '3', false, 'rag_strategy', 'Maximum parallel workers for contextual embedding generation (1-10)'),
 ('USE_HYBRID_SEARCH', 'true', false, 'rag_strategy', 'Combines vector similarity search with keyword search for better results'),
 ('USE_AGENTIC_RAG', 'true', false, 'rag_strategy', 'Enables code example extraction, storage, and specialized code search functionality'),
-('USE_RERANKING', 'true', false, 'rag_strategy', 'Applies cross-encoder reranking to improve search result relevance');
+('USE_RERANKING', 'true', false, 'rag_strategy', 'Applies cross-encoder reranking to improve search result relevance')
+ON CONFLICT (key) DO NOTHING;
 
 -- Monitoring Configuration
 INSERT INTO archon_settings (key, value, is_encrypted, category, description) VALUES
 ('LOGFIRE_ENABLED', 'true', false, 'monitoring', 'Enable or disable Pydantic Logfire logging and observability platform'),
-('PROJECTS_ENABLED', 'true', false, 'features', 'Enable or disable Projects and Tasks functionality');
+('PROJECTS_ENABLED', 'true', false, 'features', 'Enable or disable Projects and Tasks functionality')
+ON CONFLICT (key) DO NOTHING;
 
 -- Placeholder for sensitive credentials (to be added via Settings UI)
 INSERT INTO archon_settings (key, encrypted_value, is_encrypted, category, description) VALUES

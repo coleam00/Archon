@@ -573,7 +573,7 @@ def extract_code_blocks(markdown_content: str, min_length: int = None) -> list[d
     return grouped_blocks
 
 
-def generate_code_example_summary(
+async def generate_code_example_summary(
     code: str, context_before: str, context_after: str, language: str = "", provider: str = None
 ) -> dict[str, str]:
     """
@@ -589,10 +589,8 @@ def generate_code_example_summary(
     Returns:
         A dictionary with 'summary' and 'example_name'
     """
-    import asyncio
-
-    # Run the async version in the current thread
-    return asyncio.run(_generate_code_example_summary_async(code, context_before, context_after, language, provider))
+    # Call the async version directly (no event loop creation needed)
+    return await _generate_code_example_summary_async(code, context_before, context_after, language, provider)
 
 
 async def _generate_code_example_summary_async(
