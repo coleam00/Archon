@@ -1,6 +1,6 @@
 [project]
 name = "archon"
-version = "0.1.0"
+version = "0.1.1"
 description = "Archon - the command center for AI coding assistants."
 readme = "README.md"
 requires-python = ">=3.12"

@@ -101,7 +101,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 app = FastAPI(
     title="Agent Work Orders API",
     description="Independent agent work order service for workflow-based agent execution",
-    version="0.1.0",
+    version="0.1.1",
     lifespan=lifespan,
 )
 
@@ -125,7 +125,7 @@ async def health_check() -> dict[str, Any]:
     health_status: dict[str, Any] = {
         "status": "healthy",
         "service": "agent-work-orders",
-        "version": "0.1.0",
+        "version": "0.1.1",
         "enabled": config.ENABLED,
         "dependencies": {},
     }
@@ -260,7 +260,7 @@ async def root() -> dict:
     """Root endpoint with service information"""
     return {
         "service": "agent-work-orders",
-        "version": "0.1.0",
+        "version": "0.1.1",
         "description": "Independent agent work order service",
         "docs": "/docs",
         "health": "/health",
