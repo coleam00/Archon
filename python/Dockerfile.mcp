@@ -38,5 +38,5 @@ ARG ARCHON_MCP_PORT=8051
 ENV ARCHON_MCP_PORT=${ARCHON_MCP_PORT}
 EXPOSE ${ARCHON_MCP_PORT}
 
-# Run the MCP server
-CMD ["python", "-m", "src.mcp_server.mcp_server"]
+# Run the MCP server with Hypercorn (HTTP/2 support)
+CMD ["python", "-m", "src.mcp_server.run_hypercorn"]
