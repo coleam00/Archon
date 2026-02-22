@@ -870,6 +870,7 @@ class RestoreVersionRequest(BaseModel):
 
 
 @router.put("/tasks/{task_id}")
+@router.patch("/tasks/{task_id}")
 async def update_task(task_id: str, request: UpdateTaskRequest):
     """Update a task."""
     try:
