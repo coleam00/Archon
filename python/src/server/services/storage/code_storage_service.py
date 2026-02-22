@@ -628,29 +628,17 @@ async def _generate_code_example_summary_async(
             search_logger.warning(f"Failed to get provider from credential service: {e}, defaulting to openai")
             provider = "openai"
 
-    # Create the prompt variants: base prompt, guarded prompt (JSON reminder), and strict prompt for retries
-    base_prompt = f"""<context_before>
-{context_before[-500:] if len(context_before) > 500 else context_before}
-</context_before>
+    # Optimized prompt for smaller models (tested with Liquid 1.2B Instruct)
+    # Concise, structured format produces consistent JSON output
+    base_prompt = f"""Summarize this code. Return valid JSON only.
 
-<code_example language="{language}">
+Code:
 {code[:1500] if len(code) > 1500 else code}
-</code_example>
 
-<context_after>
-{context_after[:500] if len(context_after) > 500 else context_after}
-</context_after>
-
-Based on the code example and its surrounding context, provide:
-1. A concise, action-oriented name (1-4 words) that describes what this code DOES, not what it is. Focus on the action or purpose.
-   Good examples: "Parse JSON Response", "Validate Email Format", "Connect PostgreSQL", "Handle File Upload", "Sort Array Items", "Fetch User Data"
-   Bad examples: "Function Example", "Code Snippet", "JavaScript Code", "API Code"
-2. A summary (2-3 sentences) that describes what this code example demonstrates and its purpose
-
-Format your response as JSON:
+JSON format:
 {{
-  "example_name": "Action-oriented name (1-4 words)",
-  "summary": "2-3 sentence description of what the code demonstrates"
+  "example_name": "What it does (1-4 words)",
+  "summary": "PURPOSE: what it does. PARAMETERS: key inputs and types. USE WHEN: specific use case."
 }}
 """
     guard_prompt = (

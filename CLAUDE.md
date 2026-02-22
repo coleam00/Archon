@@ -150,6 +150,26 @@ make lint-be             # Backend only (Ruff + MyPy)
 make test                # Run all tests
 make test-fe             # Frontend tests only
 make test-be             # Backend tests only
+
+# Prompt regression tests
+uv run python tests/prompts/test_code_summary_prompt.py  # Test code summary prompt
+uv run pytest tests/prompts/ -v                           # Run all prompt tests with pytest
+```
+
+### Prompt Regression Tests
+
+**Location**: `python/tests/prompts/`
+**Documentation**: `@PRPs/ai_docs/CODE_SUMMARY_PROMPT.md`
+
+Regression tests for AI prompts used in production. These ensure prompt changes don't break output structure or quality.
+
+**When to run**:
+- Before merging prompt changes
+- When updating LLM providers or models
+- As part of CI/CD pipeline
+- When debugging summary/output quality issues
+
+See `python/tests/prompts/README.md` for details on adding new prompt tests.
 ```
 
 ## Architecture Overview
