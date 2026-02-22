@@ -190,6 +190,10 @@ export const RAGSettings = ({
   // Model selection modals state
   const [showLLMModelSelectionModal, setShowLLMModelSelectionModal] = useState(false);
   const [showEmbeddingModelSelectionModal, setShowEmbeddingModelSelectionModal] = useState(false);
+  const [showSummaryModelSelectionModal, setShowSummaryModelSelectionModal] = useState(false);
+
+  // Edit modals for Summary
+  const [showEditSummaryModal, setShowEditSummaryModal] = useState(false);
 
   // Provider-specific model persistence state
   const [providerModels, setProviderModels] = useState<ProviderModelMap>(() => loadProviderModels());
@@ -268,6 +272,28 @@ export const RAGSettings = ({
       });
     }
   }, [ragSettings.OLLAMA_EMBEDDING_URL, ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME]);
+
+  // Sync codeSummaryInstanceConfig from ragSettings
+  const lastCodeSummaryConfigRef = useRef({ url: '', name: '' });
+
+  useEffect(() => {
+    const newSummaryUrl = ragSettings.CODE_SUMMARIZATION_BASE_URL || '';
+    const newSummaryName = ragSettings.CODE_SUMMARIZATION_INSTANCE_NAME || '';
+    
+    if (newSummaryUrl !== lastCodeSummaryConfigRef.current.url || newSummaryName !== lastCodeSummaryConfigRef.current.name) {
+      lastCodeSummaryConfigRef.current = { url: newSummaryUrl, name: newSummaryName };
+      setCodeSummaryInstanceConfig(prev => {
+        const newConfig = {
+          url: newSummaryUrl || prev.url,
+          name: newSummaryName || prev.name
+        };
+        if (newConfig.url !== prev.url || newConfig.name !== prev.name) {
+          return newConfig;
+        }
+        return prev;
+      });
+    }
+  }, [ragSettings.CODE_SUMMARIZATION_BASE_URL, ragSettings.CODE_SUMMARIZATION_INSTANCE_NAME]);
 
   // Provider model persistence effects - separate for chat and embedding
   useEffect(() => {
@@ -446,10 +472,24 @@ export const RAGSettings = ({
     updateEmbeddingRagSettingsRef.current = true;
   }, [embeddingProvider]);
 
+  // Update ragSettings when codeSummaryProvider changes
+  const updateCodeSummaryRagSettingsRef = useRef(true);
+
+  useEffect(() => {
+    if (updateCodeSummaryRagSettingsRef.current && codeSummaryProvider && codeSummaryProvider !== ragSettings.CODE_SUMMARIZATION_PROVIDER) {
+      setRagSettings(prev => ({
+        ...prev,
+        CODE_SUMMARIZATION_PROVIDER: codeSummaryProvider
+      }));
+    }
+    updateCodeSummaryRagSettingsRef.current = true;
+  }, [codeSummaryProvider]);
+
 
   // Status tracking
   const [llmStatus, setLLMStatus] = useState({ online: false, responseTime: null, checking: false });
   const [embeddingStatus, setEmbeddingStatus] = useState({ online: false, responseTime: null, checking: false });
+  const [summaryStatus, setSummaryStatus] = useState({ online: false, responseTime: null, checking: false });
   const llmRetryTimeoutRef = useRef<number | null>(null);
   const embeddingRetryTimeoutRef = useRef<number | null>(null);
   
@@ -1335,7 +1375,7 @@ const manualTestConnection = async (
               { key: 'grok', name: 'Grok', logo: '/img/Grok.png', color: 'yellow' }
             ]
               .filter(provider =>
-                activeSelection === 'chat' || EMBEDDING_CAPABLE_PROVIDERS.includes(provider.key as ProviderKey)
+                activeSelection === 'chat' || activeSelection === 'code_summarization' || EMBEDDING_CAPABLE_PROVIDERS.includes(provider.key as ProviderKey)
               )
               .map(provider => (
               <button
@@ -1352,7 +1392,7 @@ const manualTestConnection = async (
                       ...prev,
                       MODEL_CHOICE: savedModels.chatModel
                     }));
-                  } else {
+                  } else if (activeSelection === 'embedding') {
                     setEmbeddingProvider(providerKey);
                     // Update embedding model when switching providers
                     const savedModels = providerModels[providerKey] || getDefaultModels(providerKey);
@@ -1360,11 +1400,17 @@ const manualTestConnection = async (
                       ...prev,
                       EMBEDDING_MODEL: savedModels.embeddingModel
                     }));
+                  } else if (activeSelection === 'code_summarization') {
+                    setCodeSummaryProvider(providerKey);
+                    setRagSettings(prev => ({
+                      ...prev,
+                      CODE_SUMMARIZATION_PROVIDER: providerKey
+                    }));
                   }
                 }}
                 className={`
                   relative p-3 rounded-lg border-2 transition-all duration-200 text-center
-                  ${(activeSelection === 'chat' ? chatProvider === provider.key : embeddingProvider === provider.key)
+                  ${(activeSelection === 'chat' ? chatProvider === provider.key : activeSelection === 'embedding' ? embeddingProvider === provider.key : codeSummaryProvider === provider.key)
                     ? `${colorStyles[provider.key as ProviderKey]} shadow-[0_0_15px_rgba(34,197,94,0.3)]`
                     : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
                   }
@@ -1445,7 +1491,7 @@ const manualTestConnection = async (
                     </div>
                   </div>
                 )
-              ) : (
+              ) : activeSelection === 'embedding' ? (
                 embeddingProvider !== 'ollama' ? (
                   <Input
                     label="Embedding Model"
@@ -1470,12 +1516,38 @@ const manualTestConnection = async (
                     </div>
                   </div>
                 )
+              ) : (
+                codeSummaryProvider !== 'ollama' ? (
+                  <Input
+                    label="Summary Model"
+                    value={ragSettings.CODE_SUMMARIZATION_MODEL || ""}
+                    onChange={e => setRagSettings({
+                      ...ragSettings,
+                      CODE_SUMMARIZATION_MODEL: e.target.value
+                    })}
+                    placeholder={getSummaryPlaceholder(codeSummaryProvider)}
+                    accentColor="orange"
+                  />
+                ) : (
+                  <div className="p-3 border border-orange-500/30 rounded-lg bg-orange-500/5">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Summary Model
+                    </label>
+                    <div className="text-sm text-gray-600 dark:text-gray-400">
+                      Configured via Ollama instance
+                    </div>
+                    <div className="text-xs text-orange-400 mt-1">
+                      Current: {getDisplayedSummaryModel(ragSettings) || 'Not selected'}
+                    </div>
+                  </div>
+                )
               )}
             </div>
 
             {/* Ollama Configuration Gear Icon */}
             {((activeSelection === 'chat' && chatProvider === 'ollama') ||
-              (activeSelection === 'embedding' && embeddingProvider === 'ollama')) && (
+              (activeSelection === 'embedding' && embeddingProvider === 'ollama') ||
+              (activeSelection === 'code_summarization' && codeSummaryProvider === 'ollama')) && (
               <Button
                 variant="outline"
                 accentColor="green"
@@ -1483,7 +1555,7 @@ const manualTestConnection = async (
                 className="whitespace-nowrap ml-4 border-green-500 text-green-400 hover:bg-green-500/10"
                 onClick={() => setShowOllamaConfig(!showOllamaConfig)}
               >
-                {activeSelection === 'chat' ? 'Config' : 'Config'}
+                Config
               </Button>
             )}
 
@@ -1504,7 +1576,11 @@ const manualTestConnection = async (
                     LLM_BASE_URL: llmInstanceConfig.url,
                     LLM_INSTANCE_NAME: llmInstanceConfig.name,
                     OLLAMA_EMBEDDING_URL: embeddingInstanceConfig.url,
-                    OLLAMA_EMBEDDING_INSTANCE_NAME: embeddingInstanceConfig.name
+                    OLLAMA_EMBEDDING_INSTANCE_NAME: embeddingInstanceConfig.name,
+                    CODE_SUMMARIZATION_PROVIDER: codeSummaryProvider,
+                    CODE_SUMMARIZATION_MODEL: ragSettings.CODE_SUMMARIZATION_MODEL,
+                    CODE_SUMMARIZATION_BASE_URL: codeSummaryInstanceConfig.url,
+                    CODE_SUMMARIZATION_INSTANCE_NAME: codeSummaryInstanceConfig.name
                   };
 
                   await credentialsService.updateRagSettings(updatedSettings);
@@ -1528,24 +1604,27 @@ const manualTestConnection = async (
 
           {/* Expandable Ollama Configuration Container */}
           {showOllamaConfig && ((activeSelection === 'chat' && chatProvider === 'ollama') ||
-                               (activeSelection === 'embedding' && embeddingProvider === 'ollama')) && (
+                               (activeSelection === 'embedding' && embeddingProvider === 'ollama') ||
+                               (activeSelection === 'code_summarization' && codeSummaryProvider === 'ollama')) && (
             <div className="mt-4 p-4 bg-gradient-to-r from-green-500/5 to-green-600/5 border border-green-500/20 rounded-lg shadow-[0_2px_8px_rgba(34,197,94,0.1)]">
               <div className="flex items-center justify-between mb-4">
                 <div>
                   <h3 className="text-white text-lg font-semibold">
-                    {activeSelection === 'chat' ? 'LLM Chat Configuration' : 'Embedding Configuration'}
+                    {activeSelection === 'chat' ? 'LLM Chat Configuration' : activeSelection === 'embedding' ? 'Embedding Configuration' : 'Summary Configuration'}
                   </h3>
                   <p className="text-gray-400 text-sm">
                     {activeSelection === 'chat'
                       ? 'Configure Ollama instance for chat completions'
-                      : 'Configure Ollama instance for text embeddings'}
+                      : activeSelection === 'embedding'
+                      ? 'Configure Ollama instance for text embeddings'
+                      : 'Configure Ollama instance for code summarization'}
                   </p>
                 </div>
                 <div className={`text-sm font-medium ${
-                  (activeSelection === 'chat' ? llmStatus.online : embeddingStatus.online)
+                  (activeSelection === 'chat' ? llmStatus.online : activeSelection === 'embedding' ? embeddingStatus.online : summaryStatus.online)
                     ? "text-teal-400" : "text-red-400"
                 }`}>
-                  {(activeSelection === 'chat' ? llmStatus.online : embeddingStatus.online)
+                  {(activeSelection === 'chat' ? llmStatus.online : activeSelection === 'embedding' ? embeddingStatus.online : summaryStatus.online)
                     ? "Online" : "Offline"}
                 </div>
               </div>
@@ -1630,7 +1709,7 @@ const manualTestConnection = async (
                       </div>
                     )}
                   </div>
-                ) : (
+                ) : activeSelection === 'embedding' ? (
                   // Embedding Model Configuration
                   <div>
                     {embeddingInstanceConfig.name && embeddingInstanceConfig.url ? (
@@ -1705,13 +1784,88 @@ const manualTestConnection = async (
                       </div>
                     )}
                   </div>
+                ) : (
+                  // Summary Model Configuration
+                  <div>
+                    {codeSummaryInstanceConfig.name && codeSummaryInstanceConfig.url ? (
+                      <>
+                        <div className="mb-3">
+                          <div className="text-white font-medium mb-1">{codeSummaryInstanceConfig.name}</div>
+                          <div className="text-gray-400 text-sm font-mono">{codeSummaryInstanceConfig.url}</div>
+                        </div>
+
+                        <div className="mb-4">
+                          <div className="text-gray-300 text-sm mb-1">Model:</div>
+                          <div className="text-white">{getDisplayedSummaryModel(ragSettings)}</div>
+                        </div>
+
+                        <div className="text-gray-400 text-sm mb-4">
+                          {summaryStatus.checking ? (
+                            <Loader className="w-4 h-4 animate-spin inline mr-1" />
+                          ) : null}
+                          {ollamaMetrics.loading ? 'Loading...' : `${ollamaMetrics.llmInstanceModels?.chat || 0} chat models available`}
+                        </div>
+
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-orange-300 border-orange-400 hover:bg-orange-500/10"
+                            onClick={() => setShowEditSummaryModal(true)}
+                          >
+                            Edit Settings
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-orange-300 border-orange-400 hover:bg-orange-500/10"
+                            onClick={async () => {
+                              const success = await manualTestConnection(
+                                codeSummaryInstanceConfig.url,
+                                setSummaryStatus,
+                                codeSummaryInstanceConfig.name,
+                                'chat'
+                              );
+
+                              setOllamaManualConfirmed(success);
+                              setOllamaServerStatus(success ? 'online' : 'offline');
+                            }}
+                            disabled={summaryStatus.checking}
+                          >
+                            {summaryStatus.checking ? 'Testing...' : 'Test Connection'}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-orange-300 border-orange-400 hover:bg-orange-500/10"
+                            onClick={() => setShowSummaryModelSelectionModal(true)}
+                          >
+                            Select Model
+                          </Button>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-center py-8">
+                        <div className="text-gray-400 text-sm mb-2">No Summary instance configured</div>
+                        <div className="text-gray-500 text-xs mb-4">Configure an instance to use summarization features</div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="text-orange-300 border-orange-400 hover:bg-orange-500/10"
+                          onClick={() => setShowEditSummaryModal(true)}
+                        >
+                          Add Summary Instance
+                        </Button>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
 
               {/* Context-Aware Configuration Summary */}
               <div className="bg-black/40 rounded-lg p-4 mt-4 shadow-[0_2px_8px_rgba(34,197,94,0.1)]">
                 <h4 className="text-white font-medium mb-3">
-                  {activeSelection === 'chat' ? 'LLM Instance Summary' : 'Embedding Instance Summary'}
+                  {activeSelection === 'chat' ? 'LLM Instance Summary' : activeSelection === 'embedding' ? 'Embedding Instance Summary' : 'Summary Instance Summary'}
                 </h4>
 
                 <div className="overflow-x-auto">
@@ -1720,7 +1874,7 @@ const manualTestConnection = async (
                       <tr className="border-b border-gray-600">
                         <th className="text-left py-2 text-gray-300 font-medium">Configuration</th>
                         <th className="text-left py-2 text-gray-300 font-medium">
-                          {activeSelection === 'chat' ? 'LLM Instance' : 'Embedding Instance'}
+                          {activeSelection === 'chat' ? 'LLM Instance' : activeSelection === 'embedding' ? 'Embedding Instance' : 'Summary Instance'}
                         </th>
                       </tr>
                     </thead>
@@ -1730,7 +1884,9 @@ const manualTestConnection = async (
                         <td className="py-2 text-white">
                           {activeSelection === 'chat'
                             ? (llmInstanceConfig.name || <span className="text-gray-500 italic">Not configured</span>)
-                            : (embeddingInstanceConfig.name || <span className="text-gray-500 italic">Not configured</span>)
+                            : activeSelection === 'embedding'
+                            ? (embeddingInstanceConfig.name || <span className="text-gray-500 italic">Not configured</span>)
+                            : (codeSummaryInstanceConfig.name || <span className="text-gray-500 italic">Not configured</span>)
                           }
                         </td>
                       </tr>
@@ -1739,7 +1895,9 @@ const manualTestConnection = async (
                         <td className="py-2 text-white font-mono text-xs">
                           {activeSelection === 'chat'
                             ? (llmInstanceConfig.url || <span className="text-gray-500 italic">Not configured</span>)
-                            : (embeddingInstanceConfig.url || <span className="text-gray-500 italic">Not configured</span>)
+                            : activeSelection === 'embedding'
+                            ? (embeddingInstanceConfig.url || <span className="text-gray-500 italic">Not configured</span>)
+                            : (codeSummaryInstanceConfig.url || <span className="text-gray-500 italic">Not configured</span>)
                           }
                         </td>
                       </tr>
@@ -1750,9 +1908,13 @@ const manualTestConnection = async (
                             <span className={llmStatus.checking ? "text-yellow-400" : llmStatus.online ? "text-teal-400" : "text-red-400"}>
                               {llmStatus.checking ? "Checking..." : llmStatus.online ? `Online (${llmStatus.responseTime}ms)` : "Offline"}
                             </span>
-                          ) : (
+                          ) : activeSelection === 'embedding' ? (
                             <span className={embeddingStatus.checking ? "text-yellow-400" : embeddingStatus.online ? "text-teal-400" : "text-red-400"}>
                               {embeddingStatus.checking ? "Checking..." : embeddingStatus.online ? `Online (${embeddingStatus.responseTime}ms)` : "Offline"}
+                            </span>
+                          ) : (
+                            <span className={summaryStatus.checking ? "text-yellow-400" : summaryStatus.online ? "text-teal-400" : "text-red-400"}>
+                              {summaryStatus.checking ? "Checking..." : summaryStatus.online ? `Online (${summaryStatus.responseTime}ms)` : "Offline"}
                             </span>
                           )}
                         </td>
@@ -1762,7 +1924,9 @@ const manualTestConnection = async (
                         <td className="py-2 text-white">
                           {activeSelection === 'chat'
                             ? (getDisplayedChatModel(ragSettings) || <span className="text-gray-500 italic">No model selected</span>)
-                            : (getDisplayedEmbeddingModel(ragSettings) || <span className="text-gray-500 italic">No model selected</span>)
+                            : activeSelection === 'embedding'
+                            ? (getDisplayedEmbeddingModel(ragSettings) || <span className="text-gray-500 italic">No model selected</span>)
+                            : (getDisplayedSummaryModel(ragSettings) || <span className="text-gray-500 italic">No model selected</span>)
                           }
                         </td>
                       </tr>
@@ -1776,10 +1940,15 @@ const manualTestConnection = async (
                               <span className="text-green-400 font-medium text-lg">{ollamaMetrics.llmInstanceModels?.chat || 0}</span>
                               <span className="text-gray-400 text-sm ml-2">chat models</span>
                             </div>
-                          ) : (
+                          ) : activeSelection === 'embedding' ? (
                             <div className="text-white">
                               <span className="text-purple-400 font-medium text-lg">{ollamaMetrics.embeddingInstanceModels?.embedding || 0}</span>
                               <span className="text-gray-400 text-sm ml-2">embedding models</span>
+                            </div>
+                          ) : (
+                            <div className="text-white">
+                              <span className="text-orange-400 font-medium text-lg">{ollamaMetrics.llmInstanceModels?.chat || 0}</span>
+                              <span className="text-gray-400 text-sm ml-2">chat models</span>
                             </div>
                           )}
                         </td>
@@ -1791,16 +1960,20 @@ const manualTestConnection = async (
                   <div className="mt-4 pt-3 border-t border-gray-600">
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-gray-300">
-                        {activeSelection === 'chat' ? 'LLM Instance Status:' : 'Embedding Instance Status:'}
+                        {activeSelection === 'chat' ? 'LLM Instance Status:' : activeSelection === 'embedding' ? 'Embedding Instance Status:' : 'Summary Instance Status:'}
                       </span>
                       <span className={
                         activeSelection === 'chat'
                           ? (llmStatus.online ? "text-teal-400 font-medium" : "text-red-400")
-                          : (embeddingStatus.online ? "text-teal-400 font-medium" : "text-red-400")
+                          : activeSelection === 'embedding'
+                          ? (embeddingStatus.online ? "text-teal-400 font-medium" : "text-red-400")
+                          : (summaryStatus.online ? "text-teal-400 font-medium" : "text-red-400")
                       }>
                         {activeSelection === 'chat'
                           ? (llmStatus.online ? "✓ Ready" : "✗ Not Ready")
-                          : (embeddingStatus.online ? "✓ Ready" : "✗ Not Ready")
+                          : activeSelection === 'embedding'
+                          ? (embeddingStatus.online ? "✓ Ready" : "✗ Not Ready")
+                          : (summaryStatus.online ? "✓ Ready" : "✗ Not Ready")
                         }
                       </span>
                     </div>
@@ -1817,8 +1990,10 @@ const manualTestConnection = async (
                             <Loader className="w-3 h-3 animate-spin inline" />
                           ) : activeSelection === 'chat' ? (
                             `${ollamaMetrics.llmInstanceModels?.chat || 0} chat models`
-                          ) : (
+                          ) : activeSelection === 'embedding' ? (
                             `${ollamaMetrics.embeddingInstanceModels?.embedding || 0} embedding models`
+                          ) : (
+                            `${ollamaMetrics.llmInstanceModels?.chat || 0} chat models`
                           )}
                         </span>
                       </div>
@@ -1829,109 +2004,6 @@ const manualTestConnection = async (
             </div>
           )}
         </div>
-
-        {/* Code Summarization Agent Settings */}
-        <div className="mb-4">
-          <button
-            type="button"
-            onClick={() => setShowCodeSummarySettings(!showCodeSummarySettings)}
-            className="flex items-center justify-between w-full p-3 rounded-lg border border-green-500/20 bg-gradient-to-r from-green-500/5 to-green-600/5 hover:from-green-500/10 hover:to-green-600/10 transition-all"
-          >
-            <div className="flex items-center gap-2">
-              <LuBrainCircuit className="w-5 h-5 text-green-500" />
-              <h3 className="font-semibold text-gray-800 dark:text-white">Code Summarization Agent</h3>
-              <span className="text-xs text-gray-500 dark:text-gray-400 ml-2">
-                ({codeSummaryProvider}: {ragSettings.CODE_SUMMARIZATION_MODEL || "default"})
-              </span>
-            </div>
-            {showCodeSummarySettings ? (
-              <ChevronUp className="w-5 h-5 text-gray-500" />
-            ) : (
-              <ChevronDown className="w-5 h-5 text-gray-500" />
-            )}
-          </button>
-
-          {showCodeSummarySettings && (
-            <div className="mt-4 p-4 border border-green-500/10 rounded-lg bg-green-500/5">
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Select Code Summarization Provider
-                </label>
-                <div className="grid grid-cols-3 gap-2">
-                  {[
-                    { key: 'openai', name: 'OpenAI', logo: '/img/OpenAI.png', color: 'green' },
-                    { key: 'google', name: 'Google', logo: '/img/google-logo.svg', color: 'blue' },
-                    { key: 'openrouter', name: 'OpenRouter', logo: '/img/OpenRouter.png', color: 'cyan' },
-                    { key: 'ollama', name: 'Ollama', logo: '/img/Ollama.png', color: 'purple' },
-                    { key: 'anthropic', name: 'Anthropic', logo: '/img/claude-logo.svg', color: 'orange' },
-                    { key: 'grok', name: 'Grok', logo: '/img/Grok.png', color: 'yellow' }
-                  ].map(provider => (
-                    <button
-                      key={provider.key}
-                      type="button"
-                      onClick={() => {
-                        setCodeSummaryProvider(provider.key as ProviderKey);
-                        setRagSettings(prev => ({
-                          ...prev,
-                          CODE_SUMMARIZATION_PROVIDER: provider.key
-                        }));
-                      }}
-                      className={`flex items-center gap-2 p-3 rounded-lg border transition-all
-                        ${codeSummaryProvider === provider.key
-                          ? 'border-green-500 bg-green-500/10 shadow-[0_0_15px_rgba(34,197,94,0.3)]'
-                          : 'border-gray-200 dark:border-gray-700 hover:border-green-400/50'
-                        }`}
-                    >
-                      <img src={provider.logo} alt={provider.name} className="w-5 h-5" />
-                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{provider.name}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Model Input */}
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Code Summarization Model
-                </label>
-                <Input
-                  placeholder="e.g., gpt-4o-mini, claude-3-haiku, qwen2.5-coder"
-                  value={ragSettings.CODE_SUMMARIZATION_MODEL || ""}
-                  onChange={e => setRagSettings(prev => ({
-                    ...prev,
-                    CODE_SUMMARIZATION_MODEL: e.target.value
-                  }))}
-                  className="w-full"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Leave empty to use provider's default. Recommended: qwen2.5-coder for Ollama.
-                </p>
-              </div>
-
-              {/* Base URL for Ollama/Custom */}
-              {codeSummaryProvider === 'ollama' && (
-                <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Ollama Instance URL
-                  </label>
-                  <Input
-                    placeholder="http://host.docker.internal:11434/v1"
-                    value={codeSummaryInstanceConfig.url}
-                    onChange={e => {
-                      setCodeSummaryInstanceConfig(prev => ({ ...prev, url: e.target.value }));
-                      setRagSettings(prev => ({
-                        ...prev,
-                        CODE_SUMMARIZATION_BASE_URL: e.target.value
-                      }));
-                    }}
-                    className="w-full"
-                  />
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
 
         {/* Second row: Contextual Embeddings, Max Workers, and description */}
         <div className="grid grid-cols-8 gap-4 mb-4 p-4 rounded-lg border border-green-500/20 shadow-[0_2px_8px_rgba(34,197,94,0.1)]">
@@ -2428,6 +2500,76 @@ const manualTestConnection = async (
           </div>
         )}
 
+        {/* Edit Summary Instance Modal */}
+        {showEditSummaryModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center pt-20 z-50">
+            <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-96 max-w-md">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Edit Summary Instance</h3>
+              
+              <div className="space-y-4">
+                <Input
+                  label="Instance Name"
+                  value={codeSummaryInstanceConfig.name}
+                  onChange={(e) => {
+                    const newName = e.target.value;
+                    setCodeSummaryInstanceConfig({...codeSummaryInstanceConfig, name: newName});
+                  }}
+                  placeholder="Enter instance name"
+                />
+                
+                <Input
+                  label="Instance URL"
+                  value={codeSummaryInstanceConfig.url}
+                  onChange={(e) => {
+                    const newUrl = e.target.value;
+                    setCodeSummaryInstanceConfig({...codeSummaryInstanceConfig, url: newUrl});
+                  }}
+                  placeholder="http://host.docker.internal:11434/v1"
+                />
+              </div>
+              
+              <div className="flex gap-2 mt-6">
+                <Button
+                  variant="outline"
+                  onClick={() => setShowEditSummaryModal(false)}
+                  className="flex-1"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={async () => {
+                    setRagSettings({
+                      ...ragSettings,
+                      CODE_SUMMARIZATION_BASE_URL: codeSummaryInstanceConfig.url,
+                      CODE_SUMMARIZATION_INSTANCE_NAME: codeSummaryInstanceConfig.name
+                    });
+                    setShowEditSummaryModal(false);
+                    showToast('Summary instance updated successfully', 'success');
+                    // Wait 1 second then automatically test connection and refresh models
+                    setTimeout(() => {
+                      manualTestConnection(
+                        codeSummaryInstanceConfig.url,
+                        setSummaryStatus,
+                        codeSummaryInstanceConfig.name,
+                        'chat',
+                        { suppressToast: true }
+                      ).then((success) => {
+                        setOllamaManualConfirmed(success);
+                        setOllamaServerStatus(success ? 'online' : 'offline');
+                      });
+                      fetchOllamaMetrics();
+                    }, 1000);
+                  }}
+                  className="flex-1"
+                  accentColor="green"
+                >
+                  Save Changes
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* LLM Model Selection Modal */}
         {showLLMModelSelectionModal && (
           <OllamaModelSelectionModal
@@ -2462,6 +2604,26 @@ const manualTestConnection = async (
             onSelectModel={(modelName: string) => {
               setRagSettings({ ...ragSettings, EMBEDDING_MODEL: modelName });
               showToast(`Selected embedding model: ${modelName}`, 'success');
+            }}
+          />
+        )}
+
+        {/* Summary Model Selection Modal */}
+        {showSummaryModelSelectionModal && (
+          <OllamaModelSelectionModal
+            isOpen={showSummaryModelSelectionModal}
+            onClose={() => setShowSummaryModelSelectionModal(false)}
+            instances={[
+              { name: llmInstanceConfig.name, url: llmInstanceConfig.url },
+              { name: embeddingInstanceConfig.name, url: embeddingInstanceConfig.url },
+              { name: codeSummaryInstanceConfig.name, url: codeSummaryInstanceConfig.url }
+            ]}
+            currentModel={ragSettings.CODE_SUMMARIZATION_MODEL}
+            modelType="chat"
+            selectedInstanceUrl={normalizeBaseUrl(codeSummaryInstanceConfig.url) ?? ''}
+            onSelectModel={(modelName: string) => {
+              setRagSettings({ ...ragSettings, CODE_SUMMARIZATION_MODEL: modelName });
+              showToast(`Selected summary model: ${modelName}`, 'success');
             }}
           />
         )}
@@ -2584,6 +2746,51 @@ function getEmbeddingPlaceholder(provider: ProviderKey): string {
       return 'e.g., text-embedding-3-small';
     default:
       return 'Default: text-embedding-3-small';
+  }
+}
+
+function getDisplayedSummaryModel(ragSettings: RAGSettingsProps["ragSettings"]): string {
+  const provider = ragSettings.CODE_SUMMARIZATION_PROVIDER || ragSettings.LLM_PROVIDER || 'openai';
+  const summaryModel = ragSettings.CODE_SUMMARIZATION_MODEL;
+
+  if (summaryModel !== undefined && summaryModel !== null && summaryModel !== '') {
+    return summaryModel;
+  }
+
+  switch (provider) {
+    case 'openai':
+      return 'gpt-4o-mini';
+    case 'anthropic':
+      return 'claude-3-5-sonnet-20241022';
+    case 'google':
+      return 'gemini-1.5-flash';
+    case 'grok':
+      return 'grok-3-mini';
+    case 'ollama':
+      return '';
+    case 'openrouter':
+      return 'openai/gpt-4o-mini';
+    default:
+      return 'gpt-4o-mini';
+  }
+}
+
+function getSummaryPlaceholder(provider: ProviderKey): string {
+  switch (provider) {
+    case 'openai':
+      return 'e.g., gpt-4o-mini';
+    case 'anthropic':
+      return 'e.g., claude-3-5-sonnet-20241022';
+    case 'google':
+      return 'e.g., gemini-1.5-flash';
+    case 'grok':
+      return 'e.g., grok-2-latest';
+    case 'ollama':
+      return 'e.g., qwen2.5-coder, llama3';
+    case 'openrouter':
+      return 'e.g., openai/gpt-4o-mini';
+    default:
+      return 'e.g., gpt-4o-mini';
   }
 }
 
