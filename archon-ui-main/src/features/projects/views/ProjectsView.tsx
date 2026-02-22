@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { Activity, Bot, CheckCircle2, FileText, List, ListTodo, Pin } from "lucide-react";
+import { Activity, Bot, CheckCircle2, FileText, List, ListTodo, Pin, Zap } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useSettings } from "@/contexts/SettingsContext";
@@ -17,6 +17,7 @@ import { ProjectList } from "../components/ProjectList";
 import { SendToAgentModal } from "../components/SendToAgentModal";
 import { WhiteboardView } from "../components/WhiteboardView";
 import { DocsTab } from "../documents/DocsTab";
+import { SprintsTab } from "../sprints/SprintsTab";
 import { projectKeys, useDeleteProject, useProjects, useUpdateProject } from "../hooks/useProjectQueries";
 import { useTaskCounts } from "../tasks/hooks";
 import { useProjectTasks } from "../tasks/hooks/useTaskQueries";
@@ -54,7 +55,7 @@ export function ProjectsView({ className = "", "data-id": dataId }: ProjectsView
 
   // State management
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [activeTab, setActiveTab] = useState(docId ? "docs" : "tasks");
+  const [activeTab, setActiveTab] = useState<"docs" | "tasks" | "sprints">(docId ? "docs" : "tasks");
   const [layoutMode, setLayoutMode] = useState<"horizontal" | "sidebar">("horizontal");
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -295,9 +296,10 @@ export function ProjectsView({ className = "", "data-id": dataId }: ProjectsView
                   items={[
                     { id: "docs", label: "Docs", icon: <FileText className="w-4 h-4" /> },
                     { id: "tasks", label: "Tasks", icon: <ListTodo className="w-4 h-4" /> },
+                    { id: "sprints", label: "Sprints", icon: <Zap className="w-4 h-4" /> },
                   ]}
                   activeSection={activeTab}
-                  onSectionClick={(id) => setActiveTab(id as string)}
+                  onSectionClick={(id) => setActiveTab(id as "docs" | "tasks" | "sprints")}
                   colorVariant="orange"
                   size="small"
                   showIcons={true}
@@ -314,6 +316,7 @@ export function ProjectsView({ className = "", "data-id": dataId }: ProjectsView
                 {activeTab === "tasks" && (
                   <TasksTab projectId={selectedProject.id} projectName={selectedProject.title} />
                 )}
+                {activeTab === "sprints" && <SprintsTab projectId={selectedProject.id} />}
               </div>
             </motion.div>
           )}
@@ -377,9 +380,10 @@ export function ProjectsView({ className = "", "data-id": dataId }: ProjectsView
                       items={[
                         { id: "docs", label: "Docs", icon: <FileText className="w-4 h-4" /> },
                         { id: "tasks", label: "Tasks", icon: <ListTodo className="w-4 h-4" /> },
+                        { id: "sprints", label: "Sprints", icon: <Zap className="w-4 h-4" /> },
                       ]}
                       activeSection={activeTab}
-                      onSectionClick={(id) => setActiveTab(id as string)}
+                      onSectionClick={(id) => setActiveTab(id as "docs" | "tasks" | "sprints")}
                       colorVariant="orange"
                       size="small"
                       showIcons={true}
@@ -396,6 +400,7 @@ export function ProjectsView({ className = "", "data-id": dataId }: ProjectsView
                   {activeTab === "tasks" && (
                     <TasksTab projectId={selectedProject.id} projectName={selectedProject.title} />
                   )}
+                  {activeTab === "sprints" && <SprintsTab projectId={selectedProject.id} />}
                 </div>
               </>
             )}

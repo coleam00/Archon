@@ -50,17 +50,16 @@ export const taskService = {
   },
 
   /**
-   * Get all tasks for a project
+   * Get all tasks for a project, optionally filtered by sprint
    */
-  async getTasksByProject(projectId: string, includeArchived = false): Promise<Task[]> {
+  async getTasksByProject(projectId: string, includeArchived = false, sprintId?: string): Promise<Task[]> {
     try {
-      const url = includeArchived
-        ? `/api/projects/${projectId}/tasks?include_archived=true`
-        : `/api/projects/${projectId}/tasks`;
-      const tasks = await callAPIWithETag<Task[]>(url);
-
-      // Return tasks as-is; UI uses DB status values (todo/doing/review/done)
-      return tasks;
+      const params = new URLSearchParams();
+      if (includeArchived) params.set("include_archived", "true");
+      if (sprintId) params.set("sprint_id", sprintId);
+      const query = params.toString();
+      const url = `/api/projects/${projectId}/tasks${query ? `?${query}` : ""}`;
+      return callAPIWithETag<Task[]>(url);
     } catch (error) {
       console.error(`Failed to get tasks for project ${projectId}:`, error);
       throw error;

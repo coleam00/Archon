@@ -569,7 +569,8 @@ async def list_project_tasks(
     request: Request,
     response: Response,
     include_archived: bool = False,
-    exclude_large_fields: bool = False
+    exclude_large_fields: bool = False,
+    sprint_id: str | None = None,
 ):
     """List all tasks for a specific project with ETag support for efficient polling."""
     try:
@@ -577,7 +578,7 @@ async def list_project_tasks(
         if_none_match = request.headers.get("If-None-Match")
 
         logfire.debug(
-            f"Listing project tasks | project_id={project_id} | include_archived={include_archived} | exclude_large_fields={exclude_large_fields} | etag={if_none_match}"
+            f"Listing project tasks | project_id={project_id} | include_archived={include_archived} | exclude_large_fields={exclude_large_fields} | sprint_id={sprint_id} | etag={if_none_match}"
         )
 
         # Use TaskService to list tasks
@@ -587,6 +588,7 @@ async def list_project_tasks(
             include_closed=True,  # Get all tasks, including done
             exclude_large_fields=exclude_large_fields,
             include_archived=include_archived,  # Pass the flag down to service
+            sprint_id=sprint_id,
         )
 
         if not success:
@@ -823,6 +825,7 @@ class UpdateTaskRequest(BaseModel):
     task_order: int | None = None
     priority: str | None = None
     feature: str | None = None
+    sprint_id: str | None = None
 
 
 class ArchiveTaskRequest(BaseModel):
@@ -886,6 +889,8 @@ async def update_task(task_id: str, request: UpdateTaskRequest):
             update_fields["priority"] = request.priority
         if request.feature is not None:
             update_fields["feature"] = request.feature
+        if request.sprint_id is not None:
+            update_fields["sprint_id"] = request.sprint_id
 
         # Use TaskService to update the task
         task_service = TaskService()

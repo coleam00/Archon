@@ -30,6 +30,7 @@ from .api_routes.openrouter_api import router as openrouter_router
 from .api_routes.pages_api import router as pages_router
 from .api_routes.progress_api import router as progress_router
 from .api_routes.projects_api import router as projects_router
+from .api_routes.sprints_api import router as sprints_router
 from .api_routes.providers_api import router as providers_router
 from .api_routes.version_api import router as version_router
 
@@ -232,6 +233,7 @@ app.include_router(pages_router)
 app.include_router(ollama_router)
 app.include_router(openrouter_router)
 app.include_router(projects_router)
+app.include_router(sprints_router)
 app.include_router(sessions_router)
 app.include_router(whiteboard_router)
 app.include_router(patterns_router)

@@ -67,6 +67,9 @@ export interface Task {
   // Priority field (required database field)
   priority: TaskPriority;
 
+  // Sprint assignment
+  sprint_id?: string;
+
   // Extended UI properties
   featureColor?: string;
 }
@@ -84,6 +87,7 @@ export interface CreateTaskRequest {
   priority?: TaskPriority;
   sources?: TaskSource[];
   code_examples?: TaskCodeExample[];
+  sprint_id?: string;
 }
 
 export interface UpdateTaskRequest {
@@ -97,4 +101,5 @@ export interface UpdateTaskRequest {
   priority?: TaskPriority;
   sources?: TaskSource[];
   code_examples?: TaskCodeExample[];
+  sprint_id?: string;
 }

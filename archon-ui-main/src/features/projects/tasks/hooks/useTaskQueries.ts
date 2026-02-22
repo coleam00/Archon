@@ -20,15 +20,22 @@ export const taskKeys = {
   counts: () => [...taskKeys.all, "counts"] as const, // For /api/projects/task-counts
 };
 
-// Fetch tasks for a specific project
-export function useProjectTasks(projectId: string | undefined, enabled = true, includeArchived = false) {
+// Fetch tasks for a specific project, optionally filtered by sprint
+export function useProjectTasks(
+  projectId: string | undefined,
+  enabled = true,
+  includeArchived = false,
+  sprintId?: string,
+) {
   const { refetchInterval } = useSmartPolling(2000); // 2s active per guideline for real-time task updates
 
   return useQuery<Task[]>({
-    queryKey: projectId ? [...taskKeys.byProject(projectId), { includeArchived }] : DISABLED_QUERY_KEY,
+    queryKey: projectId
+      ? [...taskKeys.byProject(projectId), { includeArchived, sprintId }]
+      : DISABLED_QUERY_KEY,
     queryFn: async () => {
       if (!projectId) throw new Error("No project ID");
-      return taskService.getTasksByProject(projectId, includeArchived);
+      return taskService.getTasksByProject(projectId, includeArchived, sprintId);
     },
     enabled: !!projectId && enabled,
     refetchInterval, // Smart interval based on page visibility/focus

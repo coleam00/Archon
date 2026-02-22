@@ -65,6 +65,7 @@ class TaskService:
         feature: str | None = None,
         sources: list[dict[str, Any]] = None,
         code_examples: list[dict[str, Any]] = None,
+        sprint_id: str | None = None,
     ) -> tuple[bool, dict[str, Any]]:
         """
         Create a new task under a project with automatic reordering.
@@ -132,6 +133,9 @@ class TaskService:
             if feature:
                 task_data["feature"] = feature
 
+            if sprint_id:
+                task_data["sprint_id"] = sprint_id
+
             response = self.supabase_client.table("archon_tasks").insert(task_data).execute()
 
             if response.data:
@@ -183,7 +187,8 @@ class TaskService:
         include_closed: bool = False,
         exclude_large_fields: bool = False,
         include_archived: bool = False,
-        search_query: str = None
+        search_query: str = None,
+        sprint_id: str = None,
     ) -> tuple[bool, dict[str, Any]]:
         """
         List tasks with various filters.
@@ -219,6 +224,10 @@ class TaskService:
             if project_id:
                 query = query.eq("project_id", project_id)
                 filters_applied.append(f"project_id={project_id}")
+
+            if sprint_id:
+                query = query.eq("sprint_id", sprint_id)
+                filters_applied.append(f"sprint_id={sprint_id}")
 
             if status:
                 # Validate status
@@ -319,6 +328,7 @@ class TaskService:
                     "task_order": task.get("task_order", 0),
                     "priority": task.get("priority", "medium"),
                     "feature": task.get("feature"),
+                    "sprint_id": task.get("sprint_id"),
                     "created_at": task["created_at"],
                     "updated_at": task["updated_at"],
                     "archived": task.get("archived", False),
@@ -430,6 +440,9 @@ class TaskService:
 
             if "feature" in update_fields:
                 update_data["feature"] = update_fields["feature"]
+
+            if "sprint_id" in update_fields:
+                update_data["sprint_id"] = update_fields["sprint_id"]
 
             # Update task
             response = (

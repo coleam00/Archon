@@ -65,7 +65,8 @@ export function SessionEventCard({ event, isFirst, isLast }: SessionEventCardPro
     }
   };
 
-  const formatEventData = (data: Record<string, unknown>) => {
+  const formatEventData = (data: Record<string, unknown> | null | undefined) => {
+    if (!data) return null;
     const entries = Object.entries(data).filter(([key]) => !key.startsWith("_") && key !== "timestamp");
 
     if (entries.length === 0) return null;
