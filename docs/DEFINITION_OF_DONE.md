@@ -41,6 +41,8 @@
 
 ### Final Step
 
+> **Sign-off required?** If the task requires PO or Lead Developer approval, set `status` to `review` first via `archon_update_task(task_id="<uuid>", status="review")` and wait for approval before completing.
+
 - [ ] `archon_complete_task(task_id="<uuid>")` called — status becomes `done`
 
 ---

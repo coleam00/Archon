@@ -104,10 +104,9 @@
 
 | File | Description |
 |------|-------------|
+| [AGILE_WORKFLOW.md](../PRPs/ai_docs/AGILE_WORKFLOW.md) | Rosetta Stone: Agile ↔ Archon concept mapping and MCP tool reference |
 | [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md) | Step-by-step sprint ceremonies using Archon MCP tools |
 | [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md) | Checklist agents must pass before completing a task |
-
-> Agile ↔ Archon concept mapping (Rosetta Stone): `PRPs/ai_docs/AGILE_WORKFLOW.md`
 
 ## Misc
 

@@ -16,6 +16,7 @@
 | **Backlog** | All `todo` tasks sorted by `priority` | `archon_list_tasks(status="todo")`. High priority = top of list. |
 | **Work In Progress** | Tasks with `status: doing` | `archon_list_tasks(status="doing")`. |
 | **Done** | Tasks with `status: done` | Only set after Definition of Done is satisfied. See `docs/DEFINITION_OF_DONE.md`. |
+| **Review** | Tasks with `status: review` | Task awaiting sign-off from Lead Developer or PO before closing. |
 | **Blocked** | Task marked in `description` | Prepend `[BLOCKED: reason]` to description. Create a dependency task if needed. |
 | **Handoff** | Handover note in `description` + reassign `assignee` | Leave context for the next agent before changing assignee. |
 
@@ -45,6 +46,10 @@ In Progress (doing)
      │  Work → satisfy DoD checklist
      │  (docs/DEFINITION_OF_DONE.md)
      ▼
+Review (review)  ← optional: only when task needs PO/Lead sign-off
+     │
+     │  Approved by Lead Developer or PO
+     ▼
 Done (done)
      │
      │  archon_complete_task(task_id)
@@ -67,6 +72,8 @@ All swarm agents interact with Archon via these tools:
 | Complete a task | `archon_complete_task` | `archon_complete_task(task_id="<uuid>")` |
 | Create a new task | `archon_add_task` | `archon_add_task(title="...", description="...", assignee="claude", priority="medium")` |
 
+> **Tool name context**: These names (`archon_list_tasks`, `archon_start_task`, etc.) are the **Claude Code MCP proxy** names. If you are a non-Claude agent connecting to Archon MCP directly (port 8051), use `archon:find_tasks` (for list/search/get) and `archon:manage_task` (for create/update/delete) instead.
+
 ---
 
 ## Standard Workflow (Pick Up → Work → Complete)
@@ -74,12 +81,16 @@ All swarm agents interact with Archon via these tools:
 ```
 1. archon_list_tasks(status="todo")
    → Pick the highest-priority unowned task
+   → Scan results: skip tasks where `assignee` is already set.
+     Pick the highest-priority task with a null/empty assignee.
 
 2. archon_start_task(task_id="<uuid>")
    → Status becomes "doing"
 
 3. archon_update_task(task_id="<uuid>", assignee="<your-agent-id>")
-   → Claim ownership so other agents don't duplicate
+   → Claim ownership. Do this immediately after step 2 to minimise the
+     window where the task is "doing" but unowned. You can combine
+     assignee + description updates into a single call.
 
 4. Execute the work described in the task
 

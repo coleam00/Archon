@@ -56,6 +56,17 @@ archon_add_task(
 )
 ```
 
+Also check for tasks awaiting sign-off:
+
+```
+# See tasks pending review/approval
+archon_list_tasks(status="review")
+
+# Approve: complete the task, or send back to "doing" if rework needed
+```
+
+> **Note:** The `review` status is optional — only used when a task requires explicit PO or Lead Developer sign-off before closing.
+
 **Output:** Blockers surfaced and escalated to `user` or reassigned agent.
 
 ---
@@ -101,7 +112,7 @@ When a task transfers between agents mid-sprint:
 1. Update description with `[HANDOFF → <target-agent>]` header and current status.
 2. Change `assignee` to target agent.
 3. Do **not** call `archon_complete_task` — leave status as `doing`.
-4. Notify target agent via your coordination channel.
+4. The target agent will discover the task on their next `archon_list_tasks(status="doing")` poll. To make the handoff visible immediately, prefix the description with `[NOTIFY: <target-agent>]` — the agent's session hook will surface this on their next check-in.
 
 ```
 archon_update_task(
