@@ -51,7 +51,6 @@ def _extract_json_payload(raw_response: str, context_code: str = "", language: s
         # If all else fails, return a minimal valid JSON object to avoid downstream errors
         return '{"example_name": "Code Example", "summary": "Code example extracted from context."}'
 
-
     if cleaned.startswith("```"):
         lines = cleaned.splitlines()
         # Drop opening fence
@@ -71,9 +70,18 @@ def _extract_json_payload(raw_response: str, context_code: str = "", language: s
 
 
 REASONING_STARTERS = [
-    "okay, let's see", "okay, let me", "let me think", "first, i need to", "looking at this",
-    "i need to", "analyzing", "let me work through", "thinking about", "let me see"
+    "okay, let's see",
+    "okay, let me",
+    "let me think",
+    "first, i need to",
+    "looking at this",
+    "i need to",
+    "analyzing",
+    "let me work through",
+    "thinking about",
+    "let me see",
 ]
+
 
 def _is_reasoning_text_response(text: str) -> bool:
     """Detect if response is reasoning text rather than direct JSON."""
@@ -90,12 +98,23 @@ def _is_reasoning_text_response(text: str) -> bool:
     starts_with_reasoning = any(text_lower.startswith(starter) for starter in REASONING_STARTERS)
 
     # Check if it lacks immediate JSON structure
-    lacks_immediate_json = not text_lower.lstrip().startswith('{')
+    lacks_immediate_json = not text_lower.lstrip().startswith("{")
 
-    return starts_with_reasoning or (lacks_immediate_json and any(pattern in text_lower for pattern in REASONING_STARTERS))
+    return starts_with_reasoning or (
+        lacks_immediate_json and any(pattern in text_lower for pattern in REASONING_STARTERS)
+    )
+
+
 async def _get_model_choice() -> str:
     """Get MODEL_CHOICE with provider-aware defaults from centralized service."""
     try:
+        # First check for dedicated code summarization model
+        code_summarization_model = await credential_service.get_credential("CODE_SUMMARIZATION_MODEL")
+        if code_summarization_model and code_summarization_model.strip():
+            search_logger.debug(f"Using dedicated code summarization model: {code_summarization_model}")
+            return code_summarization_model
+
+        # Fallback to chat model if no dedicated code summarization model set
         # Get the active provider configuration
         provider_config = await credential_service.get_active_provider("llm")
         active_provider = provider_config.get("provider", "openai")
@@ -110,7 +129,7 @@ async def _get_model_choice() -> str:
                 "google": "gemini-1.5-flash",
                 "ollama": "llama3.2:latest",
                 "anthropic": "claude-3-5-haiku-20241022",
-                "grok": "grok-3-mini"
+                "grok": "grok-3-mini",
             }
             model = provider_defaults.get(active_provider, "gpt-4o-mini")
             search_logger.debug(f"Using default model for provider {active_provider}: {model}")
@@ -120,6 +139,25 @@ async def _get_model_choice() -> str:
     except Exception as e:
         search_logger.warning(f"Error getting model choice: {e}, using default")
         return "gpt-4o-mini"
+
+
+async def _get_code_summarization_provider() -> str:
+    """Get the code summarization provider, falling back to chat provider if not set."""
+    try:
+        # Check for dedicated code summarization provider
+        code_summarization_provider = await credential_service.get_credential("CODE_SUMMARIZATION_PROVIDER")
+        if code_summarization_provider and code_summarization_provider.strip():
+            search_logger.debug(f"Using dedicated code summarization provider: {code_summarization_provider}")
+            return code_summarization_provider
+
+        # Fallback to chat provider
+        provider_config = await credential_service.get_active_provider("llm")
+        provider = provider_config.get("provider", "openai")
+        search_logger.debug(f"Using chat provider for code summarization: {provider}")
+        return provider
+    except Exception as e:
+        search_logger.warning(f"Error getting code summarization provider: {e}, defaulting to openai")
+        return "openai"
 
 
 def _get_max_workers() -> int:
@@ -239,7 +277,6 @@ def _select_best_code_variant(similar_blocks: list[dict[str, Any]]) -> dict[str,
     return best_block
 
 
-
 def extract_code_blocks(markdown_content: str, min_length: int = None) -> list[dict[str, Any]]:
     """
     Extract code blocks from markdown content along with context.
@@ -253,6 +290,7 @@ def extract_code_blocks(markdown_content: str, min_length: int = None) -> list[d
     """
     # Load all code extraction settings with direct fallback
     try:
+
         def _get_setting_fallback(key: str, default: str) -> str:
             if credential_service._cache_initialized and key in credential_service._cache:
                 return credential_service._cache[key]
@@ -263,17 +301,11 @@ def extract_code_blocks(markdown_content: str, min_length: int = None) -> list[d
             min_length = int(_get_setting_fallback("MIN_CODE_BLOCK_LENGTH", "250"))
 
         max_length = int(_get_setting_fallback("MAX_CODE_BLOCK_LENGTH", "5000"))
-        enable_prose_filtering = (
-            _get_setting_fallback("ENABLE_PROSE_FILTERING", "true").lower() == "true"
-        )
+        enable_prose_filtering = _get_setting_fallback("ENABLE_PROSE_FILTERING", "true").lower() == "true"
         max_prose_ratio = float(_get_setting_fallback("MAX_PROSE_RATIO", "0.15"))
         min_code_indicators = int(_get_setting_fallback("MIN_CODE_INDICATORS", "3"))
-        enable_diagram_filtering = (
-            _get_setting_fallback("ENABLE_DIAGRAM_FILTERING", "true").lower() == "true"
-        )
-        enable_contextual_length = (
-            _get_setting_fallback("ENABLE_CONTEXTUAL_LENGTH", "true").lower() == "true"
-        )
+        enable_diagram_filtering = _get_setting_fallback("ENABLE_DIAGRAM_FILTERING", "true").lower() == "true"
+        enable_contextual_length = _get_setting_fallback("ENABLE_CONTEXTUAL_LENGTH", "true").lower() == "true"
         context_window_size = int(_get_setting_fallback("CONTEXT_WINDOW_SIZE", "1000"))
 
     except Exception as e:
@@ -308,9 +340,7 @@ def extract_code_blocks(markdown_content: str, min_length: int = None) -> list[d
             # Skip the outer ```K` and closing ```
             inner_content = content[5:-3] if content.endswith("```") else content[5:]
             # Now extract normally from inner content
-            search_logger.info(
-                f"Attempting to extract from inner content (length: {len(inner_content)})"
-            )
+            search_logger.info(f"Attempting to extract from inner content (length: {len(inner_content)})")
             return extract_code_blocks(inner_content, min_length)
         # For normal language identifiers (e.g., ```python, ```javascript), process normally
         # No need to skip anything - the extraction logic will handle it correctly
@@ -360,9 +390,7 @@ def extract_code_blocks(markdown_content: str, min_length: int = None) -> list[d
 
         # Skip if code block is too long (likely corrupted or not actual code)
         if len(code_content) > max_length:
-            search_logger.debug(
-                f"Skipping code block that exceeds max length ({len(code_content)} > {max_length})"
-            )
+            search_logger.debug(f"Skipping code block that exceeds max length ({len(code_content)} > {max_length})")
             i += 2  # Move to next pair
             continue
 
@@ -494,14 +522,10 @@ def extract_code_blocks(markdown_content: str, min_length: int = None) -> list[d
                         special_char_lines += 1
 
                 # Check for diagram indicators
-                diagram_indicator_count = sum(
-                    1 for indicator in diagram_indicators if indicator in code_content
-                )
+                diagram_indicator_count = sum(1 for indicator in diagram_indicators if indicator in code_content)
 
                 # If looks like a diagram, skip it
-                if (
-                    special_char_lines >= 3 or diagram_indicator_count >= 5
-                ) and code_pattern_count < 5:
+                if (special_char_lines >= 3 or diagram_indicator_count >= 5) and code_pattern_count < 5:
                     search_logger.debug(
                         f"Skipping ASCII art diagram | special_lines={special_char_lines} | diagram_indicators={diagram_indicator_count}"
                     )
@@ -518,13 +542,15 @@ def extract_code_blocks(markdown_content: str, min_length: int = None) -> list[d
 
         # Add the extracted code block
         stripped_code = code_content.strip()
-        code_blocks.append({
-            "code": stripped_code,
-            "language": language,
-            "context_before": context_before,
-            "context_after": context_after,
-            "full_context": f"{context_before}\n\n{stripped_code}\n\n{context_after}",
-        })
+        code_blocks.append(
+            {
+                "code": stripped_code,
+                "language": language,
+                "context_before": context_before,
+                "context_after": context_after,
+                "full_context": f"{context_before}\n\n{stripped_code}\n\n{context_after}",
+            }
+        )
 
         # Move to next pair (skip the closing backtick we just processed)
         i += 2
@@ -596,12 +622,7 @@ def generate_code_example_summary(
 
 
 async def _generate_code_example_summary_async(
-    code: str,
-    context_before: str,
-    context_after: str,
-    language: str = "",
-    provider: str = None,
-    client = None
+    code: str, context_before: str, context_after: str, language: str = "", provider: str = None, client=None
 ) -> dict[str, str]:
     """
     Async version of generate_code_example_summary using unified LLM provider service.
@@ -621,11 +642,11 @@ async def _generate_code_example_summary_async(
     # If provider is not specified, get it from credential service
     if provider is None:
         try:
-            provider_config = await credential_service.get_active_provider("llm")
-            provider = provider_config.get("provider", "openai")
-            search_logger.debug(f"Auto-detected provider from credential service: {provider}")
+            # Use dedicated code summarization provider if set
+            provider = await _get_code_summarization_provider()
+            search_logger.debug(f"Using code summarization provider: {provider}")
         except Exception as e:
-            search_logger.warning(f"Failed to get provider from credential service: {e}, defaulting to openai")
+            search_logger.warning(f"Failed to get code summarization provider: {e}, defaulting to openai")
             provider = "openai"
 
     # Optimized prompt for smaller models (tested with Liquid 1.2B Instruct)
@@ -642,8 +663,7 @@ JSON format:
 }}
 """
     guard_prompt = (
-        base_prompt
-        + "\n\nImportant: Respond with a valid JSON object that exactly matches the keys "
+        base_prompt + "\n\nImportant: Respond with a valid JSON object that exactly matches the keys "
         '{"example_name": string, "summary": string}. Do not include commentary, '
         "markdown fences, or reasoning notes."
     )
@@ -656,35 +676,44 @@ JSON format:
     if client is not None:
         # Reuse provided client for better performance
         return await _generate_summary_with_client(
-            client, code, context_before, context_after, language, provider,
-            model_choice, guard_prompt, strict_prompt
+            client, code, context_before, context_after, language, provider, model_choice, guard_prompt, strict_prompt
         )
     else:
         # Create new client (backward compatibility)
         async with get_llm_client(provider=provider) as new_client:
             return await _generate_summary_with_client(
-                new_client, code, context_before, context_after, language, provider,
-                model_choice, guard_prompt, strict_prompt
+                new_client,
+                code,
+                context_before,
+                context_after,
+                language,
+                provider,
+                model_choice,
+                guard_prompt,
+                strict_prompt,
             )
 
 
 async def _generate_summary_with_client(
-    llm_client, code: str, context_before: str, context_after: str,
-    language: str, provider: str, model_choice: str,
-    guard_prompt: str, strict_prompt: str
+    llm_client,
+    code: str,
+    context_before: str,
+    context_after: str,
+    language: str,
+    provider: str,
+    model_choice: str,
+    guard_prompt: str,
+    strict_prompt: str,
 ) -> dict[str, str]:
     """Helper function that generates summary using a provided client."""
-    search_logger.info(
-        f"Generating summary for {hash(code) & 0xffffff:06x} using model: {model_choice}"
-    )
+    search_logger.info(f"Generating summary for {hash(code) & 0xFFFFFF:06x} using model: {model_choice}")
 
     provider_lower = provider.lower()
     is_grok_model = (provider_lower == "grok") or ("grok" in model_choice.lower())
     is_ollama = provider_lower == "ollama"
 
-    supports_response_format_base = (
-        provider_lower in {"openai", "google", "anthropic"}
-        or (provider_lower == "openrouter" and model_choice.startswith("openai/"))
+    supports_response_format_base = provider_lower in {"openai", "google", "anthropic"} or (
+        provider_lower == "openrouter" and model_choice.startswith("openai/")
     )
 
     last_response_obj = None
@@ -733,7 +762,16 @@ async def _generate_summary_with_client(
                         removed_value = request_params.pop(param)
                         search_logger.warning(f"Removed unsupported Grok parameter '{param}': {removed_value}")
 
-                supported_params = ["model", "messages", "max_tokens", "temperature", "response_format", "stream", "tools", "tool_choice"]
+                supported_params = [
+                    "model",
+                    "messages",
+                    "max_tokens",
+                    "temperature",
+                    "response_format",
+                    "stream",
+                    "tools",
+                    "tool_choice",
+                ]
                 for param in list(request_params.keys()):
                     if param not in supported_params:
                         search_logger.warning(f"Parameter '{param}' may not be supported by Grok reasoning models")
@@ -748,7 +786,9 @@ async def _generate_summary_with_client(
             for attempt in range(max_retries):
                 try:
                     if is_grok_model and attempt > 0:
-                        search_logger.info(f"Grok retry attempt {attempt + 1}/{max_retries} after {retry_delay:.1f}s delay")
+                        search_logger.info(
+                            f"Grok retry attempt {attempt + 1}/{max_retries} after {retry_delay:.1f}s delay"
+                        )
                         await asyncio.sleep(retry_delay)
 
                     final_params = prepare_chat_completion_params(model_choice, request_params)
@@ -775,7 +815,9 @@ async def _generate_summary_with_client(
                         last_response_content = response_content_local.strip()
 
                         # Pre-validate response before processing
-                        if len(last_response_content) < 20 or (len(last_response_content) < 50 and not last_response_content.strip().startswith('{')):
+                        if len(last_response_content) < 20 or (
+                            len(last_response_content) < 50 and not last_response_content.strip().startswith("{")
+                        ):
                             # Very minimal response - likely "Okay\nOkay" type
                             search_logger.debug(f"Minimal response detected: {repr(last_response_content)}")
                             # Generate fallback directly from context
@@ -784,10 +826,14 @@ async def _generate_summary_with_client(
                                 try:
                                     result = json.loads(fallback_json)
                                     final_result = {
-                                        "example_name": result.get("example_name", f"Code Example{f' ({language})' if language else ''}"),
+                                        "example_name": result.get(
+                                            "example_name", f"Code Example{f' ({language})' if language else ''}"
+                                        ),
                                         "summary": result.get("summary", "Code example for demonstration purposes."),
                                     }
-                                    search_logger.info(f"Generated fallback summary from context - Name: '{final_result['example_name']}', Summary length: {len(final_result['summary'])}")
+                                    search_logger.info(
+                                        f"Generated fallback summary from context - Name: '{final_result['example_name']}', Summary length: {len(final_result['summary'])}"
+                                    )
                                     return final_result
                                 except json.JSONDecodeError:
                                     pass  # Continue to normal error handling
@@ -797,7 +843,9 @@ async def _generate_summary_with_client(
                                     "example_name": f"Code Example{f' ({language})' if language else ''}",
                                     "summary": "Code example extracted from development context.",
                                 }
-                                search_logger.info(f"Used hardcoded fallback for minimal response - Name: '{final_result['example_name']}', Summary length: {len(final_result['summary'])}")
+                                search_logger.info(
+                                    f"Used hardcoded fallback for minimal response - Name: '{final_result['example_name']}', Summary length: {len(final_result['summary'])}"
+                                )
                                 return final_result
 
                         payload = _extract_json_payload(last_response_content, code, language)
@@ -923,7 +971,9 @@ async def _generate_summary_with_client(
 
                 except Exception as fallback_error:
                     search_logger.error(f"gpt-4o-mini fallback failed: {fallback_error}")
-                    raise ValueError(f"{model_choice} failed and fallback to gpt-4o-mini also failed: {fallback_error}") from fallback_error
+                    raise ValueError(
+                        f"{model_choice} failed and fallback to gpt-4o-mini also failed: {fallback_error}"
+                    ) from fallback_error
             else:
                 search_logger.debug(f"Full response object: {response}")
                 raise ValueError("Empty response from LLM")
@@ -937,9 +987,7 @@ async def _generate_summary_with_client(
 
         payload = _extract_json_payload(response_content, code, language)
         if payload != response_content:
-            search_logger.debug(
-                f"Sanitized LLM response payload before parsing: {repr(payload[:200])}..."
-            )
+            search_logger.debug(f"Sanitized LLM response payload before parsing: {repr(payload[:200])}...")
 
         result = json.loads(payload)
 
@@ -948,9 +996,7 @@ async def _generate_summary_with_client(
             search_logger.warning(f"Incomplete response from LLM: {result}")
 
         final_result = {
-            "example_name": result.get(
-                "example_name", f"Code Example{f' ({language})' if language else ''}"
-            ),
+            "example_name": result.get("example_name", f"Code Example{f' ({language})' if language else ''}"),
             "summary": result.get("summary", "Code example for demonstration purposes."),
         }
 
@@ -970,7 +1016,9 @@ async def _generate_summary_with_client(
                 fallback_result = json.loads(fallback_json)
                 search_logger.info("Generated context-aware fallback summary")
                 return {
-                    "example_name": fallback_result.get("example_name", f"Code Example{f' ({language})' if language else ''}"),
+                    "example_name": fallback_result.get(
+                        "example_name", f"Code Example{f' ({language})' if language else ''}"
+                    ),
                     "summary": fallback_result.get("summary", "Code example for demonstration purposes."),
                 }
         except Exception:
@@ -989,7 +1037,9 @@ async def _generate_summary_with_client(
                 fallback_result = json.loads(fallback_json)
                 search_logger.info("Generated context-aware fallback summary after error")
                 return {
-                    "example_name": fallback_result.get("example_name", f"Code Example{f' ({language})' if language else ''}"),
+                    "example_name": fallback_result.get(
+                        "example_name", f"Code Example{f' ({language})' if language else ''}"
+                    ),
                     "summary": fallback_result.get("summary", "Code example for demonstration purposes."),
                 }
         except Exception:
@@ -1022,19 +1072,14 @@ async def generate_code_summaries_batch(
     # Get max_workers from settings if not provided
     if max_workers is None:
         try:
-            if (
-                credential_service._cache_initialized
-                and "CODE_SUMMARY_MAX_WORKERS" in credential_service._cache
-            ):
+            if credential_service._cache_initialized and "CODE_SUMMARY_MAX_WORKERS" in credential_service._cache:
                 max_workers = int(credential_service._cache["CODE_SUMMARY_MAX_WORKERS"])
             else:
                 max_workers = int(os.getenv("CODE_SUMMARY_MAX_WORKERS", "3"))
         except:
             max_workers = 3  # Default fallback
 
-    search_logger.info(
-        f"Generating summaries for {len(code_blocks)} code blocks with max_workers={max_workers}"
-    )
+    search_logger.info(f"Generating summaries for {len(code_blocks)} code blocks with max_workers={max_workers}")
 
     # Create a shared LLM client for all summaries (performance optimization)
     async with get_llm_client(provider=provider) as shared_client:
@@ -1058,7 +1103,7 @@ async def generate_code_summaries_batch(
                     block["context_after"],
                     block.get("language", ""),
                     provider,
-                    shared_client  # Pass shared client for reuse
+                    shared_client,  # Pass shared client for reuse
                 )
 
                 # Update progress
@@ -1067,13 +1112,15 @@ async def generate_code_summaries_batch(
                     if progress_callback:
                         # Simple progress based on summaries completed
                         progress_percentage = int((completed_count / len(code_blocks)) * 100)
-                        await progress_callback({
-                            "status": "code_extraction",
-                            "percentage": progress_percentage,
-                            "log": f"Generated {completed_count}/{len(code_blocks)} code summaries",
-                            "completed_summaries": completed_count,
-                            "total_summaries": len(code_blocks),
-                        })
+                        await progress_callback(
+                            {
+                                "status": "code_extraction",
+                                "percentage": progress_percentage,
+                                "log": f"Generated {completed_count}/{len(code_blocks)} code summaries",
+                                "completed_summaries": completed_count,
+                                "total_summaries": len(code_blocks),
+                            }
+                        )
 
                 return result
 
@@ -1158,9 +1205,7 @@ async def add_code_examples_to_supabase(
 
     # Check if contextual embeddings are enabled (use proper async method like document storage)
     try:
-        raw_value = await credential_service.get_credential(
-            "USE_CONTEXTUAL_EMBEDDINGS", "false", decrypt=True
-        )
+        raw_value = await credential_service.get_credential("USE_CONTEXTUAL_EMBEDDINGS", "false", decrypt=True)
         if isinstance(raw_value, str):
             use_contextual_embeddings = raw_value.lower() == "true"
         else:
@@ -1168,13 +1213,9 @@ async def add_code_examples_to_supabase(
     except Exception as e:
         search_logger.error(f"DEBUG: Error reading contextual embeddings: {e}")
         # Fallback to environment variable
-        use_contextual_embeddings = (
-            os.getenv("USE_CONTEXTUAL_EMBEDDINGS", "false").lower() == "true"
-        )
+        use_contextual_embeddings = os.getenv("USE_CONTEXTUAL_EMBEDDINGS", "false").lower() == "true"
 
-    search_logger.info(
-        f"Using contextual embeddings for code examples: {use_contextual_embeddings}"
-    )
+    search_logger.info(f"Using contextual embeddings for code examples: {use_contextual_embeddings}")
 
     # Process in batches
     total_items = len(urls)
@@ -1209,9 +1250,7 @@ async def add_code_examples_to_supabase(
                 full_documents.append(full_doc)
 
             # Generate contextual embeddings
-            contextual_results = await generate_contextual_embeddings_batch(
-                full_documents, combined_texts
-            )
+            contextual_results = await generate_contextual_embeddings_batch(full_documents, combined_texts)
 
             # Process results
             for j, (contextual_text, success) in enumerate(contextual_results):
@@ -1228,8 +1267,7 @@ async def add_code_examples_to_supabase(
         # Log any failures
         if result.has_failures:
             search_logger.error(
-                f"Failed to create {result.failure_count} code example embeddings. "
-                f"Successful: {result.success_count}"
+                f"Failed to create {result.failure_count} code example embeddings. Successful: {result.success_count}"
             )
 
         # Use only successful embeddings
@@ -1279,7 +1317,9 @@ async def add_code_examples_to_supabase(
             if positions_by_text[text]:
                 orig_idx = positions_by_text[text].popleft()  # Original j index in [i, batch_end)
             else:
-                search_logger.warning(f"Could not map embedding back to original code example (no remaining index for text: {text[:50]}...)")
+                search_logger.warning(
+                    f"Could not map embedding back to original code example (no remaining index for text: {text[:50]}...)"
+                )
                 continue
 
             idx = orig_idx  # Global index into urls/chunk_numbers/etc.
@@ -1310,18 +1350,20 @@ async def add_code_examples_to_supabase(
                 )
                 continue
 
-            batch_data.append({
-                "url": urls[idx],
-                "chunk_number": chunk_numbers[idx],
-                "content": code_examples[idx],
-                "summary": summaries[idx],
-                "metadata": metadatas[idx],  # Store as JSON object, not string
-                "source_id": source_id,
-                embedding_column: embedding,
-                "llm_chat_model": llm_chat_model,  # Add LLM model tracking
-                "embedding_model": embedding_model_name,  # Add embedding model tracking
-                "embedding_dimension": embedding_dim,  # Add dimension tracking
-            })
+            batch_data.append(
+                {
+                    "url": urls[idx],
+                    "chunk_number": chunk_numbers[idx],
+                    "content": code_examples[idx],
+                    "summary": summaries[idx],
+                    "metadata": metadatas[idx],  # Store as JSON object, not string
+                    "source_id": source_id,
+                    embedding_column: embedding,
+                    "llm_chat_model": llm_chat_model,  # Add LLM model tracking
+                    "embedding_model": embedding_model_name,  # Add embedding model tracking
+                    "embedding_dimension": embedding_dim,  # Add dimension tracking
+                }
+            )
 
         if not batch_data:
             search_logger.warning("No records to insert for this batch; skipping insert.")
@@ -1373,26 +1415,30 @@ async def add_code_examples_to_supabase(
             batch_num = i // batch_size + 1
             total_batches = (total_items + batch_size - 1) // batch_size
             progress_percentage = int((batch_num / total_batches) * 100)
-            await progress_callback({
-                "status": "code_storage",
-                "percentage": progress_percentage,
-                "log": f"Stored batch {batch_num}/{total_batches} of code examples",
-                # Stage-specific batch fields to prevent contamination with document storage
-                "code_current_batch": batch_num,
-                "code_total_batches": total_batches,
-                # Keep generic fields for backward compatibility
-                "batch_number": batch_num,
-                "total_batches": total_batches,
-            })
+            await progress_callback(
+                {
+                    "status": "code_storage",
+                    "percentage": progress_percentage,
+                    "log": f"Stored batch {batch_num}/{total_batches} of code examples",
+                    # Stage-specific batch fields to prevent contamination with document storage
+                    "code_current_batch": batch_num,
+                    "code_total_batches": total_batches,
+                    # Keep generic fields for backward compatibility
+                    "batch_number": batch_num,
+                    "total_batches": total_batches,
+                }
+            )
 
     # Report final completion at 100% after all batches are done
     if progress_callback and total_items > 0:
-        await progress_callback({
-            "status": "code_storage",
-            "percentage": 100,
-            "log": f"Code storage completed. Stored {total_items} code examples.",
-            "total_items": total_items,
-            # Keep final batch info for code storage completion
-            "code_total_batches": (total_items + batch_size - 1) // batch_size,
-            "code_current_batch": (total_items + batch_size - 1) // batch_size,
-        })
+        await progress_callback(
+            {
+                "status": "code_storage",
+                "percentage": 100,
+                "log": f"Code storage completed. Stored {total_items} code examples.",
+                "total_items": total_items,
+                # Keep final batch info for code storage completion
+                "code_total_batches": (total_items + batch_size - 1) // batch_size,
+                "code_current_batch": (total_items + batch_size - 1) // batch_size,
+            }
+        )

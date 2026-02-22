@@ -4,7 +4,7 @@
  * Following the pattern from ProjectCardActions
  */
 
-import { Code, Download, Eye, MoreHorizontal, RefreshCw, Trash2 } from "lucide-react";
+import { Code, Database, Download, Eye, MoreHorizontal, RefreshCw, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { DeleteConfirmModal } from "../../ui/components/DeleteConfirmModal";
 import { Button } from "../../ui/primitives/button";
@@ -22,9 +22,12 @@ interface KnowledgeCardActionsProps {
   itemTitle?: string; // Title for delete confirmation
   isUrl: boolean;
   hasCodeExamples: boolean;
+  hasDocuments: boolean;
   onViewDocuments: () => void;
   onViewCodeExamples?: () => void;
   onRefresh?: () => Promise<void>;
+  onRevectorize?: () => Promise<void>;
+  onResummarize?: () => Promise<void>;
   onDelete?: () => Promise<void>;
   onExport?: () => void;
 }
@@ -34,13 +37,18 @@ export const KnowledgeCardActions: React.FC<KnowledgeCardActionsProps> = ({
   itemTitle = "this knowledge item",
   isUrl,
   hasCodeExamples,
+  hasDocuments,
   onViewDocuments,
   onViewCodeExamples,
   onRefresh,
+  onRevectorize,
+  onResummarize,
   onDelete,
   onExport,
 }) => {
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isRevectorizing, setIsRevectorizing] = useState(false);
+  const [isResummarizing, setIsResummarizing] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
 
@@ -54,6 +62,30 @@ export const KnowledgeCardActions: React.FC<KnowledgeCardActionsProps> = ({
     } finally {
       // Always reset the refreshing state
       setIsRefreshing(false);
+    }
+  };
+
+  const handleRevectorize = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!onRevectorize || !hasDocuments) return;
+
+    setIsRevectorizing(true);
+    try {
+      await onRevectorize();
+    } finally {
+      setIsRevectorizing(false);
+    }
+  };
+
+  const handleResummarize = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!onResummarize || !hasCodeExamples) return;
+
+    setIsResummarizing(true);
+    try {
+      await onResummarize();
+    } finally {
+      setIsResummarizing(false);
     }
   };
 
@@ -129,6 +161,26 @@ export const KnowledgeCardActions: React.FC<KnowledgeCardActionsProps> = ({
               <DropdownMenuItem onClick={handleRefresh} disabled={isRefreshing}>
                 <RefreshCw className={cn("w-4 h-4 mr-2", isRefreshing && "animate-spin")} />
                 {isRefreshing ? "Recrawling..." : "Recrawl"}
+              </DropdownMenuItem>
+            </>
+          )}
+
+          {(hasDocuments && onRevectorize) && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={handleRevectorize} disabled={isRevectorizing}>
+                <Database className={cn("w-4 h-4 mr-2", isRevectorizing && "animate-spin")} />
+                {isRevectorizing ? "Re-vectorizing..." : "Re-vectorize"}
+              </DropdownMenuItem>
+            </>
+          )}
+
+          {(hasCodeExamples && onResummarize) && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={handleResummarize} disabled={isResummarizing}>
+                <Code className={cn("w-4 h-4 mr-2", isResummarizing && "animate-spin")} />
+                {isResummarizing ? "Re-summarizing..." : "Re-summarize"}
               </DropdownMenuItem>
             </>
           )}

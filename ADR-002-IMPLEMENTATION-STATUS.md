@@ -208,6 +208,54 @@ async def rag_validate_source(source_id: str) -> dict:
 
 ---
 
+## Part 4: Reprocessing Tools - ❌ NOT STARTED
+
+### Backend Implementation
+
+**Status:** ❌ Not Started
+
+**Files to Create/Modify:**
+
+1. ❌ `python/src/server/services/credential_service.py`
+   - Add methods to get code summarization settings
+
+2. ❌ `python/src/server/api_routes/knowledge_api.py`
+   - Add `POST /api/knowledge-items/{source_id}/revectorize` endpoint
+   - Add `POST /api/knowledge-items/{source_id}/resummarize` endpoint
+
+3. ❌ `python/src/server/services/storage/document_storage_service.py`
+   - Add `revectorize_source(source_id)` method
+   - Add `resummarize_source(source_id)` method
+
+### Frontend Implementation
+
+**Status:** ❌ Not Started
+
+**Files to Create/Modify:**
+
+1. ❌ `archon-ui-main/src/services/credentialsService.ts`
+   - Add `CODE_SUMMARIZATION_MODEL`, `CODE_SUMMARIZATION_PROVIDER` to RagSettings
+
+2. ❌ `archon-ui-main/src/components/settings/RAGSettings.tsx`
+   - Add "Code Summarization Agent" section
+
+3. ❌ `archon-ui-main/src/features/knowledge/services/knowledgeService.ts`
+   - Add `revectorizeKnowledgeItem()` method
+   - Add `resummarizeKnowledgeItem()` method
+
+4. ❌ `archon-ui-main/src/features/knowledge/hooks/useKnowledgeQueries.ts`
+   - Add `useRevectorizeKnowledgeItem()` hook
+   - Add `useResummarizeKnowledgeItem()` hook
+
+5. ❌ `archon-ui-main/src/features/knowledge/components/KnowledgeCardActions.tsx`
+   - Add "Re-vectorize" dropdown action
+   - Add "Re-summarize" dropdown action
+
+6. ❌ `archon-ui-main/src/features/knowledge/components/KnowledgeCard.tsx`
+   - Add "Needs re-vectorization" badge when settings changed
+
+---
+
 ## Testing Checklist
 
 ### Part 1: Checkpoint/Resume
@@ -238,6 +286,20 @@ async def rag_validate_source(source_id: str) -> dict:
 - [ ] Test: Validation detects issues
 - [ ] Test: MCP tool returns correct summary
 
+### Part 4: Reprocessing Tools
+- [ ] Backend: Add code summarization settings to credential service
+- [ ] Backend: Add re-vectorize endpoint
+- [ ] Backend: Add re-summarize endpoint
+- [ ] Backend: Add revectorize/resummarize service methods
+- [ ] Frontend: Add code summarization settings UI
+- [ ] Frontend: Add re-vectorize service and hook
+- [ ] Frontend: Add re-summarize service and hook
+- [ ] Frontend: Add dropdown actions
+- [ ] Frontend: Add needs_revectorization indicator
+- [ ] Test: Change embedding settings, verify indicator shows
+- [ ] Test: Re-vectorize source, verify embeddings updated
+- [ ] Test: Re-summarize source, verify summaries updated
+
 ---
 
 ## Migration Deployment
@@ -245,6 +307,7 @@ async def rag_validate_source(source_id: str) -> dict:
 **Required Database Migrations:**
 1. ✅ `013_add_provenance_tracking.sql` - Ready to deploy
 2. ❌ `014_add_validation_functions.sql` - Not created yet
+3. ❌ `015_add_code_summarization_settings.sql` - Not created yet (optional, settings stored in archon_settings table)
 
 **Deployment Steps:**
 ```bash
@@ -278,13 +341,20 @@ DROP INDEX IF EXISTS idx_archon_sources_embedding_provider;
 2. Add provenance display to KnowledgeCard component
 3. Test end-to-end provenance tracking
 
+### High Priority (Part 4 - Reprocessing Tools)
+4. Add code summarization settings (backend + frontend)
+5. Add re-vectorize endpoint and service method
+6. Add re-summarize endpoint and service method
+7. Add needs_revectorization indicator
+8. Test reprocessing end-to-end
+
 ### Medium Priority (Part 3 - Validation)
-4. Create validation API endpoint
-5. Create database validation functions
-6. Build validation UI component
+9. Create validation API endpoint
+10. Create database validation functions
+11. Build validation UI component
 
 ### Low Priority (Part 3 - MCP Tool)
-7. Add read-only MCP validation tool
+12. Add read-only MCP validation tool
 
 ---
 
@@ -308,8 +378,14 @@ DROP INDEX IF EXISTS idx_archon_sources_embedding_provider;
 3. Update frontend types and UI for provenance display
 
 **Short Term:**
-4. Implement validation API endpoint and database functions
-5. Build validation UI component
+4. Add code summarization settings
+5. Implement re-vectorize endpoint and service
+6. Implement re-summarize endpoint and service
+7. Add needs_revectorization indicator
+
+**Medium Term:**
+8. Implement validation API endpoint and database functions
+9. Build validation UI component
 
 **Future Enhancements:**
 - Bulk loading UI/API (separate ADR)

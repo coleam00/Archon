@@ -47,6 +47,7 @@ export interface KnowledgeItem {
   summarization_model?: string;
   last_crawled_at?: string;
   last_vectorized_at?: string;
+  needs_revectorization?: boolean;
   metadata: KnowledgeItemMetadata;
   created_at: string;
   updated_at: string;

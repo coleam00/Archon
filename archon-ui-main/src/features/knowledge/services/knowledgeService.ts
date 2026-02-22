@@ -101,6 +101,46 @@ export const knowledgeService = {
   },
 
   /**
+   * Re-vectorize all documents in a knowledge item (without re-crawling)
+   */
+  async revectorizeKnowledgeItem(sourceId: string): Promise<{
+    message: string;
+    documents_updated: number;
+    errors: string[];
+  }> {
+    const response = await callAPIWithETag<{
+      message: string;
+      documents_updated: number;
+      errors: string[];
+    }>(`/api/knowledge-items/${sourceId}/revectorize`, {
+      method: "POST",
+    });
+
+    return response;
+  },
+
+  /**
+   * Re-summarize all code examples in a knowledge item (without re-crawling)
+   */
+  async resummarizeKnowledgeItem(sourceId: string): Promise<{
+    message: string;
+    examples_updated: number;
+    model_used: string;
+    errors: string[];
+  }> {
+    const response = await callAPIWithETag<{
+      message: string;
+      examples_updated: number;
+      model_used: string;
+      errors: string[];
+    }>(`/api/knowledge-items/${sourceId}/resummarize`, {
+      method: "POST",
+    });
+
+    return response;
+  },
+
+  /**
    * Upload a document
    */
   async uploadDocument(

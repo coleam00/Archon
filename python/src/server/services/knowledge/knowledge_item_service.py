@@ -371,6 +371,7 @@ class KnowledgeItemService:
             "summarization_model": source.get("summarization_model"),
             "last_crawled_at": source.get("last_crawled_at"),
             "last_vectorized_at": source.get("last_vectorized_at"),
+            "needs_revectorization": await self._check_needs_revectorization(source),
             "metadata": {
                 # Spread source_metadata first, then override with computed values
                 **source_metadata,
@@ -422,6 +423,43 @@ class KnowledgeItemService:
 
         except Exception:
             return []
+
+    async def _check_needs_revectorization(self, source: dict[str, Any]) -> bool:
+        """Check if re-vectorization is needed by comparing current settings with stored provenance."""
+        try:
+            from ..credential_service import credential_service
+
+            stored_embedding_model = source.get("embedding_model")
+            stored_embedding_provider = source.get("embedding_provider")
+            stored_vectorizer_settings = source.get("vectorizer_settings") or {}
+
+            if not stored_embedding_model:
+                return False
+
+            current_embedding_model = await credential_service.get_credential("EMBEDDING_MODEL")
+            current_embedding_provider_config = await credential_service.get_active_provider("embedding")
+            current_embedding_provider = current_embedding_provider_config.get("provider", "openai")
+
+            if current_embedding_model and stored_embedding_model != current_embedding_model:
+                return True
+
+            if stored_embedding_provider and stored_embedding_provider != current_embedding_provider:
+                return True
+
+            current_use_contextual = await credential_service.get_credential("USE_CONTEXTUAL_EMBEDDINGS", False)
+            stored_use_contextual = stored_vectorizer_settings.get("use_contextual", False)
+            if current_use_contextual != stored_use_contextual:
+                return True
+
+            current_chunk_size = await credential_service.get_credential("CHUNK_SIZE", 512)
+            stored_chunk_size = stored_vectorizer_settings.get("chunk_size", 512)
+            if current_chunk_size != stored_chunk_size:
+                return True
+
+            return False
+
+        except Exception:
+            return False
 
     def _determine_source_type(self, metadata: dict[str, Any], url: str) -> str:
         """Determine the source type from metadata or URL pattern."""

@@ -103,6 +103,53 @@ are invisible until RAG returns garbage.
 
 ---
 
+## Phase 4: Reprocessing Tools
+
+**Problem:** After changing embedding or summarization settings, existing sources 
+must be fully re-crawled to apply new settings. This is wasteful and slow.
+
+**Implementation:**
+
+### 4.1 Code Summarization Agent (Separate from Chat Agent)
+
+Add separate settings for code summarization:
+- `CODE_SUMMARIZATION_MODEL` - Model for summarizing code (default: optimized for code, e.g., qwen2.5-coder)
+- `CODE_SUMMARIZATION_PROVIDER` - Provider for code summarization
+- `CODE_SUMMARIZATION_BASE_URL` - Custom endpoint URL
+
+This allows using lightweight models for code summarization while keeping 
+the main chat agent separate.
+
+### 4.2 Re-vectorize Endpoint
+
+Add endpoint to regenerate embeddings without re-crawling:
+- `POST /api/knowledge-items/{source_id}/revectorize`
+- Uses current embedding settings vs stored provenance to detect stale embeddings
+- Re-generates all document embeddings for the source
+
+### 4.3 Re-summarize Endpoint
+
+Add endpoint to regenerate summaries without re-crawling:
+- `POST /api/knowledge-items/{source_id}/resummarize`
+- Uses current code summarization settings vs stored provenance
+- Re-generates all code example summaries
+
+### 4.4 Needs Re-vectorization Indicator
+
+Add UI indicator when embedding settings change:
+- Compare current embedding settings (model, provider, chunk size, contextual) 
+  with stored `vectorizer_settings` in `archon_sources`
+- Display "Needs re-vectorization" badge on knowledge cards
+- Triggers when:
+  - `EMBEDDING_MODEL` changes
+  - `EMBEDDING_PROVIDER` changes
+  - `USE_CONTEXTUAL_EMBEDDINGS` changes
+  - `CHUNK_SIZE` changes
+
+**Status:** ❌ Not Started
+
+---
+
 ## Future: Git Integration
 
 With a resumable, reprocessable pipeline with provenance and validation in 

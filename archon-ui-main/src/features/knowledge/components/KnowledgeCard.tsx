@@ -16,7 +16,7 @@ import { DataCard, DataCardContent, DataCardFooter, DataCardHeader } from "../..
 import { OptimisticIndicator } from "../../ui/primitives/OptimisticIndicator";
 import { cn } from "../../ui/primitives/styles";
 import { SimpleTooltip } from "../../ui/primitives/tooltip";
-import { useDeleteKnowledgeItem, useRefreshKnowledgeItem } from "../hooks";
+import { useDeleteKnowledgeItem, useRefreshKnowledgeItem, useRevectorizeKnowledgeItem, useResummarizeKnowledgeItem } from "../hooks";
 import type { KnowledgeItem } from "../types";
 import { extractDomain } from "../utils/knowledge-utils";
 import { KnowledgeCardActions } from "./KnowledgeCardActions";
@@ -47,6 +47,8 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
   const [showProvenance, setShowProvenance] = useState(false);
   const deleteMutation = useDeleteKnowledgeItem();
   const refreshMutation = useRefreshKnowledgeItem();
+  const revectorizeMutation = useRevectorizeKnowledgeItem();
+  const resummarizeMutation = useResummarizeKnowledgeItem();
 
   // Check if item is optimistic
   const optimistic = isOptimistic(item);
@@ -66,6 +68,7 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
 
   // Provenance fields
   const hasProvenance = !!(item.embedding_model || item.embedding_provider || item.summarization_model);
+  const needsRevectorization = item.needs_revectorization === true;
 
   const handleDelete = async () => {
     await deleteMutation.mutateAsync(item.source_id);
@@ -82,6 +85,16 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
     if (response?.progressId && onRefreshStarted) {
       onRefreshStarted(response.progressId);
     }
+  };
+
+  const handleRevectorize = async () => {
+    if (revectorizeMutation.isPending) return;
+    await revectorizeMutation.mutateAsync(item.source_id);
+  };
+
+  const handleResummarize = async () => {
+    if (resummarizeMutation.isPending) return;
+    await resummarizeMutation.mutateAsync(item.source_id);
   };
 
   // Determine edge color for DataCard primitive
@@ -168,9 +181,12 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
                 itemTitle={item.title}
                 isUrl={isUrl}
                 hasCodeExamples={codeExamplesCount > 0}
+                hasDocuments={documentCount > 0}
                 onViewDocuments={onViewDocument}
                 onViewCodeExamples={codeExamplesCount > 0 ? onViewCodeExamples : undefined}
                 onRefresh={isUrl ? handleRefresh : undefined}
+                onRevectorize={handleRevectorize}
+                onResummarize={handleResummarize}
                 onDelete={handleDelete}
                 onExport={onExport}
               />
@@ -291,6 +307,16 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
               </SimpleTooltip>
             </div>
           </div>
+
+          {/* Needs Re-vectorization Indicator */}
+          {needsRevectorization && (
+            <div className="mt-2">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400">
+                <Settings2 className="w-3 h-3" />
+                Needs re-vectorization
+              </span>
+            </div>
+          )}
 
           {/* Provenance / Processing Details */}
           {hasProvenance && (
