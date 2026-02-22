@@ -5,6 +5,7 @@ Handles source metadata, summaries, and management.
 Consolidates both utility functions and class-based service.
 """
 
+from datetime import UTC
 from typing import Any
 
 from supabase import Client
@@ -169,7 +170,7 @@ Requirements:
 - Use proper capitalization
 
 Examples:
-- "Anthropic Documentation" 
+- "Anthropic Documentation"
 - "OpenAI API Reference"
 - "Mem0 llms.txt"
 - "Supabase Docs"
@@ -224,6 +225,11 @@ async def update_source_info(
     source_url: str | None = None,
     source_display_name: str | None = None,
     source_type: str | None = None,
+    embedding_model: str | None = None,
+    embedding_dimensions: int | None = None,
+    embedding_provider: str | None = None,
+    vectorizer_settings: dict | None = None,
+    summarization_model: str | None = None,
 ):
     """
     Update or insert source information in the sources table.
@@ -288,6 +294,24 @@ async def update_source_info(
             if source_display_name:
                 upsert_data["source_display_name"] = source_display_name
 
+            # Add provenance tracking fields if provided
+            if embedding_model:
+                upsert_data["embedding_model"] = embedding_model
+            if embedding_dimensions:
+                upsert_data["embedding_dimensions"] = embedding_dimensions
+            if embedding_provider:
+                upsert_data["embedding_provider"] = embedding_provider
+            if vectorizer_settings is not None:
+                upsert_data["vectorizer_settings"] = vectorizer_settings
+            if summarization_model:
+                upsert_data["summarization_model"] = summarization_model
+
+            # Update timestamps
+            from datetime import datetime
+
+            upsert_data["last_crawled_at"] = datetime.now(UTC).isoformat()
+            upsert_data["last_vectorized_at"] = datetime.now(UTC).isoformat()
+
             client.table("archon_sources").upsert(upsert_data).execute()
 
             search_logger.info(
@@ -350,6 +374,24 @@ async def update_source_info(
                 upsert_data["source_url"] = source_url
             if source_display_name:
                 upsert_data["source_display_name"] = source_display_name
+
+            # Add provenance tracking fields if provided
+            if embedding_model:
+                upsert_data["embedding_model"] = embedding_model
+            if embedding_dimensions:
+                upsert_data["embedding_dimensions"] = embedding_dimensions
+            if embedding_provider:
+                upsert_data["embedding_provider"] = embedding_provider
+            if vectorizer_settings is not None:
+                upsert_data["vectorizer_settings"] = vectorizer_settings
+            if summarization_model:
+                upsert_data["summarization_model"] = summarization_model
+
+            # Set timestamps
+            from datetime import datetime
+
+            upsert_data["last_crawled_at"] = datetime.now(UTC).isoformat()
+            upsert_data["last_vectorized_at"] = datetime.now(UTC).isoformat()
 
             client.table("archon_sources").upsert(upsert_data).execute()
             search_logger.info(f"Created/updated source {source_id} with title: {title}")

@@ -42,6 +42,8 @@ class RecursiveCrawlStrategy:
         max_concurrent: int | None = None,
         progress_callback: Callable[..., Awaitable[None]] | None = None,
         cancellation_check: Callable[[], None] | None = None,
+        source_id: str | None = None,
+        url_state_service: Any | None = None,
     ) -> list[dict[str, Any]]:
         """
         Recursively crawl internal links from start URLs up to a maximum depth with progress reporting.
@@ -54,6 +56,8 @@ class RecursiveCrawlStrategy:
             max_concurrent: Maximum concurrent crawls
             progress_callback: Optional callback for progress updates
             cancellation_check: Optional function to check for cancellation
+            source_id: Optional source ID for resume filtering
+            url_state_service: Optional URL state service for checkpoint/resume
 
         Returns:
             List of crawl results
@@ -156,6 +160,13 @@ class RecursiveCrawlStrategy:
                 )
 
         visited = set()
+
+        # If resume filtering is enabled, pre-populate visited with already-embedded URLs
+        if url_state_service and source_id:
+            embedded_urls = url_state_service.get_embedded_urls(source_id)
+            if embedded_urls:
+                visited.update(embedded_urls)
+                logger.info(f"Resume filtering: pre-loaded {len(embedded_urls)} already-embedded URLs")
 
         def normalize_url(url):
             return urldefrag(url)[0]

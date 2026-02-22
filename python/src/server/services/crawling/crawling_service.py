@@ -266,6 +266,8 @@ class CrawlingService:
         max_depth: int = 3,
         max_concurrent: int | None = None,
         progress_callback: Callable[[str, int, str], Awaitable[None]] | None = None,
+        source_id: str | None = None,
+        url_state_service: Any | None = None,
     ) -> list[dict[str, Any]]:
         """Recursively crawl internal links from start URLs."""
         return await self.recursive_strategy.crawl_recursive_with_progress(
@@ -276,6 +278,8 @@ class CrawlingService:
             max_concurrent,
             progress_callback,
             self._check_cancellation,  # Pass cancellation check
+            source_id,
+            url_state_service,
         )
 
     # Orchestration methods
@@ -374,7 +378,6 @@ class CrawlingService:
                         f"Resuming crawl | source_id={original_source_id} | "
                         f"embedded={embedded_count} | pending={pending_count} | failed={failed_count} | total={total_count}"
                     )
-                    # TODO: Filter out already-embedded URLs from the crawl to resume properly
                 else:
                     # All URLs processed - clear old state for fresh crawl
                     url_state_service.clear_state(original_source_id)
@@ -488,7 +491,9 @@ class CrawlingService:
                 discovery_request["is_discovery_target"] = True
                 discovery_request["original_domain"] = self.url_handler.get_base_url(discovered_url)
 
-                crawl_results, crawl_type = await self._crawl_by_url_type(discovered_url, discovery_request)
+                crawl_results, crawl_type = await self._crawl_by_url_type(
+                    discovered_url, discovery_request, original_source_id, has_existing_state
+                )
 
             else:
                 # No discovery - crawl the main URL normally
@@ -499,7 +504,7 @@ class CrawlingService:
 
                 # Crawl the main URL
                 safe_logfire_info(f"No discovery file found, crawling main URL: {url}")
-                crawl_results, crawl_type = await self._crawl_by_url_type(url, request)
+                crawl_results, crawl_type = await self._crawl_by_url_type(url, request, original_source_id, has_existing_state)
 
             # Update progress tracker with crawl type
             if self.progress_tracker and crawl_type:
@@ -855,9 +860,51 @@ class CrawlingService:
             # Fallback to simple string comparison
             return link.rstrip("/") == base_url.rstrip("/")
 
-    async def _crawl_by_url_type(self, url: str, request: dict[str, Any]) -> tuple:
+    async def _filter_already_processed_urls(self, source_id: str, urls: list[str]) -> list[str]:
+        """
+        Filter out URLs that are already embedded.
+
+        Args:
+            source_id: The source ID
+            urls: List of URLs to filter
+
+        Returns:
+            List of URLs that have not been embedded yet
+        """
+        if not urls:
+            return []
+
+        url_state_service = get_crawl_url_state_service(self.supabase_client)
+
+        # Get embedded URLs
+        embedded_urls = url_state_service.get_embedded_urls(source_id)
+        embedded_set = set(embedded_urls)
+
+        # Filter
+        filtered = [url for url in urls if url not in embedded_set]
+
+        # Log resume info
+        if len(filtered) < len(urls):
+            skipped = len(urls) - len(filtered)
+            safe_logfire_info(
+                f"Resume filtering | skipped={skipped} already-embedded URLs | "
+                f"remaining={len(filtered)} | source_id={source_id}",
+                progress_id=self.progress_id,
+            )
+
+        return filtered
+
+    async def _crawl_by_url_type(
+        self, url: str, request: dict[str, Any], source_id: str | None = None, has_existing_state: bool = False
+    ) -> tuple:
         """
         Detect URL type and perform appropriate crawling.
+
+        Args:
+            url: URL to crawl
+            request: Crawl request parameters
+            source_id: Optional source ID for resume filtering
+            has_existing_state: Whether the source has existing crawl state
 
         Returns:
             Tuple of (crawl_results, crawl_type)
@@ -1000,6 +1047,10 @@ class CrawlingService:
                         url_to_link_text = dict(extracted_links_with_text)
                         extracted_links = [link for link, _ in extracted_links_with_text]
 
+                        # Apply resume filtering if we have existing state
+                        if has_existing_state and source_id:
+                            extracted_links = await self._filter_already_processed_urls(source_id, extracted_links)
+
                         # For discovery targets, respect max_depth for same-domain links
                         max_depth = (
                             request.get("max_depth", 2)
@@ -1012,11 +1063,14 @@ class CrawlingService:
                             logger.info(
                                 f"Crawling {len(extracted_links)} same-domain links with max_depth={max_depth - 1}"
                             )
+                            url_state_service = get_crawl_url_state_service(self.supabase_client) if source_id else None
                             batch_results = await self.crawl_recursive_with_progress(
                                 extracted_links,
                                 max_depth=max_depth - 1,  # Reduce depth since we're already 1 level deep
                                 max_concurrent=request.get("max_concurrent"),
                                 progress_callback=await self._create_crawl_progress_callback("crawling"),
+                                source_id=source_id,
+                                url_state_service=url_state_service,
                             )
                         else:
                             # Use normal batch crawling (with link text fallbacks)
@@ -1066,17 +1120,24 @@ class CrawlingService:
             sitemap_urls = self.parse_sitemap(url)
 
             if sitemap_urls:
-                # Update progress before starting batch crawl
-                await update_crawl_progress(
-                    75,  # 75% of crawling stage
-                    f"Starting batch crawl of {len(sitemap_urls)} URLs...",
-                    crawl_type=crawl_type,
-                )
+                # Apply resume filtering if we have existing state
+                if has_existing_state and source_id:
+                    sitemap_urls = await self._filter_already_processed_urls(source_id, sitemap_urls)
 
-                crawl_results = await self.crawl_batch_with_progress(
-                    sitemap_urls,
-                    progress_callback=await self._create_crawl_progress_callback("crawling"),
-                )
+                if sitemap_urls:  # Only proceed if there are URLs left to crawl
+                    # Update progress before starting batch crawl
+                    await update_crawl_progress(
+                        75,  # 75% of crawling stage
+                        f"Starting batch crawl of {len(sitemap_urls)} URLs...",
+                        crawl_type=crawl_type,
+                    )
+
+                    crawl_results = await self.crawl_batch_with_progress(
+                        sitemap_urls,
+                        progress_callback=await self._create_crawl_progress_callback("crawling"),
+                    )
+                else:
+                    logger.info("Resume filtering: all sitemap URLs already embedded, nothing to crawl")
 
         else:
             # Handle regular webpages with recursive crawling
@@ -1091,11 +1152,14 @@ class CrawlingService:
             # Let the strategy handle concurrency from settings
             # This will use CRAWL_MAX_CONCURRENT from database (default: 10)
 
+            url_state_service = get_crawl_url_state_service(self.supabase_client) if source_id else None
             crawl_results = await self.crawl_recursive_with_progress(
                 [url],
                 max_depth=max_depth,
                 max_concurrent=None,  # Let strategy use settings
                 progress_callback=await self._create_crawl_progress_callback("crawling"),
+                source_id=source_id,
+                url_state_service=url_state_service,
             )
 
         return crawl_results, crawl_type

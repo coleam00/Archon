@@ -374,6 +374,25 @@ class DocumentStorageOperations:
                 f"About to create/update source record for '{source_id}' (word count: {source_id_word_counts[source_id]})"
             )
             try:
+                # Get current embedding configuration for provenance tracking
+                from ..credential_service import credential_service
+
+                embedding_config = await credential_service.get_credentials_by_category("embedding")
+                embedding_provider = embedding_config.get("EMBEDDING_PROVIDER", "openai")
+                embedding_model = embedding_config.get("EMBEDDING_MODEL", "text-embedding-3-small")
+                embedding_dimensions = int(embedding_config.get("EMBEDDING_DIMENSIONS", "1536"))
+
+                # Get vectorizer settings (placeholder for now, can be enhanced later)
+                vectorizer_settings = {
+                    "use_contextual": False,
+                    "use_hybrid": False,
+                    "chunk_size": 5000,
+                }
+
+                # Get summarization model from RAG strategy
+                rag_settings = await credential_service.get_credentials_by_category("rag_strategy")
+                summarization_model = rag_settings.get("MODEL_CHOICE", "gpt-4o-mini")
+
                 # Call async update_source_info directly
                 await update_source_info(
                     client=self.supabase_client,
@@ -387,6 +406,11 @@ class DocumentStorageOperations:
                     original_url=request.get("url"),  # Store the original crawl URL
                     source_url=source_url,
                     source_display_name=source_display_name,
+                    embedding_model=embedding_model,
+                    embedding_dimensions=embedding_dimensions,
+                    embedding_provider=embedding_provider,
+                    vectorizer_settings=vectorizer_settings,
+                    summarization_model=summarization_model,
                 )
                 safe_logfire_info(f"Successfully created/updated source record for '{source_id}'")
             except Exception as e:
