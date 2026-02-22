@@ -19,7 +19,6 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 # Basic validation - simplified inline version
-
 # Import unified logging
 from ..config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
 from ..services.crawler_manager import get_crawler
@@ -52,6 +51,13 @@ router = APIRouter(prefix="/api", tags=["knowledge"])
 # starting crawls at the same time. Each crawl can still process many pages in parallel.
 CONCURRENT_CRAWL_LIMIT = 3  # Max simultaneous crawl operations (protects server resources)
 crawl_semaphore = asyncio.Semaphore(CONCURRENT_CRAWL_LIMIT)
+
+# Semaphores for re-vectorize and re-summarize operations
+CONCURRENT_REVECTORIZE_LIMIT = 2
+revectorize_semaphore = asyncio.Semaphore(CONCURRENT_REVECTORIZE_LIMIT)
+
+CONCURRENT_RESUMMARIZE_LIMIT = 2
+resummarize_semaphore = asyncio.Semaphore(CONCURRENT_RESUMMARIZE_LIMIT)
 
 # Track active async crawl tasks for cancellation support
 active_crawl_tasks: dict[str, asyncio.Task] = {}
@@ -678,10 +684,15 @@ async def refresh_knowledge_item(source_id: str):
 @router.post("/knowledge-items/{source_id}/revectorize")
 async def revectorize_knowledge_item(source_id: str):
     """Re-generate embeddings for all documents in a knowledge item without re-crawling."""
-    from ..services.embeddings.embedding_service import create_embeddings_batch
-    from ..services.llm_provider_service import get_embedding_model
+    from ..utils.progress.progress_tracker import ProgressTracker
 
     logger.info(f"🔍 Starting re-vectorize for source_id={source_id}")
+
+    # Generate unique progress ID
+    progress_id = str(uuid.uuid4())
+
+    # Initialize progress tracker
+    tracker = ProgressTracker(progress_id, operation_type="revectorize")
 
     try:
         # Validate API key
@@ -696,105 +707,172 @@ async def revectorize_knowledge_item(source_id: str):
         if not existing_item:
             raise HTTPException(status_code=404, detail={"error": f"Knowledge item {source_id} not found"})
 
-        # Get current embedding settings for provenance
-        embedding_model = await get_embedding_model(provider=provider)
-        embedding_dimensions = 1536  # Default, will be updated based on actual embeddings
-
-        # Fetch all documents for this source
-        supabase = get_supabase_client()
-        docs_response = supabase.table("archon_crawled_pages").select("*").eq("source_id", source_id).execute()
-
-        if not docs_response.data:
-            raise HTTPException(status_code=404, detail={"error": f"No documents found for source {source_id}"})
-
-        documents = docs_response.data
-        logger.info(f"Found {len(documents)} documents to re-vectorize")
-
-        # Get current vectorizer settings for provenance
-        use_contextual = await credential_service.get_credential("USE_CONTEXTUAL_EMBEDDINGS", False)
-        use_hybrid = await credential_service.get_credential("USE_HYBRID_SEARCH", True)
-        chunk_size = await credential_service.get_credential("CHUNK_SIZE", 512)
-
-        vectorizer_settings = {"use_contextual": use_contextual, "use_hybrid": use_hybrid, "chunk_size": chunk_size}
-
-        # Process documents in batches
-        batch_size = 100
-        total_updated = 0
-        errors = []
-
-        for i in range(0, len(documents), batch_size):
-            batch = documents[i : i + batch_size]
-            contents = [doc.get("content", "") or doc.get("markdown", "") for doc in batch]
-
-            # Create embeddings
-            result = await create_embeddings_batch(contents, provider=provider)
-
-            if result.embeddings:
-                # Update documents with new embeddings
-                for j, (doc, embedding) in enumerate(zip(batch, result.embeddings)):
-                    doc_id = doc.get("id")
-                    if not doc_id:
-                        continue
-
-                    # Determine embedding column based on dimension
-                    embedding_dim = len(embedding) if isinstance(embedding, list) else 0
-                    embedding_column = None
-                    if embedding_dim == 768:
-                        embedding_column = "embedding_768"
-                    elif embedding_dim == 1024:
-                        embedding_column = "embedding_1024"
-                    elif embedding_dim == 1536:
-                        embedding_column = "embedding_1536"
-                    elif embedding_dim == 3072:
-                        embedding_column = "embedding_3072"
-                    else:
-                        errors.append(f"Unsupported dimension {embedding_dim} for doc {doc_id}")
-                        continue
-
-                    try:
-                        supabase.table("archon_crawled_pages").update(
-                            {
-                                embedding_column: embedding,
-                                "embedding_model": embedding_model,
-                                "embedding_dimension": embedding_dim,
-                            }
-                        ).eq("id", doc_id).execute()
-                        total_updated += 1
-                    except Exception as e:
-                        errors.append(f"Failed to update doc {doc_id}: {str(e)}")
-
-        # Update source provenance
-        supabase.table("archon_sources").update(
+        await tracker.start(
             {
-                "embedding_model": embedding_model,
-                "embedding_dimensions": embedding_dim,
-                "embedding_provider": provider,
-                "vectorizer_settings": vectorizer_settings,
-                "last_vectorized_at": datetime.utcnow().isoformat(),
+                "status": "starting",
+                "progress": 0,
+                "log": f"Starting re-vectorization for {existing_item.get('title', source_id)}",
+                "documents_total": 0,
+                "documents_processed": 0,
             }
-        ).eq("id", source_id).execute()
+        )
 
-        logger.info(f"✅ Re-vectorize complete: {total_updated} documents updated")
+        # Start background task with semaphore
+        asyncio.create_task(_perform_revectorize_with_progress(progress_id, source_id, provider, tracker))
 
-        return {
-            "message": f"Re-vectorized {total_updated} documents",
-            "documents_updated": total_updated,
-            "errors": errors[:10] if errors else [],  # Return first 10 errors
-        }
+        return {"success": True, "progressId": progress_id, "message": "Re-vectorization started"}
 
     except HTTPException:
         raise
     except Exception as e:
-        safe_logfire_error(f"Failed to re-vectorize | error={str(e)} | source_id={source_id}")
+        safe_logfire_error(f"Failed to start re-vectorize | error={str(e)} | source_id={source_id}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
+async def _perform_revectorize_with_progress(progress_id: str, source_id: str, provider: str, tracker):
+    """Perform the actual re-vectorize operation with progress tracking."""
+    async with revectorize_semaphore:
+        try:
+            from ..services.embeddings.embedding_service import create_embeddings_batch
+            from ..services.llm_provider_service import get_embedding_model
+
+            await tracker.update(
+                {
+                    "status": "processing",
+                    "progress": 5,
+                    "log": "Fetching documents...",
+                }
+            )
+
+            # Get current embedding settings for provenance
+            embedding_model = await get_embedding_model(provider=provider)
+            embedding_dimensions = 1536
+
+            # Fetch all documents for this source
+            supabase = get_supabase_client()
+            docs_response = supabase.table("archon_crawled_pages").select("*").eq("source_id", source_id).execute()
+
+            if not docs_response.data:
+                await tracker.error("No documents found for source")
+                return
+
+            documents = docs_response.data
+            total_docs = len(documents)
+
+            await tracker.update(
+                {
+                    "status": "processing",
+                    "progress": 10,
+                    "log": f"Found {total_docs} documents to re-vectorize",
+                    "documents_total": total_docs,
+                    "documents_processed": 0,
+                }
+            )
+
+            # Get current vectorizer settings for provenance
+            use_contextual = await credential_service.get_credential("USE_CONTEXTUAL_EMBEDDINGS", False)
+            use_hybrid = await credential_service.get_credential("USE_HYBRID_SEARCH", True)
+            chunk_size = await credential_service.get_credential("CHUNK_SIZE", 512)
+
+            vectorizer_settings = {"use_contextual": use_contextual, "use_hybrid": use_hybrid, "chunk_size": chunk_size}
+
+            # Process documents in batches
+            batch_size = 100
+            total_updated = 0
+            errors = []
+
+            for i in range(0, len(documents), batch_size):
+                batch = documents[i : i + batch_size]
+                contents = [doc.get("content", "") or doc.get("markdown", "") for doc in batch]
+
+                # Create embeddings
+                result = await create_embeddings_batch(contents, provider=provider)
+
+                if result.embeddings:
+                    # Update documents with new embeddings
+                    for j, (doc, embedding) in enumerate(zip(batch, result.embeddings, strict=False)):
+                        doc_id = doc.get("id")
+                        if not doc_id:
+                            continue
+
+                        # Determine embedding column based on dimension
+                        embedding_dim = len(embedding) if isinstance(embedding, list) else 0
+                        embedding_column = None
+                        if embedding_dim == 768:
+                            embedding_column = "embedding_768"
+                        elif embedding_dim == 1024:
+                            embedding_column = "embedding_1024"
+                        elif embedding_dim == 1536:
+                            embedding_column = "embedding_1536"
+                        elif embedding_dim == 3072:
+                            embedding_column = "embedding_3072"
+                        else:
+                            errors.append(f"Unsupported dimension {embedding_dim} for doc {doc_id}")
+                            continue
+
+                        try:
+                            supabase.table("archon_crawled_pages").update(
+                                {
+                                    embedding_column: embedding,
+                                    "embedding_model": embedding_model,
+                                    "embedding_dimension": embedding_dim,
+                                }
+                            ).eq("id", doc_id).execute()
+                            total_updated += 1
+                        except Exception as e:
+                            errors.append(f"Failed to update doc {doc_id}: {str(e)}")
+
+                # Update progress
+                progress = 10 + int((i + len(batch)) / total_docs * 85)
+                await tracker.update(
+                    {
+                        "status": "processing",
+                        "progress": progress,
+                        "log": f"Processed {min(i + len(batch), total_docs)}/{total_docs} documents",
+                        "documents_total": total_docs,
+                        "documents_processed": min(i + len(batch), total_docs),
+                    }
+                )
+
+            # Update source provenance
+            supabase.table("archon_sources").update(
+                {
+                    "embedding_model": embedding_model,
+                    "embedding_dimensions": embedding_dim,
+                    "embedding_provider": provider,
+                    "vectorizer_settings": vectorizer_settings,
+                    "last_vectorized_at": datetime.utcnow().isoformat(),
+                    "needs_revectorization": False,
+                }
+            ).eq("id", source_id).execute()
+
+            await tracker.complete(
+                {
+                    "log": f"Re-vectorization complete: {total_updated} documents updated",
+                    "documents_total": total_updated,
+                    "documents_processed": total_updated,
+                }
+            )
+
+            logger.info(f"✅ Re-vectorize complete: {total_updated} documents updated")
+
+        except Exception as e:
+            safe_logfire_error(f"Failed to re-vectorize | error={str(e)} | source_id={source_id}")
+            await tracker.error(f"Re-vectorization failed: {str(e)}")
 
 
 @router.post("/knowledge-items/{source_id}/resummarize")
 async def resummarize_knowledge_item(source_id: str):
     """Re-generate summaries for all code examples in a knowledge item without re-crawling."""
-    from ..services.storage.code_storage_service import generate_code_summaries_batch
+    from ..utils.progress.progress_tracker import ProgressTracker
 
     logger.info(f"🔍 Starting re-summarize for source_id={source_id}")
+
+    # Generate unique progress ID
+    progress_id = str(uuid.uuid4())
+
+    # Initialize progress tracker
+    tracker = ProgressTracker(progress_id, operation_type="resummarize")
 
     try:
         # Validate API key (uses LLM provider for summarization)
@@ -809,73 +887,130 @@ async def resummarize_knowledge_item(source_id: str):
         if not existing_item:
             raise HTTPException(status_code=404, detail={"error": f"Knowledge item {source_id} not found"})
 
-        # Fetch all code examples for this source
-        supabase = get_supabase_client()
-        code_response = supabase.table("archon_code_examples").select("*").eq("source_id", source_id).execute()
+        await tracker.start(
+            {
+                "status": "starting",
+                "progress": 0,
+                "log": f"Starting re-summarization for {existing_item.get('title', source_id)}",
+                "examples_total": 0,
+                "examples_processed": 0,
+            }
+        )
 
-        if not code_response.data:
-            raise HTTPException(status_code=404, detail={"error": f"No code examples found for source {source_id}"})
+        # Start background task with semaphore
+        asyncio.create_task(_perform_resummarize_with_progress(progress_id, source_id, tracker))
 
-        code_examples = code_response.data
-        logger.info(f"Found {len(code_examples)} code examples to re-summarize")
-
-        # Get code summarization model
-        from ..services.storage.code_storage_service import _get_model_choice
-
-        code_summarization_model = await _get_model_choice()
-
-        # Prepare code blocks for summarization
-        code_blocks = []
-        for example in code_examples:
-            code_blocks.append(
-                {
-                    "code": example.get("content", ""),
-                    "context_before": "",
-                    "context_after": "",
-                    "language": example.get("metadata", {}).get("language", ""),
-                }
-            )
-
-        # Generate new summaries
-        max_workers = int(await credential_service.get_credential("CODE_SUMMARY_MAX_WORKERS", 3))
-        summary_results = await generate_code_summaries_batch(code_blocks, max_workers=max_workers)
-
-        # Update code examples with new summaries
-        total_updated = 0
-        errors = []
-
-        for example, summary in zip(code_examples, summary_results):
-            example_id = example.get("id")
-            if not example_id:
-                continue
-
-            try:
-                supabase.table("archon_code_examples").update(
-                    {"summary": summary.get("summary", ""), "llm_chat_model": code_summarization_model}
-                ).eq("id", example_id).execute()
-                total_updated += 1
-            except Exception as e:
-                errors.append(f"Failed to update example {example_id}: {str(e)}")
-
-        # Update source provenance
-        supabase.table("archon_sources").update({"summarization_model": code_summarization_model}).eq(
-            "id", source_id
-        ).execute()
-
-        logger.info(f"✅ Re-summarize complete: {total_updated} code examples updated")
-
-        return {
-            "message": f"Re-summarized {total_updated} code examples",
-            "examples_updated": total_updated,
-            "model_used": code_summarization_model,
-            "errors": errors[:10] if errors else [],
-        }
+        return {"success": True, "progressId": progress_id, "message": "Re-summarization started"}
 
     except HTTPException:
         raise
     except Exception as e:
-        safe_logfire_error(f"Failed to re-summarize | error={str(e)} | source_id={source_id}")
+        safe_logfire_error(f"Failed to start re-summarize | error={str(e)} | source_id={source_id}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
+async def _perform_resummarize_with_progress(progress_id: str, source_id: str, tracker):
+    """Perform the actual re-summarize operation with progress tracking."""
+    async with resummarize_semaphore:
+        try:
+            from ..services.storage.code_storage_service import _get_model_choice, generate_code_summaries_batch
+
+            await tracker.update(
+                {
+                    "status": "processing",
+                    "progress": 5,
+                    "log": "Fetching code examples...",
+                }
+            )
+
+            # Fetch all code examples for this source
+            supabase = get_supabase_client()
+            code_response = supabase.table("archon_code_examples").select("*").eq("source_id", source_id).execute()
+
+            if not code_response.data:
+                await tracker.error("No code examples found for source")
+                return
+
+            code_examples = code_response.data
+            total_examples = len(code_examples)
+
+            await tracker.update(
+                {
+                    "status": "processing",
+                    "progress": 10,
+                    "log": f"Found {total_examples} code examples to re-summarize",
+                    "examples_total": total_examples,
+                    "examples_processed": 0,
+                }
+            )
+
+            # Get code summarization model
+            code_summarization_model = await _get_model_choice()
+
+            # Prepare code blocks for summarization
+            code_blocks = []
+            for example in code_examples:
+                code_blocks.append(
+                    {
+                        "code": example.get("content", ""),
+                        "context_before": "",
+                        "context_after": "",
+                        "language": example.get("metadata", {}).get("language", ""),
+                    }
+                )
+
+            # Generate new summaries
+            max_workers = int(await credential_service.get_credential("CODE_SUMMARY_MAX_WORKERS", 3))
+            summary_results = await generate_code_summaries_batch(code_blocks, max_workers=max_workers)
+
+            # Update code examples with new summaries
+            total_updated = 0
+            errors = []
+
+            for idx, (example, summary) in enumerate(zip(code_examples, summary_results, strict=False)):
+                example_id = example.get("id")
+                if not example_id:
+                    continue
+
+                try:
+                    supabase.table("archon_code_examples").update(
+                        {"summary": summary.get("summary", ""), "llm_chat_model": code_summarization_model}
+                    ).eq("id", example_id).execute()
+                    total_updated += 1
+                except Exception as e:
+                    errors.append(f"Failed to update example {example_id}: {str(e)}")
+
+                # Update progress every 10 examples
+                if idx % 10 == 0 or idx == len(code_examples) - 1:
+                    progress = 10 + int((idx + 1) / total_examples * 85)
+                    await tracker.update(
+                        {
+                            "status": "processing",
+                            "progress": progress,
+                            "log": f"Processed {idx + 1}/{total_examples} code examples",
+                            "examples_total": total_examples,
+                            "examples_processed": idx + 1,
+                        }
+                    )
+
+            # Update source provenance
+            supabase.table("archon_sources").update({"summarization_model": code_summarization_model}).eq(
+                "id", source_id
+            ).execute()
+
+            await tracker.complete(
+                {
+                    "log": f"Re-summarization complete: {total_updated} code examples updated",
+                    "examples_total": total_updated,
+                    "examples_processed": total_updated,
+                }
+            )
+
+            logger.info(f"✅ Re-summarize complete: {total_updated} code examples updated")
+
+        except Exception as e:
+            safe_logfire_error(f"Failed to re-summarize | error={str(e)} | source_id={source_id}")
+            await tracker.error(f"Re-summarization failed: {str(e)}")
 
 
 @router.post("/knowledge-items/crawl")

@@ -89,12 +89,18 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
 
   const handleRevectorize = async () => {
     if (revectorizeMutation.isPending) return;
-    await revectorizeMutation.mutateAsync(item.source_id);
+    const response = await revectorizeMutation.mutateAsync(item.source_id);
+    if (response?.progressId && onRefreshStarted) {
+      onRefreshStarted(response.progressId);
+    }
   };
 
   const handleResummarize = async () => {
     if (resummarizeMutation.isPending) return;
-    await resummarizeMutation.mutateAsync(item.source_id);
+    const response = await resummarizeMutation.mutateAsync(item.source_id);
+    if (response?.progressId && onRefreshStarted) {
+      onRefreshStarted(response.progressId);
+    }
   };
 
   // Determine edge color for DataCard primitive

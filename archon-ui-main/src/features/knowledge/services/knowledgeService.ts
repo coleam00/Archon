@@ -104,14 +104,14 @@ export const knowledgeService = {
    * Re-vectorize all documents in a knowledge item (without re-crawling)
    */
   async revectorizeKnowledgeItem(sourceId: string): Promise<{
+    success: boolean;
+    progressId: string;
     message: string;
-    documents_updated: number;
-    errors: string[];
   }> {
     const response = await callAPIWithETag<{
+      success: boolean;
+      progressId: string;
       message: string;
-      documents_updated: number;
-      errors: string[];
     }>(`/api/knowledge-items/${sourceId}/revectorize`, {
       method: "POST",
     });
@@ -123,16 +123,14 @@ export const knowledgeService = {
    * Re-summarize all code examples in a knowledge item (without re-crawling)
    */
   async resummarizeKnowledgeItem(sourceId: string): Promise<{
+    success: boolean;
+    progressId: string;
     message: string;
-    examples_updated: number;
-    model_used: string;
-    errors: string[];
   }> {
     const response = await callAPIWithETag<{
+      success: boolean;
+      progressId: string;
       message: string;
-      examples_updated: number;
-      model_used: string;
-      errors: string[];
     }>(`/api/knowledge-items/${sourceId}/resummarize`, {
       method: "POST",
     });

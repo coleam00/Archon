@@ -214,6 +214,16 @@ export const RAGSettings = ({
     url: ragSettings.OLLAMA_EMBEDDING_URL || 'http://host.docker.internal:11434/v1'
   });
 
+  // Code Summarization state
+  const [showCodeSummarySettings, setShowCodeSummarySettings] = useState(false);
+  const [codeSummaryProvider, setCodeSummaryProvider] = useState<ProviderKey>(() =>
+    (ragSettings.CODE_SUMMARIZATION_PROVIDER as ProviderKey) || 'openai'
+  );
+  const [codeSummaryInstanceConfig, setCodeSummaryInstanceConfig] = useState({
+    name: '',
+    url: ragSettings.CODE_SUMMARIZATION_BASE_URL || 'http://host.docker.internal:11434/v1'
+  });
+
   // Update instance configs when ragSettings change (after loading from database)
   // Use refs to prevent infinite loops
   const lastLLMConfigRef = useRef({ url: '', name: '' });
@@ -1793,6 +1803,108 @@ const manualTestConnection = async (
                   </div>
                 </div>
               </div>
+            </div>
+          )}
+        </div>
+
+        {/* Code Summarization Agent Settings */}
+        <div className="mb-4">
+          <button
+            type="button"
+            onClick={() => setShowCodeSummarySettings(!showCodeSummarySettings)}
+            className="flex items-center justify-between w-full p-3 rounded-lg border border-green-500/20 bg-gradient-to-r from-green-500/5 to-green-600/5 hover:from-green-500/10 hover:to-green-600/10 transition-all"
+          >
+            <div className="flex items-center gap-2">
+              <LuBrainCircuit className="w-5 h-5 text-green-500" />
+              <h3 className="font-semibold text-gray-800 dark:text-white">Code Summarization Agent</h3>
+              <span className="text-xs text-gray-500 dark:text-gray-400 ml-2">
+                ({codeSummaryProvider}: {ragSettings.CODE_SUMMARIZATION_MODEL || "default"})
+              </span>
+            </div>
+            {showCodeSummarySettings ? (
+              <ChevronUp className="w-5 h-5 text-gray-500" />
+            ) : (
+              <ChevronDown className="w-5 h-5 text-gray-500" />
+            )}
+          </button>
+
+          {showCodeSummarySettings && (
+            <div className="mt-4 p-4 border border-green-500/10 rounded-lg bg-green-500/5">
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Select Code Summarization Provider
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { key: 'openai', name: 'OpenAI', logo: '/img/OpenAI.png', color: 'green' },
+                    { key: 'google', name: 'Google', logo: '/img/google-logo.svg', color: 'blue' },
+                    { key: 'openrouter', name: 'OpenRouter', logo: '/img/OpenRouter.png', color: 'cyan' },
+                    { key: 'ollama', name: 'Ollama', logo: '/img/Ollama.png', color: 'purple' },
+                    { key: 'anthropic', name: 'Anthropic', logo: '/img/claude-logo.svg', color: 'orange' },
+                    { key: 'grok', name: 'Grok', logo: '/img/Grok.png', color: 'yellow' }
+                  ].map(provider => (
+                    <button
+                      key={provider.key}
+                      type="button"
+                      onClick={() => {
+                        setCodeSummaryProvider(provider.key as ProviderKey);
+                        setRagSettings(prev => ({
+                          ...prev,
+                          CODE_SUMMARIZATION_PROVIDER: provider.key
+                        }));
+                      }}
+                      className={`flex items-center gap-2 p-3 rounded-lg border transition-all
+                        ${codeSummaryProvider === provider.key
+                          ? 'border-green-500 bg-green-500/10 shadow-[0_0_15px_rgba(34,197,94,0.3)]'
+                          : 'border-gray-200 dark:border-gray-700 hover:border-green-400/50'
+                        }`}
+                    >
+                      <img src={provider.logo} alt={provider.name} className="w-5 h-5" />
+                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{provider.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Model Input */}
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Code Summarization Model
+                </label>
+                <Input
+                  placeholder="e.g., gpt-4o-mini, claude-3-haiku, qwen2.5-coder"
+                  value={ragSettings.CODE_SUMMARIZATION_MODEL || ""}
+                  onChange={e => setRagSettings(prev => ({
+                    ...prev,
+                    CODE_SUMMARIZATION_MODEL: e.target.value
+                  }))}
+                  className="w-full"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Leave empty to use provider's default. Recommended: qwen2.5-coder for Ollama.
+                </p>
+              </div>
+
+              {/* Base URL for Ollama/Custom */}
+              {codeSummaryProvider === 'ollama' && (
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Ollama Instance URL
+                  </label>
+                  <Input
+                    placeholder="http://host.docker.internal:11434/v1"
+                    value={codeSummaryInstanceConfig.url}
+                    onChange={e => {
+                      setCodeSummaryInstanceConfig(prev => ({ ...prev, url: e.target.value }));
+                      setRagSettings(prev => ({
+                        ...prev,
+                        CODE_SUMMARIZATION_BASE_URL: e.target.value
+                      }));
+                    }}
+                    className="w-full"
+                  />
+                </div>
+              )}
             </div>
           )}
         </div>
