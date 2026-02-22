@@ -105,3 +105,8 @@ END $$;
 --
 -- This migration is safe to run multiple times and will not conflict
 -- with complete_setup.sql for fresh installations.
+
+-- Record migration application for tracking
+INSERT INTO archon_migrations (version, migration_name)
+VALUES ('0.1.0', '007_add_priority_column_to_tasks')
+ON CONFLICT (version, migration_name) DO NOTHING;

@@ -65,3 +65,8 @@ RESET maintenance_work_mem;
 RESET statement_timeout;
 
 SELECT 'Ollama indexes created (or skipped if timed out - that issue will be obvious in Supabase)' AS status;
+
+-- Record migration application for tracking
+INSERT INTO archon_migrations (version, migration_name)
+VALUES ('0.1.0', '006_ollama_create_indexes_optional')
+ON CONFLICT (version, migration_name) DO NOTHING;

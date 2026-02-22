@@ -34,3 +34,8 @@ WHERE
 
 -- Note: source_id will now contain a unique hash instead of domain
 -- This ensures no conflicts when multiple sources from same domain are crawled
+
+-- Record migration application for tracking
+INSERT INTO archon_migrations (version, migration_name)
+VALUES ('0.1.0', '001_add_source_url_display_name')
+ON CONFLICT (version, migration_name) DO NOTHING;

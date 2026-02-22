@@ -68,3 +68,8 @@ DROP INDEX IF EXISTS idx_archon_code_examples_embedding;
 COMMIT;
 
 SELECT 'Ollama data migrated successfully' AS status;
+
+-- Record migration application for tracking
+INSERT INTO archon_migrations (version, migration_name)
+VALUES ('0.1.0', '004_ollama_migrate_data')
+ON CONFLICT (version, migration_name) DO NOTHING;

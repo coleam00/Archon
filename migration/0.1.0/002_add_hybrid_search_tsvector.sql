@@ -326,3 +326,8 @@ COMMENT ON FUNCTION hybrid_search_archon_code_examples IS 'Legacy hybrid search 
 -- The search vectors will be automatically maintained
 -- as data is inserted or updated.
 -- =====================================================
+
+-- Record migration application for tracking
+INSERT INTO archon_migrations (version, migration_name)
+VALUES ('0.1.0', '002_add_hybrid_search_tsvector')
+ON CONFLICT (version, migration_name) DO NOTHING;

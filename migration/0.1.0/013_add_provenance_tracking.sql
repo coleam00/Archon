@@ -33,3 +33,8 @@ COMMENT ON COLUMN archon_sources.last_crawled_at IS
   'Timestamp when the source was last crawled';
 COMMENT ON COLUMN archon_sources.last_vectorized_at IS
   'Timestamp when the source was last vectorized/embedded';
+
+-- Record migration application for tracking
+INSERT INTO archon_migrations (version, migration_name)
+VALUES ('0.1.0', '013_add_provenance_tracking')
+ON CONFLICT (version, migration_name) DO NOTHING;

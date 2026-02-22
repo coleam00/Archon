@@ -33,3 +33,8 @@ ADD COLUMN IF NOT EXISTS embedding_dimension INTEGER;
 COMMIT;
 
 SELECT 'Ollama columns added successfully' AS status;
+
+-- Record migration application for tracking
+INSERT INTO archon_migrations (version, migration_name)
+VALUES ('0.1.0', '003_ollama_add_columns')
+ON CONFLICT (version, migration_name) DO NOTHING;

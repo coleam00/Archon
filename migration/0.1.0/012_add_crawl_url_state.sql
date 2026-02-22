@@ -45,3 +45,8 @@ CREATE POLICY "Service role full access to crawl_url_state" ON archon_crawl_url_
     FOR ALL USING (true) WITH CHECK (true);
 
 COMMIT;
+
+-- Record migration application for tracking
+INSERT INTO archon_migrations (version, migration_name)
+VALUES ('0.1.0', '012_add_crawl_url_state')
+ON CONFLICT (version, migration_name) DO NOTHING;
