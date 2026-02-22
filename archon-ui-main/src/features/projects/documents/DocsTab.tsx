@@ -201,16 +201,14 @@ export const DocsTab = ({ project }: DocsTabProps) => {
       <div className="flex-1 overflow-y-auto">
         {selectedDocument ? (
           <DocumentViewer document={selectedDocument} onSave={handleSaveDocument} />
-        ) : (
+        ) : documents.length > 0 ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
               <FileText className="w-16 h-16 text-gray-300 dark:text-gray-700 mx-auto mb-4" />
-              <p className="text-gray-500 dark:text-gray-400">
-                {documents.length > 0 ? "Select a document to view" : "No documents available"}
-              </p>
+              <p className="text-gray-500 dark:text-gray-400">Select a document to view</p>
             </div>
           </div>
-        )}
+        ) : null}
       </div>
 
       {/* Add Document Modal */}
