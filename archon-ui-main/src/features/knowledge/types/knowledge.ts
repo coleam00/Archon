@@ -23,6 +23,12 @@ export interface KnowledgeItemMetadata {
   code_examples_count?: number; // Number of code examples found
 }
 
+export interface VectorizerSettings {
+  use_contextual?: boolean;
+  use_hybrid?: boolean;
+  chunk_size?: number;
+}
+
 export interface KnowledgeItem {
   id: string;
   title: string;
@@ -33,6 +39,14 @@ export interface KnowledgeItem {
   status: "active" | "processing" | "error" | "completed";
   document_count: number;
   code_examples_count: number;
+  // Provenance tracking fields
+  embedding_model?: string;
+  embedding_dimensions?: number;
+  embedding_provider?: string;
+  vectorizer_settings?: VectorizerSettings;
+  summarization_model?: string;
+  last_crawled_at?: string;
+  last_vectorized_at?: string;
   metadata: KnowledgeItemMetadata;
   created_at: string;
   updated_at: string;
@@ -195,6 +209,14 @@ export interface KnowledgeSource {
   knowledge_type: "technical" | "business";
   status: "active" | "processing" | "error";
   document_count: number;
+  // Provenance tracking fields
+  embedding_model?: string;
+  embedding_dimensions?: number;
+  embedding_provider?: string;
+  vectorizer_settings?: VectorizerSettings;
+  summarization_model?: string;
+  last_crawled_at?: string;
+  last_vectorized_at?: string;
   created_at: string;
   updated_at: string;
 }

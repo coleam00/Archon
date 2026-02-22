@@ -6,7 +6,7 @@
 
 import { format } from "date-fns";
 import { motion } from "framer-motion";
-import { Clock, Code, ExternalLink, File, FileText, Globe } from "lucide-react";
+import { ChevronRight, Clock, Code, ExternalLink, File, FileText, Globe, Settings2 } from "lucide-react";
 import { useState } from "react";
 import { isOptimistic } from "@/features/shared/utils/optimistic";
 import { KnowledgeCardProgress } from "../../progress/components/KnowledgeCardProgress";
@@ -44,6 +44,7 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
   onRefreshStarted,
 }) => {
   const [isHovered, setIsHovered] = useState(false);
+  const [showProvenance, setShowProvenance] = useState(false);
   const deleteMutation = useDeleteKnowledgeItem();
   const refreshMutation = useRefreshKnowledgeItem();
 
@@ -62,6 +63,9 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
   const hasError = item.status === "error";
   const codeExamplesCount = item.code_examples_count || item.metadata?.code_examples_count || 0;
   const documentCount = item.document_count || item.metadata?.document_count || 0;
+
+  // Provenance fields
+  const hasProvenance = !!(item.embedding_model || item.embedding_provider || item.summarization_model);
 
   const handleDelete = async () => {
     await deleteMutation.mutateAsync(item.source_id);
@@ -287,6 +291,68 @@ export const KnowledgeCard: React.FC<KnowledgeCardProps> = ({
               </SimpleTooltip>
             </div>
           </div>
+
+          {/* Provenance / Processing Details */}
+          {hasProvenance && (
+            <div className="mt-2 pt-2 border-t border-gray-200 dark:border-gray-700">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowProvenance(!showProvenance);
+                }}
+                className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400 hover:text-cyan-500 dark:hover:text-cyan-400 transition-colors"
+              >
+                <ChevronRight
+                  className={cn("w-3 h-3 transition-transform", showProvenance && "rotate-90")}
+                />
+                <Settings2 className="w-3 h-3" />
+                Processing Details
+              </button>
+
+              {showProvenance && (
+                <div className="mt-2 pl-4 space-y-1 text-xs text-gray-500 dark:text-gray-400">
+                  {item.embedding_provider && item.embedding_model && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-gray-400">Embeddings:</span>
+                      <span>
+                        {item.embedding_provider}/{item.embedding_model}
+                        {item.embedding_dimensions && ` (${item.embedding_dimensions}D)`}
+                      </span>
+                    </div>
+                  )}
+                  {item.summarization_model && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-gray-400">Summarization:</span>
+                      <span>{item.summarization_model}</span>
+                    </div>
+                  )}
+                  {item.vectorizer_settings && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-gray-400">Vectorizer:</span>
+                      <span>
+                        {item.vectorizer_settings.chunk_size && `chunk=${item.vectorizer_settings.chunk_size}`}
+                        {item.vectorizer_settings.use_contextual && " contextual"}
+                        {item.vectorizer_settings.use_hybrid && " hybrid"}
+                      </span>
+                    </div>
+                  )}
+                  {item.last_crawled_at && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-gray-400">Last crawled:</span>
+                      <span>{format(new Date(item.last_crawled_at), "M/d/yyyy h:mm a")}</span>
+                    </div>
+                  )}
+                  {item.last_vectorized_at && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-gray-400">Last vectorized:</span>
+                      <span>{format(new Date(item.last_vectorized_at), "M/d/yyyy h:mm a")}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </DataCardFooter>
       </DataCard>
     </motion.div>

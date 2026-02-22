@@ -1,25 +1,16 @@
 # ADR-001: Crawl & Ingestion Pipeline Improvements
 
-**Status:** In Progress  
+**Status:** Superseded by ADR-002  
 **Date:** 2026-02-22  
 **Authors:** Zebastjan Johanzen
 
----
-
-## Context
-
-Archon's crawler and ingestion pipeline is the foundation everything else 
-depends on — MCP agent quality, RAG search accuracy, and AI coding assistant 
-usefulness all trace back to whether the knowledge base contains clean, 
-well-processed, verifiable data.
-
-This ADR tracks remaining improvements needed for the crawl & ingestion pipeline.
+> ⚠️ **This ADR has been superseded by ADR-002**. All content has been merged into ADR-002 for a unified view of crawl reliability, provenance tracking, and validation tooling.
 
 ---
 
 ## Completed ✅
 
-The following have already been implemented:
+*(These were already completed before ADR-001 was superseded)*
 
 | Feature | Status | Notes |
 |---------|--------|-------|
@@ -33,66 +24,4 @@ The following have already been implemented:
 
 ## Remaining Work
 
-### Phase 1: Crawl Checkpoint & Resume
-
-**Scope:** Add crawl state tracking so interrupted crawls can resume.
-
-**Problems solved:**
-- Mid-crawl crashes produce duplicate entries
-- No recovery path; must clean DB and restart entire crawl
-
-**Implementation:**
-- Add `crawl_url_state` table: `pending | fetched | embedded | failed`
-- Make chunk writes idempotent (upsert keyed on URL + chunk hash)
-- On restart, skip `embedded`, retry `failed`
-
----
-
-### Phase 2: Re-vectorization Without Re-crawl
-
-**Scope:** Allow reprocessing existing chunks with new embedding settings.
-
-**Problems solved:**
-- Can't change embedding provider (e.g., OpenAI → Ollama) without re-crawling
-- Re-crawling is slow and abusive to source sites
-
-**Implementation:**
-- Add to `archon_sources`:
-  ```sql
-  embedding_model TEXT,
-  embedding_dimensions INTEGER,
-  vectorizer_flags JSONB,
-  summarization_model TEXT
-  ```
-- Add "Reprocess" action to re-embed without re-fetching
-
----
-
-### Phase 3: Per-Source Provenance UI
-
-**Scope:** Display processing metadata for each source in UI.
-
-**Deliverable:**
-- UI panel showing: embedding model used, dimensions, vectorizer flags, crawl timestamp
-
----
-
-### Phase 4 (Optional): robots.txt Enforcement
-
-**Scope:** Respect `Disallow:` directives in robots.txt files.
-
-**Note:** Currently only reads robots.txt for sitemap discovery, doesn't enforce crawl rules. Lower priority - can revisit later.
-
----
-
-## Consequences
-
-- Resumable crawls prevent data loss and reduce site abuse
-- Re-vectorization enables switching embedding providers without re-crawling
-- Provenance UI helps debug embedding issues
-
----
-
-## Future: Git Integration
-
-With a resumable, reprocessable pipeline in place, Git integration becomes the next major feature (separate ADR).
+*(See ADR-002 for the complete roadmap)*

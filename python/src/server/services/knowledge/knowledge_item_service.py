@@ -59,9 +59,7 @@ class KnowledgeItemService:
 
             # Get total count before pagination
             # Clone the query for counting
-            count_query = self.supabase.from_("archon_sources").select(
-                "*", count="exact", head=True
-            )
+            count_query = self.supabase.from_("archon_sources").select("*", count="exact", head=True)
 
             # Apply same filters to count query
             if knowledge_type:
@@ -118,9 +116,7 @@ class KnowledgeItemService:
                         .eq("source_id", source_id)
                         .execute()
                     )
-                    code_example_counts[source_id] = (
-                        count_result.count if hasattr(count_result, "count") else 0
-                    )
+                    code_example_counts[source_id] = count_result.count if hasattr(count_result, "count") else 0
 
                 # Ensure all sources have a count (default to 0)
                 for source_id in source_ids:
@@ -143,7 +139,7 @@ class KnowledgeItemService:
                     display_url = source_url
                 else:
                     display_url = first_urls.get(source_id, f"source://{source_id}")
-                
+
                 code_examples_count = code_example_counts.get(source_id, 0)
                 chunks_count = chunk_counts.get(source_id, 0)
 
@@ -159,14 +155,20 @@ class KnowledgeItemService:
                     "code_examples": [{"count": code_examples_count}]
                     if code_examples_count > 0
                     else [],  # Minimal array just for count display
+                    # Provenance tracking fields
+                    "embedding_model": source.get("embedding_model"),
+                    "embedding_dimensions": source.get("embedding_dimensions"),
+                    "embedding_provider": source.get("embedding_provider"),
+                    "vectorizer_settings": source.get("vectorizer_settings"),
+                    "summarization_model": source.get("summarization_model"),
+                    "last_crawled_at": source.get("last_crawled_at"),
+                    "last_vectorized_at": source.get("last_vectorized_at"),
                     "metadata": {
                         "knowledge_type": source_metadata.get("knowledge_type", "technical"),
                         "tags": source_metadata.get("tags", []),
                         "source_type": source_type,
                         "status": "active",
-                        "description": source_metadata.get(
-                            "description", source.get("summary", "")
-                        ),
+                        "description": source_metadata.get("description", source.get("summary", "")),
                         "chunks_count": chunks_count,
                         "word_count": source.get("total_word_count", 0),
                         "estimated_pages": round(source.get("total_word_count", 0) / 250, 1),
@@ -183,9 +185,7 @@ class KnowledgeItemService:
                 }
                 items.append(item)
 
-            safe_logfire_info(
-                f"Knowledge items retrieved | total={total} | page={page} | filtered_count={len(items)}"
-            )
+            safe_logfire_info(f"Knowledge items retrieved | total={total} | page={page} | filtered_count={len(items)}")
 
             return {
                 "items": items,
@@ -213,13 +213,7 @@ class KnowledgeItemService:
             safe_logfire_info(f"Getting knowledge item | source_id={source_id}")
 
             # Get the source record
-            result = (
-                self.supabase.from_("archon_sources")
-                .select("*")
-                .eq("source_id", source_id)
-                .single()
-                .execute()
-            )
+            result = self.supabase.from_("archon_sources").select("*").eq("source_id", source_id).single().execute()
 
             if not result.data:
                 return None
@@ -229,14 +223,10 @@ class KnowledgeItemService:
             return item
 
         except Exception as e:
-            safe_logfire_error(
-                f"Failed to get knowledge item | error={str(e)} | source_id={source_id}"
-            )
+            safe_logfire_error(f"Failed to get knowledge item | error={str(e)} | source_id={source_id}")
             return None
 
-    async def update_item(
-        self, source_id: str, updates: dict[str, Any]
-    ) -> tuple[bool, dict[str, Any]]:
+    async def update_item(self, source_id: str, updates: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         """
         Update a knowledge item's metadata.
 
@@ -248,9 +238,7 @@ class KnowledgeItemService:
             Tuple of (success, result)
         """
         try:
-            safe_logfire_info(
-                f"Updating knowledge item | source_id={source_id} | updates={updates}"
-            )
+            safe_logfire_info(f"Updating knowledge item | source_id={source_id} | updates={updates}")
 
             # Prepare update data
             update_data = {}
@@ -273,10 +261,7 @@ class KnowledgeItemService:
             if metadata_updates:
                 # Get current metadata
                 current_response = (
-                    self.supabase.table("archon_sources")
-                    .select("metadata")
-                    .eq("source_id", source_id)
-                    .execute()
+                    self.supabase.table("archon_sources").select("metadata").eq("source_id", source_id).execute()
                 )
                 if current_response.data:
                     current_metadata = current_response.data[0].get("metadata", {})
@@ -286,12 +271,7 @@ class KnowledgeItemService:
                     update_data["metadata"] = metadata_updates
 
             # Perform the update
-            result = (
-                self.supabase.table("archon_sources")
-                .update(update_data)
-                .eq("source_id", source_id)
-                .execute()
-            )
+            result = self.supabase.table("archon_sources").update(update_data).eq("source_id", source_id).execute()
 
             if result.data:
                 safe_logfire_info(f"Knowledge item updated successfully | source_id={source_id}")
@@ -305,9 +285,7 @@ class KnowledgeItemService:
                 return False, {"error": f"Knowledge item {source_id} not found"}
 
         except Exception as e:
-            safe_logfire_error(
-                f"Failed to update knowledge item | error={str(e)} | source_id={source_id}"
-            )
+            safe_logfire_error(f"Failed to update knowledge item | error={str(e)} | source_id={source_id}")
             return False, {"error": str(e)}
 
     async def get_available_sources(self) -> dict[str, Any]:
@@ -325,16 +303,26 @@ class KnowledgeItemService:
             sources = []
             if result.data:
                 for source in result.data:
-                    sources.append({
-                        "source_id": source.get("source_id"),
-                        "title": source.get("title", source.get("summary", "Untitled")),
-                        "summary": source.get("summary"),
-                        "metadata": source.get("metadata", {}),
-                        "total_words": source.get("total_words", source.get("total_word_count", 0)),
-                        "update_frequency": source.get("update_frequency", 7),
-                        "created_at": source.get("created_at"),
-                        "updated_at": source.get("updated_at", source.get("created_at")),
-                    })
+                    sources.append(
+                        {
+                            "source_id": source.get("source_id"),
+                            "title": source.get("title", source.get("summary", "Untitled")),
+                            "summary": source.get("summary"),
+                            "metadata": source.get("metadata", {}),
+                            "total_words": source.get("total_words", source.get("total_word_count", 0)),
+                            "update_frequency": source.get("update_frequency", 7),
+                            # Provenance tracking fields
+                            "embedding_model": source.get("embedding_model"),
+                            "embedding_dimensions": source.get("embedding_dimensions"),
+                            "embedding_provider": source.get("embedding_provider"),
+                            "vectorizer_settings": source.get("vectorizer_settings"),
+                            "summarization_model": source.get("summarization_model"),
+                            "last_crawled_at": source.get("last_crawled_at"),
+                            "last_vectorized_at": source.get("last_vectorized_at"),
+                            "created_at": source.get("created_at"),
+                            "updated_at": source.get("updated_at", source.get("created_at")),
+                        }
+                    )
 
             return {"success": True, "sources": sources, "count": len(sources)}
 
@@ -375,6 +363,14 @@ class KnowledgeItemService:
             "url": first_page_url,
             "source_id": source_id,
             "code_examples": code_examples,
+            # Provenance tracking fields
+            "embedding_model": source.get("embedding_model"),
+            "embedding_dimensions": source.get("embedding_dimensions"),
+            "embedding_provider": source.get("embedding_provider"),
+            "vectorizer_settings": source.get("vectorizer_settings"),
+            "summarization_model": source.get("summarization_model"),
+            "last_crawled_at": source.get("last_crawled_at"),
+            "last_vectorized_at": source.get("last_vectorized_at"),
             "metadata": {
                 # Spread source_metadata first, then override with computed values
                 **source_metadata,
@@ -385,9 +381,7 @@ class KnowledgeItemService:
                 "description": source_metadata.get("description", source.get("summary", "")),
                 "chunks_count": await self._get_chunks_count(source_id),  # Get actual chunk count
                 "word_count": source.get("total_words", 0),
-                "estimated_pages": round(
-                    source.get("total_words", 0) / 250, 1
-                ),  # Average book page = 250 words
+                "estimated_pages": round(source.get("total_words", 0) / 250, 1),  # Average book page = 250 words
                 "pages_tooltip": f"{round(source.get('total_words', 0) / 250, 1)} pages (≈ {source.get('total_words', 0):,} words)",
                 "last_scraped": source.get("updated_at"),
                 "file_name": source_metadata.get("file_name"),
@@ -403,11 +397,7 @@ class KnowledgeItemService:
         """Get the first page URL for a source."""
         try:
             pages_response = (
-                self.supabase.from_("archon_crawled_pages")
-                .select("url")
-                .eq("source_id", source_id)
-                .limit(1)
-                .execute()
+                self.supabase.from_("archon_crawled_pages").select("url").eq("source_id", source_id).limit(1).execute()
             )
 
             if pages_response.data:
@@ -453,9 +443,7 @@ class KnowledgeItemService:
             or any(search_lower in tag.lower() for tag in item["metadata"].get("tags", []))
         ]
 
-    def _filter_by_knowledge_type(
-        self, items: list[dict[str, Any]], knowledge_type: str
-    ) -> list[dict[str, Any]]:
+    def _filter_by_knowledge_type(self, items: list[dict[str, Any]], knowledge_type: str) -> list[dict[str, Any]]:
         """Filter items by knowledge type."""
         return [item for item in items if item["metadata"].get("knowledge_type") == knowledge_type]
 
