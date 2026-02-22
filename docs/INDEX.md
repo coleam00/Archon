@@ -112,5 +112,6 @@
 
 | File | Description |
 |------|-------------|
+| [Claude_API_Cost_Optimization_Guide.md](./Claude_API_Cost_Optimization_Guide.md) | Model pricing, caching, batch API cost strategies |
 | [grok.md](./grok.md) | Grok AI notes |
 | [TEST_RUNNER_COMPLETE.md](./TEST_RUNNER_COMPLETE.md) | Test runner implementation |
