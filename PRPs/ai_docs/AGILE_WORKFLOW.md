@@ -1,0 +1,146 @@
+# Agile ↔ Archon Mapping (Rosetta Stone)
+
+> Canonical reference for how Agile concepts map to Archon data structures and MCP tools.
+> All swarm agents must ground their workflow in this document.
+
+---
+
+## Concept Mapping
+
+| Agile Concept | Archon Equivalent | Notes |
+|---------------|-------------------|-------|
+| **Epic** | Archon Project | A project groups related stories. Query: `archon_list_tasks(status="todo")` filtered by project. |
+| **User Story** | Archon Task (`status: todo`) | One deliverable unit of work for a single agent or pair. |
+| **Sprint** | Named time-box | e.g., "Week of 2026-02-22". Tracked via task titles or `description` prefix. No dedicated DB field. |
+| **Task / Sub-task** | Checklist inside task `description` | Use markdown `- [ ]` checkboxes in the `description` field. |
+| **Backlog** | All `todo` tasks sorted by `priority` | `archon_list_tasks(status="todo")`. High priority = top of list. |
+| **Work In Progress** | Tasks with `status: doing` | `archon_list_tasks(status="doing")`. |
+| **Done** | Tasks with `status: done` | Only set after Definition of Done is satisfied. See `docs/DEFINITION_OF_DONE.md`. |
+| **Blocked** | Task marked in `description` | Prepend `[BLOCKED: reason]` to description. Create a dependency task if needed. |
+| **Handoff** | Handover note in `description` + reassign `assignee` | Leave context for the next agent before changing assignee. |
+
+---
+
+## Agent Identity → Agile Role
+
+| Agent | Agile Role | Responsibilities |
+|-------|-----------|------------------|
+| `claude` | Lead Developer / PO | Task execution, architecture decisions, plan approval |
+| `gemini` | Developer / Analyst | Research, code review, data analysis |
+| `gpt` | Developer / Specialist | Domain-specific tasks, alternative implementations |
+| `user` | Product Owner / Sponsor | Priority calls, final approval, strategic direction |
+
+---
+
+## Lifecycle Diagram
+
+```
+Backlog (todo)
+     │
+     │  archon_start_task(task_id)
+     │  + set assignee to self
+     ▼
+In Progress (doing)
+     │
+     │  Work → satisfy DoD checklist
+     │  (docs/DEFINITION_OF_DONE.md)
+     ▼
+Done (done)
+     │
+     │  archon_complete_task(task_id)
+     ▼
+Closed ✓
+```
+
+---
+
+## MCP Tool Reference
+
+All swarm agents interact with Archon via these tools:
+
+| Action | Tool | Example |
+|--------|------|---------|
+| List backlog | `archon_list_tasks` | `archon_list_tasks(status="todo")` |
+| Get task details | `archon_get_task` | `archon_get_task(task_id="<uuid>")` |
+| Claim a task | `archon_start_task` | `archon_start_task(task_id="<uuid>")` |
+| Update description / assignee | `archon_update_task` | `archon_update_task(task_id="<uuid>", assignee="claude", description="...")` |
+| Complete a task | `archon_complete_task` | `archon_complete_task(task_id="<uuid>")` |
+| Create a new task | `archon_add_task` | `archon_add_task(title="...", description="...", assignee="claude", priority="medium")` |
+
+---
+
+## Standard Workflow (Pick Up → Work → Complete)
+
+```
+1. archon_list_tasks(status="todo")
+   → Pick the highest-priority unowned task
+
+2. archon_start_task(task_id="<uuid>")
+   → Status becomes "doing"
+
+3. archon_update_task(task_id="<uuid>", assignee="<your-agent-id>")
+   → Claim ownership so other agents don't duplicate
+
+4. Execute the work described in the task
+
+5. Verify every item in docs/DEFINITION_OF_DONE.md
+
+6. archon_complete_task(task_id="<uuid>")
+   → Status becomes "done"
+```
+
+---
+
+## Sprint Naming Convention
+
+When a task belongs to a sprint, prefix the task `description` with:
+
+```
+[Sprint: Week of YYYY-MM-DD]
+```
+
+Example description opening:
+```
+[Sprint: Week of 2026-02-24]
+
+Implement the Agile role mapping table in AGENTS.md.
+
+Checklist:
+- [ ] Append table to AGENTS.md
+- [ ] Verify formatting renders correctly
+```
+
+---
+
+## Cross-Agent Handoffs
+
+When you cannot finish a task and another agent must continue:
+
+1. Leave a handover note at the **top** of the `description`:
+   ```
+   [HANDOFF → gemini]
+   Status as of 2026-02-22: completed backend, frontend pending.
+   Next: implement UI in archon-ui-main/src/features/...
+   ```
+2. Update `assignee` to the target agent:
+   `archon_update_task(task_id="<uuid>", assignee="gemini", description="<updated>")`
+3. Do **not** call `archon_complete_task` — leave it in `doing`.
+
+---
+
+## Priority Values
+
+| Priority | When to use |
+|----------|-------------|
+| `high` | Blocking other agents or sprint goal at risk |
+| `medium` | Standard story (default) |
+| `low` | Nice-to-have, deferred |
+
+---
+
+## References
+
+- Operational sprint guide: `docs/SPRINT_WORKFLOW.md`
+- Definition of Done: `docs/DEFINITION_OF_DONE.md`
+- Agent roles (full context): `AGENTS.md`
+- Archon MCP tool patterns: `PRPs/ai_docs/ARCHITECTURE.md`

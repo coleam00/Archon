@@ -300,3 +300,18 @@ When connected to Claude/Cursor/Windsurf, the following tools are available:
 - Docker Compose handles service orchestration
 - TanStack Query for all data fetching - NO PROP DRILLING
 - Vertical slice architecture in `/features` - features own their sub-features
+
+---
+
+## Agile Roles
+
+| Agent   | Agile Role              | Responsibilities                                      |
+|---------|-------------------------|-------------------------------------------------------|
+| claude  | Lead Developer / PO     | Task execution, architecture decisions, plan approval |
+| gemini  | Developer / Analyst     | Research, code review, data analysis                  |
+| gpt     | Developer / Specialist  | Domain-specific tasks, alternative implementations    |
+| user    | Product Owner / Sponsor | Priority calls, final approval, strategic direction   |
+
+> Full Agile ↔ Archon workflow: `PRPs/ai_docs/AGILE_WORKFLOW.md`
+> Sprint ceremonies: `docs/SPRINT_WORKFLOW.md`
+> Definition of Done: `docs/DEFINITION_OF_DONE.md`

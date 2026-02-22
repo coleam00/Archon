@@ -100,6 +100,15 @@
 | [RUN_MIGRATION_003.md](./RUN_MIGRATION_003.md) | Migration 003 instructions |
 | [testDB.md](./testDB.md) | Database test notes |
 
+## Agile Workflow
+
+| File | Description |
+|------|-------------|
+| [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md) | Step-by-step sprint ceremonies using Archon MCP tools |
+| [DEFINITION_OF_DONE.md](./DEFINITION_OF_DONE.md) | Checklist agents must pass before completing a task |
+
+> Agile ↔ Archon concept mapping (Rosetta Stone): `PRPs/ai_docs/AGILE_WORKFLOW.md`
+
 ## Misc
 
 | File | Description |
