@@ -1,4 +1,5 @@
 __pycache__
+.venv/
 .env
 .serena
 .claude/settings.local.json
