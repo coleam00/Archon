@@ -74,3 +74,4 @@ logs/
 .my_cache
 .ruff_cache
 .ruff
+node_modules/

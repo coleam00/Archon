@@ -57,3 +57,6 @@ out*.txt
 
 # Context engineering intro (separate project)
 context-engineering-intro/
+
+# Node dependencies
+node_modules/
