@@ -5,7 +5,7 @@ import { Input } from '../ui/Input';
 import { Select } from '../ui/Select';
 import { Button } from '../ui/Button';
 import { Button as GlowButton } from '../../features/ui/primitives/button';
-import { LuBrainCircuit } from 'react-icons/lu';
+import { LuBrainCircuit, LuCode } from 'react-icons/lu';
 import { PiDatabaseThin } from 'react-icons/pi';
 import { useToast } from '../../features/shared/hooks/useToast';
 import { credentialsService } from '../../services/credentialsService';
@@ -202,7 +202,7 @@ export const RAGSettings = ({
     // Default to openai if no specific embedding provider is set
     (ragSettings.EMBEDDING_PROVIDER as ProviderKey) || 'openai'
   );
-  const [activeSelection, setActiveSelection] = useState<'chat' | 'embedding'>('chat');
+  const [activeSelection, setActiveSelection] = useState<'chat' | 'embedding' | 'code_summarization'>('chat');
 
   // Instance configurations
   const [llmInstanceConfig, setLLMInstanceConfig] = useState({
@@ -215,7 +215,6 @@ export const RAGSettings = ({
   });
 
   // Code Summarization state
-  const [showCodeSummarySettings, setShowCodeSummarySettings] = useState(false);
   const [codeSummaryProvider, setCodeSummaryProvider] = useState<ProviderKey>(() =>
     (ragSettings.CODE_SUMMARIZATION_PROVIDER as ProviderKey) || 'openai'
   );
@@ -1006,7 +1005,7 @@ const manualTestConnection = async (
     }
   };
 
-  const resolvedProviderForAlert = activeSelection === 'chat' ? chatProvider : embeddingProvider;
+  const resolvedProviderForAlert = activeSelection === 'chat' ? chatProvider : activeSelection === 'embedding' ? embeddingProvider : codeSummaryProvider;
   const activeProviderKey = isProviderKey(resolvedProviderForAlert)
     ? (resolvedProviderForAlert as ProviderKey)
     : undefined;
@@ -1293,15 +1292,34 @@ const manualTestConnection = async (
               <span>Embeddings: {embeddingProvider}</span>
             </span>
           </GlowButton>
+          <GlowButton
+            onClick={() => setActiveSelection('code_summarization')}
+            variant="ghost"
+            className={`min-w-[180px] px-5 py-3 font-semibold text-white dark:text-white
+              border border-orange-400/70 dark:border-orange-400/40
+              bg-black/40 backdrop-blur-md
+              shadow-[inset_0_0_16px_rgba(234,88,12,0.38)]
+              hover:bg-orange-500/12 dark:hover:bg-orange-500/20
+              hover:border-orange-300/80 hover:shadow-[0_0_24px_rgba(251,146,60,0.52)]
+              ${(activeSelection === 'code_summarization')
+                ? 'shadow-[0_0_26px_rgba(251,146,60,0.55)] ring-2 ring-orange-400/60'
+                : 'shadow-[0_0_15px_rgba(251,146,60,0.25)]'}
+            `}
+          >
+            <span className="flex items-center justify-center gap-2">
+              <LuCode className="w-4 h-4 text-orange-300" aria-hidden="true" />
+              <span>Code Summary: {codeSummaryProvider}</span>
+            </span>
+          </GlowButton>
         </div>
 
         {/* Context-Aware Provider Grid */}
         <div className="mb-6">
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
-            Select {activeSelection === 'chat' ? 'Chat' : 'Embedding'} Provider
+            Select {activeSelection === 'chat' ? 'Chat' : activeSelection === 'embedding' ? 'Embedding' : 'Code Summarization'} Provider
           </label>
           <div className={`grid gap-3 mb-4 ${
-            activeSelection === 'chat' ? 'grid-cols-6' : 'grid-cols-4'
+            activeSelection === 'chat' ? 'grid-cols-6' : activeSelection === 'embedding' ? 'grid-cols-4' : 'grid-cols-3'
           }`}>
             {[
               { key: 'openai', name: 'OpenAI', logo: '/img/OpenAI.png', color: 'green' },
@@ -1312,7 +1330,7 @@ const manualTestConnection = async (
               { key: 'grok', name: 'Grok', logo: '/img/Grok.png', color: 'yellow' }
             ]
               .filter(provider =>
-                activeSelection === 'chat' || EMBEDDING_CAPABLE_PROVIDERS.includes(provider.key as ProviderKey)
+                activeSelection !== 'embedding' || EMBEDDING_CAPABLE_PROVIDERS.includes(provider.key as ProviderKey)
               )
               .map(provider => (
               <button
@@ -1323,25 +1341,29 @@ const manualTestConnection = async (
 
                   if (activeSelection === 'chat') {
                     setChatProvider(providerKey);
-                    // Update chat model when switching providers
                     const savedModels = providerModels[providerKey] || getDefaultModels(providerKey);
                     setRagSettings(prev => ({
                       ...prev,
                       MODEL_CHOICE: savedModels.chatModel
                     }));
-                  } else {
+                  } else if (activeSelection === 'embedding') {
                     setEmbeddingProvider(providerKey);
-                    // Update embedding model when switching providers
                     const savedModels = providerModels[providerKey] || getDefaultModels(providerKey);
                     setRagSettings(prev => ({
                       ...prev,
                       EMBEDDING_MODEL: savedModels.embeddingModel
                     }));
+                  } else {
+                    setCodeSummaryProvider(providerKey);
+                    setRagSettings(prev => ({
+                      ...prev,
+                      CODE_SUMMARIZATION_PROVIDER: providerKey
+                    }));
                   }
                 }}
                 className={`
                   relative p-3 rounded-lg border-2 transition-all duration-200 text-center
-                  ${(activeSelection === 'chat' ? chatProvider === provider.key : embeddingProvider === provider.key)
+                  ${(activeSelection === 'chat' ? chatProvider === provider.key : activeSelection === 'embedding' ? embeddingProvider === provider.key : codeSummaryProvider === provider.key)
                     ? `${colorStyles[provider.key as ProviderKey]} shadow-[0_0_15px_rgba(34,197,94,0.3)]`
                     : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
                   }
@@ -1422,7 +1444,7 @@ const manualTestConnection = async (
                     </div>
                   </div>
                 )
-              ) : (
+              ) : activeSelection === 'embedding' ? (
                 embeddingProvider !== 'ollama' ? (
                   <Input
                     label="Embedding Model"
@@ -1447,12 +1469,55 @@ const manualTestConnection = async (
                     </div>
                   </div>
                 )
+              ) : (
+                <div className="space-y-3">
+                  {codeSummaryProvider !== 'ollama' ? (
+                    <Input
+                      label="Code Summarization Model"
+                      value={ragSettings.CODE_SUMMARIZATION_MODEL || ''}
+                      onChange={e => setRagSettings({
+                        ...ragSettings,
+                        CODE_SUMMARIZATION_MODEL: e.target.value
+                      })}
+                      placeholder="e.g., gpt-4o-mini, claude-3-haiku"
+                      accentColor="orange"
+                    />
+                  ) : (
+                    <div className="p-3 border border-orange-500/30 rounded-lg bg-orange-500/5">
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        Code Summarization Model
+                      </label>
+                      <div className="text-sm text-gray-600 dark:text-gray-400">
+                        Configured via Ollama instance
+                      </div>
+                      <div className="text-xs text-orange-400 mt-1">
+                        Current: {ragSettings.CODE_SUMMARIZATION_MODEL || 'Not selected'}
+                      </div>
+                    </div>
+                  )}
+                  {codeSummaryProvider === 'ollama' && (
+                    <Input
+                      label="Ollama Instance URL"
+                      value={codeSummaryInstanceConfig.url}
+                      onChange={e => {
+                        setCodeSummaryInstanceConfig(prev => ({ ...prev, url: e.target.value }));
+                        setRagSettings(prev => ({
+                          ...prev,
+                          CODE_SUMMARIZATION_BASE_URL: e.target.value
+                        }));
+                      }}
+                      placeholder="http://host.docker.internal:11434/v1"
+                      accentColor="orange"
+                    />
+                  )}
+                </div>
               )}
             </div>
 
             {/* Ollama Configuration Gear Icon */}
             {((activeSelection === 'chat' && chatProvider === 'ollama') ||
-              (activeSelection === 'embedding' && embeddingProvider === 'ollama')) && (
+              (activeSelection === 'embedding' && embeddingProvider === 'ollama') ||
+              (activeSelection === 'code_summarization' && codeSummaryProvider === 'ollama')) && (
               <Button
                 variant="outline"
                 accentColor="green"
@@ -1460,7 +1525,7 @@ const manualTestConnection = async (
                 className="whitespace-nowrap ml-4 border-green-500 text-green-400 hover:bg-green-500/10"
                 onClick={() => setShowOllamaConfig(!showOllamaConfig)}
               >
-                {activeSelection === 'chat' ? 'Config' : 'Config'}
+                Config
               </Button>
             )}
 
@@ -1806,109 +1871,6 @@ const manualTestConnection = async (
             </div>
           )}
         </div>
-
-        {/* Code Summarization Agent Settings */}
-        <div className="mb-4">
-          <button
-            type="button"
-            onClick={() => setShowCodeSummarySettings(!showCodeSummarySettings)}
-            className="flex items-center justify-between w-full p-3 rounded-lg border border-green-500/20 bg-gradient-to-r from-green-500/5 to-green-600/5 hover:from-green-500/10 hover:to-green-600/10 transition-all"
-          >
-            <div className="flex items-center gap-2">
-              <LuBrainCircuit className="w-5 h-5 text-green-500" />
-              <h3 className="font-semibold text-gray-800 dark:text-white">Code Summarization Agent</h3>
-              <span className="text-xs text-gray-500 dark:text-gray-400 ml-2">
-                ({codeSummaryProvider}: {ragSettings.CODE_SUMMARIZATION_MODEL || "default"})
-              </span>
-            </div>
-            {showCodeSummarySettings ? (
-              <ChevronUp className="w-5 h-5 text-gray-500" />
-            ) : (
-              <ChevronDown className="w-5 h-5 text-gray-500" />
-            )}
-          </button>
-
-          {showCodeSummarySettings && (
-            <div className="mt-4 p-4 border border-green-500/10 rounded-lg bg-green-500/5">
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Select Code Summarization Provider
-                </label>
-                <div className="grid grid-cols-3 gap-2">
-                  {[
-                    { key: 'openai', name: 'OpenAI', logo: '/img/OpenAI.png', color: 'green' },
-                    { key: 'google', name: 'Google', logo: '/img/google-logo.svg', color: 'blue' },
-                    { key: 'openrouter', name: 'OpenRouter', logo: '/img/OpenRouter.png', color: 'cyan' },
-                    { key: 'ollama', name: 'Ollama', logo: '/img/Ollama.png', color: 'purple' },
-                    { key: 'anthropic', name: 'Anthropic', logo: '/img/claude-logo.svg', color: 'orange' },
-                    { key: 'grok', name: 'Grok', logo: '/img/Grok.png', color: 'yellow' }
-                  ].map(provider => (
-                    <button
-                      key={provider.key}
-                      type="button"
-                      onClick={() => {
-                        setCodeSummaryProvider(provider.key as ProviderKey);
-                        setRagSettings(prev => ({
-                          ...prev,
-                          CODE_SUMMARIZATION_PROVIDER: provider.key
-                        }));
-                      }}
-                      className={`flex items-center gap-2 p-3 rounded-lg border transition-all
-                        ${codeSummaryProvider === provider.key
-                          ? 'border-green-500 bg-green-500/10 shadow-[0_0_15px_rgba(34,197,94,0.3)]'
-                          : 'border-gray-200 dark:border-gray-700 hover:border-green-400/50'
-                        }`}
-                    >
-                      <img src={provider.logo} alt={provider.name} className="w-5 h-5" />
-                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{provider.name}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Model Input */}
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Code Summarization Model
-                </label>
-                <Input
-                  placeholder="e.g., gpt-4o-mini, claude-3-haiku, qwen2.5-coder"
-                  value={ragSettings.CODE_SUMMARIZATION_MODEL || ""}
-                  onChange={e => setRagSettings(prev => ({
-                    ...prev,
-                    CODE_SUMMARIZATION_MODEL: e.target.value
-                  }))}
-                  className="w-full"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Leave empty to use provider's default. Recommended: qwen2.5-coder for Ollama.
-                </p>
-              </div>
-
-              {/* Base URL for Ollama/Custom */}
-              {codeSummaryProvider === 'ollama' && (
-                <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Ollama Instance URL
-                  </label>
-                  <Input
-                    placeholder="http://host.docker.internal:11434/v1"
-                    value={codeSummaryInstanceConfig.url}
-                    onChange={e => {
-                      setCodeSummaryInstanceConfig(prev => ({ ...prev, url: e.target.value }));
-                      setRagSettings(prev => ({
-                        ...prev,
-                        CODE_SUMMARIZATION_BASE_URL: e.target.value
-                      }));
-                    }}
-                    className="w-full"
-                  />
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
 
         {/* Second row: Contextual Embeddings, Max Workers, and description */}
         <div className="grid grid-cols-8 gap-4 mb-4 p-4 rounded-lg border border-green-500/20 shadow-[0_2px_8px_rgba(34,197,94,0.1)]">
