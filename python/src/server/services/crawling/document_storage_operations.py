@@ -14,6 +14,7 @@ from ..source_management_service import extract_source_summary, update_source_in
 from ..storage.document_storage_service import add_documents_to_supabase
 from ..storage.storage_services import DocumentStorageService
 from .code_extraction_service import CodeExtractionService
+from .crawl_url_state_service import get_crawl_url_state_service
 
 logger = get_logger(__name__)
 
@@ -65,6 +66,17 @@ class DocumentStorageOperations:
         # Reuse initialized storage service for chunking
         storage_service = self.doc_storage_service
 
+        # Initialize URL state tracking if enabled
+        url_state_service = get_crawl_url_state_service(self.supabase_client)
+        unique_doc_urls = [doc.get("url", "").strip() for doc in crawl_results if doc.get("url", "").strip()]
+        unique_doc_urls = list(set(unique_doc_urls))
+        if unique_doc_urls:
+            try:
+                url_state_service.initialize_urls(original_source_id, unique_doc_urls)
+                safe_logfire_info(f"Initialized URL state tracking for {len(unique_doc_urls)} URLs")
+            except Exception as e:
+                safe_logfire_error(f"Failed to initialize URL state: {e}")
+
         # Prepare data for chunked storage
         all_urls = []
         all_chunk_numbers = []
@@ -85,12 +97,12 @@ class DocumentStorageOperations:
                         await progress_callback(
                             "cancelled",
                             99,
-                            f"Document processing cancelled at document {doc_index + 1}/{len(crawl_results)}"
+                            f"Document processing cancelled at document {doc_index + 1}/{len(crawl_results)}",
                         )
                     raise
 
-            doc_url = (doc.get('url') or '').strip()
-            markdown_content = (doc.get('markdown') or '').strip()
+            doc_url = (doc.get("url") or "").strip()
+            markdown_content = (doc.get("markdown") or "").strip()
 
             # Skip documents with empty or whitespace-only content or missing URLs
             if not markdown_content or not doc_url:
@@ -121,7 +133,7 @@ class DocumentStorageOperations:
                             await progress_callback(
                                 "cancelled",
                                 99,
-                                f"Chunk processing cancelled at chunk {i + 1}/{len(chunks)} of document {doc_index + 1}"
+                                f"Chunk processing cancelled at chunk {i + 1}/{len(chunks)} of document {doc_index + 1}",
                             )
                         raise
 
@@ -160,18 +172,17 @@ class DocumentStorageOperations:
         # Create/update source record FIRST (required for FK constraints on pages and chunks)
         if all_contents and all_metadatas:
             await self._create_source_records(
-                all_metadatas, all_contents, source_word_counts, request,
-                source_url, source_display_name
+                all_metadatas, all_contents, source_word_counts, request, source_url, source_display_name
             )
 
         # Store pages AFTER source is created but BEFORE chunks (FK constraint requirement)
         from .page_storage_operations import PageStorageOperations
+
         page_storage_ops = PageStorageOperations(self.supabase_client)
 
         # Check if this is an llms-full.txt file
         is_llms_full = crawl_type == "llms-txt" or (
-            len(url_to_full_document) == 1 and
-            next(iter(url_to_full_document.keys())).endswith("llms-full.txt")
+            len(url_to_full_document) == 1 and next(iter(url_to_full_document.keys())).endswith("llms-full.txt")
         )
 
         if is_llms_full and url_to_full_document:
@@ -190,6 +201,7 @@ class DocumentStorageOperations:
 
             # Parse sections and re-chunk each section
             from .helpers.llms_full_parser import parse_llms_full_sections
+
             sections = parse_llms_full_sections(content, base_url)
 
             # Clear existing chunks and re-create from sections
@@ -203,9 +215,7 @@ class DocumentStorageOperations:
             for section in sections:
                 # Update url_to_full_document with section content
                 url_to_full_document[section.url] = section.content
-                section_chunks = await storage_service.smart_chunk_text_async(
-                    section.content, chunk_size=5000
-                )
+                section_chunks = await storage_service.smart_chunk_text_async(section.content, chunk_size=5000)
 
                 for i, chunk in enumerate(section_chunks):
                     all_urls.append(section.url)
@@ -231,10 +241,12 @@ class DocumentStorageOperations:
             # Handle regular pages
             reconstructed_crawl_results = []
             for url, markdown in url_to_full_document.items():
-                reconstructed_crawl_results.append({
-                    "url": url,
-                    "markdown": markdown,
-                })
+                reconstructed_crawl_results.append(
+                    {
+                        "url": url,
+                        "markdown": markdown,
+                    }
+                )
 
             if reconstructed_crawl_results:
                 url_to_page_id = await page_storage_ops.store_pages(
@@ -276,16 +288,25 @@ class DocumentStorageOperations:
             url_to_page_id=url_to_page_id,  # Link chunks to pages
         )
 
+        # Mark URLs as embedded after successful storage
+        if unique_doc_urls:
+            try:
+                for doc_url in unique_doc_urls:
+                    url_state_service.mark_embedded(original_source_id, doc_url)
+                safe_logfire_info(f"Marked {len(unique_doc_urls)} URLs as embedded")
+            except Exception as e:
+                safe_logfire_error(f"Failed to mark URLs as embedded: {e}")
+
         # Calculate chunk counts
         chunk_count = len(all_contents)
         chunks_stored = storage_stats.get("chunks_stored", 0)
 
         return {
-            'chunk_count': chunk_count,
-            'chunks_stored': chunks_stored,
-            'total_word_count': sum(source_word_counts.values()),
-            'url_to_full_document': url_to_full_document,
-            'source_id': original_source_id
+            "chunk_count": chunk_count,
+            "chunks_stored": chunks_stored,
+            "total_word_count": sum(source_word_counts.values()),
+            "url_to_full_document": url_to_full_document,
+            "source_id": original_source_id,
         }
 
     async def _create_source_records(
@@ -323,11 +344,9 @@ class DocumentStorageOperations:
             # Track word counts per source_id
             if source_id not in source_id_word_counts:
                 source_id_word_counts[source_id] = 0
-            source_id_word_counts[source_id] += metadata.get('word_count', 0)
+            source_id_word_counts[source_id] += metadata.get("word_count", 0)
 
-        safe_logfire_info(
-            f"Found {len(unique_source_ids)} unique source_ids: {list(unique_source_ids)}"
-        )
+        safe_logfire_info(f"Found {len(unique_source_ids)} unique source_ids: {list(unique_source_ids)}")
 
         # Create source records for ALL unique source_ids
         for source_id in unique_source_ids:
@@ -346,9 +365,7 @@ class DocumentStorageOperations:
                 summary = await extract_source_summary(source_id, combined_content)
             except Exception as e:
                 logger.error(f"Failed to generate AI summary for '{source_id}'", exc_info=True)
-                safe_logfire_error(
-                    f"Failed to generate AI summary for '{source_id}': {str(e)}, using fallback"
-                )
+                safe_logfire_error(f"Failed to generate AI summary for '{source_id}': {str(e)}, using fallback")
                 # Fallback to simple summary
                 summary = f"Documentation from {source_id} - {len(source_contents)} pages crawled"
 
@@ -374,9 +391,7 @@ class DocumentStorageOperations:
                 safe_logfire_info(f"Successfully created/updated source record for '{source_id}'")
             except Exception as e:
                 logger.error(f"Failed to create/update source record for '{source_id}'", exc_info=True)
-                safe_logfire_error(
-                    f"Failed to create/update source record for '{source_id}': {str(e)}"
-                )
+                safe_logfire_error(f"Failed to create/update source record for '{source_id}': {str(e)}")
                 # Try a simpler approach with minimal data
                 try:
                     safe_logfire_info(f"Attempting fallback source creation for '{source_id}'")
@@ -404,9 +419,7 @@ class DocumentStorageOperations:
                     safe_logfire_info(f"Fallback source creation succeeded for '{source_id}'")
                 except Exception as fallback_error:
                     logger.error(f"Both source creation attempts failed for '{source_id}'", exc_info=True)
-                    safe_logfire_error(
-                        f"Both source creation attempts failed for '{source_id}': {str(fallback_error)}"
-                    )
+                    safe_logfire_error(f"Both source creation attempts failed for '{source_id}': {str(fallback_error)}")
                     raise RuntimeError(
                         f"Unable to create source record for '{source_id}'. This will cause foreign key violations."
                     ) from fallback_error
