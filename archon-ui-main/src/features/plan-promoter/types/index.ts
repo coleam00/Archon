@@ -25,3 +25,15 @@ export interface PlansResponse {
   count: number;
   error?: string;
 }
+
+export interface PlanContentResponse {
+  content: string;
+  path: string;
+}
+
+export interface DemoteRequest {
+  plan_path: string;
+  plan_name: string;
+  notes: string;
+  section: string;
+}

@@ -20,6 +20,13 @@ class PromoteRequest(BaseModel):
     plan_name: str
 
 
+class DemoteRequest(BaseModel):
+    plan_path: str
+    plan_name: str
+    notes: str = ""
+    section: str = ""
+
+
 @router.get("/plans")
 async def list_plans():
     """List all plans from PLANS_INDEX.md with promotion status."""
@@ -34,6 +41,48 @@ async def list_plans():
     except Exception as e:
         logger.error(f"Error listing plans: {e}", exc_info=True)
         return {"error": str(e), "plans": [], "count": 0}
+
+
+@router.get("/content")
+async def get_plan_content(path: str):
+    """Return the raw markdown content of a plan file."""
+    from ..services.plan_promoter_service import PlanPromoterService
+
+    service = PlanPromoterService()
+    try:
+        content = service._read_plan_file(path)
+        return {"content": content, "path": path}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error reading plan file: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/demote")
+async def demote_plan_to_idea(request: DemoteRequest):
+    """Send a plan back to the idea-capture system as a new idea."""
+    import httpx
+
+    idea_payload = {
+        "title": request.plan_name,
+        "idea": f"Demoted from plan: {request.plan_path}\n\n{request.notes}".strip(),
+        "category": request.section or "plans",
+        "status": "captured",
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post("http://localhost:3001/api/ideas", json=idea_payload, timeout=5.0)
+            resp.raise_for_status()
+    except httpx.ConnectError:
+        raise HTTPException(status_code=502, detail="Idea capture service is not running (port 3001)")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=502, detail=f"Idea capture returned {e.response.status_code}")
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Idea capture service timed out")
+
+    return {"success": True, "plan_name": request.plan_name}
 
 
 @router.post("/promote")
