@@ -29,7 +29,7 @@ export function RecommendedActionCard({ action, index }: RecommendedActionCardPr
   const [copied, setCopied] = useState(false);
   const [showAgentPicker, setShowAgentPicker] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<Agent>("claude");
-  const [taskCreated, setTaskCreated] = useState(false);
+  const [assignedAgent, setAssignedAgent] = useState<Agent | null>(null);
 
   const { mutate: createTask, isPending: isCreating } = useCreateTaskFromAction();
 
@@ -55,8 +55,7 @@ export function RecommendedActionCard({ action, index }: RecommendedActionCardPr
       {
         onSuccess: () => {
           setShowAgentPicker(false);
-          setTaskCreated(true);
-          setTimeout(() => setTaskCreated(false), 3000);
+          setAssignedAgent(selectedAgent);
         },
       },
     );
@@ -131,10 +130,12 @@ export function RecommendedActionCard({ action, index }: RecommendedActionCardPr
       {/* Action buttons */}
       {!showAgentPicker && (
         <div className="flex items-center gap-2 pt-2 border-t border-gray-800/50">
-          {taskCreated ? (
-            <span className="flex items-center gap-1 text-xs text-emerald-400">
+          {assignedAgent ? (
+            <span className="flex items-center gap-1.5 text-xs text-emerald-400">
               <Check className="h-3 w-3" />
-              Task created
+              <span className="font-medium">{assignedAgent}</span>
+              <span className="text-emerald-600">·</span>
+              <span className="text-emerald-600">doing</span>
             </span>
           ) : (
             <button

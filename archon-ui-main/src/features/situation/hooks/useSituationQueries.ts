@@ -28,6 +28,7 @@ export function useCreateTaskFromAction() {
           description: `${action.description}\n\nWhy now: ${action.why}`,
           priority: action.priority,
           assignee,
+          status: "doing",
         }),
       }),
   });
