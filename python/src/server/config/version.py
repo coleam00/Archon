@@ -4,7 +4,7 @@ Version configuration for Archon.
 
 # Current version of Archon
 # Update this with each release
-ARCHON_VERSION = "0.1.0"
+ARCHON_VERSION = "0.2.0"
 
 # Repository information for GitHub API
 GITHUB_REPO_OWNER = "coleam00"
