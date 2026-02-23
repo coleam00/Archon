@@ -48,6 +48,7 @@ from .api_routes.audit_api import router as audit_router
 from .api_routes.council_api import router as council_router
 from .api_routes.conductor_log_api import router as conductor_log_router
 from .api_routes.telemetry_api import router as telemetry_router
+from .api_routes.situation_api import router as situation_router
 
 # Import Logfire configuration
 from .config.logfire_config import api_logger, setup_logfire
@@ -270,6 +271,7 @@ app.include_router(audit_router)
 app.include_router(council_router)
 app.include_router(conductor_log_router)
 app.include_router(telemetry_router)
+app.include_router(situation_router)
 
 
 # Root endpoint

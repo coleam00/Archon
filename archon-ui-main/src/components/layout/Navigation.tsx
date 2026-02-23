@@ -4,6 +4,7 @@ import {
   BarChart2,
   BookOpen,
   Bot,
+  Brain,
   Clock,
   Database,
   FlaskConical,
@@ -55,6 +56,12 @@ export function Navigation({ className }: NavigationProps) {
       icon: <Bot className="h-5 w-5" />,
       label: "Agent Work Orders",
       enabled: agentWorkOrdersEnabled,
+    },
+    {
+      path: "/situation",
+      icon: <Brain className="h-5 w-5" />,
+      label: "Situation",
+      enabled: true,
     },
     {
       path: "/todo",

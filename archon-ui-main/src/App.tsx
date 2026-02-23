@@ -27,6 +27,7 @@ import { AgentExecutionPage } from './pages/AgentExecutionPage';
 import { TimelinePage } from './pages/TimelinePage';
 import { SprintsPage } from './pages/SprintsPage';
 import { TelemetryPage } from './pages/TelemetryPage';
+import { SituationPage } from './pages/SituationPage';
 import { DisconnectScreenOverlay } from './components/DisconnectScreenOverlay';
 import { ErrorBoundaryWithBugReport } from './components/bug-report/ErrorBoundaryWithBugReport';
 import { MigrationBanner } from './components/ui/MigrationBanner';
@@ -52,6 +53,7 @@ const AppRoutes = () => {
       <Route path="/test-runner" element={<TestRunnerPage />} />
       <Route path="/plan-promoter" element={<PlanPromoterPage />} />
       <Route path="/telemetry" element={<TelemetryPage />} />
+      <Route path="/situation" element={<SituationPage />} />
       {styleGuideEnabled ? (
         <Route path="/style-guide" element={<StyleGuidePage />} />
       ) : (
