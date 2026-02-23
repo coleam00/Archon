@@ -5,7 +5,7 @@
 
 // Removed relative started time display to avoid misleading UX
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertCircle, CheckCircle, Globe, Loader2, StopCircle, XCircle } from "lucide-react";
+import { AlertCircle, CheckCircle, Globe, Loader2, Play, RotateCw, StopCircle, XCircle } from "lucide-react";
 import { useState } from "react";
 import { useStopCrawl, usePauseOperation, useResumeOperation } from "../../knowledge/hooks";
 import { Button } from "../../ui/primitives";
@@ -41,12 +41,12 @@ export const CrawlingProgress: React.FC<CrawlingProgressProps> = ({ onSwitchToBr
   const [pausingId, setPausingId] = useState<string | null>(null);
   const [resumingId, setResumingId] = useState<string | null>(null);
 
-  const handleStop = async (progressId: string) => {
+  const handleCancel = async (progressId: string) => {
     try {
       setStoppingId(progressId);
       await stopMutation.mutateAsync(progressId);
     } catch (error) {
-      console.error("Stop crawl failed:", { progressId, error });
+      console.error("Cancel crawl failed:", { progressId, error });
     } finally {
       setStoppingId(null);
     }
@@ -206,8 +206,8 @@ export const CrawlingProgress: React.FC<CrawlingProgressProps> = ({ onSwitchToBr
                       </div>
                     </div>
 
-                    {/* Action buttons: Stop (for active), Pause/Resume (for in_progress), Resume (for paused) */}
-                    {(isActive || operation.status === "paused") && (
+                    {/* Action buttons: Cancel (for active), Pause/Resume (for in_progress), Resume (for paused), Retry (for failed) */}
+                    {(isActive || operation.status === "paused" || operation.status === "failed") && (
                       <div className="flex gap-2">
                         {/* Pause button - only show for active/in_progress operations */}
                         {isActive && operation.status !== "paused" && (
@@ -227,7 +227,7 @@ export const CrawlingProgress: React.FC<CrawlingProgressProps> = ({ onSwitchToBr
                           </Button>
                         )}
 
-                        {/* Resume button - only show for paused operations */}
+                        {/* Resume button - show for paused operations */}
                         {operation.status === "paused" && (
                           <Button
                             variant="ghost"
@@ -239,27 +239,47 @@ export const CrawlingProgress: React.FC<CrawlingProgressProps> = ({ onSwitchToBr
                             {resumingId === operation.operation_id ? (
                               <Loader2 className="w-4 h-4 animate-spin" />
                             ) : (
-                              <StopCircle className="w-4 h-4" />
+                              <Play className="w-4 h-4" />
                             )}
                             <span className="ml-2">Resume</span>
                           </Button>
                         )}
 
-                        {/* Stop button - show for active and paused */}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleStop(operation.operation_id)}
-                          disabled={stoppingId === operation.operation_id}
-                          className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
-                        >
-                          {stoppingId === operation.operation_id ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                          ) : (
-                            <XCircle className="w-4 h-4" />
-                          )}
-                          <span className="ml-2">Stop</span>
-                        </Button>
+                        {/* Retry button - show for failed operations */}
+                        {operation.status === "failed" && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleResume(operation.operation_id)}
+                            disabled={resumingId === operation.operation_id}
+                            className="text-blue-400 hover:text-blue-300 hover:bg-blue-500/10"
+                          >
+                            {resumingId === operation.operation_id ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <RotateCw className="w-4 h-4" />
+                            )}
+                            <span className="ml-2">Retry</span>
+                          </Button>
+                        )}
+
+                        {/* Cancel button - show for active and paused */}
+                        {operation.status !== "failed" && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleCancel(operation.operation_id)}
+                            disabled={stoppingId === operation.operation_id}
+                            className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                          >
+                            {stoppingId === operation.operation_id ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <XCircle className="w-4 h-4" />
+                            )}
+                            <span className="ml-2">Cancel</span>
+                          </Button>
+                        )}
                       </div>
                     )}
                   </div>

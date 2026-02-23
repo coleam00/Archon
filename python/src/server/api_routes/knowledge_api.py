@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 # Basic validation - simplified inline version
 # Import unified logging
-from ..config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
+from ..config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info, safe_logfire_warning
 from ..services.crawler_manager import get_crawler
 from ..services.crawling import CrawlingService
 from ..services.credential_service import credential_service
@@ -1617,12 +1617,12 @@ async def pause_operation(progress_id: str):
 
         # Check if operation exists
         progress_data = ProgressTracker.get_progress(progress_id)
-        if not progress_id:
+        if not progress_data:
             raise HTTPException(status_code=404, detail={"error": f"No operation found for ID: {progress_id}"})
 
         # Check if operation is in a pausable state
         current_status = progress_data.get("status") if progress_data else None
-        if current_status not in ["starting", "in_progress"]:
+        if current_status not in ["starting", "in_progress", "crawling"]:
             raise HTTPException(
                 status_code=400, detail={"error": f"Cannot pause operation in status: {current_status}"}
             )
@@ -1633,12 +1633,12 @@ async def pause_operation(progress_id: str):
         if not success:
             raise HTTPException(status_code=500, detail={"error": "Failed to pause operation"})
 
-        # Cancel the orchestration task if running
+        # Pause the orchestration task if running
         from ..services.crawling import get_active_orchestration
 
         orchestration = await get_active_orchestration(progress_id)
         if orchestration:
-            orchestration.cancel()
+            orchestration.pause()
 
         safe_logfire_info(f"Operation paused | progress_id={progress_id}")
         return {
@@ -1668,8 +1668,10 @@ async def resume_operation(progress_id: str):
             raise HTTPException(status_code=404, detail={"error": f"No operation found for ID: {progress_id}"})
 
         # Check if operation is in a resumable state
+        # Allow resuming from paused, in_progress, crawling, or failed states
+        # Failed operations can be retried to recover from DB failures or other issues
         current_status = progress_data.get("status")
-        if current_status != "paused":
+        if current_status not in ["paused", "in_progress", "crawling", "failed"]:
             raise HTTPException(
                 status_code=400, detail={"error": f"Cannot resume operation in status: {current_status}"}
             )
@@ -1680,11 +1682,39 @@ async def resume_operation(progress_id: str):
         if not success:
             raise HTTPException(status_code=500, detail={"error": "Failed to resume operation"})
 
-        # Get source_id to restart the crawl
+        # Get source_id and operation_type to restart the crawl
         source_id = progress_data.get("source_id")
+        operation_type = progress_data.get("type", "crawl")
 
-        # TODO: Restart the actual operation - for now just mark as in_progress
-        # The actual restart logic would need to check what type of operation and restart it
+        # Restart the actual operation based on type
+        if operation_type == "crawl" and source_id:
+            from ..services.crawling.crawling_service import CrawlingService
+
+            supabase = get_supabase_client()
+
+            source_result = (
+                supabase.table("archon_sources").select("source_url, metadata").eq("source_id", source_id).execute()
+            )
+
+            if source_result.data and len(source_result.data) > 0:
+                source_url = source_result.data[0].get("source_url")
+                metadata = source_result.data[0].get("metadata", {})
+
+                crawl_request = {
+                    "url": source_url,
+                    "knowledge_type": metadata.get("knowledge_type", "website"),
+                    "tags": metadata.get("tags", []),
+                    "max_depth": metadata.get("max_depth", 3),
+                    "allow_external_links": metadata.get("allow_external_links", False),
+                }
+
+                crawl_service = CrawlingService(supabase_client=supabase, progress_id=progress_id)
+                await crawl_service.orchestrate_crawl(crawl_request)
+                safe_logfire_info(
+                    f"Restarted crawl | progress_id={progress_id} | source_id={source_id} | url={source_url}"
+                )
+            else:
+                safe_logfire_warning(f"Source not found for resume | source_id={source_id}")
 
         safe_logfire_info(f"Operation resumed | progress_id={progress_id} | source_id={source_id}")
         return {

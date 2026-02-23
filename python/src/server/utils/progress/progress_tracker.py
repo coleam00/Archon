@@ -143,6 +143,135 @@ class ProgressTracker:
             return active
 
     @classmethod
+    async def restore_paused_operations(cls) -> int:
+        """
+        Restore operations that were in progress when the server restarted.
+        Changes their status to 'paused' so users can manually resume them.
+        Returns the count of restored operations.
+        """
+        try:
+            supabase = get_supabase_client()
+
+            result = (
+                supabase.table("archon_operation_progress")
+                .select("progress_id, status, operation_type, source_id")
+                .in_("status", ["in_progress", "crawling", "starting"])
+                .execute()
+            )
+
+            if not result.data:
+                return 0
+
+            restored_count = 0
+            for record in result.data:
+                progress_id = record.get("progress_id")
+                if progress_id:
+                    supabase.table("archon_operation_progress").update(
+                        {
+                            "status": "paused",
+                            "updated_at": datetime.now().isoformat(),
+                        }
+                    ).eq("progress_id", progress_id).execute()
+
+                    safe_logfire_info(
+                        f"Restored operation | progress_id={progress_id} | "
+                        f"previous_status={record.get('status')} -> paused"
+                    )
+                    restored_count += 1
+
+            return restored_count
+
+        except Exception as e:
+            safe_logfire_error(f"Failed to restore paused operations: {e}")
+            return 0
+
+    @classmethod
+    async def auto_resume_paused_operations(cls) -> int:
+        """
+        Automatically resume all paused operations after server restart.
+        Returns the count of resumed operations.
+        """
+        try:
+            supabase = get_supabase_client()
+
+            # Find all paused operations
+            result = (
+                supabase.table("archon_operation_progress")
+                .select("progress_id, status, operation_type, source_id")
+                .eq("status", "paused")
+                .execute()
+            )
+
+            if not result.data:
+                return 0
+
+            resumed_count = 0
+            for record in result.data:
+                progress_id = record.get("progress_id")
+                source_id = record.get("source_id")
+                operation_type = record.get("operation_type", "crawl")
+
+                if not progress_id or not source_id:
+                    continue
+
+                try:
+                    # Update status to in_progress
+                    supabase.table("archon_operation_progress").update(
+                        {
+                            "status": "in_progress",
+                            "updated_at": datetime.now().isoformat(),
+                        }
+                    ).eq("progress_id", progress_id).execute()
+
+                    # Restart the crawl operation
+                    if operation_type == "crawl":
+                        from ...services.crawling.crawling_service import CrawlingService
+
+                        # Get source metadata to reconstruct crawl request
+                        source_result = (
+                            supabase.table("archon_sources")
+                            .select("source_url, metadata")
+                            .eq("source_id", source_id)
+                            .execute()
+                        )
+
+                        if source_result.data and len(source_result.data) > 0:
+                            source_url = source_result.data[0].get("source_url")
+                            metadata = source_result.data[0].get("metadata", {})
+
+                            crawl_request = {
+                                "url": source_url,
+                                "knowledge_type": metadata.get("knowledge_type", "website"),
+                                "tags": metadata.get("tags", []),
+                                "max_depth": metadata.get("max_depth", 3),
+                                "allow_external_links": metadata.get("allow_external_links", False),
+                            }
+
+                            # Create crawl service and start orchestration in background
+                            crawl_service = CrawlingService(supabase_client=supabase, progress_id=progress_id)
+                            # Use asyncio.create_task to run in background without awaiting
+                            asyncio.create_task(crawl_service.orchestrate_crawl(crawl_request))
+
+                            safe_logfire_info(
+                                f"Auto-resumed crawl | progress_id={progress_id} | "
+                                f"source_id={source_id} | url={source_url}"
+                            )
+                            resumed_count += 1
+
+                except Exception as e:
+                    safe_logfire_error(
+                        f"Failed to auto-resume operation | progress_id={progress_id} | error={str(e)}"
+                    )
+                    # Continue with next operation even if one fails
+                    continue
+
+            return resumed_count
+
+        except Exception as e:
+            safe_logfire_error(f"Failed to auto-resume paused operations: {e}")
+            return 0
+
+    @classmethod
     async def pause_operation(cls, progress_id: str) -> bool:
         """Pause an operation."""
         try:

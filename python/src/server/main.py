@@ -163,6 +163,21 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             api_logger.warning(f"Could not fully initialize crawling context: {str(e)}")
 
+        # Restore paused/in_progress operations from database after restart
+        try:
+            from .utils.progress.progress_tracker import ProgressTracker
+
+            restored_count = await ProgressTracker.restore_paused_operations()
+            if restored_count > 0:
+                api_logger.info(f"✅ Restored {restored_count} paused operations from database")
+
+            # Auto-resume all paused operations (both user-paused and crash-interrupted)
+            resumed_count = await ProgressTracker.auto_resume_paused_operations()
+            if resumed_count > 0:
+                api_logger.info(f"🔄 Auto-resumed {resumed_count} paused operations")
+        except Exception as e:
+            api_logger.warning(f"Could not restore paused operations: {str(e)}")
+
         # Make crawling context available to modules
         # Crawler is now managed by CrawlerManager
 

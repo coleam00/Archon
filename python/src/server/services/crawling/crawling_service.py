@@ -9,6 +9,7 @@ batch crawling, recursive crawling, and overall orchestration with progress trac
 import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
+from enum import Enum
 from typing import Any, Optional
 
 import tldextract
@@ -35,6 +36,14 @@ from .strategies.single_page import SinglePageCrawlStrategy
 from .strategies.sitemap import SitemapCrawlStrategy
 
 logger = get_logger(__name__)
+
+
+class CancellationReason(Enum):
+    """Tracks why a crawl was cancelled."""
+
+    NONE = "none"  # Not cancelled
+    PAUSED = "paused"  # User paused for later resume
+    STOPPED = "stopped"  # User explicitly stopped/cancelled
 
 # Global registry to track active orchestration services for cancellation support
 _active_orchestrations: dict[str, "CrawlingService"] = {}
@@ -140,6 +149,7 @@ class CrawlingService:
         self.progress_mapper = ProgressMapper()
         # Cancellation support
         self._cancelled = False
+        self._cancellation_reason = CancellationReason.NONE
 
     def set_progress_id(self, progress_id: str):
         """Set the progress ID for HTTP polling updates."""
@@ -149,10 +159,15 @@ class CrawlingService:
             # Initialize progress tracker for HTTP polling
             self.progress_tracker = ProgressTracker(progress_id, operation_type="crawl")
 
-    def cancel(self):
-        """Cancel the crawl operation."""
+    def cancel(self, reason: CancellationReason = CancellationReason.STOPPED):
+        """Cancel the crawl operation with a specific reason."""
         self._cancelled = True
-        safe_logfire_info(f"Crawl operation cancelled | progress_id={self.progress_id}")
+        self._cancellation_reason = reason
+        safe_logfire_info(f"Crawl operation cancelled | progress_id={self.progress_id} | reason={reason.value}")
+
+    def pause(self):
+        """Pause the crawl operation for later resume."""
+        self.cancel(reason=CancellationReason.PAUSED)
 
     def is_cancelled(self) -> bool:
         """Check if the crawl operation has been cancelled."""
@@ -360,6 +375,18 @@ class CrawlingService:
             safe_logfire_info(
                 f"Generated unique source_id '{original_source_id}' and display name '{source_display_name}' from URL '{url}'"
             )
+
+            # Set source_id on progress tracker immediately for pause/resume support
+            if self.progress_tracker:
+                await self.progress_tracker.update(
+                    status="starting",
+                    progress=self.progress_tracker.state.get("progress", 0),
+                    log=f"Initializing crawl for {url}",
+                    source_id=original_source_id,
+                )
+                safe_logfire_info(
+                    f"Set source_id on progress tracker early | progress_id={self.progress_id} | source_id={original_source_id}"
+                )
 
             # Check for existing crawl state and determine if we're resuming
             url_state_service = get_crawl_url_state_service(self.supabase_client)
@@ -729,22 +756,34 @@ class CrawlingService:
                 )
 
         except asyncio.CancelledError:
-            safe_logfire_info(f"Crawl operation cancelled | progress_id={self.progress_id}")
-            # Use ProgressMapper to get proper progress value for cancelled state
-            cancelled_progress = self.progress_mapper.map_progress("cancelled", 0)
+            # Determine final status based on cancellation reason
+            if self._cancellation_reason == CancellationReason.PAUSED:
+                final_status = "paused"
+                log_message = "Crawl operation was paused by user"
+                safe_logfire_info(f"Crawl operation paused | progress_id={self.progress_id}")
+            else:
+                # Default to cancelled for explicit stops or unknown reasons
+                final_status = "cancelled"
+                log_message = "Crawl operation was cancelled by user"
+                safe_logfire_info(f"Crawl operation cancelled | progress_id={self.progress_id}")
+
+            # Use ProgressMapper to get proper progress value
+            final_progress = self.progress_mapper.map_progress(final_status, 0)
+
             await self._handle_progress_update(
                 task_id,
                 {
-                    "status": "cancelled",
-                    "progress": cancelled_progress,
-                    "log": "Crawl operation was cancelled by user",
+                    "status": final_status,
+                    "progress": final_progress,
+                    "log": log_message,
                 },
             )
+
             # Unregister on cancellation
             if self.progress_id:
                 await unregister_orchestration(self.progress_id)
                 safe_logfire_info(
-                    f"Unregistered orchestration service on cancellation | progress_id={self.progress_id}"
+                    f"Unregistered orchestration service on {final_status} | progress_id={self.progress_id}"
                 )
         except Exception as e:
             # Log full stack trace for debugging
