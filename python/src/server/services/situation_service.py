@@ -160,6 +160,11 @@ class SituationService:
             "    }\n"
             "  ]\n"
             "}\n"
+            "Rules for recommended_actions:\n"
+            "- active_tasks already contains ONLY todo/doing tasks — do NOT recommend executing or creating tasks that duplicate what is already listed.\n"
+            "- In plans_index, entries marked COMPLETE or RESOLVED are finished — never recommend actions on them.\n"
+            "- Only recommend actions on plans marked ACTIVE and on tasks not yet covered.\n"
+            "- Never recommend archiving, demoting, or cleaning up plans/tasks unless they are clearly abandoned (no updates in 30+ days AND status is still todo).\n"
             "Include up to 5 active_tasks (highest priority first) and up to 3 recommended_actions."
         )
 
