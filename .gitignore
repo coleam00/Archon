@@ -18,6 +18,13 @@ UAT/
 
 # Temporary validation/report markdown files
 /*_RESULTS.md
+
+# Browser-saved pages and screenshots
+*.html
+*.mhtml
+*_files/
+*.png
+scrumBoard*
 /*_SUMMARY.md
 /*_REPORT.md
 /*_SUCCESS.md
