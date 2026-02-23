@@ -11,6 +11,7 @@ Modules:
 - projects_api: Project and task management with streaming
 """
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -48,6 +49,7 @@ from .api_routes.audit_api import router as audit_router
 from .api_routes.council_api import router as council_router
 from .api_routes.conductor_log_api import router as conductor_log_router
 from .api_routes.telemetry_api import router as telemetry_router
+from .api_routes.telemetry_api import ws_router as telemetry_ws_router
 from .api_routes.situation_api import router as situation_router
 
 # Import Logfire configuration
@@ -150,6 +152,14 @@ async def lifespan(app: FastAPI):
             api_logger.info("✅ Event listener service started")
         except Exception as e:
             api_logger.warning(f"Could not start event listener service: {e}")
+
+        # Start Telemetry Realtime Listener (Supabase Realtime → /ws/telemetry broadcasts)
+        try:
+            from .api_routes.telemetry_api import run_telemetry_realtime_listener
+            asyncio.create_task(run_telemetry_realtime_listener())
+            api_logger.info("✅ Telemetry Realtime listener started")
+        except Exception as e:
+            api_logger.warning(f"Could not start telemetry realtime listener: {e}")
 
         # MCP Client functionality removed from architecture
         # Agents now use MCP tools directly
@@ -271,6 +281,7 @@ app.include_router(audit_router)
 app.include_router(council_router)
 app.include_router(conductor_log_router)
 app.include_router(telemetry_router)
+app.include_router(telemetry_ws_router)
 app.include_router(situation_router)
 
 
