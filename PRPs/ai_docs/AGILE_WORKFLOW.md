@@ -11,7 +11,7 @@
 |---------------|-------------------|-------|
 | **Epic** | Archon Project | A project groups related stories. Query: `archon_list_tasks(status="todo")` filtered by project. |
 | **User Story** | Archon Task (`status: todo`) | One deliverable unit of work for a single agent or pair. |
-| **Sprint** | Named time-box | e.g., "Week of 2026-02-22". Tracked via task titles or `description` prefix. No dedicated DB field. |
+| **Sprint** | `archon_sprints` table | Full DB record: name, goal, status lifecycle, start/end dates, linked tasks via `sprint_id`. See `SPRINT_LIFECYCLE.md`. |
 | **Task / Sub-task** | Checklist inside task `description` | Use markdown `- [ ]` checkboxes in the `description` field. |
 | **Backlog** | All `todo` tasks sorted by `priority` | `archon_list_tasks(status="todo")`. High priority = top of list. |
 | **Work In Progress** | Tasks with `status: doing` | `archon_list_tasks(status="doing")`. |
@@ -26,10 +26,11 @@
 
 | Agent | Agile Role | Responsibilities |
 |-------|-----------|------------------|
-| `claude` | Lead Developer / PO | Task execution, architecture decisions, plan approval |
-| `gemini` | Developer / Analyst | Research, code review, data analysis |
-| `gpt` | Developer / Specialist | Domain-specific tasks, alternative implementations |
-| `user` | Product Owner / Sponsor | Priority calls, final approval, strategic direction |
+| `user` | **Product Owner** | Priority calls, sprint approval gate, final sign-off — the only agent that can activate a sprint |
+| `claude` | Software Developer | Task execution, architecture, implementation |
+| `claude-opus` | Tech Lead | Design decisions, code review, unblocking |
+| `gemini` | QA Tester | Testing, validation, browser compat |
+| `gpt` | Scrum Master | Facilitation, sprint planning, impediment removal |
 
 ---
 
@@ -102,24 +103,16 @@ All swarm agents interact with Archon via these tools:
 
 ---
 
-## Sprint Naming Convention
+## Sprint Lifecycle
 
-When a task belongs to a sprint, prefix the task `description` with:
+Sprints follow a strict status progression. See `SPRINT_LIFECYCLE.md` for the full spec.
 
 ```
-[Sprint: Week of YYYY-MM-DD]
+planning → ready_for_kickoff → active → completed
+                                      → cancelled
 ```
 
-Example description opening:
-```
-[Sprint: Week of 2026-02-24]
-
-Implement the Agile role mapping table in AGENTS.md.
-
-Checklist:
-- [ ] Append table to AGENTS.md
-- [ ] Verify formatting renders correctly
-```
+**Key rule:** Only the `user` (Product Owner) can transition a sprint from `ready_for_kickoff` → `active`. No AI agent can bypass this gate.
 
 ---
 

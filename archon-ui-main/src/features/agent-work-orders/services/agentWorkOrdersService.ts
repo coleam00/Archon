@@ -109,6 +109,20 @@ export const agentWorkOrdersService = {
    * @returns Promise resolving to logs response
    * @throws Error if work order not found or request fails
    */
+  /**
+   * Cancel a running or pending work order
+   *
+   * @param id - The work order ID to cancel
+   * @returns Promise resolving to cancel confirmation
+   * @throws Error if work order not found, not cancellable, or request fails
+   */
+  async cancelWorkOrder(id: string): Promise<{ success: boolean; message: string; agent_work_order_id: string }> {
+    const baseUrl = getBaseUrl();
+    return await callAPIWithETag(`${baseUrl}/${id}/cancel`, {
+      method: "POST",
+    });
+  },
+
   async getWorkOrderLogs(
     id: string,
     options?: {

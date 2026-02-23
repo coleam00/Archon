@@ -8,12 +8,14 @@ export interface Agent {
   last_seen: string;
   metadata: Record<string, unknown>;
   created_at: string;
+  role?: string;
 }
 
 export interface RegisterAgentRequest {
   name: string;
   capabilities?: string[];
   metadata?: Record<string, unknown>;
+  role?: string;
 }
 
 export interface AgentResponse {

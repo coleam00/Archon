@@ -33,6 +33,7 @@ class UpdateSprintRequest(BaseModel):
     status: str | None = None
     start_date: str | None = None
     end_date: str | None = None
+    requested_by: str | None = None  # Agent name required when activating a sprint
 
 
 @router.get("/projects/{project_id}/sprints")
@@ -139,13 +140,18 @@ async def update_sprint(sprint_id: str, request: UpdateSprintRequest):
             update_fields["start_date"] = request.start_date
         if request.end_date is not None:
             update_fields["end_date"] = request.end_date
+        if request.requested_by is not None:
+            update_fields["requested_by"] = request.requested_by
 
         sprint_service = SprintService()
         success, result = sprint_service.update_sprint(sprint_id, update_fields)
 
         if not success:
-            if "not found" in result.get("error", "").lower():
-                raise HTTPException(status_code=404, detail=result.get("error"))
+            error_msg = result.get("error", "")
+            if "not found" in error_msg.lower():
+                raise HTTPException(status_code=404, detail=error_msg)
+            if "only the product owner" in error_msg.lower() or "invalid transition" in error_msg.lower():
+                raise HTTPException(status_code=403, detail=error_msg)
             raise HTTPException(status_code=500, detail=result)
 
         logfire.info(f"Sprint updated | sprint_id={sprint_id}")

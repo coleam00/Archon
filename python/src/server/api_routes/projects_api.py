@@ -826,6 +826,7 @@ class UpdateTaskRequest(BaseModel):
     priority: str | None = None
     feature: str | None = None
     sprint_id: str | None = None
+    requested_by: str | None = None  # Required for review → done gate
 
 
 class ArchiveTaskRequest(BaseModel):
@@ -892,16 +893,20 @@ async def update_task(task_id: str, request: UpdateTaskRequest):
             update_fields["feature"] = request.feature
         if request.sprint_id is not None:
             update_fields["sprint_id"] = request.sprint_id
+        if request.requested_by is not None:
+            update_fields["requested_by"] = request.requested_by
 
         # Use TaskService to update the task
         task_service = TaskService()
         success, result = await task_service.update_task(task_id, update_fields)
 
         if not success:
-            if "not found" in result.get("error", "").lower():
-                raise HTTPException(status_code=404, detail=result.get("error"))
-            else:
-                raise HTTPException(status_code=500, detail=result)
+            error_code = result.get("code") if isinstance(result, dict) else None
+            if error_code == "REVIEW_GATE_BLOCKED":
+                raise HTTPException(status_code=403, detail=result.get("error"))
+            if "not found" in (result.get("error", "") if isinstance(result, dict) else str(result)).lower():
+                raise HTTPException(status_code=404, detail=result.get("error") if isinstance(result, dict) else result)
+            raise HTTPException(status_code=500, detail=result)
 
         updated_task = result["task"]
 

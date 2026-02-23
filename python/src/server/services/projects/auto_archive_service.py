@@ -41,13 +41,14 @@ class AutoArchiveService:
 
     async def _run_loop(self):
         while self._running:
+            await asyncio.sleep(self.check_interval)
+            if not self._running:
+                break
             try:
                 await self.check_and_archive_projects()
                 await self.archive_stale_tasks()
             except Exception as e:
                 logfire.error(f"Error in Auto-Archive loop: {e}", exc_info=True)
-
-            await asyncio.sleep(self.check_interval)
 
     async def check_and_archive_projects(self):
         """Perform the check and archive logic."""

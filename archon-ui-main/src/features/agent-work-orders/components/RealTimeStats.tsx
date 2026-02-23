@@ -1,7 +1,7 @@
-import { Activity, ChevronDown, ChevronUp, Clock, TrendingUp } from "lucide-react";
+import { Activity, ChevronDown, ChevronUp, Clock, Square, TrendingUp } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/features/ui/primitives/button";
-import { useStepHistory, useWorkOrderLogs } from "../hooks/useAgentWorkOrderQueries";
+import { useCancelWorkOrder, useStepHistory, useWorkOrderLogs } from "../hooks/useAgentWorkOrderQueries";
 import { useAgentWorkOrdersStore } from "../state/agentWorkOrdersStore";
 import type { LiveProgress } from "../state/slices/sseSlice";
 import type { LogEntry } from "../types";
@@ -147,6 +147,9 @@ function formatDuration(seconds: number): string {
 
 export function RealTimeStats({ workOrderId }: RealTimeStatsProps) {
   const [showLogs, setShowLogs] = useState(false);
+  const [confirmStop, setConfirmStop] = useState(false);
+
+  const { mutate: cancelWorkOrder, isPending: isCancelling } = useCancelWorkOrder();
 
   // Zustand SSE slice - connection management and live data
   const connectToLogs = useAgentWorkOrdersStore((s) => s.connectToLogs);
@@ -246,6 +249,11 @@ export function RealTimeStats({ workOrderId }: RealTimeStatsProps) {
       bgColor: "bg-green-500 dark:bg-green-400",
     },
     failed: { label: "Failed", color: "text-red-600 dark:text-red-400", bgColor: "bg-red-500 dark:bg-red-400" },
+    cancelled: {
+      label: "Cancelled",
+      color: "text-orange-600 dark:text-orange-400",
+      bgColor: "bg-orange-500 dark:bg-orange-400",
+    },
   };
 
   const currentStatus = statusConfig[status as keyof typeof statusConfig] || statusConfig.running;
@@ -306,10 +314,53 @@ export function RealTimeStats({ workOrderId }: RealTimeStatsProps) {
               </div>
               <div className="text-sm text-gray-900 dark:text-gray-300 flex-1 min-w-0 truncate">{currentActivity}</div>
             </div>
-            {/* Status Indicator - right side of Latest Activity */}
-            <div className={`flex items-center gap-1 text-xs ${currentStatus.color} flex-shrink-0`}>
-              <div className={`w-2 h-2 ${currentStatus.bgColor} rounded-full ${isRunning ? "animate-pulse" : ""}`} />
-              <span>{currentStatus.label}</span>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {/* Status Indicator */}
+              <div className={`flex items-center gap-1 text-xs ${currentStatus.color}`}>
+                <div className={`w-2 h-2 ${currentStatus.bgColor} rounded-full ${isRunning ? "animate-pulse" : ""}`} />
+                <span>{currentStatus.label}</span>
+              </div>
+              {/* Stop button - only while running */}
+              {isRunning && workOrderId && (
+                <>
+                  {confirmStop ? (
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setConfirmStop(false)}
+                        className="h-6 px-2 text-xs text-gray-400 hover:text-gray-200"
+                        disabled={isCancelling}
+                      >
+                        Keep
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          cancelWorkOrder(workOrderId);
+                          setConfirmStop(false);
+                        }}
+                        className="h-6 px-2 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                        disabled={isCancelling}
+                      >
+                        {isCancelling ? "Stopping…" : "Confirm Stop"}
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setConfirmStop(true)}
+                      className="h-6 px-2 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                      aria-label="Stop work order"
+                    >
+                      <Square className="w-3 h-3 mr-1" aria-hidden="true" />
+                      Stop
+                    </Button>
+                  )}
+                </>
+              )}
             </div>
           </div>
         </div>

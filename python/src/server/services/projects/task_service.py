@@ -407,7 +407,23 @@ class TaskService:
             )
             old_task = old_task_response.data[0] if old_task_response.data else None
 
-            # Build update data
+            # Gate: review → done requires Product Owner or Tech Lead approval
+            if (
+                old_task
+                and old_task.get("status") == "review"
+                and update_fields.get("status") == "done"
+            ):
+                requested_by = update_fields.get("requested_by")
+                if requested_by not in {"user", "claude-opus"}:
+                    return False, {
+                        "error": (
+                            "Only the Product Owner (user) or Tech Lead (claude-opus) can approve tasks from review. "
+                            f"Got requested_by={requested_by!r}."
+                        ),
+                        "code": "REVIEW_GATE_BLOCKED",
+                    }
+
+            # Build update data (requested_by is a gate param only — never stored)
             update_data = {"updated_at": datetime.now().isoformat()}
 
             # Validate and add fields

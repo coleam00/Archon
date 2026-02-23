@@ -58,7 +58,9 @@ export function SprintsTab({ projectId }: SprintsTabProps) {
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <Zap className="w-12 h-12 text-gray-200 dark:text-gray-700 mb-4" />
           <p className="text-gray-500 dark:text-gray-400 text-sm">No sprints yet</p>
-          <p className="text-gray-400 dark:text-gray-500 text-xs mt-1">Create a sprint to organize tasks by iteration</p>
+          <p className="text-gray-400 dark:text-gray-500 text-xs mt-1">
+            Create a sprint to organize tasks by iteration
+          </p>
           <Button
             variant="outline"
             size="sm"

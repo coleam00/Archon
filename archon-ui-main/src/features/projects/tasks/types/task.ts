@@ -102,4 +102,5 @@ export interface UpdateTaskRequest {
   sources?: TaskSource[];
   code_examples?: TaskCodeExample[];
   sprint_id?: string;
+  requested_by?: string; // Required for review → done gate (must be "user" or "claude-opus")
 }

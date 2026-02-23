@@ -107,6 +107,29 @@ export function useWorkOrderLogs(
 }
 
 /**
+ * Hook to cancel a running or pending work order
+ * Invalidates detail and list queries on success
+ *
+ * @returns Mutation object with mutate function
+ */
+export function useCancelWorkOrder() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: string) => agentWorkOrdersService.cancelWorkOrder(id),
+
+    onSuccess: (_data, id) => {
+      queryClient.invalidateQueries({ queryKey: agentWorkOrderKeys.detail(id) });
+      queryClient.invalidateQueries({ queryKey: agentWorkOrderKeys.lists() });
+    },
+
+    onError: (error) => {
+      console.error("Failed to cancel work order:", error);
+    },
+  });
+}
+
+/**
  * Hook to create a new agent work order
  * Automatically invalidates work order lists on success
  *

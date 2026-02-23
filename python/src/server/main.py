@@ -47,6 +47,7 @@ from .api_routes.plan_promoter_api import router as plan_promoter_router
 from .api_routes.audit_api import router as audit_router
 from .api_routes.council_api import router as council_router
 from .api_routes.conductor_log_api import router as conductor_log_router
+from .api_routes.telemetry_api import router as telemetry_router
 
 # Import Logfire configuration
 from .config.logfire_config import api_logger, setup_logfire
@@ -132,6 +133,14 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             api_logger.warning(f"Could not start auto-archive service: {e}")
 
+        # Start Agent Heartbeat Scheduler
+        try:
+            from .services.agent_heartbeat_scheduler import agent_heartbeat_scheduler
+            await agent_heartbeat_scheduler.start()
+            api_logger.info("✅ Agent Heartbeat Scheduler started")
+        except Exception as e:
+            api_logger.warning(f"Could not start agent heartbeat scheduler: {e}")
+
         # Start Event Listener Service (for whiteboard integration)
         try:
             from .services.event_listener_service import get_event_listener
@@ -163,6 +172,13 @@ async def lifespan(app: FastAPI):
         try:
             from .services.projects.auto_archive_service import auto_archive_service
             await auto_archive_service.stop()
+        except Exception:
+            pass
+
+        # Stop Agent Heartbeat Scheduler
+        try:
+            from .services.agent_heartbeat_scheduler import agent_heartbeat_scheduler
+            await agent_heartbeat_scheduler.stop()
         except Exception:
             pass
 
@@ -253,6 +269,7 @@ app.include_router(plan_promoter_router)
 app.include_router(audit_router)
 app.include_router(council_router)
 app.include_router(conductor_log_router)
+app.include_router(telemetry_router)
 
 
 # Root endpoint

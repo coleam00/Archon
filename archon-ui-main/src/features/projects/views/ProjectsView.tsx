@@ -17,8 +17,8 @@ import { ProjectList } from "../components/ProjectList";
 import { SendToAgentModal } from "../components/SendToAgentModal";
 import { WhiteboardView } from "../components/WhiteboardView";
 import { DocsTab } from "../documents/DocsTab";
-import { SprintsTab } from "../sprints/SprintsTab";
 import { projectKeys, useDeleteProject, useProjects, useUpdateProject } from "../hooks/useProjectQueries";
+import { SprintsTab } from "../sprints/SprintsTab";
 import { useTaskCounts } from "../tasks/hooks";
 import { useProjectTasks } from "../tasks/hooks/useTaskQueries";
 import { TasksTab } from "../tasks/TasksTab";
@@ -170,9 +170,7 @@ export function ProjectsView({ className = "", "data-id": dataId }: ProjectsView
       { projectId: selectedProject.id, updates: { archived: true } },
       {
         onSuccess: () => {
-          const remaining = (projects as Project[]).filter(
-            (p) => p.id !== selectedProject.id && !p.archived,
-          );
+          const remaining = (projects as Project[]).filter((p) => p.id !== selectedProject.id && !p.archived);
           if (remaining.length > 0) {
             handleProjectSelect(remaining[0]);
           } else {

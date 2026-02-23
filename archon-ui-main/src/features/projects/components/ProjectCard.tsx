@@ -18,12 +18,7 @@ interface ProjectCardProps {
   onSelect: (project: Project) => void;
 }
 
-export const ProjectCard: React.FC<ProjectCardProps> = ({
-  project,
-  isSelected,
-  taskCounts,
-  onSelect,
-}) => {
+export const ProjectCard: React.FC<ProjectCardProps> = ({ project, isSelected, taskCounts, onSelect }) => {
   // Check if project is optimistic
   const optimistic = isOptimistic(project);
 

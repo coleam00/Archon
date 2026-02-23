@@ -672,6 +672,60 @@ async def list_agent_work_orders(
         raise HTTPException(status_code=500, detail=f"Failed to list work orders: {e}") from e
 
 
+@router.post("/{agent_work_order_id}/cancel")
+async def cancel_agent_work_order(agent_work_order_id: str) -> dict:
+    """Cancel a running or pending agent work order
+
+    Cancels the background workflow task and marks the work order as failed.
+    Returns 404 if work order not found, 409 if not in a cancellable state.
+    """
+    logger.info("agent_work_order_cancel_started", agent_work_order_id=agent_work_order_id)
+
+    try:
+        result = await state_repository.get(agent_work_order_id)
+        if not result:
+            raise HTTPException(status_code=404, detail="Work order not found")
+
+        _, metadata = result
+        current_status = metadata.get("status")
+
+        if current_status not in (AgentWorkOrderStatus.RUNNING, AgentWorkOrderStatus.PENDING):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Work order cannot be cancelled in status: {current_status}",
+            )
+
+        # Cancel the background asyncio task if it is still running
+        task = _workflow_tasks.get(agent_work_order_id)
+        if task and not task.done():
+            task.cancel()
+            logger.info("workflow_task_cancelled", agent_work_order_id=agent_work_order_id)
+
+        # Mark work order as failed with cancellation message
+        await state_repository.update_status(
+            agent_work_order_id,
+            AgentWorkOrderStatus.FAILED,
+            error_message="Cancelled by user",
+        )
+
+        logger.info("agent_work_order_cancelled", agent_work_order_id=agent_work_order_id)
+        return {
+            "success": True,
+            "message": "Work order cancelled",
+            "agent_work_order_id": agent_work_order_id,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(
+            "agent_work_order_cancel_failed",
+            agent_work_order_id=agent_work_order_id,
+            error=str(e),
+        )
+        raise HTTPException(status_code=500, detail=f"Failed to cancel work order: {e}") from e
+
+
 @router.post("/{agent_work_order_id}/prompt")
 async def send_prompt_to_agent(
     agent_work_order_id: str,

@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS conversation_history (
     tools_used JSONB DEFAULT '[]',
     type VARCHAR(50),
     subtype VARCHAR(50),
-    embedding VECTOR(1536),
+    embedding VECTOR(1024),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     metadata JSONB DEFAULT '{}'
 );
@@ -48,12 +48,10 @@ CREATE INDEX IF NOT EXISTS idx_conversation_created_at
 CREATE INDEX IF NOT EXISTS idx_conversation_type
     ON conversation_history(type, subtype);
 
--- Vector similarity search index using ivfflat
--- lists = rows/1000 (for 1000 rows, use 1 list; for 1M rows, use 1000 lists)
-CREATE INDEX IF NOT EXISTS idx_conversation_embedding
-    ON conversation_history
-    USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100);
+-- Vector embedding index should be added separately after data exists
+-- (ivfflat can cause silent transaction rollback when run inline on empty tables)
+-- CREATE INDEX idx_conversation_embedding ON conversation_history
+--     USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 
 -- =====================================================
 -- SECTION 3: TRIGGERS
@@ -77,6 +75,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS conversation_embedding_trigger ON conversation_history;
 CREATE TRIGGER conversation_embedding_trigger
     BEFORE INSERT OR UPDATE ON conversation_history
     FOR EACH ROW
@@ -121,7 +120,7 @@ $$ LANGUAGE plpgsql;
 
 -- Search conversation history semantically
 CREATE OR REPLACE FUNCTION search_conversation_semantic(
-    p_query_embedding VECTOR(1536),
+    p_query_embedding VECTOR(1024),
     p_session_id UUID DEFAULT NULL,
     p_match_count INT DEFAULT 10,
     p_threshold FLOAT DEFAULT 0.7
@@ -244,6 +243,7 @@ GROUP BY ch.session_id, s.agent;
 ALTER TABLE conversation_history ENABLE ROW LEVEL SECURITY;
 
 -- Policy: Allow all operations for service role
+DROP POLICY IF EXISTS conversation_history_service_role_policy ON conversation_history;
 CREATE POLICY conversation_history_service_role_policy
     ON conversation_history
     FOR ALL
@@ -252,7 +252,7 @@ CREATE POLICY conversation_history_service_role_policy
     WITH CHECK (true);
 
 -- Policy: Allow authenticated users to read their own conversation history
--- (Customize based on your authentication scheme)
+DROP POLICY IF EXISTS conversation_history_read_policy ON conversation_history;
 CREATE POLICY conversation_history_read_policy
     ON conversation_history
     FOR SELECT

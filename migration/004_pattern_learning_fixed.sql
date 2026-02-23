@@ -1,4 +1,10 @@
 -- =====================================================
+-- DEPRECATED: Use 005_pattern_tables_minimal.sql + 006_pattern_indexes_rls.sql instead.
+-- This file has an inline ivfflat index that causes silent transaction rollback
+-- in Supabase Cloud SQL Editor. See ISSUE-20260219-009.
+-- =====================================================
+
+-- =====================================================
 -- Phase 3: Pattern Learning System
 -- Migration 004 FIXED: Includes missing trigger function
 -- =====================================================

@@ -29,9 +29,9 @@ export const CreateTaskSchema = z.object({
   code_examples: z.array(z.any()).default([]),
 });
 
-export const UpdateTaskSchema = CreateTaskSchema.partial().omit({
-  project_id: true,
-});
+export const UpdateTaskSchema = CreateTaskSchema.partial()
+  .omit({ project_id: true })
+  .extend({ requested_by: z.string().optional() });
 
 export const TaskSchema = z.object({
   id: z.string().uuid("Task ID must be a valid UUID"),

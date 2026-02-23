@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS archon_sessions (
     ended_at TIMESTAMPTZ,
     summary TEXT,
     context JSONB DEFAULT '{}',
-    embedding VECTOR(1536),
+    embedding VECTOR(1024),
     metadata JSONB DEFAULT '{}',
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS archon_session_events (
     event_type VARCHAR(50) NOT NULL,
     event_data JSONB NOT NULL,
     timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    embedding VECTOR(1536),
+    embedding VECTOR(1024),
     metadata JSONB DEFAULT '{}'
 );
 
@@ -46,11 +46,11 @@ CREATE TABLE IF NOT EXISTS archon_session_events (
 
 -- Add embeddings to tasks for semantic search
 ALTER TABLE archon_tasks
-ADD COLUMN IF NOT EXISTS embedding VECTOR(1536);
+ADD COLUMN IF NOT EXISTS embedding VECTOR(1024);
 
 -- Add embeddings to projects for semantic search
 ALTER TABLE archon_projects
-ADD COLUMN IF NOT EXISTS embedding VECTOR(1536);
+ADD COLUMN IF NOT EXISTS embedding VECTOR(1024);
 
 -- =====================================================
 -- SECTION 3: INDEXES FOR PERFORMANCE
@@ -60,29 +60,21 @@ ADD COLUMN IF NOT EXISTS embedding VECTOR(1536);
 CREATE INDEX IF NOT EXISTS idx_sessions_agent ON archon_sessions(agent);
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON archon_sessions(project_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON archon_sessions(started_at DESC);
-CREATE INDEX IF NOT EXISTS idx_sessions_embedding ON archon_sessions
-    USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 
 -- Session events indexes
 CREATE INDEX IF NOT EXISTS idx_events_session ON archon_session_events(session_id);
 CREATE INDEX IF NOT EXISTS idx_events_type ON archon_session_events(event_type);
 CREATE INDEX IF NOT EXISTS idx_events_timestamp ON archon_session_events(timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_events_embedding ON archon_session_events
-    USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 
--- Task embedding index
-CREATE INDEX IF NOT EXISTS idx_tasks_embedding ON archon_tasks
-    USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-
--- Project embedding index
-CREATE INDEX IF NOT EXISTS idx_projects_embedding ON archon_projects
-    USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+-- Vector embedding indexes are created separately in fix_embedding_dimensions.sql
+-- (ivfflat requires data to exist and can cause silent transaction rollback when run inline)
 
 -- =====================================================
 -- SECTION 4: TRIGGERS FOR AUTO-UPDATE
 -- =====================================================
 
 -- Update trigger for sessions (uses existing update_updated_at_column function)
+DROP TRIGGER IF EXISTS update_archon_sessions_updated_at ON archon_sessions;
 CREATE TRIGGER update_archon_sessions_updated_at
     BEFORE UPDATE ON archon_sessions
     FOR EACH ROW
@@ -97,16 +89,20 @@ ALTER TABLE archon_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE archon_session_events ENABLE ROW LEVEL SECURITY;
 
 -- Service role full access
+DROP POLICY IF EXISTS "Allow service role full access on sessions" ON archon_sessions;
 CREATE POLICY "Allow service role full access on sessions" ON archon_sessions
     FOR ALL USING (auth.role() = 'service_role');
 
+DROP POLICY IF EXISTS "Allow service role full access on events" ON archon_session_events;
 CREATE POLICY "Allow service role full access on events" ON archon_session_events
     FOR ALL USING (auth.role() = 'service_role');
 
 -- Authenticated users full access
+DROP POLICY IF EXISTS "Allow authenticated users on sessions" ON archon_sessions;
 CREATE POLICY "Allow authenticated users on sessions" ON archon_sessions
     FOR ALL TO authenticated USING (true);
 
+DROP POLICY IF EXISTS "Allow authenticated users on events" ON archon_session_events;
 CREATE POLICY "Allow authenticated users on events" ON archon_session_events
     FOR ALL TO authenticated USING (true);
 
@@ -151,7 +147,7 @@ $$ LANGUAGE plpgsql;
 
 -- Function to search sessions by semantic similarity
 CREATE OR REPLACE FUNCTION search_sessions_semantic(
-    p_query_embedding VECTOR(1536),
+    p_query_embedding VECTOR(1024),
     p_limit INT DEFAULT 10,
     p_threshold FLOAT DEFAULT 0.7
 )

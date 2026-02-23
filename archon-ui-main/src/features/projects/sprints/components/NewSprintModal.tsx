@@ -109,21 +109,11 @@ export function NewSprintModal({ open, onOpenChange, projectId, onSubmit, isSubm
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label htmlFor="sprint-start">Start Date</Label>
-              <Input
-                id="sprint-start"
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-              />
+              <Input id="sprint-start" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="sprint-end">End Date</Label>
-              <Input
-                id="sprint-end"
-                type="date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-              />
+              <Input id="sprint-end" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
             </div>
           </div>
 

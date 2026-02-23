@@ -24,6 +24,7 @@ class AgentRegistryService:
         name: str,
         capabilities: list[str] | None = None,
         metadata: dict | None = None,
+        role: str | None = None,
     ) -> dict:
         """
         Register or update an agent in the registry.
@@ -48,6 +49,8 @@ class AgentRegistryService:
                 "last_seen": datetime.now(UTC).isoformat(),
                 "metadata": metadata or {},
             }
+            if role is not None:
+                agent_data["role"] = role
             response = (
                 self.supabase.table("archon_agent_registry")
                 .upsert(agent_data, on_conflict="name")

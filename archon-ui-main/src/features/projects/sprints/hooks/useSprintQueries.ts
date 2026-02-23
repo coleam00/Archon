@@ -78,44 +78,41 @@ export function useUpdateSprint(projectId: string) {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
 
-  return useMutation<
-    Sprint,
-    Error,
-    { sprintId: string; updates: UpdateSprintRequest },
-    { previousSprints?: Sprint[] }
-  >({
-    mutationFn: ({ sprintId, updates }) => sprintService.updateSprint(sprintId, updates),
+  return useMutation<Sprint, Error, { sprintId: string; updates: UpdateSprintRequest }, { previousSprints?: Sprint[] }>(
+    {
+      mutationFn: ({ sprintId, updates }) => sprintService.updateSprint(sprintId, updates),
 
-    onMutate: async ({ sprintId, updates }) => {
-      await queryClient.cancelQueries({ queryKey: sprintKeys.byProject(projectId) });
-      const previousSprints = queryClient.getQueryData<Sprint[]>(sprintKeys.byProject(projectId));
+      onMutate: async ({ sprintId, updates }) => {
+        await queryClient.cancelQueries({ queryKey: sprintKeys.byProject(projectId) });
+        const previousSprints = queryClient.getQueryData<Sprint[]>(sprintKeys.byProject(projectId));
 
-      queryClient.setQueryData<Sprint[]>(sprintKeys.byProject(projectId), (old) =>
-        old ? old.map((s) => (s.id === sprintId ? { ...s, ...updates } : s)) : old,
-      );
+        queryClient.setQueryData<Sprint[]>(sprintKeys.byProject(projectId), (old) =>
+          old ? old.map((s) => (s.id === sprintId ? { ...s, ...updates } : s)) : old,
+        );
 
-      return { previousSprints };
+        return { previousSprints };
+      },
+
+      onError: (error, _variables, context) => {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (context?.previousSprints) {
+          queryClient.setQueryData(sprintKeys.byProject(projectId), context.previousSprints);
+        }
+        showToast(`Failed to update sprint: ${errorMessage}`, "error");
+      },
+
+      onSuccess: (data) => {
+        queryClient.setQueryData<Sprint[]>(sprintKeys.byProject(projectId), (old) =>
+          old ? old.map((s) => (s.id === data.id ? data : s)) : old,
+        );
+        showToast("Sprint updated", "success");
+      },
+
+      onSettled: () => {
+        queryClient.invalidateQueries({ queryKey: sprintKeys.byProject(projectId) });
+      },
     },
-
-    onError: (error, _variables, context) => {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      if (context?.previousSprints) {
-        queryClient.setQueryData(sprintKeys.byProject(projectId), context.previousSprints);
-      }
-      showToast(`Failed to update sprint: ${errorMessage}`, "error");
-    },
-
-    onSuccess: (data) => {
-      queryClient.setQueryData<Sprint[]>(sprintKeys.byProject(projectId), (old) =>
-        old ? old.map((s) => (s.id === data.id ? data : s)) : old,
-      );
-      showToast("Sprint updated", "success");
-    },
-
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: sprintKeys.byProject(projectId) });
-    },
-  });
+  );
 }
 
 export function useDeleteSprint(projectId: string) {

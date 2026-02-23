@@ -30,9 +30,7 @@ export function useProjectTasks(
   const { refetchInterval } = useSmartPolling(2000); // 2s active per guideline for real-time task updates
 
   return useQuery<Task[]>({
-    queryKey: projectId
-      ? [...taskKeys.byProject(projectId), { includeArchived, sprintId }]
-      : DISABLED_QUERY_KEY,
+    queryKey: projectId ? [...taskKeys.byProject(projectId), { includeArchived, sprintId }] : DISABLED_QUERY_KEY,
     queryFn: async () => {
       if (!projectId) throw new Error("No project ID");
       return taskService.getTasksByProject(projectId, includeArchived, sprintId);

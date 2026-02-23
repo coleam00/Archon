@@ -1,4 +1,4 @@
-import { Activity, CheckCircle2, Eye, ListTodo } from "lucide-react";
+import { Activity, CheckCircle2, Eye, ListTodo, Shield } from "lucide-react";
 import { useRef } from "react";
 import { useDrop } from "react-dnd";
 import { cn } from "../../../ui/primitives/styles";
@@ -70,6 +70,7 @@ export const KanbanColumn = ({
           icon: <Eye className="w-3 h-3" />,
           label: "Review",
           color: "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/30",
+          gateLabel: true,
         };
       case "done":
         return {
@@ -92,7 +93,7 @@ export const KanbanColumn = ({
     <div ref={ref} className="flex flex-col h-full">
       {/* Column Header - pill badge only */}
       <div className="text-center py-3 relative">
-        <div className="flex items-center justify-center">
+        <div className="flex items-center justify-center gap-2">
           <div
             className={cn(
               "inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium border backdrop-blur-md",
@@ -103,6 +104,12 @@ export const KanbanColumn = ({
             <span className="font-medium">{statusInfo.label}</span>
             <span className="font-bold">{tasks.length}</span>
           </div>
+          {"gateLabel" in statusInfo && tasks.length > 0 && (
+            <div className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider text-blue-400 bg-blue-500/10 border border-blue-500/20">
+              <Shield className="w-2.5 h-2.5" />
+              PO gate
+            </div>
+          )}
         </div>
         {/* Colored underline */}
         <div

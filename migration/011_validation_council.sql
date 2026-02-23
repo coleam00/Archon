@@ -17,5 +17,6 @@ CREATE INDEX IF NOT EXISTS idx_council_created_at ON validation_council_decision
 
 ALTER TABLE validation_council_decisions ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Allow all for service role" ON validation_council_decisions;
 CREATE POLICY "Allow all for service role" ON validation_council_decisions
     FOR ALL USING (true) WITH CHECK (true);

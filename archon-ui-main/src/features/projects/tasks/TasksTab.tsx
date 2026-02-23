@@ -8,6 +8,7 @@ import { Button, Card } from "../../ui/primitives";
 import { cn, glassmorphism } from "../../ui/primitives/styles";
 import { SendToAgentModal } from "../components/SendToAgentModal";
 import { TaskEditModal } from "./components/TaskEditModal";
+import { TaskReviewModal } from "./components/TaskReviewModal";
 import { useArchiveTask, useDeleteTask, useProjectTasks, useUnarchiveTask, useUpdateTask } from "./hooks";
 import type { Task } from "./types";
 import { getReorderTaskOrder, ORDER_INCREMENT, validateTaskOrder } from "./utils";
@@ -26,6 +27,7 @@ export const TasksTab = ({ projectId, projectName = "" }: TasksTabProps) => {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [sendToAgentTask, setSendToAgentTask] = useState<Task | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [reviewTask, setReviewTask] = useState<Task | null>(null);
 
   const { agentWorkOrdersEnabled } = useSettings();
 
@@ -122,6 +124,12 @@ export const TasksTab = ({ projectId, projectName = "" }: TasksTabProps) => {
     async (taskId: string, newStatus: Task["status"]) => {
       const movingTask = (tasks as Task[]).find((task) => task.id === taskId);
       if (!movingTask || movingTask.status === newStatus) return;
+
+      // Gate: review → done requires PO approval via modal
+      if (movingTask.status === "review" && newStatus === "done") {
+        setReviewTask(movingTask);
+        return;
+      }
 
       try {
         // Calculate position for new status
@@ -224,6 +232,15 @@ export const TasksTab = ({ projectId, projectName = "" }: TasksTabProps) => {
           type="task"
           size="compact"
         />
+
+        {/* PO Review Gate Modal */}
+        {reviewTask && (
+          <TaskReviewModal
+            task={reviewTask}
+            projectId={projectId}
+            onClose={() => setReviewTask(null)}
+          />
+        )}
 
         {/* Send to Agent Modal (task-level) */}
         {sendToAgentTask && (

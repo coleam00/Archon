@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS archon_agent_work_orders (
     sandbox_identifier TEXT NOT NULL,
     git_branch_name TEXT,
     agent_session_id TEXT,
-    status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed')),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed', 'blocked')),
 
     -- Flexible metadata (JSONB for infrequently queried fields)
     -- Stores: sandbox_type, github_issue_number, current_phase, error_message, etc.
@@ -116,23 +116,27 @@ ALTER TABLE archon_agent_work_orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE archon_agent_work_order_steps ENABLE ROW LEVEL SECURITY;
 
 -- Policy 1: Service role has full access (for API operations)
+DROP POLICY IF EXISTS "Allow service role full access to archon_agent_work_orders" ON archon_agent_work_orders;
 CREATE POLICY "Allow service role full access to archon_agent_work_orders"
     ON archon_agent_work_orders
     FOR ALL
     USING (auth.role() = 'service_role');
 
+DROP POLICY IF EXISTS "Allow service role full access to archon_agent_work_order_steps" ON archon_agent_work_order_steps;
 CREATE POLICY "Allow service role full access to archon_agent_work_order_steps"
     ON archon_agent_work_order_steps
     FOR ALL
     USING (auth.role() = 'service_role');
 
 -- Policy 2: Authenticated users can read and update (for frontend operations)
+DROP POLICY IF EXISTS "Allow authenticated users to read and update archon_agent_work_orders" ON archon_agent_work_orders;
 CREATE POLICY "Allow authenticated users to read and update archon_agent_work_orders"
     ON archon_agent_work_orders
     FOR ALL
     TO authenticated
     USING (true);
 
+DROP POLICY IF EXISTS "Allow authenticated users to read and update archon_agent_work_order_steps" ON archon_agent_work_order_steps;
 CREATE POLICY "Allow authenticated users to read and update archon_agent_work_order_steps"
     ON archon_agent_work_order_steps
     FOR ALL
@@ -163,7 +167,7 @@ COMMENT ON COLUMN archon_agent_work_orders.agent_session_id IS
     'Agent session ID for tracking agent execution (nullable if not yet started)';
 
 COMMENT ON COLUMN archon_agent_work_orders.status IS
-    'Current status: pending, running, completed, or failed';
+    'Current status: pending, running, completed, failed, or blocked (blocked by Validation Council)';
 
 COMMENT ON COLUMN archon_agent_work_orders.metadata IS
     'JSONB metadata including sandbox_type, github_issue_number, current_phase, error_message, etc.';

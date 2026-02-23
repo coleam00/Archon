@@ -17,7 +17,21 @@ logger = get_logger(__name__)
 class SprintService:
     """Service class for sprint operations"""
 
-    VALID_STATUSES = ["planning", "active", "completed", "cancelled"]
+    VALID_STATUSES = ["planning", "ready_for_kickoff", "active", "completed", "cancelled"]
+
+    # Allowed transitions: from_status → set of allowed to_statuses
+    ALLOWED_TRANSITIONS: dict[str, list[str]] = {
+        "planning":           ["ready_for_kickoff", "cancelled"],
+        "ready_for_kickoff":  ["planning", "active", "cancelled"],
+        "active":             ["completed", "cancelled"],
+        "completed":          [],
+        "cancelled":          [],
+    }
+
+    # Transitions that require the Product Owner (agent name: "user")
+    PO_ONLY_TRANSITIONS: set[tuple[str, str]] = {
+        ("ready_for_kickoff", "active"),
+    }
 
     def __init__(self, supabase_client=None):
         self.supabase_client = supabase_client or get_supabase_client()
@@ -28,6 +42,26 @@ class SprintService:
                 False,
                 f"Invalid status '{status}'. Must be one of: {', '.join(self.VALID_STATUSES)}",
             )
+        return True, ""
+
+    def _validate_transition(
+        self, from_status: str, to_status: str, requested_by: str | None
+    ) -> tuple[bool, str]:
+        """Enforce the sprint lifecycle transition rules and PO approval gate."""
+        allowed = self.ALLOWED_TRANSITIONS.get(from_status, [])
+        if to_status not in allowed:
+            return (
+                False,
+                f"Invalid transition: '{from_status}' → '{to_status}'. "
+                f"Allowed next statuses: {allowed or ['none (terminal state)']}",
+            )
+        if (from_status, to_status) in self.PO_ONLY_TRANSITIONS:
+            if requested_by != "user":
+                return (
+                    False,
+                    f"Only the Product Owner (requested_by='user') can activate a sprint. "
+                    f"Got: '{requested_by}'.",
+                )
         return True, ""
 
     def list_sprints(self, project_id: str) -> tuple[bool, dict[str, Any]]:
@@ -122,7 +156,26 @@ class SprintService:
                 is_valid, error_msg = self._validate_status(update_fields["status"])
                 if not is_valid:
                     return False, {"error": error_msg}
-                update_data["status"] = update_fields["status"]
+
+                # Fetch current status to validate the transition
+                current = (
+                    self.supabase_client.table("archon_sprints")
+                    .select("status")
+                    .eq("id", sprint_id)
+                    .execute()
+                )
+                if not current.data:
+                    return False, {"error": f"Sprint with ID {sprint_id} not found"}
+
+                from_status = current.data[0]["status"]
+                to_status = update_fields["status"]
+                requested_by = update_fields.get("requested_by")
+
+                is_valid, error_msg = self._validate_transition(from_status, to_status, requested_by)
+                if not is_valid:
+                    return False, {"error": error_msg}
+
+                update_data["status"] = to_status
 
             if "start_date" in update_fields:
                 update_data["start_date"] = update_fields["start_date"]

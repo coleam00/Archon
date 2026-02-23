@@ -17,6 +17,7 @@ class AgentRegisterRequest(BaseModel):
     name: str = Field(..., description="Unique agent name")
     capabilities: list[str] | None = Field(default_factory=list, description="Agent capabilities")
     metadata: dict | None = Field(default_factory=dict, description="Additional metadata")
+    role: str | None = Field(default=None, description="Agent role (e.g. 'Developer', 'Scrum Master')")
 
 
 @router.post("/register", response_model=dict)
@@ -28,6 +29,7 @@ async def register_agent(request: AgentRegisterRequest):
             name=request.name,
             capabilities=request.capabilities,
             metadata=request.metadata,
+            role=request.role,
         )
         return {"success": True, "agent": agent}
     except Exception as e:

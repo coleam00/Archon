@@ -12,7 +12,7 @@
  * - completed: Work order finished successfully
  * - failed: Work order encountered an error
  */
-export type AgentWorkOrderStatus = "pending" | "running" | "completed" | "failed";
+export type AgentWorkOrderStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 
 /**
  * Available workflow steps for agent work orders
