@@ -31,10 +31,10 @@ class OllamaModel:
     parameters: dict[str, Any] | None = None
     instance_url: str = ""
     last_updated: str | None = None
-    
+
     # Comprehensive API data from /api/show endpoint
     context_window: int | None = None  # Current/active context length
-    max_context_length: int | None = None  # Maximum supported context length  
+    max_context_length: int | None = None  # Maximum supported context length
     base_context_length: int | None = None  # Original/base context length
     custom_context_length: int | None = None  # Custom num_ctx if set
     architecture: str | None = None
@@ -42,7 +42,7 @@ class OllamaModel:
     attention_heads: int | None = None
     format: str | None = None
     parent_model: str | None = None
-    
+
     # Extended model metadata
     family: str | None = None
     parameter_size: str | None = None
@@ -132,7 +132,7 @@ class ModelDiscoveryService:
         """
         # ULTRA FAST MODE DISABLED - Now fetching real models
         # logger.warning(f"🚀 ULTRA FAST MODE ACTIVE - Returning mock models instantly for {instance_url}")
-        
+
         # mock_models = [
         #     OllamaModel(
         #         name="llama3.2:latest",
@@ -169,9 +169,9 @@ class ModelDiscoveryService:
         #         instance_url=instance_url
         #     ),
         # ]
-        
+
         # return mock_models
-        
+
         # Check cache first (but skip if we need detailed info)
         if not fetch_details:
             cached_models = self._get_cached_models(instance_url)
@@ -252,22 +252,22 @@ class ModelDiscoveryService:
         import time
         start_time = time.time()
         logger.info(f"Starting capability enrichment for {len(models)} models from {instance_url}")
-        
+
         enriched_models = []
         unknown_models = []
 
         # First pass: Use pattern-based detection for known models
         for model in models:
             model_name_lower = model.name.lower()
-            
+
             # Known embedding model patterns - these are fast to identify
             embedding_patterns = [
                 'embed', 'embedding', 'bge-', 'e5-', 'sentence-', 'arctic-embed',
                 'nomic-embed', 'mxbai-embed', 'snowflake-arctic-embed', 'gte-', 'stella-'
             ]
-            
+
             is_embedding_model = any(pattern in model_name_lower for pattern in embedding_patterns)
-            
+
             if is_embedding_model:
                 # Set embedding capabilities immediately
                 model.capabilities = ["embedding"]
@@ -282,7 +282,7 @@ class ModelDiscoveryService:
                     model.embedding_dimensions = 1024
                 else:
                     model.embedding_dimensions = 768  # Conservative default
-                    
+
                 logger.debug(f"Pattern-matched embedding model {model.name} with {model.embedding_dimensions}D")
                 enriched_models.append(model)
             else:
@@ -292,19 +292,19 @@ class ModelDiscoveryService:
                     'orca', 'vicuna', 'wizardlm', 'solar', 'mixtral', 'chatglm', 'baichuan',
                     'yi', 'zephyr', 'openchat', 'starling', 'nous-hermes'
                 ]
-                
+
                 is_known_chat_model = any(pattern in model_name_lower for pattern in chat_patterns)
-                
+
                 if is_known_chat_model:
                     # Set chat capabilities based on model patterns
                     model.capabilities = ["chat"]
-                    
+
                     # Advanced capability detection based on model families
                     if any(pattern in model_name_lower for pattern in ['qwen', 'llama3', 'phi3', 'mistral']):
                         model.capabilities.extend(["function_calling", "structured_output"])
                     elif any(pattern in model_name_lower for pattern in ['llama', 'phi', 'gemma']):
                         model.capabilities.append("structured_output")
-                    
+
                     # Get comprehensive information from /api/show endpoint if requested
                     if fetch_details:
                         logger.info(f"Fetching detailed info for {model.name} from {instance_url}")
@@ -317,14 +317,14 @@ class ModelDiscoveryService:
                                 model.max_context_length = detailed_info.get("max_context_length")
                                 model.base_context_length = detailed_info.get("base_context_length")
                                 model.custom_context_length = detailed_info.get("custom_context_length")
-                                
+
                                 # Architecture and technical details
                                 model.architecture = detailed_info.get("architecture")
                                 model.block_count = detailed_info.get("block_count")
                                 model.attention_heads = detailed_info.get("attention_heads")
                                 model.format = detailed_info.get("format")
                                 model.parent_model = detailed_info.get("parent_model")
-                                
+
                                 # Extended metadata
                                 model.family = detailed_info.get("family")
                                 model.parameter_size = detailed_info.get("parameter_size")
@@ -337,14 +337,14 @@ class ModelDiscoveryService:
                                 model.license = detailed_info.get("license")
                                 model.finetune = detailed_info.get("finetune")
                                 model.embedding_dimension = detailed_info.get("embedding_dimension")
-                                
+
                                 # Update capabilities with real API capabilities if available
                                 api_capabilities = detailed_info.get("capabilities", [])
                                 if api_capabilities:
                                     # Merge with existing capabilities, prioritizing API data
                                     combined_capabilities = list(set(model.capabilities + api_capabilities))
                                     model.capabilities = combined_capabilities
-                                
+
                                 # Update parameters with comprehensive structured info
                                 if model.parameters:
                                     model.parameters.update({
@@ -361,7 +361,7 @@ class ModelDiscoveryService:
                                         "quantization": detailed_info.get("quantization"),
                                         "format": detailed_info.get("format")
                                     })
-                                    
+
                                 logger.debug(f"Enriched {model.name} with comprehensive data: "
                                            f"context={model.context_window}, arch={model.architecture}, "
                                            f"params={model.parameter_size}, capabilities={model.capabilities}")
@@ -369,7 +369,7 @@ class ModelDiscoveryService:
                                 logger.debug(f"No detailed info returned for {model.name}")
                         except Exception as e:
                             logger.debug(f"Could not get comprehensive details for {model.name}: {e}")
-                    
+
                     logger.debug(f"Pattern-matched chat model {model.name} with capabilities: {model.capabilities}")
                     enriched_models.append(model)
                 else:
@@ -380,25 +380,25 @@ class ModelDiscoveryService:
         pattern_matched_count = len(enriched_models)
         unknown_count = len(unknown_models)
         logger.info(f"Pattern matching results: {pattern_matched_count} models matched patterns, {unknown_count} models require API testing")
-        
+
         if pattern_matched_count > 0:
             matched_names = [m.name for m in enriched_models]
             logger.info(f"Pattern-matched models: {', '.join(matched_names[:10])}{'...' if len(matched_names) > 10 else ''}")
-        
+
         if unknown_models:
             unknown_names = [m.name for m in unknown_models]
             logger.info(f"Unknown models requiring API testing: {', '.join(unknown_names[:10])}{'...' if len(unknown_names) > 10 else ''}")
-        
+
         # TEMPORARY PERFORMANCE FIX: Skip slow API testing entirely
         # Instead of testing unknown models (which takes 30+ minutes), assign reasonable defaults
         if unknown_models:
             logger.info(f"🚀 PERFORMANCE MODE: Skipping API testing for {len(unknown_models)} unknown models, assigning fast defaults")
-            
+
             for model in unknown_models:
                 # Assign chat capability to all unknown models by default
                 model.capabilities = ["chat"]
-                
-                # Try some smart defaults based on model name patterns  
+
+                # Try some smart defaults based on model name patterns
                 model_name_lower = model.name.lower()
                 if any(hint in model_name_lower for hint in ['embed', 'embedding', 'vector']):
                     model.capabilities = ["embedding"]
@@ -407,20 +407,20 @@ class ModelDiscoveryService:
                 elif any(hint in model_name_lower for hint in ['chat', 'instruct', 'assistant']):
                     model.capabilities = ["chat"]
                     logger.debug(f"Fast-assigned chat capability to {model.name} based on name hints")
-                
+
                 enriched_models.append(model)
-            
+
             logger.info(f"🚀 PERFORMANCE MODE: Fast assignment completed for {len(unknown_models)} models in <1s")
 
         # Log final timing and results
         end_time = time.time()
         total_duration = end_time - start_time
         pattern_matched_count = len(models) - len(unknown_models)
-        
+
         logger.info(f"Model capability enrichment complete: {len(enriched_models)} total models, "
                    f"pattern-matched {pattern_matched_count}, tested {len(unknown_models)}")
         logger.info(f"Total enrichment time: {total_duration:.2f}s for {instance_url}")
-        
+
         if pattern_matched_count > 0:
             logger.info(f"Pattern matching saved ~{pattern_matched_count * 10:.1f}s (estimated 10s per model API test)")
 
@@ -451,7 +451,7 @@ class ModelDiscoveryService:
             # Quick heuristic: if model name suggests embedding, test that first
             model_name_lower = model_name.lower()
             likely_embedding = any(pattern in model_name_lower for pattern in ['embed', 'embedding', 'bge', 'e5'])
-            
+
             if likely_embedding:
                 # Test embedding capability first for likely embedding models
                 embedding_dims = await self._test_embedding_capability_fast(model_name, instance_url)
@@ -468,7 +468,7 @@ class ModelDiscoveryService:
             if chat_supported:
                 capabilities.supports_chat = True
                 logger.debug(f"Fast chat test: {model_name} supports chat")
-                
+
                 # For chat models, do a quick structured output test (skip function calling for speed)
                 structured_output_supported = await self._test_structured_output_capability_fast(model_name, instance_url)
                 if structured_output_supported:
@@ -518,13 +518,13 @@ class ModelDiscoveryService:
             if chat_supported:
                 capabilities.supports_chat = True
                 logger.debug(f"Model {model_name} supports chat")
-                
+
                 # Test advanced capabilities for chat models
                 function_calling_supported = await self._test_function_calling_capability(model_name, instance_url)
                 if function_calling_supported:
                     capabilities.supports_function_calling = True
                     logger.debug(f"Model {model_name} supports function calling")
-                
+
                 structured_output_supported = await self._test_structured_output_capability(model_name, instance_url)
                 if structured_output_supported:
                     capabilities.supports_structured_output = True
@@ -605,7 +605,7 @@ class ModelDiscoveryService:
                 response = await client.chat.completions.create(
                     model=model_name,
                     messages=[{
-                        "role": "user", 
+                        "role": "user",
                         "content": "Return: {\"ok\":true}"  # Minimal JSON test
                     }],
                     max_tokens=10,
@@ -700,13 +700,13 @@ class ModelDiscoveryService:
                 if response.status_code == 200:
                     data = response.json()
                     logger.debug(f"Got /api/show response for {model_name}: keys={list(data.keys())}, model_info keys={list(data.get('model_info', {}).keys())[:10]}")
-                    
+
                     # Extract sections from /api/show response
                     details_section = data.get("details", {})
                     model_info = data.get("model_info", {})
                     parameters_raw = data.get("parameters", "")
                     capabilities = data.get("capabilities", [])
-                    
+
                     # Parse parameters string for custom context length (num_ctx)
                     custom_context_length = None
                     if parameters_raw:
@@ -719,12 +719,12 @@ class ModelDiscoveryService:
                                     break
                                 except (ValueError, IndexError):
                                     continue
-                    
+
                     # Extract architecture-specific context lengths from model_info
                     max_context_length = None
                     base_context_length = None
                     embedding_dimension = None
-                    
+
                     # Find architecture-specific values (e.g., phi3.context_length, gptoss.context_length)
                     for key, value in model_info.items():
                         if key.endswith(".context_length"):
@@ -733,13 +733,13 @@ class ModelDiscoveryService:
                             base_context_length = value
                         elif key.endswith(".embedding_length"):
                             embedding_dimension = value
-                    
+
                     # Determine current context length based on logic:
                     # 1. If custom num_ctx exists, use it
                     # 2. Otherwise use base context length if available
                     # 3. Otherwise fall back to max context length
                     current_context_length = custom_context_length if custom_context_length else (base_context_length if base_context_length else max_context_length)
-                    
+
                     # Build comprehensive parameters object
                     parameters_obj = {
                         "family": details_section.get("family"),
@@ -747,7 +747,7 @@ class ModelDiscoveryService:
                         "quantization": details_section.get("quantization_level"),
                         "format": details_section.get("format")
                     }
-                    
+
                     # Extract real API data with comprehensive coverage
                     details = {
                         # From details section
@@ -756,57 +756,57 @@ class ModelDiscoveryService:
                         "quantization": details_section.get("quantization_level"),
                         "format": details_section.get("format"),
                         "parent_model": details_section.get("parent_model"),
-                        
+
                         # Structured parameters object for display
                         "parameters": parameters_obj,
-                        
+
                         # Context length information with proper logic
                         "context_window": current_context_length,  # Current/active context length
                         "max_context_length": max_context_length,  # Maximum supported context length
                         "base_context_length": base_context_length,  # Original/base context length
                         "custom_context_length": custom_context_length,  # Custom num_ctx if set
-                        
+
                         # Architecture and model info
                         "architecture": model_info.get("general.architecture"),
                         "embedding_dimension": embedding_dimension,
                         "parameter_count": model_info.get("general.parameter_count"),
                         "file_type": model_info.get("general.file_type"),
                         "quantization_version": model_info.get("general.quantization_version"),
-                        
+
                         # Model metadata
                         "basename": model_info.get("general.basename"),
                         "size_label": model_info.get("general.size_label"),
                         "license": model_info.get("general.license"),
                         "finetune": model_info.get("general.finetune"),
-                        
+
                         # Capabilities from API
                         "capabilities": capabilities,
-                        
+
                         # Initialize fields for advanced extraction
                         "block_count": None,
                         "attention_heads": None
                     }
-                    
+
                     # Extract block count (layers) - try multiple patterns
                     for key, value in model_info.items():
-                        if ("block_count" in key or "num_layers" in key or 
+                        if ("block_count" in key or "num_layers" in key or
                             key.endswith(".block_count") or key.endswith(".n_layer")):
                             details["block_count"] = value
                             break
-                    
+
                     # Extract attention heads - try multiple patterns
                     for key, value in model_info.items():
-                        if (key.endswith(".attention.head_count") or 
-                            key.endswith(".n_head") or 
+                        if (key.endswith(".attention.head_count") or
+                            key.endswith(".n_head") or
                             "attention_head" in key) and not key.endswith("_kv"):
                             details["attention_heads"] = value
                             break
-                    
+
                     logger.info(f"Extracted comprehensive details for {model_name}: "
                                f"context={current_context_length}, max={max_context_length}, "
                                f"base={base_context_length}, arch={details['architecture']}, "
                                f"blocks={details.get('block_count')}, heads={details.get('attention_heads')}")
-                    
+
                     return details
 
         except Exception as e:
@@ -872,7 +872,7 @@ class ModelDiscoveryService:
                 response = await client.chat.completions.create(
                     model=model_name,
                     messages=[{
-                        "role": "user", 
+                        "role": "user",
                         "content": "Return exactly this JSON structure with no additional text: {\"name\": \"test\", \"value\": 42, \"active\": true}"
                     }],
                     max_tokens=100,

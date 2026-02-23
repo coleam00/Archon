@@ -379,7 +379,7 @@ export const RAGSettings = ({
   }, [ragSettings.LLM_PROVIDER, reloadApiCredentials]);
 
   useEffect(() => {
-    const needsDetection = chatProvider === 'ollama' || embeddingProvider === 'ollama';
+    const needsDetection = chatProvider === 'ollama' || embeddingProvider === 'ollama' || codeSummaryProvider === 'ollama';
 
     if (!needsDetection) {
       setOllamaServerStatus('unknown');
@@ -391,6 +391,8 @@ export const RAGSettings = ({
       llmInstanceConfig.url?.trim() ||
       ragSettings.OLLAMA_EMBEDDING_URL?.trim() ||
       embeddingInstanceConfig.url?.trim() ||
+      ragSettings.CODE_SUMMARIZATION_BASE_URL?.trim() ||
+      codeSummaryInstanceConfig.url?.trim() ||
       DEFAULT_OLLAMA_URL
     );
 
@@ -425,7 +427,7 @@ export const RAGSettings = ({
     return () => {
       cancelled = true;
     };
-  }, [chatProvider, embeddingProvider, ragSettings.LLM_BASE_URL, ragSettings.OLLAMA_EMBEDDING_URL, llmInstanceConfig.url, embeddingInstanceConfig.url]);
+  }, [chatProvider, embeddingProvider, codeSummaryProvider, ragSettings.LLM_BASE_URL, ragSettings.OLLAMA_EMBEDDING_URL, ragSettings.CODE_SUMMARIZATION_BASE_URL, llmInstanceConfig.url, embeddingInstanceConfig.url, codeSummaryInstanceConfig.url]);
 
   // Sync independent provider states with ragSettings (one-way: ragSettings -> local state)
   useEffect(() => {
@@ -443,7 +445,7 @@ export const RAGSettings = ({
   useEffect(() => {
     setOllamaManualConfirmed(false);
     setOllamaServerStatus('unknown');
-  }, [ragSettings.LLM_BASE_URL, ragSettings.OLLAMA_EMBEDDING_URL, chatProvider, embeddingProvider]);
+  }, [ragSettings.LLM_BASE_URL, ragSettings.OLLAMA_EMBEDDING_URL, ragSettings.CODE_SUMMARIZATION_BASE_URL, chatProvider, embeddingProvider, codeSummaryProvider]);
 
   // Update ragSettings when independent providers change (one-way: local state -> ragSettings)
   // Split the “first‐run” guard into two refs so chat and embedding effects don’t interfere.
@@ -1585,8 +1587,11 @@ const manualTestConnection = async (
 
                   await credentialsService.updateRagSettings(updatedSettings);
 
+                  // Reload settings from database to confirm they were saved correctly
+                  const freshSettings = await credentialsService.getRagSettings();
+
                   // Update local ragSettings state to match what was saved
-                  setRagSettings(updatedSettings);
+                  setRagSettings(freshSettings);
 
                   showToast('RAG settings saved successfully!', 'success');
                 } catch (err) {
@@ -2538,11 +2543,18 @@ const manualTestConnection = async (
                 </Button>
                 <Button
                   onClick={async () => {
-                    setRagSettings({
+                    // Save the instance config
+                    const updatedSettings = {
                       ...ragSettings,
                       CODE_SUMMARIZATION_BASE_URL: codeSummaryInstanceConfig.url,
                       CODE_SUMMARIZATION_INSTANCE_NAME: codeSummaryInstanceConfig.name
-                    });
+                    };
+                    await credentialsService.updateRagSettings(updatedSettings);
+                    
+                    // Reload to confirm
+                    const freshSettings = await credentialsService.getRagSettings();
+                    setRagSettings(freshSettings);
+                    
                     setShowEditSummaryModal(false);
                     showToast('Summary instance updated successfully', 'success');
                     // Wait 1 second then automatically test connection and refresh models

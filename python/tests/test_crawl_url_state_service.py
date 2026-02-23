@@ -4,7 +4,7 @@ Unit tests for CrawlUrlStateService.
 Tests the checkpoint/resume URL state tracking service.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 

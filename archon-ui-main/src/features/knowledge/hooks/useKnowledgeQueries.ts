@@ -505,6 +505,42 @@ export function useStopCrawl() {
 }
 
 /**
+ * Pause an ongoing operation
+ */
+export function usePauseOperation() {
+  const { showToast } = useToast();
+
+  return useMutation({
+    mutationFn: (progressId: string) => knowledgeService.pauseOperation(progressId),
+    onSuccess: (_data, progressId) => {
+      showToast(`Operation paused (${progressId})`, "info");
+    },
+    onError: (error, progressId) => {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      showToast(`Failed to pause operation (${progressId}): ${errorMessage}`, "error");
+    },
+  });
+}
+
+/**
+ * Resume a paused operation
+ */
+export function useResumeOperation() {
+  const { showToast } = useToast();
+
+  return useMutation({
+    mutationFn: (progressId: string) => knowledgeService.resumeOperation(progressId),
+    onSuccess: (_data, progressId) => {
+      showToast(`Operation resumed (${progressId})`, "success");
+    },
+    onError: (error, progressId) => {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      showToast(`Failed to resume operation (${progressId}): ${errorMessage}`, "error");
+    },
+  });
+}
+
+/**
  * Delete knowledge item mutation
  */
 export function useDeleteKnowledgeItem() {

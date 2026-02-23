@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Path
 
 from ..config.logfire_config import logfire
 from ..services.credential_service import credential_service
+
 # Provider validation - simplified inline version
 
 router = APIRouter(prefix="/api/providers", tags=["providers"])

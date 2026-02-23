@@ -2,7 +2,6 @@
 Tests for LLMs-full.txt Section Parser
 """
 
-import pytest
 
 from src.server.services.crawling.helpers.llms_full_parser import (
     create_section_slug,

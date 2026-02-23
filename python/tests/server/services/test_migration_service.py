@@ -3,9 +3,8 @@ Fixed unit tests for migration_service.py
 """
 
 import hashlib
-from datetime import datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -47,7 +46,7 @@ def test_pending_migration_init():
     assert migration.name == "001_initial"
     assert migration.sql_content == "CREATE TABLE test (id INT);"
     assert migration.file_path == "migration/0.1.0/001_initial.sql"
-    assert migration.checksum == hashlib.md5("CREATE TABLE test (id INT);".encode()).hexdigest()
+    assert migration.checksum == hashlib.md5(b"CREATE TABLE test (id INT);").hexdigest()
 
 
 def test_migration_record_init():

@@ -3,8 +3,8 @@ Site Configuration Helper
 
 Handles site-specific configurations and detection.
 """
-from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 from crawl4ai.content_filter_strategy import PruningContentFilter
+from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 
 from ....config.logfire_config import get_logger
 

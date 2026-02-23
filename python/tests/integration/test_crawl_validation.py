@@ -18,7 +18,6 @@ from pathlib import Path
 
 import httpx
 
-
 # API base URL
 API_BASE = "http://localhost:8181"
 
@@ -87,7 +86,7 @@ async def poll_progress(client: httpx.AsyncClient, progress_id: str, timeout: in
     raise TimeoutError(f"Crawl timed out after {timeout} seconds")
 
 
-async def test_crawl_and_extract(test_case: dict) -> dict:
+async def run_crawl_validation(test_case: dict) -> dict:
     """
     Crawl a URL via API and validate code extraction.
 
@@ -128,9 +127,7 @@ async def test_crawl_and_extract(test_case: dict) -> dict:
                 "max_depth": 2,
             }
 
-            response = await client.post(
-                f"{API_BASE}/api/knowledge-items/crawl", json=crawl_request
-            )
+            response = await client.post(f"{API_BASE}/api/knowledge-items/crawl", json=crawl_request)
 
             # Debug response
             print(f"   Status code: {response.status_code}")
@@ -150,12 +147,10 @@ async def test_crawl_and_extract(test_case: dict) -> dict:
             final_progress = await poll_progress(client, progress_id)
 
             result["chunks_stored"] = final_progress.get("result", {}).get("chunks_stored", 0)
-            result["code_examples_extracted"] = final_progress.get("result", {}).get(
-                "code_examples_count", 0
-            )
+            result["code_examples_extracted"] = final_progress.get("result", {}).get("code_examples_count", 0)
             result["source_id"] = final_progress.get("result", {}).get("source_id")
 
-            print(f"\n✅ Crawl complete:")
+            print("\n✅ Crawl complete:")
             print(f"   Chunks stored: {result['chunks_stored']}")
             print(f"   Code examples: {result['code_examples_extracted']}")
             print(f"   Source ID: {result['source_id']}")
@@ -211,9 +206,7 @@ async def test_crawl_and_extract(test_case: dict) -> dict:
                 result["errors"].append("Expected code examples but none were extracted")
             elif not test_case["expected_code"] and result["code_examples_extracted"] > 0:
                 result["status"] = "info"
-                result["errors"].append(
-                    "Unexpected code examples found (not necessarily an error)"
-                )
+                result["errors"].append("Unexpected code examples found (not necessarily an error)")
             else:
                 result["status"] = "success"
 
@@ -261,6 +254,7 @@ async def main():
             print(f"   ❌ API health check failed: {e}")
             print(f"   Exception type: {type(e).__name__}")
             import traceback
+
             traceback.print_exc()
             print("\nPlease ensure the backend is running (docker compose up or uv run server)")
             return
@@ -268,7 +262,7 @@ async def main():
     all_results = []
 
     for test_case in TEST_URLS:
-        result = await test_crawl_and_extract(test_case)
+        result = await run_crawl_validation(test_case)
         all_results.append(result)
 
     # Summary

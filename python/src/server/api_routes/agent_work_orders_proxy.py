@@ -111,7 +111,7 @@ async def proxy_to_agent_work_orders(request: Request, path: str = "") -> Respon
 
     except httpx.TimeoutException as e:
         logger.error(
-            f"Agent work orders service timeout",
+            "Agent work orders service timeout",
             extra={
                 "error": str(e),
                 "service_url": service_url,
@@ -126,7 +126,7 @@ async def proxy_to_agent_work_orders(request: Request, path: str = "") -> Respon
 
     except Exception as e:
         logger.error(
-            f"Error proxying to agent work orders service",
+            "Error proxying to agent work orders service",
             extra={
                 "error": str(e),
                 "service_url": service_url,

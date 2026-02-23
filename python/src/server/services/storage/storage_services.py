@@ -153,14 +153,14 @@ class DocumentStorageService(BaseStorageService):
                 if extract_code_examples and len(chunks) > 0:
                     try:
                         await report_progress("Extracting code examples...", 85)
-                        
+
                         logger.info(f"🔍 DEBUG: Starting code extraction for {filename} | extract_code_examples={extract_code_examples}")
-                        
+
                         # Import code extraction service
                         from ..crawling.code_extraction_service import CodeExtractionService
-                        
+
                         code_service = CodeExtractionService(self.supabase_client)
-                        
+
                         # Create crawl_results format expected by code extraction service
                         # markdown: cleaned plaintext (HTML->markdown for HTML files, raw content otherwise)
                         # html: empty string to prevent HTML extraction path confusion
@@ -173,9 +173,9 @@ class DocumentStorageService(BaseStorageService):
                                 "text/markdown" if filename.lower().endswith(('.html', '.htm', '.md')) else "text/plain"
                             )
                         }]
-                        
+
                         logger.info(f"🔍 DEBUG: Created crawl_results with url={doc_url}, content_length={len(file_content)}")
-                        
+
                         # Create progress callback for code extraction
                         async def code_progress_callback(data: dict):
                             logger.info(f"🔍 DEBUG: Code extraction progress: {data}")
@@ -185,8 +185,8 @@ class DocumentStorageService(BaseStorageService):
                                 mapped_progress = 85 + (raw_progress / 100.0) * 10  # 85% to 95%
                                 message = data.get("log", "Extracting code examples...")
                                 await progress_callback(message, int(mapped_progress))
-                        
-                        logger.info(f"🔍 DEBUG: About to call extract_and_store_code_examples...")
+
+                        logger.info("🔍 DEBUG: About to call extract_and_store_code_examples...")
                         code_examples_count = await code_service.extract_and_store_code_examples(
                             crawl_results=crawl_results,
                             url_to_full_document=url_to_full_document,
@@ -194,14 +194,14 @@ class DocumentStorageService(BaseStorageService):
                             progress_callback=code_progress_callback,
                             cancellation_check=cancellation_check,
                         )
-                        
+
                         logger.info(f"🔍 DEBUG: Code extraction completed: {code_examples_count} code examples found for {filename}")
-                        
+
                     except Exception as e:
                         # Log error with full traceback but don't fail the entire upload
                         logger.error(f"Code extraction failed for {filename}: {e}", exc_info=True)
                         code_examples_count = 0
-                
+
                 await report_progress("Document upload completed!", 100)
 
                 result = {

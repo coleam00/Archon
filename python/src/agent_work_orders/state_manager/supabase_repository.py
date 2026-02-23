@@ -10,7 +10,7 @@ Architecture Note - async/await Pattern:
     This maintains a consistent async API contract across all repositories.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from supabase import Client
@@ -247,7 +247,7 @@ class SupabaseWorkOrderRepository:
             # Prepare updates
             updates: dict[str, Any] = {
                 "status": status.value,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(UTC).isoformat(),
             }
 
             # Add any metadata updates to the JSONB column
@@ -307,7 +307,7 @@ class SupabaseWorkOrderRepository:
         try:
             self.client.table(self.table_name).update({
                 "git_branch_name": git_branch_name,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(UTC).isoformat(),
             }).eq("agent_work_order_id", agent_work_order_id).execute()
 
             self._logger.info(
@@ -341,7 +341,7 @@ class SupabaseWorkOrderRepository:
         try:
             self.client.table(self.table_name).update({
                 "agent_session_id": agent_session_id,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(UTC).isoformat(),
             }).eq("agent_work_order_id", agent_work_order_id).execute()
 
             self._logger.info(

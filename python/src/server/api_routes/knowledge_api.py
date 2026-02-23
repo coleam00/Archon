@@ -153,7 +153,7 @@ class KnowledgeItemRequest(BaseModel):
     update_frequency: int = 7
     max_depth: int = 2  # Maximum crawl depth (1-5)
     extract_code_examples: bool = True  # Whether to extract code examples
-    use_new_pipeline: bool = False  # Whether to use the new restartable pipeline
+    use_new_pipeline: bool = True  # Whether to use the new restartable pipeline
 
     class Config:
         schema_extra = {
@@ -164,7 +164,7 @@ class KnowledgeItemRequest(BaseModel):
                 "update_frequency": 7,
                 "max_depth": 2,
                 "extract_code_examples": True,
-                "use_new_pipeline": False,
+                "use_new_pipeline": True,
             }
         }
 
@@ -1604,4 +1604,98 @@ async def stop_crawl_task(progress_id: str):
         raise
     except Exception as e:
         safe_logfire_error(f"Failed to stop crawl task | error={str(e)} | progress_id={progress_id}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
+@router.post("/knowledge-items/pause/{progress_id}")
+async def pause_operation(progress_id: str):
+    """Pause an ongoing operation."""
+    try:
+        from ..utils.progress.progress_tracker import ProgressTracker
+
+        safe_logfire_info(f"Pause requested | progress_id={progress_id}")
+
+        # Check if operation exists
+        progress_data = ProgressTracker.get_progress(progress_id)
+        if not progress_id:
+            raise HTTPException(status_code=404, detail={"error": f"No operation found for ID: {progress_id}"})
+
+        # Check if operation is in a pausable state
+        current_status = progress_data.get("status") if progress_data else None
+        if current_status not in ["starting", "in_progress"]:
+            raise HTTPException(
+                status_code=400, detail={"error": f"Cannot pause operation in status: {current_status}"}
+            )
+
+        # Pause the operation
+        success = await ProgressTracker.pause_operation(progress_id)
+
+        if not success:
+            raise HTTPException(status_code=500, detail={"error": "Failed to pause operation"})
+
+        # Cancel the orchestration task if running
+        from ..services.crawling import get_active_orchestration
+
+        orchestration = await get_active_orchestration(progress_id)
+        if orchestration:
+            orchestration.cancel()
+
+        safe_logfire_info(f"Operation paused | progress_id={progress_id}")
+        return {
+            "success": True,
+            "message": "Operation paused successfully",
+            "progressId": progress_id,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        safe_logfire_error(f"Failed to pause operation | error={str(e)} | progress_id={progress_id}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
+@router.post("/knowledge-items/resume/{progress_id}")
+async def resume_operation(progress_id: str):
+    """Resume a paused operation."""
+    try:
+        from ..utils.progress.progress_tracker import ProgressTracker
+
+        safe_logfire_info(f"Resume requested | progress_id={progress_id}")
+
+        # Check if operation exists and is paused
+        progress_data = ProgressTracker.get_progress(progress_id)
+        if not progress_data:
+            raise HTTPException(status_code=404, detail={"error": f"No operation found for ID: {progress_id}"})
+
+        # Check if operation is in a resumable state
+        current_status = progress_data.get("status")
+        if current_status != "paused":
+            raise HTTPException(
+                status_code=400, detail={"error": f"Cannot resume operation in status: {current_status}"}
+            )
+
+        # Resume the operation
+        success = await ProgressTracker.resume_operation(progress_id)
+
+        if not success:
+            raise HTTPException(status_code=500, detail={"error": "Failed to resume operation"})
+
+        # Get source_id to restart the crawl
+        source_id = progress_data.get("source_id")
+
+        # TODO: Restart the actual operation - for now just mark as in_progress
+        # The actual restart logic would need to check what type of operation and restart it
+
+        safe_logfire_info(f"Operation resumed | progress_id={progress_id} | source_id={source_id}")
+        return {
+            "success": True,
+            "message": "Operation resumed successfully",
+            "progressId": progress_id,
+            "sourceId": source_id,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        safe_logfire_error(f"Failed to resume operation | error={str(e)} | progress_id={progress_id}")
         raise HTTPException(status_code=500, detail={"error": str(e)})

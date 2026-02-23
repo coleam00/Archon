@@ -328,14 +328,14 @@ async def add_documents_to_supabase(
             # Use only successful embeddings
             batch_embeddings = result.embeddings
             successful_texts = result.texts_processed
-            
+
             # Get model information for tracking
-            from ..llm_provider_service import get_embedding_model
             from ..credential_service import credential_service
-            
+            from ..llm_provider_service import get_embedding_model
+
             # Get embedding model name
             embedding_model_name = await get_embedding_model(provider=provider)
-            
+
             # Get LLM chat model (used for contextual embeddings if enabled)
             llm_chat_model = None
             if use_contextual_embeddings:
@@ -386,7 +386,7 @@ async def add_documents_to_supabase(
                 # Determine the correct embedding column based on dimension
                 embedding_dim = len(embedding) if isinstance(embedding, list) else len(embedding.tolist())
                 embedding_column = None
-                
+
                 if embedding_dim == 768:
                     embedding_column = "embedding_768"
                 elif embedding_dim == 1024:
@@ -399,7 +399,7 @@ async def add_documents_to_supabase(
                     # Default to closest supported dimension
                     search_logger.warning(f"Unsupported embedding dimension {embedding_dim}, using embedding_1536")
                     embedding_column = "embedding_1536"
-                
+
                 # Get page_id for this URL if available
                 page_id = url_to_page_id.get(batch_urls[j]) if url_to_page_id else None
 

@@ -94,7 +94,7 @@ async def test_prompt_directly():
                 provider=None,  # Use configured provider
             )
 
-            print(f"\n✅ Summary generated:")
+            print("\n✅ Summary generated:")
             print(f"   Example name: {result.get('example_name', 'N/A')}")
             print(f"   Summary: {result.get('summary', 'N/A')[:200]}...")
 
@@ -120,7 +120,7 @@ async def test_prompt_directly():
                 }
             )
 
-            print(f"\n   Validation:")
+            print("\n   Validation:")
             print(f"   ✓ Has example_name: {has_example_name}")
             print(f"   ✓ Has summary: {has_summary}")
             print(

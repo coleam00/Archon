@@ -51,27 +51,27 @@ def _preserve_code_blocks_across_pages(text: str) -> str:
     that appear within code blocks.
     """
     import re
-    
+
     # Pattern to match page separators that split code blocks
     # Look for: ``` [content] --- Page N --- [content] ```
     page_break_in_code_pattern = r'(```\w*[^\n]*\n(?:[^`]|`(?!``))*)(\n--- Page \d+ ---\n)((?:[^`]|`(?!``))*)```'
-    
+
     # Keep merging until no more splits are found
     while True:
         matches = list(re.finditer(page_break_in_code_pattern, text, re.DOTALL))
         if not matches:
             break
-            
+
         # Replace each match by removing the page separator
         for match in reversed(matches):  # Reverse to maintain positions
             before_page_break = match.group(1)
-            page_separator = match.group(2) 
+            page_separator = match.group(2)
             after_page_break = match.group(3)
-            
+
             # Rejoin the code block without the page separator
             rejoined = f"{before_page_break}\n{after_page_break}```"
             text = text[:match.start()] + rejoined + text[match.end():]
-    
+
     return text
 
 
@@ -81,21 +81,21 @@ def _clean_html_to_text(html_content: str) -> str:
     Preserves code blocks and important structure while removing markup.
     """
     import re
-    
+
     # First preserve code blocks with their content before general cleaning
     # This ensures code blocks remain intact for extraction
     code_blocks = []
-    
+
     # Find and temporarily replace code blocks to preserve them
     code_patterns = [
         r'<pre><code[^>]*>(.*?)</code></pre>',
         r'<code[^>]*>(.*?)</code>',
         r'<pre[^>]*>(.*?)</pre>',
     ]
-    
+
     processed_html = html_content
     placeholder_map = {}
-    
+
     for pattern in code_patterns:
         matches = list(re.finditer(pattern, processed_html, re.DOTALL | re.IGNORECASE))
         for i, match in enumerate(reversed(matches)):  # Reverse to maintain positions
@@ -109,19 +109,19 @@ def _clean_html_to_text(html_content: str) -> str:
             code_content = re.sub(r'&amp;', '&', code_content)
             code_content = re.sub(r'&quot;', '"', code_content)
             code_content = re.sub(r'&#39;', "'", code_content)
-            
+
             # Create placeholder
             placeholder = f"__CODE_BLOCK_{len(placeholder_map)}__"
             placeholder_map[placeholder] = code_content.strip()
-            
+
             # Replace in HTML
             processed_html = processed_html[:match.start()] + placeholder + processed_html[match.end():]
-    
+
     # Now clean all remaining HTML tags
     # Remove script and style content entirely
     processed_html = re.sub(r'<script[^>]*>.*?</script>', '', processed_html, flags=re.DOTALL | re.IGNORECASE)
     processed_html = re.sub(r'<style[^>]*>.*?</style>', '', processed_html, flags=re.DOTALL | re.IGNORECASE)
-    
+
     # Convert common HTML elements to readable text
     # Headers
     processed_html = re.sub(r'<h[1-6][^>]*>(.*?)</h[1-6]>', r'\n\n\1\n\n', processed_html, flags=re.DOTALL | re.IGNORECASE)
@@ -131,10 +131,10 @@ def _clean_html_to_text(html_content: str) -> str:
     processed_html = re.sub(r'<br\s*/?>', '\n', processed_html, flags=re.IGNORECASE)
     # List items
     processed_html = re.sub(r'<li[^>]*>(.*?)</li>', r'• \1\n', processed_html, flags=re.DOTALL | re.IGNORECASE)
-    
+
     # Remove all remaining HTML tags
     processed_html = re.sub(r'<[^>]+>', '', processed_html)
-    
+
     # Clean up HTML entities
     processed_html = re.sub(r'&nbsp;', ' ', processed_html)
     processed_html = re.sub(r'&lt;', '<', processed_html)
@@ -143,15 +143,15 @@ def _clean_html_to_text(html_content: str) -> str:
     processed_html = re.sub(r'&quot;', '"', processed_html)
     processed_html = re.sub(r'&#39;', "'", processed_html)
     processed_html = re.sub(r'&#x27;', "'", processed_html)
-    
+
     # Restore code blocks
     for placeholder, code_content in placeholder_map.items():
         processed_html = processed_html.replace(placeholder, f"\n\n```\n{code_content}\n```\n\n")
-    
+
     # Clean up excessive whitespace
     processed_html = re.sub(r'\n\s*\n\s*\n', '\n\n', processed_html)  # Max 2 consecutive newlines
     processed_html = re.sub(r'[ \t]+', ' ', processed_html)  # Multiple spaces to single space
-    
+
     return processed_html.strip()
 
 
@@ -256,18 +256,18 @@ def extract_text_from_pdf(file_content: bytes) -> str:
                 combined_text = "\n\n".join(text_content)
                 logger.info(f"🔍 PDF DEBUG: Extracted {len(text_content)} pages, total length: {len(combined_text)}")
                 logger.info(f"🔍 PDF DEBUG: First 500 chars: {repr(combined_text[:500])}")
-                
+
                 # Check for backticks before and after processing
                 backtick_count_before = combined_text.count("```")
                 logger.info(f"🔍 PDF DEBUG: Backticks found before processing: {backtick_count_before}")
-                
+
                 processed_text = _preserve_code_blocks_across_pages(combined_text)
                 backtick_count_after = processed_text.count("```")
                 logger.info(f"🔍 PDF DEBUG: Backticks found after processing: {backtick_count_after}")
-                
+
                 if backtick_count_after > 0:
                     logger.info(f"🔍 PDF DEBUG: Sample after processing: {repr(processed_text[:1000])}")
-                
+
                 return processed_text
 
         except Exception as e:

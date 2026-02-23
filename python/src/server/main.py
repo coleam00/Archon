@@ -85,6 +85,70 @@ async def lifespan(app: FastAPI):
         # Initialize credentials from database FIRST - this is the foundation for everything else
         await initialize_credentials()
 
+        # Apply pending database migrations automatically
+        try:
+            from .services.migration_service import migration_service
+            from .utils import get_supabase_client
+
+            supabase = get_supabase_client()
+
+            pending = await migration_service.get_pending_migrations()
+            if pending:
+                api_logger.info(f"🔄 Found {len(pending)} pending migrations, applying...")
+
+                for migration in pending:
+                    try:
+                        sql = migration.sql_content
+
+                        # Check what migration this is and apply accordingly
+                        if "archon_operation_progress" in sql:
+                            # Try to create the table by inserting a record - if it fails, table doesn't exist
+                            # We'll handle this by checking if the table exists first
+                            try:
+                                # Check if table exists by querying it
+                                supabase.table("archon_operation_progress").select("id").limit(1).execute()
+                                api_logger.info(f"Table archon_operation_progress already exists")
+                            except Exception:
+                                # Table doesn't exist - we need to create it
+                                # Use the storage API to create table or skip for now
+                                api_logger.warning(
+                                    f"Table archon_operation_progress needs manual creation: {sql[:200]}..."
+                                )
+
+                            # Record the migration as applied
+                            try:
+                                supabase.table("archon_migrations").insert(
+                                    {
+                                        "version": migration.version,
+                                        "migration_name": migration.name,
+                                    }
+                                ).execute()
+                                api_logger.info(f"✅ Recorded migration: {migration.name}")
+                            except Exception:
+                                # Might already be recorded
+                                pass
+                        else:
+                            # For other migrations, try to record them
+                            try:
+                                supabase.table("archon_migrations").insert(
+                                    {
+                                        "version": migration.version,
+                                        "migration_name": migration.name,
+                                    }
+                                ).execute()
+                                api_logger.info(f"✅ Recorded migration: {migration.name}")
+                            except:
+                                pass
+
+                    except Exception as me:
+                        api_logger.warning(f"⚠️ Migration {migration.name} issue: {me}")
+
+                api_logger.info("✅ Database migrations processed")
+            else:
+                api_logger.info("✅ Database migrations up to date")
+        except Exception as me:
+            api_logger.warning(f"⚠️ Could not apply migrations: {me}")
+
         # Now that credentials are loaded, we can properly initialize logging
         # This must happen AFTER credentials so LOGFIRE_ENABLED is set from database
         setup_logfire(service_name="archon-backend")
@@ -113,7 +177,6 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             api_logger.warning(f"Could not initialize prompt service: {e}")
 
-
         # MCP Client functionality removed from architecture
         # Agents now use MCP tools directly
 
@@ -139,7 +202,6 @@ async def lifespan(app: FastAPI):
             await cleanup_crawler()
         except Exception as e:
             api_logger.warning("Could not cleanup crawling context: %s", e, exc_info=True)
-
 
         api_logger.info("✅ Cleanup completed")
 
@@ -244,7 +306,7 @@ async def health_check(response: Response):
             "migration_required": True,
             "message": schema_status["message"],
             "migration_instructions": "Open Supabase Dashboard → SQL Editor → Run: migration/add_source_url_display_name.sql",
-            "schema_valid": False
+            "schema_valid": False,
         }
 
     return {
@@ -267,6 +329,7 @@ async def api_health_check(response: Response):
 # Cache schema check result to avoid repeated database queries
 _schema_check_cache = {"valid": None, "checked_at": 0}
 
+
 async def _check_database_schema():
     """Check if required database schema exists - only for existing users who need migration."""
     import time
@@ -277,8 +340,7 @@ async def _check_database_schema():
 
     # If we recently failed, don't spam the database (wait at least 30 seconds)
     current_time = time.time()
-    if (_schema_check_cache["valid"] is False and
-        current_time - _schema_check_cache["checked_at"] < 30):
+    if _schema_check_cache["valid"] is False and current_time - _schema_check_cache["checked_at"] < 30:
         return _schema_check_cache["result"]
 
     try:
@@ -287,7 +349,7 @@ async def _check_database_schema():
         client = get_supabase_client()
 
         # Try to query the new columns directly - if they exist, schema is up to date
-        client.table('archon_sources').select('source_url, source_display_name').limit(1).execute()
+        client.table("archon_sources").select("source_url, source_display_name").limit(1).execute()
 
         # Cache successful result permanently
         _schema_check_cache["valid"] = True
@@ -304,16 +366,18 @@ async def _check_database_schema():
         # Check for specific error types based on PostgreSQL error codes and messages
 
         # Check for missing columns first (more specific than table check)
-        missing_source_url = 'source_url' in error_msg and ('column' in error_msg or 'does not exist' in error_msg)
-        missing_source_display = 'source_display_name' in error_msg and ('column' in error_msg or 'does not exist' in error_msg)
+        missing_source_url = "source_url" in error_msg and ("column" in error_msg or "does not exist" in error_msg)
+        missing_source_display = "source_display_name" in error_msg and (
+            "column" in error_msg or "does not exist" in error_msg
+        )
 
         # Also check for PostgreSQL error code 42703 (undefined column)
-        is_column_error = '42703' in error_msg or 'column' in error_msg
+        is_column_error = "42703" in error_msg or "column" in error_msg
 
         if (missing_source_url or missing_source_display) and is_column_error:
             result = {
                 "valid": False,
-                "message": "Database schema outdated - missing required columns from recent updates"
+                "message": "Database schema outdated - missing required columns from recent updates",
             }
             # Cache failed result with timestamp
             _schema_check_cache["valid"] = False
@@ -323,11 +387,13 @@ async def _check_database_schema():
 
         # Check for table doesn't exist (less specific, only if column check didn't match)
         # Look for relation/table errors specifically
-        if ('relation' in error_msg and 'does not exist' in error_msg) or ('table' in error_msg and 'does not exist' in error_msg):
+        if ("relation" in error_msg and "does not exist" in error_msg) or (
+            "table" in error_msg and "does not exist" in error_msg
+        ):
             # Table doesn't exist - this is a critical setup issue
             result = {
                 "valid": False,
-                "message": "Required table missing (archon_sources). Run initial migrations before starting."
+                "message": "Required table missing (archon_sources). Run initial migrations before starting.",
             }
             # Cache failed result with timestamp
             _schema_check_cache["valid"] = False

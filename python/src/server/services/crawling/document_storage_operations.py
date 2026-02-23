@@ -395,11 +395,15 @@ class DocumentStorageOperations:
                 embedding_model = embedding_config.get("EMBEDDING_MODEL", "text-embedding-3-small")
                 embedding_dimensions = int(embedding_config.get("EMBEDDING_DIMENSIONS", "1536"))
 
-                # Get vectorizer settings (placeholder for now, can be enhanced later)
+                # Get vectorizer settings from credentials
+                use_contextual = await credential_service.get_credential("USE_CONTEXTUAL_EMBEDDINGS", False)
+                use_hybrid = await credential_service.get_credential("USE_HYBRID_SEARCH", False)
+                chunk_size = await credential_service.get_credential("CHUNK_SIZE", 5000)
+
                 vectorizer_settings = {
-                    "use_contextual": False,
-                    "use_hybrid": False,
-                    "chunk_size": 5000,
+                    "use_contextual": use_contextual,
+                    "use_hybrid": use_hybrid,
+                    "chunk_size": chunk_size,
                 }
 
                 # Get summarization model from RAG strategy
@@ -552,11 +556,13 @@ class DocumentStorageOperations:
             if not markdown_content or not doc_url:
                 continue
 
-            documents.append({
-                "url": doc_url,
-                "content": markdown_content,
-                "title": doc.get("title", ""),
-            })
+            documents.append(
+                {
+                    "url": doc_url,
+                    "content": markdown_content,
+                    "title": doc.get("title", ""),
+                }
+            )
 
         if not documents:
             safe_logfire_error(f"No valid documents to process | source_id={original_source_id}")
@@ -632,7 +638,9 @@ class DocumentStorageOperations:
         but we still need an archon_sources record for compatibility.
         """
         try:
-            response = self.supabase_client.table("archon_sources").select("source_id").eq("source_id", source_id).execute()
+            response = (
+                self.supabase_client.table("archon_sources").select("source_id").eq("source_id", source_id).execute()
+            )
 
             if not response.data:
                 # Create new source record
@@ -650,10 +658,12 @@ class DocumentStorageOperations:
                 safe_logfire_info(f"Created archon_sources record | source_id={source_id}")
             else:
                 # Update existing source
-                self.supabase_client.table("archon_sources").update({
-                    "pipeline_status": "chunking",
-                    "updated_at": "now()",
-                }).eq("source_id", source_id).execute()
+                self.supabase_client.table("archon_sources").update(
+                    {
+                        "pipeline_status": "chunking",
+                        "updated_at": "now()",
+                    }
+                ).eq("source_id", source_id).execute()
                 safe_logfire_info(f"Updated archon_sources record | source_id={source_id}")
 
         except Exception as e:

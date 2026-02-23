@@ -58,9 +58,7 @@ router = APIRouter(prefix="/api/migrations", tags=["migrations"])
 
 
 @router.get("/status", response_model=MigrationStatusResponse)
-async def get_migration_status(
-    response: Response, if_none_match: str | None = Header(None)
-):
+async def get_migration_status(response: Response, if_none_match: str | None = Header(None)):
     """
     Get current migration status including pending and applied migrations.
 

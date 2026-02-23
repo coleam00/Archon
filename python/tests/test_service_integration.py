@@ -59,7 +59,7 @@ def test_progress_polling(client):
     # Test crawl progress polling endpoint
     response = client.get("/api/knowledge/crawl-progress/test-progress-id")
     assert response.status_code in [200, 404, 500]
-    
+
     # Test project progress polling endpoint (if exists)
     response = client.get("/api/progress/test-operation-id")
     assert response.status_code in [200, 404, 500]

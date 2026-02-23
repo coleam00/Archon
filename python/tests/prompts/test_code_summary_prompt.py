@@ -18,7 +18,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from server.services.storage.code_storage_service import _generate_code_example_summary_async
 
-
 # Sample code blocks for testing
 SAMPLE_CODE_BLOCKS = [
     {
@@ -115,39 +114,39 @@ fn read_file_contents(path: &str) -> Result<String, io::Error> {
 ]
 
 
-async def test_single_summary(sample: dict, provider: str = None):
+async def run_single_summary(sample: dict, provider: str = None):
     """Test summary generation for a single code sample."""
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print(f"Testing: {sample['name']}")
     print(f"Language: {sample['language']}")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
 
-    print(f"\nCode snippet (first 200 chars):")
+    print("\nCode snippet (first 200 chars):")
     print(f"{sample['code'][:200]}...")
 
     try:
         result = await _generate_code_example_summary_async(
-            code=sample['code'],
-            context_before=sample['context_before'],
-            context_after=sample['context_after'],
-            language=sample['language'],
-            provider=provider
+            code=sample["code"],
+            context_before=sample["context_before"],
+            context_after=sample["context_after"],
+            language=sample["language"],
+            provider=provider,
         )
 
-        print(f"\n✅ SUCCESS - Generated summary:")
+        print("\n✅ SUCCESS - Generated summary:")
         print(f"   Example Name: {result['example_name']}")
         print(f"   Summary: {result['summary']}")
 
         # Verify JSON structure
-        assert 'example_name' in result, "Missing 'example_name' field"
-        assert 'summary' in result, "Missing 'summary' field"
-        assert len(result['example_name']) > 0, "Empty 'example_name'"
-        assert len(result['summary']) > 0, "Empty 'summary'"
+        assert "example_name" in result, "Missing 'example_name' field"
+        assert "summary" in result, "Missing 'summary' field"
+        assert len(result["example_name"]) > 0, "Empty 'example_name'"
+        assert len(result["summary"]) > 0, "Empty 'summary'"
 
         # Check if summary follows the structured format
-        has_purpose = 'PURPOSE:' in result['summary'].upper() or 'purpose' in result['summary'].lower()
-        has_params = 'PARAMETERS:' in result['summary'].upper() or 'parameter' in result['summary'].lower()
-        has_use = 'USE WHEN:' in result['summary'].upper() or 'use' in result['summary'].lower()
+        has_purpose = "PURPOSE:" in result["summary"].upper() or "purpose" in result["summary"].lower()
+        has_params = "PARAMETERS:" in result["summary"].upper() or "parameter" in result["summary"].lower()
+        has_use = "USE WHEN:" in result["summary"].upper() or "use" in result["summary"].lower()
 
         structure_score = sum([has_purpose, has_params, has_use])
         print(f"   Structure indicators: {structure_score}/3 (PURPOSE/PARAMETERS/USE WHEN)")
@@ -155,16 +154,16 @@ async def test_single_summary(sample: dict, provider: str = None):
         return True, result
 
     except Exception as e:
-        print(f"\n❌ FAILED with error:")
+        print("\n❌ FAILED with error:")
         print(f"   {type(e).__name__}: {str(e)}")
         return False, None
 
 
 async def main():
     """Run all tests."""
-    print("="*80)
+    print("=" * 80)
     print("CODE SUMMARY PROMPT TEST - 1.2B-Optimized Version")
-    print("="*80)
+    print("=" * 80)
     print("\nThis script tests the updated prompt in code_storage_service.py")
     print("Testing with various code samples across different languages...\n")
 
@@ -179,39 +178,36 @@ async def main():
     results = []
 
     for sample in SAMPLE_CODE_BLOCKS:
-        success, result = await test_single_summary(sample, provider)
-        results.append({
-            'name': sample['name'],
-            'language': sample['language'],
-            'success': success,
-            'result': result
-        })
+        success, result = await run_single_summary(sample, provider)
+        results.append({"name": sample["name"], "language": sample["language"], "success": success, "result": result})
 
         # Small delay between tests to avoid rate limiting
         await asyncio.sleep(1)
 
     # Print summary
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TEST SUMMARY")
-    print("="*80)
+    print("=" * 80)
 
-    successful = sum(1 for r in results if r['success'])
+    successful = sum(1 for r in results if r["success"])
     total = len(results)
 
     print(f"\nResults: {successful}/{total} tests passed")
     print("\nDetailed results:")
 
     for r in results:
-        status = "✅ PASS" if r['success'] else "❌ FAIL"
+        status = "✅ PASS" if r["success"] else "❌ FAIL"
         print(f"  {status} - {r['name']} ({r['language']})")
-        if r['result']:
+        if r["result"]:
             print(f"          Name: {r['result']['example_name']}")
-            summary_preview = r['result']['summary'][:80] + "..." if len(r['result']['summary']) > 80 else r['result']['summary']
+            summary_preview = (
+                r["result"]["summary"][:80] + "..." if len(r["result"]["summary"]) > 80 else r["result"]["summary"]
+            )
             print(f"          Summary: {summary_preview}")
 
     # Export results to JSON for inspection
     output_file = Path(__file__).parent / "code_summary_test_results.json"
-    with open(output_file, 'w') as f:
+    with open(output_file, "w") as f:
         json.dump(results, f, indent=2)
 
     print(f"\n📄 Full results exported to: {output_file}")

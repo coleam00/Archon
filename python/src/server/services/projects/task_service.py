@@ -218,7 +218,7 @@ class TaskService:
             if search_query:
                 # Split search query into terms
                 search_terms = search_query.lower().split()
-                
+
                 # Build the filter expression for AND-of-ORs
                 # Each term must match in at least one field (OR), and all terms must match (AND)
                 if len(search_terms) == 1:
