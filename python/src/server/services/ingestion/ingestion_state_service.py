@@ -256,12 +256,34 @@ class IngestionStateService:
         ]
 
     async def get_chunks_by_source(self, source_id: str) -> list[Chunk]:
-        response = (
-            self.supabase.table("archon_chunks")
-            .select("archon_chunks.*, archon_document_blobs.source_id")
-            .eq("archon_document_blobs.source_id", source_id)
+        # First get all blob_ids for this source
+        blobs_response = (
+            self.supabase.table("archon_document_blobs")
+            .select("id")
+            .eq("source_id", source_id)
             .execute()
         )
+
+        if not blobs_response.data:
+            return []
+
+        blob_ids = [row["id"] for row in blobs_response.data]
+
+        # Batch the query to avoid URI too long error
+        # PostgREST has URL length limits, so query in batches of 50
+        all_chunks = []
+        batch_size = 50
+
+        for i in range(0, len(blob_ids), batch_size):
+            batch = blob_ids[i : i + batch_size]
+            response = (
+                self.supabase.table("archon_chunks")
+                .select("*")
+                .in_("blob_id", batch)
+                .execute()
+            )
+            all_chunks.extend(response.data)
+
         return [
             Chunk(
                 id=uuid.UUID(row["id"]),
@@ -273,7 +295,7 @@ class IngestionStateService:
                 token_count=row.get("token_count"),
                 created_at=row.get("created_at"),
             )
-            for row in response.data
+            for row in all_chunks
         ]
 
     async def create_embedding_set(

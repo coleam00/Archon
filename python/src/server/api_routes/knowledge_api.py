@@ -153,6 +153,7 @@ class KnowledgeItemRequest(BaseModel):
     update_frequency: int = 7
     max_depth: int = 2  # Maximum crawl depth (1-5)
     extract_code_examples: bool = True  # Whether to extract code examples
+    use_new_pipeline: bool = False  # Whether to use the new restartable pipeline
 
     class Config:
         schema_extra = {
@@ -163,6 +164,7 @@ class KnowledgeItemRequest(BaseModel):
                 "update_frequency": 7,
                 "max_depth": 2,
                 "extract_code_examples": True,
+                "use_new_pipeline": False,
             }
         }
 
@@ -1120,6 +1122,7 @@ async def _perform_crawl_with_progress(progress_id: str, request: KnowledgeItemR
                 "max_depth": request.max_depth,
                 "extract_code_examples": request.extract_code_examples,
                 "generate_summary": True,
+                "use_new_pipeline": request.use_new_pipeline,
             }
 
             # Orchestrate the crawl - this returns immediately with task info including the actual task

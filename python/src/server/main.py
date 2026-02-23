@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .api_routes.agent_chat_api import router as agent_chat_router
 from .api_routes.agent_work_orders_proxy import router as agent_work_orders_router
 from .api_routes.bug_report_api import router as bug_report_router
+from .api_routes.ingestion_api import router as ingestion_router
 from .api_routes.internal_api import router as internal_router
 from .api_routes.knowledge_api import router as knowledge_router
 from .api_routes.mcp_api import router as mcp_router
@@ -31,10 +32,10 @@ from .api_routes.pages_api import router as pages_router
 from .api_routes.progress_api import router as progress_router
 from .api_routes.projects_api import router as projects_router
 from .api_routes.providers_api import router as providers_router
-from .api_routes.version_api import router as version_router
 
 # Import modular API routers
 from .api_routes.settings_api import router as settings_router
+from .api_routes.version_api import router as version_router
 
 # Import Logfire configuration
 from .config.logfire_config import api_logger, setup_logfire
@@ -120,7 +121,7 @@ async def lifespan(app: FastAPI):
         _initialization_complete = True
         api_logger.info("🎉 Archon backend started successfully!")
 
-    except Exception as e:
+    except Exception:
         api_logger.error("❌ Failed to start backend", exc_info=True)
         raise
 
@@ -142,7 +143,7 @@ async def lifespan(app: FastAPI):
 
         api_logger.info("✅ Cleanup completed")
 
-    except Exception as e:
+    except Exception:
         api_logger.error("❌ Error during shutdown", exc_info=True)
 
 
@@ -198,6 +199,7 @@ app.include_router(bug_report_router)
 app.include_router(providers_router)
 app.include_router(version_router)
 app.include_router(migration_router)
+app.include_router(ingestion_router)
 
 
 # Root endpoint

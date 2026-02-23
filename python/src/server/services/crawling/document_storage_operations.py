@@ -63,6 +63,19 @@ class DocumentStorageOperations:
         Returns:
             Dict containing storage statistics and document mappings
         """
+        # Check if new pipeline should be used
+        if request.get("use_new_pipeline", False):
+            return await self._process_with_new_pipeline(
+                crawl_results,
+                request,
+                crawl_type,
+                original_source_id,
+                progress_callback,
+                cancellation_check,
+                source_url,
+                source_display_name,
+            )
+
         # Reuse initialized storage service for chunking
         storage_service = self.doc_storage_service
 
@@ -508,3 +521,141 @@ class DocumentStorageOperations:
         )
 
         return result
+
+    async def _process_with_new_pipeline(
+        self,
+        crawl_results: list[dict],
+        request: dict[str, Any],
+        crawl_type: str,
+        original_source_id: str,
+        progress_callback: Callable | None = None,
+        cancellation_check: Callable | None = None,
+        source_url: str | None = None,
+        source_display_name: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Process documents using the new restartable pipeline.
+
+        This creates document blobs, chunks, and queues embedding/summary jobs.
+        Actual embedding and summarization happens later when workers are triggered.
+        """
+        from ..ingestion.pipeline_orchestrator import get_pipeline_orchestrator
+
+        safe_logfire_info(f"Using new restartable pipeline | source_id={original_source_id}")
+
+        # Transform crawl results into document format for pipeline
+        documents = []
+        for doc in crawl_results:
+            doc_url = (doc.get("url") or "").strip()
+            markdown_content = (doc.get("markdown") or "").strip()
+
+            if not markdown_content or not doc_url:
+                continue
+
+            documents.append({
+                "url": doc_url,
+                "content": markdown_content,
+                "title": doc.get("title", ""),
+            })
+
+        if not documents:
+            safe_logfire_error(f"No valid documents to process | source_id={original_source_id}")
+            return {
+                "source_id": original_source_id,
+                "chunk_count": 0,
+                "chunks_stored": 0,
+                "urls_stored": set(),
+                "url_to_page_id": {},
+            }
+
+        # Create source record first
+        await self._create_source_record_for_new_pipeline(
+            original_source_id,
+            source_url or documents[0]["url"],
+            source_display_name,
+            request,
+        )
+
+        # Run pipeline orchestrator
+        orchestrator = get_pipeline_orchestrator(self.supabase_client)
+
+        # Create progress wrapper for pipeline
+        async def pipeline_progress_callback(stage: str, progress: int, message: str):
+            if progress_callback:
+                await progress_callback(stage, progress, message)
+
+        result = await orchestrator.run_pipeline(
+            source_id=original_source_id,
+            documents=documents,
+            chunk_size=request.get("chunk_size", 5000),
+            embedder_id=request.get("embedder_id", "default"),
+            summarizer_model_id=request.get("summarizer_model_id"),
+            summary_style=request.get("summary_style", "OVERVIEW"),
+            progress_callback=pipeline_progress_callback,
+        )
+
+        safe_logfire_info(
+            f"New pipeline completed | source_id={original_source_id} | "
+            f"blobs={result.get('blobs_created', 0)} | "
+            f"chunks={result.get('chunks_created', 0)} | "
+            f"embedding_set_id={result.get('embedding_set_id')} | "
+            f"summary_id={result.get('summary_id')}"
+        )
+
+        # Create url_to_full_document mapping for compatibility
+        url_to_full_document = {doc["url"]: doc["content"] for doc in documents}
+
+        # Return compatible response format
+        return {
+            "source_id": original_source_id,
+            "chunk_count": result.get("chunks_created", 0),
+            "chunks_stored": result.get("chunks_created", 0),
+            "urls_stored": {doc["url"] for doc in documents},
+            "url_to_page_id": {},
+            "url_to_full_document": url_to_full_document,
+            "embedding_set_id": result.get("embedding_set_id"),
+            "summary_id": result.get("summary_id"),
+            "new_pipeline_used": True,
+        }
+
+    async def _create_source_record_for_new_pipeline(
+        self,
+        source_id: str,
+        source_url: str,
+        source_display_name: str | None,
+        request: dict[str, Any],
+    ):
+        """
+        Create archon_sources record for new pipeline.
+
+        The new pipeline uses archon_document_blobs and archon_chunks tables,
+        but we still need an archon_sources record for compatibility.
+        """
+        try:
+            response = self.supabase_client.table("archon_sources").select("source_id").eq("source_id", source_id).execute()
+
+            if not response.data:
+                # Create new source record
+                source_record = {
+                    "source_id": source_id,
+                    "source_url": source_url,
+                    "source_url_display_name": source_display_name or source_url,
+                    "source_type": "url",
+                    "knowledge_type": request.get("knowledge_type", "documentation"),
+                    "tags": request.get("tags", []),
+                    "pipeline_status": "chunking",
+                    "pipeline_stage_status": {},
+                }
+                self.supabase_client.table("archon_sources").insert(source_record).execute()
+                safe_logfire_info(f"Created archon_sources record | source_id={source_id}")
+            else:
+                # Update existing source
+                self.supabase_client.table("archon_sources").update({
+                    "pipeline_status": "chunking",
+                    "updated_at": "now()",
+                }).eq("source_id", source_id).execute()
+                safe_logfire_info(f"Updated archon_sources record | source_id={source_id}")
+
+        except Exception as e:
+            safe_logfire_error(f"Failed to create/update archon_sources record | error={str(e)}")
+            raise
