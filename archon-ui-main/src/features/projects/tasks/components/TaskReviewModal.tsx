@@ -15,8 +15,8 @@ const PRIORITY_CONFIG = {
 const AGENT_DISPLAY: Record<string, { emoji: string; label: string; color: string }> = {
   claude: { emoji: "🔥", label: "Software Developer", color: "text-orange-400" },
   "claude-opus": { emoji: "🏗️", label: "Tech Lead", color: "text-cyan-400" },
-  gemini: { emoji: "🔍", label: "QA Tester", color: "text-purple-400" },
-  gpt: { emoji: "⚡", label: "Scrum Master", color: "text-orange-300" },
+  "claude-sonnet": { emoji: "🔍", label: "Reviewer", color: "text-blue-400" },
+  "claude-haiku": { emoji: "⚡", label: "Planner", color: "text-green-400" },
   user: { emoji: "👑", label: "Product Owner", color: "text-slate-200" },
 };
 

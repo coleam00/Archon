@@ -80,23 +80,31 @@ const AGENT_ENGINE_FALLBACK: Record<
     ring: "ring-orange-500/40",
     emoji: "🔥",
     glowRgb: "249,115,22",
-    tagline: "Anthropic Claude",
+    tagline: "Claude · Orchestrator",
   },
-  gemini: {
+  "claude-opus": {
+    bg: "bg-cyan-500/15",
+    text: "text-cyan-400",
+    ring: "ring-cyan-500/40",
+    emoji: "🏗️",
+    glowRgb: "6,182,212",
+    tagline: "Claude Opus · Tech Lead",
+  },
+  "claude-sonnet": {
     bg: "bg-blue-500/15",
     text: "text-blue-400",
     ring: "ring-blue-500/40",
-    emoji: "⭐",
+    emoji: "🔍",
     glowRgb: "59,130,246",
-    tagline: "Google Gemini",
+    tagline: "Claude Sonnet · Reviewer",
   },
-  gpt: {
+  "claude-haiku": {
     bg: "bg-green-500/15",
     text: "text-green-400",
     ring: "ring-green-500/40",
-    emoji: "◆",
+    emoji: "⚡",
     glowRgb: "34,197,94",
-    tagline: "OpenAI GPT",
+    tagline: "Claude Haiku · Planner",
   },
   user: {
     bg: "bg-purple-500/15",
