@@ -1,4 +1,4 @@
-import { Check, ClipboardCopy, Plus } from "lucide-react";
+import { Check, ClipboardCopy, Zap } from "lucide-react";
 import { useState } from "react";
 import { useCreateTaskFromAction } from "../hooks/useSituationQueries";
 import type { RecommendedAction } from "../types";
@@ -90,7 +90,7 @@ export function RecommendedActionCard({ action, index }: RecommendedActionCardPr
       {/* Agent picker (inline, shown when Create Task is clicked) */}
       {showAgentPicker && (
         <div className="flex flex-col gap-2 pt-2 border-t border-gray-800/50">
-          <p className="text-xs text-gray-500">Assign to:</p>
+          <p className="text-xs text-gray-500">Start agent:</p>
           <div className="flex flex-wrap gap-1.5">
             {AGENTS.map((agent) => (
               <button
@@ -112,9 +112,10 @@ export function RecommendedActionCard({ action, index }: RecommendedActionCardPr
               type="button"
               onClick={handleConfirmCreate}
               disabled={isCreating}
-              className="px-3 py-1 text-xs rounded bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 hover:bg-cyan-500/30 transition-colors disabled:opacity-50"
+              className="flex items-center gap-1 px-3 py-1 text-xs rounded bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 hover:bg-cyan-500/30 transition-colors disabled:opacity-50"
             >
-              {isCreating ? "Creating…" : "Confirm"}
+              <Zap className="h-3 w-3" />
+              {isCreating ? "Starting…" : "Start →"}
             </button>
             <button
               type="button"
@@ -143,8 +144,8 @@ export function RecommendedActionCard({ action, index }: RecommendedActionCardPr
               onClick={() => setShowAgentPicker(true)}
               className="flex items-center gap-1 text-xs text-gray-500 hover:text-cyan-400 transition-colors"
             >
-              <Plus className="h-3 w-3" />
-              Create Task
+              <Zap className="h-3 w-3" />
+              Start Agent
             </button>
           )}
           <span className="text-gray-800">·</span>
