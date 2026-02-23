@@ -1,6 +1,7 @@
 import {
   Activity,
   ArrowRightLeft,
+  BarChart2,
   BookOpen,
   Bot,
   Clock,
@@ -11,6 +12,7 @@ import {
   MessageSquare,
   Palette,
   Settings,
+  Swords,
   Users,
 } from "lucide-react";
 import type React from "react";
@@ -91,9 +93,21 @@ export function Navigation({ className }: NavigationProps) {
       enabled: true,
     },
     {
+      path: "/sprints",
+      icon: <Swords className="h-5 w-5" />,
+      label: "Sprint War Room",
+      enabled: projectsEnabled,
+    },
+    {
       path: "/projects/6cc3ca3f-ad32-4cbf-98b3-975abbbddeee/docs/8aeb549b-4cd1-4ff8-adda-87b0afbca9da",
       icon: <MessageSquare className="h-5 w-5" />,
       label: "Swarm Whiteboard",
+      enabled: true,
+    },
+    {
+      path: "/telemetry",
+      icon: <BarChart2 className="h-5 w-5" />,
+      label: "Telemetry",
       enabled: true,
     },
     {

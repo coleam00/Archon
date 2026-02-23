@@ -25,6 +25,8 @@ import { TestRunnerPage } from './pages/TestRunnerPage';
 import { PlanPromoterPage } from './pages/PlanPromoterPage';
 import { AgentExecutionPage } from './pages/AgentExecutionPage';
 import { TimelinePage } from './pages/TimelinePage';
+import { SprintsPage } from './pages/SprintsPage';
+import { TelemetryPage } from './pages/TelemetryPage';
 import { DisconnectScreenOverlay } from './components/DisconnectScreenOverlay';
 import { ErrorBoundaryWithBugReport } from './components/bug-report/ErrorBoundaryWithBugReport';
 import { MigrationBanner } from './components/ui/MigrationBanner';
@@ -49,6 +51,7 @@ const AppRoutes = () => {
       <Route path="/mcp" element={<MCPPage />} />
       <Route path="/test-runner" element={<TestRunnerPage />} />
       <Route path="/plan-promoter" element={<PlanPromoterPage />} />
+      <Route path="/telemetry" element={<TelemetryPage />} />
       {styleGuideEnabled ? (
         <Route path="/style-guide" element={<StyleGuidePage />} />
       ) : (
@@ -56,13 +59,17 @@ const AppRoutes = () => {
       )}
       {projectsEnabled ? (
         <>
+          <Route path="/sprints" element={<SprintsPage />} />
           <Route path="/projects" element={<ProjectPage />} />
           <Route path="/projects/:projectId" element={<ProjectPage />} />
           <Route path="/projects/:projectId/docs" element={<ProjectPage />} />
           <Route path="/projects/:projectId/docs/:docId" element={<ProjectPage />} />
         </>
       ) : (
-        <Route path="/projects" element={<Navigate to="/" replace />} />
+        <>
+          <Route path="/sprints" element={<Navigate to="/projects" replace />} />
+          <Route path="/projects" element={<Navigate to="/" replace />} />
+        </>
       )}
       {projectsEnabled && agentWorkOrdersEnabled ? (
         <Route path="/projects/:projectId/agent-run/:workOrderId" element={<AgentExecutionPage />} />
