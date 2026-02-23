@@ -24,15 +24,7 @@ grep -i "keyword" ~/Documents/Documentation/System/ISSUES_KNOWLEDGE_BASE.md
 ---
 ## 🔢 Version Control Protocol
 
-Version file: `python/src/server/config/version.py` — update `ARCHON_VERSION` and commit when:
-
-| Change type | Example | Bump |
-|-------------|---------|------|
-| Bug fix, refactor, rename, style | Fix a broken query, rename a component | `0.2.0 → 0.2.1` |
-| New feature, new page, new panel | Add a new route/page, a new API endpoint | `0.2.1 → 0.3.0` |
-| Major architecture change | Replace polling with WebSockets, add auth, new database | `0.x.x → 1.0.0` |
-
-**Rule**: bump the version in the same commit as the feature/fix, with a clear commit message referencing what changed.
+@PRPs/ai_docs/VERSION_CONTROL.md
 
 ---
 ## Beta Development Guidelines
