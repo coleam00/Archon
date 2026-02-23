@@ -388,6 +388,72 @@ class CrawlingService:
                     f"Set source_id on progress tracker early | progress_id={self.progress_id} | source_id={original_source_id}"
                 )
 
+            # Create minimal source record immediately for pause/resume support
+            # This ensures auto-resume can always find source metadata even if crawl is interrupted early
+            # REQUIRED: Source creation must succeed for pause/resume to work
+            max_retries = 3
+            retry_delay = 1.0  # Start with 1 second
+            last_error = None
+
+            for attempt in range(max_retries):
+                try:
+                    existing_source = (
+                        self.supabase_client.table("archon_sources")
+                        .select("source_id")
+                        .eq("source_id", original_source_id)
+                        .execute()
+                    )
+
+                    if not existing_source.data:
+                        # Create minimal source record with essential metadata
+                        minimal_source = {
+                            "source_id": original_source_id,
+                            "source_url": url,
+                            "source_display_name": source_display_name,
+                            "metadata": {
+                                "original_url": url,
+                                "knowledge_type": request.get("knowledge_type", "general"),
+                                "tags": request.get("tags", []),
+                                "max_depth": request.get("max_depth", 2),
+                                "allow_external_links": request.get("allow_external_links", False),
+                                "source_type": "url",
+                                "auto_generated": False,
+                            },
+                            "pipeline_status": "initializing",
+                        }
+
+                        self.supabase_client.table("archon_sources").insert(minimal_source).execute()
+                        safe_logfire_info(
+                            f"Created minimal source record for pause/resume support | source_id={original_source_id}"
+                        )
+                    else:
+                        safe_logfire_info(f"Source record already exists | source_id={original_source_id}")
+
+                    # Success - break out of retry loop
+                    break
+
+                except Exception as e:
+                    last_error = e
+                    if attempt < max_retries - 1:
+                        # Not the last attempt - retry with exponential backoff
+                        safe_logfire_error(
+                            f"Failed to create source record (attempt {attempt + 1}/{max_retries}): {e} | "
+                            f"source_id={original_source_id} | retrying in {retry_delay}s"
+                        )
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    else:
+                        # Last attempt failed - raise exception to fail the crawl
+                        safe_logfire_error(
+                            f"Failed to create source record after {max_retries} attempts: {e} | "
+                            f"source_id={original_source_id} | FAILING CRAWL"
+                        )
+                        raise Exception(
+                            f"Failed to create source record after {max_retries} attempts. "
+                            f"Pause/resume will not work without a source record. "
+                            f"Please check database connectivity and try again. Error: {str(e)}"
+                        ) from last_error
+
             # Check for existing crawl state and determine if we're resuming
             url_state_service = get_crawl_url_state_service(self.supabase_client)
             has_existing_state = url_state_service.has_existing_state(original_source_id)
@@ -450,9 +516,16 @@ class CrawlingService:
                 await update_mapped_progress(
                     "discovery", 25, f"Discovering best related file for {url}", current_url=url
                 )
+
+                # Check for cancellation before discovery
+                self._check_cancellation()
+
                 try:
                     # Offload potential sync I/O to avoid blocking the event loop
                     discovered_file = await asyncio.to_thread(self.discovery_service.discover_files, url)
+
+                    # Check for cancellation after discovery completes
+                    self._check_cancellation()
 
                     # Add the single best discovered file to crawl list
                     if discovered_file:
@@ -496,6 +569,9 @@ class CrawlingService:
                     await update_mapped_progress(
                         "discovery", 100, "Discovery phase failed, continuing with regular crawl", current_url=url
                     )
+
+            # Check for cancellation before analyzing
+            self._check_cancellation()
 
             # Analyzing stage - determine what to crawl
             if discovered_urls:
