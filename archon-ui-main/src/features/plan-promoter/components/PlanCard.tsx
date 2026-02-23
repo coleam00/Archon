@@ -96,22 +96,26 @@ export function PlanCard({ plan, onPromote }: PlanCardProps) {
             <FileText className="h-3 w-3" />
             Open Plan
           </button>
-          <span className="text-gray-800">·</span>
-          {demoted ? (
-            <span className="flex items-center gap-1 text-xs text-emerald-400">
-              <Check className="h-3 w-3" />
-              Sent to Ideas
-            </span>
-          ) : (
-            <button
-              type="button"
-              onClick={handleDemote}
-              disabled={isDemoting}
-              className="flex items-center gap-1 text-xs text-gray-500 hover:text-amber-400 transition-colors disabled:opacity-50"
-            >
-              {isDemoting ? <Loader2 className="h-3 w-3 animate-spin" /> : <ArrowDownToLine className="h-3 w-3" />}
-              Demote to Idea
-            </button>
+          {plan.status !== "COMPLETE" && plan.status !== "RESOLVED" && (
+            <>
+              <span className="text-gray-800">·</span>
+              {demoted ? (
+                <span className="flex items-center gap-1 text-xs text-emerald-400">
+                  <Check className="h-3 w-3" />
+                  Sent to Ideas
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleDemote}
+                  disabled={isDemoting}
+                  className="flex items-center gap-1 text-xs text-gray-500 hover:text-amber-400 transition-colors disabled:opacity-50"
+                >
+                  {isDemoting ? <Loader2 className="h-3 w-3 animate-spin" /> : <ArrowDownToLine className="h-3 w-3" />}
+                  Demote to Idea
+                </button>
+              )}
+            </>
           )}
         </div>
       </Card>
