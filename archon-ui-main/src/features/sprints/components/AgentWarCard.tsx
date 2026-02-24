@@ -146,14 +146,6 @@ function getVisualConfig(agent: Agent) {
   };
 }
 
-function getTodayCompletions(tasks: Task[], agentName: string): number {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return tasks.filter((t) => {
-    if (t.assignee !== agentName || t.status !== "done") return false;
-    return new Date(t.updated_at) >= today;
-  }).length;
-}
 
 function TypingIndicator() {
   return (
@@ -186,24 +178,22 @@ export function AgentWarCard({ agent, sprintTasks, doingTasks, pendingHandoffs }
 
   // Use global doing tasks when available so active work shows regardless of selected sprint
   const currentTask = (doingTasks ?? sprintTasks).find((t) => t.assignee === agent.name && t.status === "doing");
-  const todayDone = getTodayCompletions(sprintTasks, agent.name);
   const pendingHandoff = pendingHandoffs.find((h) => h.from_agent === agent.name);
 
-  // Avatar glow via inline style (color is role-specific)
-  const avatarGlow = isActive
-    ? { boxShadow: `0 0 20px 6px rgba(${cfg.glowRgb}, 0.6)` }
+  const rowGlow = isActive
+    ? { boxShadow: `0 0 10px 1px rgba(${cfg.glowRgb}, 0.2)` }
     : isBusy
-      ? { boxShadow: `0 0 12px 3px rgba(${cfg.glowRgb}, 0.4)` }
+      ? { boxShadow: `0 0 6px 1px rgba(${cfg.glowRgb}, 0.12)` }
       : undefined;
 
   return (
     <div
       className={[
-        "relative flex flex-col items-center text-center bg-zinc-900/70 border rounded-2xl px-4 pt-6 pb-4 gap-3 transition-[opacity,border-color] duration-200",
+        "flex flex-col gap-1.5 bg-zinc-900/70 border rounded-xl px-3 py-2.5 transition-[opacity,border-color] duration-200",
         pendingHandoff ? "ring-1 ring-yellow-500/30" : "",
         isActive ? "agent-card-active" : "",
         isBusy ? "agent-card-busy" : "",
-        isIdle ? "opacity-55" : "",
+        isIdle ? "opacity-50" : "",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -211,71 +201,32 @@ export function AgentWarCard({ agent, sprintTasks, doingTasks, pendingHandoffs }
         {
           borderColor: `rgba(${cfg.glowRgb}, 0.2)`,
           "--agent-glow-rgb": cfg.glowRgb,
+          ...rowGlow,
         } as React.CSSProperties
       }
     >
-      {/* Pending handoff badge */}
-      {pendingHandoff && (
-        <div className="absolute top-2 right-2 flex items-center gap-1 text-yellow-400 text-xs bg-yellow-500/10 border border-yellow-500/20 rounded px-1.5 py-0.5">
-          <ArrowRight className="h-3 w-3" />
-          <span>Handoff</span>
-        </div>
-      )}
-
-      {/* Large role avatar */}
-      <div
-        className={[
-          `w-16 h-16 rounded-2xl ${cfg.bg} ring-2 ${cfg.ring} flex items-center justify-center text-3xl`,
-          isActive ? "agent-float-active" : "",
-          isBusy ? "agent-float-busy" : "",
-        ]
-          .filter(Boolean)
-          .join(" ")}
-        style={avatarGlow}
-      >
-        {cfg.emoji}
-      </div>
-
-      {/* Role (primary identity) */}
-      <div>
-        <p className={`text-sm font-bold uppercase tracking-wider ${cfg.text}`}>{cfg.displayRole}</p>
-        <p className="text-xs text-gray-500 mt-0.5">{cfg.tagline}</p>
-      </div>
-
-      {/* Divider */}
-      <div className="w-full h-px bg-zinc-700/50" />
-
-      {/* Agent name + status badge */}
-      <div className="flex items-center justify-between w-full gap-2">
-        <span className="text-xs text-gray-500 font-medium truncate">{agent.name}</span>
-        <div className="flex items-center gap-1 shrink-0">
+      {/* Line 1: emoji + name + status badge + indicators */}
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="text-sm leading-none shrink-0">{cfg.emoji}</span>
+        <span className={`text-xs font-bold truncate ${cfg.text}`}>{agent.name}</span>
+        <div className="flex items-center gap-1 ml-auto shrink-0">
           <span
-            className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium border ${statusConfig.className}`}
+            className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border ${statusConfig.className}`}
           >
             {statusConfig.label}
           </span>
           {isBusy && <TypingIndicator />}
+          {pendingHandoff && <ArrowRight className="h-3 w-3 text-yellow-400 shrink-0" />}
         </div>
       </div>
 
-      {/* Current task */}
+      {/* Line 2: current task or idle */}
       {currentTask ? (
-        <div className="w-full bg-zinc-800/50 rounded-lg px-3 py-2 text-left">
-          <p className="text-[10px] text-gray-500 mb-0.5 font-semibold uppercase tracking-wider">Working on</p>
-          <p className="text-xs text-white font-medium line-clamp-2">{currentTask.title}</p>
-        </div>
+        <p className="text-[11px] text-gray-300 truncate leading-tight">
+          <span className="text-gray-500">Working on:</span> {currentTask.title}
+        </p>
       ) : (
-        <div className="w-full bg-zinc-800/20 rounded-lg px-3 py-2">
-          <p className="text-xs text-gray-600 italic">No active task</p>
-        </div>
-      )}
-
-      {/* Today's completions */}
-      {todayDone > 0 && (
-        <div className="flex items-center gap-1.5">
-          <span className="text-xs text-gray-500">Today:</span>
-          <span className={`text-xs font-bold ${cfg.text}`}>{todayDone} done</span>
-        </div>
+        <p className="text-[11px] text-gray-600 italic leading-tight">No active task</p>
       )}
     </div>
   );

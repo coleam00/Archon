@@ -13,6 +13,7 @@ describe("ProjectCard", () => {
     pinned: false,
     features: [],
     docs: [],
+    phase: "analysis",
   };
 
   const mockTaskCounts = {
@@ -68,9 +69,10 @@ describe("ProjectCard", () => {
 
     const card = container.firstChild;
     expect(card).toBeInTheDocument();
-    // Check for selected-specific classes
+    // motion.div wrapper gets the scale class
     expect((card as HTMLElement)?.className || "").toContain("scale-[1.02]");
-    expect((card as HTMLElement)?.className || "").toContain("border-purple");
+    // border-purple is on the inner Card element
+    expect(container.querySelector('[class*="border-purple"]')).toBeInTheDocument();
   });
 
   it("should apply pinned styles when project is pinned", () => {
@@ -82,9 +84,9 @@ describe("ProjectCard", () => {
 
     const card = container.firstChild;
     expect(card).toBeInTheDocument();
-    // Check for pinned-specific classes
-    expect((card as HTMLElement)?.className || "").toContain("from-purple");
-    expect((card as HTMLElement)?.className || "").toContain("border-purple-500");
+    // gradient and border classes are on the inner Card element
+    expect(container.querySelector('[class*="from-purple"]')).toBeInTheDocument();
+    expect(container.querySelector('[class*="border-purple-500"]')).toBeInTheDocument();
   });
 
   it("should render aurora glow effect when selected", () => {

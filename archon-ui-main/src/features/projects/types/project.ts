@@ -4,6 +4,9 @@
  * Properly typed project interfaces following vertical slice architecture
  */
 
+// BMAD lifecycle phase
+export type ProjectPhase = "analysis" | "planning" | "solutioning" | "implementation";
+
 // Project JSONB field types - replacing any with proper unions
 export type ProjectPRD = Record<string, unknown>;
 export type ProjectDocs = unknown[]; // Will be refined to ProjectDocument[] when fully migrated
@@ -60,6 +63,7 @@ export interface Project {
   updated?: string; // Human-readable format
   pinned: boolean;
   archived?: boolean;
+  phase: ProjectPhase;
 
   // Creation progress tracking for inline display
   creationProgress?: ProjectCreationProgress;
@@ -76,6 +80,7 @@ export interface CreateProjectRequest {
   data?: ProjectData;
   technical_sources?: string[];
   business_sources?: string[];
+  phase?: ProjectPhase;
 }
 
 export interface UpdateProjectRequest {
@@ -90,6 +95,7 @@ export interface UpdateProjectRequest {
   business_sources?: string[];
   pinned?: boolean;
   archived?: boolean;
+  phase?: ProjectPhase;
 }
 
 // Utility types

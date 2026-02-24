@@ -133,6 +133,55 @@ class AgentRegistryService:
             logger.error(f"Failed to list agents: {e}", exc_info=True)
             raise
 
+    async def update_agent(
+        self,
+        name: str,
+        capabilities: list[str] | None = None,
+        metadata: dict | None = None,
+        status: str | None = None,
+        role: str | None = None,
+    ) -> dict:
+        """
+        Update an existing agent's fields. Only provided (non-None) values are written;
+        omitted fields are left unchanged in the database.
+
+        Args:
+            name: Agent name (used to locate the record)
+            capabilities: Updated capability list
+            metadata: Updated metadata dict
+            status: Updated status string
+            role: Updated role string
+
+        Returns:
+            Updated agent record
+        """
+        try:
+            update_data: dict = {}
+            if capabilities is not None:
+                update_data["capabilities"] = capabilities
+            if metadata is not None:
+                update_data["metadata"] = metadata
+            if status is not None:
+                update_data["status"] = status
+            if role is not None:
+                update_data["role"] = role
+            if not update_data:
+                raise ValueError("No fields provided to update")
+            response = (
+                self.supabase.table("archon_agent_registry")
+                .update(update_data)
+                .eq("name", name)
+                .execute()
+            )
+            if not response.data:
+                raise Exception(f"Agent '{name}' not found for update")
+            agent = response.data[0]
+            logger.info(f"Agent updated: {name} | fields={list(update_data)}")
+            return agent
+        except Exception as e:
+            logger.error(f"Failed to update agent {name}: {e}", exc_info=True)
+            raise
+
     async def deactivate_agent(self, name: str) -> dict:
         """
         Set an agent's status to inactive.

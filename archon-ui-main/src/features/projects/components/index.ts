@@ -13,8 +13,10 @@
  * - VersionHistory: Document versioning
  */
 
+export { AnalysisView } from "./AnalysisView";
 export { NewProjectModal } from "./NewProjectModal";
 export { ProjectCard } from "./ProjectCard";
 export { ProjectCardActions } from "./ProjectCardActions";
 export { ProjectHeader } from "./ProjectHeader";
 export { ProjectList } from "./ProjectList";
+export { ProjectPhaseArc } from "./ProjectPhaseArc";

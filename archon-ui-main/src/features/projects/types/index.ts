@@ -20,6 +20,7 @@ export type {
   ProjectData,
   ProjectDocs,
   ProjectFeatures,
+  ProjectPhase,
   ProjectPRD,
   UpdateProjectRequest,
 } from "./project";

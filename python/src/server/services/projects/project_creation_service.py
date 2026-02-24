@@ -63,7 +63,7 @@ class ProjectCreationService:
             }
 
             # Add any additional fields from kwargs
-            for key in ["pinned"]:
+            for key in ["pinned", "phase"]:
                 if key in kwargs:
                     project_data[key] = kwargs[key]
 
@@ -106,6 +106,7 @@ class ProjectCreationService:
                     "features": final_project.get("features", {}),
                     "data": final_project.get("data", {}),
                     "pinned": final_project.get("pinned", False),
+                    "phase": final_project.get("phase", "analysis"),
                     "technical_sources": [],  # Empty initially
                     "business_sources": [],  # Empty initially
                 }

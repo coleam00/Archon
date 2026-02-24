@@ -50,6 +50,7 @@ class CreateProjectRequest(BaseModel):
     technical_sources: list[str] | None = None  # List of knowledge source IDs
     business_sources: list[str] | None = None  # List of knowledge source IDs
     pinned: bool | None = None  # Whether this project should be pinned to top
+    phase: str = "analysis"  # BMAD lifecycle phase
 
 
 class UpdateProjectRequest(BaseModel):
@@ -64,6 +65,7 @@ class UpdateProjectRequest(BaseModel):
     pinned: bool | None = None  # Whether this project is pinned to top
     archived: bool | None = None  # Whether this project is archived
     status: str | None = None  # Lifecycle status (Prototype, In Progress, etc.)
+    phase: str | None = None  # BMAD lifecycle phase
 
 
 class CreateTaskRequest(BaseModel):
@@ -191,6 +193,7 @@ async def create_project(request: CreateProjectRequest):
             kwargs["features"] = request.features
         if request.data:
             kwargs["data"] = request.data
+        kwargs["phase"] = request.phase
 
         # Create project directly with AI assistance
         project_service = ProjectCreationService()
@@ -377,6 +380,7 @@ async def get_project(project_id: str):
             "pinned": project.get("pinned", False),
             "archived": project.get("archived", False),
             "status": project.get("status", "Archived" if project.get("archived") else "Active"),
+            "phase": project.get("phase", "analysis"),
         }
 
     except HTTPException:
@@ -412,6 +416,8 @@ async def update_project(project_id: str, request: UpdateProjectRequest):
             update_fields["archived"] = request.archived
         if request.status is not None:
             update_fields["status"] = request.status
+        if request.phase is not None:
+            update_fields["phase"] = request.phase
 
         # Create version snapshots for JSONB fields before updating
         if update_fields:

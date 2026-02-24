@@ -20,6 +20,13 @@ class AgentRegisterRequest(BaseModel):
     role: str | None = Field(default=None, description="Agent role (e.g. 'Developer', 'Scrum Master')")
 
 
+class AgentUpdateRequest(BaseModel):
+    capabilities: list[str] | None = Field(default=None, description="Updated capabilities")
+    metadata: dict | None = Field(default=None, description="Updated metadata")
+    status: str | None = Field(default=None, description="Updated status")
+    role: str | None = Field(default=None, description="Updated role")
+
+
 @router.post("/register", response_model=dict)
 async def register_agent(request: AgentRegisterRequest):
     """Register or update an agent in the registry."""
@@ -34,6 +41,24 @@ async def register_agent(request: AgentRegisterRequest):
         return {"success": True, "agent": agent}
     except Exception as e:
         logger.error(f"Error registering agent: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/{name}", response_model=dict)
+async def update_agent(name: str, request: AgentUpdateRequest):
+    """Update an existing agent's fields. Only provided fields are written."""
+    try:
+        service = get_agent_registry_service()
+        agent = await service.update_agent(
+            name=name,
+            capabilities=request.capabilities,
+            metadata=request.metadata,
+            status=request.status,
+            role=request.role,
+        )
+        return {"success": True, "agent": agent}
+    except Exception as e:
+        logger.error(f"Error updating agent {name}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

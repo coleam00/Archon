@@ -75,6 +75,7 @@ export function useCreateProject() {
         prd: undefined,
         data: undefined,
         pinned: false,
+        phase: newProjectData.phase ?? "analysis",
       });
 
       // Optimistically add the new project

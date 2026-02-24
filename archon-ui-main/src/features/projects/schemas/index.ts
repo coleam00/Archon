@@ -2,6 +2,7 @@ import { z } from "zod";
 
 // Base validation schemas
 export const ProjectColorSchema = z.enum(["cyan", "purple", "pink", "blue", "orange", "green"]);
+export const ProjectPhaseSchema = z.enum(["analysis", "planning", "solutioning", "implementation"]);
 
 // Project schemas
 export const CreateProjectSchema = z.object({
@@ -18,6 +19,7 @@ export const CreateProjectSchema = z.object({
   business_sources: z.array(z.string()).optional(),
   pinned: z.boolean().optional(),
   archived: z.boolean().optional(),
+  phase: ProjectPhaseSchema.optional(),
 });
 
 export const UpdateProjectSchema = CreateProjectSchema.partial();
@@ -42,6 +44,7 @@ export const ProjectSchema = z.object({
   progress: z.number().min(0).max(100).optional(),
   pinned: z.boolean(),
   updated: z.string().optional(), // Human-readable format
+  phase: ProjectPhaseSchema.default("analysis"),
 });
 
 // Validation helper functions

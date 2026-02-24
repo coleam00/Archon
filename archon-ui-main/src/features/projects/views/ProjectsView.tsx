@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { Activity, Bot, CheckCircle2, FileText, List, ListTodo, Pin, Zap } from "lucide-react";
+import { Activity, Bot, CheckCircle2, FileText, FlaskConical, List, ListTodo, Pin, Zap } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useSettings } from "@/contexts/SettingsContext";
@@ -11,9 +11,11 @@ import { Button, PillNavigation, SelectableCard } from "../../ui/primitives";
 import { OptimisticIndicator } from "../../ui/primitives/OptimisticIndicator";
 import { StatPill } from "../../ui/primitives/pill";
 import { cn } from "../../ui/primitives/styles";
+import { AnalysisView } from "../components/AnalysisView";
 import { NewProjectModal } from "../components/NewProjectModal";
 import { ProjectHeader } from "../components/ProjectHeader";
 import { ProjectList } from "../components/ProjectList";
+import { ProjectPhaseArc } from "../components/ProjectPhaseArc";
 import { SendToAgentModal } from "../components/SendToAgentModal";
 import { WhiteboardView } from "../components/WhiteboardView";
 import { DocsTab } from "../documents/DocsTab";
@@ -55,7 +57,7 @@ export function ProjectsView({ className = "", "data-id": dataId }: ProjectsView
 
   // State management
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [activeTab, setActiveTab] = useState<"docs" | "tasks" | "sprints">(docId ? "docs" : "tasks");
+  const [activeTab, setActiveTab] = useState<"analysis" | "docs" | "tasks" | "sprints">(docId ? "docs" : "tasks");
   const [layoutMode, setLayoutMode] = useState<"horizontal" | "sidebar">("horizontal");
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -109,7 +111,7 @@ export function ProjectsView({ className = "", "data-id": dataId }: ProjectsView
       if (selectedProject?.id === project.id) return;
 
       setSelectedProject(project);
-      setActiveTab("tasks");
+      setActiveTab(project.phase === "analysis" ? "analysis" : "tasks");
       navigate(`/projects/${project.id}`, { replace: true });
     },
     [selectedProject?.id, navigate],
@@ -275,6 +277,9 @@ export function ProjectsView({ className = "", "data-id": dataId }: ProjectsView
           {/* Project Details Section */}
           {selectedProject && (
             <motion.div variants={itemVariants} className="relative">
+              {/* Phase Arc */}
+              <ProjectPhaseArc phase={selectedProject.phase ?? "analysis"} className="mb-4" />
+
               {/* PillNavigation centered, View Toggle on right */}
               <div className="flex items-center justify-between mb-6">
                 <div className="flex-1 flex justify-start">
@@ -292,12 +297,15 @@ export function ProjectsView({ className = "", "data-id": dataId }: ProjectsView
                 </div>
                 <PillNavigation
                   items={[
+                    ...(selectedProject.phase === "analysis"
+                      ? [{ id: "analysis", label: "Analysis", icon: <FlaskConical className="w-4 h-4" /> }]
+                      : []),
                     { id: "docs", label: "Docs", icon: <FileText className="w-4 h-4" /> },
                     { id: "tasks", label: "Tasks", icon: <ListTodo className="w-4 h-4" /> },
                     { id: "sprints", label: "Sprints", icon: <Zap className="w-4 h-4" /> },
                   ]}
                   activeSection={activeTab}
-                  onSectionClick={(id) => setActiveTab(id as "docs" | "tasks" | "sprints")}
+                  onSectionClick={(id) => setActiveTab(id as "analysis" | "docs" | "tasks" | "sprints")}
                   colorVariant="orange"
                   size="small"
                   showIcons={true}
@@ -309,6 +317,7 @@ export function ProjectsView({ className = "", "data-id": dataId }: ProjectsView
 
               {/* Tab content */}
               <div>
+                {activeTab === "analysis" && <AnalysisView project={selectedProject} />}
                 {activeTab === "docs" &&
                   (isViewingWhiteboard ? <WhiteboardView /> : <DocsTab project={selectedProject} />)}
                 {activeTab === "tasks" && (
@@ -376,12 +385,15 @@ export function ProjectsView({ className = "", "data-id": dataId }: ProjectsView
                   <div className="flex-1 flex justify-center">
                     <PillNavigation
                       items={[
+                        ...(selectedProject.phase === "analysis"
+                          ? [{ id: "analysis", label: "Analysis", icon: <FlaskConical className="w-4 h-4" /> }]
+                          : []),
                         { id: "docs", label: "Docs", icon: <FileText className="w-4 h-4" /> },
                         { id: "tasks", label: "Tasks", icon: <ListTodo className="w-4 h-4" /> },
                         { id: "sprints", label: "Sprints", icon: <Zap className="w-4 h-4" /> },
                       ]}
                       activeSection={activeTab}
-                      onSectionClick={(id) => setActiveTab(id as "docs" | "tasks" | "sprints")}
+                      onSectionClick={(id) => setActiveTab(id as "analysis" | "docs" | "tasks" | "sprints")}
                       colorVariant="orange"
                       size="small"
                       showIcons={true}
@@ -392,8 +404,12 @@ export function ProjectsView({ className = "", "data-id": dataId }: ProjectsView
                   <div className="flex-1" />
                 </div>
 
+                {/* Phase Arc */}
+                <ProjectPhaseArc phase={selectedProject.phase ?? "analysis"} className="mb-4" />
+
                 {/* Tab Content */}
                 <div>
+                  {activeTab === "analysis" && <AnalysisView project={selectedProject} />}
                   {activeTab === "docs" && <DocsTab project={selectedProject} />}
                   {activeTab === "tasks" && (
                     <TasksTab projectId={selectedProject.id} projectName={selectedProject.title} />

@@ -92,7 +92,7 @@ describe("useTaskQueries", () => {
         expect(result.current.data).toEqual(mockTasks);
       });
 
-      expect(taskService.getTasksByProject).toHaveBeenCalledWith("project-123");
+      expect(taskService.getTasksByProject).toHaveBeenCalledWith("project-123", false, undefined);
     });
 
     it("should not fetch tasks when projectId is undefined", () => {

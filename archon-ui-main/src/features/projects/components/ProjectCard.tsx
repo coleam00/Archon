@@ -4,7 +4,14 @@ import { isOptimistic } from "@/features/shared/utils/optimistic";
 import { OptimisticIndicator } from "../../ui/primitives/OptimisticIndicator";
 import { SelectableCard } from "../../ui/primitives/selectable-card";
 import { cn } from "../../ui/primitives/styles";
-import type { Project } from "../types";
+import type { Project, ProjectPhase } from "../types";
+
+const PHASE_BADGE: Record<ProjectPhase, { label: string; className: string }> = {
+  analysis: { label: "Analysis", className: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30" },
+  planning: { label: "Planning", className: "bg-blue-500/20 text-blue-400 border-blue-500/30" },
+  solutioning: { label: "Solutioning", className: "bg-purple-500/20 text-purple-400 border-purple-500/30" },
+  implementation: { label: "Implementation", className: "bg-cyan-500/20 text-cyan-400 border-cyan-500/30" },
+};
 
 interface ProjectCardProps {
   project: Project;
@@ -44,7 +51,7 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({ project, isSelected, t
       {/* Main content area with padding */}
       <div className="flex-1 p-4 pb-2">
         {/* Title section */}
-        <div className="flex flex-col items-center justify-center mb-4 min-h-[48px]">
+        <div className="flex flex-col items-center justify-center mb-3 min-h-[48px]">
           <h3
             className={cn(
               "font-medium text-center leading-tight line-clamp-2 transition-all duration-300",
@@ -59,6 +66,20 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({ project, isSelected, t
           </h3>
           <OptimisticIndicator isOptimistic={optimistic} className="mt-1" />
         </div>
+
+        {/* Phase badge */}
+        {project.phase && (
+          <div className="flex justify-center mb-3">
+            <span
+              className={cn(
+                "text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full border",
+                PHASE_BADGE[project.phase]?.className ?? "bg-zinc-500/20 text-zinc-400 border-zinc-500/30",
+              )}
+            >
+              {PHASE_BADGE[project.phase]?.label ?? project.phase}
+            </span>
+          </div>
+        )}
 
         {/* Task count pills */}
         <div className="flex flex-col sm:flex-row items-stretch gap-2 w-full">

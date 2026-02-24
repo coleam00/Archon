@@ -73,6 +73,7 @@ describe("useProjectQueries", () => {
           pinned: false,
           features: [],
           docs: [],
+          phase: "analysis",
         },
       ];
 
@@ -103,6 +104,7 @@ describe("useProjectQueries", () => {
         pinned: false,
         features: [],
         docs: [],
+        phase: "analysis",
       };
 
       const { projectService } = await import("../../services");
@@ -157,6 +159,7 @@ describe("useProjectQueries", () => {
         pinned: true,
         features: [],
         docs: [],
+        phase: "analysis",
       };
 
       const { projectService } = await import("../../services");
