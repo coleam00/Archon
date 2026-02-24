@@ -9,8 +9,9 @@ RUN apk add --no-cache python3 make g++ git curl
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies including dev dependencies for testing
-RUN npm ci
+# Install dependencies — use npm install to handle platform-specific optional
+# packages (biome darwin-x64 vs linux-arm64) when building in Docker on Apple Silicon
+RUN npm install --no-audit --no-fund
 
 # Create coverage directory with proper permissions
 RUN mkdir -p /app/coverage && chmod 777 /app/coverage

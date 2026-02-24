@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useAgents } from "@/features/agents/hooks/useAgentQueries";
 import { useHandoffs } from "@/features/handoffs/hooks/useHandoffQueries";
 import { useProjects } from "@/features/projects/hooks/useProjectQueries";
-import { useProjectTasks } from "@/features/projects/tasks/hooks/useTaskQueries";
+import { useAllDoingTasks, useProjectTasks } from "@/features/projects/tasks/hooks/useTaskQueries";
 import { AgentWarCard } from "../components/AgentWarCard";
 import { SprintHeader } from "../components/SprintHeader";
 import { SprintKanban } from "../components/SprintKanban";
@@ -91,6 +91,7 @@ export function SprintWarRoomView() {
   const { data: agents = [] } = useAgents();
   const { data: allTasks = [] } = useProjectTasks(selectedProjectId ?? undefined, !!selectedProjectId);
   const { data: pendingHandoffs = [] } = useHandoffs({ status: "pending" });
+  const { data: allDoingTasks = [] } = useAllDoingTasks();
 
   // Persist selections to localStorage
   useEffect(() => {
@@ -189,6 +190,7 @@ export function SprintWarRoomView() {
                     key={agent.id}
                     agent={agent}
                     sprintTasks={sprintTasks}
+                    doingTasks={allDoingTasks}
                     pendingHandoffs={pendingHandoffs}
                   />
                 ))}

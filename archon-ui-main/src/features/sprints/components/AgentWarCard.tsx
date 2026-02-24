@@ -172,10 +172,11 @@ function TypingIndicator() {
 interface AgentWarCardProps {
   agent: Agent;
   sprintTasks: Task[];
+  doingTasks?: Task[];
   pendingHandoffs: Handoff[];
 }
 
-export function AgentWarCard({ agent, sprintTasks, pendingHandoffs }: AgentWarCardProps) {
+export function AgentWarCard({ agent, sprintTasks, doingTasks, pendingHandoffs }: AgentWarCardProps) {
   const cfg = getVisualConfig(agent);
   const statusConfig = STATUS_CONFIG[agent.status] ?? STATUS_CONFIG.inactive;
 
@@ -183,7 +184,8 @@ export function AgentWarCard({ agent, sprintTasks, pendingHandoffs }: AgentWarCa
   const isBusy = agent.status === "busy";
   const isIdle = agent.status === "inactive";
 
-  const currentTask = sprintTasks.find((t) => t.assignee === agent.name && t.status === "doing");
+  // Use global doing tasks when available so active work shows regardless of selected sprint
+  const currentTask = (doingTasks ?? sprintTasks).find((t) => t.assignee === agent.name && t.status === "doing");
   const todayDone = getTodayCompletions(sprintTasks, agent.name);
   const pendingHandoff = pendingHandoffs.find((h) => h.from_agent === agent.name);
 

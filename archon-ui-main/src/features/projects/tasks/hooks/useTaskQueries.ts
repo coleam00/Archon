@@ -42,6 +42,20 @@ export function useProjectTasks(
   });
 }
 
+// Fetch all tasks with status=doing across all projects (for agent war cards)
+export function useAllDoingTasks() {
+  const { refetchInterval } = useSmartPolling(3000);
+  return useQuery<Task[]>({
+    queryKey: [...taskKeys.all, "doing"] as const,
+    queryFn: async () => {
+      const result = await taskService.getTasks({ status: "doing", exclude_large_fields: true, per_page: 100 });
+      return result.tasks;
+    },
+    refetchInterval,
+    staleTime: STALE_TIMES.frequent,
+  });
+}
+
 // Fetch task counts for all projects
 export function useTaskCounts() {
   const { refetchInterval: countsRefetchInterval } = useSmartPolling(10_000); // 10s bg polling with smart pause
