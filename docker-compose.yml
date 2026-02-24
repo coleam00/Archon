@@ -43,24 +43,15 @@ services:
       #   1. Set ENABLE_DOCKER_SOCKET_MONITORING=true in .env
       #   2. Uncomment the line below
       # - /var/run/docker.sock:/var/run/docker.sock # SECURITY RISK: root-equivalent host access
-      - ./python/src:/app/src # Mount source code for hot reload
+      # macOS stability: src bind mount removed — VirtioFS causes EDEADLK (errno 35) on Python import.
+      # Source is baked into the image (Dockerfile.server COPY src/server/). Rebuild after code changes.
+      # - ./python/src:/app/src # Hot reload — disabled on macOS (VirtioFS deadlock)
       - ./python/tests:/app/tests # Mount tests for UI test execution
       - ./migration:/app/migration # Mount migration files for version tracking
       - ${HOME}/Documents:/documents:ro # Plan Promoter: read-only access to ~/Documents/
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    command:
-      [
-        "python",
-        "-m",
-        "uvicorn",
-        "src.server.main:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "${ARCHON_SERVER_PORT:-8181}",
-        "--reload",
-      ]
+    # Command uses Dockerfile default: --workers 1 (no --reload). Reload is incompatible with macOS VirtioFS.
     healthcheck:
       test:
         [
