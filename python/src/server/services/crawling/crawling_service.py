@@ -419,7 +419,7 @@ class CrawlingService:
                                 "source_type": "url",
                                 "auto_generated": False,
                             },
-                            "pipeline_status": "initializing",
+                            "pipeline_status": "idle",
                         }
 
                         self.supabase_client.table("archon_sources").insert(minimal_source).execute()
