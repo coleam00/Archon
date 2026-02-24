@@ -33,6 +33,7 @@ import { ErrorBoundaryWithBugReport } from './components/bug-report/ErrorBoundar
 import { MigrationBanner } from './components/ui/MigrationBanner';
 import { serverHealthService } from './services/serverHealthService';
 import { useMigrationStatus } from './hooks/useMigrationStatus';
+import { useSystemEvents } from './features/shared/hooks/useSystemEvents';
 
 
 const AppRoutes = () => {
@@ -94,6 +95,7 @@ const AppRoutes = () => {
 };
 
 const AppContent = () => {
+  useSystemEvents();
   const [disconnectScreenActive, setDisconnectScreenActive] = useState(false);
   const [disconnectScreenDismissed, setDisconnectScreenDismissed] = useState(false);
   const [disconnectScreenSettings, setDisconnectScreenSettings] = useState({

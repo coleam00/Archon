@@ -51,6 +51,7 @@ from .api_routes.conductor_log_api import router as conductor_log_router
 from .api_routes.telemetry_api import router as telemetry_router
 from .api_routes.telemetry_api import ws_router as telemetry_ws_router
 from .api_routes.situation_api import router as situation_router
+from .api_routes.events_api import router as events_router
 
 # Import Logfire configuration
 from .config.logfire_config import api_logger, setup_logfire
@@ -283,6 +284,7 @@ app.include_router(conductor_log_router)
 app.include_router(telemetry_router)
 app.include_router(telemetry_ws_router)
 app.include_router(situation_router)
+app.include_router(events_router)
 
 
 # Root endpoint
