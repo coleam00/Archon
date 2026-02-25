@@ -1,12 +1,7 @@
 import { callAPIWithETag } from "../../shared/api/apiClient";
 import type { CreateSprintRequest, Sprint, UpdateSprintRequest } from "../types";
 
-interface CreateSprintResponse {
-  message: string;
-  sprint: Sprint;
-}
-
-interface UpdateSprintResponse {
+interface SprintMutationResponse {
   message: string;
   sprint: Sprint;
 }
@@ -14,6 +9,7 @@ interface UpdateSprintResponse {
 export const sprintService = {
   async listSprints(projectId: string): Promise<Sprint[]> {
     try {
+      // Defensive fallback: guards against null response if the project has no sprints yet
       const sprints = await callAPIWithETag<Sprint[]>(`/api/projects/${projectId}/sprints`);
       return sprints || [];
     } catch (error) {
@@ -34,20 +30,20 @@ export const sprintService = {
 
   async createSprint(data: CreateSprintRequest): Promise<Sprint> {
     try {
-      const response = await callAPIWithETag<CreateSprintResponse>("/api/sprints", {
+      const response = await callAPIWithETag<SprintMutationResponse>("/api/sprints", {
         method: "POST",
         body: JSON.stringify(data),
       });
       return response.sprint;
     } catch (error) {
-      console.error("Failed to create sprint:", error);
+      console.error(`Failed to create sprint for project ${data.project_id}:`, error);
       throw error;
     }
   },
 
   async updateSprint(sprintId: string, data: UpdateSprintRequest): Promise<Sprint> {
     try {
-      const response = await callAPIWithETag<UpdateSprintResponse>(`/api/sprints/${sprintId}`, {
+      const response = await callAPIWithETag<SprintMutationResponse>(`/api/sprints/${sprintId}`, {
         method: "PUT",
         body: JSON.stringify(data),
       });
@@ -60,7 +56,7 @@ export const sprintService = {
 
   async deleteSprint(sprintId: string): Promise<void> {
     try {
-      await callAPIWithETag<{ message: string }>(`/api/sprints/${sprintId}`, {
+      await callAPIWithETag<void>(`/api/sprints/${sprintId}`, {
         method: "DELETE",
       });
     } catch (error) {

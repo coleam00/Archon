@@ -6,6 +6,7 @@ import type { CreateSprintRequest, UpdateSprintRequest } from "../types";
 
 export const sprintKeys = {
   all: ["sprints"] as const,
+  lists: () => [...sprintKeys.all, "list"] as const,
   byProject: (projectId: string) => ["sprints", "project", projectId] as const,
   detail: (id: string) => ["sprints", "detail", id] as const,
 };
@@ -55,10 +56,10 @@ export function useUpdateSprint(projectId: string) {
     onSuccess: (sprint) => {
       queryClient.invalidateQueries({ queryKey: sprintKeys.byProject(projectId) });
       queryClient.invalidateQueries({ queryKey: sprintKeys.detail(sprint.id) });
-      showToast("Sprint updated", "success");
+      showToast("Sprint updated successfully", "success");
     },
-    onError: (error) => {
-      console.error("Failed to update sprint:", error);
+    onError: (error, { sprintId }) => {
+      console.error("Failed to update sprint:", { sprintId, error });
       showToast("Failed to update sprint", "error");
     },
   });
@@ -70,12 +71,13 @@ export function useDeleteSprint(projectId: string) {
 
   return useMutation({
     mutationFn: (sprintId: string) => sprintService.deleteSprint(sprintId),
-    onSuccess: () => {
+    onSuccess: (_, sprintId) => {
       queryClient.invalidateQueries({ queryKey: sprintKeys.byProject(projectId) });
-      showToast("Sprint deleted", "success");
+      queryClient.invalidateQueries({ queryKey: sprintKeys.detail(sprintId) });
+      showToast("Sprint deleted successfully", "success");
     },
-    onError: (error) => {
-      console.error("Failed to delete sprint:", error);
+    onError: (error, sprintId) => {
+      console.error("Failed to delete sprint:", { sprintId, error });
       showToast("Failed to delete sprint", "error");
     },
   });

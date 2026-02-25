@@ -1,4 +1,4 @@
-import { Check, Copy } from "lucide-react";
+import { Check, ClipboardList, Copy } from "lucide-react";
 import { useState } from "react";
 import type { Agent } from "@/features/agents/types/agent";
 import type { DatabaseTaskStatus, Task } from "@/features/projects/tasks/types";
@@ -41,6 +41,80 @@ When done, mark it complete:
 Then confirm what was done in 1-2 sentences.`;
 }
 
+function buildReviewAgentPrompt(reviewTasks: Task[], agents: Agent[]): string {
+  const reviewAgent = agents.find(
+    (a) =>
+      a.role &&
+      (a.role.toLowerCase().includes("qa") ||
+        a.role.toLowerCase().includes("reviewer") ||
+        a.role.toLowerCase().includes("quality")),
+  );
+  const role = reviewAgent?.role ?? "QA / Reviewer Agent";
+  const capabilities = reviewAgent?.capabilities?.join(", ") ?? "";
+
+  const taskList = reviewTasks
+    .map((t) => `- [${t.id}] ${t.title}${t.priority ? ` (${t.priority})` : ""}`)
+    .join("\n");
+
+  return `You are the ${role} in the Archon Agile AI team.${capabilities ? `\nCapabilities: ${capabilities}` : ""}
+
+## Sprint Review Queue
+
+The following tasks are awaiting your review:
+
+${taskList}
+
+## Instructions
+
+For each task above, review the implementation thoroughly, then:
+
+If approved — mark it done:
+  curl -s -X PUT http://localhost:8181/api/tasks/{task_id} \\
+    -H "Content-Type: application/json" \\
+    -d '{"status":"done"}'
+
+If rejected — send it back to doing:
+  curl -s -X PUT http://localhost:8181/api/tasks/{task_id} \\
+    -H "Content-Type: application/json" \\
+    -d '{"status":"doing"}'
+
+Start with the highest-priority task first. Confirm your review decision in 1-2 sentences per task.`;
+}
+
+interface ReviewAgentHintProps {
+  reviewTasks: Task[];
+  agents: Agent[];
+}
+
+function ReviewAgentHint({ reviewTasks, agents }: ReviewAgentHintProps) {
+  const [copied, setCopied] = useState(false);
+
+  function handleCopyReviewPrompt() {
+    navigator.clipboard.writeText(buildReviewAgentPrompt(reviewTasks, agents)).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {
+      // clipboard write failed — no-op
+    });
+  }
+
+  return (
+    <div className="flex flex-col gap-2 border border-dashed border-blue-500/30 rounded-lg px-3 py-3 bg-blue-500/5">
+      <p className="text-[11px] text-blue-400/80 font-medium leading-tight">
+        No backlog — {reviewTasks.length} task{reviewTasks.length !== 1 ? "s" : ""} awaiting review
+      </p>
+      <button
+        type="button"
+        onClick={handleCopyReviewPrompt}
+        className="self-start flex items-center gap-1.5 text-[10px] font-semibold px-2 py-1 rounded bg-blue-900/50 text-blue-300 border border-blue-700/40 hover:bg-blue-800/50 transition-colors"
+      >
+        {copied ? <Check className="w-3 h-3" /> : <ClipboardList className="w-3 h-3" />}
+        {copied ? "Copied" : "Copy review prompt"}
+      </button>
+    </div>
+  );
+}
+
 interface TaskCardProps {
   task: Task;
   agent: Agent | undefined;
@@ -63,9 +137,12 @@ function TaskCard({ task, agent, isReview = false, onReviewClick }: TaskCardProp
 
   function handleCopy(e: React.MouseEvent) {
     e.stopPropagation();
-    navigator.clipboard.writeText(buildPrompt(task, agent));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    navigator.clipboard.writeText(buildPrompt(task, agent)).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {
+      // clipboard write failed — no-op
+    });
   }
 
   return (
@@ -73,10 +150,22 @@ function TaskCard({ task, agent, isReview = false, onReviewClick }: TaskCardProp
       className={[
         "group bg-zinc-800/60 border border-zinc-700/50 rounded-lg px-3 py-2.5 space-y-2 transition-colors",
         isReview
-          ? "cursor-pointer hover:border-blue-500/50 hover:bg-zinc-800/80"
+          ? "cursor-pointer hover:border-blue-500/50 hover:bg-zinc-800/80 focus:outline-none focus:ring-1 focus:ring-blue-500/50"
           : "cursor-default hover:border-zinc-600",
       ].join(" ")}
+      role={isReview ? "button" : undefined}
+      tabIndex={isReview ? 0 : undefined}
       onClick={isReview && onReviewClick ? () => onReviewClick(task) : undefined}
+      onKeyDown={
+        isReview && onReviewClick
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onReviewClick(task);
+              }
+            }
+          : undefined
+      }
     >
       <div className="flex items-start gap-2">
         <div className={`w-1.5 h-1.5 rounded-full ${priorityColor} shrink-0 mt-1.5`} />
@@ -141,6 +230,9 @@ export function SprintKanban({ tasks, agents = [], projectId }: SprintKanbanProp
         {COLUMNS.map((col) => {
           const colTasks = tasksByStatus[col.status] ?? [];
           const isReview = col.status === "review";
+          const isTodo = col.status === "todo";
+          const reviewTasks = tasksByStatus["review"] ?? [];
+          const showReviewHint = isTodo && colTasks.length === 0 && reviewTasks.length > 0;
           return (
             <div key={col.status} className="space-y-2">
               {/* Column header */}
@@ -164,6 +256,9 @@ export function SprintKanban({ tasks, agents = [], projectId }: SprintKanbanProp
                     onReviewClick={setReviewTask}
                   />
                 ))}
+                {showReviewHint && (
+                  <ReviewAgentHint reviewTasks={reviewTasks} agents={agents} />
+                )}
               </div>
             </div>
           );

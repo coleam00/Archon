@@ -8,6 +8,7 @@ import { AgentWarCard } from "../components/AgentWarCard";
 import { SprintHeader } from "../components/SprintHeader";
 import { SprintKanban } from "../components/SprintKanban";
 import { SprintSelector } from "../components/SprintSelector";
+import { SprintVelocityPanel } from "../components/SprintVelocityPanel";
 import { useProjectSprints } from "../hooks/useSprintQueries";
 import type { Sprint, SprintStatus } from "../types";
 
@@ -87,7 +88,7 @@ export function SprintWarRoomView() {
   const [selectedSprintId, setSelectedSprintId] = useState<string | null>(() => localStorage.getItem(LS_SPRINT_KEY));
 
   const { data: projects = [], isLoading: projectsLoading } = useProjects();
-  const { data: sprints = [] } = useProjectSprints(selectedProjectId ?? undefined);
+  const { data: sprints = [], isLoading: sprintsLoading } = useProjectSprints(selectedProjectId ?? undefined);
   const { data: agents = [] } = useAgents();
   const { data: allTasks = [] } = useProjectTasks(selectedProjectId ?? undefined, !!selectedProjectId);
   const { data: pendingHandoffs = [] } = useHandoffs({ status: "pending" });
@@ -102,16 +103,20 @@ export function SprintWarRoomView() {
     else localStorage.removeItem(LS_SPRINT_KEY);
   }, [selectedSprintId]);
 
-  // Auto-select first non-archived project only if nothing persisted
+  // Auto-select first non-archived project when nothing persisted or persisted ID is no longer valid
   useEffect(() => {
-    if (!selectedProjectId && projects.length > 0) {
-      const first = projects.find((p) => !p.archived) ?? projects[0];
-      if (first) setSelectedProjectId(first.id);
+    if (projects.length > 0) {
+      const isValid = selectedProjectId && projects.some((p) => p.id === selectedProjectId);
+      if (!isValid) {
+        const first = projects.find((p) => !p.archived) ?? projects[0];
+        if (first) setSelectedProjectId(first.id);
+      }
     }
   }, [projects, selectedProjectId]);
 
   // Auto-select active sprint, falling back to first sprint
   useEffect(() => {
+    if (sprintsLoading) return; // preserve persisted selection while sprints are loading
     if (sprints.length === 0) {
       setSelectedSprintId(null);
       return;
@@ -121,7 +126,7 @@ export function SprintWarRoomView() {
     if (!current) {
       setSelectedSprintId((active ?? sprints[0]).id);
     }
-  }, [sprints, selectedSprintId]);
+  }, [sprints, selectedSprintId, sprintsLoading]);
 
   const selectedSprint = sprints.find((s: Sprint) => s.id === selectedSprintId);
   const sprintTasks = selectedSprintId ? allTasks.filter((t) => t.sprint_id === selectedSprintId) : [];
@@ -185,7 +190,7 @@ export function SprintWarRoomView() {
             <section className="space-y-3">
               <h2 className="text-xs font-bold text-gray-500 uppercase tracking-[0.2em]">Agile AI Team</h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                {agents.map((agent) => (
+                {[...agents].sort((a, b) => a.name.localeCompare(b.name)).map((agent) => (
                   <AgentWarCard
                     key={agent.id}
                     agent={agent}
@@ -204,6 +209,12 @@ export function SprintWarRoomView() {
             <div className="holographic-board rounded-xl p-4">
               <SprintKanban tasks={sprintTasks} agents={agents} projectId={selectedProjectId ?? ""} />
             </div>
+          </section>
+
+          {/* Velocity panel — burn-down chart */}
+          <section className="space-y-3">
+            <h2 className="text-xs font-bold text-gray-500 uppercase tracking-[0.2em]">Sprint Velocity</h2>
+            <SprintVelocityPanel sprint={selectedSprint} tasks={sprintTasks} />
           </section>
         </>
       )}

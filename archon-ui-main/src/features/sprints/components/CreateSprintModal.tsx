@@ -23,17 +23,20 @@ export function CreateSprintModal({ projectId, onClose, onCreated }: CreateSprin
     e.preventDefault();
     if (!name.trim()) return;
 
-    const sprint = await createSprint.mutateAsync({
-      project_id: projectId,
-      name: name.trim(),
-      goal: goal.trim() || undefined,
-      status: "planning" as SprintStatus,
-      start_date: startDate || undefined,
-      end_date: endDate || undefined,
-    });
-
-    onCreated?.(sprint.id);
-    onClose();
+    try {
+      const sprint = await createSprint.mutateAsync({
+        project_id: projectId,
+        name: name.trim(),
+        goal: goal.trim() || undefined,
+        status: "planning" as SprintStatus,
+        start_date: startDate || undefined,
+        end_date: endDate || undefined,
+      });
+      onCreated?.(sprint.id);
+      onClose();
+    } catch {
+      // Error handled by useCreateSprint onError (toast shown) — do not propagate
+    }
   };
 
   return (
@@ -100,6 +103,7 @@ export function CreateSprintModal({ projectId, onClose, onCreated }: CreateSprin
                 type="date"
                 value={endDate}
                 onChange={(e) => setEndDate(e.target.value)}
+                min={startDate || undefined}
                 className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-cyan-500/50 text-sm"
               />
             </div>

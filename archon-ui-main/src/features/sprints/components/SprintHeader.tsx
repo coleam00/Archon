@@ -1,5 +1,5 @@
 import { Calendar, ChevronDown, Clock, Target } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Task } from "@/features/projects/tasks/types";
 import { useUpdateSprint } from "../hooks/useSprintQueries";
 import type { Sprint, SprintStatus } from "../types";
@@ -8,6 +8,7 @@ const STATUS_CONFIG: Record<SprintStatus, { label: string; className: string }> 
   planning: { label: "Planning", className: "text-gray-400 bg-gray-500/20 border-gray-500/30" },
   ready_for_kickoff: { label: "Ready for Kickoff", className: "text-yellow-400 bg-yellow-500/20 border-yellow-500/30" },
   active: { label: "Active", className: "text-cyan-400 bg-cyan-500/20 border-cyan-500/30" },
+  review: { label: "In Review", className: "text-purple-400 bg-purple-500/20 border-purple-500/30" },
   completed: { label: "Completed", className: "text-green-400 bg-green-500/20 border-green-500/30" },
   cancelled: { label: "Cancelled", className: "text-red-400 bg-red-500/20 border-red-500/30" },
 };
@@ -16,7 +17,8 @@ const STATUS_CONFIG: Record<SprintStatus, { label: string; className: string }> 
 const AGENT_TRANSITIONS: Record<SprintStatus, SprintStatus[]> = {
   planning: ["ready_for_kickoff", "cancelled"],
   ready_for_kickoff: ["planning", "cancelled"],
-  active: ["completed", "cancelled"],
+  active: ["review", "completed", "cancelled"],
+  review: ["completed", "active"],
   completed: [],
   cancelled: [],
 };
@@ -29,7 +31,18 @@ interface SprintHeaderProps {
 
 export function SprintHeader({ sprint, tasks, isProductOwner = true }: SprintHeaderProps) {
   const [showStatusMenu, setShowStatusMenu] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
   const updateSprint = useUpdateSprint(sprint.project_id);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setShowStatusMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   const doneTasks = tasks.filter((t) => t.status === "done").length;
   const totalTasks = tasks.length;
@@ -90,11 +103,12 @@ export function SprintHeader({ sprint, tasks, isProductOwner = true }: SprintHea
           )}
 
           {/* Status badge with dropdown */}
-          <div className="relative">
+          <div className="relative" ref={menuRef}>
             <button
               type="button"
               onClick={() => agentTransitions.length > 0 && setShowStatusMenu(!showStatusMenu)}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${currentStatus.className} ${agentTransitions.length > 0 ? "cursor-pointer hover:opacity-80" : "cursor-default"}`}
+              disabled={updateSprint.isPending}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors disabled:opacity-50 ${currentStatus.className} ${agentTransitions.length > 0 ? "cursor-pointer hover:opacity-80" : "cursor-default"}`}
             >
               {currentStatus.label}
               {agentTransitions.length > 0 && <ChevronDown className="h-3.5 w-3.5" />}

@@ -10,6 +10,7 @@ const STATUS_COLORS: Record<SprintStatus, string> = {
   planning: "text-gray-400 bg-gray-500/20 border-gray-500/30",
   ready_for_kickoff: "text-yellow-400 bg-yellow-500/20 border-yellow-500/30",
   active: "text-cyan-400 bg-cyan-500/20 border-cyan-500/30",
+  review: "text-purple-400 bg-purple-500/20 border-purple-500/30",
   completed: "text-green-400 bg-green-500/20 border-green-500/30",
   cancelled: "text-red-400 bg-red-500/20 border-red-500/30",
 };
@@ -33,7 +34,7 @@ export function SprintSelector({
 }: SprintSelectorProps) {
   const [showCreateModal, setShowCreateModal] = useState(false);
 
-  const { data: sprints = [] } = useProjectSprints(selectedProjectId ?? undefined);
+  const { data: sprints = [], isLoading: sprintsLoading, isError: sprintsError } = useProjectSprints(selectedProjectId ?? undefined);
 
   const selectedSprint = sprints.find((s: Sprint) => s.id === selectedSprintId);
 
@@ -64,14 +65,15 @@ export function SprintSelector({
         {/* Sprint selector */}
         {selectedProjectId && (
           <select
-            value={selectedSprintId ?? ""}
+            value={sprintsLoading || sprintsError ? "" : (selectedSprintId ?? "")}
             onChange={(e) => onSprintChange(e.target.value)}
-            className="bg-zinc-800 border border-zinc-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+            disabled={sprintsLoading}
+            className="bg-zinc-800 border border-zinc-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-cyan-500/50 disabled:opacity-50"
           >
             <option value="" disabled>
-              Select sprint…
+              {sprintsLoading ? "Loading sprints…" : sprintsError ? "Failed to load sprints" : "Select sprint…"}
             </option>
-            {sprints.map((s: Sprint) => (
+            {!sprintsLoading && !sprintsError && sprints.map((s: Sprint) => (
               <option key={s.id} value={s.id}>
                 {s.name}
               </option>

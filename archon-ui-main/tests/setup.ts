@@ -68,6 +68,7 @@ vi.mock('lucide-react', () => ({
   Pin: () => 'Pin',
   PinOff: () => 'PinOff',
   Clipboard: () => 'Clipboard',
+  TrendingUp: () => 'TrendingUp',
   // Add more icons as needed
 }))
 

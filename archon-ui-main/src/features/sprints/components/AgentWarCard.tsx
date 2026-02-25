@@ -74,14 +74,7 @@ const AGENT_ENGINE_FALLBACK: Record<
   string,
   { bg: string; text: string; ring: string; emoji: string; glowRgb: string; tagline: string }
 > = {
-  claude: {
-    bg: "bg-orange-500/15",
-    text: "text-orange-400",
-    ring: "ring-orange-500/40",
-    emoji: "🔥",
-    glowRgb: "249,115,22",
-    tagline: "Claude · Orchestrator",
-  },
+  // Specific variants must come before generic "claude" — Object.entries preserves insertion order
   "claude-opus": {
     bg: "bg-cyan-500/15",
     text: "text-cyan-400",
@@ -106,6 +99,14 @@ const AGENT_ENGINE_FALLBACK: Record<
     glowRgb: "34,197,94",
     tagline: "Claude Haiku · Planner",
   },
+  claude: {
+    bg: "bg-orange-500/15",
+    text: "text-orange-400",
+    ring: "ring-orange-500/40",
+    emoji: "🔥",
+    glowRgb: "249,115,22",
+    tagline: "Claude · Orchestrator",
+  },
   user: {
     bg: "bg-purple-500/15",
     text: "text-purple-400",
@@ -126,7 +127,7 @@ function getVisualConfig(agent: Agent) {
   if (agent.role) {
     const roleLower = agent.role.toLowerCase();
     for (const cfg of ROLE_CONFIGS) {
-      if (cfg.keywords.some((kw) => roleLower.includes(kw))) {
+      if (cfg.keywords.some((kw) => roleLower === kw.trim() || roleLower.includes(kw))) {
         return { ...cfg, displayRole: agent.role, tagline: cfg.tagline };
       }
     }
@@ -180,9 +181,17 @@ export function AgentWarCard({ agent, sprintTasks, doingTasks, pendingHandoffs }
   const currentTask = (doingTasks ?? sprintTasks).find((t) => t.assignee === agent.name && t.status === "doing");
   const pendingHandoff = pendingHandoffs.find((h) => h.from_agent === agent.name);
 
-  const rowGlow = isActive
+  // Accumulate all completed/reviewed work this agent did in the sprint
+  const historyTasks = sprintTasks
+    .filter((t) => t.assignee === agent.name && (t.status === "done" || t.status === "review"))
+    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+
+  const hasHistory = historyTasks.length > 0;
+  const isWorking = !!currentTask;
+
+  const rowGlow = (isActive && isWorking)
     ? { boxShadow: `0 0 10px 1px rgba(${cfg.glowRgb}, 0.2)` }
-    : isBusy
+    : (isBusy && isWorking)
       ? { boxShadow: `0 0 6px 1px rgba(${cfg.glowRgb}, 0.12)` }
       : undefined;
 
@@ -191,15 +200,15 @@ export function AgentWarCard({ agent, sprintTasks, doingTasks, pendingHandoffs }
       className={[
         "flex flex-col gap-1.5 bg-zinc-900/70 border rounded-xl px-3 py-2.5 transition-[opacity,border-color] duration-200",
         pendingHandoff ? "ring-1 ring-yellow-500/30" : "",
-        isActive ? "agent-card-active" : "",
-        isBusy ? "agent-card-busy" : "",
-        isIdle ? "opacity-50" : "",
+        isActive && isWorking ? "agent-card-active" : "",
+        isBusy && isWorking ? "agent-card-busy" : "",
+        isIdle && !hasHistory ? "opacity-50" : "",
       ]
         .filter(Boolean)
         .join(" ")}
       style={
         {
-          borderColor: `rgba(${cfg.glowRgb}, 0.2)`,
+          borderColor: isWorking ? `rgba(${cfg.glowRgb}, 0.2)` : undefined,
           "--agent-glow-rgb": cfg.glowRgb,
           ...rowGlow,
         } as React.CSSProperties
@@ -220,14 +229,37 @@ export function AgentWarCard({ agent, sprintTasks, doingTasks, pendingHandoffs }
         </div>
       </div>
 
-      {/* Line 2: current task or idle */}
+      {/* Line 2+: active task, or history, or empty — fixed height keeps grid rows uniform */}
+      <div className="min-h-[46px]">
       {currentTask ? (
-        <p className="text-[11px] text-gray-300 truncate leading-tight">
-          <span className="text-gray-500">Working on:</span> {currentTask.title}
-        </p>
+        <>
+          <p className="text-[11px] text-gray-300 truncate leading-tight">
+            <span className="text-gray-500">Working on:</span> {currentTask.title}
+          </p>
+          {hasHistory && (
+            <p className="text-[10px] text-gray-600 leading-tight">
+              ✓ {historyTasks.length} task{historyTasks.length !== 1 ? "s" : ""} completed this sprint
+            </p>
+          )}
+        </>
+      ) : hasHistory ? (
+        <div className="space-y-0.5">
+          {historyTasks.slice(0, 3).map((t) => (
+            <p key={t.id} className="text-[11px] truncate leading-tight">
+              <span className={t.status === "done" ? "text-green-600" : "text-yellow-600"}>
+                {t.status === "done" ? "✓" : "~"}
+              </span>{" "}
+              <span className="text-gray-400">{t.title}</span>
+            </p>
+          ))}
+          {historyTasks.length > 3 && (
+            <p className="text-[10px] text-gray-600 leading-tight">+{historyTasks.length - 3} more</p>
+          )}
+        </div>
       ) : (
-        <p className="text-[11px] text-gray-600 italic leading-tight">No active task</p>
+        <p className="text-[11px] text-gray-600 italic leading-tight">No work yet this sprint</p>
       )}
+      </div>
     </div>
   );
 }

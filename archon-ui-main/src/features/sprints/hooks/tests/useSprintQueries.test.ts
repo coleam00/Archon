@@ -38,13 +38,11 @@ vi.mock("@/features/shared/config/queryPatterns", () => ({
   },
 }));
 
-const createWrapper = () => {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-      mutations: { retry: false },
-    },
-  });
+const createClient = () =>
+  new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+
+const createWrapper = (client?: QueryClient) => {
+  const queryClient = client ?? createClient();
   return ({ children }: { children: React.ReactNode }) =>
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 };
@@ -105,6 +103,18 @@ describe("useProjectSprints", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data).toEqual([]);
   });
+
+  it("propagates error when service fails", async () => {
+    const { sprintService } = await import("../../services/sprintService");
+    vi.mocked(sprintService.listSprints).mockRejectedValue(new Error("Server error"));
+
+    const { result } = renderHook(() => useProjectSprints("project-1"), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.error).toBeInstanceOf(Error);
+  });
 });
 
 describe("useSprint", () => {
@@ -130,16 +140,30 @@ describe("useSprint", () => {
 
     expect(result.current.fetchStatus).toBe("idle");
   });
+
+  it("propagates error when service fails", async () => {
+    const { sprintService } = await import("../../services/sprintService");
+    vi.mocked(sprintService.getSprint).mockRejectedValue(new Error("Not found"));
+
+    const { result } = renderHook(() => useSprint("sprint-1"), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.error).toBeInstanceOf(Error);
+  });
 });
 
 describe("useCreateSprint", () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
   it("creates a sprint and invalidates project sprints cache", async () => {
+    const queryClient = createClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
     const { sprintService } = await import("../../services/sprintService");
     vi.mocked(sprintService.createSprint).mockResolvedValue(mockSprint);
 
-    const { result } = renderHook(() => useCreateSprint(), { wrapper: createWrapper() });
+    const { result } = renderHook(() => useCreateSprint(), { wrapper: createWrapper(queryClient) });
 
     await result.current.mutateAsync({
       project_id: "project-1",
@@ -153,6 +177,7 @@ describe("useCreateSprint", () => {
       name: "Sprint 1 — Swarm Infrastructure",
       goal: "Ship Sprint War Room",
     });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sprintKeys.byProject("project-1") });
   });
 
   it("surfaces error on failure", async () => {
@@ -171,11 +196,13 @@ describe("useUpdateSprint", () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
   it("updates sprint status and invalidates caches", async () => {
+    const queryClient = createClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
     const updatedSprint = { ...mockSprint, status: "completed" as const };
     const { sprintService } = await import("../../services/sprintService");
     vi.mocked(sprintService.updateSprint).mockResolvedValue(updatedSprint);
 
-    const { result } = renderHook(() => useUpdateSprint("project-1"), { wrapper: createWrapper() });
+    const { result } = renderHook(() => useUpdateSprint("project-1"), { wrapper: createWrapper(queryClient) });
 
     await result.current.mutateAsync({
       sprintId: "sprint-1",
@@ -184,6 +211,8 @@ describe("useUpdateSprint", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(sprintService.updateSprint).toHaveBeenCalledWith("sprint-1", { status: "completed" });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sprintKeys.byProject("project-1") });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: sprintKeys.detail("sprint-1") });
   });
 });
 
