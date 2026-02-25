@@ -3,6 +3,8 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
+const serverPort = process.env.ARCHON_SERVER_PORT || '8181'
+
 export default defineConfig({
   plugins: [react()],
   test: {
@@ -30,7 +32,7 @@ export default defineConfig({
     // Proxy API calls to the backend for integration tests
     proxy: {
       '/api': {
-        target: 'http://localhost:8181',
+        target: `http://localhost:${serverPort}`,
         changeOrigin: true,
       },
     },
