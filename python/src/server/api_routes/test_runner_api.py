@@ -5,10 +5,13 @@ Provides endpoints to collect, run, and stream test results via SSE.
 """
 
 import asyncio
+import os
 import re
 import time
 import uuid
 from typing import Any
+
+_APP_DIR = os.getenv("APP_DIR", "/app")
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
@@ -57,7 +60,7 @@ async def collect_tests(suite: str = "mcp_server"):
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd="/app",
+            cwd=_APP_DIR,
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
         lines = stdout.decode().splitlines()
@@ -99,7 +102,7 @@ async def start_run(request: RunRequest):
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
-                cwd="/app",
+                cwd=_APP_DIR,
             )
             _runs[run_id]["process"] = proc
 

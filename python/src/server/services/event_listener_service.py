@@ -10,12 +10,12 @@ Processes:
 
 import asyncio
 import json
-import os
 from typing import Any
 
 import redis.asyncio as redis
 
 from ..config.logfire_config import get_logger
+from ..config.redis_config import REDIS_URL
 from .whiteboard_service import WhiteboardService
 
 logger = get_logger(__name__)
@@ -31,7 +31,7 @@ class EventListenerService:
         Args:
             redis_url: Redis connection URL (defaults to REDIS_URL env var)
         """
-        self.redis_url = redis_url or os.getenv("REDIS_URL", "redis://localhost:6379")
+        self.redis_url = redis_url or REDIS_URL
         self._redis: redis.Redis | None = None
         self._pubsub: redis.client.PubSub | None = None
         self._listener_task: asyncio.Task | None = None

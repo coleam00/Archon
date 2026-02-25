@@ -35,8 +35,13 @@ class AgentWorkOrdersConfig:
     # Service discovery configuration
     SERVICE_DISCOVERY_MODE: str = os.getenv("SERVICE_DISCOVERY_MODE", "local")
 
-    # CORS configuration
-    CORS_ORIGINS: str = os.getenv("CORS_ORIGINS", "http://localhost:3737,http://host.docker.internal:3737,*")
+    # CORS configuration — UI port is read from ARCHON_UI_PORT so the default
+    # stays in sync with whatever port the frontend is running on.
+    _ui_port: str = os.getenv("ARCHON_UI_PORT", "3737")
+    CORS_ORIGINS: str = os.getenv(
+        "CORS_ORIGINS",
+        f"http://localhost:{_ui_port},http://host.docker.internal:{_ui_port},*",
+    )
 
     # Claude CLI flags configuration
     # --verbose: Required when using --print with --output-format=stream-json

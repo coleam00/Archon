@@ -14,6 +14,10 @@
 import { API_BASE_URL } from "../../../config/api";
 import { APIServiceError } from "../types/errors";
 
+// Temporary workaround: large DELETE operations (7K+ rows on crawled_pages) can take 13+ s.
+// Revert to a shorter value once batch deletion is implemented.
+const API_TIMEOUT_MS = 60_000;
+
 /**
  * Build full URL with test environment handling
  * Ensures consistent URL construction for cache keys
@@ -73,15 +77,10 @@ export async function callAPIWithETag<T = unknown>(endpoint: string, options: Re
       headers["Content-Type"] = "application/json";
     }
 
-    // Make the request with timeout
-    // NOTE: Increased to 20s due to database performance issues with large DELETE operations
-    // Root cause: Sequential scan on crawled_pages table when deleting sources with 7K+ rows
-    // takes 13+ seconds. This is a temporary fix until we implement batch deletion.
-    // See: DELETE FROM archon_crawled_pages WHERE source_id = '9529d5dabe8a726a' (7,073 rows)
     const response = await fetch(fullUrl, {
       ...options,
       headers,
-      signal: options.signal ?? AbortSignal.timeout(60000), // 60 second timeout (was 10s)
+      signal: options.signal ?? AbortSignal.timeout(API_TIMEOUT_MS),
     });
 
     // Handle errors

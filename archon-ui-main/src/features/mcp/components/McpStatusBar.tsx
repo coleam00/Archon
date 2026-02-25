@@ -72,7 +72,7 @@ export const McpStatusBar: React.FC<McpStatusBarProps> = ({ status, sessionInfo,
       <div className="flex items-center gap-2">
         <Server className="w-4 h-4 text-cyan-500" />
         <span className="text-zinc-400">MCP</span>
-        <span className="text-white">8051</span>
+        <span className="text-white">{config?.port ?? 8051}</span>
       </div>
 
       {/* Active Sessions */}

@@ -13,10 +13,11 @@ Channels:
 
 import redis.asyncio as redis
 import json
-import os
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 import logfire
+
+from ..config.redis_config import REDIS_URL
 
 
 class EventPublisher:
@@ -36,7 +37,7 @@ class EventPublisher:
         Args:
             redis_url: Redis connection URL. Defaults to REDIS_URL env var or localhost.
         """
-        self.redis_url = redis_url or os.getenv("REDIS_URL", "redis://localhost:6379")
+        self.redis_url = redis_url or REDIS_URL
         self._redis: Optional[redis.Redis] = None
 
     async def _get_redis(self) -> redis.Redis:

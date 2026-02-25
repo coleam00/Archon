@@ -11,7 +11,6 @@ notifications without polling:
 
 import asyncio
 import json
-import os
 from collections.abc import AsyncIterator
 
 import redis.asyncio as redis
@@ -19,6 +18,7 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
 from ..config.logfire_config import get_logger
+from ..config.redis_config import REDIS_URL
 
 logger = get_logger(__name__)
 
@@ -44,7 +44,7 @@ async def stream_events() -> StreamingResponse:
 
 async def _generate() -> AsyncIterator[str]:
     """Async generator that subscribes to Redis and yields SSE-formatted events."""
-    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+    redis_url = REDIS_URL
     r: redis.Redis | None = None
     pubsub: redis.client.PubSub | None = None
     listener_task: asyncio.Task | None = None

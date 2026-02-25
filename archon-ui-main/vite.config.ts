@@ -17,7 +17,8 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
   // For internal Docker communication, use the service name
   // For external access, use the HOST from environment
   const isDocker = process.env.DOCKER_ENV === 'true' || existsSync('/.dockerenv');
-  const internalHost = 'archon-server';  // Docker service name for internal communication
+  const AGENT_WORK_ORDERS_TIMEOUT_MS = 10_000;
+  const internalHost = process.env.ARCHON_INTERNAL_HOST || 'archon-server';  // Docker service name for internal communication
   const externalHost = process.env.HOST || 'localhost';  // Host for external access
   // CRITICAL: For proxy target, always use internal host in Docker
   const proxyHost = isDocker ? internalHost : externalHost;
@@ -311,7 +312,7 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
             target: isDocker ? `http://archon-agent-work-orders:${agentWorkOrdersPort}` : `http://localhost:${agentWorkOrdersPort}`,
           changeOrigin: true,
           secure: false,
-            timeout: 10000, // 10 second timeout
+            timeout: AGENT_WORK_ORDERS_TIMEOUT_MS,
             configure: (proxy: any, options: any) => {
               const targetUrl = isDocker ? `http://archon-agent-work-orders:${agentWorkOrdersPort}` : `http://localhost:${agentWorkOrdersPort}`;
               
@@ -341,7 +342,7 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
               console.log('🔄 [VITE PROXY - Agent Work Orders] Forwarding:', req.method, req.url, 'to', `${targetUrl}${req.url}`);
                 
                 // Set timeout for the proxy request
-                proxyReq.setTimeout(10000, () => {
+                proxyReq.setTimeout(AGENT_WORK_ORDERS_TIMEOUT_MS, () => {
                   console.log('⏱️ [VITE PROXY - Agent Work Orders] Request timeout');
                   if (!res.headersSent) {
                     res.writeHead(504, {
@@ -402,6 +403,9 @@ export default defineConfig(({ mode }: ConfigEnv): UserConfig => {
       // The browser can't resolve 'archon-server'
       'import.meta.env.VITE_HOST': JSON.stringify(isDocker ? 'localhost' : host),
       'import.meta.env.VITE_PORT': JSON.stringify(port),
+      'import.meta.env.VITE_SSE_ENDPOINT': JSON.stringify(
+        process.env.VITE_SSE_ENDPOINT || env.VITE_SSE_ENDPOINT || "http://localhost:8000/stream/sessions"
+      ),
       'import.meta.env.PROD': env.PROD === 'true',
     },
     resolve: {

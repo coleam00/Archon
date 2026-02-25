@@ -4,6 +4,8 @@ import type { Agent } from "@/features/agents/types/agent";
 import type { DatabaseTaskStatus, Task } from "@/features/projects/tasks/types";
 import { TaskReviewModal } from "@/features/projects/tasks/components/TaskReviewModal";
 
+const ARCHON_API_URL = `http://${import.meta.env.VITE_HOST || "localhost"}:${import.meta.env.VITE_PORT || "8181"}`;
+
 const COLUMNS: { status: DatabaseTaskStatus; label: string; color: string }[] = [
   { status: "todo", label: "Todo", color: "text-gray-400 border-gray-500/30" },
   { status: "doing", label: "Doing", color: "text-yellow-400 border-yellow-500/30" },
@@ -34,7 +36,7 @@ function buildPrompt(task: Task, agent: Agent | undefined): string {
 Complete this task fully in the Archon project at ~/Documents/Projects/Archon.
 When done, mark it complete:
 
-  curl -s -X PUT http://localhost:8181/api/tasks/${task.id} \\
+  curl -s -X PUT ${ARCHON_API_URL}/api/tasks/${task.id} \\
     -H "Content-Type: application/json" \\
     -d '{"status":"review"}'
 
@@ -69,12 +71,12 @@ ${taskList}
 For each task above, review the implementation thoroughly, then:
 
 If approved — mark it done:
-  curl -s -X PUT http://localhost:8181/api/tasks/{task_id} \\
+  curl -s -X PUT ${ARCHON_API_URL}/api/tasks/{task_id} \\
     -H "Content-Type: application/json" \\
     -d '{"status":"done"}'
 
 If rejected — send it back to doing:
-  curl -s -X PUT http://localhost:8181/api/tasks/{task_id} \\
+  curl -s -X PUT ${ARCHON_API_URL}/api/tasks/{task_id} \\
     -H "Content-Type: application/json" \\
     -d '{"status":"doing"}'
 

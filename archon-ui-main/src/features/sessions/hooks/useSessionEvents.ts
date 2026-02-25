@@ -21,7 +21,7 @@ interface SessionEvent {
   };
 }
 
-const SSE_ENDPOINT = "http://localhost:8000/stream/sessions";
+const SSE_ENDPOINT = import.meta.env.VITE_SSE_ENDPOINT || "http://localhost:8000/stream/sessions";
 
 /**
  * Hook to enable real-time session updates via SSE

@@ -5,9 +5,16 @@ Maps sub-task progress (0-100%) to overall task progress ranges.
 This ensures smooth progress reporting without jumping backwards.
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class ProgressMapper:
     """Maps sub-task progress to overall progress ranges"""
+
+    MIN_PROGRESS = 0
+    MAX_PROGRESS = 100
 
     # Define progress ranges for each stage
     # Reflects actual processing time distribution
@@ -70,18 +77,16 @@ class ProgressMapper:
 
         # Handle completion
         if stage in ["completed", "complete"]:
-            self.last_overall_progress = 100
-            return 100
+            self.last_overall_progress = self.MAX_PROGRESS
+            return self.MAX_PROGRESS
 
         # Calculate mapped progress
-        stage_progress = max(0, min(100, stage_progress))  # Clamp to 0-100
+        stage_progress = max(self.MIN_PROGRESS, min(self.MAX_PROGRESS, stage_progress))
         stage_range = end - start
         mapped_progress = start + (stage_progress / 100.0) * stage_range
 
         # Debug logging for document_storage
         if stage == "document_storage" and stage_progress >= 90:
-            import logging
-            logger = logging.getLogger(__name__)
             logger.info(
                 f"DEBUG: ProgressMapper.map_progress | stage={stage} | stage_progress={stage_progress}% | "
                 f"range=({start}, {end}) | mapped_before_check={mapped_progress:.1f}% | "
@@ -102,7 +107,7 @@ class ProgressMapper:
 
     def get_stage_range(self, stage: str) -> tuple:
         """Get the progress range for a stage"""
-        return self.STAGE_RANGES.get(stage, (0, 100))
+        return self.STAGE_RANGES.get(stage, (self.MIN_PROGRESS, self.MAX_PROGRESS))
 
     def calculate_stage_progress(self, current_value: int, max_value: int) -> float:
         """

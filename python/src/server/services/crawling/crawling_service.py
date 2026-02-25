@@ -11,6 +11,8 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any, Optional
 
+HEARTBEAT_INTERVAL_SECONDS = 30.0
+
 import tldextract
 
 from ...config.logfire_config import get_logger, safe_logfire_error, safe_logfire_info
@@ -323,7 +325,7 @@ class CrawlingService:
         Async orchestration that runs in the main event loop.
         """
         last_heartbeat = asyncio.get_event_loop().time()
-        heartbeat_interval = 30.0  # Send heartbeat every 30 seconds
+        heartbeat_interval = HEARTBEAT_INTERVAL_SECONDS
 
         async def send_heartbeat_if_needed():
             """Send heartbeat to keep connection alive"""
