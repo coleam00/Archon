@@ -6,9 +6,10 @@ Tests ending a session and verifying it's removed from the whiteboard.
 """
 
 import json
+import os
 import redis
 
-REDIS_URL = "redis://llm-streamer-redis:6379"
+REDIS_URL = os.getenv("REDIS_URL", "redis://llm-streamer-redis:6379")
 
 def end_session(r: redis.Redis, session_id: str, agent: str):
     """Publish session.ended event to Redis"""

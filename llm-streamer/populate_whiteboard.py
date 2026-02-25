@@ -6,10 +6,11 @@ Publishes test sessions and tasks to Redis to demonstrate the whiteboard functio
 """
 
 import json
+import os
 import redis
 from datetime import datetime, timezone
 
-REDIS_URL = "redis://llm-streamer-redis:6379"
+REDIS_URL = os.getenv("REDIS_URL", "redis://llm-streamer-redis:6379")
 
 # Test data
 TEST_SESSIONS = [

@@ -13,6 +13,7 @@ Usage:
 
 import asyncio
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -26,8 +27,8 @@ from src.server.config.logfire_config import get_logger
 
 logger = get_logger(__name__)
 
-MCP_BASE_URL = "http://localhost:8051"
-API_BASE_URL = "http://localhost:8181"
+MCP_BASE_URL = os.getenv("ARCHON_MCP_URL",    "http://localhost:8051")
+API_BASE_URL = os.getenv("ARCHON_SERVER_URL", "http://localhost:8181")
 
 
 class MultiAgentScenarioTest:

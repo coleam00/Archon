@@ -15,6 +15,7 @@ Usage:
 
 import asyncio
 import json
+import os
 import statistics
 import time
 from datetime import datetime
@@ -23,7 +24,7 @@ from typing import Any
 import httpx
 
 # Configuration
-API_BASE_URL = "http://localhost:8181"
+API_BASE_URL = os.getenv("ARCHON_SERVER_URL", "http://localhost:8181")
 PROJECT_ID = "7c3528df-b1a2-4fde-9fee-68727c15b6c6"  # Shared Memory project
 TIMEOUT = httpx.Timeout(30.0, connect=5.0)
 
