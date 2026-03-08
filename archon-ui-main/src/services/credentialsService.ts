@@ -478,6 +478,7 @@ class CredentialsService {
             isPrimary: instance.isPrimary ?? false,
             instanceType: instance.instanceType ?? 'both',
             loadBalancingWeight: instance.loadBalancingWeight ?? 100,
+            authToken: instance.authToken,
             isHealthy: instance.isHealthy,
             responseTimeMs: instance.responseTimeMs,
             modelsAvailable: instance.modelsAvailable,
@@ -511,7 +512,8 @@ class CredentialsService {
           isEnabled: instance.isEnabled,
           isPrimary: instance.isPrimary,
           instanceType: instance.instanceType || 'both',
-          loadBalancingWeight: instance.loadBalancingWeight || 100
+          loadBalancingWeight: instance.loadBalancingWeight || 100,
+          ...(instance.authToken !== undefined ? { authToken: instance.authToken } : {})
         };
         
         // Add optional health-related fields

@@ -139,6 +139,55 @@ const normalizeBaseUrl = (url?: string | null): string | null => {
   return normalized || null;
 };
 
+// Reusable authentication input used by both the LLM and Embedding instance modals
+interface AuthenticationInputProps {
+  id: string;
+  useAuth: boolean;
+  authToken: string;
+  onUseAuthChange: (checked: boolean) => void;
+  onAuthTokenChange: (token: string) => void;
+  accentColor?: 'green' | 'purple';
+}
+
+const AuthenticationInput: React.FC<AuthenticationInputProps> = ({
+  id,
+  useAuth,
+  authToken,
+  onUseAuthChange,
+  onAuthTokenChange,
+  accentColor = 'green',
+}) => {
+  const colorClass = accentColor === 'purple'
+    ? 'text-purple-600 focus:ring-purple-500 dark:focus:ring-purple-600'
+    : 'text-green-600 focus:ring-green-500 dark:focus:ring-green-600';
+
+  return (
+    <div className="space-y-2 mt-4">
+      <div className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          id={id}
+          checked={useAuth}
+          onChange={(e) => onUseAuthChange(e.target.checked)}
+          className={`w-4 h-4 ${colorClass} bg-gray-100 border-gray-300 rounded dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600`}
+        />
+        <label htmlFor={id} className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          Use Authentication
+        </label>
+      </div>
+      {useAuth && (
+        <Input
+          type="password"
+          placeholder="Auth Token"
+          value={authToken}
+          onChange={(e) => onAuthTokenChange(e.target.value)}
+          className="text-sm"
+        />
+      )}
+    </div>
+  );
+};
+
 interface RAGSettingsProps {
   ragSettings: {
     MODEL_CHOICE: string;
@@ -152,10 +201,12 @@ interface RAGSettingsProps {
     LLM_PROVIDER?: string;
     LLM_BASE_URL?: string;
     LLM_INSTANCE_NAME?: string;
+    OLLAMA_CHAT_AUTH_TOKEN?: string;
     EMBEDDING_MODEL?: string;
     EMBEDDING_PROVIDER?: string;
     OLLAMA_EMBEDDING_URL?: string;
     OLLAMA_EMBEDDING_INSTANCE_NAME?: string;
+    OLLAMA_EMBEDDING_AUTH_TOKEN?: string;
     // Crawling Performance Settings
     CRAWL_BATCH_SIZE?: number;
     CRAWL_MAX_CONCURRENT?: number;
@@ -229,7 +280,7 @@ export const RAGSettings = ({
   useEffect(() => {
     const newLLMUrl = ragSettings.LLM_BASE_URL || '';
     const newLLMName = ragSettings.LLM_INSTANCE_NAME || '';
-    const newAuthToken = (ragSettings as any).OLLAMA_CHAT_AUTH_TOKEN || '';
+    const newAuthToken = ragSettings.OLLAMA_CHAT_AUTH_TOKEN || '';
 
     if (newLLMUrl !== lastLLMConfigRef.current.url || newLLMName !== lastLLMConfigRef.current.name || newAuthToken !== lastLLMConfigRef.current.authToken) {
       lastLLMConfigRef.current = { url: newLLMUrl, name: newLLMName, authToken: newAuthToken };
@@ -247,12 +298,12 @@ export const RAGSettings = ({
         return prev;
       });
     }
-  }, [ragSettings.LLM_BASE_URL, ragSettings.LLM_INSTANCE_NAME, (ragSettings as any).OLLAMA_CHAT_AUTH_TOKEN]);
+  }, [ragSettings.LLM_BASE_URL, ragSettings.LLM_INSTANCE_NAME, ragSettings.OLLAMA_CHAT_AUTH_TOKEN]);
 
   useEffect(() => {
     const newEmbeddingUrl = ragSettings.OLLAMA_EMBEDDING_URL || '';
     const newEmbeddingName = ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME || '';
-    const newAuthToken = (ragSettings as any).OLLAMA_EMBEDDING_AUTH_TOKEN || '';
+    const newAuthToken = ragSettings.OLLAMA_EMBEDDING_AUTH_TOKEN || '';
 
     if (newEmbeddingUrl !== lastEmbeddingConfigRef.current.url || newEmbeddingName !== lastEmbeddingConfigRef.current.name || newAuthToken !== lastEmbeddingConfigRef.current.authToken) {
       lastEmbeddingConfigRef.current = { url: newEmbeddingUrl, name: newEmbeddingName, authToken: newAuthToken };
@@ -270,7 +321,7 @@ export const RAGSettings = ({
         return prev;
       });
     }
-  }, [ragSettings.OLLAMA_EMBEDDING_URL, ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME, (ragSettings as any).OLLAMA_EMBEDDING_AUTH_TOKEN]);
+  }, [ragSettings.OLLAMA_EMBEDDING_URL, ragSettings.OLLAMA_EMBEDDING_INSTANCE_NAME, ragSettings.OLLAMA_EMBEDDING_AUTH_TOKEN]);
 
   // Provider model persistence effects - separate for chat and embedding
   useEffect(() => {
@@ -2391,29 +2442,14 @@ const manualTestConnection = async (
                 </div>
 
                 {/* Authentication Settings */}
-                <div className="space-y-2 mt-4">
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id="llm-use-auth"
-                      checked={llmInstanceConfig.useAuth}
-                      onChange={(e) => setLLMInstanceConfig({...llmInstanceConfig, useAuth: e.target.checked})}
-                      className="w-4 h-4 text-green-600 bg-gray-100 border-gray-300 rounded focus:ring-green-500 dark:focus:ring-green-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
-                    />
-                    <label htmlFor="llm-use-auth" className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                      Use Authentication
-                    </label>
-                  </div>
-                  {llmInstanceConfig.useAuth && (
-                    <Input
-                      type="password"
-                      placeholder="Auth Token"
-                      value={llmInstanceConfig.authToken}
-                      onChange={(e) => setLLMInstanceConfig({...llmInstanceConfig, authToken: e.target.value})}
-                      className="text-sm"
-                    />
-                  )}
-                </div>
+                <AuthenticationInput
+                  id="llm-use-auth"
+                  useAuth={llmInstanceConfig.useAuth}
+                  authToken={llmInstanceConfig.authToken}
+                  onUseAuthChange={(checked) => setLLMInstanceConfig({...llmInstanceConfig, useAuth: checked})}
+                  onAuthTokenChange={(token) => setLLMInstanceConfig({...llmInstanceConfig, authToken: token})}
+                  accentColor="green"
+                />
               </div>
               
               <div className="flex gap-2 mt-6">
@@ -2481,29 +2517,14 @@ const manualTestConnection = async (
                 />
 
                 {/* Authentication Settings */}
-                <div className="space-y-2 mt-4">
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id="embedding-use-auth"
-                      checked={embeddingInstanceConfig.useAuth}
-                      onChange={(e) => setEmbeddingInstanceConfig({...embeddingInstanceConfig, useAuth: e.target.checked})}
-                      className="w-4 h-4 text-purple-600 bg-gray-100 border-gray-300 rounded focus:ring-purple-500 dark:focus:ring-purple-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
-                    />
-                    <label htmlFor="embedding-use-auth" className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                      Use Authentication
-                    </label>
-                  </div>
-                  {embeddingInstanceConfig.useAuth && (
-                    <Input
-                      type="password"
-                      placeholder="Auth Token"
-                      value={embeddingInstanceConfig.authToken}
-                      onChange={(e) => setEmbeddingInstanceConfig({...embeddingInstanceConfig, authToken: e.target.value})}
-                      className="text-sm"
-                    />
-                  )}
-                </div>
+                <AuthenticationInput
+                  id="embedding-use-auth"
+                  useAuth={embeddingInstanceConfig.useAuth}
+                  authToken={embeddingInstanceConfig.authToken}
+                  onUseAuthChange={(checked) => setEmbeddingInstanceConfig({...embeddingInstanceConfig, useAuth: checked})}
+                  onAuthTokenChange={(token) => setEmbeddingInstanceConfig({...embeddingInstanceConfig, authToken: token})}
+                  accentColor="purple"
+                />
               </div>
               
               <div className="flex gap-2 mt-6">

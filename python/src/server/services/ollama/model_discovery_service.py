@@ -225,7 +225,7 @@ class ModelDiscoveryService:
                 logger.info(f"Discovered {len(models)} models from {instance_url}")
 
                 # Enrich models with capability information
-                enriched_models = await self._enrich_model_capabilities(models, instance_url, fetch_details=fetch_details)
+                enriched_models = await self._enrich_model_capabilities(models, instance_url, fetch_details=fetch_details, auth_token=auth_token)
 
                 # Cache the results
                 self._cache_models(instance_url, enriched_models)
@@ -242,7 +242,7 @@ class ModelDiscoveryService:
             logger.error(f"Error discovering models from {instance_url}: {e}")
             raise Exception(f"Failed to discover models: {str(e)}") from e
 
-    async def _enrich_model_capabilities(self, models: list[OllamaModel], instance_url: str, fetch_details: bool = False) -> list[OllamaModel]:
+    async def _enrich_model_capabilities(self, models: list[OllamaModel], instance_url: str, fetch_details: bool = False, auth_token: str | None = None) -> list[OllamaModel]:
         """
         Enrich models with capability information using optimized pattern-based detection.
         Only performs API testing for unknown models or when specifically requested.
@@ -251,6 +251,7 @@ class ModelDiscoveryService:
             models: List of basic model information
             instance_url: Ollama instance URL
             fetch_details: If True, fetch comprehensive model details via /api/show
+            auth_token: Optional authentication token for protected instances
 
         Returns:
             Models enriched with capability information
@@ -315,7 +316,7 @@ class ModelDiscoveryService:
                     if fetch_details:
                         logger.info(f"Fetching detailed info for {model.name} from {instance_url}")
                         try:
-                            detailed_info = await self._get_model_details(model.name, instance_url)
+                            detailed_info = await self._get_model_details(model.name, instance_url, auth_token=auth_token)
                             if detailed_info:
                                 # Add comprehensive real API data to the model
                                 # Context information
@@ -685,11 +686,16 @@ class ModelDiscoveryService:
 
         return False
 
-    async def _get_model_details(self, model_name: str, instance_url: str) -> dict[str, Any] | None:
+    async def _get_model_details(self, model_name: str, instance_url: str, auth_token: str | None = None) -> dict[str, Any] | None:
         """
         Get comprehensive information about a model from Ollama /api/show endpoint.
         Extracts all available data including context lengths, architecture details,
         capabilities, and parameter information as specified by user requirements.
+
+        Args:
+            model_name: Name of the model to look up
+            instance_url: Ollama instance URL
+            auth_token: Optional authentication token for protected instances
 
         Returns:
             Model details dictionary with comprehensive real API data or None if failed
@@ -700,8 +706,12 @@ class ModelDiscoveryService:
                 base_url = instance_url.rstrip('/').replace('/v1', '')
                 show_url = f"{base_url}/api/show"
 
+                headers = {}
+                if auth_token:
+                    headers["Authorization"] = f"Bearer {auth_token}"
+
                 payload = {"name": model_name}
-                response = await client.post(show_url, json=payload)
+                response = await client.post(show_url, json=payload, headers=headers)
 
                 if response.status_code == 200:
                     data = response.json()

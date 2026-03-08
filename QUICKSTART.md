@@ -6,11 +6,11 @@
 
 ```bash
 # 1. Supabase starten
-cd /Volumes/DATEN/Coding/archon/supabase
+cd supabase
 supabase start
 
 # 2. Archon starten
-cd /Volumes/DATEN/Coding/archon
+cd ..
 docker compose up -d
 
 # 3. Status prüfen

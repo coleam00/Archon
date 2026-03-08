@@ -253,12 +253,15 @@ def extract_text_from_pdf(file_content: bytes) -> str:
             import tempfile
             import os
 
-            # pymupdf4llm requires a file path, so write to temp file
-            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-                tmp.write(file_content)
-                tmp_path = tmp.name
-
+            # pymupdf4llm requires a file path, so write to a temp file.
+            # Use a single try/finally block so the file is always removed,
+            # even if the write itself raises (e.g., disk full).
+            tmp_path = None
             try:
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                    tmp.write(file_content)
+                    tmp_path = tmp.name
+
                 markdown_text = pymupdf4llm.to_markdown(tmp_path)
 
                 if markdown_text and len(markdown_text.strip()) > 100:
@@ -267,7 +270,8 @@ def extract_text_from_pdf(file_content: bytes) -> str:
                 else:
                     logfire.warning("pymupdf4llm returned insufficient text, trying fallback")
             finally:
-                os.unlink(tmp_path)
+                if tmp_path is not None:
+                    os.unlink(tmp_path)
 
         except Exception as e:
             logfire.warning(f"pymupdf4llm extraction failed: {e}, trying pdfplumber")

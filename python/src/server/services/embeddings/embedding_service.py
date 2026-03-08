@@ -119,13 +119,47 @@ class NativeOllamaEmbeddingAdapter(EmbeddingProviderAdapter):
     ) -> list[list[float]]:
         try:
             async with httpx.AsyncClient(timeout=60.0) as http_client:
-                embeddings = await asyncio.gather(
+                results = await asyncio.gather(
                     *(
                         self._fetch_single_embedding(http_client, model, text)
                         for text in texts
-                    )
+                    ),
+                    return_exceptions=True,
                 )
+
+            # Separate successes from failures for partial-failure resilience
+            embeddings: list[list[float]] = []
+            errors: list[tuple[int, BaseException]] = []
+            for i, result in enumerate(results):
+                if isinstance(result, BaseException):
+                    errors.append((i, result))
+                    search_logger.error(
+                        f"Embedding failed for text[{i}]: {result}", exc_info=False
+                    )
+                else:
+                    embeddings.append(result)
+
+            if errors and not embeddings:
+                # All requests failed – raise using the first error
+                first_error = errors[0][1]
+                if isinstance(first_error, httpx.HTTPStatusError):
+                    error_content = first_error.response.text
+                    raise EmbeddingAPIError(
+                        f"Ollama native API error: {first_error.response.status_code} - {error_content}",
+                        original_error=first_error,
+                    ) from first_error
+                raise EmbeddingAPIError(
+                    f"Ollama native API error: {str(first_error)}", original_error=first_error
+                ) from first_error
+
+            if errors:
+                search_logger.warning(
+                    f"{len(errors)}/{len(results)} embedding requests failed; returning {len(embeddings)} successful embeddings"
+                )
+
             return embeddings
+        except EmbeddingAPIError:
+            raise
         except httpx.HTTPStatusError as error:
             error_content = error.response.text
             search_logger.error(
@@ -456,7 +490,7 @@ async def create_embeddings_batch(
                     embedding_dimensions = int(rag_settings.get("EMBEDDING_DIMENSIONS", "1536"))
 
                     # For Ollama, get native API URL, auth token, and API mode
-                    ollama_base_url = rag_settings.get("OLLAMA_EMBEDDING_URL", "").rstrip("/v1").rstrip("/")
+                    ollama_base_url = rag_settings.get("OLLAMA_EMBEDDING_URL", "").removesuffix("/v1").rstrip("/")
                     ollama_auth_token = rag_settings.get("OLLAMA_EMBEDDING_AUTH_TOKEN", "")
                     ollama_api_mode = rag_settings.get("OLLAMA_API_MODE", "native")
                 except Exception as e:

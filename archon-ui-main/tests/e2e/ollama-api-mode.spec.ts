@@ -8,22 +8,19 @@ test.describe('Ollama API Mode Selection', () => {
 
   test('should display API mode radio buttons when Ollama is selected', async ({ page }) => {
     // Navigate to RAG Settings tab
-    await page.click('text=RAG Settings');
-    await page.waitForTimeout(500);
+    await page.locator('text=RAG Settings').click();
+    await expect(page.locator('text=Embedding')).toBeVisible();
 
     // Select Ollama as embedding provider
-    await page.click('text=Embedding');
-    await page.waitForTimeout(300);
+    await page.locator('text=Embedding').click();
+    await expect(page.locator('button:has-text("Ollama")').first()).toBeVisible();
 
     // Click on Ollama provider card
-    const ollamaCard = page.locator('button:has-text("Ollama")').first();
-    await ollamaCard.click();
-    await page.waitForTimeout(500);
+    await page.locator('button:has-text("Ollama")').first().click();
+    await expect(page.locator('button:has-text("Config")').first()).toBeVisible();
 
     // Open Ollama configuration
-    const configButton = page.locator('button:has-text("Config")').first();
-    await configButton.click();
-    await page.waitForTimeout(500);
+    await page.locator('button:has-text("Config")').first().click();
 
     // Verify API mode section is visible
     await expect(page.locator('text=Ollama API Mode')).toBeVisible();
@@ -39,24 +36,21 @@ test.describe('Ollama API Mode Selection', () => {
 
   test('should default to Native Ollama API mode', async ({ page }) => {
     // Navigate to RAG Settings tab
-    await page.click('text=RAG Settings');
-    await page.waitForTimeout(1000);
+    await page.locator('text=RAG Settings').click();
+    await expect(page.locator('text=Embedding')).toBeVisible();
 
     // Select Ollama as embedding provider
-    await page.click('text=Embedding');
-    await page.waitForTimeout(500);
+    await page.locator('text=Embedding').click();
+    await expect(page.locator('button:has-text("Ollama")').first()).toBeVisible();
 
-    const ollamaCard = page.locator('button:has-text("Ollama")').first();
-    await ollamaCard.click();
-    await page.waitForTimeout(1000);
+    await page.locator('button:has-text("Ollama")').first().click();
+    await expect(page.locator('button:has-text("Config")').first()).toBeVisible();
 
     // Open Ollama configuration
-    const configButton = page.locator('button:has-text("Config")').first();
-    await configButton.click();
-    await page.waitForTimeout(1000);
+    await page.locator('button:has-text("Config")').first().click();
 
     // Wait for the API mode section to be visible
-    await page.waitForSelector('text=Ollama API Mode', { timeout: 5000 });
+    await expect(page.locator('text=Ollama API Mode')).toBeVisible();
 
     // Verify Native Ollama API is selected by default (check for the green border or the filled radio)
     const nativeButton = page.locator('button:has-text("Native Ollama API")');
@@ -68,26 +62,23 @@ test.describe('Ollama API Mode Selection', () => {
 
   test('should switch between API modes', async ({ page }) => {
     // Navigate to RAG Settings tab
-    await page.click('text=RAG Settings');
-    await page.waitForTimeout(500);
+    await page.locator('text=RAG Settings').click();
+    await expect(page.locator('text=Embedding')).toBeVisible();
 
     // Select Ollama as embedding provider
-    await page.click('text=Embedding');
-    await page.waitForTimeout(300);
+    await page.locator('text=Embedding').click();
+    await expect(page.locator('button:has-text("Ollama")').first()).toBeVisible();
 
-    const ollamaCard = page.locator('button:has-text("Ollama")').first();
-    await ollamaCard.click();
-    await page.waitForTimeout(500);
+    await page.locator('button:has-text("Ollama")').first().click();
+    await expect(page.locator('button:has-text("Config")').first()).toBeVisible();
 
     // Open Ollama configuration
-    const configButton = page.locator('button:has-text("Config")').first();
-    await configButton.click();
-    await page.waitForTimeout(500);
+    await page.locator('button:has-text("Config")').first().click();
+    await expect(page.locator('text=Ollama API Mode')).toBeVisible();
 
     // Click on OpenAI-Compatible mode
     const openaiButton = page.locator('button:has-text("OpenAI-Compatible")');
     await openaiButton.click();
-    await page.waitForTimeout(300);
 
     // Verify OpenAI-Compatible is now selected
     await expect(openaiButton).toHaveClass(/border-green-500/);
@@ -100,7 +91,6 @@ test.describe('Ollama API Mode Selection', () => {
 
     // Switch back to Native
     await nativeButton.click();
-    await page.waitForTimeout(300);
 
     // Verify Native is selected again
     await expect(nativeButton).toHaveClass(/border-green-500/);
@@ -113,30 +103,27 @@ test.describe('Ollama API Mode Selection', () => {
 
   test('should persist API mode selection after save', async ({ page }) => {
     // Navigate to RAG Settings tab
-    await page.click('text=RAG Settings');
-    await page.waitForTimeout(500);
+    await page.locator('text=RAG Settings').click();
+    await expect(page.locator('text=Embedding')).toBeVisible();
 
     // Select Ollama as embedding provider
-    await page.click('text=Embedding');
-    await page.waitForTimeout(300);
+    await page.locator('text=Embedding').click();
+    await expect(page.locator('button:has-text("Ollama")').first()).toBeVisible();
 
-    const ollamaCard = page.locator('button:has-text("Ollama")').first();
-    await ollamaCard.click();
-    await page.waitForTimeout(500);
+    await page.locator('button:has-text("Ollama")').first().click();
+    await expect(page.locator('button:has-text("Config")').first()).toBeVisible();
 
     // Open Ollama configuration
-    const configButton = page.locator('button:has-text("Config")').first();
-    await configButton.click();
-    await page.waitForTimeout(500);
+    await page.locator('button:has-text("Config")').first().click();
+    await expect(page.locator('text=Ollama API Mode')).toBeVisible();
 
     // Select OpenAI-Compatible mode
     const openaiButton = page.locator('button:has-text("OpenAI-Compatible")');
     await openaiButton.click();
-    await page.waitForTimeout(300);
+    await expect(openaiButton).toHaveClass(/border-green-500/);
 
     // Save settings
-    await page.click('button:has-text("Save Settings")');
-    await page.waitForTimeout(1000);
+    await page.locator('button:has-text("Save Settings")').click();
 
     // Verify success toast (use first() to avoid strict mode violation)
     await expect(page.locator('text=RAG settings saved successfully!').first()).toBeVisible({ timeout: 5000 });
@@ -146,16 +133,15 @@ test.describe('Ollama API Mode Selection', () => {
     await page.waitForLoadState('networkidle');
 
     // Navigate back to RAG Settings
-    await page.click('text=RAG Settings');
-    await page.waitForTimeout(500);
+    await page.locator('text=RAG Settings').click();
+    await expect(page.locator('text=Embedding')).toBeVisible();
 
-    await page.click('text=Embedding');
-    await page.waitForTimeout(300);
+    await page.locator('text=Embedding').click();
+    await expect(page.locator('button:has-text("Config")').first()).toBeVisible();
 
     // Open Ollama configuration
-    const configBtn = page.locator('button:has-text("Config")').first();
-    await configBtn.click();
-    await page.waitForTimeout(500);
+    await page.locator('button:has-text("Config")').first().click();
+    await expect(page.locator('text=Ollama API Mode')).toBeVisible();
 
     // Verify OpenAI-Compatible is still selected after reload
     const openaiButtonAfterReload = page.locator('button:has-text("OpenAI-Compatible")');
@@ -164,29 +150,23 @@ test.describe('Ollama API Mode Selection', () => {
 
   test('should show API mode for both chat and embedding configurations', async ({ page }) => {
     // Navigate to RAG Settings tab
-    await page.click('text=RAG Settings');
-    await page.waitForTimeout(500);
+    await page.locator('text=RAG Settings').click();
+    await expect(page.locator('text=Chat')).toBeVisible();
 
     // Test with Chat tab
-    await page.click('text=Chat');
-    await page.waitForTimeout(300);
+    await page.locator('text=Chat').click();
+    await expect(page.locator('button:has-text("Ollama")').first()).toBeVisible();
 
-    const ollamaCardChat = page.locator('button:has-text("Ollama")').first();
-    await ollamaCardChat.click();
-    await page.waitForTimeout(500);
+    await page.locator('button:has-text("Ollama")').first().click();
+    await expect(page.locator('button:has-text("Config")').first()).toBeVisible();
 
-    const configButtonChat = page.locator('button:has-text("Config")').first();
-    await configButtonChat.click();
-    await page.waitForTimeout(500);
+    await page.locator('button:has-text("Config")').first().click();
 
     // Verify API mode section is visible for chat
     await expect(page.locator('text=Ollama API Mode')).toBeVisible();
 
     // Switch to Embedding tab
-    await page.click('text=Embedding');
-    await page.waitForTimeout(500);
-
-    // Verify API mode section is still visible (shared across both tabs)
+    await page.locator('text=Embedding').click();
     await expect(page.locator('text=Ollama API Mode')).toBeVisible();
   });
 });

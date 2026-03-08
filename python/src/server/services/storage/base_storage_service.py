@@ -75,9 +75,12 @@ class BaseStorageService(ABC):
             # Try to find a good break point
             chunk = text[start:end]
 
-            # Helper: check if position is inside a code block
-            def is_inside_code_block(text_segment: str, pos: int) -> bool:
-                return text_segment[:pos].count("```") % 2 == 1
+            # Helper: check if an absolute position in `text` is inside a code block.
+            # We count all ``` fences from the very beginning of the full text so that
+            # fenced blocks that started before `start` are correctly accounted for.
+            def is_inside_code_block(text_segment: str, local_pos: int) -> bool:
+                abs_pos = start + local_pos
+                return text[:abs_pos].count("```") % 2 == 1
 
             # Store original end for checking if we found a break point
             original_end = end
