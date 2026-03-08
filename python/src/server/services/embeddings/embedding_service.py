@@ -292,8 +292,8 @@ def _get_embedding_adapter(
         search_logger.info("Using Google native embedding adapter")
         return GoogleEmbeddingAdapter()
     if provider_name == "ollama" and base_url:
-        # Check API mode - default to native if not specified or if set to native
-        if (api_mode or "native") == "native":
+        # Check API mode - default to native if not specified or if set to native (case-insensitive)
+        if (api_mode or "native").lower() == "native":
             search_logger.info(f"Using Ollama native API adapter with base URL: {base_url}")
             return NativeOllamaEmbeddingAdapter(base_url, auth_token)
         else:
@@ -456,9 +456,9 @@ async def create_embeddings_batch(
                     embedding_dimensions = int(rag_settings.get("EMBEDDING_DIMENSIONS", "1536"))
 
                     # For Ollama, get native API URL, auth token, and API mode
-                    ollama_base_url = rag_settings.get("OLLAMA_EMBEDDING_URL", "").rstrip("/v1").rstrip("/")
-                    ollama_auth_token = rag_settings.get("OLLAMA_EMBEDDING_AUTH_TOKEN", "")
-                    ollama_api_mode = rag_settings.get("OLLAMA_API_MODE", "native")
+                    ollama_base_url = (rag_settings.get("OLLAMA_EMBEDDING_URL") or "").replace("/v1", "").rstrip("/")
+                    ollama_auth_token = rag_settings.get("OLLAMA_EMBEDDING_AUTH_TOKEN") or ""
+                    ollama_api_mode = (rag_settings.get("OLLAMA_API_MODE") or "native").lower()
                 except Exception as e:
                     search_logger.warning(f"Failed to load embedding settings: {e}, using defaults")
                     batch_size = 100

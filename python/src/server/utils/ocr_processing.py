@@ -10,9 +10,6 @@ Primary engine: Tesseract OCR
 - Good accuracy for clean documents
 """
 
-import io
-import tempfile
-import os
 from typing import Optional
 
 from ..config.logfire_config import get_logger, logfire

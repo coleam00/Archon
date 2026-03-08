@@ -155,6 +155,8 @@ interface RAGSettingsProps {
     EMBEDDING_PROVIDER?: string;
     OLLAMA_EMBEDDING_URL?: string;
     OLLAMA_EMBEDDING_INSTANCE_NAME?: string;
+    OLLAMA_CHAT_AUTH_TOKEN?: string;
+    OLLAMA_EMBEDDING_AUTH_TOKEN?: string;
     // Crawling Performance Settings
     CRAWL_BATCH_SIZE?: number;
     CRAWL_MAX_CONCURRENT?: number;
@@ -680,13 +682,13 @@ export const RAGSettings = ({
 
   // Auto-load available models when URLs are configured
   useEffect(() => {
-    if (llmInstanceConfig.url && llmInstanceConfig.url !== 'http://host.docker.internal:11434/v1') {
+    if (llmInstanceConfig.url && llmInstanceConfig.url.trim()) {
       loadAvailableModels(llmInstanceConfig.url, 'chat');
     }
   }, [llmInstanceConfig.url]);
 
   useEffect(() => {
-    if (embeddingInstanceConfig.url && embeddingInstanceConfig.url !== 'http://host.docker.internal:11434/v1') {
+    if (embeddingInstanceConfig.url && embeddingInstanceConfig.url.trim()) {
       loadAvailableModels(embeddingInstanceConfig.url, 'embedding');
     }
   }, [embeddingInstanceConfig.url]);
@@ -2401,6 +2403,10 @@ const manualTestConnection = async (
                 </Button>
                 <Button
                   onClick={async () => {
+                    if (llmInstanceConfig.useAuth && !llmInstanceConfig.authToken.trim()) {
+                      showToast('Authentication token is required when authentication is enabled', 'error');
+                      return;
+                    }
                     const updatedSettings = {
                       ...ragSettings,
                       LLM_BASE_URL: llmInstanceConfig.url,
@@ -2491,6 +2497,10 @@ const manualTestConnection = async (
                 </Button>
                 <Button
                   onClick={async () => {
+                    if (embeddingInstanceConfig.useAuth && !embeddingInstanceConfig.authToken.trim()) {
+                      showToast('Authentication token is required when authentication is enabled', 'error');
+                      return;
+                    }
                     const updatedSettings = {
                       ...ragSettings,
                       OLLAMA_EMBEDDING_URL: embeddingInstanceConfig.url,

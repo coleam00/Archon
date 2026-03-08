@@ -171,7 +171,8 @@ async def reconcile_state(
                     logger.info("orphaned_worktree_deleted", path=orphan_path)
                 else:
                     # Safety check failed - do not delete
-                    actions.append(f"Skipped deletion of {orphan_path} (safety check failed: outside worktree base or invalid path)")
+                    skip_msg = f"Skipped deletion of {orphan_path} (safety check failed: outside worktree base or invalid path)"
+                    actions.append(skip_msg)
                     logger.error(
                         "orphaned_worktree_deletion_skipped_safety_check_failed",
                         path=orphan_path,
