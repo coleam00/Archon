@@ -60,7 +60,7 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/)
 - [Node.js 18+](https://nodejs.org/) (for hybrid development mode)
-- [Supabase](https://supabase.com/) account (free tier or local Supabase both work)
+- [Supabase](https://supabase.com/) account (free tier or local Supabase both work) **OR use local database mode**
 - [OpenAI API key](https://platform.openai.com/api-keys) (Gemini and Ollama are supported too!)
 - (OPTIONAL) [Make](https://www.gnu.org/software/make/) (see [Installing Make](#installing-make) below)
 
@@ -77,16 +77,34 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
    **Note:** The `stable` branch is recommended for using Archon. If you want to contribute or try the latest features, use the `main` branch with `git clone https://github.com/coleam00/archon.git`
 2. **Environment Configuration**:
 
-   ```bash
-   cp .env.example .env
-   # Edit .env and add your Supabase credentials:
-   # SUPABASE_URL=https://your-project.supabase.co
-   # SUPABASE_SERVICE_KEY=your-service-key-here
-   ```
+    ```bash
+    cp .env.example .env
+    ```
 
-   IMPORTANT NOTES:
-   - For cloud Supabase: they recently introduced a new type of service role key but use the legacy one (the longer one).
-   - For local Supabase: set SUPABASE_URL to http://host.docker.internal:8000 (unless you have an IP address set up).
+    **Option A — Supabase Cloud (Default)**:
+    ```bash
+    # Edit .env and add your Supabase credentials:
+    SUPABASE_URL=https://your-project.supabase.co
+    SUPABASE_SERVICE_KEY=your-service-key-here
+    ```
+
+    **Option B — Local Database (No Cloud)**:
+    ```bash
+    # Edit .env and set:
+    LOCAL_DB=true
+    # Leave SUPABASE_URL and SUPABASE_SERVICE_KEY empty
+    ```
+
+    IMPORTANT NOTES:
+    - For cloud Supabase: they recently introduced a new type of service role key but use the legacy one (the longer one).
+    - For local Supabase: set SUPABASE_URL to http://host.docker.internal:8000 (unless you have an IP address set up).
+    - For local database mode: no Supabase credentials needed — just set `LOCAL_DB=true`.
+
+3. **Database Setup**:
+
+    **Supabase Cloud**: In your [Supabase project](https://supabase.com/dashboard) SQL Editor, copy, paste, and execute the contents of `migration/complete_setup.sql`
+
+    **Local Database**: The database is automatically initialized when you start the services — no manual SQL execution needed.
 
 3. **Database Setup**: In your [Supabase project](https://supabase.com/dashboard) SQL Editor, copy, paste, and execute the contents of `migration/complete_setup.sql`
 
@@ -104,6 +122,25 @@ This new vision for Archon replaces the old one (the agenteer). Archon used to b
    - **UI**: Web interface (Port: 3737)
 
    Ports are configurable in your .env as well!
+
+   **Local Database Mode (No Supabase Account Required)**
+
+   If you want to keep all data on your machine with no cloud dependencies:
+
+   ```bash
+   # Option 1: Using Make (recommended)
+   make dev-local-db
+
+   # Option 2: Using Docker Compose directly
+   docker compose --profile full --profile local-db up -d
+   ```
+
+   This starts the full Archon stack **plus** a local PostgreSQL + PostgREST database:
+   - **Database**: PostgreSQL 16 with pgvector (Port: 5433)
+   - **PostgREST**: REST API compatible with supabase-py (Port: 3001)
+   - **All data stays on your machine** – no Supabase account needed
+
+   No additional configuration required – just set `LOCAL_DB=true` in your `.env` and everything works automatically.
 
 5. **Configure API Keys**:
    - Open http://localhost:3737
@@ -160,16 +197,20 @@ sudo yum install make
 <summary><strong>🚀 Quick Command Reference for Make</strong></summary>
 <br/>
 
-| Command           | Description                                             |
-| ----------------- | ------------------------------------------------------- |
-| `make dev`        | Start hybrid dev (backend in Docker, frontend local) ⭐ |
-| `make dev-docker` | Everything in Docker                                    |
-| `make stop`       | Stop all services                                       |
-| `make test`       | Run all tests                                           |
-| `make lint`       | Run linters                                             |
-| `make install`    | Install dependencies                                    |
-| `make check`      | Check environment setup                                 |
-| `make clean`      | Remove containers and volumes (with confirmation)       |
+| Command              | Description                                             |
+| -------------------- | ------------------------------------------------------- |
+| `make dev`           | Start hybrid dev (backend in Docker, frontend local) ⭐ |
+| `make dev-docker`    | Everything in Docker                                    |
+| `make dev-local-db`  | Full stack with local PostgreSQL + PostgREST 🆕         |
+| `make stop`          | Stop all services                                       |
+| `make test`          | Run all tests                                           |
+| `make lint`          | Run linters                                             |
+| `make install`       | Install dependencies                                    |
+| `make check`         | Check environment setup                                 |
+| `make clean`         | Remove containers and volumes (with confirmation)       |
+| `make local-db-up`   | Start local database stack only                         |
+| `make local-db-down` | Stop local database stack                               |
+| `make local-db-reset`| Reset local database (deletes all data)                 |
 
 </details>
 
@@ -204,12 +245,20 @@ The reset script safely removes all tables, functions, triggers, and policies wi
 
 ### Core Services
 
-| Service            | Container Name | Default URL           | Purpose                           |
-| ------------------ | -------------- | --------------------- | --------------------------------- |
-| **Web Interface**  | archon-ui      | http://localhost:3737 | Main dashboard and controls       |
-| **API Service**    | archon-server  | http://localhost:8181 | Web crawling, document processing |
-| **MCP Server**     | archon-mcp     | http://localhost:8051 | Model Context Protocol interface  |
-| **Agents Service** | archon-agents  | http://localhost:8052 | AI/ML operations, reranking       |  
+| Service            | Container Name        | Default URL           | Purpose                           |
+| ------------------ | --------------------- | --------------------- | --------------------------------- |
+| **Web Interface**  | archon-ui             | http://localhost:3737 | Main dashboard and controls       |
+| **API Service**    | archon-server         | http://localhost:8181 | Web crawling, document processing |
+| **MCP Server**     | archon-mcp            | http://localhost:8051 | Model Context Protocol interface  |
+| **Agents Service** | archon-agents         | http://localhost:8052 | AI/ML operations, reranking       |
+
+### Local Database Services (opt-in)
+
+| Service            | Container Name        | Default URL           | Purpose                           |
+| ------------------ | --------------------- | --------------------- | --------------------------------- |
+| **PostgreSQL**     | archon-db             | localhost:5433        | Database with pgvector extension  |
+| **PostgREST**      | archon-postgrest      | http://localhost:3001 | REST API for PostgreSQL           |
+| **Nginx Proxy**    | archon-postgrest-proxy| http://localhost:3002 | Supabase URL compatibility layer  |
 
 ## Upgrading
 
@@ -285,11 +334,26 @@ Archon uses true microservices architecture with clear separation of concerns:
                          ┌─────────────────┐               │
                          │    Database     │               │
                          │                 │               │
-                         │    Supabase     │◄──────────────┘
-                         │    PostgreSQL   │
-                         │    PGVector     │
+                         │  Supabase Cloud │◄──────────────┘
+                         │  or Local DB    │
+                         │  PostgreSQL     │
+                         │  + PostgREST    │
                          └─────────────────┘
 ```
+
+### Local Database Architecture
+
+When running with `LOCAL_DB=true`, Archon uses a local PostgreSQL stack instead of Supabase Cloud:
+
+```
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│  PostgreSQL  │───►│  PostgREST   │───►│  Nginx Proxy │
+│  16 + pgvec  │    │  (REST API)  │    │  /rest/v1/   │
+│  Port 5433   │    │  Port 3001   │    │  Port 3002   │
+└──────────────┘    └──────────────┘    └──────────────┘
+```
+
+The Nginx proxy maps `/rest/v1/` paths to PostgREST's root paths, making it fully compatible with the `supabase-py` client. **No code changes needed** – Archon's Python services work identically in both modes.
 
 ### Service Responsibilities
 

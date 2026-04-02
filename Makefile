@@ -5,23 +5,37 @@ SHELL := /bin/bash
 # Docker compose command - prefer newer 'docker compose' plugin over standalone 'docker-compose'
 COMPOSE ?= $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
 
-.PHONY: help dev dev-docker stop test test-fe test-be lint lint-fe lint-be clean install check
+# Load .env if it exists
+ifneq (,$(wildcard .env))
+    include .env
+    export
+endif
+
+.PHONY: help dev dev-docker dev-local-db stop test test-fe test-be lint lint-fe lint-be clean install check
 
 help:
 	@echo "Archon Development Commands"
 	@echo "==========================="
-	@echo "  make dev        - Backend in Docker, frontend local (recommended)"
-	@echo "  make dev-docker - Everything in Docker"
-	@echo "  make stop       - Stop all services"
-	@echo "  make test       - Run all tests"
-	@echo "  make test-fe    - Run frontend tests only"
-	@echo "  make test-be    - Run backend tests only"
-	@echo "  make lint       - Run all linters"
-	@echo "  make lint-fe    - Run frontend linter only"
-	@echo "  make lint-be    - Run backend linter only"
-	@echo "  make clean      - Remove containers and volumes"
-	@echo "  make install    - Install dependencies"
-	@echo "  make check      - Check environment setup"
+	@echo "  make dev          - Backend in Docker, frontend local (recommended)"
+	@echo "  make dev-docker   - Everything in Docker"
+	@echo "  make dev-local-db - Full stack with local PostgreSQL + PostgREST"
+	@echo "  make stop         - Stop all services"
+	@echo "  make test         - Run all tests"
+	@echo "  make test-fe      - Run frontend tests only"
+	@echo "  make test-be      - Run backend tests only"
+	@echo "  make lint         - Run all linters"
+	@echo "  make lint-fe      - Run frontend linter only"
+	@echo "  make lint-be      - Run backend linter only"
+	@echo "  make clean        - Remove containers and volumes"
+	@echo "  make install      - Install dependencies"
+	@echo "  make check        - Check environment setup"
+	@echo ""
+	@echo "Local Database Commands"
+	@echo "======================="
+	@echo "  make local-db-up      - Start local database stack only"
+	@echo "  make local-db-down    - Stop local database stack"
+	@echo "  make local-db-reset   - Reset local database (deletes all data)"
+	@echo "  make local-db-logs    - View local database logs"
 
 # Install dependencies
 install:
@@ -62,11 +76,49 @@ dev-docker: check
 	@echo "Frontend: http://localhost:3737"
 	@echo "API: http://localhost:8181"
 
+# Full stack with local database
+dev-local-db: check
+	@echo "Starting Archon with local database..."
+	@$(COMPOSE) --profile full --profile local-db up -d --build
+	@echo "✓ All services running with local database"
+	@echo "Frontend: http://localhost:3737"
+	@echo "API: http://localhost:8181"
+	@echo "Database: localhost:$(LOCAL_DB_PORT:-5433)"
+	@echo "PostgREST: http://localhost:$(POSTGREST_PORT:-3001)"
+
 # Stop all services
 stop:
 	@echo "Stopping all services..."
-	@$(COMPOSE) --profile backend --profile frontend --profile full down
+	@$(COMPOSE) --profile backend --profile frontend --profile full --profile local-db down
 	@echo "✓ Services stopped"
+
+# Local database commands
+local-db-up:
+	@echo "Starting local database stack..."
+	@$(COMPOSE) --profile local-db up -d
+	@echo "✓ Local database running"
+	@echo "PostgreSQL: localhost:$(LOCAL_DB_PORT:-5433)"
+	@echo "PostgREST: http://localhost:$(POSTGREST_PORT:-3001)"
+
+local-db-down:
+	@echo "Stopping local database..."
+	@$(COMPOSE) --profile local-db down
+	@echo "✓ Local database stopped"
+
+local-db-reset:
+	@echo "⚠️  This will remove the local database volume and recreate it"
+	@read -p "Are you sure? All data will be lost! (y/N) " -n 1 -r; \
+	echo; \
+	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
+		$(COMPOSE) --profile local-db down -v; \
+		$(COMPOSE) --profile local-db up -d; \
+		echo "✓ Local database reset and recreated"; \
+	else \
+		echo "Cancelled"; \
+	fi
+
+local-db-logs:
+	@$(COMPOSE) --profile local-db logs -f
 
 # Run all tests
 test: test-fe test-be

@@ -1,11 +1,83 @@
 # Docker Compose profiles:
 # - Default (no profile): Starts archon-server, archon-mcp, and archon-frontend
 # - Agents are opt-in: archon-agents starts only with the "agents" profile
+# - Local DB: Use LOCAL_DB=true to run PostgreSQL + PostgREST locally instead of Supabase cloud
 # Usage:
 #   docker compose up                        # Starts server, mcp, frontend (agents disabled)
 #   docker compose --profile agents up -d    # Also starts archon-agents
+#   LOCAL_DB=true docker compose up -d       # Full stack with local database
 
 services:
+  # =====================================================
+  # LOCAL DATABASE SERVICES (opt-in via LOCAL_DB=true)
+  # =====================================================
+
+  # PostgreSQL with pgvector extension
+  archon-db:
+    image: pgvector/pgvector:pg16
+    container_name: archon-db
+    profiles:
+      - local-db
+    ports:
+      - "${LOCAL_DB_PORT:-5433}:5432"
+    environment:
+      - POSTGRES_USER=${LOCAL_DB_USER:-archon}
+      - POSTGRES_PASSWORD=${LOCAL_DB_PASSWORD:-archon_password}
+      - POSTGRES_DB=${LOCAL_DB_NAME:-archon}
+    volumes:
+      - archon-db-data:/var/lib/postgresql/data
+      - ./local-db/complete_setup_local.sql:/docker-entrypoint-initdb.d/01_complete_setup.sql
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${LOCAL_DB_USER:-archon} -d ${LOCAL_DB_NAME:-archon}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # PostgREST - exposes PostgreSQL as REST API (Supabase-compatible)
+  archon-postgrest:
+    image: postgrest/postgrest:latest
+    container_name: archon-postgrest
+    profiles:
+      - local-db
+    ports:
+      - "${POSTGREST_PORT:-3001}:3000"
+    environment:
+      - PGRST_DB_URI=postgres://${LOCAL_DB_USER:-archon}:${LOCAL_DB_PASSWORD:-archon_password}@archon-db:5432/${LOCAL_DB_NAME:-archon}
+      - PGRST_DB_SCHEMA=public
+      - PGRST_DB_ANON_ROLE=${LOCAL_DB_USER:-archon}
+      - PGRST_SERVER_PORT=3000
+      - PGRST_DB_POOL=10
+      - PGRST_DB_EXTRA_SEARCH_PATH=public,extensions
+    networks:
+      - app-network
+    depends_on:
+      archon-db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Lightweight proxy to map /rest/v1/ -> / (Supabase URL format compatibility)
+  archon-postgrest-proxy:
+    image: nginx:alpine
+    container_name: archon-postgrest-proxy
+    profiles:
+      - local-db
+    ports:
+      - "${LOCAL_REST_PORT:-3002}:80"
+    volumes:
+      - ./local-db/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - app-network
+    depends_on:
+      - archon-postgrest
+    restart: unless-stopped
+
+  # =====================================================
+  # CORE SERVICES
+  # =====================================================
+
   # Server Service (FastAPI + Socket.IO + Crawling)
   archon-server:
     build:
@@ -18,8 +90,8 @@ services:
     ports:
       - "${ARCHON_SERVER_PORT:-8181}:${ARCHON_SERVER_PORT:-8181}"
     environment:
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - SUPABASE_URL=${SUPABASE_URL:-http://archon-postgrest-proxy:${LOCAL_REST_PORT:-3002}}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-local-db-key}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LOGFIRE_TOKEN=${LOGFIRE_TOKEN:-}
       - SERVICE_DISCOVERY_MODE=docker_compose
@@ -29,13 +101,14 @@ services:
       - ARCHON_AGENTS_PORT=${ARCHON_AGENTS_PORT:-8052}
       - AGENTS_ENABLED=${AGENTS_ENABLED:-false}
       - ARCHON_HOST=${HOST:-localhost}
+      - LOCAL_DB=${LOCAL_DB:-false}
     networks:
       - app-network
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock # Docker socket for MCP container control
-      - ./python/src:/app/src # Mount source code for hot reload
-      - ./python/tests:/app/tests # Mount tests for UI test execution
-      - ./migration:/app/migration # Mount migration files for version tracking
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./python/src:/app/src
+      - ./python/tests:/app/tests
+      - ./migration:/app/migration
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command:
@@ -75,25 +148,25 @@ services:
     ports:
       - "${ARCHON_MCP_PORT:-8051}:${ARCHON_MCP_PORT:-8051}"
     environment:
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - SUPABASE_URL=${SUPABASE_URL:-http://archon-postgrest-proxy:${LOCAL_REST_PORT:-3002}}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-local-db-key}
       - LOGFIRE_TOKEN=${LOGFIRE_TOKEN:-}
       - SERVICE_DISCOVERY_MODE=docker_compose
       - TRANSPORT=sse
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      # MCP needs to know where to find other services
       - API_SERVICE_URL=http://archon-server:${ARCHON_SERVER_PORT:-8181}
       - AGENTS_ENABLED=${AGENTS_ENABLED:-false}
       - AGENTS_SERVICE_URL=${AGENTS_SERVICE_URL:-http://archon-agents:${ARCHON_AGENTS_PORT:-8052}}
       - ARCHON_MCP_PORT=${ARCHON_MCP_PORT:-8051}
       - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
       - ARCHON_AGENTS_PORT=${ARCHON_AGENTS_PORT:-8052}
+      - LOCAL_DB=${LOCAL_DB:-false}
     networks:
       - app-network
     depends_on:
       archon-server:
         condition: service_healthy
-      
+
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -107,12 +180,12 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s # Give dependencies time to start
+      start_period: 60s
 
   # AI Agents Service (ML/Reranking)
   archon-agents:
     profiles:
-      - agents  # Only starts when explicitly using --profile agents
+      - agents
     build:
       context: ./python
       dockerfile: Dockerfile.agents
@@ -123,14 +196,15 @@ services:
     ports:
       - "${ARCHON_AGENTS_PORT:-8052}:${ARCHON_AGENTS_PORT:-8052}"
     environment:
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - SUPABASE_URL=${SUPABASE_URL:-http://archon-postgrest-proxy:${LOCAL_REST_PORT:-3002}}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-local-db-key}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LOGFIRE_TOKEN=${LOGFIRE_TOKEN:-}
       - SERVICE_DISCOVERY_MODE=docker_compose
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - ARCHON_AGENTS_PORT=${ARCHON_AGENTS_PORT:-8052}
       - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
+      - LOCAL_DB=${LOCAL_DB:-false}
     networks:
       - app-network
     healthcheck:
@@ -153,8 +227,6 @@ services:
     ports:
       - "${ARCHON_UI_PORT:-3737}:3737"
     environment:
-      # Don't set VITE_API_URL so frontend uses relative URLs through proxy
-      # - VITE_API_URL=http://${HOST:-localhost}:${ARCHON_SERVER_PORT:-8181}
       - VITE_ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
       - ARCHON_SERVER_PORT=${ARCHON_SERVER_PORT:-8181}
       - HOST=${HOST:-localhost}
@@ -179,3 +251,6 @@ services:
 networks:
   app-network:
     driver: bridge
+
+volumes:
+  archon-db-data:
