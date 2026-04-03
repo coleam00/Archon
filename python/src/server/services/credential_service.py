@@ -60,8 +60,8 @@ class CredentialService:
             if not url or not key:
                 if local_db:
                     local_rest_port = os.getenv("LOCAL_REST_PORT", "3002")
-                    url = f"http://archon-postgrest-proxy:{local_rest_port}"
-                    key = "local-db-key"
+                    url = f"http://archon-postgrest-proxy"
+                    key = "eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCJ9.eyJyb2xlIjogImFyY2hvbiIsICJpc3MiOiAic3VwYWJhc2UiLCAiaWF0IjogMTcwMDAwMDAwMCwgImV4cCI6IDE5MDAwMDAwMDB9.fMGxKe1G_SlgZzA5myJAs5NooiRCnm-6MwKo7ob9v5g"
                 else:
                     raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in environment variables")
 

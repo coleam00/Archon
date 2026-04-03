@@ -50,7 +50,8 @@ services:
       - PGRST_DB_ANON_ROLE=${LOCAL_DB_USER:-archon}
       - PGRST_SERVER_PORT=3000
       - PGRST_DB_POOL=10
-      - PGRST_DB_EXTRA_SEARCH_PATH=public,extensions
+      - PGRST_DB_EXTRA_SEARCH_PATH=public
+      - PGRST_JWT_SECRET=local-jwt-secret-key-for-development-only-not-for-production-use-12345678
     networks:
       - app-network
     depends_on:
@@ -73,6 +74,12 @@ services:
     depends_on:
       - archon-postgrest
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:80/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
 
   # =====================================================
   # CORE SERVICES
@@ -90,8 +97,8 @@ services:
     ports:
       - "${ARCHON_SERVER_PORT:-8181}:${ARCHON_SERVER_PORT:-8181}"
     environment:
-      - SUPABASE_URL=${SUPABASE_URL:-http://archon-postgrest-proxy:${LOCAL_REST_PORT:-3002}}
-      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-local-db-key}
+      - SUPABASE_URL=${SUPABASE_URL:-http://archon-postgrest-proxy}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCJ9.eyJyb2xlIjogImFyY2hvbiIsICJpc3MiOiAic3VwYWJhc2UiLCAiaWF0IjogMTcwMDAwMDAwMCwgImV4cCI6IDE5MDAwMDAwMDB9.fMGxKe1G_SlgZzA5myJAs5NooiRCnm-6MwKo7ob9v5g}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LOGFIRE_TOKEN=${LOGFIRE_TOKEN:-}
       - SERVICE_DISCOVERY_MODE=docker_compose
@@ -111,6 +118,10 @@ services:
       - ./migration:/app/migration
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      archon-postgrest-proxy:
+        condition: service_started
+    restart: unless-stopped
     command:
       [
         "python",
@@ -148,8 +159,8 @@ services:
     ports:
       - "${ARCHON_MCP_PORT:-8051}:${ARCHON_MCP_PORT:-8051}"
     environment:
-      - SUPABASE_URL=${SUPABASE_URL:-http://archon-postgrest-proxy:${LOCAL_REST_PORT:-3002}}
-      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-local-db-key}
+      - SUPABASE_URL=${SUPABASE_URL:-http://archon-postgrest-proxy}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCJ9.eyJyb2xlIjogImFyY2hvbiIsICJpc3MiOiAic3VwYWJhc2UiLCAiaWF0IjogMTcwMDAwMDAwMCwgImV4cCI6IDE5MDAwMDAwMDB9.fMGxKe1G_SlgZzA5myJAs5NooiRCnm-6MwKo7ob9v5g}
       - LOGFIRE_TOKEN=${LOGFIRE_TOKEN:-}
       - SERVICE_DISCOVERY_MODE=docker_compose
       - TRANSPORT=sse
@@ -196,8 +207,8 @@ services:
     ports:
       - "${ARCHON_AGENTS_PORT:-8052}:${ARCHON_AGENTS_PORT:-8052}"
     environment:
-      - SUPABASE_URL=${SUPABASE_URL:-http://archon-postgrest-proxy:${LOCAL_REST_PORT:-3002}}
-      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-local-db-key}
+      - SUPABASE_URL=${SUPABASE_URL:-http://archon-postgrest-proxy}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCJ9.eyJyb2xlIjogImFyY2hvbiIsICJpc3MiOiAic3VwYWJhc2UiLCAiaWF0IjogMTcwMDAwMDAwMCwgImV4cCI6IDE5MDAwMDAwMDB9.fMGxKe1G_SlgZzA5myJAs5NooiRCnm-6MwKo7ob9v5g}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LOGFIRE_TOKEN=${LOGFIRE_TOKEN:-}
       - SERVICE_DISCOVERY_MODE=docker_compose

@@ -92,7 +92,7 @@ def validate_supabase_key(supabase_key: str) -> tuple[bool, str]:
         return True, "UNABLE_TO_VALIDATE"
 
 
-def validate_supabase_url(url: str) -> bool:
+def validate_supabase_url(url: str, local_db: bool = False) -> bool:
     """Validate Supabase URL format."""
     if not url:
         raise ConfigurationError("Supabase URL cannot be empty")
@@ -109,6 +109,14 @@ def validate_supabase_url(url: str) -> bool:
         # Check for exact localhost and Docker internal hosts (security: prevent subdomain bypass)
         local_hosts = ["localhost", "127.0.0.1", "host.docker.internal"]
         if hostname in local_hosts or hostname.endswith(".localhost"):
+            return True
+
+        # Allow HTTP for Docker Compose service names in local database mode
+        if local_db and hostname.startswith("archon-"):
+            return True
+
+        # Allow HTTP for Docker Compose service names in local database mode
+        if local_db and hostname.startswith("archon-"):
             return True
 
         # Check if hostname is a private IP address
@@ -149,22 +157,23 @@ def load_environment_config() -> EnvironmentConfig:
         if local_db:
             # Auto-configure for local PostgREST
             local_rest_port = os.getenv("LOCAL_REST_PORT", "3002")
-            supabase_url = f"http://archon-postgrest-proxy:{local_rest_port}"
+            supabase_url = f"http://archon-postgrest-proxy"
         else:
             raise ConfigurationError("SUPABASE_URL environment variable is required (or set LOCAL_DB=true)")
 
     supabase_service_key = os.getenv("SUPABASE_SERVICE_KEY")
     if not supabase_service_key:
         if local_db:
-            # Use a placeholder key for local mode - no JWT validation needed
-            supabase_service_key = "local-db-key"
+            # Use a JWT-formatted key that supabase-py accepts
+            # PostgREST in local mode doesn't verify signatures
+            supabase_service_key = "eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCJ9.eyJyb2xlIjogImFyY2hvbiIsICJpc3MiOiAic3VwYWJhc2UiLCAiaWF0IjogMTcwMDAwMDAwMCwgImV4cCI6IDE5MDAwMDAwMDB9.fMGxKe1G_SlgZzA5myJAs5NooiRCnm-6MwKo7ob9v5g"
         else:
             raise ConfigurationError("SUPABASE_SERVICE_KEY environment variable is required (or set LOCAL_DB=true)")
 
     # Validate required fields
     if openai_api_key:
         validate_openai_api_key(openai_api_key)
-    validate_supabase_url(supabase_url)
+    validate_supabase_url(supabase_url, local_db=local_db)
 
     # Skip Supabase key validation in local database mode
     if not local_db:
