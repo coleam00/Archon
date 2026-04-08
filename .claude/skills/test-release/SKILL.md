@@ -45,8 +45,10 @@ TARGET=bun-darwin-arm64 \
 OUTFILE=dist/test-archon-darwin-arm64 \
 bash scripts/build-binaries.sh
 
-# Verify the binary
-./dist/binaries/archon-darwin-arm64 version
+# Verify the binary — use the path from the mode you built:
+#   multi-target → ./dist/binaries/archon-darwin-arm64
+#   single-target → the OUTFILE you passed above
+./dist/test-archon-darwin-arm64 version
 # Expected: Archon CLI v0.3.1, Build: binary, Git commit: abc12345
 ```
 

@@ -50,7 +50,9 @@ jobs:
 
       - name: Build binary
         env:
-          VERSION: ${{ github.ref_name }}
+          # On workflow_dispatch, github.ref_name is the branch name (e.g. 'main'),
+          # not the version tag — fall back to the user-supplied `version` input.
+          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
           GIT_COMMIT: ${{ github.sha }}
           TARGET: ${{ matrix.target }}
           OUTFILE: dist/${{ matrix.binary }}
@@ -64,9 +66,15 @@ jobs:
 
       - name: Smoke-test built binary
         if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
+        env:
+          RAW_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
         run: |
           chmod +x dist/${{ matrix.binary }}
-          VERSION_OUTPUT=$(./dist/${{ matrix.binary }} version 2>&1)
+          if ! VERSION_OUTPUT=$(./dist/${{ matrix.binary }} version 2>&1); then
+            echo "::error::Binary failed to execute"
+            echo "$VERSION_OUTPUT"
+            exit 1
+          fi
           echo "$VERSION_OUTPUT"
 
           # Must not error with "Failed to read version" or similar
@@ -83,11 +91,36 @@ jobs:
             exit 1
           fi
 
-          # Must report the tag version
-          if echo "$VERSION_OUTPUT" | grep -q "${{ github.ref_name }}"; then
-            echo "::notice::Binary correctly reports version"
+          # Must report the (stripped) tag version. Compare against the same
+          # value that was baked into the binary (VERSION#v), not the raw ref,
+          # so the check doesn't rely on the CLI re-adding a 'v' prefix.
+          EXPECTED_VERSION="${RAW_VERSION#v}"
+          if echo "$VERSION_OUTPUT" | grep -qE "v?${EXPECTED_VERSION}(\s|$)"; then
+            echo "::notice::Binary correctly reports version ${EXPECTED_VERSION}"
           else
-            echo "::error::Binary does not report the tag version"
+            echo "::error::Binary does not report version ${EXPECTED_VERSION}"
+            exit 1
+          fi
+
+      - name: Smoke-test bundled defaults load
+        if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
+        run: |
+          # `workflow list` requires running from a git repo
+          BIN="$PWD/dist/${{ matrix.binary }}"
+          TMP_REPO=$(mktemp -d)
+          cd "$TMP_REPO"
+          git init -q
+          git -c user.email=ci@example.com -c user.name=ci commit --allow-empty -q -m init
+          if ! OUTPUT=$("$BIN" workflow list 2>&1); then
+            echo "::error::workflow list failed to execute"
+            echo "$OUTPUT"
+            exit 1
+          fi
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -q "archon-assist"; then
+            echo "::notice::Bundled workflows loaded correctly"
+          else
+            echo "::error::Bundled workflows did not load — embedded JSON may be missing from the binary"
             exit 1
           fi
 
