@@ -184,38 +184,56 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Migration-day scan: warn for codebases that would be blocked at next spawn
-  // by the env-leak-gate. Best-effort — failures must not block startup.
-  try {
-    const codebases = await codebaseDb.listCodebases();
-    for (const cb of codebases) {
-      if (cb.allow_env_keys) continue;
-      try {
-        const report = scanPathForSensitiveKeys(cb.default_cwd);
-        if (report.findings.length > 0) {
-          const files = report.findings.map(f => f.file);
-          const keys = Array.from(new Set(report.findings.flatMap(f => f.keys)));
-          getLog().warn(
-            {
-              codebaseId: cb.id,
-              name: cb.name,
-              path: cb.default_cwd,
-              files,
-              keys,
-            },
-            'migration_env_leak_gate_will_block'
+  // Load configuration early so the startup env-leak scan can honor the
+  // global bypass. Without this, users who set `allow_target_repo_keys: true`
+  // would get a per-codebase warn spam on every boot even though the gate
+  // is intentionally disabled.
+  const config = await loadConfig();
+  logConfig(config);
+
+  // Startup env-leak scan: warn for codebases that would be blocked at next
+  // spawn by the env-leak-gate. Skipped entirely when the global bypass is
+  // active. Best-effort — failures are surfaced but never block startup.
+  if (config.allowTargetRepoKeys) {
+    getLog().info('startup_env_leak_scan_skipped — allow_target_repo_keys is true');
+  } else {
+    try {
+      const codebases = await codebaseDb.listCodebases();
+      for (const cb of codebases) {
+        if (cb.allow_env_keys) continue;
+        try {
+          const report = scanPathForSensitiveKeys(cb.default_cwd);
+          if (report.findings.length > 0) {
+            const files = report.findings.map(f => f.file);
+            const keys = Array.from(new Set(report.findings.flatMap(f => f.keys)));
+            getLog().warn(
+              {
+                codebaseId: cb.id,
+                name: cb.name,
+                path: cb.default_cwd,
+                files,
+                keys,
+              },
+              'startup_env_leak_gate_will_block'
+            );
+          }
+        } catch (scanErr) {
+          // Path may no longer exist (codebase moved/deleted on disk) —
+          // log at debug, do not abort the loop. This is the only quiet path.
+          getLog().debug(
+            { err: scanErr, codebaseId: cb.id, path: cb.default_cwd },
+            'startup_env_leak_scan_path_unavailable'
           );
         }
-      } catch (scanErr) {
-        // Path may no longer exist — skip silently
-        getLog().debug(
-          { err: scanErr, codebaseId: cb.id, path: cb.default_cwd },
-          'migration_env_leak_gate_scan_skipped'
-        );
       }
+    } catch (error) {
+      // listCodebases() failed — the entire startup safety net is silently
+      // absent. Surface at error level so operators see it.
+      getLog().error(
+        { err: error },
+        'startup_env_leak_scan_failed — startup migration warnings suppressed'
+      );
     }
-  } catch (error) {
-    getLog().warn({ err: error }, 'migration_env_leak_gate_scan_failed');
   }
 
   // Start cleanup scheduler
@@ -233,10 +251,6 @@ async function main(): Promise<void> {
 
   // Validate app defaults paths (non-blocking, just logs warnings)
   await validateAppDefaultsPaths();
-
-  // Load and log configuration
-  const config = await loadConfig();
-  logConfig(config);
 
   // Initialize conversation lock manager
   const maxConcurrent = parseInt(process.env.MAX_CONCURRENT_CONVERSATIONS ?? '10');

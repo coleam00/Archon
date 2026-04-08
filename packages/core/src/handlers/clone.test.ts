@@ -961,14 +961,20 @@ describe('RegisterResult shape', () => {
       );
     });
 
-    test('does not scan when allowEnvKeys is true, even with scanner findings available', async () => {
+    test('does not throw when allowEnvKeys is true, even with scanner findings present', async () => {
       mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+      // Scanner is still called for the audit-log payload (files/keys), but the
+      // gate must NOT throw — the per-call grant is the bypass.
+      mockScanPathForSensitiveKeys.mockReturnValueOnce({
+        path: '/home/test/.archon/workspaces/owner/repo/source',
+        findings: [{ file: '.env', keys: ['ANTHROPIC_API_KEY'] }],
+      });
 
-      // allowEnvKeys=true should bypass the gate; scanner not called even with findings queued
       const result = await cloneRepository('https://github.com/owner/repo', true);
 
-      expect(mockScanPathForSensitiveKeys).not.toHaveBeenCalled();
       expect(result.codebaseId).toBe('codebase-uuid-1');
+      // Scanner is called once — for the audit log, not as a gate
+      expect(mockScanPathForSensitiveKeys).toHaveBeenCalledTimes(1);
     });
   });
 });

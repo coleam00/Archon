@@ -20,6 +20,7 @@ import { ClaudeClient } from './claude';
 import * as claudeModule from './claude';
 import * as codebaseDb from '../db/codebases';
 import * as envLeakScanner from '../utils/env-leak-scanner';
+import * as configLoader from '../config/config-loader';
 
 describe('ClaudeClient', () => {
   let client: ClaudeClient;
@@ -1014,6 +1015,44 @@ describe('ClaudeClient', () => {
 
       expect(spyScan).toHaveBeenCalledTimes(1);
       expect(chunks).toHaveLength(1);
+    });
+
+    test('skips scan when allowTargetRepoKeys is true in merged config', async () => {
+      const spyLoadConfig = spyOn(configLoader, 'loadConfig').mockResolvedValueOnce({
+        allowTargetRepoKeys: true,
+      } as Awaited<ReturnType<typeof configLoader.loadConfig>>);
+      // Even though scanner would return a finding, the config bypass must short-circuit
+      spyScan.mockReturnValueOnce({
+        path: '/workspace',
+        findings: [{ file: '.env', keys: ['ANTHROPIC_API_KEY'] }],
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(spyScan).not.toHaveBeenCalled();
+      expect(chunks).toHaveLength(1);
+      spyLoadConfig.mockRestore();
+    });
+
+    test('falls back to scanner when loadConfig throws (fail-closed)', async () => {
+      const spyLoadConfig = spyOn(configLoader, 'loadConfig').mockRejectedValueOnce(
+        new Error('YAML parse error')
+      );
+      spyScan.mockReturnValueOnce({
+        path: '/workspace',
+        findings: [{ file: '.env', keys: ['ANTHROPIC_API_KEY'] }],
+      });
+
+      await expect(async () => {
+        for await (const _ of client.sendQuery('test', '/workspace')) {
+          // consume
+        }
+      }).toThrow('Cannot run workflow');
+      expect(spyScan).toHaveBeenCalled();
+      spyLoadConfig.mockRestore();
     });
 
     test('uses prefix lookup for worktree paths when exact match returns null', async () => {

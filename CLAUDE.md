@@ -198,6 +198,10 @@ bun run cli workflow run implement --branch feature-auth "Add auth"
 # Opt out of isolation (run in live checkout)
 bun run cli workflow run quick-fix --no-worktree "Fix typo"
 
+# Grant env-leak-gate consent during auto-registration (for repos whose .env
+# contains sensitive keys). Audit-logged with actor: 'user-cli'.
+bun run cli workflow run plan --cwd /path/to/leaky/repo --allow-env-keys "..."
+
 # Show running workflows
 bun run cli workflow status
 
@@ -742,6 +746,12 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 - `POST /api/workflows/runs/{runId}/resume` - Mark a failed run as ready for auto-resume on next invocation
 - `POST /api/workflows/runs/{runId}/abandon` - Abandon a non-terminal run (marks as cancelled)
 - `DELETE /api/workflows/runs/{runId}` - Delete a terminal workflow run and its events
+
+**Codebases:**
+- `GET /api/codebases` / `GET /api/codebases/:id` - List / fetch codebases
+- `POST /api/codebases` - Register a codebase (clone or local path); body accepts `allowEnvKeys` for the env-leak gate
+- `PATCH /api/codebases/:id` - Flip the `allow_env_keys` consent bit; body: `{ allowEnvKeys: boolean }`. Audit-logged at `warn` level on every grant/revoke (`env_leak_consent_granted` / `env_leak_consent_revoked`) with `codebaseId`, `path`, `files`, `keys`, `scanStatus`, `actor`
+- `DELETE /api/codebases/:id` - Delete a codebase and clean up resources
 
 **Artifact Files:**
 - `GET /api/artifacts/:runId/*` - Serve a workflow artifact file by run ID and relative path; returns `text/markdown` for `.md` files, `text/plain` otherwise; 400 on path traversal (`..`), 404 if run or file not found

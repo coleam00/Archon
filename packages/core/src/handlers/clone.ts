@@ -51,7 +51,12 @@ async function registerRepoAtPath(
   context: LeakErrorContext = 'register-ui'
 ): Promise<RegisterResult> {
   // Scan for sensitive keys in auto-loaded .env files before registering.
-  // Config-level bypass short-circuits the scan entirely.
+  // Two bypass paths exist (in order of precedence):
+  //   1. Per-call `allowEnvKeys=true` (Web UI checkbox or CLI --allow-env-keys)
+  //   2. Config-level `allow_target_repo_keys: true` (global YAML)
+  // When the per-call bypass is used we still emit an audit-log entry so the
+  // grant has a permanent breadcrumb (parity with the PATCH route's
+  // `env_leak_consent_granted` log).
   if (!allowEnvKeys) {
     const merged = await loadConfig(targetPath);
     if (!merged.allowTargetRepoKeys) {
@@ -60,6 +65,32 @@ async function registerRepoAtPath(
         throw new EnvLeakError(report, context);
       }
     }
+  } else {
+    // Per-call grant — emit audit log mirroring the PATCH route shape so the
+    // CLI/UI add-with-consent paths leave the same breadcrumbs.
+    let files: string[] = [];
+    let keys: string[] = [];
+    let scanStatus: 'ok' | 'skipped' = 'ok';
+    try {
+      const report = scanPathForSensitiveKeys(targetPath);
+      files = report.findings.map(f => f.file);
+      keys = Array.from(new Set(report.findings.flatMap(f => f.keys)));
+    } catch (scanErr) {
+      scanStatus = 'skipped';
+      getLog().warn({ err: scanErr, path: targetPath }, 'env_leak_consent_scan_skipped');
+    }
+    const actor = context === 'register-cli' ? 'user-cli' : 'user-ui';
+    getLog().warn(
+      {
+        name,
+        path: targetPath,
+        files,
+        keys,
+        scanStatus,
+        actor,
+      },
+      'env_leak_consent_granted'
+    );
   }
 
   // Auto-detect assistant type based on folder structure

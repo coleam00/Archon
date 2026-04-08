@@ -1546,11 +1546,13 @@ export function registerApiRoutes(
       // Capture scanner findings for the audit log (best-effort — path may be gone)
       let files: string[] = [];
       let keys: string[] = [];
+      let scanStatus: 'ok' | 'skipped' = 'ok';
       try {
         const report = scanPathForSensitiveKeys(codebase.default_cwd);
         files = report.findings.map(f => f.file);
         keys = Array.from(new Set(report.findings.flatMap(f => f.keys)));
       } catch (scanErr) {
+        scanStatus = 'skipped';
         getLog().warn(
           { err: scanErr, codebaseId: id, path: codebase.default_cwd },
           'env_leak_consent_scan_skipped'
@@ -1559,6 +1561,10 @@ export function registerApiRoutes(
 
       await codebaseDb.updateCodebaseAllowEnvKeys(id, body.allowEnvKeys);
 
+      // Audit log: emitted unconditionally on every grant/revoke. `scanStatus`
+      // distinguishes "scanned and these are the findings" from "could not
+      // scan, files/keys are empty for that reason" — important for later
+      // security review of the audit trail.
       getLog().warn(
         {
           codebaseId: id,
@@ -1566,6 +1572,7 @@ export function registerApiRoutes(
           path: codebase.default_cwd,
           files,
           keys,
+          scanStatus,
           actor: 'user-ui',
         },
         body.allowEnvKeys ? 'env_leak_consent_granted' : 'env_leak_consent_revoked'

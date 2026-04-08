@@ -164,8 +164,15 @@ export class CodexClient implements IAssistantClient {
       (await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
       (await codebaseDb.findCodebaseByPathPrefix(cwd));
     if (!codebase?.allow_env_keys) {
-      const merged = await loadConfig(cwd);
-      if (!merged.allowTargetRepoKeys) {
+      // Fail-closed: a config load failure must NOT silently bypass the gate.
+      let allowTargetRepoKeys = false;
+      try {
+        const merged = await loadConfig(cwd);
+        allowTargetRepoKeys = merged.allowTargetRepoKeys;
+      } catch (configErr) {
+        getLog().warn({ err: configErr, cwd }, 'env_leak_gate.config_load_failed_gate_enforced');
+      }
+      if (!allowTargetRepoKeys) {
         const report = scanPathForSensitiveKeys(cwd);
         if (report.findings.length > 0) {
           throw new EnvLeakError(report, 'spawn-existing');

@@ -266,6 +266,7 @@ function ProjectsSection(): React.ReactElement {
   const [showAdd, setShowAdd] = useState(false);
   const [allowEnvKeys, setAllowEnvKeys] = useState(false);
   const [expandedEnvVars, setExpandedEnvVars] = useState<string | null>(null);
+  const [toggleError, setToggleError] = useState<string | null>(null);
 
   const { data: codebases } = useQuery({
     queryKey: ['codebases'],
@@ -294,7 +295,13 @@ function ProjectsSection(): React.ReactElement {
     mutationFn: ({ id, allowEnvKeys }: { id: string; allowEnvKeys: boolean }) =>
       updateCodebase(id, { allowEnvKeys }),
     onSuccess: () => {
+      setToggleError(null);
       void queryClient.invalidateQueries({ queryKey: ['codebases'] });
+    },
+    onError: (err: Error) => {
+      // Without this the user clicks "Revoke env keys", confirms the
+      // destructive dialog, and gets no feedback if the PATCH fails.
+      setToggleError(err.message);
     },
   });
 
@@ -311,6 +318,11 @@ function ProjectsSection(): React.ReactElement {
         <CardTitle>Projects</CardTitle>
       </CardHeader>
       <CardContent>
+        {toggleError && (
+          <div className="mb-2 rounded-md border border-error/50 bg-error/10 p-2 text-sm text-error">
+            Failed to update env-key consent: {toggleError}
+          </div>
+        )}
         {!codebases || codebases.length === 0 ? (
           <div className="text-sm text-muted-foreground">No projects registered.</div>
         ) : (

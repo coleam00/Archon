@@ -39,6 +39,24 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 /**
+ * Tracks which env-leak-gate-disabled sources have already warned in this
+ * process. `loadConfig()` is called once per pre-spawn check (per workflow
+ * step), so without this guard the warn would flood logs and break alert
+ * rate-limiting downstream.
+ */
+const envLeakGateDisabledWarnedSources = new Set<'global_config' | 'repo_config'>();
+function warnEnvLeakGateDisabledOnce(source: 'global_config' | 'repo_config'): void {
+  if (envLeakGateDisabledWarnedSources.has(source)) return;
+  envLeakGateDisabledWarnedSources.add(source);
+  getLog().warn({ source }, 'env_leak_gate_disabled');
+}
+
+// Test-only: reset the warn-once state so unit tests can re-trigger the log.
+export function resetEnvLeakGateWarnedSourcesForTests(): void {
+  envLeakGateDisabledWarnedSources.clear();
+}
+
+/**
  * Parse YAML using Bun's native YAML parser
  */
 function parseYaml(content: string): unknown {
@@ -306,7 +324,7 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
   // Env-leak gate bypass (global)
   if (global.allow_target_repo_keys === true) {
     result.allowTargetRepoKeys = true;
-    getLog().warn({ source: 'global_config' }, 'env_leak_gate_disabled');
+    warnEnvLeakGateDisabledOnce('global_config');
   }
 
   return result;
@@ -386,7 +404,7 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
   if (repo.allow_target_repo_keys !== undefined) {
     result.allowTargetRepoKeys = repo.allow_target_repo_keys;
     if (repo.allow_target_repo_keys) {
-      getLog().warn({ source: 'repo_config' }, 'env_leak_gate_disabled');
+      warnEnvLeakGateDisabledOnce('repo_config');
     }
   }
 

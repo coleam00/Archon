@@ -127,6 +127,9 @@ Options:
   --json                     Output machine-readable JSON (for workflow list)
   --workflow <name>          Workflow to run for 'continue' (default: archon-assist)
   --no-context               Skip context injection for 'continue'
+  --allow-env-keys           Grant env-key consent during auto-registration
+                             (bypasses the env-leak gate for this codebase;
+                             logs an audit entry)
 
 Examples:
   archon chat "What does the orchestrator do?"
