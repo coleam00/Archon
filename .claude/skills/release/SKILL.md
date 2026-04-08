@@ -13,7 +13,20 @@ description: |
 
 # Release Skill
 
-Creates a release by comparing dev to main, generating changelog entries from commits, bumping the version, and creating a PR.
+Creates a release by comparing dev to main, generating changelog entries from commits, bumping the version, and creating a PR. After the tag is pushed and the release workflow finishes building binaries, updates the Homebrew formula with the real SHA256 values from the published `checksums.txt`, syncs the `coleam00/homebrew-archon` tap, and verifies the end-to-end install path via `/test-release`.
+
+> **⚠️ CRITICAL — Homebrew formula SHAs cannot be known until after the release workflow builds binaries.**
+>
+> The `version` field in `homebrew/archon.rb` and the `sha256` fields must be updated **atomically**. Never update one without the other.
+>
+> The correct sequence is:
+> 1. Tag is pushed → release workflow fires → binaries built → `checksums.txt` uploaded
+> 2. Fetch `checksums.txt` from the published release
+> 3. Parse the SHA256 per platform
+> 4. Update `homebrew/archon.rb` with the new version AND the new SHAs in a single commit
+> 5. Sync to the `coleam00/homebrew-archon/Formula/archon.rb` tap repo
+>
+> Updating the formula's `version` field without also updating the `sha256` values creates a stale, misleading formula that looks valid but produces checksum mismatches on install. This has happened before (v0.3.0: version updated to 0.3.0 but SHAs were still from v0.2.13). Always do both or neither.
 
 ## Process
 
@@ -177,6 +190,179 @@ The GitHub Release is distinct from the git tag — without it, the release won'
 
 If the user merges the PR themselves and comes back, still offer to tag, release, and sync.
 
+### Step 10: Wait for Release Workflow and Update Homebrew Formula
+
+After the tag is pushed, `.github/workflows/release.yml` builds platform binaries and uploads them to the GitHub release. This takes 5-10 minutes. The Homebrew formula SHA256 values cannot be known until these binaries exist.
+
+**Wait for all assets to appear on the release:**
+
+```bash
+echo "Waiting for release workflow to finish uploading binaries..."
+for i in {1..30}; do
+  ASSET_COUNT=$(gh release view "vx.y.z" --repo coleam00/Archon --json assets --jq '.assets | length')
+  # Expect 6 assets: 5 binaries (darwin-arm64, darwin-x64, linux-arm64, linux-x64, windows-x64.exe) + checksums.txt
+  if [ "$ASSET_COUNT" -ge 6 ]; then
+    echo "All $ASSET_COUNT assets uploaded"
+    break
+  fi
+  echo "  Assets so far: $ASSET_COUNT/6 — waiting 30s (attempt $i/30)..."
+  sleep 30
+done
+
+if [ "$ASSET_COUNT" -lt 6 ]; then
+  echo "ERROR: Release workflow did not finish uploading assets after 15 minutes"
+  echo "Check https://github.com/coleam00/Archon/actions for the release workflow run"
+  exit 1
+fi
+```
+
+**Fetch checksums.txt and extract SHA256 values:**
+
+```bash
+TMP_DIR=$(mktemp -d)
+gh release download "vx.y.z" --repo coleam00/Archon --pattern "checksums.txt" --dir "$TMP_DIR"
+
+DARWIN_ARM64_SHA=$(awk '/archon-darwin-arm64$/ {print $1}' "$TMP_DIR/checksums.txt")
+DARWIN_X64_SHA=$(awk '/archon-darwin-x64$/ {print $1}' "$TMP_DIR/checksums.txt")
+LINUX_ARM64_SHA=$(awk '/archon-linux-arm64$/ {print $1}' "$TMP_DIR/checksums.txt")
+LINUX_X64_SHA=$(awk '/archon-linux-x64$/ {print $1}' "$TMP_DIR/checksums.txt")
+
+# Sanity check — all four must be present and non-empty
+for var in DARWIN_ARM64_SHA DARWIN_X64_SHA LINUX_ARM64_SHA LINUX_X64_SHA; do
+  if [ -z "${!var}" ]; then
+    echo "ERROR: $var is empty — checksums.txt may be malformed"
+    cat "$TMP_DIR/checksums.txt"
+    exit 1
+  fi
+done
+
+rm -rf "$TMP_DIR"
+```
+
+**Update `homebrew/archon.rb` in the main repo atomically with version AND SHAs:**
+
+Rewrite the formula file using the exact template below. Do NOT edit in place with sed — the whole file should be regenerated from this template so there is zero risk of partial updates.
+
+```bash
+cat > homebrew/archon.rb << EOF
+# Homebrew formula for Archon CLI
+# To install: brew install coleam00/archon/archon
+#
+# This formula downloads pre-built binaries from GitHub releases.
+# For development, see: https://github.com/coleam00/Archon
+
+class Archon < Formula
+  desc "Remote agentic coding platform - control AI assistants from anywhere"
+  homepage "https://github.com/coleam00/Archon"
+  version "x.y.z"
+  license "MIT"
+
+  on_macos do
+    on_arm do
+      url "https://github.com/coleam00/Archon/releases/download/v#{version}/archon-darwin-arm64"
+      sha256 "${DARWIN_ARM64_SHA}"
+    end
+    on_intel do
+      url "https://github.com/coleam00/Archon/releases/download/v#{version}/archon-darwin-x64"
+      sha256 "${DARWIN_X64_SHA}"
+    end
+  end
+
+  on_linux do
+    on_arm do
+      url "https://github.com/coleam00/Archon/releases/download/v#{version}/archon-linux-arm64"
+      sha256 "${LINUX_ARM64_SHA}"
+    end
+    on_intel do
+      url "https://github.com/coleam00/Archon/releases/download/v#{version}/archon-linux-x64"
+      sha256 "${LINUX_X64_SHA}"
+    end
+  end
+
+  def install
+    binary_name = case
+    when OS.mac? && Hardware::CPU.arm?
+      "archon-darwin-arm64"
+    when OS.mac? && Hardware::CPU.intel?
+      "archon-darwin-x64"
+    when OS.linux? && Hardware::CPU.arm?
+      "archon-linux-arm64"
+    when OS.linux? && Hardware::CPU.intel?
+      "archon-linux-x64"
+    end
+
+    bin.install binary_name => "archon"
+  end
+
+  test do
+    # Basic version check - archon version should exit with 0 on success
+    assert_match version.to_s, shell_output("#{bin}/archon version")
+  end
+end
+EOF
+```
+
+**Commit the formula update to main, then sync back to dev:**
+
+```bash
+git checkout main
+git pull origin main
+git add homebrew/archon.rb
+git commit -m "chore(homebrew): update formula to vx.y.z"
+git push origin main
+
+# Sync dev with main so the formula update is on both branches
+git checkout dev
+git pull origin main
+git push origin dev
+```
+
+### Step 11: Sync the Homebrew Tap Repo
+
+The `coleam00/homebrew-archon` repository hosts the actual tap formula that Homebrew reads when users run `brew tap coleam00/archon && brew install coleam00/archon/archon`. The file `coleam00/Archon/homebrew/archon.rb` is the source-of-truth template; the file `coleam00/homebrew-archon/Formula/archon.rb` is what users actually install from. These must be kept in sync.
+
+```bash
+TAP_DIR=$(mktemp -d)
+git clone git@github.com:coleam00/homebrew-archon.git "$TAP_DIR"
+cp homebrew/archon.rb "$TAP_DIR/Formula/archon.rb"
+
+cd "$TAP_DIR"
+if git diff --quiet; then
+  echo "Tap formula already matches — no sync needed"
+else
+  git add Formula/archon.rb
+  git commit -m "chore: sync formula to vx.y.z"
+  git push origin main
+fi
+cd -
+rm -rf "$TAP_DIR"
+```
+
+If the `git clone` fails with a permissions error, the user running the release skill does not have push access to `coleam00/homebrew-archon`. Ask them to request push access from the repo owner, or to perform the sync manually via the GitHub web UI. Do not skip this step silently — the release is not complete until the tap is synced.
+
+### Step 12: Verify the Release End-to-End
+
+After the formula is synced, the final verification step is to actually install the released binary via Homebrew and run smoke tests. Use the `test-release` skill:
+
+```
+/test-release brew x.y.z
+```
+
+This will:
+- Install via `brew tap coleam00/archon && brew install coleam00/archon/archon`
+- Verify the binary reports the correct version and `Build: binary`
+- Verify bundled workflows load
+- Verify the SDK spawn path works (a minimal assist workflow)
+- Verify the env-leak gate is active (if shipped in this release)
+- Uninstall cleanly
+- Produce a PASS/FAIL report
+
+**If `/test-release brew` fails, the release is not ready to announce.** File a hotfix issue for whatever broke, cut `x.y.z+1` with the fix, and re-run this skill. Do NOT advertise a release that fails `test-release`.
+
+Also run `/test-release curl-mac x.y.z` to cover the curl install path. The two install paths test slightly different things (Homebrew tests the tap formula, curl tests `install.sh` and checksums from the release) and both need to work for users to have a reliable install experience.
+
+If you have a VPS available, also run `/test-release curl-vps x.y.z <vps-target>` to verify the Linux binary.
+
 ## Important Rules
 
 - NEVER force push
@@ -185,3 +371,6 @@ If the user merges the PR themselves and comes back, still offer to tag, release
 - NEVER add emoji to changelog entries unless the user asks
 - If the user says "ship it" without specifying bump type, default to patch
 - The commit message is just `Release x.y.z` — clean and simple
+- **NEVER update `homebrew/archon.rb` version field without also updating the `sha256` values**. They must move together atomically. The correct SHAs only exist after the release workflow finishes building binaries — see Step 10. Updating the version field alone produces a stale formula that looks valid but causes checksum mismatches on install.
+- **NEVER skip Step 11 (tap sync).** The `coleam00/Archon/homebrew/archon.rb` file is only a template; users install from `coleam00/homebrew-archon/Formula/archon.rb`. If you update one without the other, users get stale or wrong data.
+- **NEVER announce a release that failed `/test-release brew`.** A release that installs but crashes on first invocation is worse than no release — it burns user trust. If the release verification fails, cut a hotfix before telling anyone the release exists.
