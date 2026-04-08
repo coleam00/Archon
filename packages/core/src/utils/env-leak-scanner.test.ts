@@ -4,6 +4,7 @@ import { join } from 'path';
 import {
   scanPathForSensitiveKeys,
   EnvLeakError,
+  formatLeakError,
   SENSITIVE_KEYS,
   AUTOLOADED_FILES,
 } from './env-leak-scanner';
@@ -91,6 +92,28 @@ describe('EnvLeakError', () => {
     expect(err.name).toBe('EnvLeakError');
     expect(err.message).toContain('ANTHROPIC_API_KEY');
     expect(err.report).toBe(report);
+  });
+
+  it('defaults context to register-ui and stores it on the error', () => {
+    const report = { path: '/x', findings: [{ file: '.env', keys: ['ANTHROPIC_API_KEY'] }] };
+    const err = new EnvLeakError(report);
+    expect(err.context).toBe('register-ui');
+    expect(err.message).toContain('Add Project');
+  });
+
+  it('produces distinct remediation bodies per context', () => {
+    const report = { path: '/x', findings: [{ file: '.env', keys: ['ANTHROPIC_API_KEY'] }] };
+    const ui = formatLeakError(report, 'register-ui');
+    const cli = formatLeakError(report, 'register-cli');
+    const spawn = formatLeakError(report, 'spawn-existing');
+    expect(ui).toContain('Add Project');
+    expect(cli).toContain('--allow-env-keys');
+    expect(cli).toContain('allow_target_repo_keys');
+    expect(spawn).toContain('Settings');
+    expect(spawn).toContain('already-registered');
+    // headers differ between register and spawn
+    expect(ui).toContain('Cannot add codebase');
+    expect(spawn).toContain('Cannot run workflow');
   });
 
   it('formats multiple findings', () => {

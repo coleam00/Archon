@@ -30,10 +30,25 @@ export interface LeakReport {
   findings: LeakFinding[];
 }
 
+/**
+ * Context in which the env-leak error is being surfaced. Drives the remediation
+ * copy so users see guidance that matches how they hit the gate.
+ *
+ * - `register-ui`: Add-Project flow in the Web UI (checkbox is visible)
+ * - `register-cli`: CLI auto-register path (no Web UI)
+ * - `spawn-existing`: Pre-spawn check for an already-registered codebase
+ */
+export type LeakErrorContext = 'register-ui' | 'register-cli' | 'spawn-existing';
+
 export class EnvLeakError extends Error {
-  constructor(public readonly report: LeakReport) {
-    super(formatLeakError(report));
+  public readonly context: LeakErrorContext;
+  constructor(
+    public readonly report: LeakReport,
+    context: LeakErrorContext = 'register-ui'
+  ) {
+    super(formatLeakError(report, context));
     this.name = 'EnvLeakError';
+    this.context = context;
   }
 }
 
@@ -76,10 +91,33 @@ export function scanPathForSensitiveKeys(dirPath: string): LeakReport {
   return { path: dirPath, findings };
 }
 
-export function formatLeakError(report: LeakReport): string {
+export function formatLeakError(
+  report: LeakReport,
+  context: LeakErrorContext = 'register-ui'
+): string {
   const fileList = report.findings.map(f => `    ${f.file} — ${f.keys.join(', ')}`).join('\n');
 
-  return `Cannot add codebase — ${report.path} contains keys that will leak into AI subprocesses
+  const header =
+    context === 'spawn-existing'
+      ? `Cannot run workflow — ${report.path} contains keys that will leak into AI subprocesses`
+      : `Cannot add codebase — ${report.path} contains keys that will leak into AI subprocesses`;
+
+  const consent =
+    context === 'register-cli'
+      ? `    3. Acknowledge the risk and allow this codebase to use its .env key:
+       Re-run the CLI command with --allow-env-keys, or set
+       'allow_target_repo_keys: true' in ~/.archon/config.yaml to bypass this
+       gate globally.`
+      : context === 'spawn-existing'
+        ? `    3. Acknowledge the risk for this already-registered codebase:
+       Open the Web UI (Settings → Projects), find this project, and toggle
+       "Allow env keys". Or set 'allow_target_repo_keys: true' in
+       ~/.archon/config.yaml to bypass this gate globally.`
+        : `    3. Acknowledge the risk and allow this codebase to use its .env key:
+       Open the web UI (Settings → Projects → Add Project) and tick
+       "Allow env keys (I understand the risk)" when adding this project.`;
+
+  return `${header}
 
   Found:
 ${fileList}
@@ -98,7 +136,5 @@ ${fileList}
          mv .env .env.secrets
          # update your app to load it explicitly
 
-    3. Acknowledge the risk and allow this codebase to use its .env key:
-       Open the web UI (Settings → Projects → Add Project) and tick
-       "Allow env keys (I understand the risk)" when adding this project.`;
+${consent}`;
 }

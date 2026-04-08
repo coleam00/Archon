@@ -22,6 +22,7 @@ import {
   findCodebaseByDefaultCwd,
   findCodebaseByName,
   updateCodebase,
+  updateCodebaseAllowEnvKeys,
   deleteCodebase,
 } from './codebases';
 
@@ -395,6 +396,26 @@ describe('codebases', () => {
       await updateCodebase('codebase-123', {});
 
       expect(mockQuery).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updateCodebaseAllowEnvKeys', () => {
+    test('flips the consent bit', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await updateCodebaseAllowEnvKeys('codebase-123', true);
+
+      expect(mockQuery).toHaveBeenCalledWith(
+        'UPDATE remote_agent_codebases SET allow_env_keys = $1, updated_at = NOW() WHERE id = $2',
+        [true, 'codebase-123']
+      );
+    });
+
+    test('throws when codebase not found', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
+      await expect(updateCodebaseAllowEnvKeys('missing', false)).rejects.toThrow(
+        'Codebase missing not found'
+      );
     });
   });
 

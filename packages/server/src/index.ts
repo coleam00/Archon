@@ -70,7 +70,9 @@ import {
   logConfig,
   getPort,
   createWorkflowStore,
+  scanPathForSensitiveKeys,
 } from '@archon/core';
+import * as codebaseDb from '@archon/core/db/codebases';
 import type { IPlatformAdapter } from '@archon/core';
 import { createLogger, logArchonPaths, validateAppDefaultsPaths } from '@archon/paths';
 
@@ -180,6 +182,40 @@ async function main(): Promise<void> {
   } catch (error) {
     getLog().fatal({ err: error }, 'database_connection_failed');
     process.exit(1);
+  }
+
+  // Migration-day scan: warn for codebases that would be blocked at next spawn
+  // by the env-leak-gate. Best-effort — failures must not block startup.
+  try {
+    const codebases = await codebaseDb.listCodebases();
+    for (const cb of codebases) {
+      if (cb.allow_env_keys) continue;
+      try {
+        const report = scanPathForSensitiveKeys(cb.default_cwd);
+        if (report.findings.length > 0) {
+          const files = report.findings.map(f => f.file);
+          const keys = Array.from(new Set(report.findings.flatMap(f => f.keys)));
+          getLog().warn(
+            {
+              codebaseId: cb.id,
+              name: cb.name,
+              path: cb.default_cwd,
+              files,
+              keys,
+            },
+            'migration_env_leak_gate_will_block'
+          );
+        }
+      } catch (scanErr) {
+        // Path may no longer exist — skip silently
+        getLog().debug(
+          { err: scanErr, codebaseId: cb.id, path: cb.default_cwd },
+          'migration_env_leak_gate_scan_skipped'
+        );
+      }
+    }
+  } catch (error) {
+    getLog().warn({ err: error }, 'migration_env_leak_gate_scan_failed');
   }
 
   // Start cleanup scheduler

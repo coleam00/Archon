@@ -1043,7 +1043,7 @@ describe('CodexClient', () => {
         }
       };
 
-      await expect(consumeGenerator()).rejects.toThrow('Cannot add codebase');
+      await expect(consumeGenerator()).rejects.toThrow('Cannot run workflow');
     });
 
     test('skips scan when codebase has allow_env_keys: true', async () => {

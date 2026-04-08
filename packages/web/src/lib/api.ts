@@ -167,6 +167,17 @@ export async function addCodebase(
   });
 }
 
+export async function updateCodebase(
+  id: string,
+  input: { allowEnvKeys: boolean }
+): Promise<CodebaseResponse> {
+  return fetchJSON<CodebaseResponse>(`/api/codebases/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
 export async function deleteCodebase(id: string): Promise<{ success: boolean }> {
   return fetchJSON<{ success: boolean }>(`/api/codebases/${id}`, { method: 'DELETE' });
 }

@@ -20,6 +20,7 @@ import {
 import { createLogger } from '@archon/paths';
 import { scanPathForSensitiveKeys, EnvLeakError } from '../utils/env-leak-scanner';
 import * as codebaseDb from '../db/codebases';
+import { loadConfig } from '../config/config-loader';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -163,9 +164,12 @@ export class CodexClient implements IAssistantClient {
       (await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
       (await codebaseDb.findCodebaseByPathPrefix(cwd));
     if (!codebase?.allow_env_keys) {
-      const report = scanPathForSensitiveKeys(cwd);
-      if (report.findings.length > 0) {
-        throw new EnvLeakError(report);
+      const merged = await loadConfig(cwd);
+      if (!merged.allowTargetRepoKeys) {
+        const report = scanPathForSensitiveKeys(cwd);
+        if (report.findings.length > 0) {
+          throw new EnvLeakError(report, 'spawn-existing');
+        }
       }
     }
 

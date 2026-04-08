@@ -16,7 +16,12 @@ import {
   parseOwnerRepo,
 } from '@archon/paths';
 import { findMarkdownFilesRecursive } from '../utils/commands';
-import { scanPathForSensitiveKeys, EnvLeakError } from '../utils/env-leak-scanner';
+import {
+  scanPathForSensitiveKeys,
+  EnvLeakError,
+  type LeakErrorContext,
+} from '../utils/env-leak-scanner';
+import { loadConfig } from '../config/config-loader';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -42,13 +47,18 @@ async function registerRepoAtPath(
   targetPath: string,
   name: string,
   repositoryUrl: string | null,
-  allowEnvKeys = false
+  allowEnvKeys = false,
+  context: LeakErrorContext = 'register-ui'
 ): Promise<RegisterResult> {
-  // Scan for sensitive keys in auto-loaded .env files before registering
+  // Scan for sensitive keys in auto-loaded .env files before registering.
+  // Config-level bypass short-circuits the scan entirely.
   if (!allowEnvKeys) {
-    const report = scanPathForSensitiveKeys(targetPath);
-    if (report.findings.length > 0) {
-      throw new EnvLeakError(report);
+    const merged = await loadConfig(targetPath);
+    if (!merged.allowTargetRepoKeys) {
+      const report = scanPathForSensitiveKeys(targetPath);
+      if (report.findings.length > 0) {
+        throw new EnvLeakError(report, context);
+      }
     }
   }
 
@@ -203,12 +213,13 @@ function normalizeRepoUrl(rawUrl: string): {
  */
 export async function cloneRepository(
   repoUrl: string,
-  allowEnvKeys?: boolean
+  allowEnvKeys?: boolean,
+  context: LeakErrorContext = 'register-ui'
 ): Promise<RegisterResult> {
   // Local paths should be registered (symlink), not cloned (copied)
   if (repoUrl.startsWith('/') || repoUrl.startsWith('~') || repoUrl.startsWith('.')) {
     const resolvedPath = repoUrl.startsWith('~') ? expandTilde(repoUrl) : resolve(repoUrl);
-    return registerRepository(resolvedPath, allowEnvKeys);
+    return registerRepository(resolvedPath, allowEnvKeys, context);
   }
 
   const { workingUrl, ownerName, repoName, targetPath } = normalizeRepoUrl(repoUrl);
@@ -293,7 +304,8 @@ export async function cloneRepository(
     targetPath,
     `${ownerName}/${repoName}`,
     workingUrl,
-    allowEnvKeys
+    allowEnvKeys,
+    context
   );
   getLog().info({ url: workingUrl, targetPath }, 'clone_completed');
   return result;
@@ -304,7 +316,8 @@ export async function cloneRepository(
  */
 export async function registerRepository(
   localPath: string,
-  allowEnvKeys?: boolean
+  allowEnvKeys?: boolean,
+  context: LeakErrorContext = 'register-ui'
 ): Promise<RegisterResult> {
   // Validate path exists and is a git repo
   try {
@@ -371,5 +384,5 @@ export async function registerRepository(
   );
 
   // default_cwd is the real local path (not the symlink)
-  return registerRepoAtPath(localPath, name, remoteUrl, allowEnvKeys);
+  return registerRepoAtPath(localPath, name, remoteUrl, allowEnvKeys, context);
 }

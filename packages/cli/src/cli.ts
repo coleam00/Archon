@@ -190,6 +190,7 @@ async function main(): Promise<number> {
         reason: { type: 'string' },
         workflow: { type: 'string' },
         'no-context': { type: 'boolean' },
+        'allow-env-keys': { type: 'boolean' },
       },
       allowPositionals: true,
       strict: false, // Allow unknown flags to pass through
@@ -211,6 +212,7 @@ async function main(): Promise<number> {
   const resumeFlag = values.resume as boolean | undefined;
   const spawnFlag = values.spawn as boolean | undefined;
   const jsonFlag = values.json as boolean | undefined;
+  const allowEnvKeysFlag = values['allow-env-keys'] as boolean | undefined;
 
   // Handle help flag
   if (values.help) {
@@ -323,6 +325,7 @@ async function main(): Promise<number> {
               fromBranch,
               noWorktree,
               resume: resumeFlag,
+              allowEnvKeys: allowEnvKeysFlag,
               quiet: values.quiet as boolean | undefined,
               verbose: values.verbose as boolean | undefined,
             };

@@ -41,6 +41,13 @@ export const addCodebaseBodySchema = z
   })
   .openapi('AddCodebaseBody');
 
+/** PATCH /api/codebases/:id request body. */
+export const updateCodebaseBodySchema = z
+  .object({
+    allowEnvKeys: z.boolean(),
+  })
+  .openapi('UpdateCodebaseBody');
+
 /** DELETE /api/codebases/:id response. */
 export const deleteCodebaseResponseSchema = z
   .object({ success: z.boolean() })

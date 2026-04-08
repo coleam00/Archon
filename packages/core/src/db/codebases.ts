@@ -158,6 +158,21 @@ export async function updateCodebase(
   }
 }
 
+/**
+ * Flip the `allow_env_keys` consent bit for an existing codebase.
+ * Throws when the codebase does not exist.
+ */
+export async function updateCodebaseAllowEnvKeys(id: string, allowEnvKeys: boolean): Promise<void> {
+  const dialect = getDialect();
+  const result = await pool.query(
+    `UPDATE remote_agent_codebases SET allow_env_keys = $1, updated_at = ${dialect.now()} WHERE id = $2`,
+    [allowEnvKeys, id]
+  );
+  if ((result.rowCount ?? 0) === 0) {
+    throw new Error(`Codebase ${id} not found`);
+  }
+}
+
 export async function listCodebases(): Promise<readonly Codebase[]> {
   const result = await pool.query<Codebase>(
     'SELECT * FROM remote_agent_codebases ORDER BY name ASC'

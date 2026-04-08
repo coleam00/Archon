@@ -198,6 +198,7 @@ function getDefaults(): MergedConfig {
       loadDefaultCommands: true,
       loadDefaultWorkflows: true,
     },
+    allowTargetRepoKeys: false,
   };
 }
 
@@ -302,6 +303,12 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
     result.concurrency.maxConversations = global.concurrency.maxConversations;
   }
 
+  // Env-leak gate bypass (global)
+  if (global.allow_target_repo_keys === true) {
+    result.allowTargetRepoKeys = true;
+    getLog().warn({ source: 'global_config' }, 'env_leak_gate_disabled');
+  }
+
   return result;
 }
 
@@ -373,6 +380,14 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
   // Propagate per-project env vars from repo config
   if (repo.env) {
     result.envVars = { ...result.envVars, ...repo.env };
+  }
+
+  // Repo-level env-leak gate override (wins over global)
+  if (repo.allow_target_repo_keys !== undefined) {
+    result.allowTargetRepoKeys = repo.allow_target_repo_keys;
+    if (repo.allow_target_repo_keys) {
+      getLog().warn({ source: 'repo_config' }, 'env_leak_gate_disabled');
+    }
   }
 
   return result;

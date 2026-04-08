@@ -28,6 +28,7 @@ import {
   ConversationNotFoundError,
   generateAndSetTitle,
   EnvLeakError,
+  scanPathForSensitiveKeys,
 } from '@archon/core';
 import { removeWorktree, toRepoPath, toWorktreePath } from '@archon/git';
 import {
@@ -104,6 +105,7 @@ import {
   codebaseSchema,
   codebaseIdParamsSchema,
   addCodebaseBodySchema,
+  updateCodebaseBodySchema,
   deleteCodebaseResponseSchema,
   codebaseEnvVarsResponseSchema,
   setEnvVarBodySchema,
@@ -454,6 +456,28 @@ const addCodebaseRoute = createRoute({
       description: 'Codebase created',
     },
     400: jsonError('Bad request'),
+    500: jsonError('Server error'),
+  },
+});
+
+const updateCodebaseRoute = createRoute({
+  method: 'patch',
+  path: '/api/codebases/{id}',
+  tags: ['Codebases'],
+  summary: 'Update codebase consent flags (e.g. allow_env_keys)',
+  request: {
+    params: codebaseIdParamsSchema,
+    body: {
+      content: { 'application/json': { schema: updateCodebaseBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: codebaseSchema } },
+      description: 'Updated codebase',
+    },
+    404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
 });
@@ -1506,6 +1530,64 @@ export function registerApiRoutes(
         500,
         `Failed to add codebase: ${(error as Error).message ?? 'unknown error'}`
       );
+    }
+  });
+
+  // PATCH /api/codebases/:id - Update consent flags
+  registerOpenApiRoute(updateCodebaseRoute, async c => {
+    const id = c.req.param('id') ?? '';
+    const body = getValidatedBody(c, updateCodebaseBodySchema);
+    try {
+      const codebase = await codebaseDb.getCodebase(id);
+      if (!codebase) {
+        return apiError(c, 404, 'Codebase not found');
+      }
+
+      // Capture scanner findings for the audit log (best-effort — path may be gone)
+      let files: string[] = [];
+      let keys: string[] = [];
+      try {
+        const report = scanPathForSensitiveKeys(codebase.default_cwd);
+        files = report.findings.map(f => f.file);
+        keys = Array.from(new Set(report.findings.flatMap(f => f.keys)));
+      } catch (scanErr) {
+        getLog().warn(
+          { err: scanErr, codebaseId: id, path: codebase.default_cwd },
+          'env_leak_consent_scan_skipped'
+        );
+      }
+
+      await codebaseDb.updateCodebaseAllowEnvKeys(id, body.allowEnvKeys);
+
+      getLog().warn(
+        {
+          codebaseId: id,
+          name: codebase.name,
+          path: codebase.default_cwd,
+          files,
+          keys,
+          actor: 'user-ui',
+        },
+        body.allowEnvKeys ? 'env_leak_consent_granted' : 'env_leak_consent_revoked'
+      );
+
+      const updated = await codebaseDb.getCodebase(id);
+      if (!updated) {
+        return apiError(c, 500, 'Codebase updated but not found');
+      }
+      let commands = updated.commands;
+      if (typeof commands === 'string') {
+        try {
+          commands = JSON.parse(commands);
+        } catch (parseErr) {
+          getLog().error({ err: parseErr, codebaseId: id }, 'corrupted_commands_json');
+          commands = {};
+        }
+      }
+      return c.json({ ...updated, commands });
+    } catch (error) {
+      getLog().error({ err: error, codebaseId: id }, 'update_codebase_failed');
+      return apiError(c, 500, 'Failed to update codebase');
     }
   });
 

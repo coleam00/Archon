@@ -84,6 +84,20 @@ export interface GlobalConfig {
      */
     maxConversations?: number;
   };
+
+  /**
+   * Bypass the env-leak gate globally. When true, Archon will not refuse to
+   * register or spawn subprocesses for codebases whose auto-loaded .env files
+   * contain sensitive keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc).
+   *
+   * WARNING: Weakens the env-leak gate. Keys in the target repo's .env will
+   * be auto-loaded by Bun subprocesses (Claude/Codex) and bypass Archon's
+   * env allowlist. Use only on trusted machines.
+   *
+   * YAML key: `allow_target_repo_keys`
+   * @default false
+   */
+  allow_target_repo_keys?: boolean;
 }
 
 /**
@@ -157,6 +171,12 @@ export interface RepoConfig {
    * Sensitive — do not commit actual secrets to version-controlled repos.
    */
   env?: Record<string, string>;
+
+  /**
+   * Per-repo override for the env-leak gate bypass. Repo value wins over global.
+   * YAML key: `allow_target_repo_keys`
+   */
+  allow_target_repo_keys?: boolean;
 
   /**
    * Default commands/workflows configuration
@@ -240,6 +260,14 @@ export interface MergedConfig {
    * Undefined when no env vars are configured.
    */
   envVars?: Record<string, string>;
+
+  /**
+   * Effective value of the env-leak gate bypass. When true, the env scanner
+   * is skipped during registration and pre-spawn. Repo-level override wins
+   * over global (explicit `false` at repo level re-enables the gate).
+   * @default false
+   */
+  allowTargetRepoKeys: boolean;
 }
 
 /**

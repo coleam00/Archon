@@ -987,7 +987,7 @@ describe('ClaudeClient', () => {
         for await (const _ of client.sendQuery('test', '/workspace')) {
           // consume
         }
-      }).toThrow('Cannot add codebase');
+      }).toThrow('Cannot run workflow');
     });
 
     test('skips scan when codebase has allow_env_keys: true', async () => {
