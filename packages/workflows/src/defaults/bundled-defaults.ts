@@ -111,10 +111,11 @@ export const BUNDLED_WORKFLOWS: Record<string, string> = {
  * `scripts/build-binaries.sh` rewrites that file to set it to `true` before
  * `bun build --compile` and restores it afterwards. See GitHub issue #979.
  *
- * @deprecated Prefer importing `BUNDLED_IS_BINARY` directly from `@archon/paths`.
- *   This function wrapper is retained so existing callers that use
- *   `spyOn(bundledDefaults, 'isBinaryBuild').mockReturnValue(...)` in tests
- *   (e.g. `loader.test.ts`) continue to work without modification.
+ * Kept as a function (rather than a direct re-export of `BUNDLED_IS_BINARY`)
+ * so tests can use `spyOn(bundledDefaults, 'isBinaryBuild').mockReturnValue(...)`
+ * without resorting to `mock.module('@archon/paths', ...)` — which is
+ * process-global and irreversible in Bun and would pollute other test files.
+ * See `.claude/rules/dx-quirks.md` and `loader.test.ts` for context.
  */
 export function isBinaryBuild(): boolean {
   return BUNDLED_IS_BINARY;

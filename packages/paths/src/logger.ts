@@ -61,13 +61,22 @@ function buildLogger(): Logger {
   const usePretty = process.stdout.isTTY && process.env.NODE_ENV !== 'production';
 
   if (usePretty) {
-    const stream = pretty({
-      colorize: true,
-      levelFirst: true,
-      translateTime: 'SYS:standard',
-      ignore: 'pid,hostname',
-    });
-    return pino({ level }, stream);
+    try {
+      const stream = pretty({
+        colorize: true,
+        levelFirst: true,
+        translateTime: 'SYS:standard',
+        ignore: 'pid,hostname',
+      });
+      return pino({ level }, stream);
+    } catch (err) {
+      // pino-pretty failed to initialize (missing peer, broken TTY descriptor,
+      // or incompatible runtime). Fall back to plain JSON so logging keeps
+      // working instead of crashing the entire process at module import time.
+      console.warn(
+        `[logger] pino-pretty failed to initialize, falling back to JSON output: ${(err as Error).message}`
+      );
+    }
   }
 
   return pino({ level });

@@ -13,7 +13,7 @@ echo "Building Archon CLI v${VERSION} (commit: ${GIT_COMMIT})"
 # The file is restored via an EXIT trap so the dev tree is never left dirty,
 # even if `bun build --compile` fails mid-way. See GitHub issue #979.
 BUNDLED_BUILD_FILE="packages/paths/src/bundled-build.ts"
-trap 'echo "Restoring ${BUNDLED_BUILD_FILE}..."; git checkout -- "${BUNDLED_BUILD_FILE}" 2>/dev/null || true' EXIT
+trap 'echo "Restoring ${BUNDLED_BUILD_FILE}..."; git checkout -- "${BUNDLED_BUILD_FILE}"' EXIT
 
 echo "Updating build-time constants (version=${VERSION}, is_binary=true)..."
 cat > "$BUNDLED_BUILD_FILE" << EOF
