@@ -19,6 +19,15 @@ import {
   type HookCallback,
   type HookCallbackMatcher,
 } from '@anthropic-ai/claude-agent-sdk';
+// The `/embed` entry point uses `import ... with { type: 'file' }` to embed
+// the SDK's `cli.js` into the compiled binary's $bunfs virtual filesystem,
+// then extracts it to a temp path at runtime so the subprocess can exec it.
+// Without this, the SDK falls back to resolving `cli.js` from
+// `import.meta.url` of its own module — which bun freezes at build time to
+// the build host's absolute node_modules path, producing a "Module not found
+// /Users/runner/..." error on any machine other than the CI runner.
+// Safe in dev too: resolves to the real on-disk cli.js.
+import cliPath from '@anthropic-ai/claude-agent-sdk/embed';
 import {
   type AssistantRequestOptions,
   type IAssistantClient,
@@ -315,6 +324,7 @@ export class ClaudeClient implements IAssistantClient {
 
       const options: Options = {
         cwd,
+        pathToClaudeCodeExecutable: cliPath,
         env: requestOptions?.env
           ? { ...buildSubprocessEnv(), ...requestOptions.env }
           : buildSubprocessEnv(),
