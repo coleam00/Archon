@@ -1029,9 +1029,12 @@ describe('CodexClient', () => {
       spyScan.mockRestore();
     });
 
-    test('throws EnvLeakError when .env contains sensitive keys and codebase has no consent', async () => {
-      spyFindByDefaultCwd.mockResolvedValueOnce(null);
-      spyFindByPathPrefix.mockResolvedValueOnce(null);
+    test('throws EnvLeakError when .env contains sensitive keys and registered codebase has no consent', async () => {
+      spyFindByDefaultCwd.mockResolvedValueOnce({
+        id: 'codebase-1',
+        allow_env_keys: false,
+        default_cwd: '/workspace',
+      });
       spyScan.mockReturnValueOnce({
         path: '/workspace',
         findings: [{ file: '.env', keys: ['ANTHROPIC_API_KEY'] }],
@@ -1044,6 +1047,22 @@ describe('CodexClient', () => {
       };
 
       await expect(consumeGenerator()).rejects.toThrow('Cannot run workflow');
+    });
+
+    test('skips scan entirely when cwd is not a registered codebase', async () => {
+      // Both lookups return null (default from beforeEach). Pre-spawn safety net
+      // is only for registered codebases; unregistered paths go through registerRepoAtPath.
+      spyScan.mockReturnValue({
+        path: '/workspace',
+        findings: [{ file: '.env', keys: ['ANTHROPIC_API_KEY'] }],
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(spyScan).not.toHaveBeenCalled();
     });
 
     test('skips scan when codebase has allow_env_keys: true', async () => {
@@ -1061,13 +1080,13 @@ describe('CodexClient', () => {
       expect(spyScan).not.toHaveBeenCalled();
     });
 
-    test('proceeds when cwd has no registered codebase and no sensitive keys', async () => {
+    test('proceeds without scanning when cwd has no registered codebase', async () => {
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
         chunks.push(chunk);
       }
 
-      expect(spyScan).toHaveBeenCalledTimes(1);
+      expect(spyScan).not.toHaveBeenCalled();
     });
 
     test('uses prefix lookup for worktree paths when exact match returns null', async () => {

@@ -163,7 +163,7 @@ export class CodexClient implements IAssistantClient {
     const codebase =
       (await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
       (await codebaseDb.findCodebaseByPathPrefix(cwd));
-    if (!codebase?.allow_env_keys) {
+    if (codebase && !codebase.allow_env_keys) {
       // Fail-closed: a config load failure must NOT silently bypass the gate.
       let allowTargetRepoKeys = false;
       try {

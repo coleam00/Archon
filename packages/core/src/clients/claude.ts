@@ -276,7 +276,7 @@ export class ClaudeClient implements IAssistantClient {
     const codebase =
       (await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
       (await codebaseDb.findCodebaseByPathPrefix(cwd));
-    if (!codebase?.allow_env_keys) {
+    if (codebase && !codebase.allow_env_keys) {
       // Fail-closed: a config load failure (corrupt YAML, permission denied)
       // must NOT silently bypass the gate. Catch, log, and treat as
       // `allowTargetRepoKeys = false` so the scanner still runs.
