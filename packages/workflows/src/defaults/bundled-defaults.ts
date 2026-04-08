@@ -8,6 +8,8 @@
  * Import syntax uses `with { type: 'text' }` to import file contents as strings.
  */
 
+import { BUNDLED_IS_BINARY } from '@archon/paths';
+
 // =============================================================================
 // Default Commands (21 total)
 // =============================================================================
@@ -101,8 +103,6 @@ export const BUNDLED_WORKFLOWS: Record<string, string> = {
   'archon-adversarial-dev': archonAdversarialDevWf,
   'archon-workflow-builder': archonWorkflowBuilderWf,
 };
-
-import { BUNDLED_IS_BINARY } from '@archon/paths';
 
 /**
  * Check if the current process is running as a compiled binary (not via Bun CLI).
