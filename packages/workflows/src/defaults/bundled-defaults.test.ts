@@ -1,40 +1,13 @@
 import { describe, it, expect } from 'bun:test';
-import {
-  isBinaryBuild,
-  isBunVirtualFs,
-  BUNDLED_COMMANDS,
-  BUNDLED_WORKFLOWS,
-} from './bundled-defaults';
+import { isBinaryBuild, BUNDLED_COMMANDS, BUNDLED_WORKFLOWS } from './bundled-defaults';
 
 describe('bundled-defaults', () => {
-  describe('isBunVirtualFs', () => {
-    it('should detect Linux/macOS virtual filesystem paths', () => {
-      expect(isBunVirtualFs('/$bunfs/root/bundled-defaults')).toBe(true);
-      expect(isBunVirtualFs('/$bunfs/root/')).toBe(true);
-    });
-
-    it('should detect Windows virtual filesystem paths (backslash)', () => {
-      expect(isBunVirtualFs('B:\\~BUN\\root\\bundled-defaults')).toBe(true);
-      expect(isBunVirtualFs('B:\\~BUN\\root')).toBe(true);
-    });
-
-    it('should detect Windows virtual filesystem paths (forward slash)', () => {
-      expect(isBunVirtualFs('B:/~BUN/root/bundled-defaults')).toBe(true);
-      expect(isBunVirtualFs('B:/~BUN/root')).toBe(true);
-    });
-
-    it('should return false for real filesystem paths', () => {
-      expect(isBunVirtualFs('/home/user/project/src')).toBe(false);
-      expect(isBunVirtualFs('C:\\Users\\user\\project\\src')).toBe(false);
-      expect(isBunVirtualFs('/tmp/test')).toBe(false);
-    });
-  });
-
   describe('isBinaryBuild', () => {
-    it('should return false when running in test environment (not compiled)', () => {
-      // The true path requires an actual compiled binary (import.meta.dir points to
-      // Bun's virtual FS only inside compiled binaries). Coverage of the true branch
-      // relies on isBunVirtualFs tests above + manual binary smoke testing in CI.
+    it('should return false in dev/test mode', () => {
+      // `isBinaryBuild()` reads the build-time constant `BUNDLED_IS_BINARY` from
+      // `@archon/paths`. In dev/test mode it is `false`. It is only rewritten to
+      // `true` by `scripts/build-binaries.sh` before `bun build --compile`.
+      // Coverage of the `true` branch is via local binary smoke testing (see #979).
       expect(isBinaryBuild()).toBe(false);
     });
   });

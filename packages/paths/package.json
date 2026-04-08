@@ -12,9 +12,7 @@
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
-    "pino": "^9"
-  },
-  "optionalDependencies": {
+    "pino": "^9",
     "pino-pretty": "^13"
   },
   "peerDependencies": {

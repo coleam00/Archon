@@ -23,6 +23,7 @@
 
 import pino from 'pino';
 import type { Logger } from 'pino';
+import pretty from 'pino-pretty';
 
 export type { Logger } from 'pino';
 
@@ -44,36 +45,39 @@ function getInitialLevel(): string {
 }
 
 /**
- * Uses pino-pretty when stdout is a TTY and NODE_ENV !== 'production';
- * outputs newline-delimited JSON otherwise.
+ * Build the root Pino logger.
+ *
+ * Uses `pino-pretty` as a **destination stream** (not a worker-thread transport)
+ * when stdout is a TTY and NODE_ENV !== 'production'. Running pino-pretty as a
+ * destination stream keeps the formatter on the main thread, which avoids the
+ * `require.resolve('pino-pretty')` lookup that crashes inside Bun's `/$bunfs/`
+ * virtual filesystem in compiled binaries (see GitHub issue #960 / #979).
+ *
+ * The same code path runs in dev and compiled binaries — no environment
+ * detection required.
  */
-function buildLoggerOptions(): pino.LoggerOptions {
+function buildLogger(): Logger {
   const level = getInitialLevel();
   const usePretty = process.stdout.isTTY && process.env.NODE_ENV !== 'production';
 
   if (usePretty) {
-    return {
-      level,
-      transport: {
-        target: 'pino-pretty',
-        options: {
-          colorize: true,
-          levelFirst: true,
-          translateTime: 'SYS:standard',
-          ignore: 'pid,hostname',
-        },
-      },
-    };
+    const stream = pretty({
+      colorize: true,
+      levelFirst: true,
+      translateTime: 'SYS:standard',
+      ignore: 'pid,hostname',
+    });
+    return pino({ level }, stream);
   }
 
-  return { level };
+  return pino({ level });
 }
 
 /**
  * Root Pino logger instance.
  * Children inherit the root's level at creation time (not dynamically updated).
  */
-export const rootLogger: Logger = pino(buildLoggerOptions());
+export const rootLogger: Logger = buildLogger();
 
 /**
  * Create a child logger with a module binding.

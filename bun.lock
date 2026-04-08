@@ -41,7 +41,7 @@
     },
     "packages/cli": {
       "name": "@archon/cli",
-      "version": "0.2.0",
+      "version": "0.2.13",
       "bin": {
         "archon": "./src/cli.ts",
       },
@@ -114,8 +114,6 @@
       "version": "0.2.0",
       "dependencies": {
         "pino": "^9",
-      },
-      "optionalDependencies": {
         "pino-pretty": "^13",
       },
       "peerDependencies": {

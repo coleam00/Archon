@@ -102,23 +102,20 @@ export const BUNDLED_WORKFLOWS: Record<string, string> = {
   'archon-workflow-builder': archonWorkflowBuilderWf,
 };
 
-/**
- * Check if a given module directory path belongs to a compiled Bun binary.
- *
- * Compiled Bun binaries use a virtual filesystem for bundled modules:
- * - Linux/macOS: `/$bunfs/root/`
- * - Windows: `B:\~BUN\root\` or `B:/~BUN/root/`
- */
-export function isBunVirtualFs(dir: string): boolean {
-  return dir.startsWith('/$bunfs/') || dir.startsWith('B:\\~BUN\\') || dir.startsWith('B:/~BUN/');
-}
+import { BUNDLED_IS_BINARY } from '@archon/paths';
 
 /**
  * Check if the current process is running as a compiled binary (not via Bun CLI).
  *
- * Note: `process.versions.bun` is still set in compiled binaries as of Bun 1.3.5,
- * so we use the virtual filesystem path prefix for detection instead.
+ * Reads the build-time constant `BUNDLED_IS_BINARY` from `@archon/paths`.
+ * `scripts/build-binaries.sh` rewrites that file to set it to `true` before
+ * `bun build --compile` and restores it afterwards. See GitHub issue #979.
+ *
+ * @deprecated Prefer importing `BUNDLED_IS_BINARY` directly from `@archon/paths`.
+ *   This function wrapper is retained so existing callers that use
+ *   `spyOn(bundledDefaults, 'isBinaryBuild').mockReturnValue(...)` in tests
+ *   (e.g. `loader.test.ts`) continue to work without modification.
  */
 export function isBinaryBuild(): boolean {
-  return isBunVirtualFs(import.meta.dir);
+  return BUNDLED_IS_BINARY;
 }

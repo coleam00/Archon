@@ -1,17 +1,21 @@
 /**
  * Version command - displays version info
  *
- * For compiled binaries, version and git commit are embedded via bundled-version.ts
- * For development (Bun), reads from package.json and retrieves git commit at runtime
+ * For compiled binaries, version and git commit are embedded via `@archon/paths`
+ * build-time constants (rewritten by `scripts/build-binaries.sh`).
+ * For development (Bun), reads from package.json and retrieves git commit at runtime.
  */
 import { readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execFileAsync } from '@archon/git';
-import { createLogger } from '@archon/paths';
+import {
+  BUNDLED_GIT_COMMIT,
+  BUNDLED_IS_BINARY,
+  BUNDLED_VERSION,
+  createLogger,
+} from '@archon/paths';
 import { getDatabaseType } from '@archon/core';
-import { isBinaryBuild } from '@archon/workflows/defaults';
-import { BUNDLED_VERSION, BUNDLED_GIT_COMMIT } from './bundled-version';
 
 const log = createLogger('cli:version');
 
@@ -72,7 +76,7 @@ export async function versionCommand(): Promise<void> {
   let version: string;
   let gitCommit: string;
 
-  if (isBinaryBuild()) {
+  if (BUNDLED_IS_BINARY) {
     // Compiled binary: use embedded version and commit
     version = BUNDLED_VERSION;
     gitCommit = BUNDLED_GIT_COMMIT;
@@ -86,7 +90,7 @@ export async function versionCommand(): Promise<void> {
   const platform = process.platform;
   const arch = process.arch;
   const dbType = getDatabaseType();
-  const buildType = isBinaryBuild() ? 'binary' : 'source (bun)';
+  const buildType = BUNDLED_IS_BINARY ? 'binary' : 'source (bun)';
 
   console.log(`Archon CLI v${version}`);
   console.log(`  Platform: ${platform}-${arch}`);

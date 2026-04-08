@@ -9,19 +9,23 @@ VERSION="${VERSION:-$(grep '"version"' package.json | head -1 | cut -d'"' -f4)}"
 GIT_COMMIT="${GIT_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')}"
 echo "Building Archon CLI v${VERSION} (commit: ${GIT_COMMIT})"
 
-# Update bundled version in source before compiling
-BUNDLED_VERSION_FILE="packages/cli/src/commands/bundled-version.ts"
-echo "Updating bundled version to ${VERSION}..."
-cat > "$BUNDLED_VERSION_FILE" << EOF
+# Update build-time constants in source before compiling.
+# The file is restored via an EXIT trap so the dev tree is never left dirty,
+# even if `bun build --compile` fails mid-way. See GitHub issue #979.
+BUNDLED_BUILD_FILE="packages/paths/src/bundled-build.ts"
+trap 'echo "Restoring ${BUNDLED_BUILD_FILE}..."; git checkout -- "${BUNDLED_BUILD_FILE}" 2>/dev/null || true' EXIT
+
+echo "Updating build-time constants (version=${VERSION}, is_binary=true)..."
+cat > "$BUNDLED_BUILD_FILE" << EOF
 /**
- * Bundled version for compiled binaries
+ * Build-time constants embedded into compiled binaries.
  *
- * This file is updated by scripts/build-binaries.sh before compilation.
- * The version is read from package.json at build time and embedded here.
- *
- * For development, the version command reads directly from package.json instead.
+ * This file is rewritten by scripts/build-binaries.sh before \`bun build --compile\`
+ * and restored afterwards via an EXIT trap. Do not edit these values by hand
+ * outside the build script — the dev defaults live in the committed copy.
  */
 
+export const BUNDLED_IS_BINARY = true;
 export const BUNDLED_VERSION = '${VERSION}';
 export const BUNDLED_GIT_COMMIT = '${GIT_COMMIT}';
 EOF
