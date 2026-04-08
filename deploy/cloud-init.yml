@@ -15,10 +15,12 @@
 #   3. Creates a 2GB swapfile (helps small VPS builds avoid OOM)
 #   4. Clones the repo to /opt/archon
 #   5. Prepares .env and Caddyfile from examples
-#   6. Creates a dedicated 'archon' user (sudo + docker groups)
+#   6. Creates a dedicated 'archon' user (docker group only, no sudo)
 #   7. Builds the Docker image (~5 min) as the archon user
 #
 # Note: On VPS with <2GB RAM, the docker build step can OOM without swap.
+# Note: The 'archon' user has docker access but NOT sudo. For administrative
+#       tasks (updates, reboots), use the default cloud user or root.
 #
 # After the server boots (~5-8 min), SSH in as the archon user:
 #   ssh archon@your-server-ip
@@ -31,6 +33,7 @@
 #
 
 package_update: true
+package_upgrade: true
 
 packages:
   - curl
@@ -41,9 +44,7 @@ users:
   - default
   - name: archon
     gecos: Archon Service User
-    groups: [sudo, docker]
     shell: /bin/bash
-    sudo: ALL=(ALL) NOPASSWD:ALL
     lock_passwd: true
 
 runcmd:
@@ -78,18 +79,20 @@ runcmd:
       chown -R archon:archon /home/archon/.ssh
     fi
 
-  # --- Firewall ---
+  # --- Firewall (443/udp needed for HTTP/3 QUIC via Caddy) ---
   - ufw allow 22/tcp
   - ufw allow 80/tcp
   - ufw allow 443/tcp
+  - ufw allow 443/udp
   - ufw --force enable
 
-  # --- Clone and configure (fail fast on errors) ---
-  - set -e
-  - git clone https://github.com/coleam00/Archon.git /opt/archon
-  - cp /opt/archon/.env.example /opt/archon/.env
-  - cp /opt/archon/Caddyfile.example /opt/archon/Caddyfile
-  - chown -R archon:archon /opt/archon
+  # --- Clone and configure (fail fast — single shell so set -e applies) ---
+  - |
+    set -e
+    git clone https://github.com/coleam00/Archon.git /opt/archon
+    cp /opt/archon/.env.example /opt/archon/.env
+    cp /opt/archon/Caddyfile.example /opt/archon/Caddyfile
+    chown -R archon:archon /opt/archon
 
   # --- Pre-pull external images (as archon, via docker group) ---
   - sudo -u archon docker pull postgres:17-alpine
@@ -107,6 +110,10 @@ runcmd:
 
     Log in as the 'archon' user (not root):
       ssh archon@<server-ip>
+
+    Note: the 'archon' user has docker access but no sudo. For system
+    maintenance (apt upgrade, reboots), log in as the default cloud user
+    or root.
 
     Next steps:
 
