@@ -29,6 +29,32 @@ Every path installs the binary, runs a fixed smoke test suite, and cleans up. Th
 - You want to test the dev clone — use `bun run validate` or invoke source directly via `bun packages/cli/src/cli.ts`
 - You want to test the full server + web UI deploy flow — use the cloud-init from `deploy/cloud-init.yml` on a real VPS
 
+## Local build for pre-release QA
+
+To build a binary locally with the exact same flags and constants that CI uses,
+invoke `scripts/build-binaries.sh` directly. The script supports two modes:
+
+```bash
+# Multi-target mode (builds all 4 local platforms into dist/binaries/)
+VERSION=0.3.1 GIT_COMMIT=abc12345 bash scripts/build-binaries.sh
+
+# Single-target mode (matches one CI matrix job)
+VERSION=0.3.1 \
+GIT_COMMIT=abc12345 \
+TARGET=bun-darwin-arm64 \
+OUTFILE=dist/test-archon-darwin-arm64 \
+bash scripts/build-binaries.sh
+
+# Verify the binary
+./dist/binaries/archon-darwin-arm64 version
+# Expected: Archon CLI v0.3.1, Build: binary, Git commit: abc12345
+```
+
+Run this **before tagging a release** to catch build-time-constant issues
+locally. The script is the canonical entry point — both local dev and the
+release workflow call it the same way, so a green local build means the CI
+build will exercise the same code path.
+
 ## Phase 1 — Determine scope
 
 Parse the arguments. The skill takes up to three:

@@ -49,13 +49,46 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Build binary
+        env:
+          VERSION: ${{ github.ref_name }}
+          GIT_COMMIT: ${{ github.sha }}
+          TARGET: ${{ matrix.target }}
+          OUTFILE: dist/${{ matrix.binary }}
         run: |
+          # Strip 'v' prefix from tag (e.g. v0.3.1 → 0.3.1)
+          VERSION="${VERSION#v}"
+          # Short commit (first 8 chars of SHA)
+          GIT_COMMIT="${GIT_COMMIT::8}"
           mkdir -p dist
-          # --bytecode excluded for Windows cross-compile (inconsistent Bun support)
-          if [[ "${{ matrix.target }}" == *windows* ]]; then
-            bun build --compile --minify --target=${{ matrix.target }} --outfile=dist/${{ matrix.binary }} packages/cli/src/cli.ts
+          VERSION="$VERSION" GIT_COMMIT="$GIT_COMMIT" TARGET="$TARGET" OUTFILE="$OUTFILE" bash scripts/build-binaries.sh
+
+      - name: Smoke-test built binary
+        if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
+        run: |
+          chmod +x dist/${{ matrix.binary }}
+          VERSION_OUTPUT=$(./dist/${{ matrix.binary }} version 2>&1)
+          echo "$VERSION_OUTPUT"
+
+          # Must not error with "Failed to read version" or similar
+          if echo "$VERSION_OUTPUT" | grep -qE "Failed to read version|package\.json not found|bad installation"; then
+            echo "::error::Binary is broken — version command cannot read embedded version"
+            echo "::error::This means BUNDLED_IS_BINARY was not set to true at build time."
+            exit 1
+          fi
+
+          # Must report 'Build: binary', not 'Build: source'
+          if ! echo "$VERSION_OUTPUT" | grep -q "Build: binary"; then
+            echo "::error::Binary reports wrong build type"
+            echo "::error::Expected 'Build: binary' in version output"
+            exit 1
+          fi
+
+          # Must report the tag version
+          if echo "$VERSION_OUTPUT" | grep -q "${{ github.ref_name }}"; then
+            echo "::notice::Binary correctly reports version"
           else
-            bun build --compile --minify --bytecode --target=${{ matrix.target }} --outfile=dist/${{ matrix.binary }} packages/cli/src/cli.ts
+            echo "::error::Binary does not report the tag version"
+            exit 1
           fi
 
       - name: Upload binary artifact
