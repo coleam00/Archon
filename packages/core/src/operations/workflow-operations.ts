@@ -34,6 +34,7 @@ export interface ApprovalOperationResult {
   workingPath: string | null;
   userMessage: string | null;
   codebaseId: string | null;
+  /** Internal DB UUID — resolve via getConversationById() to get platform_conversation_id. */
   conversationId: string;
   type: 'interactive_loop' | 'approval_gate';
 }
@@ -43,6 +44,7 @@ export interface RejectionOperationResult {
   workingPath: string | null;
   userMessage: string | null;
   codebaseId: string | null;
+  /** Internal DB UUID — resolve via getConversationById() to get platform_conversation_id. */
   conversationId: string;
   /** true = run cancelled; false = transitioning to failed for retry (has onRejectPrompt) */
   cancelled: boolean;

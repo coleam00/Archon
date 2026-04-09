@@ -66,6 +66,7 @@ export interface WorkflowRunOptions {
   allowEnvKeys?: boolean;
   quiet?: boolean;
   verbose?: boolean;
+  /** Platform conversation ID (e.g. `cli-{ts}-{rand}`), NOT a DB UUID. */
   conversationId?: string;
 }
 
@@ -863,14 +864,29 @@ export async function workflowApproveCommand(runId: string, comment?: string): P
   console.log('Resuming workflow...');
 
   // Look up the original platform conversation ID to keep all messages in one thread
-  const originalConversation = await conversationDb.getConversationById(result.conversationId);
-  const platformConversationId = originalConversation?.platform_conversation_id;
+  let platformConversationId: string | undefined;
+  try {
+    const originalConversation = await conversationDb.getConversationById(result.conversationId);
+    platformConversationId = originalConversation?.platform_conversation_id ?? undefined;
+    if (!originalConversation) {
+      getLog().info(
+        { runId, conversationId: result.conversationId },
+        'cli.workflow_approve_conversation_not_found'
+      );
+    }
+  } catch (error) {
+    const err = error as Error;
+    getLog().warn(
+      { err, runId, conversationId: result.conversationId },
+      'cli.workflow_approve_conversation_lookup_failed'
+    );
+  }
 
   try {
     await workflowRunCommand(result.workingPath, result.workflowName, result.userMessage ?? '', {
       resume: true,
       codebaseId: result.codebaseId ?? undefined,
-      conversationId: platformConversationId ?? undefined,
+      conversationId: platformConversationId,
     });
   } catch (error) {
     const err = error as Error;
@@ -908,14 +924,29 @@ export async function workflowRejectCommand(runId: string, reason?: string): Pro
   console.log('Resuming with on_reject prompt...');
 
   // Look up the original platform conversation ID to keep all messages in one thread
-  const originalConversation = await conversationDb.getConversationById(result.conversationId);
-  const platformConversationId = originalConversation?.platform_conversation_id;
+  let platformConversationId: string | undefined;
+  try {
+    const originalConversation = await conversationDb.getConversationById(result.conversationId);
+    platformConversationId = originalConversation?.platform_conversation_id ?? undefined;
+    if (!originalConversation) {
+      getLog().info(
+        { runId, conversationId: result.conversationId },
+        'cli.workflow_reject_conversation_not_found'
+      );
+    }
+  } catch (error) {
+    const err = error as Error;
+    getLog().warn(
+      { err, runId, conversationId: result.conversationId },
+      'cli.workflow_reject_conversation_lookup_failed'
+    );
+  }
 
   try {
     await workflowRunCommand(result.workingPath, result.workflowName, result.userMessage ?? '', {
       resume: true,
       codebaseId: result.codebaseId ?? undefined,
-      conversationId: platformConversationId ?? undefined,
+      conversationId: platformConversationId,
     });
   } catch (error) {
     const err = error as Error;

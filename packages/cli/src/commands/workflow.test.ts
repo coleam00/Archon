@@ -1382,6 +1382,58 @@ describe('workflowApproveCommand', () => {
 
     expect(codebaseDb.getCodebase).toHaveBeenCalledWith('cb-existing');
   });
+
+  it('should pass original platform conversation ID through to workflowRunCommand', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const conversationsDb = await import('@archon/core/db/conversations');
+    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+    const core = await import('@archon/core');
+
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-approve-conv',
+      workflow_name: 'implement',
+      status: 'paused',
+      user_message: 'add auth',
+      working_path: '/tmp/test-worktree',
+      codebase_id: 'cb-existing',
+      conversation_id: 'db-uuid-original',
+      metadata: { approval: { nodeId: 'review-node', message: 'Approve?' } },
+    });
+
+    // Return a conversation with the original platform ID
+    (conversationsDb.getConversationById as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'db-uuid-original',
+      platform_type: 'cli',
+      platform_conversation_id: 'cli-original-123',
+    });
+
+    (
+      workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>
+    ).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'implement' })],
+      errors: [],
+    });
+
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-existing',
+      name: 'owner/repo',
+      default_cwd: '/path/to/main-checkout',
+    });
+
+    // Clear call history before our test so we can assert precisely
+    (conversationsDb.getOrCreateConversation as ReturnType<typeof mock>).mockClear();
+
+    try {
+      await workflowApproveCommand('run-approve-conv');
+    } catch {
+      // downstream failure is acceptable — we only need to reach getOrCreateConversation
+    }
+
+    // Verify the original platform conversation ID was passed through
+    expect(conversationsDb.getConversationById).toHaveBeenCalledWith('db-uuid-original');
+    expect(conversationsDb.getOrCreateConversation).toHaveBeenCalledWith('cli', 'cli-original-123');
+  });
 });
 
 describe('workflowAbandonCommand', () => {
@@ -1565,6 +1617,61 @@ describe('workflowRejectCommand', () => {
       metadata: { rejection_reason: 'needs work', rejection_count: 1 },
     });
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Rejected workflow'));
+  });
+
+  it('should pass original platform conversation ID through on reject-resume', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const conversationsDb = await import('@archon/core/db/conversations');
+    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+
+    const runData = {
+      id: 'run-reject-conv',
+      workflow_name: 'my-wf',
+      status: 'paused',
+      user_message: 'build it',
+      working_path: '/repo',
+      codebase_id: null,
+      conversation_id: 'db-uuid-reject',
+      metadata: {
+        approval: {
+          type: 'approval',
+          nodeId: 'gate',
+          message: 'Approve?',
+          onRejectPrompt: 'Fix: $REJECTION_REASON',
+          onRejectMaxAttempts: 3,
+        },
+        rejection_count: 0,
+      },
+    };
+    // rejectWorkflow reads the run twice internally (getRunOrThrow + updateWorkflowRun check)
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(runData);
+
+    // Return a conversation with the original platform ID
+    (conversationsDb.getConversationById as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'db-uuid-reject',
+      platform_type: 'cli',
+      platform_conversation_id: 'cli-reject-456',
+    });
+
+    (
+      workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>
+    ).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'my-wf' })],
+      errors: [],
+    });
+
+    // Clear call history before our test so we can assert precisely
+    (conversationsDb.getOrCreateConversation as ReturnType<typeof mock>).mockClear();
+
+    try {
+      await workflowRejectCommand('run-reject-conv', 'needs work');
+    } catch {
+      // downstream workflowRunCommand failure is acceptable — we only need to reach getOrCreateConversation
+    }
+
+    // Verify the original platform conversation ID was passed through
+    expect(conversationsDb.getConversationById).toHaveBeenCalledWith('db-uuid-reject');
+    expect(conversationsDb.getOrCreateConversation).toHaveBeenCalledWith('cli', 'cli-reject-456');
   });
 
   it('cancels when max attempts reached', async () => {
