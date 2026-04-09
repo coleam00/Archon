@@ -1522,14 +1522,25 @@ async function executeScriptNode(
   let cmd: string;
   let args: string[];
 
+  const nodeDeps = node.deps ?? [];
+
   if (isInlineScript(finalScript)) {
     // Inline code execution
     if (node.runtime === 'bun') {
+      // Bun auto-installs imported packages at runtime, so deps are a no-op here
       cmd = 'bun';
       args = ['-e', finalScript];
     } else {
-      cmd = 'uv';
-      args = ['run', 'python', '-c', finalScript];
+      // uv: use `uvx --with dep1 --with dep2 python -c <code>` when deps present,
+      // otherwise `uv run python -c <code>`
+      if (nodeDeps.length > 0) {
+        cmd = 'uvx';
+        const withFlags = nodeDeps.flatMap((dep: string) => ['--with', dep]);
+        args = [...withFlags, 'python', '-c', finalScript];
+      } else {
+        cmd = 'uv';
+        args = ['run', 'python', '-c', finalScript];
+      }
     }
   } else {
     // Named script — look up in .archon/scripts/ directory
@@ -1542,8 +1553,11 @@ async function executeScriptNode(
       const ext = extname(scriptDef.path);
       if (ext === '.py') {
         cmd = 'uv';
-        args = ['run', scriptDef.path];
+        // uv run --with dep1 --with dep2 <path>
+        const withFlags = nodeDeps.flatMap((dep: string) => ['--with', dep]);
+        args = ['run', ...withFlags, scriptDef.path];
       } else {
+        // Bun auto-installs imported packages at runtime, so deps are a no-op here
         cmd = 'bun';
         args = ['run', scriptDef.path];
       }
@@ -1553,8 +1567,11 @@ async function executeScriptNode(
       const ext = extname(resolvedPath);
       if (ext === '.py') {
         cmd = 'uv';
-        args = ['run', resolvedPath];
+        // uv run --with dep1 --with dep2 <path>
+        const withFlags = nodeDeps.flatMap((dep: string) => ['--with', dep]);
+        args = ['run', ...withFlags, resolvedPath];
       } else {
+        // Bun auto-installs imported packages at runtime, so deps are a no-op here
         cmd = 'bun';
         args = ['run', resolvedPath];
       }
