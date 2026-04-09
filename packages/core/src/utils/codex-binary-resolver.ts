@@ -69,6 +69,16 @@ const PLATFORM_MAP: Record<string, PlatformInfo> = {
     npmTag: 'linux-x64',
     binarySubpath: 'x86_64-linux-gnu/codex/codex',
   },
+  'win32-x64': {
+    triple: 'x86_64-pc-windows-msvc',
+    npmTag: 'win32-x64',
+    binarySubpath: 'x86_64-pc-windows-msvc/codex/codex.exe',
+  },
+  'win32-arm64': {
+    triple: 'aarch64-pc-windows-msvc',
+    npmTag: 'win32-arm64',
+    binarySubpath: 'aarch64-pc-windows-msvc/codex/codex.exe',
+  },
 };
 
 function getPlatformKey(): string {
@@ -161,16 +171,8 @@ export async function resolveCodexBinaryPath(
 ): Promise<string | undefined> {
   if (!BUNDLED_IS_BINARY) return undefined;
 
-  const platformKey = getPlatformKey();
-  const platformInfo = PLATFORM_MAP[platformKey];
-  if (!platformInfo) {
-    throw new Error(
-      `Unsupported platform for Codex: ${process.platform} (${process.arch})\n\n` +
-        'Codex CLI binaries are only available for darwin-arm64, darwin-x64, linux-arm64, and linux-x64.'
-    );
-  }
-
-  // 1. Environment variable override
+  // 1. Environment variable override (checked before platform detection —
+  //    user-supplied paths work on any platform including Windows)
   const envPath = process.env.CODEX_BIN_PATH;
   if (envPath) {
     if (!fileExists(envPath)) {
@@ -183,7 +185,7 @@ export async function resolveCodexBinaryPath(
     return envPath;
   }
 
-  // 2. Config file override
+  // 2. Config file override (also platform-independent)
   if (configCodexBinaryPath) {
     if (!fileExists(configCodexBinaryPath)) {
       throw new Error(
@@ -195,7 +197,19 @@ export async function resolveCodexBinaryPath(
     return configCodexBinaryPath;
   }
 
-  // 3. Check vendor directory
+  // 3. Platform detection (needed for vendor dir lookup and auto-download)
+  const platformKey = getPlatformKey();
+  const platformInfo = PLATFORM_MAP[platformKey];
+  if (!platformInfo) {
+    throw new Error(
+      `Unsupported platform for Codex auto-download: ${process.platform} (${process.arch})\n\n` +
+        'Codex CLI binaries are only available for darwin-arm64, darwin-x64, linux-arm64, and linux-x64.\n' +
+        'To use Codex on this platform, install the Codex CLI manually and set\n' +
+        'CODEX_BIN_PATH or assistants.codex.codexBinaryPath in .archon/config.yaml.'
+    );
+  }
+
+  // 4. Check vendor directory
   const archonHome = getArchonHome();
   const vendorDir = join(archonHome, CODEX_VENDOR_DIR);
   const vendorBinaryPath = join(vendorDir, platformInfo.binarySubpath);
