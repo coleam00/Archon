@@ -17,10 +17,11 @@ import {
   type MessageChunk,
   type TokenUsage,
 } from '../types';
-import { createLogger, BUNDLED_IS_BINARY } from '@archon/paths';
+import { createLogger } from '@archon/paths';
 import { scanPathForSensitiveKeys, EnvLeakError } from '../utils/env-leak-scanner';
 import * as codebaseDb from '../db/codebases';
 import { loadConfig } from '../config/config-loader';
+import { resolveCodexBinaryPath } from '../utils/codex-binary-resolver';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -29,18 +30,36 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-// Singleton Codex instance
+// Singleton Codex instance (async because binary path resolution may download)
 let codexInstance: Codex | null = null;
+let codexInitPromise: Promise<Codex> | null = null;
+
+/** Reset singleton state. Exported for tests only. */
+export function resetCodexSingleton(): void {
+  codexInstance = null;
+  codexInitPromise = null;
+}
 
 /**
- * Get or create Codex SDK instance
- * Synchronous now that we have direct ESM import
+ * Get or create Codex SDK instance.
+ * Async because in compiled binary mode, the first call may need to
+ * download the native Codex binary (~112 MB).
  */
-function getCodex(): Codex {
-  if (!codexInstance) {
-    codexInstance = new Codex();
+async function getCodex(configCodexBinaryPath?: string): Promise<Codex> {
+  if (codexInstance) return codexInstance;
+
+  // Prevent concurrent initialization (first-use download race)
+  if (!codexInitPromise) {
+    codexInitPromise = (async (): Promise<Codex> => {
+      const codexPathOverride = await resolveCodexBinaryPath(configCodexBinaryPath);
+      const instance = new Codex({
+        ...(codexPathOverride ? { codexPathOverride } : {}),
+      });
+      codexInstance = instance;
+      return instance;
+    })();
   }
-  return codexInstance;
+  return codexInitPromise;
 }
 
 /**
@@ -157,17 +176,12 @@ export class CodexClient implements IAssistantClient {
     resumeSessionId?: string,
     options?: AssistantRequestOptions
   ): AsyncGenerator<MessageChunk> {
-    // Fail fast in compiled binary mode — Codex SDK's createRequire(import.meta.url)
-    // is broken in bun --compile builds and the native binary can't be embedded.
-    if (BUNDLED_IS_BINARY) {
-      throw new Error(
-        'Codex is not supported in the archon binary install.\n\n' +
-          'The @openai/codex-sdk requires a native platform binary that cannot be\n' +
-          'embedded in bun-compiled releases. To use Codex workflows, install archon from\n' +
-          'source via `bun link` instead of via the binary release.\n\n' +
-          'To use Claude (the default provider) instead, set `assistant: claude` in\n' +
-          '.archon/config.yaml or remove the `provider: codex` line from your workflow.'
-      );
+    // Load config once — used for both env-leak gate and codexBinaryPath resolution.
+    let mergedConfig: Awaited<ReturnType<typeof loadConfig>> | undefined;
+    try {
+      mergedConfig = await loadConfig(cwd);
+    } catch (configErr) {
+      getLog().warn({ err: configErr, cwd }, 'config_load_failed');
     }
 
     // Pre-spawn: check for env key leak if codebase is not explicitly consented.
@@ -178,13 +192,7 @@ export class CodexClient implements IAssistantClient {
       (await codebaseDb.findCodebaseByPathPrefix(cwd));
     if (codebase && !codebase.allow_env_keys) {
       // Fail-closed: a config load failure must NOT silently bypass the gate.
-      let allowTargetRepoKeys = false;
-      try {
-        const merged = await loadConfig(cwd);
-        allowTargetRepoKeys = merged.allowTargetRepoKeys;
-      } catch (configErr) {
-        getLog().warn({ err: configErr, cwd }, 'env_leak_gate.config_load_failed_gate_enforced');
-      }
+      const allowTargetRepoKeys = mergedConfig?.allowTargetRepoKeys ?? false;
       if (!allowTargetRepoKeys) {
         const report = scanPathForSensitiveKeys(cwd);
         if (report.findings.length > 0) {
@@ -193,7 +201,10 @@ export class CodexClient implements IAssistantClient {
       }
     }
 
-    const codex = getCodex();
+    // Initialize Codex SDK with binary path override (resolved from config/env/vendor).
+    // In dev mode, resolveCodexBinaryPath returns undefined and the SDK uses node_modules.
+    // In binary mode, it resolves or auto-downloads the native Codex CLI binary.
+    const codex = await getCodex(mergedConfig?.assistants.codex.codexBinaryPath);
     const threadOptions = buildThreadOptions(cwd, options);
 
     // Check if already aborted before starting

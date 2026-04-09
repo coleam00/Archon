@@ -17,6 +17,9 @@ export interface AssistantDefaults {
   modelReasoningEffort?: ModelReasoningEffort;
   webSearchMode?: WebSearchMode;
   additionalDirectories?: string[];
+  /** Path to a pre-installed Codex CLI binary. Overrides auto-detection.
+   *  Only relevant for the Codex provider; ignored for Claude. */
+  codexBinaryPath?: string;
 }
 
 export interface ClaudeAssistantDefaults {

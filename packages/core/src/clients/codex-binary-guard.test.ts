@@ -1,5 +1,5 @@
 /**
- * Tests for the BUNDLED_IS_BINARY guard in CodexClient.
+ * Tests for Codex binary resolution in compiled binary mode.
  *
  * Separate file because mock.module('@archon/paths') with BUNDLED_IS_BINARY=true
  * conflicts with codex.test.ts which mocks it without BUNDLED_IS_BINARY.
@@ -14,16 +14,53 @@ const mockLogger = createMockLogger();
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   BUNDLED_IS_BINARY: true,
+  getArchonHome: mock(() => '/tmp/test-archon'),
 }));
 
-// Mock Codex SDK so it doesn't try to resolve the native binary
-const MockCodex = mock(() => ({
-  startThread: mock(() => ({})),
-  resumeThread: mock(() => ({})),
+// Track what path override is passed to the Codex constructor
+let capturedOptions: { codexPathOverride?: string } | undefined;
+
+const mockStartThread = mock(() => ({
+  id: 'test-thread',
+  runStreamed: mock(() =>
+    Promise.resolve({
+      events: (async function* () {
+        yield {
+          type: 'turn.completed',
+          usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5 },
+        };
+      })(),
+    })
+  ),
 }));
+
+const MockCodex = mock((opts?: { codexPathOverride?: string }) => {
+  capturedOptions = opts;
+  return {
+    startThread: mockStartThread,
+    resumeThread: mock(() => ({})),
+  };
+});
 mock.module('@openai/codex-sdk', () => ({
   Codex: MockCodex,
 }));
+
+// Mock resolver — controls binary resolution behavior per test
+const mockResolveCodexBinaryPath = mock(
+  (_configPath?: string): Promise<string | undefined> =>
+    Promise.resolve('/tmp/test-archon/vendor/codex/codex')
+);
+mock.module('../utils/codex-binary-resolver', () => ({
+  resolveCodexBinaryPath: mockResolveCodexBinaryPath,
+}));
+
+// Config mock with configurable return value
+const mockLoadConfig = mock(() =>
+  Promise.resolve({
+    allowTargetRepoKeys: false,
+    assistants: { codex: {} },
+  })
+);
 
 // Mock db and config dependencies to prevent real DB access
 mock.module('../db/codebases', () => ({
@@ -31,53 +68,75 @@ mock.module('../db/codebases', () => ({
   findCodebaseByPathPrefix: mock(() => Promise.resolve(null)),
 }));
 mock.module('../config/config-loader', () => ({
-  loadConfig: mock(() => Promise.resolve({ allowTargetRepoKeys: false })),
+  loadConfig: mockLoadConfig,
 }));
 mock.module('../utils/env-leak-scanner', () => ({
   scanPathForSensitiveKeys: mock(() => ({ findings: [] })),
   EnvLeakError: class extends Error {},
 }));
 
-import { CodexClient } from './codex';
+import { CodexClient, resetCodexSingleton } from './codex';
 
-describe('CodexClient binary mode guard', () => {
+describe('CodexClient binary mode resolution', () => {
   beforeEach(() => {
+    resetCodexSingleton();
     MockCodex.mockClear();
+    mockStartThread.mockClear();
+    mockResolveCodexBinaryPath.mockClear();
+    mockLoadConfig.mockClear();
+    capturedOptions = undefined;
+
+    // Restore default mock implementations
+    mockResolveCodexBinaryPath.mockImplementation(() =>
+      Promise.resolve('/tmp/test-archon/vendor/codex/codex')
+    );
+    mockLoadConfig.mockImplementation(() =>
+      Promise.resolve({
+        allowTargetRepoKeys: false,
+        assistants: { codex: {} },
+      })
+    );
   });
 
-  test('throws a clear error when BUNDLED_IS_BINARY is true', async () => {
+  test('passes resolved binary path to Codex constructor via codexPathOverride', async () => {
+    mockResolveCodexBinaryPath.mockResolvedValueOnce('/custom/path/to/codex');
+
     const client = new CodexClient();
     const generator = client.sendQuery('test prompt', '/tmp/test');
 
-    await expect(generator.next()).rejects.toThrow('not supported in the archon binary');
-  });
-
-  test('error message includes remediation steps', async () => {
-    const client = new CodexClient();
-    const generator = client.sendQuery('test prompt', '/tmp/test');
-
-    try {
-      await generator.next();
-      expect.unreachable('should have thrown');
-    } catch (error) {
-      const msg = (error as Error).message;
-      expect(msg).toContain('bun link');
-      expect(msg).toContain('assistant: claude');
-      expect(msg).toContain('provider: codex');
-    }
-  });
-
-  test('Codex SDK constructor is never called', async () => {
-    const client = new CodexClient();
-    const generator = client.sendQuery('test prompt', '/tmp/test');
-
-    try {
-      await generator.next();
-    } catch {
-      // Expected
+    // Consume events to trigger initialization
+    for await (const _chunk of generator) {
+      // drain
     }
 
-    // The guard throws at the top of sendQuery, before getCodex() is reached
-    expect(MockCodex).not.toHaveBeenCalled();
+    expect(mockResolveCodexBinaryPath).toHaveBeenCalledTimes(1);
+    expect(capturedOptions?.codexPathOverride).toBe('/custom/path/to/codex');
+  });
+
+  test('propagates resolver errors as clear failures', async () => {
+    mockResolveCodexBinaryPath.mockRejectedValueOnce(
+      new Error('Codex native binary not found at /tmp/test-archon/vendor/codex/codex')
+    );
+
+    const client = new CodexClient();
+    const generator = client.sendQuery('test prompt', '/tmp/test');
+
+    await expect(generator.next()).rejects.toThrow('Codex native binary not found');
+  });
+
+  test('passes config codexBinaryPath to resolver', async () => {
+    mockLoadConfig.mockResolvedValueOnce({
+      allowTargetRepoKeys: false,
+      assistants: { codex: { codexBinaryPath: '/user/custom/codex' } },
+    });
+
+    const client = new CodexClient();
+    const generator = client.sendQuery('test prompt', '/tmp/test');
+
+    for await (const _chunk of generator) {
+      // drain
+    }
+
+    expect(mockResolveCodexBinaryPath).toHaveBeenCalledWith('/user/custom/codex');
   });
 });
