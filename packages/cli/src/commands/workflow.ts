@@ -66,6 +66,7 @@ export interface WorkflowRunOptions {
   allowEnvKeys?: boolean;
   quiet?: boolean;
   verbose?: boolean;
+  conversationId?: string;
 }
 
 /**
@@ -269,7 +270,7 @@ export async function workflowRunCommand(
   const adapter = new CLIAdapter();
 
   // Generate conversation ID
-  const conversationId = generateConversationId();
+  const conversationId = options.conversationId ?? generateConversationId();
 
   // Get or create conversation in database
   let conversation;
@@ -861,10 +862,15 @@ export async function workflowApproveCommand(runId: string, comment?: string): P
   console.log('');
   console.log('Resuming workflow...');
 
+  // Look up the original platform conversation ID to keep all messages in one thread
+  const originalConversation = await conversationDb.getConversationById(result.conversationId);
+  const platformConversationId = originalConversation?.platform_conversation_id;
+
   try {
     await workflowRunCommand(result.workingPath, result.workflowName, result.userMessage ?? '', {
       resume: true,
       codebaseId: result.codebaseId ?? undefined,
+      conversationId: platformConversationId ?? undefined,
     });
   } catch (error) {
     const err = error as Error;
@@ -900,10 +906,16 @@ export async function workflowRejectCommand(runId: string, reason?: string): Pro
   }
   console.log(`Rejected workflow: ${result.workflowName}`);
   console.log('Resuming with on_reject prompt...');
+
+  // Look up the original platform conversation ID to keep all messages in one thread
+  const originalConversation = await conversationDb.getConversationById(result.conversationId);
+  const platformConversationId = originalConversation?.platform_conversation_id;
+
   try {
     await workflowRunCommand(result.workingPath, result.workflowName, result.userMessage ?? '', {
       resume: true,
       codebaseId: result.codebaseId ?? undefined,
+      conversationId: platformConversationId ?? undefined,
     });
   } catch (error) {
     const err = error as Error;

@@ -52,6 +52,7 @@ nodes:
   - id: foundation-gate
     approval:
       message: "Answer the foundation questions above. Your answers will guide the research phase."
+      capture_response: true
     depends_on: [initiate]
 
   # ═══════════════════════════════════════════════════════════════
@@ -106,6 +107,7 @@ nodes:
   - id: deepdive-gate
     approval:
       message: "Answer the deep dive questions above (vision, primary user, JTBD, constraints). Add any adjustments from the research."
+      capture_response: true
     depends_on: [research]
 
   # ═══════════════════════════════════════════════════════════════
@@ -172,6 +174,7 @@ nodes:
   - id: scope-gate
     approval:
       message: "Answer the scope questions above (MVP, must-haves, hypothesis, exclusions). This is the final input before PRD generation."
+      capture_response: true
     depends_on: [technical]
 
   # ═══════════════════════════════════════════════════════════════
@@ -188,11 +191,11 @@ nodes:
       **Deep dive answers**: $deepdive-gate.output
       **Scope answers**: $scope-gate.output
 
-      Generate a complete PRD file at `.claude/PRPs/prds/{kebab-case-name}.prd.md`.
+      Generate a complete PRD file at `$ARTIFACTS_DIR/prds/{kebab-case-name}.prd.md`.
 
       First create the directory:
       ```bash
-      mkdir -p .claude/PRPs/prds
+      mkdir -p $ARTIFACTS_DIR/prds
       ```
 
       **First principles rule**: Before writing the Technical Approach section, READ the
@@ -243,9 +246,9 @@ nodes:
       Read the PRD file that was just generated. The generate node output the file path:
       $generate.output
 
-      Find the PRD file — check `.claude/PRPs/prds/` for the most recently created `.prd.md` file:
+      Find the PRD file — check `$ARTIFACTS_DIR/prds/` for the most recently created `.prd.md` file:
       ```bash
-      ls -t .claude/PRPs/prds/*.prd.md | head -1
+      ls -t $ARTIFACTS_DIR/prds/*.prd.md | head -1
       ```
 
       Read the entire PRD, then verify EVERY technical claim against the actual codebase:

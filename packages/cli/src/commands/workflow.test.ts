@@ -107,6 +107,7 @@ mock.module('@archon/core/db/conversations', () => ({
   getOrCreateConversation: mock(() =>
     Promise.resolve({ id: 'conv-123', platform_type: 'cli', platform_conversation_id: 'cli-123' })
   ),
+  getConversationById: mock(() => Promise.resolve(null)),
   updateConversation: mock(() => Promise.resolve()),
 }));
 

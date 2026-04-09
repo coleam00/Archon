@@ -34,6 +34,7 @@ export interface ApprovalOperationResult {
   workingPath: string | null;
   userMessage: string | null;
   codebaseId: string | null;
+  conversationId: string;
   type: 'interactive_loop' | 'approval_gate';
 }
 
@@ -42,6 +43,7 @@ export interface RejectionOperationResult {
   workingPath: string | null;
   userMessage: string | null;
   codebaseId: string | null;
+  conversationId: string;
   /** true = run cancelled; false = transitioning to failed for retry (has onRejectPrompt) */
   cancelled: boolean;
   /** true when cancelled specifically because max rejection attempts were reached */
@@ -168,6 +170,7 @@ export async function approveWorkflow(
         workingPath: run.working_path,
         userMessage: run.user_message,
         codebaseId: run.codebase_id,
+        conversationId: run.conversation_id,
         type: 'interactive_loop',
       };
     }
@@ -204,6 +207,7 @@ export async function approveWorkflow(
     workingPath: run.working_path,
     userMessage: run.user_message,
     codebaseId: run.codebase_id,
+    conversationId: run.conversation_id,
     type: 'approval_gate',
   };
 }
@@ -248,6 +252,7 @@ export async function rejectWorkflow(
           workingPath: run.working_path,
           userMessage: run.user_message,
           codebaseId: run.codebase_id,
+          conversationId: run.conversation_id,
           cancelled: true,
           maxAttemptsReached: true,
         };
@@ -261,6 +266,7 @@ export async function rejectWorkflow(
         workingPath: run.working_path,
         userMessage: run.user_message,
         codebaseId: run.codebase_id,
+        conversationId: run.conversation_id,
         cancelled: false,
         maxAttemptsReached: false,
       };
@@ -280,6 +286,7 @@ export async function rejectWorkflow(
     workingPath: run.working_path,
     userMessage: run.user_message,
     codebaseId: run.codebase_id,
+    conversationId: run.conversation_id,
     cancelled: true,
     maxAttemptsReached: false,
   };
