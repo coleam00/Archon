@@ -13,11 +13,13 @@
   --sl-color-hairline-light: #1e293b;
 }
 
+/* !important needed: Starlight sets .hero padding/gap via inline styles */
 .hero {
   padding-block: 2rem !important;
   gap: 1rem !important;
 }
 
+/* .sidebar-content is an internal Starlight class (not a public API) — re-test after Starlight upgrades */
 [data-theme='dark'] .sidebar-content a[aria-current='page'] {
   background: linear-gradient(135deg, rgba(168, 85, 247, 0.15), rgba(59, 130, 246, 0.15));
   border-left-color: #a855f7;
