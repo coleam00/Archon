@@ -598,6 +598,19 @@ describe('dagNodeSchema — ScriptNode', () => {
     }
   });
 
+  test('rejects script + command (mutually exclusive)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 's',
+      script: 'console.log("hi")',
+      command: 'some-command',
+      runtime: 'bun',
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('mutually exclusive');
+    }
+  });
+
   test('strips AI-only fields from script nodes', () => {
     const result = dagNodeSchema.safeParse({
       id: 's',

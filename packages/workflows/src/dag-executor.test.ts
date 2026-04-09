@@ -5082,4 +5082,93 @@ describe('executeDagWorkflow -- script nodes', () => {
     const failMsg = messages.find((m: string) => m.includes('no successful nodes'));
     expect(failMsg).toBeDefined();
   }, 10000);
+
+  it('stderr output is sent to the user', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('script-stderr-run-id', {
+      workflow_name: 'script-stderr-test',
+      conversation_id: 'conv-stderr',
+      user_message: 'stderr test',
+    });
+
+    const scriptNode: ScriptNode = {
+      id: 'stderr-script',
+      // Write to both stderr and stdout
+      script: 'process.stderr.write("error detail\\n"); console.log("done")',
+      runtime: 'bun',
+    };
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-stderr',
+      testDir,
+      { name: 'script-stderr-test', nodes: [scriptNode] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
+    const stderrMsg = messages.find((m: string) => m.includes('error detail'));
+    expect(stderrMsg).toBeDefined();
+    expect(stderrMsg).toContain('stderr-script');
+  });
+
+  it('$WORKFLOW_ID and $ARTIFACTS_DIR are substituted into script text', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('wf-subst-run-id', {
+      workflow_name: 'script-subst-test',
+      conversation_id: 'conv-subst',
+      user_message: 'subst test',
+    });
+
+    const artifactsDir = join(testDir, 'artifacts');
+
+    // Write a downstream command so we can inspect the substituted prompt
+    const commandsDir = join(testDir, '.archon', 'commands');
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(join(commandsDir, 'check-output.md'), 'Got: $script-out.output');
+
+    const nodes: DagNode[] = [
+      {
+        id: 'script-out',
+        // Print the run ID and artifacts dir — after substitution these are real values
+        script: 'console.log("id=$WORKFLOW_ID artifacts=$ARTIFACTS_DIR")',
+        runtime: 'bun',
+      },
+      { id: 'check', command: 'check-output', depends_on: ['script-out'] },
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-subst',
+      testDir,
+      { name: 'script-subst-vars', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      artifactsDir,
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // The downstream AI node should have received the substituted output
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    const prompt = mockSendQueryDag.mock.calls[0][0] as string;
+    // The script output should contain the actual run ID (not the literal variable name)
+    expect(prompt).toContain('wf-subst-run-id');
+    expect(prompt).not.toContain('$WORKFLOW_ID');
+  });
 });

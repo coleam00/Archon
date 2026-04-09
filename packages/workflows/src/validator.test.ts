@@ -289,3 +289,56 @@ describe('discoverAvailableCommands', () => {
     expect(withDefaults.length).toBeGreaterThanOrEqual(without.length);
   });
 });
+
+// =============================================================================
+// validateWorkflowResources — script nodes
+// =============================================================================
+
+describe('validateWorkflowResources — script nodes', () => {
+  test('error when named bun script file does not exist', async () => {
+    const workflow = makeWorkflow('test', [
+      { id: 'step1', script: 'nonexistent-script', runtime: 'bun' } as unknown as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const errors = issues.filter(i => i.level === 'error' && i.field === 'script');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toContain("Named script 'nonexistent-script' not found");
+    expect(errors[0].nodeId).toBe('step1');
+  });
+
+  test('error when named uv script file does not exist', async () => {
+    const workflow = makeWorkflow('test', [
+      { id: 'step1', script: 'missing-py-script', runtime: 'uv' } as unknown as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const errors = issues.filter(i => i.level === 'error' && i.field === 'script');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toContain("Named script 'missing-py-script' not found");
+    expect(errors[0].hint).toContain('.py');
+  });
+
+  test('no error when named bun script file exists', async () => {
+    const scriptsDir = join(tmpDir, '.archon', 'scripts');
+    await mkdir(scriptsDir, { recursive: true });
+    await writeFile(join(scriptsDir, 'my-script.ts'), 'console.log("hi")');
+    const workflow = makeWorkflow('test', [
+      { id: 'step1', script: 'my-script', runtime: 'bun' } as unknown as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const scriptErrors = issues.filter(i => i.level === 'error' && i.field === 'script');
+    expect(scriptErrors).toHaveLength(0);
+  });
+
+  test('no error for inline bun script (no file lookup needed)', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'step1',
+        script: 'console.log("inline")',
+        runtime: 'bun',
+      } as unknown as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const scriptErrors = issues.filter(i => i.level === 'error' && i.field === 'script');
+    expect(scriptErrors).toHaveLength(0);
+  });
+});
