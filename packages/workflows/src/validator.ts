@@ -13,6 +13,7 @@ import { join, resolve, isAbsolute } from 'path';
 import { homedir } from 'os';
 import { access, readFile } from 'fs/promises';
 import {
+  createLogger,
   getCommandFolderSearchPaths,
   getDefaultCommandsPath,
   findMarkdownFilesRecursive,
@@ -20,6 +21,13 @@ import {
 import { execFileAsync } from '@archon/git';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { isValidCommandName } from './command-validation';
+
+/** Lazy-initialized logger */
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('workflow.validator');
+  return cachedLog;
+}
 import { isScriptNode } from './schemas';
 import type { WorkflowDefinition, DagNode } from './schemas';
 import type { ScriptRuntime } from './script-discovery';
@@ -432,6 +440,17 @@ export async function validateWorkflowResources(
           hint: RUNTIME_INSTALL_HINTS[node.runtime],
         });
       }
+
+      // Warn when deps is specified with bun (bun auto-installs, deps is a no-op)
+      if (node.runtime === 'bun' && node.deps && node.deps.length > 0) {
+        issues.push({
+          level: 'warning',
+          nodeId: node.id,
+          field: 'deps',
+          message: "'deps' is ignored for bun runtime (bun auto-installs packages at runtime)",
+          hint: 'Remove deps or switch to runtime: uv if you need explicit dependency management',
+        });
+      }
     }
   }
 
@@ -532,7 +551,9 @@ export async function discoverAvailableScripts(
   try {
     const scripts = await discoverScripts(scriptsDir);
     return [...scripts.values()].map(s => ({ name: s.name, path: s.path, runtime: s.runtime }));
-  } catch {
+  } catch (error) {
+    const err = error as Error;
+    getLog().warn({ err, scriptsDir }, 'script_discovery_failed');
     return [];
   }
 }

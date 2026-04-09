@@ -4,7 +4,7 @@
  * Scripts are keyed by filename without extension. Runtime is auto-detected
  * from the file extension: .ts/.js -> bun, .py -> uv.
  */
-import { readFile, readdir, stat } from 'fs/promises';
+import { readdir, stat } from 'fs/promises';
 import { join, basename, extname } from 'path';
 import { createLogger } from '@archon/paths';
 
@@ -18,12 +18,11 @@ function getLog(): ReturnType<typeof createLogger> {
 /** Supported script runtime */
 export type ScriptRuntime = 'bun' | 'uv';
 
-/** A discovered script with its metadata and content */
+/** A discovered script with its metadata */
 export interface ScriptDefinition {
   name: string;
   path: string;
   runtime: ScriptRuntime;
-  content: string;
 }
 
 /** Supported file extensions and their runtimes */
@@ -97,18 +96,7 @@ async function scanScriptDir(
       );
     }
 
-    let content: string;
-    try {
-      content = await readFile(entryPath, 'utf-8');
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      getLog().warn({ err, entryPath }, 'script_file_read_error');
-      throw new Error(
-        `File read error for "${entryPath}": ${err.message} (${err.code ?? 'unknown'})`
-      );
-    }
-
-    scripts.set(name, { name, path: entryPath, runtime, content });
+    scripts.set(name, { name, path: entryPath, runtime });
     getLog().debug({ name, runtime, entryPath }, 'script_loaded');
   }
 }

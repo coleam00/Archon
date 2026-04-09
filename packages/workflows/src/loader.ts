@@ -2,10 +2,10 @@
  * Workflow loader - discovers and parses workflow YAML files
  */
 import type { WorkflowDefinition, WorkflowLoadError, DagNode, WorkflowNodeHooks } from './schemas';
-import { isLoopNode, isApprovalNode, isCancelNode } from './schemas';
+import { isLoopNode, isApprovalNode, isCancelNode, isScriptNode } from './schemas';
 import { createLogger } from '@archon/paths';
 import { isModelCompatible } from './model-validation';
-import { dagNodeSchema, BASH_NODE_AI_FIELDS } from './schemas/dag-node';
+import { dagNodeSchema, BASH_NODE_AI_FIELDS, SCRIPT_NODE_AI_FIELDS } from './schemas/dag-node';
 import { modelReasoningEffortSchema, webSearchModeSchema } from './schemas/workflow';
 import { workflowNodeHooksSchema } from './schemas/hooks';
 import { z } from '@hono/zod-openapi';
@@ -55,9 +55,10 @@ function parseDagNode(raw: unknown, index: number, errors: string[]): DagNode | 
 
   const node = result.data;
 
-  // Warn about AI-specific fields on bash/loop nodes (runtime behavior, not schema errors)
+  // Warn about AI-specific fields on non-AI nodes (runtime behavior, not schema errors)
   const isNonAiNode =
     ('bash' in node && typeof node.bash === 'string') ||
+    isScriptNode(node) ||
     isLoopNode(node) ||
     isApprovalNode(node) ||
     isCancelNode(node);
@@ -69,12 +70,13 @@ function parseDagNode(raw: unknown, index: number, errors: string[]): DagNode | 
       nodeType = 'approval';
     } else if (isLoopNode(node)) {
       nodeType = 'loop';
+    } else if (isScriptNode(node)) {
+      nodeType = 'script';
     } else {
       nodeType = 'bash';
     }
-    const presentAiFields = BASH_NODE_AI_FIELDS.filter(
-      f => (raw as Record<string, unknown>)[f] !== undefined
-    );
+    const aiFields = isScriptNode(node) ? SCRIPT_NODE_AI_FIELDS : BASH_NODE_AI_FIELDS;
+    const presentAiFields = aiFields.filter(f => (raw as Record<string, unknown>)[f] !== undefined);
     if (presentAiFields.length > 0) {
       getLog().warn({ id: node.id, fields: presentAiFields }, `${nodeType}_node_ai_fields_ignored`);
     }

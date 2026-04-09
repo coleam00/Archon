@@ -199,7 +199,7 @@ export type BashNode = z.infer<typeof bashNodeSchema> & {
 export const scriptNodeSchema = dagNodeBaseSchema.extend({
   script: z.string().min(1, 'script cannot be empty'),
   runtime: z.enum(['bun', 'uv']),
-  deps: z.array(z.string()).optional(),
+  deps: z.array(z.string().min(1, 'each dep must be a non-empty string')).optional(),
   timeout: z.number().optional(),
 });
 
@@ -351,7 +351,7 @@ export const dagNodeSchema = dagNodeBaseSchema
     // Script-only
     script: z.string().optional(),
     runtime: z.enum(['bun', 'uv']).optional(),
-    deps: z.array(z.string()).optional(),
+    deps: z.array(z.string().min(1, 'each dep must be a non-empty string')).optional(),
     // Bash/Script shared
     timeout: z.number().optional(),
   })

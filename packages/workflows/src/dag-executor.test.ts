@@ -5171,4 +5171,42 @@ describe('executeDagWorkflow -- script nodes', () => {
     expect(prompt).toContain('wf-subst-run-id');
     expect(prompt).not.toContain('$WORKFLOW_ID');
   });
+
+  it('named script not found at runtime results in failed state and platform message', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('script-notfound-run-id', {
+      workflow_name: 'script-notfound-test',
+      conversation_id: 'conv-notfound',
+      user_message: 'notfound test',
+    });
+
+    // Do NOT create .archon/scripts/missing.ts — the script should fail to resolve
+    const scriptNode: ScriptNode = {
+      id: 'gone-script',
+      script: 'missing',
+      runtime: 'bun',
+    };
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-notfound',
+      testDir,
+      { name: 'script-notfound-test', nodes: [scriptNode] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
+    const notFoundMsg = messages.find((m: string) => m.includes('not found in .archon/scripts/'));
+    expect(notFoundMsg).toBeDefined();
+  });
 });

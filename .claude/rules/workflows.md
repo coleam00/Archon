@@ -65,8 +65,9 @@ await executeWorkflow(deps, platform, conversationId, cwd, workflow, ...);
 - `command:` — named file from `.archon/commands/`, AI-executed
 - `prompt:` — inline prompt string, AI-executed
 - `bash:` — shell script, no AI; stdout captured as `$nodeId.output`; default timeout 120000ms
+- `script:` — inline code or named file from `.archon/scripts/`, runs via `runtime: bun` (`.ts`/`.js`) or `runtime: uv` (`.py`), no AI; stdout captured as `$nodeId.output`; supports `deps:` for dependency installation and `timeout:` (ms); runtime availability checked at load time with a warning if binary is missing
 
-DAG node options: `depends_on`, `when` (condition expression), `trigger_rule` (`all_success` | `one_success` | `none_failed_min_one_success` | `all_done`), `output_format` (JSON Schema, Claude only), `allowed_tools` / `denied_tools` (Claude only), `idle_timeout` (ms), `context: 'fresh'`, per-node `provider` and `model`.
+DAG node options: `depends_on`, `when` (condition expression), `trigger_rule` (`all_success` | `one_success` | `none_failed_min_one_success` | `all_done`), `output_format` (JSON Schema, Claude only), `allowed_tools` / `denied_tools` (Claude only), `idle_timeout` (ms), `context: 'fresh'`, per-node `provider` and `model`, `deps` (script nodes only — dependency list), `runtime` (script nodes only — `'bun'` or `'uv'`).
 
 ## Event Emitter for Observability
 

@@ -2,7 +2,7 @@
  * Tests for US-005: dependency installation (deps field) in script nodes.
  *
  * These tests mock @archon/git's execFileAsync to verify command construction
- * without actually running uvx/bun, and are isolated from dag-executor.test.ts
+ * without actually running uv/bun, and are isolated from dag-executor.test.ts
  * to avoid mock.module() pollution.
  */
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
@@ -184,7 +184,7 @@ describe('script node deps field — command construction', () => {
     }
   });
 
-  it('uv inline with deps uses uvx --with flags', async () => {
+  it('uv inline with deps uses uv run --with flags', async () => {
     const node: ScriptNode = {
       id: 'fetch-data',
       script: 'import httpx; print(httpx.get("https://example.com").status_code)',
@@ -209,16 +209,17 @@ describe('script node deps field — command construction', () => {
     );
 
     const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'uvx' || (c[0] as string) === 'uv');
+    const scriptCall = calls.find(c => (c[0] as string) === 'uv');
     expect(scriptCall).toBeDefined();
     const [cmd, args] = scriptCall as [string, string[]];
-    expect(cmd).toBe('uvx');
+    expect(cmd).toBe('uv');
+    expect(args[0]).toBe('run');
     expect(args).toContain('--with');
     expect(args).toContain('httpx');
     expect(args).toContain('beautifulsoup4');
     expect(args).toContain('python');
     expect(args).toContain('-c');
-    // --with httpx --with beautifulsoup4 python -c <code>
+    // run --with httpx --with beautifulsoup4 python -c <code>
     expect(args.indexOf('--with')).toBeLessThan(args.indexOf('python'));
     expect(args[args.indexOf('python') + 1]).toBe('-c');
   });
@@ -247,7 +248,7 @@ describe('script node deps field — command construction', () => {
     );
 
     const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'uv' || (c[0] as string) === 'uvx');
+    const scriptCall = calls.find(c => (c[0] as string) === 'uv');
     expect(scriptCall).toBeDefined();
     const [cmd, args] = scriptCall as [string, string[]];
     expect(cmd).toBe('uv');
@@ -279,7 +280,7 @@ describe('script node deps field — command construction', () => {
     );
 
     const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'uv' || (c[0] as string) === 'uvx');
+    const scriptCall = calls.find(c => (c[0] as string) === 'uv');
     expect(scriptCall).toBeDefined();
     const [cmd, args] = scriptCall as [string, string[]];
     expect(cmd).toBe('uv');
@@ -383,7 +384,7 @@ describe('script node deps field — command construction', () => {
     );
 
     const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'uv' || (c[0] as string) === 'uvx');
+    const scriptCall = calls.find(c => (c[0] as string) === 'uv');
     expect(scriptCall).toBeDefined();
     const [cmd, args] = scriptCall as [string, string[]];
     expect(cmd).toBe('uv');
@@ -428,7 +429,7 @@ describe('script node deps field — command construction', () => {
     );
 
     const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'uv' || (c[0] as string) === 'uvx');
+    const scriptCall = calls.find(c => (c[0] as string) === 'uv');
     expect(scriptCall).toBeDefined();
     const [cmd, args] = scriptCall as [string, string[]];
     expect(cmd).toBe('uv');

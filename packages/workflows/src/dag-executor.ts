@@ -6,7 +6,7 @@
  * Captures all assistant output regardless of streaming mode for $node_id.output substitution.
  */
 import { readFile } from 'fs/promises';
-import { resolve, isAbsolute, extname } from 'path';
+import { resolve, isAbsolute } from 'path';
 import { execFileAsync } from '@archon/git';
 import { discoverScripts } from './script-discovery';
 import type {
@@ -1294,8 +1294,8 @@ async function executeNodeInternal(
   }
 }
 
-/** Default timeout for bash nodes: 2 minutes */
-const BASH_DEFAULT_TIMEOUT = 120_000;
+/** Default timeout for subprocess nodes (bash, script): 2 minutes */
+const SUBPROCESS_DEFAULT_TIMEOUT = 120_000;
 
 /**
  * Execute a bash (shell script) DAG node.
@@ -1356,7 +1356,7 @@ async function executeBashNode(
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true);
 
-  const timeout = node.timeout ?? BASH_DEFAULT_TIMEOUT;
+  const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
 
   try {
     const { stdout, stderr } = await execFileAsync('bash', ['-c', finalScript], {
@@ -1447,9 +1447,6 @@ async function executeBashNode(
   }
 }
 
-/** Default timeout for script nodes: 2 minutes (same as bash) */
-const SCRIPT_DEFAULT_TIMEOUT = 120_000;
-
 /**
  * Execute a script (TypeScript via bun or Python via uv) DAG node.
  * Supports both inline code snippets and named scripts discovered from .archon/scripts/.
@@ -1509,60 +1506,73 @@ async function executeScriptNode(
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, false);
 
-  const timeout = node.timeout ?? SCRIPT_DEFAULT_TIMEOUT;
+  const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
 
   // Build the command and args based on runtime and inline vs named
-  let cmd: string;
-  let args: string[];
+  let cmd = '';
+  let args: string[] = [];
 
   const nodeDeps = node.deps ?? [];
 
-  if (isInlineScript(finalScript)) {
-    // Inline code execution
-    if (node.runtime === 'bun') {
-      // Bun auto-installs imported packages at runtime, so deps are a no-op here
-      cmd = 'bun';
-      args = ['-e', finalScript];
-    } else {
-      // uv: use `uvx --with dep1 --with dep2 python -c <code>` when deps present,
-      // otherwise `uv run python -c <code>`
-      if (nodeDeps.length > 0) {
-        cmd = 'uvx';
-        const withFlags = nodeDeps.flatMap((dep: string) => ['--with', dep]);
-        args = [...withFlags, 'python', '-c', finalScript];
+  try {
+    if (isInlineScript(finalScript)) {
+      // Inline code execution
+      if (node.runtime === 'bun') {
+        cmd = 'bun';
+        args = ['-e', finalScript];
       } else {
+        // uv run --with dep1 --with dep2 python -c <code>
         cmd = 'uv';
-        args = ['run', 'python', '-c', finalScript];
+        const withFlags = nodeDeps.flatMap(dep => ['--with', dep]);
+        args = ['run', ...withFlags, 'python', '-c', finalScript];
       }
-    }
-  } else {
-    // Named script — look up in .archon/scripts/ directory
-    const scriptsDir = resolve(cwd, '.archon', 'scripts');
-    const scripts = await discoverScripts(scriptsDir);
-    const scriptDef = scripts.get(finalScript);
+    } else {
+      // Named script — look up in .archon/scripts/ directory
+      const scriptsDir = resolve(cwd, '.archon', 'scripts');
+      const scripts = await discoverScripts(scriptsDir);
+      const scriptDef = scripts.get(finalScript);
 
-    if (scriptDef) {
-      // Found in discovered scripts map
-      const ext = extname(scriptDef.path);
-      if (ext === '.py') {
+      if (!scriptDef) {
+        const errorMsg = `Script node '${node.id}': named script '${finalScript}' not found in .archon/scripts/`;
+        getLog().error({ nodeId: node.id, scriptName: finalScript }, 'script_not_found');
+        await safeSendMessage(platform, conversationId, errorMsg, nodeContext);
+        await logNodeError(logDir, workflowRun.id, node.id, errorMsg);
+
+        emitter.emit({
+          type: 'node_failed',
+          runId: workflowRun.id,
+          nodeId: node.id,
+          nodeName: node.id,
+          error: errorMsg,
+        });
+        deps.store
+          .createWorkflowEvent({
+            workflow_run_id: workflowRun.id,
+            event_type: 'node_failed',
+            step_name: node.id,
+            data: { error: errorMsg, type: 'script' },
+          })
+          .catch((dbErr: Error) => {
+            getLog().error(
+              { err: dbErr, workflowRunId: workflowRun.id, eventType: 'node_failed' },
+              'workflow_event_persist_failed'
+            );
+          });
+
+        return { state: 'failed', output: '', error: errorMsg };
+      }
+
+      // Use scriptDef.runtime (canonical source) instead of re-deriving from extension
+      if (scriptDef.runtime === 'uv') {
         cmd = 'uv';
-        // uv run --with dep1 --with dep2 <path>
-        const withFlags = nodeDeps.flatMap((dep: string) => ['--with', dep]);
+        const withFlags = nodeDeps.flatMap(dep => ['--with', dep]);
         args = ['run', ...withFlags, scriptDef.path];
       } else {
-        // Bun auto-installs imported packages at runtime, so deps are a no-op here
         cmd = 'bun';
         args = ['run', scriptDef.path];
       }
-    } else {
-      const errorMsg = `Script node '${node.id}': named script '${finalScript}' not found in .archon/scripts/`;
-      getLog().error({ nodeId: node.id, scriptName: finalScript }, 'script_not_found');
-      await safeSendMessage(platform, conversationId, errorMsg, nodeContext);
-      return { state: 'failed', output: '', error: errorMsg };
     }
-  }
 
-  try {
     const { stdout, stderr } = await execFileAsync(cmd, args, {
       cwd,
       timeout,
@@ -1609,8 +1619,9 @@ async function executeScriptNode(
 
     return { state: 'completed', output };
   } catch (error) {
-    const err = error as Error & { killed?: boolean; code?: number | string };
+    const err = error as Error & { killed?: boolean; code?: number | string; stderr?: string };
     const isTimeout = err.killed === true || (err.message ?? '').includes('timed out');
+    const stderrHint = err.stderr?.trim() ? `\n\nScript output:\n${err.stderr.trim()}` : '';
     let errorMsg: string;
     if (isTimeout) {
       errorMsg = `Script node '${node.id}' timed out after ${String(timeout)}ms`;
@@ -1619,7 +1630,7 @@ async function executeScriptNode(
     } else if (err.message?.includes('EACCES')) {
       errorMsg = `Script node '${node.id}' failed: permission denied (check cwd permissions)`;
     } else {
-      errorMsg = `Script node '${node.id}' failed: ${err.message}`;
+      errorMsg = `Script node '${node.id}' failed: ${err.message}${stderrHint}`;
     }
 
     getLog().error({ err, nodeId: node.id, isTimeout }, 'dag_node_failed');

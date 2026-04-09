@@ -3,12 +3,10 @@ import { describe, test, expect, mock, beforeEach } from 'bun:test';
 // Mock fs/promises before importing the module under test
 const mockReaddir = mock(async (_path: string): Promise<string[]> => []);
 const mockStat = mock(async (_path: string) => ({ isDirectory: () => false }));
-const mockReadFile = mock(async (_path: string, _enc: string): Promise<string> => '');
 
 mock.module('fs/promises', () => ({
   readdir: mockReaddir,
   stat: mockStat,
-  readFile: mockReadFile,
 }));
 
 // Mock logger
@@ -28,7 +26,6 @@ describe('discoverScripts', () => {
   beforeEach(() => {
     mockReaddir.mockClear();
     mockStat.mockClear();
-    mockReadFile.mockClear();
     mockLogger.info.mockClear();
     mockLogger.debug.mockClear();
     mockLogger.warn.mockClear();
@@ -51,7 +48,6 @@ describe('discoverScripts', () => {
   test('discovers a TypeScript file as bun runtime', async () => {
     mockReaddir.mockResolvedValueOnce(['fetch-prices.ts']);
     mockStat.mockResolvedValueOnce({ isDirectory: () => false });
-    mockReadFile.mockResolvedValueOnce('console.log("hello")');
 
     const result = await discoverScripts('/scripts');
 
@@ -60,13 +56,12 @@ describe('discoverScripts', () => {
     expect(script).toBeDefined();
     expect(script!.name).toBe('fetch-prices');
     expect(script!.runtime).toBe('bun');
-    expect(script!.content).toBe('console.log("hello")');
+    expect(script!.path).toBe('/scripts/fetch-prices.ts');
   });
 
   test('discovers a JavaScript file as bun runtime', async () => {
     mockReaddir.mockResolvedValueOnce(['compute.js']);
     mockStat.mockResolvedValueOnce({ isDirectory: () => false });
-    mockReadFile.mockResolvedValueOnce('module.exports = 42;');
 
     const result = await discoverScripts('/scripts');
 
@@ -78,14 +73,13 @@ describe('discoverScripts', () => {
   test('discovers a Python file as uv runtime', async () => {
     mockReaddir.mockResolvedValueOnce(['analyze.py']);
     mockStat.mockResolvedValueOnce({ isDirectory: () => false });
-    mockReadFile.mockResolvedValueOnce('print("hello")');
 
     const result = await discoverScripts('/scripts');
 
     const script = result.get('analyze');
     expect(script).toBeDefined();
     expect(script!.runtime).toBe('uv');
-    expect(script!.content).toBe('print("hello")');
+    expect(script!.path).toBe('/scripts/analyze.py');
   });
 
   test('skips files with unknown extensions', async () => {
@@ -97,13 +91,11 @@ describe('discoverScripts', () => {
     const result = await discoverScripts('/scripts');
 
     expect(result.size).toBe(0);
-    expect(mockReadFile).not.toHaveBeenCalled();
   });
 
   test('keys scripts by filename without extension', async () => {
     mockReaddir.mockResolvedValueOnce(['my-cool-script.ts']);
     mockStat.mockResolvedValueOnce({ isDirectory: () => false });
-    mockReadFile.mockResolvedValueOnce('// code');
 
     const result = await discoverScripts('/scripts');
 
@@ -113,10 +105,7 @@ describe('discoverScripts', () => {
 
   test('throws on duplicate script names across extensions', async () => {
     mockReaddir.mockResolvedValueOnce(['fetch.ts', 'fetch.py']);
-    // fetch.ts stat
     mockStat.mockResolvedValueOnce({ isDirectory: () => false });
-    mockReadFile.mockResolvedValueOnce('// ts content');
-    // fetch.py stat
     mockStat.mockResolvedValueOnce({ isDirectory: () => false });
 
     await expect(discoverScripts('/scripts')).rejects.toThrow(/Duplicate script name "fetch"/);
@@ -125,7 +114,6 @@ describe('discoverScripts', () => {
   test('includes both paths in duplicate error message', async () => {
     mockReaddir.mockResolvedValueOnce(['run.js', 'run.py']);
     mockStat.mockResolvedValueOnce({ isDirectory: () => false });
-    mockReadFile.mockResolvedValueOnce('// js');
     mockStat.mockResolvedValueOnce({ isDirectory: () => false });
 
     try {
@@ -148,12 +136,8 @@ describe('discoverScripts', () => {
     mockReaddir.mockResolvedValueOnce(['nested.py']);
     // stat for nested.py
     mockStat.mockResolvedValueOnce({ isDirectory: () => false });
-    // readFile for nested.py
-    mockReadFile.mockResolvedValueOnce('print("nested")');
     // stat for top.ts
     mockStat.mockResolvedValueOnce({ isDirectory: () => false });
-    // readFile for top.ts
-    mockReadFile.mockResolvedValueOnce('// top');
 
     const result = await discoverScripts('/scripts');
 
@@ -167,23 +151,11 @@ describe('discoverScripts', () => {
   test('stores the full path in the script definition', async () => {
     mockReaddir.mockResolvedValueOnce(['prices.ts']);
     mockStat.mockResolvedValueOnce({ isDirectory: () => false });
-    mockReadFile.mockResolvedValueOnce('// prices');
 
     const result = await discoverScripts('/my/scripts');
 
     const script = result.get('prices');
     expect(script!.path).toBe('/my/scripts/prices.ts');
-  });
-
-  test('caches script content in the definition', async () => {
-    const content = 'const x = 42;\nconsole.log(x);';
-    mockReaddir.mockResolvedValueOnce(['util.ts']);
-    mockStat.mockResolvedValueOnce({ isDirectory: () => false });
-    mockReadFile.mockResolvedValueOnce(content);
-
-    const result = await discoverScripts('/scripts');
-
-    expect(result.get('util')!.content).toBe(content);
   });
 });
 

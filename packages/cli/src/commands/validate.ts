@@ -55,20 +55,20 @@ function formatIssue(issue: ValidationIssue, indent = '    '): string {
   return line;
 }
 
-function formatWorkflowResult(result: WorkflowValidationResult): string {
-  const errors = result.issues.filter(i => i.level === 'error');
-  const warnings = result.issues.filter(i => i.level === 'warning');
+function formatValidationResult(displayName: string, issues: ValidationIssue[]): string {
+  const hasErrors = issues.some(i => i.level === 'error');
+  const hasWarnings = issues.some(i => i.level === 'warning');
+  const statusLabel = hasErrors ? 'ERRORS' : hasWarnings ? 'WARNINGS' : 'ok';
 
-  const statusLabel = errors.length > 0 ? 'ERRORS' : warnings.length > 0 ? 'WARNINGS' : 'ok';
-
-  const namePad = result.workflowName.padEnd(40, ' ');
-  let output = `  ${namePad} ${statusLabel}`;
-
-  for (const issue of result.issues) {
+  let output = `  ${displayName.padEnd(40, ' ')} ${statusLabel}`;
+  for (const issue of issues) {
     output += '\n' + formatIssue(issue);
   }
-
   return output;
+}
+
+function formatWorkflowResult(result: WorkflowValidationResult): string {
+  return formatValidationResult(result.workflowName, result.issues);
 }
 
 // =============================================================================
@@ -178,29 +178,12 @@ export async function validateWorkflowsCommand(
 }
 
 // =============================================================================
-// Command validation command
-// =============================================================================
-
-// =============================================================================
-// Script validation helpers
+// Command and script validation command
 // =============================================================================
 
 function formatScriptResult(result: ScriptValidationResult): string {
-  const errors = result.issues.filter(i => i.level === 'error');
-  const warnings = result.issues.filter(i => i.level === 'warning');
-  const statusLabel = errors.length > 0 ? 'ERRORS' : warnings.length > 0 ? 'WARNINGS' : 'ok';
-
-  const namePad = `[script] ${result.scriptName}`.padEnd(40, ' ');
-  let output = `  ${namePad} ${statusLabel}`;
-  for (const issue of result.issues) {
-    output += '\n' + formatIssue(issue);
-  }
-  return output;
+  return formatValidationResult(`[script] ${result.scriptName}`, result.issues);
 }
-
-// =============================================================================
-// Command validation command
-// =============================================================================
 
 /**
  * Validate all commands or a specific command.

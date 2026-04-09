@@ -22,6 +22,7 @@ import {
   substituteWorkflowVariables,
   buildPromptWithContext,
   detectCreditExhaustion,
+  isInlineScript,
 } from './executor-shared';
 
 describe('substituteWorkflowVariables', () => {
@@ -278,5 +279,54 @@ describe('detectCreditExhaustion', () => {
 
   it('is case-insensitive', () => {
     expect(detectCreditExhaustion("YOU'RE OUT OF EXTRA USAGE")).not.toBeNull();
+  });
+});
+
+describe('isInlineScript', () => {
+  // Named identifiers — should return false
+  it('plain identifier is not inline', () => {
+    expect(isInlineScript('my-script')).toBe(false);
+  });
+
+  it('hyphenated name is not inline', () => {
+    expect(isInlineScript('fetch-data')).toBe(false);
+  });
+
+  it('dot-separated name is not inline', () => {
+    expect(isInlineScript('my.script')).toBe(false);
+  });
+
+  // Inline code — should return true
+  it('newline is inline', () => {
+    expect(isInlineScript('a\nb')).toBe(true);
+  });
+
+  it('semicolon is inline', () => {
+    expect(isInlineScript('a; b')).toBe(true);
+  });
+
+  it('parenthesis is inline', () => {
+    expect(isInlineScript('f()')).toBe(true);
+  });
+
+  it('space is inline', () => {
+    expect(isInlineScript('console.log("x")')).toBe(true);
+  });
+
+  it('dollar sign is inline', () => {
+    expect(isInlineScript('$VAR')).toBe(true);
+  });
+
+  it('single-quoted string is inline', () => {
+    expect(isInlineScript("print('hi')")).toBe(true);
+  });
+
+  it('double-quoted string is inline', () => {
+    expect(isInlineScript('print("hi")')).toBe(true);
+  });
+
+  // Edge cases
+  it('empty string is not inline', () => {
+    expect(isInlineScript('')).toBe(false);
   });
 });
