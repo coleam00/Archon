@@ -46,10 +46,12 @@
         "archon": "./src/cli.ts",
       },
       "dependencies": {
+        "@archon/adapters": "workspace:*",
         "@archon/core": "workspace:*",
         "@archon/git": "workspace:*",
         "@archon/isolation": "workspace:*",
         "@archon/paths": "workspace:*",
+        "@archon/server": "workspace:*",
         "@archon/workflows": "workspace:*",
         "@clack/prompts": "^1.0.0",
         "dotenv": "^17.2.3",

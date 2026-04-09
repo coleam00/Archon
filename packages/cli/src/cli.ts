@@ -78,6 +78,7 @@ import { continueCommand } from './commands/continue';
 import { chatCommand } from './commands/chat';
 import { setupCommand } from './commands/setup';
 import { validateWorkflowsCommand, validateCommandsCommand } from './commands/validate';
+import { serveCommand } from './commands/serve';
 import { closeDatabase } from '@archon/core';
 import { setLogLevel, createLogger } from '@archon/paths';
 import * as git from '@archon/git';
@@ -110,6 +111,7 @@ Commands:
   isolation cleanup --merged Remove environments with branches merged into main
   continue <branch> [msg]    Continue work on an existing worktree with prior context
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
+  serve                      Start the web UI server (downloads web UI on first run)
   validate workflows [name]  Validate workflow definitions and their references
   validate commands [name]   Validate command files
   version                    Show version info
@@ -130,6 +132,8 @@ Options:
   --allow-env-keys           Grant env-key consent during auto-registration
                              (bypasses the env-leak gate for this codebase;
                              logs an audit entry)
+  --port <port>              Override server port for 'serve' (default: 3090)
+  --download-only            Download web UI without starting the server
 
 Examples:
   archon chat "What does the orchestrator do?"
@@ -194,6 +198,8 @@ async function main(): Promise<number> {
         workflow: { type: 'string' },
         'no-context': { type: 'boolean' },
         'allow-env-keys': { type: 'boolean' },
+        port: { type: 'string' },
+        'download-only': { type: 'boolean' },
       },
       allowPositionals: true,
       strict: false, // Allow unknown flags to pass through
@@ -228,7 +234,7 @@ async function main(): Promise<number> {
   const subcommand = positionals[1];
 
   // Commands that don't require git repo validation
-  const noGitCommands = ['version', 'help', 'setup', 'chat', 'continue'];
+  const noGitCommands = ['version', 'help', 'setup', 'chat', 'continue', 'serve'];
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
 
   try {
@@ -532,6 +538,12 @@ async function main(): Promise<number> {
           noContext: noContextFlag,
         });
         break;
+      }
+
+      case 'serve': {
+        const servePort = values.port ? Number(values.port) : undefined;
+        const downloadOnly = Boolean(values['download-only']);
+        return await serveCommand({ port: servePort, downloadOnly });
       }
 
       default:

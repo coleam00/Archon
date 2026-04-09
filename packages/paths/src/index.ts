@@ -25,6 +25,7 @@ export {
   ensureProjectStructure,
   createProjectSourceSymlink,
   findMarkdownFilesRecursive,
+  getWebDistDir,
 } from './archon-paths';
 
 // Logger

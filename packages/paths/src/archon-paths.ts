@@ -198,6 +198,14 @@ export function getDefaultWorkflowsPath(): string {
   return join(getAppArchonBasePath(), 'workflows', 'defaults');
 }
 
+/**
+ * Returns the path to the cached web UI distribution for a given version.
+ * Example: ~/.archon/web-dist/v0.3.2/
+ */
+export function getWebDistDir(version: string): string {
+  return join(getArchonHome(), 'web-dist', version);
+}
+
 // =============================================================================
 // Project-centric path functions
 // =============================================================================
