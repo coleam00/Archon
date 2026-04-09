@@ -33,7 +33,7 @@ import {
   executeDagWorkflow,
   loadMcpConfig,
 } from './dag-executor';
-import type { DagNode, BashNode, NodeOutput, WorkflowRun } from './schemas';
+import type { DagNode, BashNode, ScriptNode, NodeOutput, WorkflowRun } from './schemas';
 import { discoverWorkflows } from './workflow-discovery';
 import { parseWorkflow } from './loader';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
@@ -4822,4 +4822,264 @@ describe('executeDagWorkflow -- cost tracking', () => {
     expect(completeCalls.length).toBe(1);
     expect(completeCalls[0][1]).toMatchObject({ total_cost_usd: 0.004 });
   });
+});
+
+describe('executeDagWorkflow -- script nodes', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-script-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+
+    mockSendQueryDag.mockClear();
+    mockGetAssistantClientDag.mockClear();
+
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'DAG AI response' };
+      yield { type: 'result', sessionId: 'dag-session-id' };
+    });
+
+    mockGetAssistantClientDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+    }));
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  it('inline bun script executes and captures stdout', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('script-test-run-id', {
+      workflow_name: 'script-test',
+      conversation_id: 'conv-script',
+      user_message: 'script test message',
+    });
+
+    const scriptNode: ScriptNode = {
+      id: 'inline-bun',
+      script: 'console.log("hello from bun")',
+      runtime: 'bun',
+    };
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-script',
+      testDir,
+      { name: 'script-inline-bun-test', nodes: [scriptNode] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // Script node should NOT invoke AI client
+    expect(mockSendQueryDag.mock.calls.length).toBe(0);
+  });
+
+  it('inline bun script output available for downstream substitution', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('script-test-run-id', {
+      workflow_name: 'script-test',
+      conversation_id: 'conv-script',
+      user_message: 'script test message',
+    });
+
+    // Write a command file for the downstream AI node
+    const commandsDir = join(testDir, '.archon', 'commands');
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(join(commandsDir, 'use-result.md'), 'Use: $compute.output');
+
+    const nodes: DagNode[] = [
+      { id: 'compute', script: 'console.log("42")', runtime: 'bun' },
+      { id: 'use', command: 'use-result', depends_on: ['compute'] },
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-script',
+      testDir,
+      { name: 'script-subst-test', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // AI client called for the downstream AI node
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    const prompt = mockSendQueryDag.mock.calls[0][0] as string;
+    expect(prompt).toContain('42');
+  });
+
+  it('inline uv script executes and captures stdout', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('script-uv-run-id', {
+      workflow_name: 'script-uv-test',
+      conversation_id: 'conv-script-uv',
+      user_message: 'uv test message',
+    });
+
+    const scriptNode: ScriptNode = {
+      id: 'inline-uv',
+      script: 'print("hello from python")',
+      runtime: 'uv',
+    };
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-script-uv',
+      testDir,
+      { name: 'script-inline-uv-test', nodes: [scriptNode] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // Script node should NOT invoke AI client
+    expect(mockSendQueryDag.mock.calls.length).toBe(0);
+  });
+
+  it('named bun script executes from .archon/scripts/', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('script-named-run-id', {
+      workflow_name: 'script-named-test',
+      conversation_id: 'conv-named',
+      user_message: 'named test',
+    });
+
+    // Create a named script
+    const scriptsDir = join(testDir, '.archon', 'scripts');
+    await mkdir(scriptsDir, { recursive: true });
+    await writeFile(join(scriptsDir, 'greet.ts'), 'console.log("named script output")');
+
+    const scriptNode: ScriptNode = {
+      id: 'run-greet',
+      script: 'greet',
+      runtime: 'bun',
+    };
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-named',
+      testDir,
+      { name: 'named-script-test', nodes: [scriptNode] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(0);
+  });
+
+  it('non-zero exit code results in failed state', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('script-fail-run-id', {
+      workflow_name: 'script-fail-test',
+      conversation_id: 'conv-fail',
+      user_message: 'fail test',
+    });
+
+    const scriptNode: ScriptNode = {
+      id: 'fail-script',
+      script: 'process.exit(1)',
+      runtime: 'bun',
+    };
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-fail',
+      testDir,
+      { name: 'script-fail-test', nodes: [scriptNode] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
+    const failMsg = messages.find((m: string) => m.includes('no successful nodes'));
+    expect(failMsg).toBeDefined();
+  });
+
+  it('timeout kills subprocess', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('script-timeout-run-id', {
+      workflow_name: 'script-timeout-test',
+      conversation_id: 'conv-timeout',
+      user_message: 'timeout test',
+    });
+
+    const scriptNode: ScriptNode = {
+      id: 'slow-script',
+      // Bun inline script that sleeps longer than the timeout
+      script: 'await new Promise(r => setTimeout(r, 30000))',
+      runtime: 'bun',
+      timeout: 500,
+    };
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-timeout',
+      testDir,
+      { name: 'script-timeout-test', nodes: [scriptNode] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
+    // Workflow fails because the only node failed (timeout)
+    const failMsg = messages.find((m: string) => m.includes('no successful nodes'));
+    expect(failMsg).toBeDefined();
+  }, 10000);
 });

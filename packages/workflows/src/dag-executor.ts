@@ -6,8 +6,9 @@
  * Captures all assistant output regardless of streaming mode for $node_id.output substitution.
  */
 import { readFile } from 'fs/promises';
-import { resolve, isAbsolute } from 'path';
+import { resolve, isAbsolute, extname } from 'path';
 import { execFileAsync } from '@archon/git';
+import { discoverScripts } from './script-discovery';
 import type {
   WorkflowAssistantOptions,
   IWorkflowPlatform,
@@ -23,6 +24,7 @@ import type {
   CommandNode,
   PromptNode,
   LoopNode,
+  ScriptNode,
   NodeOutput,
   TriggerRule,
   WorkflowRun,
@@ -1444,6 +1446,210 @@ async function executeBashNode(
   }
 }
 
+/** Default timeout for script nodes: 2 minutes (same as bash) */
+const SCRIPT_DEFAULT_TIMEOUT = 120_000;
+
+/**
+ * Determine whether a script string is "inline" code or a named script reference.
+ * A named script is a simple identifier (no newlines, no whitespace, no shell metacharacters).
+ */
+function isInlineScript(script: string): boolean {
+  return script.includes('\n') || /[;(){}&|<>$`"' ]/.test(script);
+}
+
+/**
+ * Execute a script (TypeScript via bun or Python via uv) DAG node.
+ * Supports both inline code snippets and named scripts discovered from .archon/scripts/.
+ * stdout is captured and trimmed as the node output; stderr is logged as a warning.
+ */
+async function executeScriptNode(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  cwd: string,
+  workflowRun: WorkflowRun,
+  node: ScriptNode,
+  artifactsDir: string,
+  logDir: string,
+  baseBranch: string,
+  docsDir: string,
+  nodeOutputs: Map<string, NodeOutput>,
+  issueContext?: string
+): Promise<NodeOutput> {
+  const nodeStartTime = Date.now();
+  const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
+
+  getLog().info({ nodeId: node.id, type: 'script', runtime: node.runtime }, 'dag_node_started');
+  await logNodeStart(logDir, workflowRun.id, node.id, '<script>');
+
+  deps.store
+    .createWorkflowEvent({
+      workflow_run_id: workflowRun.id,
+      event_type: 'node_started',
+      step_name: node.id,
+      data: { type: 'script', runtime: node.runtime },
+    })
+    .catch((err: Error) => {
+      getLog().error(
+        { err, workflowRunId: workflowRun.id, eventType: 'node_started' },
+        'workflow_event_persist_failed'
+      );
+    });
+
+  const emitter = getWorkflowEventEmitter();
+  emitter.emit({
+    type: 'node_started',
+    runId: workflowRun.id,
+    nodeId: node.id,
+    nodeName: node.id,
+  });
+
+  // Variable substitution on script field
+  const { prompt: substitutedScript } = substituteWorkflowVariables(
+    node.script,
+    workflowRun.id,
+    workflowRun.user_message,
+    artifactsDir,
+    baseBranch,
+    docsDir,
+    issueContext
+  );
+  const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, false);
+
+  const timeout = node.timeout ?? SCRIPT_DEFAULT_TIMEOUT;
+
+  // Build the command and args based on runtime and inline vs named
+  let cmd: string;
+  let args: string[];
+
+  if (isInlineScript(finalScript)) {
+    // Inline code execution
+    if (node.runtime === 'bun') {
+      cmd = 'bun';
+      args = ['-e', finalScript];
+    } else {
+      cmd = 'uv';
+      args = ['run', 'python', '-c', finalScript];
+    }
+  } else {
+    // Named script — look up in .archon/scripts/ directory
+    const scriptsDir = resolve(cwd, '.archon', 'scripts');
+    const scripts = await discoverScripts(scriptsDir);
+    const scriptDef = scripts.get(finalScript);
+
+    if (scriptDef) {
+      // Found in discovered scripts map
+      const ext = extname(scriptDef.path);
+      if (ext === '.py') {
+        cmd = 'uv';
+        args = ['run', scriptDef.path];
+      } else {
+        cmd = 'bun';
+        args = ['run', scriptDef.path];
+      }
+    } else {
+      // Try as a direct file path
+      const resolvedPath = isAbsolute(finalScript) ? finalScript : resolve(cwd, finalScript);
+      const ext = extname(resolvedPath);
+      if (ext === '.py') {
+        cmd = 'uv';
+        args = ['run', resolvedPath];
+      } else {
+        cmd = 'bun';
+        args = ['run', resolvedPath];
+      }
+    }
+  }
+
+  try {
+    const { stdout, stderr } = await execFileAsync(cmd, args, {
+      cwd,
+      timeout,
+    });
+
+    // Trim trailing newline from stdout (common shell behavior)
+    const output = stdout.replace(/\n$/, '');
+
+    if (stderr.trim()) {
+      getLog().warn({ nodeId: node.id, stderr: stderr.trim() }, 'script_node_stderr');
+      await safeSendMessage(
+        platform,
+        conversationId,
+        `Script node '${node.id}' stderr:\n\`\`\`\n${stderr.trim()}\n\`\`\``,
+        nodeContext
+      );
+    }
+
+    const duration = Date.now() - nodeStartTime;
+    getLog().info({ nodeId: node.id, durationMs: duration }, 'dag_node_completed');
+    await logNodeComplete(logDir, workflowRun.id, node.id, '<script>', { durationMs: duration });
+
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'node_completed',
+        step_name: node.id,
+        data: { duration_ms: duration, type: 'script', node_output: output },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: workflowRun.id, eventType: 'node_completed' },
+          'workflow_event_persist_failed'
+        );
+      });
+
+    emitter.emit({
+      type: 'node_completed',
+      runId: workflowRun.id,
+      nodeId: node.id,
+      nodeName: node.id,
+      duration,
+    });
+
+    return { state: 'completed', output };
+  } catch (error) {
+    const err = error as Error & { killed?: boolean; code?: number | string };
+    const isTimeout = err.killed === true || (err.message ?? '').includes('timed out');
+    let errorMsg: string;
+    if (isTimeout) {
+      errorMsg = `Script node '${node.id}' timed out after ${String(timeout)}ms`;
+    } else if (err.message?.includes('ENOENT')) {
+      errorMsg = `Script node '${node.id}' failed: '${cmd}' executable not found in PATH`;
+    } else if (err.message?.includes('EACCES')) {
+      errorMsg = `Script node '${node.id}' failed: permission denied (check cwd permissions)`;
+    } else {
+      errorMsg = `Script node '${node.id}' failed: ${err.message}`;
+    }
+
+    getLog().error({ err, nodeId: node.id, isTimeout }, 'dag_node_failed');
+    await logNodeError(logDir, workflowRun.id, node.id, errorMsg);
+
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'node_failed',
+        step_name: node.id,
+        data: { error: errorMsg, type: 'script' },
+      })
+      .catch((dbErr: Error) => {
+        getLog().error(
+          { err: dbErr, workflowRunId: workflowRun.id, eventType: 'node_failed' },
+          'workflow_event_persist_failed'
+        );
+      });
+
+    emitter.emit({
+      type: 'node_failed',
+      runId: workflowRun.id,
+      nodeId: node.id,
+      nodeName: node.id,
+      error: errorMsg,
+    });
+
+    return { state: 'failed', output: '', error: errorMsg };
+  }
+}
+
 /**
  * Build WorkflowAssistantOptions from resolved provider, model, and config.
  * Caller is responsible for resolving per-node overrides before passing model.
@@ -2484,16 +2690,23 @@ export async function executeDagWorkflow(
             return { nodeId: node.id, output: { state: 'completed' as const, output: reason } };
           }
 
-          // 3e. Script node dispatch — not yet implemented (US-003)
+          // 3e. Script node dispatch — runs via bun or uv
           if (isScriptNode(node)) {
-            return {
-              nodeId: node.id,
-              output: {
-                state: 'failed' as const,
-                output: '',
-                error: `Script node '${node.id}': script execution is not yet implemented`,
-              },
-            };
+            const output = await executeScriptNode(
+              deps,
+              platform,
+              conversationId,
+              cwd,
+              workflowRun,
+              node,
+              artifactsDir,
+              logDir,
+              baseBranch,
+              docsDir,
+              nodeOutputs,
+              issueContext
+            );
+            return { nodeId: node.id, output };
           }
 
           // 4. Resolve per-node provider/model/options
