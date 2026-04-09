@@ -158,7 +158,7 @@ Both paths are normal — the manual path is not an error.
 
 Wait for the user to confirm they've completed the setup wizard before proceeding.
 
-### 5c: Verify Configuration
+### 4c: Verify Configuration
 
 After the user confirms setup is complete:
 
@@ -170,7 +170,7 @@ Should show:
 - `Database: sqlite` (default, zero setup) or `Database: postgresql` (if DATABASE_URL was configured)
 - No errors about missing configuration
 
-### 5d: Run Database Migrations (PostgreSQL only)
+### 4d: Run Database Migrations (PostgreSQL only)
 
 **SQLite users: skip this step.** SQLite is auto-initialized on first run with zero setup.
 
