@@ -31,7 +31,14 @@ import type {
   ThinkingConfig,
   SandboxSettings,
 } from './schemas';
-import { isBashNode, isLoopNode, isApprovalNode, isCancelNode, isApprovalContext } from './schemas';
+import {
+  isBashNode,
+  isLoopNode,
+  isApprovalNode,
+  isCancelNode,
+  isScriptNode,
+  isApprovalContext,
+} from './schemas';
 import { formatToolCall } from './utils/tool-formatter';
 import { createLogger } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
@@ -2475,6 +2482,18 @@ export async function executeDagWorkflow(
             });
             // Return completed — the between-layer status check will see 'cancelled' and break.
             return { nodeId: node.id, output: { state: 'completed' as const, output: reason } };
+          }
+
+          // 3e. Script node dispatch — not yet implemented (US-003)
+          if (isScriptNode(node)) {
+            return {
+              nodeId: node.id,
+              output: {
+                state: 'failed' as const,
+                output: '',
+                error: `Script node '${node.id}': script execution is not yet implemented`,
+              },
+            };
           }
 
           // 4. Resolve per-node provider/model/options

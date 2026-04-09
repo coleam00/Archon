@@ -2,8 +2,10 @@ import { describe, test, expect } from 'bun:test';
 import {
   isBashNode,
   isCancelNode,
+  isScriptNode,
   isTriggerRule,
   TRIGGER_RULES,
+  SCRIPT_NODE_AI_FIELDS,
   approvalOnRejectSchema,
   dagNodeSchema,
 } from './schemas';
@@ -14,6 +16,7 @@ import type {
   PromptNode,
   BashNode,
   CancelNode,
+  ScriptNode,
   TriggerRule,
 } from './schemas';
 
@@ -404,6 +407,244 @@ describe('dagNodeSchema — new Claude SDK options', () => {
       // bash nodes don't get AI-only fields in the transform
       expect('effort' in result.data).toBe(false);
       expect('thinking' in result.data).toBe(false);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isScriptNode
+// ---------------------------------------------------------------------------
+
+describe('isScriptNode', () => {
+  const scriptNode: ScriptNode = { id: 's1', script: 'console.log("hi")', runtime: 'bun' };
+  const commandNode: CommandNode = { id: 'n1', command: 'build' };
+  const promptNode: PromptNode = { id: 'n2', prompt: 'Do this inline.' };
+  const bashNode: BashNode = { id: 'n3', bash: 'echo hello' };
+
+  test('returns true for a ScriptNode', () => {
+    expect(isScriptNode(scriptNode)).toBe(true);
+  });
+
+  test('returns true for a ScriptNode with deps', () => {
+    const withDeps: ScriptNode = {
+      id: 's',
+      script: 'import zod from "zod"',
+      runtime: 'bun',
+      deps: ['zod'],
+    };
+    expect(isScriptNode(withDeps)).toBe(true);
+  });
+
+  test('returns false for a CommandNode', () => {
+    expect(isScriptNode(commandNode)).toBe(false);
+  });
+
+  test('returns false for a PromptNode', () => {
+    expect(isScriptNode(promptNode)).toBe(false);
+  });
+
+  test('returns false for a BashNode', () => {
+    expect(isScriptNode(bashNode)).toBe(false);
+  });
+
+  test('returns false when script is not a string (malformed node)', () => {
+    const malformed = { id: 'x', script: 42 } as unknown as DagNode;
+    expect(isScriptNode(malformed)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// dagNodeSchema — ScriptNode parsing and validation
+// ---------------------------------------------------------------------------
+
+describe('dagNodeSchema — ScriptNode', () => {
+  test('parses a bun script node with inline script', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'fetch',
+      script: 'console.log("hello")',
+      runtime: 'bun',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(isScriptNode(result.data)).toBe(true);
+      const node = result.data as ScriptNode;
+      expect(node.script).toBe('console.log("hello")');
+      expect(node.runtime).toBe('bun');
+    }
+  });
+
+  test('parses a uv script node with inline script', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'py',
+      script: 'print("hello")',
+      runtime: 'uv',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(isScriptNode(result.data)).toBe(true);
+      const node = result.data as ScriptNode;
+      expect(node.runtime).toBe('uv');
+    }
+  });
+
+  test('parses a script node with deps', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 's',
+      script: 'import httpx',
+      runtime: 'uv',
+      deps: ['httpx', 'beautifulsoup4'],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const node = result.data as ScriptNode;
+      expect(node.deps).toEqual(['httpx', 'beautifulsoup4']);
+    }
+  });
+
+  test('parses a script node with timeout', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 's',
+      script: 'console.log("hi")',
+      runtime: 'bun',
+      timeout: 30000,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const node = result.data as ScriptNode;
+      expect(node.timeout).toBe(30000);
+    }
+  });
+
+  test('parses a script node with depends_on', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 's',
+      script: 'console.log("hi")',
+      runtime: 'bun',
+      depends_on: ['prev'],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const node = result.data as ScriptNode;
+      expect(node.depends_on).toEqual(['prev']);
+    }
+  });
+
+  test('rejects script node without runtime', () => {
+    const result = dagNodeSchema.safeParse({ id: 's', script: 'console.log("hi")' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('runtime');
+    }
+  });
+
+  test('rejects invalid runtime value', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 's',
+      script: 'console.log("hi")',
+      runtime: 'node',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('rejects empty script string', () => {
+    const result = dagNodeSchema.safeParse({ id: 's', script: '', runtime: 'bun' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toBe('script cannot be empty');
+    }
+  });
+
+  test('rejects whitespace-only script', () => {
+    const result = dagNodeSchema.safeParse({ id: 's', script: '   ', runtime: 'bun' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toBe('script cannot be empty');
+    }
+  });
+
+  test('rejects negative timeout on script node', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 's',
+      script: 'console.log("hi")',
+      runtime: 'bun',
+      timeout: -1,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('rejects script + bash (mutually exclusive)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 's',
+      script: 'console.log("hi")',
+      bash: 'echo hi',
+      runtime: 'bun',
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('mutually exclusive');
+    }
+  });
+
+  test('rejects script + prompt (mutually exclusive)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 's',
+      script: 'console.log("hi")',
+      prompt: 'Do something',
+      runtime: 'bun',
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('mutually exclusive');
+    }
+  });
+
+  test('strips AI-only fields from script nodes', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 's',
+      script: 'console.log("hi")',
+      runtime: 'bun',
+      effort: 'high',
+      thinking: 'adaptive',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect('effort' in result.data).toBe(false);
+      expect('thinking' in result.data).toBe(false);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCRIPT_NODE_AI_FIELDS constant
+// ---------------------------------------------------------------------------
+
+describe('SCRIPT_NODE_AI_FIELDS', () => {
+  test('contains provider and model fields', () => {
+    expect(SCRIPT_NODE_AI_FIELDS).toContain('provider');
+    expect(SCRIPT_NODE_AI_FIELDS).toContain('model');
+  });
+
+  test('contains all AI-specific fields', () => {
+    const expectedFields = [
+      'provider',
+      'model',
+      'context',
+      'output_format',
+      'allowed_tools',
+      'denied_tools',
+      'hooks',
+      'mcp',
+      'skills',
+      'effort',
+      'thinking',
+      'maxBudgetUsd',
+      'systemPrompt',
+      'fallbackModel',
+      'betas',
+      'sandbox',
+    ];
+    for (const field of expectedFields) {
+      expect(SCRIPT_NODE_AI_FIELDS).toContain(field);
     }
   });
 });
