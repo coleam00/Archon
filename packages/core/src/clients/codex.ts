@@ -17,7 +17,7 @@ import {
   type MessageChunk,
   type TokenUsage,
 } from '../types';
-import { createLogger } from '@archon/paths';
+import { createLogger, BUNDLED_IS_BINARY } from '@archon/paths';
 import { scanPathForSensitiveKeys, EnvLeakError } from '../utils/env-leak-scanner';
 import * as codebaseDb from '../db/codebases';
 import { loadConfig } from '../config/config-loader';
@@ -37,6 +37,16 @@ let codexInstance: Codex | null = null;
  * Synchronous now that we have direct ESM import
  */
 function getCodex(): Codex {
+  if (BUNDLED_IS_BINARY) {
+    throw new Error(
+      'Codex is not supported in the archon binary install.\n\n' +
+        'The @openai/codex-sdk requires a native platform binary that cannot be\n' +
+        'embedded in bun-compiled releases. To use Codex workflows, install archon from\n' +
+        'source via `bun link` instead of via the binary release.\n\n' +
+        'To use Claude (the default provider) instead, set `assistant: claude` in\n' +
+        '.archon/config.yaml or remove the `provider: codex` line from your workflow.'
+    );
+  }
   if (!codexInstance) {
     codexInstance = new Codex();
   }
