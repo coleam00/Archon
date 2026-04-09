@@ -37,16 +37,6 @@ let codexInstance: Codex | null = null;
  * Synchronous now that we have direct ESM import
  */
 function getCodex(): Codex {
-  if (BUNDLED_IS_BINARY) {
-    throw new Error(
-      'Codex is not supported in the archon binary install.\n\n' +
-        'The @openai/codex-sdk requires a native platform binary that cannot be\n' +
-        'embedded in bun-compiled releases. To use Codex workflows, install archon from\n' +
-        'source via `bun link` instead of via the binary release.\n\n' +
-        'To use Claude (the default provider) instead, set `assistant: claude` in\n' +
-        '.archon/config.yaml or remove the `provider: codex` line from your workflow.'
-    );
-  }
   if (!codexInstance) {
     codexInstance = new Codex();
   }
@@ -167,6 +157,19 @@ export class CodexClient implements IAssistantClient {
     resumeSessionId?: string,
     options?: AssistantRequestOptions
   ): AsyncGenerator<MessageChunk> {
+    // Fail fast in compiled binary mode — Codex SDK's createRequire(import.meta.url)
+    // is broken in bun --compile builds and the native binary can't be embedded.
+    if (BUNDLED_IS_BINARY) {
+      throw new Error(
+        'Codex is not supported in the archon binary install.\n\n' +
+          'The @openai/codex-sdk requires a native platform binary that cannot be\n' +
+          'embedded in bun-compiled releases. To use Codex workflows, install archon from\n' +
+          'source via `bun link` instead of via the binary release.\n\n' +
+          'To use Claude (the default provider) instead, set `assistant: claude` in\n' +
+          '.archon/config.yaml or remove the `provider: codex` line from your workflow.'
+      );
+    }
+
     // Pre-spawn: check for env key leak if codebase is not explicitly consented.
     // Use prefix lookup so worktree paths (e.g. .../worktrees/feature-branch) still
     // match the registered source cwd (e.g. .../source).

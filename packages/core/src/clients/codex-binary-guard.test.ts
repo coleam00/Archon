@@ -5,7 +5,7 @@
  * conflicts with codex.test.ts which mocks it without BUNDLED_IS_BINARY.
  * Must run in its own bun test invocation (see package.json test script).
  */
-import { describe, test, expect, mock } from 'bun:test';
+import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 
 const mockLogger = createMockLogger();
@@ -41,6 +41,10 @@ mock.module('../utils/env-leak-scanner', () => ({
 import { CodexClient } from './codex';
 
 describe('CodexClient binary mode guard', () => {
+  beforeEach(() => {
+    MockCodex.mockClear();
+  });
+
   test('throws a clear error when BUNDLED_IS_BINARY is true', async () => {
     const client = new CodexClient();
     const generator = client.sendQuery('test prompt', '/tmp/test');
@@ -73,7 +77,7 @@ describe('CodexClient binary mode guard', () => {
       // Expected
     }
 
-    // The guard should throw before ever instantiating Codex
+    // The guard throws at the top of sendQuery, before getCodex() is reached
     expect(MockCodex).not.toHaveBeenCalled();
   });
 });
