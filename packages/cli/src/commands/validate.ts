@@ -8,7 +8,9 @@ import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discover
 import {
   validateWorkflowResources,
   validateCommand,
+  validateScript,
   discoverAvailableCommands,
+  discoverAvailableScripts,
   findSimilar,
   makeWorkflowResult,
 } from '@archon/workflows/validator';
@@ -16,6 +18,7 @@ import type {
   ValidationIssue,
   WorkflowValidationResult,
   ValidationConfig,
+  ScriptValidationResult,
 } from '@archon/workflows/validator';
 import { loadConfig, loadRepoConfig } from '@archon/core';
 
@@ -178,8 +181,30 @@ export async function validateWorkflowsCommand(
 // Command validation command
 // =============================================================================
 
+// =============================================================================
+// Script validation helpers
+// =============================================================================
+
+function formatScriptResult(result: ScriptValidationResult): string {
+  const errors = result.issues.filter(i => i.level === 'error');
+  const warnings = result.issues.filter(i => i.level === 'warning');
+  const statusLabel = errors.length > 0 ? 'ERRORS' : warnings.length > 0 ? 'WARNINGS' : 'ok';
+
+  const namePad = `[script] ${result.scriptName}`.padEnd(40, ' ');
+  let output = `  ${namePad} ${statusLabel}`;
+  for (const issue of result.issues) {
+    output += '\n' + formatIssue(issue);
+  }
+  return output;
+}
+
+// =============================================================================
+// Command validation command
+// =============================================================================
+
 /**
  * Validate all commands or a specific command.
+ * Also validates scripts from .archon/scripts/ alongside commands.
  * Returns exit code: 0 = all valid, 1 = errors found.
  */
 export async function validateCommandsCommand(
@@ -208,41 +233,50 @@ export async function validateCommandsCommand(
 
   // Validate all commands
   const allCommands = await discoverAvailableCommands(cwd, config);
+  const commandResults = await Promise.all(
+    allCommands.map(cmd => validateCommand(cmd, cwd, config))
+  );
 
-  if (allCommands.length === 0) {
-    if (jsonOutput) {
-      console.log(JSON.stringify({ results: [], summary: { total: 0, valid: 0, errors: 0 } }));
-    } else {
-      console.log('\nNo commands found.');
-    }
-    return 0;
-  }
+  // Validate all scripts
+  const allScripts = await discoverAvailableScripts(cwd);
+  const scriptResults = await Promise.all(allScripts.map(s => validateScript(s.name, cwd)));
 
-  const results = await Promise.all(allCommands.map(cmd => validateCommand(cmd, cwd, config)));
-
-  const totalErrors = results.filter(r => !r.valid).length;
+  const totalCommandErrors = commandResults.filter(r => !r.valid).length;
+  const totalScriptErrors = scriptResults.filter(r => !r.valid).length;
+  const totalErrors = totalCommandErrors + totalScriptErrors;
 
   if (jsonOutput) {
     console.log(
       JSON.stringify({
-        results,
+        results: commandResults,
+        scripts: scriptResults,
         summary: {
-          total: results.length,
-          valid: results.length - totalErrors,
+          total: commandResults.length + scriptResults.length,
+          valid: commandResults.length + scriptResults.length - totalErrors,
           errors: totalErrors,
         },
       })
     );
   } else {
-    console.log(`\nValidating commands in ${cwd}\n`);
-    for (const result of results) {
+    if (commandResults.length === 0 && scriptResults.length === 0) {
+      console.log('\nNo commands or scripts found.');
+      return 0;
+    }
+
+    console.log(`\nValidating commands and scripts in ${cwd}\n`);
+    for (const result of commandResults) {
       const statusLabel = result.valid ? 'ok' : 'ERRORS';
       console.log(`  ${result.commandName.padEnd(40, ' ')} ${statusLabel}`);
       for (const issue of result.issues) {
         console.log(formatIssue(issue));
       }
     }
-    console.log(`\nResults: ${results.length - totalErrors} valid, ${totalErrors} with errors`);
+    for (const result of scriptResults) {
+      console.log(formatScriptResult(result));
+    }
+    console.log(
+      `\nResults: ${commandResults.length + scriptResults.length - totalErrors} valid, ${totalErrors} with errors`
+    );
   }
 
   return totalErrors > 0 ? 1 : 0;

@@ -2,12 +2,13 @@
  * Workflow loader - discovers and parses workflow YAML files
  */
 import type { WorkflowDefinition, WorkflowLoadError, DagNode, WorkflowNodeHooks } from './schemas';
-import { isLoopNode, isApprovalNode, isCancelNode } from './schemas';
+import { isLoopNode, isApprovalNode, isCancelNode, isScriptNode } from './schemas';
 import { createLogger } from '@archon/paths';
 import { isModelCompatible } from './model-validation';
 import { dagNodeSchema, BASH_NODE_AI_FIELDS } from './schemas/dag-node';
 import { modelReasoningEffortSchema, webSearchModeSchema } from './schemas/workflow';
 import { workflowNodeHooksSchema } from './schemas/hooks';
+import { checkRuntimeAvailable } from './validator';
 import { z } from '@hono/zod-openapi';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -370,6 +371,31 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
         errorType: 'parse_error',
       },
     };
+  }
+}
+
+/**
+ * After a workflow has been successfully parsed, warn if any script node
+ * references a runtime that is not available on PATH.
+ *
+ * This is a best-effort async check — it never throws and never fails loading.
+ * Callers may invoke it fire-and-forget after parseWorkflow() succeeds.
+ */
+export async function warnMissingScriptRuntimes(
+  workflow: WorkflowDefinition,
+  filename: string
+): Promise<void> {
+  const runtimes = new Set<string>();
+  for (const node of workflow.nodes) {
+    if (isScriptNode(node)) {
+      runtimes.add(node.runtime);
+    }
+  }
+  for (const runtime of runtimes) {
+    const available = await checkRuntimeAvailable(runtime as 'bun' | 'uv').catch(() => true);
+    if (!available) {
+      getLog().warn({ filename, runtime }, 'script_runtime_not_available');
+    }
   }
 }
 
