@@ -414,9 +414,10 @@ export async function validateWorkflowResources(
       if (!isInlineScript(script)) {
         const scriptsDir = resolve(cwd, '.archon', 'scripts');
         const extensions = node.runtime === 'uv' ? ['.py'] : ['.ts', '.js'];
-        const scriptExists = await Promise.any(
+        const existsResults = await Promise.all(
           extensions.map(ext => fileExists(join(scriptsDir, `${script}${ext}`)))
-        ).catch(() => false);
+        );
+        const scriptExists = existsResults.some(Boolean);
 
         if (!scriptExists) {
           issues.push({
