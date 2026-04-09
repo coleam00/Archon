@@ -77,17 +77,17 @@ describe('classifyAndFormatError', () => {
   describe('session errors', () => {
     test('detects lowercase "session" in message', () => {
       const result = classifyAndFormatError(new Error('session not found'));
-      expect(result).toBe('⚠️ Session error. Use /reset to start a fresh session.');
+      expect(result).toBe('⚠️ Session error. Use `reset` to start a fresh session.');
     });
 
     test('detects titlecase "Session" in message', () => {
       const result = classifyAndFormatError(new Error('Session expired'));
-      expect(result).toBe('⚠️ Session error. Use /reset to start a fresh session.');
+      expect(result).toBe('⚠️ Session error. Use `reset` to start a fresh session.');
     });
 
     test('matches session anywhere in message', () => {
       const result = classifyAndFormatError(new Error('Failed to resume session state'));
-      expect(result).toBe('⚠️ Session error. Use /reset to start a fresh session.');
+      expect(result).toBe('⚠️ Session error. Use `reset` to start a fresh session.');
     });
   });
 

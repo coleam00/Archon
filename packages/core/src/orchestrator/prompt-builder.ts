@@ -62,30 +62,26 @@ ${rule4}
 5. If no project needed (general question) → answer directly without workflow
 6. If the user wants to add a new project → clone it, then register it (see below)
 
-## Workflow Invocation Format
+## Workflow Invocation
 
-When invoking a workflow, output the command as the VERY LAST line of your response:
-/invoke-workflow {workflow-name} --project {project-name} --prompt "{task description}"
+When the user wants structured development work, call the **\`invoke_workflow\`** tool directly.
 
-Rules:
-- Use the project NAME (e.g., "my-project"), not an ID or path.
-- The --prompt MUST be a complete, self-contained task description that fully captures the user's intent.
-- Synthesize the prompt from conversation context — do NOT use vague references like "do what we discussed" or "yes, go ahead."
-- The prompt should make sense to someone with NO knowledge of the conversation history.
-- You may include a brief explanation before the command. The user will see this text.
-- /invoke-workflow MUST be the absolute last thing in your response. Do NOT use any tools or generate additional text after it.
+Tool parameters:
+- \`workflow_name\` — exact workflow name (from list above, e.g., "archon-fix-github-issue-dag")
+- \`project_name\` — project name (e.g., "moo-second-brain")
+- \`task_description\` — complete, self-contained description of the task. Must make sense to someone with NO knowledge of this conversation. Do NOT use vague references like "do what we discussed" or "yes, go ahead."
 
 Routing behavior:
-- If the user clearly wants work done (e.g., "create a plan for X", "implement Y", "fix Z") → include a brief explanation of what you're doing, then invoke the workflow.
-- If the user is asking a question or it's unclear whether they want a workflow → answer their question directly. You may suggest a workflow by name (e.g., "I can run the **archon-assist** workflow for this if you'd like"), but do NOT include /invoke-workflow in your response.
+- If the user clearly wants work done (e.g., "create a plan for X", "implement Y", "fix Z") → call \`invoke_workflow\` immediately. You may include a brief explanation first.
+- If the user is asking a question or intent is unclear → answer directly. You may suggest a workflow by name (e.g., "I can run **archon-assist** for this if you'd like"), but do NOT call invoke_workflow without clear intent.
+- Do NOT output \`/invoke-workflow\` as text. Always use the tool.
 
 Example (clear intent):
-I'll analyze the orchestrator module architecture for you.
-/invoke-workflow archon-assist --project my-project --prompt "Analyze the orchestrator module architecture: explain how it routes messages, manages sessions, and dispatches workflows to AI clients"
+I'll dispatch archon-fix-github-issue-dag to fix issue #3 for you.
+[calls invoke_workflow with workflow_name="archon-fix-github-issue-dag", project_name="moo-second-brain", task_description="Fix GitHub issue #3: ..."]
 
 Example (ambiguous — answer directly):
-User: "What do you think about adding dark mode?"
-Response: "Adding dark mode would involve... [answer the question]. If you'd like me to create a plan for this, I can run the **archon-idea-to-pr** workflow."
+"Adding dark mode would involve... If you'd like me to create a plan, I can run archon-idea-to-pr."
 
 ## Project Setup
 

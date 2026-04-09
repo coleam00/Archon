@@ -48,6 +48,8 @@ import { buildOrchestratorPrompt, buildProjectScopedPrompt } from './prompt-buil
 import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
 import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
+import { buildWorkflowMcpServer } from './workflow-tool';
+import { findCodebaseByName } from './codebase-utils';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -85,21 +87,6 @@ export interface OrchestratorCommands {
 }
 
 // ─── Command Parsing ────────────────────────────────────────────────────────
-
-/**
- * Find a codebase by exact name or by last path segment (e.g., "repo" matches "owner/repo").
- * Case-insensitive. Used in both the parse phase and the dispatch phase.
- */
-function findCodebaseByName(
-  codebases: readonly Codebase[],
-  projectName: string
-): Codebase | undefined {
-  const projectLower = projectName.toLowerCase();
-  return codebases.find(c => {
-    const nameLower = c.name.toLowerCase();
-    return nameLower === projectLower || nameLower.endsWith(`/${projectLower}`);
-  });
-}
 
 /**
  * Parse orchestrator commands from AI response text.
@@ -322,10 +309,12 @@ async function dispatchOrchestratorWorkflow(
 
 // ─── Session Helpers ────────────────────────────────────────────────────────
 
+/** Returns true if the error indicates the Claude SDK session ID is no longer valid. */
 function isStaleSessionError(error: Error): boolean {
   const msg = error.message.toLowerCase();
-  // Primary: claude.ts re-throws with "Claude Code stale session:" prefix
-  // Fallback: raw SDK pattern match via shared STALE_SESSION_PATTERNS (single source of truth)
+  // Two detection sources — either suffices:
+  // 1. Enriched prefix added by claude.ts ("Claude Code stale session: …")
+  // 2. Raw SDK message matched via STALE_SESSION_PATTERNS (single source of truth)
   return msg.includes('stale session') || STALE_SESSION_PATTERNS.some(p => msg.includes(p));
 }
 
@@ -540,7 +529,7 @@ export async function handleMessage(
     if (!conversation.title && !effectiveMessage.startsWith('/')) {
       void generateAndSetTitle(
         conversation.id,
-        message,
+        effectiveMessage,
         conversation.ai_assistant_type,
         getArchonWorkspacesPath()
       );
@@ -838,7 +827,7 @@ export async function handleMessage(
 async function handleStreamMode(
   platform: IPlatformAdapter,
   conversationId: string,
-  originalMessage: string,
+  _originalMessage: string, // unused — invoke_workflow MCP tool dispatches workflows inline via task_description
   codebases: readonly Codebase[],
   workflows: readonly WorkflowDefinition[],
   aiClient: ReturnType<typeof getAssistantClient>,
@@ -847,9 +836,28 @@ async function handleStreamMode(
   session: { id: string; assistant_session_id: string | null },
   isolationHints: HandleMessageContext['isolationHints'],
   conversation: Conversation,
-  issueContext?: string,
+  _issueContext?: string, // unused — issue context is passed via task_description in the tool call
   requestOptions?: AssistantRequestOptions
 ): Promise<void> {
+  const workflowMcpServer = buildWorkflowMcpServer({
+    platform,
+    conversationId,
+    conversation,
+    codebases,
+    workflows,
+    isolationHints,
+    dispatch: (codebase, workflow, taskDescription) =>
+      dispatchOrchestratorWorkflow(
+        platform,
+        conversationId,
+        conversation,
+        codebase,
+        workflow,
+        taskDescription,
+        isolationHints
+      ),
+  });
+
   const allMessages: string[] = [];
   let newSessionId: string | undefined;
   let commandDetected = false;
@@ -861,7 +869,13 @@ async function handleStreamMode(
       fullPrompt,
       cwd,
       sessionForQuery.assistant_session_id ?? undefined,
-      requestOptions
+      {
+        ...requestOptions,
+        mcpServers: {
+          ...(requestOptions?.mcpServers ?? {}),
+          'archon-tools': workflowMcpServer,
+        },
+      }
     )) {
       if (msg.type === 'assistant' && msg.content) {
         if (!commandDetected) {
@@ -870,10 +884,7 @@ async function handleStreamMode(
           // Check for orchestrator commands BEFORE streaming to frontend.
           // If detected, suppress this chunk and all future chunks — the full
           // response will be parsed post-loop and the command dispatched there.
-          if (
-            /^\/invoke-workflow\s/m.test(accumulated) ||
-            /^\/register-project\s/m.test(accumulated)
-          ) {
+          if (/^\/register-project\s/m.test(accumulated)) {
             commandDetected = true;
           } else {
             await platform.sendMessage(conversationId, msg.content);
@@ -909,14 +920,27 @@ async function handleStreamMode(
     if (!retried && isStaleSessionError(err) && sessionForQuery.assistant_session_id) {
       retried = true;
       getLog().warn({ conversationId, sessionId: sessionForQuery.id }, 'stale_session_auto_reset');
-      sessionForQuery = await sessionDb.transitionSession(conversationId, 'stale-session-cleared', {
-        ai_assistant_type: conversation.ai_assistant_type,
-      });
-      await platform.sendMessage(conversationId, '⚠️ Previous session expired — starting fresh.');
+      sessionForQuery = await sessionDb.transitionSession(
+        conversation.id,
+        'stale-session-cleared',
+        {
+          ai_assistant_type: conversation.ai_assistant_type,
+        }
+      );
       newSessionId = undefined; // Clear any partial state from failed attempt before retry
       allMessages.length = 0;
       commandDetected = false;
-      await runStreamQuery();
+      try {
+        await runStreamQuery(); // retry in fresh session
+        await platform.sendMessage(conversationId, '⚠️ Previous session expired — starting fresh.');
+      } catch (retryError) {
+        const retryErr = toError(retryError);
+        getLog().error({ conversationId, err: retryErr }, 'stale_session_retry_failed');
+        await platform.sendMessage(
+          conversationId,
+          '⚠️ Previous session expired and retry also failed. Use /reset to start a fresh session.'
+        );
+      }
     } else {
       throw err;
     }
@@ -933,25 +957,6 @@ async function handleStreamMode(
 
   const fullResponse = allMessages.join('');
   const commands = parseOrchestratorCommands(fullResponse, codebases, workflows);
-
-  if (commands.workflowInvocation) {
-    // Retract streamed text — workflow dispatch replaces it
-    if (platform.emitRetract) {
-      await platform.emitRetract(conversationId);
-    }
-    await handleWorkflowInvocationResult(
-      platform,
-      conversationId,
-      conversation,
-      codebases,
-      workflows,
-      commands.workflowInvocation,
-      originalMessage,
-      isolationHints,
-      issueContext
-    );
-    return;
-  }
 
   if (commands.projectRegistration) {
     if (platform.emitRetract) {
@@ -978,7 +983,7 @@ async function handleStreamMode(
 async function handleBatchMode(
   platform: IPlatformAdapter,
   conversationId: string,
-  originalMessage: string,
+  _originalMessage: string, // unused — invoke_workflow MCP tool dispatches workflows inline via task_description
   codebases: readonly Codebase[],
   workflows: readonly WorkflowDefinition[],
   aiClient: ReturnType<typeof getAssistantClient>,
@@ -987,9 +992,28 @@ async function handleBatchMode(
   session: { id: string; assistant_session_id: string | null },
   isolationHints: HandleMessageContext['isolationHints'],
   conversation: Conversation,
-  issueContext?: string,
+  _issueContext?: string, // unused — issue context is passed via task_description in the tool call
   requestOptions?: AssistantRequestOptions
 ): Promise<void> {
+  const workflowMcpServer = buildWorkflowMcpServer({
+    platform,
+    conversationId,
+    conversation,
+    codebases,
+    workflows,
+    isolationHints,
+    dispatch: (codebase, workflow, taskDescription) =>
+      dispatchOrchestratorWorkflow(
+        platform,
+        conversationId,
+        conversation,
+        codebase,
+        workflow,
+        taskDescription,
+        isolationHints
+      ),
+  });
+
   const allChunks: { type: string; content: string }[] = [];
   const assistantMessages: string[] = [];
   let assistantChunksTruncated = false;
@@ -1004,7 +1028,13 @@ async function handleBatchMode(
       fullPrompt,
       cwd,
       sessionForQuery.assistant_session_id ?? undefined,
-      requestOptions
+      {
+        ...requestOptions,
+        mcpServers: {
+          ...(requestOptions?.mcpServers ?? {}),
+          'archon-tools': workflowMcpServer,
+        },
+      }
     )) {
       if (msg.type === 'assistant' && msg.content) {
         if (!commandDetected) {
@@ -1016,10 +1046,7 @@ async function handleBatchMode(
             assistantChunksTruncated = true;
           }
           const accumulated = assistantMessages.join('');
-          if (
-            /^\/invoke-workflow\s/m.test(accumulated) ||
-            /^\/register-project\s/m.test(accumulated)
-          ) {
+          if (/^\/register-project\s/m.test(accumulated)) {
             commandDetected = true;
           }
         }
@@ -1047,17 +1074,30 @@ async function handleBatchMode(
     if (!retried && isStaleSessionError(err) && sessionForQuery.assistant_session_id) {
       retried = true;
       getLog().warn({ conversationId, sessionId: sessionForQuery.id }, 'stale_session_auto_reset');
-      sessionForQuery = await sessionDb.transitionSession(conversationId, 'stale-session-cleared', {
-        ai_assistant_type: conversation.ai_assistant_type,
-      });
-      await platform.sendMessage(conversationId, '⚠️ Previous session expired — starting fresh.');
+      sessionForQuery = await sessionDb.transitionSession(
+        conversation.id,
+        'stale-session-cleared',
+        {
+          ai_assistant_type: conversation.ai_assistant_type,
+        }
+      );
       newSessionId = undefined; // Clear any partial state from failed attempt before retry
       allChunks.length = 0;
       assistantMessages.length = 0;
       assistantChunksTruncated = false;
       totalChunksTruncated = false;
       commandDetected = false;
-      await runBatchQuery();
+      try {
+        await runBatchQuery(); // retry in fresh session
+        await platform.sendMessage(conversationId, '⚠️ Previous session expired — starting fresh.');
+      } catch (retryError) {
+        const retryErr = toError(retryError);
+        getLog().error({ conversationId, err: retryErr }, 'stale_session_retry_failed');
+        await platform.sendMessage(
+          conversationId,
+          '⚠️ Previous session expired and retry also failed. Use /reset to start a fresh session.'
+        );
+      }
     } else {
       throw err;
     }
@@ -1095,24 +1135,6 @@ async function handleBatchMode(
   // Parse orchestrator commands from filtered response
   const commands = parseOrchestratorCommands(finalMessage, codebases, workflows);
 
-  if (commands.workflowInvocation) {
-    if (platform.emitRetract) {
-      await platform.emitRetract(conversationId);
-    }
-    await handleWorkflowInvocationResult(
-      platform,
-      conversationId,
-      conversation,
-      codebases,
-      workflows,
-      commands.workflowInvocation,
-      originalMessage,
-      isolationHints,
-      issueContext
-    );
-    return;
-  }
-
   if (commands.projectRegistration) {
     if (platform.emitRetract) {
       await platform.emitRetract(conversationId);
@@ -1132,71 +1154,6 @@ async function handleBatchMode(
 }
 
 // ─── Orchestrator Command Handlers ──────────────────────────────────────────
-
-/**
- * Handle a parsed /invoke-workflow command from AI response.
- */
-async function handleWorkflowInvocationResult(
-  platform: IPlatformAdapter,
-  conversationId: string,
-  conversation: Conversation,
-  codebases: readonly Codebase[],
-  workflows: readonly WorkflowDefinition[],
-  invocation: WorkflowInvocation,
-  originalMessage: string,
-  isolationHints: HandleMessageContext['isolationHints'],
-  issueContext?: string
-): Promise<void> {
-  const { workflowName, projectName, remainingMessage } = invocation;
-
-  // Send explanation text before dispatching
-  if (remainingMessage) {
-    await platform.sendMessage(conversationId, remainingMessage);
-  }
-
-  // Find the codebase and workflow (supports partial name matching)
-  const codebase = findCodebaseByName(codebases, projectName);
-  const workflow = findWorkflow(workflowName, [...workflows]);
-
-  if (codebase && workflow) {
-    const workflowPrompt = invocation.synthesizedPrompt ?? originalMessage;
-    getLog().debug(
-      {
-        source: invocation.synthesizedPrompt ? 'synthesized' : 'original',
-        promptLength: workflowPrompt.length,
-        workflowName,
-        hasIssueContext: !!issueContext,
-        issueContextLength: issueContext?.length ?? 0,
-      },
-      'workflow_prompt_resolved'
-    );
-    await dispatchOrchestratorWorkflow(
-      platform,
-      conversationId,
-      conversation,
-      codebase,
-      workflow,
-      workflowPrompt,
-      isolationHints
-    );
-    return;
-  }
-
-  // Fallback: send error about missing project or workflow
-  if (!codebase) {
-    const projectList = codebases.map(c => `- ${c.name}`).join('\n');
-    await platform.sendMessage(
-      conversationId,
-      `I couldn't find a project matching "${projectName}". Here are your registered projects:\n${projectList || '(none)'}\n\nPlease specify which project you'd like to use.`
-    );
-  } else if (!workflow) {
-    getLog().warn({ workflowName, projectName }, 'workflow_not_found_in_dispatch');
-    await platform.sendMessage(
-      conversationId,
-      `Workflow \`${workflowName}\` is not available. Use \`/workflow list\` to see available workflows.`
-    );
-  }
-}
 
 /**
  * Handle a parsed /register-project command from AI response.

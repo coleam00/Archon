@@ -168,6 +168,10 @@ mock.module('fs', () => ({
   existsSync: mock(() => true),
 }));
 
+mock.module('./workflow-tool', () => ({
+  buildWorkflowMcpServer: mock(() => ({ type: 'sdk', name: 'archon-tools', instance: {} })),
+}));
+
 // ─── Import module under test (AFTER all mocks) ───────────────────────────────
 
 import { parseOrchestratorCommands, handleMessage } from './orchestrator-agent';

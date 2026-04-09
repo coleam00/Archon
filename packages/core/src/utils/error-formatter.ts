@@ -40,7 +40,7 @@ export function classifyAndFormatError(error: Error): string {
 
   // Session errors
   if (message.includes('session') || message.includes('Session')) {
-    return '⚠️ Session error. Use /reset to start a fresh session.';
+    return '⚠️ Session error. Use `reset` to start a fresh session.';
   }
 
   if (message.startsWith('❌ Model "') && message.includes('not available for your account')) {
