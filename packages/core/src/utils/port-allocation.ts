@@ -22,7 +22,7 @@ function getLog(): ReturnType<typeof createLogger> {
  */
 export function calculatePortOffset(path: string): number {
   const hash = createHash('md5').update(path).digest();
-  // 100-999 range: Offset starts at 100 to avoid default port 3000, results in ports 3100-3999
+  // 100-999 range: offset starts at 100; produces ports 3190-4089 when added to basePort (3090)
   return (hash.readUInt16BE(0) % 900) + 100;
 }
 
