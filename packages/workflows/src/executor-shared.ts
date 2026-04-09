@@ -402,3 +402,12 @@ export function detectCompletionSignal(output: string, signal: string): boolean 
 export function stripCompletionTags(content: string): string {
   return content.replace(/<promise>[\s\S]*?<\/promise>/gi, '').trim();
 }
+
+/**
+ * Determine whether a script string is "inline" code or a named script reference.
+ * A named script is a simple identifier (no newlines, no whitespace, no shell metacharacters).
+ * Used by both the DAG executor (runtime dispatch) and the validator (resource checks).
+ */
+export function isInlineScript(script: string): boolean {
+  return script.includes('\n') || /[;(){}&|<>$`"' ]/.test(script);
+}

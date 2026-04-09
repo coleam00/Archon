@@ -197,7 +197,7 @@ export type BashNode = z.infer<typeof bashNodeSchema> & {
  * AI-specific fields from the base are present in the type but ignored at runtime with a warning.
  */
 export const scriptNodeSchema = dagNodeBaseSchema.extend({
-  script: z.string(),
+  script: z.string().min(1, 'script cannot be empty'),
   runtime: z.enum(['bun', 'uv']),
   deps: z.array(z.string()).optional(),
   timeout: z.number().optional(),

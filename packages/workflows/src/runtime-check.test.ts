@@ -37,11 +37,12 @@ mock.module('./command-validation', () => ({
   isValidCommandName: () => true,
 }));
 
-import { checkRuntimeAvailable } from './validator';
+import { checkRuntimeAvailable, clearRuntimeCache } from './validator';
 
 describe('checkRuntimeAvailable', () => {
   beforeEach(() => {
     mockExecFileAsync.mockClear();
+    clearRuntimeCache();
   });
 
   test('returns true when binary is found (exit 0)', async () => {

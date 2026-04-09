@@ -65,6 +65,7 @@ import {
   buildPromptWithContext,
   detectCompletionSignal,
   stripCompletionTags,
+  isInlineScript,
 } from './executor-shared';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -1450,14 +1451,6 @@ async function executeBashNode(
 const SCRIPT_DEFAULT_TIMEOUT = 120_000;
 
 /**
- * Determine whether a script string is "inline" code or a named script reference.
- * A named script is a simple identifier (no newlines, no whitespace, no shell metacharacters).
- */
-function isInlineScript(script: string): boolean {
-  return script.includes('\n') || /[;(){}&|<>$`"' ]/.test(script);
-}
-
-/**
  * Execute a script (TypeScript via bun or Python via uv) DAG node.
  * Supports both inline code snippets and named scripts discovered from .archon/scripts/.
  * stdout is captured and trimmed as the node output; stderr is logged as a warning.
@@ -1562,19 +1555,10 @@ async function executeScriptNode(
         args = ['run', scriptDef.path];
       }
     } else {
-      // Try as a direct file path
-      const resolvedPath = isAbsolute(finalScript) ? finalScript : resolve(cwd, finalScript);
-      const ext = extname(resolvedPath);
-      if (ext === '.py') {
-        cmd = 'uv';
-        // uv run --with dep1 --with dep2 <path>
-        const withFlags = nodeDeps.flatMap((dep: string) => ['--with', dep]);
-        args = ['run', ...withFlags, resolvedPath];
-      } else {
-        // Bun auto-installs imported packages at runtime, so deps are a no-op here
-        cmd = 'bun';
-        args = ['run', resolvedPath];
-      }
+      const errorMsg = `Script node '${node.id}': named script '${finalScript}' not found in .archon/scripts/`;
+      getLog().error({ nodeId: node.id, scriptName: finalScript }, 'script_not_found');
+      await safeSendMessage(platform, conversationId, errorMsg, nodeContext);
+      return { state: 'failed', output: '', error: errorMsg };
     }
   }
 

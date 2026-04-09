@@ -23,6 +23,8 @@ import { isValidCommandName } from './command-validation';
 import { isScriptNode } from './schemas';
 import type { WorkflowDefinition, DagNode } from './schemas';
 import type { ScriptRuntime } from './script-discovery';
+import { discoverScripts } from './script-discovery';
+import { isInlineScript } from './executor-shared';
 
 // =============================================================================
 // Types
@@ -205,30 +207,28 @@ const RUNTIME_INSTALL_HINTS: Record<ScriptRuntime, string> = {
   uv: 'Install uv: https://docs.astral.sh/uv/getting-started/installation/ — or run: curl -LsSf https://astral.sh/uv/install.sh | sh',
 };
 
-/**
- * Check whether a runtime binary (bun or uv) is available on PATH.
- * Returns true if the binary is found, false otherwise.
- */
-export async function checkRuntimeAvailable(runtime: ScriptRuntime): Promise<boolean> {
-  try {
-    await execFileAsync('which', [runtime]);
-    return true;
-  } catch {
-    return false;
-  }
+const runtimeCache = new Map<string, boolean>();
+
+/** Clear the runtime availability cache (exposed for testing). */
+export function clearRuntimeCache(): void {
+  runtimeCache.clear();
 }
 
-// =============================================================================
-// Script file resolution
-// =============================================================================
-
 /**
- * Determine whether a script string is an inline script (contains code characters)
- * or a named script reference (simple identifier).
- * Mirrors the logic in dag-executor.ts isInlineScript().
+ * Check whether a runtime binary (bun or uv) is available on PATH.
+ * Results are memoized per runtime name to avoid repeated subprocess spawns.
  */
-function isInlineScript(script: string): boolean {
-  return script.includes('\n') || /[;(){}&|<>$`"' ]/.test(script);
+export async function checkRuntimeAvailable(runtime: ScriptRuntime): Promise<boolean> {
+  const cached = runtimeCache.get(runtime);
+  if (cached !== undefined) return cached;
+  try {
+    await execFileAsync('which', [runtime]);
+    runtimeCache.set(runtime, true);
+    return true;
+  } catch {
+    runtimeCache.set(runtime, false);
+    return false;
+  }
 }
 
 // =============================================================================
@@ -528,7 +528,6 @@ export interface ScriptValidationResult {
 export async function discoverAvailableScripts(
   cwd: string
 ): Promise<{ name: string; path: string; runtime: ScriptRuntime }[]> {
-  const { discoverScripts } = await import('./script-discovery');
   const scriptsDir = resolve(cwd, '.archon', 'scripts');
   try {
     const scripts = await discoverScripts(scriptsDir);
