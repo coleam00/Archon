@@ -25,6 +25,7 @@ import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
 import { classifyAndFormatError } from '../utils/error-formatter';
 import { toError } from '../utils/error';
 import { getAssistantClient } from '../clients/factory';
+import { STALE_SESSION_PATTERNS } from '../clients/claude';
 import { getArchonHome, getArchonWorkspacesPath } from '@archon/paths';
 import { syncArchonToWorktree } from '../utils/worktree-sync';
 import { syncWorkspace, toRepoPath } from '@archon/git';
@@ -61,6 +62,8 @@ function getLog(): ReturnType<typeof createLogger> {
 const MAX_BATCH_ASSISTANT_CHUNKS = 20;
 /** Max total chunks (assistant + tool) to keep in batch mode */
 const MAX_BATCH_TOTAL_CHUNKS = 200;
+/** Bare commands that Slack users commonly send without a leading slash */
+const SLACK_BARE_COMMANDS = new Set(['reset']);
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -319,6 +322,13 @@ async function dispatchOrchestratorWorkflow(
 
 // ─── Session Helpers ────────────────────────────────────────────────────────
 
+function isStaleSessionError(error: Error): boolean {
+  const msg = error.message.toLowerCase();
+  // Primary: claude.ts re-throws with "Claude Code stale session:" prefix
+  // Fallback: raw SDK pattern match via shared STALE_SESSION_PATTERNS (single source of truth)
+  return msg.includes('stale session') || STALE_SESSION_PATTERNS.some(p => msg.includes(p));
+}
+
 async function tryPersistSessionId(sessionId: string, assistantSessionId: string): Promise<void> {
   try {
     await sessionDb.updateSession(sessionId, assistantSessionId);
@@ -519,8 +529,15 @@ export async function handleMessage(
       conversationId
     );
 
+    // 1b. Normalize bare commands (Slack users often omit the leading slash)
+    const effectiveMessage =
+      platform.getPlatformType() === 'slack' &&
+      SLACK_BARE_COMMANDS.has(message.trim().toLowerCase())
+        ? `/${message.trim().toLowerCase()}`
+        : message;
+
     // 1c. Auto-generate title for untitled conversations (fire-and-forget)
-    if (!conversation.title && !message.startsWith('/')) {
+    if (!conversation.title && !effectiveMessage.startsWith('/')) {
       void generateAndSetTitle(
         conversation.id,
         message,
@@ -645,8 +662,8 @@ export async function handleMessage(
     }
 
     // 2. Check for deterministic commands
-    if (message.startsWith('/')) {
-      const { command } = commandHandler.parseCommand(message);
+    if (effectiveMessage.startsWith('/')) {
+      const { command } = commandHandler.parseCommand(effectiveMessage);
       const deterministicCommands = [
         'help',
         'status',
@@ -663,7 +680,7 @@ export async function handleMessage(
       if (deterministicCommands.includes(command)) {
         if (command === 'register-project') {
           getLog().debug({ command, conversationId }, 'deterministic_command');
-          const result = await handleRegisterProject(message, platform, conversationId);
+          const result = await handleRegisterProject(effectiveMessage, platform, conversationId);
           await platform.sendMessage(conversationId, result);
           return;
         }
@@ -683,7 +700,7 @@ export async function handleMessage(
         }
 
         getLog().debug({ command, conversationId }, 'deterministic_command');
-        const result = await commandHandler.handleCommand(conversation, message);
+        const result = await commandHandler.handleCommand(conversation, effectiveMessage);
         await platform.sendMessage(conversationId, result.message);
 
         if (result.workflow) {
@@ -836,53 +853,77 @@ async function handleStreamMode(
   const allMessages: string[] = [];
   let newSessionId: string | undefined;
   let commandDetected = false;
+  let sessionForQuery = session;
+  let retried = false;
 
-  for await (const msg of aiClient.sendQuery(
-    fullPrompt,
-    cwd,
-    session.assistant_session_id ?? undefined,
-    requestOptions
-  )) {
-    if (msg.type === 'assistant' && msg.content) {
-      if (!commandDetected) {
-        allMessages.push(msg.content);
-        const accumulated = allMessages.join('');
-        // Check for orchestrator commands BEFORE streaming to frontend.
-        // If detected, suppress this chunk and all future chunks — the full
-        // response will be parsed post-loop and the command dispatched there.
-        if (
-          /^\/invoke-workflow\s/m.test(accumulated) ||
-          /^\/register-project\s/m.test(accumulated)
-        ) {
-          commandDetected = true;
-        } else {
-          await platform.sendMessage(conversationId, msg.content);
+  async function runStreamQuery(): Promise<void> {
+    for await (const msg of aiClient.sendQuery(
+      fullPrompt,
+      cwd,
+      sessionForQuery.assistant_session_id ?? undefined,
+      requestOptions
+    )) {
+      if (msg.type === 'assistant' && msg.content) {
+        if (!commandDetected) {
+          allMessages.push(msg.content);
+          const accumulated = allMessages.join('');
+          // Check for orchestrator commands BEFORE streaming to frontend.
+          // If detected, suppress this chunk and all future chunks — the full
+          // response will be parsed post-loop and the command dispatched there.
+          if (
+            /^\/invoke-workflow\s/m.test(accumulated) ||
+            /^\/register-project\s/m.test(accumulated)
+          ) {
+            commandDetected = true;
+          } else {
+            await platform.sendMessage(conversationId, msg.content);
+          }
         }
-      }
-    } else if (msg.type === 'tool' && msg.toolName) {
-      if (!commandDetected) {
-        const toolMessage = formatToolCall(msg.toolName, msg.toolInput);
-        await platform.sendMessage(conversationId, toolMessage, {
-          category: 'tool_call_formatted',
-        });
-        if (platform.sendStructuredEvent) {
+      } else if (msg.type === 'tool' && msg.toolName) {
+        if (!commandDetected) {
+          const toolMessage = formatToolCall(msg.toolName, msg.toolInput);
+          await platform.sendMessage(conversationId, toolMessage, {
+            category: 'tool_call_formatted',
+          });
+          if (platform.sendStructuredEvent) {
+            await platform.sendStructuredEvent(conversationId, msg);
+          }
+        }
+      } else if (msg.type === 'tool_result' && msg.toolName) {
+        if (!commandDetected && platform.sendStructuredEvent) {
           await platform.sendStructuredEvent(conversationId, msg);
         }
-      }
-    } else if (msg.type === 'tool_result' && msg.toolName) {
-      if (!commandDetected && platform.sendStructuredEvent) {
-        await platform.sendStructuredEvent(conversationId, msg);
-      }
-    } else if (msg.type === 'result' && msg.sessionId) {
-      newSessionId = msg.sessionId;
-      if (!commandDetected && platform.sendStructuredEvent) {
-        await platform.sendStructuredEvent(conversationId, msg);
+      } else if (msg.type === 'result' && msg.sessionId) {
+        newSessionId = msg.sessionId;
+        if (!commandDetected && platform.sendStructuredEvent) {
+          await platform.sendStructuredEvent(conversationId, msg);
+        }
       }
     }
   }
 
+  try {
+    await runStreamQuery();
+  } catch (error) {
+    const err = toError(error);
+    if (!retried && isStaleSessionError(err) && sessionForQuery.assistant_session_id) {
+      retried = true;
+      getLog().warn({ conversationId, sessionId: sessionForQuery.id }, 'stale_session_auto_reset');
+      sessionForQuery = await sessionDb.transitionSession(conversationId, 'stale-session-cleared', {
+        ai_assistant_type: conversation.ai_assistant_type,
+      });
+      await platform.sendMessage(conversationId, '⚠️ Previous session expired — starting fresh.');
+      newSessionId = undefined; // Clear any partial state from failed attempt before retry
+      allMessages.length = 0;
+      commandDetected = false;
+      await runStreamQuery();
+    } else {
+      throw err;
+    }
+  }
+
   if (newSessionId) {
-    await tryPersistSessionId(session.id, newSessionId);
+    await tryPersistSessionId(sessionForQuery.id, newSessionId);
   }
 
   if (allMessages.length === 0) {
@@ -955,48 +996,75 @@ async function handleBatchMode(
   let totalChunksTruncated = false;
   let newSessionId: string | undefined;
   let commandDetected = false;
+  let sessionForQuery = session;
+  let retried = false;
 
-  for await (const msg of aiClient.sendQuery(
-    fullPrompt,
-    cwd,
-    session.assistant_session_id ?? undefined,
-    requestOptions
-  )) {
-    if (msg.type === 'assistant' && msg.content) {
-      if (!commandDetected) {
-        assistantMessages.push(msg.content);
-        allChunks.push({ type: 'assistant', content: msg.content });
+  async function runBatchQuery(): Promise<void> {
+    for await (const msg of aiClient.sendQuery(
+      fullPrompt,
+      cwd,
+      sessionForQuery.assistant_session_id ?? undefined,
+      requestOptions
+    )) {
+      if (msg.type === 'assistant' && msg.content) {
+        if (!commandDetected) {
+          assistantMessages.push(msg.content);
+          allChunks.push({ type: 'assistant', content: msg.content });
 
-        if (assistantMessages.length > MAX_BATCH_ASSISTANT_CHUNKS) {
-          assistantMessages.shift();
-          assistantChunksTruncated = true;
+          if (assistantMessages.length > MAX_BATCH_ASSISTANT_CHUNKS) {
+            assistantMessages.shift();
+            assistantChunksTruncated = true;
+          }
+          const accumulated = assistantMessages.join('');
+          if (
+            /^\/invoke-workflow\s/m.test(accumulated) ||
+            /^\/register-project\s/m.test(accumulated)
+          ) {
+            commandDetected = true;
+          }
         }
-        const accumulated = assistantMessages.join('');
-        if (
-          /^\/invoke-workflow\s/m.test(accumulated) ||
-          /^\/register-project\s/m.test(accumulated)
-        ) {
-          commandDetected = true;
+      } else if (msg.type === 'tool' && msg.toolName) {
+        if (!commandDetected) {
+          const toolMessage = formatToolCall(msg.toolName, msg.toolInput);
+          allChunks.push({ type: 'tool', content: toolMessage });
+          getLog().debug({ toolName: msg.toolName }, 'tool_call');
         }
+      } else if (msg.type === 'result' && msg.sessionId) {
+        newSessionId = msg.sessionId;
       }
-    } else if (msg.type === 'tool' && msg.toolName) {
-      if (!commandDetected) {
-        const toolMessage = formatToolCall(msg.toolName, msg.toolInput);
-        allChunks.push({ type: 'tool', content: toolMessage });
-        getLog().debug({ toolName: msg.toolName }, 'tool_call');
+
+      if (!commandDetected && allChunks.length > MAX_BATCH_TOTAL_CHUNKS) {
+        allChunks.shift();
+        totalChunksTruncated = true;
       }
-    } else if (msg.type === 'result' && msg.sessionId) {
-      newSessionId = msg.sessionId;
     }
+  }
 
-    if (!commandDetected && allChunks.length > MAX_BATCH_TOTAL_CHUNKS) {
-      allChunks.shift();
-      totalChunksTruncated = true;
+  try {
+    await runBatchQuery();
+  } catch (error) {
+    const err = toError(error);
+    if (!retried && isStaleSessionError(err) && sessionForQuery.assistant_session_id) {
+      retried = true;
+      getLog().warn({ conversationId, sessionId: sessionForQuery.id }, 'stale_session_auto_reset');
+      sessionForQuery = await sessionDb.transitionSession(conversationId, 'stale-session-cleared', {
+        ai_assistant_type: conversation.ai_assistant_type,
+      });
+      await platform.sendMessage(conversationId, '⚠️ Previous session expired — starting fresh.');
+      newSessionId = undefined; // Clear any partial state from failed attempt before retry
+      allChunks.length = 0;
+      assistantMessages.length = 0;
+      assistantChunksTruncated = false;
+      totalChunksTruncated = false;
+      commandDetected = false;
+      await runBatchQuery();
+    } else {
+      throw err;
     }
   }
 
   if (newSessionId) {
-    await tryPersistSessionId(session.id, newSessionId);
+    await tryPersistSessionId(sessionForQuery.id, newSessionId);
   }
 
   if (assistantChunksTruncated || totalChunksTruncated) {

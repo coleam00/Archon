@@ -170,6 +170,11 @@ mock.module('@archon/workflows/utils/tool-formatter', () => ({
   formatToolCall: mock((toolName: string, _toolInput: unknown) => `🔧 ${toolName.toUpperCase()}`),
 }));
 
+// claude client constants mock (needed because orchestrator-agent imports STALE_SESSION_PATTERNS)
+mock.module('../clients/claude', () => ({
+  STALE_SESSION_PATTERNS: ['no conversation found', 'conversation not found'],
+}));
+
 // fs mock for existsSync
 const mockExistsSync = mock(() => true);
 mock.module('fs', () => ({
@@ -1491,6 +1496,138 @@ describe('orchestrator-agent handleMessage', () => {
       await handleMessage(platform, 'chat-456', 'Hello world');
 
       expect(mockGenerateAndSetTitle).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── Stale Session Auto-Reset ──────────────────────────────────────────
+
+  for (const mode of ['stream', 'batch'] as const) {
+    describe(`stale session recovery (${mode} mode)`, () => {
+      beforeEach(() => {
+        platform.getStreamingMode.mockReturnValue(mode);
+      });
+
+      test('resets session and retries once on stale session error', async () => {
+        // Session with existing assistant_session_id so stale-session guard fires
+        const staleSession: Session = { ...mockSession, assistant_session_id: 'old-session-id' };
+        const freshSession: Session = {
+          ...mockSession,
+          id: 'session-fresh',
+          assistant_session_id: 'new-session-id',
+        };
+        mockGetActiveSession.mockResolvedValue(staleSession);
+        mockTransitionSession.mockResolvedValue(freshSession);
+
+        let callCount = 0;
+        mockClient.sendQuery.mockImplementation(async function* () {
+          callCount += 1;
+          if (callCount === 1) {
+            throw new Error('Claude Code stale session: No conversation found');
+          }
+          yield { type: 'result', sessionId: 'new-session-id' };
+        });
+        mockGetAssistantClient.mockReturnValue(mockClient);
+
+        await handleMessage(platform, 'chat-456', 'hello');
+
+        expect(mockClient.sendQuery).toHaveBeenCalledTimes(2);
+        // conversationId is the platform conversation ID ('chat-456'), not the DB conversation ID
+        expect(mockTransitionSession).toHaveBeenCalledWith(
+          'chat-456',
+          'stale-session-cleared',
+          expect.any(Object)
+        );
+        expect(platform.sendMessage).toHaveBeenCalledWith(
+          'chat-456',
+          expect.stringContaining('session expired')
+        );
+        // Verify the retry uses the fresh session ID, not the stale one
+        const calls = mockClient.sendQuery.mock.calls;
+        expect(calls[0][2]).toBe('old-session-id'); // first call: stale session
+        expect(calls[1][2]).toBe('new-session-id'); // retry: fresh session
+      });
+
+      test('does NOT retry a third time if the retry also fails', async () => {
+        // handleMessage catches all errors and sends them as messages — no rejection
+        const staleSession: Session = { ...mockSession, assistant_session_id: 'old-session-id' };
+        mockGetActiveSession.mockResolvedValue(staleSession);
+        mockTransitionSession.mockResolvedValue({
+          ...mockSession,
+          assistant_session_id: 'mid-session',
+        });
+
+        mockClient.sendQuery.mockImplementation(async function* () {
+          throw new Error('Claude Code stale session: No conversation found');
+        });
+        mockGetAssistantClient.mockReturnValue(mockClient);
+
+        // handleMessage swallows the error and sends it as a message
+        await handleMessage(platform, 'chat-456', 'hello');
+        // sendQuery called twice: original attempt + one retry (retried guard prevents a third)
+        expect(mockClient.sendQuery).toHaveBeenCalledTimes(2);
+      });
+
+      test('skips stale-session reset when session has no assistant_session_id', async () => {
+        // Session with no assistant_session_id — guard should NOT fire
+        const newSession: Session = { ...mockSession, assistant_session_id: null };
+        mockGetActiveSession.mockResolvedValue(newSession);
+
+        mockClient.sendQuery.mockImplementation(async function* () {
+          throw new Error('Claude Code stale session: No conversation found');
+        });
+        mockGetAssistantClient.mockReturnValue(mockClient);
+
+        // handleMessage swallows the error; no retry attempted
+        await handleMessage(platform, 'chat-456', 'hello');
+        // Only called once — no retry when session has no assistant_session_id
+        expect(mockClient.sendQuery).toHaveBeenCalledTimes(1);
+        expect(mockTransitionSession).not.toHaveBeenCalledWith(
+          expect.anything(),
+          'stale-session-cleared',
+          expect.anything()
+        );
+      });
+    });
+  }
+
+  // ─── Bare Command Normalization ────────────────────────────────────────
+
+  describe('bare command normalization', () => {
+    test('treats bare "reset" as "/reset" command', async () => {
+      mockHandleCommand.mockResolvedValue({
+        message: 'Session cleared',
+        modified: false,
+        success: true,
+      });
+
+      await handleMessage(platform, 'chat-456', 'reset');
+
+      expect(mockParseCommand).toHaveBeenCalledWith('/reset');
+      expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Session cleared');
+    });
+
+    test('treats "  RESET  " (padded + uppercase) as "/reset"', async () => {
+      mockHandleCommand.mockResolvedValue({
+        message: 'Session cleared',
+        modified: false,
+        success: true,
+      });
+
+      await handleMessage(platform, 'chat-456', '  RESET  ');
+
+      expect(mockParseCommand).toHaveBeenCalledWith('/reset');
+    });
+
+    test('does NOT treat "resetall" as a bare command', async () => {
+      mockClient.sendQuery.mockImplementation(async function* () {
+        yield { type: 'result', sessionId: 'session-id' };
+      });
+
+      await handleMessage(platform, 'chat-456', 'resetall');
+
+      // Should NOT parse it as a command — goes to AI instead
+      expect(mockParseCommand).not.toHaveBeenCalledWith('/resetall');
+      expect(mockGetAssistantClient).toHaveBeenCalled();
     });
   });
 });
