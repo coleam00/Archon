@@ -1740,10 +1740,12 @@ export function registerApiRoutes(
       }
 
       if (!workingDir) {
-        return c.json({ workflows: [] });
+        workingDir = getArchonHome();
       }
 
-      const result = await discoverWorkflowsWithConfig(workingDir, loadConfig);
+      const result = await discoverWorkflowsWithConfig(workingDir, loadConfig, {
+        globalSearchPath: getArchonHome(),
+      });
       return c.json({
         workflows: result.workflows.map(ws => ({ workflow: ws.workflow, source: ws.source })),
         errors: result.errors.length > 0 ? result.errors : undefined,

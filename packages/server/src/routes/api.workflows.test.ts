@@ -116,9 +116,28 @@ describe('GET /api/workflows', () => {
     expect(body.workflows[0]?.workflow.name).toBe('deploy');
     expect(body.workflows[0]?.source).toBe('bundled');
     expect(body.workflows.workflows).toBeUndefined();
-    expect(mockDiscoverWorkflows).toHaveBeenCalledWith('/tmp/project', expect.any(Function));
+    expect(mockDiscoverWorkflows).toHaveBeenCalledWith(
+      '/tmp/project',
+      expect.any(Function),
+      expect.objectContaining({ globalSearchPath: expect.stringContaining('.archon') })
+    );
     expect(body.errors).toBeDefined();
     expect(Array.isArray(body.errors)).toBe(true);
+  });
+
+  test('falls back to Archon home when no cwd and no registered codebases', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    mockListCodebases.mockImplementationOnce(async () => []);
+
+    const response = await app.request('/api/workflows');
+    expect(response.status).toBe(200);
+    expect(mockDiscoverWorkflows).toHaveBeenCalledWith(
+      expect.stringContaining('.archon'),
+      expect.any(Function),
+      expect.objectContaining({ globalSearchPath: expect.stringContaining('.archon') })
+    );
   });
 });
 
