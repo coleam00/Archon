@@ -1360,16 +1360,17 @@ async function handleCompact(
   }
 
   // Save summary and reset session
-  await db.updateConversationSummary(conversation.id, summary.trim());
+  const trimmedSummary = summary.trim();
+  await db.updateConversationSummary(conversation.id, trimmedSummary);
   await sessionDb.deactivateSession(session.id, 'reset-requested');
 
   getLog().info(
-    { conversationId, summaryLength: summary.length },
+    { conversationId, summaryLength: trimmedSummary.length },
     'session.compact_completed'
   );
   await platform.sendMessage(
     conversationId,
-    `Session compacted. Summary saved (${String(summary.length)} chars).\nNext message will start a fresh session with full context.`
+    `Session compacted. Summary saved (${String(trimmedSummary.length)} chars).\nNext message will start a fresh session with full context.`
   );
 }
 
