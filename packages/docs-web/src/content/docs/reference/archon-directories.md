@@ -31,6 +31,7 @@ Archon provides a unified directory and configuration system with:
 │           ├── source/       # Clone or symlink -> local path
 │           └── worktrees/    # Git worktrees for this project
 ├── worktrees/                # Legacy global worktrees (for repos not in workspaces/)
+├── web-dist/<version>/       # Cached web UI dist (archon serve, binary only)
 └── config.yaml               # Global user configuration
 ```
 
@@ -85,6 +86,10 @@ getArchonWorktreesPath(): string
 // Get global config path
 getArchonConfigPath(): string
 // Returns: ${ARCHON_HOME}/config.yaml
+
+// Get cached web UI distribution directory for a given version
+getWebDistDir(version: string): string
+// Returns: ${ARCHON_HOME}/web-dist/${version}
 
 // Get command folder search paths (priority order)
 getCommandFolderSearchPaths(configuredFolder?: string): string[]

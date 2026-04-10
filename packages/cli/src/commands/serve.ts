@@ -6,11 +6,21 @@ const log = createLogger('cli.serve');
 const GITHUB_REPO = 'coleam00/Archon';
 
 export interface ServeOptions {
+  /** TCP port to bind. Ignored when downloadOnly is true. Range: 1–65535. */
   port?: number;
+  /** Download the web UI and exit without starting the server. */
   downloadOnly?: boolean;
 }
 
 export async function serveCommand(opts: ServeOptions): Promise<number> {
+  if (
+    opts.port !== undefined &&
+    (!Number.isInteger(opts.port) || opts.port < 1 || opts.port > 65535)
+  ) {
+    console.error(`Error: --port must be an integer between 1 and 65535, got: ${opts.port}`);
+    return 1;
+  }
+
   const version = BUNDLED_IS_BINARY ? BUNDLED_VERSION : 'dev';
 
   if (version === 'dev') {
@@ -22,7 +32,14 @@ export async function serveCommand(opts: ServeOptions): Promise<number> {
   const webDistDir = getWebDistDir(version);
 
   if (!existsSync(webDistDir)) {
-    await downloadWebDist(version, webDistDir);
+    try {
+      await downloadWebDist(version, webDistDir);
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      log.error({ err: error, version, webDistDir }, 'web_dist.download_failed');
+      console.error(`Error: Failed to download web UI: ${error.message}`);
+      return 1;
+    }
   } else {
     log.info({ webDistDir }, 'web_dist.cache_hit');
   }
@@ -34,12 +51,19 @@ export async function serveCommand(opts: ServeOptions): Promise<number> {
   }
 
   // Import server and start (dynamic import keeps CLI startup fast for other commands)
-  const { startServer } = await import('@archon/server');
-  await startServer({
-    webDistPath: webDistDir,
-    port: opts.port,
-    skipPlatformAdapters: false,
-  });
+  try {
+    const { startServer } = await import('@archon/server');
+    await startServer({
+      webDistPath: webDistDir,
+      port: opts.port,
+      skipPlatformAdapters: true,
+    });
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    log.error({ err: error, version, webDistDir, port: opts.port }, 'server.start_failed');
+    console.error(`Error: Server failed to start: ${error.message}`);
+    return 1;
+  }
 
   // Server runs until SIGINT/SIGTERM — never returns
   return 0;
@@ -49,10 +73,15 @@ async function downloadWebDist(version: string, targetDir: string): Promise<void
   const tarballUrl = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/archon-web.tar.gz`;
   const checksumsUrl = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/checksums.txt`;
 
+  log.info({ version, targetDir }, 'web_dist.download_started');
   console.log(`Web UI not found locally — downloading from release v${version}...`);
 
   // Download checksums
-  const checksumsRes = await fetch(checksumsUrl);
+  const checksumsRes = await fetch(checksumsUrl).catch((err: unknown) => {
+    throw new Error(
+      `Network error fetching checksums from ${checksumsUrl}: ${(err as Error).message}`
+    );
+  });
   if (!checksumsRes.ok) {
     throw new Error(
       `Failed to download checksums: ${checksumsRes.status} ${checksumsRes.statusText}`
@@ -63,7 +92,9 @@ async function downloadWebDist(version: string, targetDir: string): Promise<void
 
   // Download tarball
   console.log(`Downloading ${tarballUrl}...`);
-  const tarballRes = await fetch(tarballUrl);
+  const tarballRes = await fetch(tarballUrl).catch((err: unknown) => {
+    throw new Error(`Network error fetching tarball from ${tarballUrl}: ${(err as Error).message}`);
+  });
   if (!tarballRes.ok) {
     throw new Error(`Failed to download web UI: ${tarballRes.status} ${tarballRes.statusText}`);
   }
@@ -89,16 +120,33 @@ async function downloadWebDist(version: string, targetDir: string): Promise<void
   // Extract tarball using tar (available on macOS/Linux)
   const proc = Bun.spawn(['tar', 'xzf', '-', '-C', tmpDir, '--strip-components=1'], {
     stdin: new Uint8Array(tarballBuffer),
+    stderr: 'pipe',
   });
   const exitCode = await proc.exited;
   if (exitCode !== 0) {
+    const stderrText = await new Response(proc.stderr).text();
     rmSync(tmpDir, { recursive: true, force: true });
-    throw new Error(`tar extraction failed with exit code ${exitCode}`);
+    throw new Error(`tar extraction failed (exit ${exitCode}): ${stderrText.trim()}`);
+  }
+
+  // Verify extraction produced expected layout
+  if (!existsSync(`${tmpDir}/index.html`)) {
+    rmSync(tmpDir, { recursive: true, force: true });
+    throw new Error(
+      'Extraction produced unexpected layout — index.html not found in extracted dir'
+    );
   }
 
   // Atomic move into place
   mkdirSync(targetDir.substring(0, targetDir.lastIndexOf('/')), { recursive: true });
-  renameSync(tmpDir, targetDir);
+  try {
+    renameSync(tmpDir, targetDir);
+  } catch (err) {
+    rmSync(tmpDir, { recursive: true, force: true });
+    throw new Error(
+      `Failed to move extracted web UI from ${tmpDir} to ${targetDir}: ${(err as Error).message}`
+    );
+  }
   console.log(`Extracted to ${targetDir}`);
 }
 
@@ -110,7 +158,11 @@ export function parseChecksum(checksums: string, filename: string): string {
   for (const line of checksums.split('\n')) {
     const parts = line.trim().split(/\s+/);
     if (parts.length >= 2 && parts[1] === filename) {
-      return parts[0];
+      const hash = parts[0];
+      if (!/^[0-9a-f]{64}$/.test(hash)) {
+        throw new Error(`Malformed checksum entry for ${filename}: "${line.trim()}"`);
+      }
+      return hash;
     }
   }
   throw new Error(`Checksum not found for ${filename} in checksums.txt`);

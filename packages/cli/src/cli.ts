@@ -541,7 +541,7 @@ async function main(): Promise<number> {
       }
 
       case 'serve': {
-        const servePort = values.port ? Number(values.port) : undefined;
+        const servePort = values.port !== undefined ? Number(values.port) : undefined;
         const downloadOnly = Boolean(values['download-only']);
         return await serveCommand({ port: servePort, downloadOnly });
       }

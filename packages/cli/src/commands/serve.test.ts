@@ -1,4 +1,4 @@
-import { describe, it, expect, mock, beforeEach, spyOn } from 'bun:test';
+import { describe, it, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
 
 // Mock @archon/paths BEFORE importing the module under test.
 // This sets BUNDLED_IS_BINARY = false (dev mode) so serveCommand rejects.
@@ -20,23 +20,25 @@ mock.module('@archon/paths', () => ({
 import { serveCommand, parseChecksum } from './serve';
 
 describe('parseChecksum', () => {
+  const validHash = 'a'.repeat(64);
+
   it('should extract hash for matching filename', () => {
     const checksums = [
-      'abc123def456  archon-linux-x64',
-      'deadbeef1234  archon-web.tar.gz',
-      'cafe0000babe  archon-darwin-arm64',
+      `${'b'.repeat(64)}  archon-linux-x64`,
+      `${validHash}  archon-web.tar.gz`,
+      `${'c'.repeat(64)}  archon-darwin-arm64`,
     ].join('\n');
 
-    expect(parseChecksum(checksums, 'archon-web.tar.gz')).toBe('deadbeef1234');
+    expect(parseChecksum(checksums, 'archon-web.tar.gz')).toBe(validHash);
   });
 
   it('should handle single-space separator', () => {
-    const checksums = 'abc123 archon-web.tar.gz\n';
-    expect(parseChecksum(checksums, 'archon-web.tar.gz')).toBe('abc123');
+    const checksums = `${validHash} archon-web.tar.gz\n`;
+    expect(parseChecksum(checksums, 'archon-web.tar.gz')).toBe(validHash);
   });
 
   it('should throw for missing filename', () => {
-    const checksums = 'abc123  archon-linux-x64\n';
+    const checksums = `${validHash}  archon-linux-x64\n`;
     expect(() => parseChecksum(checksums, 'archon-web.tar.gz')).toThrow(
       'Checksum not found for archon-web.tar.gz'
     );
@@ -47,8 +49,22 @@ describe('parseChecksum', () => {
   });
 
   it('should skip blank lines', () => {
-    const checksums = '\nabc123  archon-web.tar.gz\n\n';
-    expect(parseChecksum(checksums, 'archon-web.tar.gz')).toBe('abc123');
+    const checksums = `\n${validHash}  archon-web.tar.gz\n\n`;
+    expect(parseChecksum(checksums, 'archon-web.tar.gz')).toBe(validHash);
+  });
+
+  it('should throw for malformed hash (not 64 hex chars)', () => {
+    const checksums = 'short_hash  archon-web.tar.gz\n';
+    expect(() => parseChecksum(checksums, 'archon-web.tar.gz')).toThrow(
+      'Malformed checksum entry for archon-web.tar.gz'
+    );
+  });
+
+  it('should throw for uppercase hex hash', () => {
+    const checksums = `${'A'.repeat(64)}  archon-web.tar.gz\n`;
+    expect(() => parseChecksum(checksums, 'archon-web.tar.gz')).toThrow(
+      'Malformed checksum entry for archon-web.tar.gz'
+    );
   });
 });
 
@@ -59,18 +75,41 @@ describe('serveCommand', () => {
     consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
   });
 
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
+  });
+
   it('should reject in dev mode (non-binary)', async () => {
     const exitCode = await serveCommand({});
     expect(exitCode).toBe(1);
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       'Error: `archon serve` is for compiled binaries only.'
     );
-    consoleErrorSpy.mockRestore();
   });
 
   it('should reject with downloadOnly in dev mode', async () => {
     const exitCode = await serveCommand({ downloadOnly: true });
     expect(exitCode).toBe(1);
-    consoleErrorSpy.mockRestore();
+  });
+
+  it('should reject invalid port (NaN)', async () => {
+    const exitCode = await serveCommand({ port: NaN });
+    expect(exitCode).toBe(1);
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('--port must be an integer between 1 and 65535')
+    );
+  });
+
+  it('should reject port out of range', async () => {
+    const exitCode = await serveCommand({ port: 99999 });
+    expect(exitCode).toBe(1);
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('--port must be an integer between 1 and 65535')
+    );
+  });
+
+  it('should reject port 0', async () => {
+    const exitCode = await serveCommand({ port: 0 });
+    expect(exitCode).toBe(1);
   });
 });

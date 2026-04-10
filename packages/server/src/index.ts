@@ -127,11 +127,14 @@ export function handleUnhandledRejection(reason: unknown): void {
 }
 
 export interface ServerOptions {
-  /** Override the web dist path (for CLI binary with downloaded web-dist) */
+  /**
+   * Override the web dist path (for CLI binary with downloaded web-dist).
+   * Only effective in production mode (NODE_ENV=production or WEB_UI_DEV unset).
+   */
   webDistPath?: string;
-  /** Override the port */
+  /** Override the port. Range: 1–65535. */
   port?: number;
-  /** Skip platform adapter initialization (CLI serve mode) */
+  /** Run in standalone web-only mode (no Telegram/Slack/GitHub/Discord adapters). */
   skipPlatformAdapters?: boolean;
 }
 
