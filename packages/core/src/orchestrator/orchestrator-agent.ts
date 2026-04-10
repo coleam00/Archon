@@ -655,6 +655,7 @@ export async function handleMessage(
         'register-project',
         'update-project',
         'remove-project',
+        'setproject',
         'commands',
         'init',
         'worktree',
@@ -678,6 +679,13 @@ export async function handleMessage(
         if (command === 'remove-project') {
           getLog().debug({ command, conversationId }, 'deterministic_command');
           const result = await handleRemoveProject(message);
+          await platform.sendMessage(conversationId, result);
+          return;
+        }
+
+        if (command === 'setproject') {
+          getLog().debug({ command, conversationId }, 'deterministic_command');
+          const result = await handleSetProject(message, conversationId);
           await platform.sendMessage(conversationId, result);
           return;
         }
@@ -1264,6 +1272,41 @@ async function handleRemoveProject(message: string): Promise<string> {
   await codebaseDb.deleteCodebase(codebase.id);
   getLog().info({ name: projectName, id: codebase.id }, 'project.remove_completed');
   return `Project "${projectName}" removed.\nPath was: ${codebase.default_cwd}`;
+}
+
+/**
+ * Handle /setproject command.
+ * Binds a registered codebase to the current conversation so all subsequent
+ * messages route to that project automatically.
+ */
+async function handleSetProject(message: string, conversationId: string): Promise<string> {
+  const { args } = commandHandler.parseCommand(message);
+  if (args.length < 1) {
+    return 'Usage: /setproject <project-name>';
+  }
+
+  const projectName = args.join(' ');
+
+  // Find codebase (case-insensitive, partial path match)
+  const codebases = await codebaseDb.listCodebases();
+  const codebase = findCodebaseByName(codebases, projectName);
+
+  if (!codebase) {
+    const available = codebases.map(c => c.name).join(', ');
+    return `Project "${projectName}" not found.\nRegistered projects: ${available || 'none'}`;
+  }
+
+  // Update conversation record
+  await db.updateConversation(conversationId, {
+    codebase_id: codebase.id,
+    cwd: codebase.default_cwd,
+  });
+
+  getLog().info(
+    { conversationId, projectName: codebase.name, codebaseId: codebase.id },
+    'project.setproject_completed'
+  );
+  return `Project set to **${codebase.name}**\nWorking directory: ${codebase.default_cwd}`;
 }
 
 /**

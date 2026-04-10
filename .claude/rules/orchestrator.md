@@ -14,7 +14,7 @@ Platform message
   → ConversationLockManager.acquireLock()
   → handleMessage() (orchestrator-agent.ts:383)
       → inheritThreadContext() — copy parent's codebase/cwd if child thread
-      → Deterministic gate: 10 commands (help, status, reset, workflow, register-project, update-project, remove-project, commands, init, worktree)
+      → Deterministic gate: 11 commands (help, status, reset, workflow, register-project, update-project, remove-project, setproject, commands, init, worktree)
       → Everything else → AI routing call:
           → listCodebases() + discoverAllWorkflows()
           → buildFullPrompt() → buildOrchestratorPrompt() or buildProjectScopedPrompt()
@@ -29,7 +29,7 @@ Lock manager returns `{ status: 'started' | 'queued-conversation' | 'queued-capa
 
 ## Deterministic Commands (command-handler.ts)
 
-Only **10 commands** are handled deterministically:
+Only **11 commands** are handled deterministically:
 
 | Command | Behavior |
 |---------|----------|
@@ -40,6 +40,7 @@ Only **10 commands** are handled deterministically:
 | `/register-project` | Handled inline — creates codebase DB record |
 | `/update-project` | Handled inline — updates codebase path |
 | `/remove-project` | Handled inline — deletes codebase DB record |
+| `/setproject` | Handled inline — binds codebase to conversation (updates codebase_id + cwd) |
 | `/commands` | List registered codebase commands |
 | `/init` | Scaffold `.archon/` in current repo |
 | `/worktree` | Worktree subcommands |
