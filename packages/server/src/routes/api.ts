@@ -802,6 +802,17 @@ const getCodebaseEnvironmentsRoute = createRoute({
   },
 });
 
+const adaptersSchema = z
+  .object({
+    slack: z.boolean(),
+    telegram: z.boolean(),
+    discord: z.boolean(),
+    github: z.boolean(),
+    gitea: z.boolean(),
+    gitlab: z.boolean(),
+  })
+  .openapi('Adapters');
+
 const getHealthRoute = createRoute({
   method: 'get',
   path: '/api/health',
@@ -815,6 +826,7 @@ const getHealthRoute = createRoute({
             .object({
               status: z.string(),
               adapter: z.string(),
+              adapters: adaptersSchema,
               concurrency: z.record(z.unknown()),
               runningWorkflows: z.number(),
               version: z.string().optional(),
@@ -848,10 +860,28 @@ const getUpdateCheckRoute = createRoute({
 /**
  * Register all /api/* routes on the Hono app.
  */
+/** Which platform adapters are currently active (instantiated and started). */
+export interface ActiveAdapters {
+  slack: boolean;
+  telegram: boolean;
+  discord: boolean;
+  github: boolean;
+  gitea: boolean;
+  gitlab: boolean;
+}
+
 export function registerApiRoutes(
   app: OpenAPIHono,
   webAdapter: WebAdapter,
-  lockManager: ConversationLockManager
+  lockManager: ConversationLockManager,
+  getActiveAdapters: () => ActiveAdapters = () => ({
+    slack: false,
+    telegram: false,
+    discord: false,
+    github: false,
+    gitea: false,
+    gitlab: false,
+  })
 ): void {
   function apiError(
     c: Context,
@@ -2540,6 +2570,7 @@ export function registerApiRoutes(
     return c.json({
       status: 'ok',
       adapter: 'web',
+      adapters: getActiveAdapters(),
       concurrency: {
         ...stats,
         active: allActiveIds.length,
