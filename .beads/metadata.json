@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "Archon",
+  "project_id": "50332000-ce1c-4bf3-9536-8e3549753f25"
+}
