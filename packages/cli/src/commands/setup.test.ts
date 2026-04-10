@@ -361,6 +361,17 @@ CODEX_ACCOUNT_ID=account1
       // Just verify the function is exported and callable
       expect(typeof spawnTerminalWithSetup).toBe('function');
     });
+
+    it('should quote paths with spaces for Windows terminal spawning', () => {
+      // Verify the function handles paths with spaces without throwing
+      // On non-Windows platforms, this just tests that the fallback path works
+      const pathWithSpaces = join(tmpdir(), 'path with spaces', 'Archon');
+      const result = spawnTerminalWithSetup(pathWithSpaces);
+      // On CI/Linux, all terminal spawns will fail (no wt.exe, no gnome-terminal, etc.)
+      // That's expected — we just verify it doesn't crash and returns a proper result
+      expect(result).toHaveProperty('success');
+      expect(typeof result.success).toBe('boolean');
+    });
   });
 
   describe('copyArchonSkill', () => {

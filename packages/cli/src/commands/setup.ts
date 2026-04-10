@@ -1223,19 +1223,28 @@ function trySpawn(
  * Tries: Windows Terminal -> cmd.exe with start
  */
 function spawnWindowsTerminal(repoPath: string): SpawnResult {
+  // Quote the path for Windows shell expansion — paths like
+  // "C:\Users\...\GitHub Libraries\Archon" must be double-quoted
+  // to survive both wt.exe and cmd.exe argument parsing (#1035).
+  const quoted = `"${repoPath}"`;
+
   // Try Windows Terminal first (modern Windows 10/11)
+  // wt.exe parses its own command line, so we need shell: true
+  // with explicit quoting rather than relying on Node's auto-quoting.
   if (
-    trySpawn('wt.exe', ['-d', repoPath, 'cmd', '/k', 'archon setup'], {
+    trySpawn('wt.exe', ['-d', quoted, 'cmd', '/k', 'archon setup'], {
       detached: true,
       stdio: 'ignore',
+      shell: true,
     })
   ) {
     return { success: true };
   }
 
   // Fallback to cmd.exe with start command (works on all Windows)
+  // /D requires a quoted path when it contains spaces.
   if (
-    trySpawn('cmd.exe', ['/c', 'start', '""', '/D', repoPath, 'cmd', '/k', 'archon setup'], {
+    trySpawn('cmd.exe', ['/c', 'start', '""', '/D', quoted, 'cmd', '/k', 'archon setup'], {
       detached: true,
       stdio: 'ignore',
       shell: true,
