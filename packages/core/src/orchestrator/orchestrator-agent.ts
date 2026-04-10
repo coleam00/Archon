@@ -21,6 +21,7 @@ import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
 import * as commandHandler from '../handlers/command-handler';
+import * as messageDb from '../db/messages';
 import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
 import { classifyAndFormatError } from '../utils/error-formatter';
 import { toError } from '../utils/error';
@@ -1305,26 +1306,52 @@ async function handleCompact(
   conversation: Conversation
 ): Promise<void> {
   const session = await sessionDb.getActiveSession(conversation.id);
-  if (!session?.assistant_session_id) {
+  if (!session) {
     await platform.sendMessage(conversationId, 'No active session to compact.');
     return;
   }
 
   await platform.sendMessage(conversationId, 'Compacting session...');
 
-  // Ask the current session to summarize itself
   const aiClient = getAssistantClient(conversation.ai_assistant_type);
   const cwd = conversation.cwd ?? getArchonWorkspacesPath();
   let summary = '';
 
-  for await (const chunk of aiClient.sendQuery(
-    'Summarize our entire conversation so far in a structured way. Include: key decisions made, current state of work, important context, and any pending items. Be concise but complete — this summary will be used to continue the conversation in a fresh session. Output ONLY the summary, no preamble.',
-    cwd,
-    session.assistant_session_id,
-    { tools: [] }
-  )) {
-    if (chunk.type === 'assistant') {
-      summary += chunk.content;
+  // Try resuming the existing session for summarization.
+  // If the session expired (server restart), fall back to message history.
+  const resumeId = session.assistant_session_id ?? undefined;
+  const summarizePrompt =
+    'Summarize our entire conversation so far in a structured way. Include: key decisions made, current state of work, important context, and any pending items. Be concise but complete — this summary will be used to continue the conversation in a fresh session. Output ONLY the summary, no preamble.';
+
+  try {
+    for await (const chunk of aiClient.sendQuery(summarizePrompt, cwd, resumeId, {
+      tools: [],
+    })) {
+      if (chunk.type === 'assistant') {
+        summary += chunk.content;
+      }
+    }
+  } catch {
+    // Session expired — build summary from saved messages
+    getLog().info({ conversationId }, 'session.compact_resume_failed_using_messages');
+    const messages = await messageDb.listMessages(conversation.id, 50);
+    if (messages.length === 0) {
+      await platform.sendMessage(conversationId, 'No messages to summarize. Use /reset instead.');
+      return;
+    }
+
+    const transcript = messages
+      .map(m => `[${m.role}]: ${m.content.slice(0, 500)}`)
+      .join('\n\n');
+
+    const fallbackPrompt = `Summarize this conversation transcript. Include: key decisions, current state of work, important context, and pending items. Be concise but complete. Output ONLY the summary.\n\n---\n\n${transcript}`;
+
+    for await (const chunk of aiClient.sendQuery(fallbackPrompt, cwd, undefined, {
+      tools: [],
+    })) {
+      if (chunk.type === 'assistant') {
+        summary += chunk.content;
+      }
     }
   }
 
