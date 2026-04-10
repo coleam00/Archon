@@ -927,7 +927,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
 **Session**
 - \`/status\` — Show current session and project info
 - \`/compact\` — Summarize and compress the session (frees context window)
-- \`/resume\` — Show saved context summary
+- \`/resume\` — Show project memory (shared with CLI)
 - \`/reset\` — Clear conversation and start fresh
 - \`/help\` — Show this help message
 
