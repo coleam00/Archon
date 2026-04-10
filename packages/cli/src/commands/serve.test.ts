@@ -111,5 +111,8 @@ describe('serveCommand', () => {
   it('should reject port 0', async () => {
     const exitCode = await serveCommand({ port: 0 });
     expect(exitCode).toBe(1);
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('--port must be an integer between 1 and 65535')
+    );
   });
 });

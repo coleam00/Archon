@@ -1,9 +1,14 @@
+import { dirname } from 'path';
 import { existsSync, mkdirSync, renameSync, rmSync } from 'fs';
 import { createLogger, getWebDistDir, BUNDLED_IS_BINARY, BUNDLED_VERSION } from '@archon/paths';
 
 const log = createLogger('cli.serve');
 
 const GITHUB_REPO = 'coleam00/Archon';
+
+function toError(err: unknown): Error {
+  return err instanceof Error ? err : new Error(String(err));
+}
 
 export interface ServeOptions {
   /** TCP port to bind. Ignored when downloadOnly is true. Range: 1–65535. */
@@ -21,21 +26,20 @@ export async function serveCommand(opts: ServeOptions): Promise<number> {
     return 1;
   }
 
-  const version = BUNDLED_IS_BINARY ? BUNDLED_VERSION : 'dev';
-
-  if (version === 'dev') {
+  if (!BUNDLED_IS_BINARY) {
     console.error('Error: `archon serve` is for compiled binaries only.');
     console.error('For development, use: bun run dev');
     return 1;
   }
 
+  const version = BUNDLED_VERSION;
   const webDistDir = getWebDistDir(version);
 
   if (!existsSync(webDistDir)) {
     try {
       await downloadWebDist(version, webDistDir);
     } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
+      const error = toError(err);
       log.error({ err: error, version, webDistDir }, 'web_dist.download_failed');
       console.error(`Error: Failed to download web UI: ${error.message}`);
       return 1;
@@ -59,7 +63,7 @@ export async function serveCommand(opts: ServeOptions): Promise<number> {
       skipPlatformAdapters: true,
     });
   } catch (err) {
-    const error = err instanceof Error ? err : new Error(String(err));
+    const error = toError(err);
     log.error({ err: error, version, webDistDir, port: opts.port }, 'server.start_failed');
     console.error(`Error: Server failed to start: ${error.message}`);
     return 1;
@@ -125,29 +129,33 @@ async function downloadWebDist(version: string, targetDir: string): Promise<void
   const exitCode = await proc.exited;
   if (exitCode !== 0) {
     const stderrText = await new Response(proc.stderr).text();
-    rmSync(tmpDir, { recursive: true, force: true });
-    throw new Error(`tar extraction failed (exit ${exitCode}): ${stderrText.trim()}`);
+    cleanupAndThrow(tmpDir, `tar extraction failed (exit ${exitCode}): ${stderrText.trim()}`);
   }
 
   // Verify extraction produced expected layout
   if (!existsSync(`${tmpDir}/index.html`)) {
-    rmSync(tmpDir, { recursive: true, force: true });
-    throw new Error(
+    cleanupAndThrow(
+      tmpDir,
       'Extraction produced unexpected layout — index.html not found in extracted dir'
     );
   }
 
   // Atomic move into place
-  mkdirSync(targetDir.substring(0, targetDir.lastIndexOf('/')), { recursive: true });
+  mkdirSync(dirname(targetDir), { recursive: true });
   try {
     renameSync(tmpDir, targetDir);
   } catch (err) {
-    rmSync(tmpDir, { recursive: true, force: true });
-    throw new Error(
+    cleanupAndThrow(
+      tmpDir,
       `Failed to move extracted web UI from ${tmpDir} to ${targetDir}: ${(err as Error).message}`
     );
   }
   console.log(`Extracted to ${targetDir}`);
+}
+
+function cleanupAndThrow(tmpDir: string, message: string): never {
+  rmSync(tmpDir, { recursive: true, force: true });
+  throw new Error(message);
 }
 
 /**
