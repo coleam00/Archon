@@ -711,6 +711,12 @@ export async function handleMessage(
           return;
         }
 
+        if (command === 'reset') {
+          getLog().debug({ command, conversationId }, 'deterministic_command');
+          await handleResetWithSessionLog(platform, conversationId, conversation);
+          return;
+        }
+
         if (command === 'compact') {
           getLog().debug({ command, conversationId }, 'deterministic_command');
           await handleCompact(platform, conversationId, conversation);
@@ -876,7 +882,8 @@ export async function handleMessage(
     if (conversation && isSessionExpired) {
       getLog().info({ conversationId }, 'session.expired_auto_compacting');
       try {
-        // No summary generation needed — MEMORY.md provides context for the new session
+        // Save session log to Obsidian before resetting
+        await saveSessionToObsidian(conversation);
 
         // Reset the expired session
         const expiredSession = await sessionDb.getActiveSession(conversation.id);
@@ -1480,6 +1487,78 @@ async function persistConversationMessages(
   } catch (error) {
     getLog().warn({ err: error as Error, conversationDbId }, 'message.persist_failed');
   }
+}
+
+/**
+ * Generate a summary from saved messages and write a session log to Obsidian.
+ * Used by /reset, /compact, and auto-compact to preserve session history.
+ * Returns the vault path on success, null if no messages or on failure.
+ */
+async function saveSessionToObsidian(conversation: Conversation): Promise<string | null> {
+  const messages = await messageDb.listMessages(conversation.id, 50);
+  if (messages.length === 0) return null;
+
+  const codebase = conversation.codebase_id
+    ? await codebaseDb.getCodebase(conversation.codebase_id)
+    : null;
+  if (!codebase) return null;
+
+  const transcript = messages
+    .map(m => `[${m.role}]: ${m.content.slice(0, 500)}`)
+    .join('\n\n');
+
+  const aiClient = getAssistantClient(conversation.ai_assistant_type);
+  const cwd = conversation.cwd ?? getArchonWorkspacesPath();
+  let summary = '';
+
+  try {
+    for await (const chunk of aiClient.sendQuery(
+      `Summarize this conversation transcript concisely. Include: key decisions, current state of work, important context, and pending items. Output ONLY the summary, no preamble.\n\n---\n\n${transcript}`,
+      cwd,
+      undefined,
+      { tools: [] }
+    )) {
+      if (chunk.type === 'assistant') summary += chunk.content;
+    }
+  } catch (error) {
+    getLog().warn({ err: error as Error }, 'session.summary_generation_failed');
+    return null;
+  }
+
+  if (!summary.trim()) return null;
+
+  return saveSessionLogToVault(
+    getProjectSlug(codebase),
+    summary.trim(),
+    conversation.platform_type,
+    conversation.title
+  );
+}
+
+/**
+ * Handle /reset with session log preservation.
+ * Saves conversation history to Obsidian before resetting the session.
+ */
+async function handleResetWithSessionLog(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  conversation: Conversation
+): Promise<void> {
+  const session = await sessionDb.getActiveSession(conversation.id);
+  if (!session) {
+    await platform.sendMessage(conversationId, 'No active session to reset.');
+    return;
+  }
+
+  // Save session log to Obsidian before resetting
+  const vaultPath = await saveSessionToObsidian(conversation);
+  await sessionDb.deactivateSession(session.id, 'reset-requested');
+
+  const logNote = vaultPath ? `\nSession log saved to Obsidian: ${vaultPath}` : '';
+  await platform.sendMessage(
+    conversationId,
+    `Session cleared. Starting fresh on next message.${logNote}\n\nProject and memory preserved.`
+  );
 }
 
 /**
