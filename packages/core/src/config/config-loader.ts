@@ -497,6 +497,11 @@ export async function updateGlobalConfig(updates: Partial<GlobalConfig>): Promis
       merged.assistants = {
         claude: { ...current.assistants?.claude, ...updates.assistants.claude },
         codex: { ...current.assistants?.codex, ...updates.assistants.codex },
+        ...(current.assistants?.qwen || updates.assistants.qwen
+          ? {
+              qwen: { ...current.assistants?.qwen, ...updates.assistants.qwen },
+            }
+          : {}),
       };
     }
 

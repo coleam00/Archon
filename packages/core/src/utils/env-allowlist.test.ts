@@ -47,6 +47,14 @@ describe('buildCleanSubprocessEnv', () => {
     expect(env.GITHUB_TOKEN).toBe('ghp_test123');
   });
 
+  it('includes OPENAI auth vars when present', () => {
+    process.env.OPENAI_API_KEY = 'sk-test';
+    process.env.OPENAI_BASE_URL = 'https://api.example.com/v1';
+    const env = buildCleanSubprocessEnv();
+    expect(env.OPENAI_API_KEY).toBe('sk-test');
+    expect(env.OPENAI_BASE_URL).toBe('https://api.example.com/v1');
+  });
+
   it('does not include keys with undefined values', () => {
     const env = buildCleanSubprocessEnv();
     for (const value of Object.values(env)) {
@@ -66,5 +74,9 @@ describe('SUBPROCESS_ENV_ALLOWLIST', () => {
 
   it('contains CLAUDE_API_KEY', () => {
     expect(SUBPROCESS_ENV_ALLOWLIST.has('CLAUDE_API_KEY')).toBe(true);
+  });
+
+  it('contains OPENAI_API_KEY', () => {
+    expect(SUBPROCESS_ENV_ALLOWLIST.has('OPENAI_API_KEY')).toBe(true);
   });
 });

@@ -213,7 +213,7 @@ export class QwenClient implements IAssistantClient {
     const qwenDefaults = mergedConfig?.assistants.qwen;
     const includePartialMessages = qwenDefaults?.includePartialMessages ?? true;
     const permissionMode = qwenDefaults?.permissionMode ?? 'yolo';
-    const authType = qwenDefaults?.authType ?? 'openai';
+    const authType = qwenDefaults?.authType;
     const pathToQwenExecutable = qwenDefaults?.pathToQwenExecutable;
 
     const queryOptions: QueryOptions = {
@@ -227,7 +227,7 @@ export class QwenClient implements IAssistantClient {
       allowedTools: options?.allowedTools,
       excludeTools: options?.disallowedTools,
       coreTools: options?.tools,
-      authType,
+      ...(authType ? { authType } : {}),
       includePartialMessages,
       resume: resumeSessionId,
       abortController: options?.abortSignal

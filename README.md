@@ -307,9 +307,11 @@ when configured globally, per repository, or per workflow node.
 - Qwen works with Archon's normal assistant selection and MCP wiring.
 - `pathToQwenExecutable` is optional; use it only if you want to point Archon at a specific
   Qwen CLI binary.
+- Archon does not provision Qwen credentials for you; by default it follows your existing
+  Qwen Code auth/config unless you explicitly override `assistants.qwen.authType`.
 - Claude-only workflow features do not apply to Qwen: `settingSources`, `effort`,
   `thinking`, `maxBudgetUsd`, `fallbackModel`, `betas`, `sandbox`, `hooks`, and `skills`.
-- Structured `output_format` support is currently limited compared with Claude and Codex.
+- Structured `output_format` is not currently forwarded to Qwen workflow nodes.
 
 ## Contributing
 

@@ -449,9 +449,11 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 **Qwen Support Boundaries**
 - Archon uses `@qwen-code/sdk` and can select Qwen as the active assistant when configured.
 - `pathToQwenExecutable` is optional and only needed when pointing at a custom Qwen binary.
+- Archon does not provision Qwen credentials; by default it follows the Qwen Code auth/config
+  already present on the machine unless `assistants.qwen.authType` is set explicitly.
 - Claude-only options do not apply to Qwen: `settingSources`, `effort`, `thinking`,
   `maxBudgetUsd`, `fallbackModel`, `betas`, `sandbox`, `hooks`, and `skills`.
-- Structured `output_format` support is currently limited compared with Claude and Codex.
+- Structured `output_format` is not currently forwarded to Qwen workflow nodes.
 
 ### Configuration
 

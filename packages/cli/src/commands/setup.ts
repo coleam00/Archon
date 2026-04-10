@@ -3,7 +3,7 @@
  *
  * Guides users through configuring:
  * - Database (SQLite default vs PostgreSQL)
- * - AI assistants (Claude and/or Codex)
+ * - AI assistants (Claude, Codex, and/or Qwen)
  * - Platform connections (GitHub, Telegram, Slack, Discord)
  *
  * Writes configuration to both ~/.archon/.env and <repo>/.env
@@ -662,6 +662,15 @@ After upgrading, run 'archon setup' again.`,
     );
   }
 
+  if (hasQwen) {
+    note(
+      'Qwen credentials are not provisioned by `archon setup`.\n\n' +
+        'Default behavior follows your existing Qwen Code authentication (typically ~/.qwen settings or Qwen OAuth).\n' +
+        'If you want OpenAI-compatible auth instead, configure `assistants.qwen.authType` and the matching provider credentials manually.',
+      'Qwen Auth'
+    );
+  }
+
   if (!hasClaude && !hasCodex && !hasQwen) {
     log.warning('No AI assistant selected. You can add one later by running `archon setup` again.');
     return {
@@ -1093,6 +1102,17 @@ export function generateEnvContent(config: SetupConfig): string {
     lines.push(`CODEX_ACCESS_TOKEN=${config.ai.codexTokens.accessToken}`);
     lines.push(`CODEX_REFRESH_TOKEN=${config.ai.codexTokens.refreshToken}`);
     lines.push(`CODEX_ACCOUNT_ID=${config.ai.codexTokens.accountId}`);
+    lines.push('');
+  }
+
+  if (config.ai.qwen) {
+    lines.push('# Qwen Authentication');
+    lines.push(
+      '# Qwen credentials are managed outside `archon setup` via your Qwen Code auth/config.'
+    );
+    lines.push(
+      '# To override the default auth flow, configure assistants.qwen in ~/.archon/config.yaml.'
+    );
     lines.push('');
   }
 

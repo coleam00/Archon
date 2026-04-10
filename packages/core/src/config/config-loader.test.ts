@@ -543,6 +543,24 @@ assistants:
       expect(writtenContent).toContain('MyBot');
     });
 
+    test('preserves existing qwen settings when updating another assistant', async () => {
+      mockReadConfigFile.mockResolvedValue(`
+defaultAssistant: qwen
+assistants:
+  qwen:
+    model: qwen-max
+`);
+
+      await updateGlobalConfig({
+        assistants: { claude: { model: 'sonnet' } },
+      });
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const writtenContent = mockWriteConfigFile.mock.calls[0]?.[1] as string;
+      expect(writtenContent).toContain('qwen-max');
+      expect(writtenContent).toContain('sonnet');
+    });
+
     test('creates config when file does not exist', async () => {
       const error = new Error('ENOENT') as NodeJS.ErrnoException;
       error.code = 'ENOENT';

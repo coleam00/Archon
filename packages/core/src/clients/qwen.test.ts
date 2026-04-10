@@ -119,4 +119,33 @@ describe('QwenClient smoke test', () => {
       },
     ]);
   });
+
+  test('does not force an auth type when qwen auth is not configured', async () => {
+    mockLoadConfig.mockImplementationOnce(async () => ({
+      assistant: 'qwen',
+      assistants: {
+        claude: {},
+        codex: {},
+        qwen: {
+          model: 'qwen-max',
+          includePartialMessages: true,
+        },
+      },
+      envVars: {},
+      allowTargetRepoKeys: true,
+    }));
+
+    const client = new QwenClient();
+
+    for await (const _chunk of client.sendQuery('auth smoke prompt', '/workspace')) {
+      // Drain stream
+    }
+
+    expect(capturedOptions).toMatchObject({
+      cwd: '/workspace',
+      model: 'qwen-max',
+      includePartialMessages: true,
+    });
+    expect(capturedOptions).not.toHaveProperty('authType');
+  });
 });

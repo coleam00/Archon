@@ -1,13 +1,13 @@
 /**
  * Subprocess environment allowlist
  *
- * Controls which process.env keys are passed to Claude Code subprocesses.
+ * Controls which process.env keys are passed to assistant subprocesses.
  * Using an allowlist prevents target-repo .env leakage (Bun auto-loads CWD .env).
  * Per-codebase env vars (codebase_env_vars table / .archon/config.yaml `env:`) are
  * merged on top by the workflow executor via requestOptions.env — those are unaffected.
  */
 
-/** Canonical set of env vars Claude Code subprocess legitimately needs */
+/** Canonical set of env vars assistant subprocesses legitimately need */
 export const SUBPROCESS_ENV_ALLOWLIST = new Set([
   // System essentials needed by tools, git, shell operations
   'PATH',
@@ -34,6 +34,10 @@ export const SUBPROCESS_ENV_ALLOWLIST = new Set([
   'ANTHROPIC_BEDROCK_BASE_URL',
   'ANTHROPIC_VERTEX_PROJECT_ID',
   'ANTHROPIC_VERTEX_REGION',
+  // OpenAI-compatible auth/config used by Codex and Qwen
+  'OPENAI_API_KEY',
+  'OPENAI_BASE_URL',
+  'OPENAI_MODEL',
   // Archon runtime config
   'ARCHON_HOME',
   'ARCHON_DOCKER',
