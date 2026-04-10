@@ -834,7 +834,11 @@ export async function handleMessage(
     const err = toError(error);
 
     // Auto-compact on expired session: save summary from messages, reset, and retry
-    if (conversation && err.message.includes('No conversation found with session ID')) {
+    const isSessionExpired =
+      err.message.includes('No conversation found with session ID') ||
+      err.message.includes('not a valid UUID') ||
+      err.message.includes('session') && err.message.includes('not found');
+    if (conversation && isSessionExpired) {
       getLog().info({ conversationId }, 'session.expired_auto_compacting');
       try {
         const messages = await messageDb.listMessages(conversation.id, 50);
