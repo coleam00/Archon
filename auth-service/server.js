@@ -64,6 +64,20 @@ function isSafeRedirect(rd) {
   return rd === '/' || (/^\/[^/\\]/.test(rd) && !rd.includes('://'));
 }
 
+function safeDecodeURIComponent(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeRedirect(rawValue) {
+  const decoded = safeDecodeURIComponent(rawValue ?? '/');
+  if (!decoded) return '/';
+  return isSafeRedirect(decoded) ? decoded : '/';
+}
+
 // ── HTML helpers ──────────────────────────────────────────────────────────────
 function escapeHtml(s) {
   return s
@@ -159,7 +173,7 @@ const server = http.createServer(async (req, res) => {
 
     // GET /login — serve the styled login form
     if (req.method === 'GET' && url.pathname === '/login') {
-      const rd = url.searchParams.get('rd') ?? '/';
+      const rd = normalizeRedirect(url.searchParams.get('rd'));
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       return res.end(loginPage(encodeURIComponent(rd), null));
     }
@@ -170,8 +184,7 @@ const server = http.createServer(async (req, res) => {
       const params = new URLSearchParams(body);
       const username = params.get('username') ?? '';
       const password = params.get('password') ?? '';
-      const rd = decodeURIComponent(params.get('rd') ?? '/');
-      const safeRd = isSafeRedirect(rd) ? rd : '/';
+      const safeRd = normalizeRedirect(params.get('rd'));
 
       const usernameOk = username === USERNAME;
       const passwordOk = await bcrypt.compare(password, PASSWORD_HASH);
@@ -220,4 +233,11 @@ if (require.main === module) {
   });
 }
 
-module.exports = { signCookie, verifyCookie, isSafeRedirect, parseCookies };
+module.exports = {
+  signCookie,
+  verifyCookie,
+  isSafeRedirect,
+  parseCookies,
+  safeDecodeURIComponent,
+  normalizeRedirect,
+};
