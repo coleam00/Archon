@@ -176,7 +176,7 @@ export class TelegramAdapter implements IPlatformAdapter {
       const userId = ctx.from?.id;
       if (!isUserAuthorized(userId, this.allowedUserIds)) {
         // Log unauthorized attempt (mask user ID for privacy)
-        const maskedId = `${String(userId).slice(0, 4)}***`;
+        const maskedId = userId !== undefined ? `${String(userId).slice(0, 4)}***` : 'unknown';
         getLog().info({ maskedUserId: maskedId }, 'telegram.unauthorized_message');
         return; // Silent rejection
       }
@@ -185,6 +185,11 @@ export class TelegramAdapter implements IPlatformAdapter {
         const conversationId = this.getConversationId(ctx);
         // Fire-and-forget - errors handled by caller
         void this.messageHandler({ conversationId, message, userId });
+      } else {
+        // Intentional: message dropped silently if handler not registered yet.
+        // In production the server always calls onMessage() before start(); this
+        // path only surfaces during development or misconfiguration.
+        getLog().debug({ chatId: ctx.chat?.id }, 'telegram.message_dropped_no_handler');
       }
     });
 
@@ -208,7 +213,11 @@ export class TelegramAdapter implements IPlatformAdapter {
               },
             })
             .catch((err: unknown) => {
-              reject(err instanceof Error ? err : new Error(String(err)));
+              const error = err instanceof Error ? err : new Error(String(err));
+              // Log post-startup crashes — after onStart fires the reject() below is a no-op
+              // (Promise already settled), but the error should still be observable in logs.
+              getLog().error({ err: error }, 'telegram.bot_runtime_error');
+              reject(error);
             });
         });
         getLog().info('telegram.bot_started');

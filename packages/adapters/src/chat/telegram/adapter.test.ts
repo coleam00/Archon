@@ -234,6 +234,16 @@ describe('TelegramAdapter', () => {
     });
   });
 
+  describe('stop()', () => {
+    test('should call bot.stop()', () => {
+      const adapter = new TelegramAdapter('fake-token-for-testing');
+      const mockStop = mock(() => undefined);
+      (adapter.getBot() as unknown as { stop: typeof mockStop }).stop = mockStop;
+      adapter.stop();
+      expect(mockStop).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('start()', () => {
     beforeEach(() => {
       mockLogger.warn.mockClear();
