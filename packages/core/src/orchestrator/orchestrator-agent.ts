@@ -464,7 +464,7 @@ function buildFullPrompt(
     : buildOrchestratorPrompt(codebases, workflows);
 
   const summarySuffix = conversation.context_summary
-    ? '\n\n---\n\n## Previous Conversation Summary\n\nThe following is a summary from a prior session in this conversation. Use it as context:\n\n' +
+    ? '\n\n---\n\n## Previous Conversation Summary\n\nThe following is a summary from a prior session in this conversation. Use it as context.\nIf you need more history, check the Obsidian vault at `Claude/Session-Logs/` using Obsidian MCP tools.\n\n' +
       conversation.context_summary
     : '';
 
@@ -1000,6 +1000,10 @@ async function handleStreamMode(
   }
 
   const fullResponse = allMessages.join('');
+
+  // Persist messages for all platforms (enables auto-compact, /compact, history)
+  await persistConversationMessages(conversation.id, originalMessage, fullResponse);
+
   const commands = parseOrchestratorCommands(fullResponse, codebases, workflows);
 
   if (commands.workflowInvocation) {
@@ -1132,6 +1136,9 @@ async function handleBatchMode(
     getLog().debug({ conversationId }, 'no_ai_response');
     return;
   }
+
+  // Persist messages for all platforms (enables auto-compact, /compact, history)
+  await persistConversationMessages(conversation.id, originalMessage, finalMessage);
 
   // Parse orchestrator commands from filtered response
   const commands = parseOrchestratorCommands(finalMessage, codebases, workflows);
@@ -1374,6 +1381,28 @@ async function handleRemoveProject(message: string): Promise<string> {
   await codebaseDb.deleteCodebase(codebase.id);
   getLog().info({ name: projectName, id: codebase.id }, 'project.remove_completed');
   return `Project "${projectName}" removed.\nPath was: ${codebase.default_cwd}`;
+}
+
+/**
+ * Persist user + assistant messages to the database.
+ * Fire-and-forget — errors are logged but never thrown.
+ * These messages power auto-compact summaries when sessions expire.
+ */
+async function persistConversationMessages(
+  conversationDbId: string,
+  userMessage: string,
+  assistantResponse: string
+): Promise<void> {
+  try {
+    // Skip internal orchestrator commands (they're not useful context)
+    if (assistantResponse.startsWith('/invoke-workflow') || assistantResponse.startsWith('/register-project')) {
+      return;
+    }
+    await messageDb.addMessage(conversationDbId, 'user', userMessage);
+    await messageDb.addMessage(conversationDbId, 'assistant', assistantResponse);
+  } catch (error) {
+    getLog().warn({ err: error as Error, conversationDbId }, 'message.persist_failed');
+  }
 }
 
 /**
