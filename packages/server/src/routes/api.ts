@@ -42,6 +42,7 @@ import {
   getArchonHome,
   isDocker,
   checkForUpdate,
+  BUNDLED_IS_BINARY,
 } from '@archon/paths';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { parseWorkflow } from '@archon/workflows/loader';
@@ -2610,6 +2611,14 @@ export function registerApiRoutes(
   });
 
   registerOpenApiRoute(getUpdateCheckRoute, async c => {
+    if (!BUNDLED_IS_BINARY) {
+      return c.json({
+        updateAvailable: false,
+        currentVersion: appVersion,
+        latestVersion: appVersion,
+        releaseUrl: '',
+      });
+    }
     const result = await checkForUpdate(appVersion);
     if (!result) {
       return c.json({

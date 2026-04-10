@@ -352,6 +352,16 @@ curl -X PATCH http://localhost:3090/api/config/assistants \
 
 ---
 
+## System
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/update-check` | Check for available updates (binary builds only) |
+
+Returns `{ updateAvailable, currentVersion, latestVersion, releaseUrl }`. For non-binary (source) builds, always returns `updateAvailable: false` without making external requests.
+
+---
+
 ## SSE Streaming
 
 | Path | Description |

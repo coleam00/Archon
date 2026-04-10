@@ -1,6 +1,6 @@
-import { describe, test, expect, spyOn, beforeEach, afterEach, mock } from 'bun:test';
+import { describe, test, expect, spyOn, beforeEach, afterEach } from 'bun:test';
 import { join } from 'path';
-import { mkdirSync, writeFileSync, existsSync, rmSync, unlinkSync } from 'fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import {
   isNewerVersion,
@@ -136,8 +136,11 @@ describe('checkForUpdate', () => {
     });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
-    // Verify cache was written
-    expect(existsSync(join(testDir, 'update-check.json'))).toBe(true);
+    // Verify cache was written with correct content
+    const cacheRaw = JSON.parse(readFileSync(join(testDir, 'update-check.json'), 'utf-8'));
+    expect(cacheRaw.latestVersion).toBe('0.5.0');
+    expect(cacheRaw.releaseUrl).toBe('https://github.com/coleam00/Archon/releases/tag/v0.5.0');
+    expect(typeof cacheRaw.checkedAt).toBe('number');
     fetchSpy.mockRestore();
   });
 
@@ -147,6 +150,18 @@ describe('checkForUpdate', () => {
     const result = await checkForUpdate('0.4.0');
 
     expect(result).toBeNull();
+    fetchSpy.mockRestore();
+  });
+
+  test('returns null on non-200 HTTP response', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{"message":"rate limit exceeded"}', { status: 403 })
+    );
+
+    const result = await checkForUpdate('0.4.0');
+
+    expect(result).toBeNull();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
     fetchSpy.mockRestore();
   });
 
@@ -233,6 +248,22 @@ describe('getCachedUpdateCheck', () => {
 
   test('returns null for corrupt cache file', () => {
     writeFileSync(join(testDir, 'update-check.json'), 'not json');
+    expect(getCachedUpdateCheck('0.4.0')).toBeNull();
+  });
+
+  test('returns null for stale cache', () => {
+    const staleCache = {
+      latestVersion: '0.5.0',
+      releaseUrl: 'https://example.com',
+      checkedAt: Date.now() - 25 * 60 * 60 * 1000, // 25 hours ago
+    };
+    writeFileSync(join(testDir, 'update-check.json'), JSON.stringify(staleCache));
+    expect(getCachedUpdateCheck('0.4.0')).toBeNull();
+  });
+
+  test('returns null when checkedAt is missing', () => {
+    const cache = { latestVersion: '0.5.0', releaseUrl: 'https://example.com' };
+    writeFileSync(join(testDir, 'update-check.json'), JSON.stringify(cache));
     expect(getCachedUpdateCheck('0.4.0')).toBeNull();
   });
 });

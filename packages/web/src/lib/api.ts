@@ -496,12 +496,7 @@ export async function getHealth(): Promise<HealthResponse> {
   return fetchJSON<HealthResponse>('/api/health');
 }
 
-export interface UpdateCheckResult {
-  updateAvailable: boolean;
-  currentVersion: string;
-  latestVersion: string;
-  releaseUrl: string;
-}
+export type UpdateCheckResult = components['schemas']['UpdateCheckResponse'];
 
 export async function getUpdateCheck(): Promise<UpdateCheckResult> {
   return fetchJSON<UpdateCheckResult>('/api/update-check');

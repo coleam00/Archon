@@ -536,6 +536,7 @@ curl http://localhost:3637/api/conversations/<conversationId>/messages
 │   │   └── uploads/{convId}/     # Web UI file uploads (ephemeral)
 │   └── logs/                     # Workflow execution logs
 ├── web-dist/<version>/            # Cached web UI dist (archon serve, binary only)
+├── update-check.json              # Update check cache (binary builds, 24h TTL)
 ├── archon.db                     # SQLite database (when DATABASE_URL not set)
 └── config.yaml                   # Global configuration (non-secrets)
 ```
@@ -765,6 +766,9 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 
 **Command Listing:**
 - `GET /api/commands` - List available command names (bundled + project-defined); optional `?cwd=`; returns `{ commands: [{ name, source: 'bundled' | 'project' }] }`
+
+**System:**
+- `GET /api/update-check` - Check for available updates; returns `{ updateAvailable, currentVersion, latestVersion, releaseUrl }`; skips GitHub API call for non-binary builds
 
 **OpenAPI Spec:**
 - `GET /api/openapi.json` - Generated OpenAPI 3.0 spec for all Zod-validated routes

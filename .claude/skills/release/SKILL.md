@@ -187,8 +187,9 @@ git push origin dev
 ```
 
 > **Important**: This sync ensures dev has the merge commit from main. Without it,
-> dev and main diverge. The CI's `update-homebrew` job pushes a formula commit
-> to dev but does NOT sync the merge commit — this manual step is required.
+> dev and main diverge. The CI `update-homebrew` job only pushes the formula
+> commit to dev — it does not bring the PR merge commit onto dev. This manual
+> `git pull origin main` is what ensures dev has the merge commit.
 
 The GitHub Release is distinct from the git tag — without it, the release won't appear on the repository's Releases page. Always create it.
 
@@ -197,8 +198,9 @@ If the user merges the PR themselves and comes back, still offer to tag, release
 ### Step 10: Wait for Release Workflow and Update Homebrew Formula
 
 > **Note**: The `update-homebrew` CI job in `.github/workflows/release.yml` runs automatically
-> after the release job and handles Steps 10-11 (formula update + push to dev). These manual
-> steps are only needed if the CI job fails. Check the Actions tab before running manually.
+> after the release job and handles the formula update + push to dev (part of Step 10).
+> Step 11 (tap sync to `coleam00/homebrew-archon`) is always manual. Check the Actions tab
+> before running Step 10 manually.
 
 After the tag is pushed, `.github/workflows/release.yml` builds platform binaries and uploads them to the GitHub release. This takes 5-10 minutes. The Homebrew formula SHA256 values cannot be known until these binaries exist.
 

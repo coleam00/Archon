@@ -1,6 +1,9 @@
 import { join } from 'path';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { getArchonHome } from './archon-paths';
+import { createLogger } from './logger';
+
+const log = createLogger('update-check');
 
 interface UpdateCheckCache {
   latestVersion: string;
@@ -37,7 +40,8 @@ function readCache(): UpdateCheckCache | null {
       return null;
     }
     return data;
-  } catch {
+  } catch (err) {
+    log.debug({ err, cachePath: getCachePath() }, 'update_check.cache_read_failed');
     return null;
   }
 }
@@ -47,8 +51,8 @@ function writeCache(cache: UpdateCheckCache): void {
     const home = getArchonHome();
     mkdirSync(home, { recursive: true });
     writeFileSync(getCachePath(), JSON.stringify(cache), 'utf-8');
-  } catch {
-    // Best-effort — never fail the CLI command because of a cache write error
+  } catch (err) {
+    log.debug({ err }, 'update_check.cache_write_failed');
   }
 }
 
@@ -127,13 +131,15 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateChec
     } finally {
       clearTimeout(timeout);
     }
-  } catch {
+  } catch (err) {
+    log.debug({ err }, 'update_check.fetch_failed');
     return null;
   }
 }
 
 /**
- * Sync-only: read cache, compare, return result. No fetch. For display only.
+ * Sync-only: read cache, compare, return result. No fetch.
+ * Returns null for stale or corrupt cache entries.
  */
 export function getCachedUpdateCheck(currentVersion: string): UpdateCheckResult | null {
   try {
@@ -141,14 +147,16 @@ export function getCachedUpdateCheck(currentVersion: string): UpdateCheckResult 
     if (!existsSync(cachePath)) return null;
     const raw = readFileSync(cachePath, 'utf-8');
     const data = JSON.parse(raw) as UpdateCheckCache;
-    if (!data.latestVersion || !data.releaseUrl) return null;
+    if (!data.latestVersion || !data.releaseUrl || typeof data.checkedAt !== 'number') return null;
+    if (Date.now() - data.checkedAt > STALENESS_MS) return null;
     return {
       updateAvailable: isNewerVersion(currentVersion, data.latestVersion),
       currentVersion,
       latestVersion: data.latestVersion,
       releaseUrl: data.releaseUrl,
     };
-  } catch {
+  } catch (err) {
+    log.debug({ err, cachePath: getCachePath() }, 'update_check.cached_read_failed');
     return null;
   }
 }
