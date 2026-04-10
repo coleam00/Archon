@@ -1,6 +1,6 @@
 ## Project Overview
 
-**Remote Agentic Coding Platform**: Control AI coding assistants (Claude Code SDK, Codex SDK) remotely from Slack, Telegram, and GitHub. Built with **Bun + TypeScript + SQLite/PostgreSQL**, single-developer tool for AI-assisted development practitioners. Architecture prioritizes simplicity, flexibility, and user control.
+**Remote Agentic Coding Platform**: Control AI coding assistants (Claude Code SDK, Codex SDK, Qwen Code SDK) remotely from Slack, Telegram, and GitHub. Built with **Bun + TypeScript + SQLite/PostgreSQL**, single-developer tool for AI-assisted development practitioners. Architecture prioritizes simplicity, flexibility, and user control.
 
 ## Core Principles
 
@@ -443,7 +443,15 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 - Implement `IAssistantClient` interface
 - **ClaudeClient**: `@anthropic-ai/claude-agent-sdk`
 - **CodexClient**: `@openai/codex-sdk`
+- **QwenClient**: `@qwen-code/sdk`
 - Streaming: `for await (const event of events) { await platform.send(event) }`
+
+**Qwen Support Boundaries**
+- Archon uses `@qwen-code/sdk` and can select Qwen as the active assistant when configured.
+- `pathToQwenExecutable` is optional and only needed when pointing at a custom Qwen binary.
+- Claude-only options do not apply to Qwen: `settingSources`, `effort`, `thinking`,
+  `maxBudgetUsd`, `fallbackModel`, `betas`, `sandbox`, `hooks`, and `skills`.
+- Structured `output_format` support is currently limited compared with Claude and Codex.
 
 ### Configuration
 
@@ -470,6 +478,12 @@ assistants:
     additionalDirectories:
       - /absolute/path/to/other/repo
     codexBinaryPath: /usr/local/bin/codex  # Optional: custom Codex CLI binary path
+  qwen:
+    model: qwen-max
+    pathToQwenExecutable: qwen  # Optional: custom Qwen CLI executable path
+    permissionMode: yolo  # 'default' | 'plan' | 'auto-edit' | 'yolo'
+    authType: openai  # 'openai' | 'qwen-oauth'
+    includePartialMessages: true
 
 # docs:
 #   path: docs  # Optional: default is docs/
@@ -483,6 +497,7 @@ assistants:
 **Model Validation:**
 - Workflows are validated at load time for provider/model compatibility
 - Claude models: `sonnet`, `opus`, `haiku`, `claude-*`, `inherit`
+- Qwen models: `qwen-*`, `qwq-*`, `qvq-*`
 - Codex models: Any model except Claude-specific aliases
 - Invalid combinations fail workflow loading with clear error messages
 
@@ -681,7 +696,7 @@ async function createSession(conversationId: string, codebaseId: string) {
 2. **Workflows** (YAML-based):
    - Stored in `.archon/workflows/` (searched recursively)
    - Multi-step AI execution chains, discovered at runtime
-   - **`nodes:` (DAG format)**: Nodes with explicit `depends_on` edges; independent nodes in the same topological layer run concurrently. Node types: `command:` (named command file), `prompt:` (inline prompt), `bash:` (shell script, stdout captured as `$nodeId.output`, no AI), `loop:` (iterative AI prompt until completion signal), `approval:` (human gate; pauses until user approves or rejects; `capture_response: true` stores the user's comment as `$<node-id>.output` for downstream nodes, default false), `script:` (inline TypeScript/Python or named script from `.archon/scripts/`, runs via `bun` or `uv`, stdout captured as `$nodeId.output`, no AI, supports `deps:` for dependency installation and `timeout:` in ms, requires `runtime: bun` or `runtime: uv`) . Supports `when:` conditions, `trigger_rule` join semantics, `$nodeId.output` substitution, `output_format` for structured JSON output (Claude and Codex), `allowed_tools`/`denied_tools` for per-node tool restrictions (Claude only), `hooks` for per-node SDK hook callbacks (Claude only), `mcp` for per-node MCP server config files (Claude only, env vars expanded at execution time), and `skills` for per-node skill preloading via AgentDefinition wrapping (Claude only), and `effort`/`thinking`/`maxBudgetUsd`/`systemPrompt`/`fallbackModel`/`betas`/`sandbox` for Claude SDK advanced options (Claude only, also settable at workflow level)
+   - **`nodes:` (DAG format)**: Nodes with explicit `depends_on` edges; independent nodes in the same topological layer run concurrently. Node types: `command:` (named command file), `prompt:` (inline prompt), `bash:` (shell script, stdout captured as `$nodeId.output`, no AI), `loop:` (iterative AI prompt until completion signal), `approval:` (human gate; pauses until user approves or rejects; `capture_response: true` stores the user's comment as `$<node-id>.output` for downstream nodes, default false), `script:` (inline TypeScript/Python or named script from `.archon/scripts/`, runs via `bun` or `uv`, stdout captured as `$nodeId.output`, no AI, supports `deps:` for dependency installation and `timeout:` in ms, requires `runtime: bun` or `runtime: uv`) . Supports `when:` conditions, `trigger_rule` join semantics, `$nodeId.output` substitution, `output_format` for structured JSON output (Claude and Codex; Qwen support is currently limited), `allowed_tools`/`denied_tools` for per-node tool restrictions (Claude/Codex/Qwen), `hooks` for per-node SDK hook callbacks (Claude only), `mcp` for per-node MCP server config files (Claude/Codex/Qwen), and `skills` for per-node skill preloading via AgentDefinition wrapping (Claude only), and `effort`/`thinking`/`maxBudgetUsd`/`systemPrompt`/`fallbackModel`/`betas`/`sandbox` for Claude SDK advanced options (Claude only, also settable at workflow level)
    - Provider inherited from `.archon/config.yaml` unless explicitly set; per-node `provider` and `model` overrides supported
    - Model and options can be set per workflow or inherited from config defaults
    - `interactive: true` at the workflow level forces foreground execution on web (required for approval-gate workflows in the web UI)

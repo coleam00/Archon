@@ -75,7 +75,7 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 # Bot display name (shown in messages)
 # botName: Archon
 
-# Default AI assistant (claude or codex)
+# Default AI assistant (claude, codex, or qwen)
 # defaultAssistant: claude
 
 # Assistant defaults
@@ -88,6 +88,9 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 #     webSearchMode: disabled
 #     additionalDirectories:
 #       - /absolute/path/to/other/repo
+#   qwen:
+#     model: qwen-max
+#     pathToQwenExecutable: qwen
 
 # Streaming mode per platform (stream or batch)
 # streaming:
@@ -194,6 +197,7 @@ function getDefaults(): MergedConfig {
     assistants: {
       claude: {},
       codex: {},
+      qwen: {},
     },
     streaming: {
       telegram: 'stream',
@@ -232,7 +236,7 @@ function applyEnvOverrides(config: MergedConfig): MergedConfig {
 
   // Assistant override
   const envAssistant = process.env.DEFAULT_AI_ASSISTANT;
-  if (envAssistant === 'claude' || envAssistant === 'codex') {
+  if (envAssistant === 'claude' || envAssistant === 'codex' || envAssistant === 'qwen') {
     config.assistant = envAssistant;
   }
 
@@ -277,6 +281,7 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
     assistants: {
       claude: { ...defaults.assistants.claude },
       codex: { ...defaults.assistants.codex },
+      ...(defaults.assistants.qwen ? { qwen: { ...defaults.assistants.qwen } } : {}),
     },
   };
 
@@ -300,6 +305,12 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
     result.assistants.codex = {
       ...result.assistants.codex,
       ...global.assistants.codex,
+    };
+  }
+  if (global.assistants?.qwen) {
+    result.assistants.qwen = {
+      ...result.assistants.qwen,
+      ...global.assistants.qwen,
     };
   }
 
@@ -339,6 +350,7 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
     assistants: {
       claude: { ...merged.assistants.claude },
       codex: { ...merged.assistants.codex },
+      ...(merged.assistants.qwen ? { qwen: { ...merged.assistants.qwen } } : {}),
     },
   };
 
@@ -357,6 +369,12 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
     result.assistants.codex = {
       ...result.assistants.codex,
       ...repo.assistants.codex,
+    };
+  }
+  if (repo.assistants?.qwen) {
+    result.assistants.qwen = {
+      ...result.assistants.qwen,
+      ...repo.assistants.qwen,
     };
   }
 
@@ -529,6 +547,13 @@ export function toSafeConfig(config: MergedConfig): SafeConfig {
         modelReasoningEffort: config.assistants.codex.modelReasoningEffort,
         webSearchMode: config.assistants.codex.webSearchMode,
       },
+      ...(config.assistants.qwen
+        ? {
+            qwen: {
+              model: config.assistants.qwen.model,
+            },
+          }
+        : {}),
     },
     streaming: {
       telegram: config.streaming.telegram,

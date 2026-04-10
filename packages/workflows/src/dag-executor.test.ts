@@ -114,7 +114,7 @@ function createMockDeps(storeOverride?: IWorkflowStore): WorkflowDeps {
         assistant: 'claude' as const,
         commands: {},
         defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
-        assistants: { claude: {}, codex: {} },
+        assistants: { claude: {}, codex: {}, qwen: {} },
       })
     ),
   };
@@ -131,7 +131,7 @@ function createMockPlatform(): IWorkflowPlatform {
 
 const minimalConfig: WorkflowConfig = {
   assistant: 'claude',
-  assistants: { claude: {}, codex: {} },
+  assistants: { claude: {}, codex: {}, qwen: {} },
   commands: {},
   defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
 };

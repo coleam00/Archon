@@ -460,6 +460,7 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
   const [assistant, setAssistant] = useState(config.assistant);
   const [claudeModel, setClaudeModel] = useState(config.assistants.claude.model ?? 'sonnet');
   const [codexModel, setCodexModel] = useState(config.assistants.codex.model ?? '');
+  const [qwenModel, setQwenModel] = useState(config.assistants.qwen.model ?? '');
   const [reasoning, setReasoning] = useState<'minimal' | 'low' | 'medium' | 'high' | 'xhigh'>(
     config.assistants.codex.modelReasoningEffort ?? 'medium'
   );
@@ -472,6 +473,7 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
     assistant !== config.assistant ||
     claudeModel !== (config.assistants.claude.model ?? 'sonnet') ||
     codexModel !== (config.assistants.codex.model ?? '') ||
+    qwenModel !== (config.assistants.qwen.model ?? '') ||
     reasoning !== (config.assistants.codex.modelReasoningEffort ?? 'medium') ||
     webSearch !== (config.assistants.codex.webSearchMode ?? 'disabled');
 
@@ -479,6 +481,7 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
     setAssistant(config.assistant);
     setClaudeModel(config.assistants.claude.model ?? 'sonnet');
     setCodexModel(config.assistants.codex.model ?? '');
+    setQwenModel(config.assistants.qwen.model ?? '');
     setReasoning(config.assistants.codex.modelReasoningEffort ?? 'medium');
     setWebSearch(config.assistants.codex.webSearchMode ?? 'disabled');
   }, [config]);
@@ -508,6 +511,7 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
             codex: { model: codexModel, modelReasoningEffort: reasoning, webSearchMode: webSearch },
           }
         : {}),
+      ...(qwenModel ? { qwen: { model: qwenModel } } : {}),
     });
   }
 
@@ -524,12 +528,13 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
               id="default-assistant"
               value={assistant}
               onChange={e => {
-                setAssistant(e.target.value as 'claude' | 'codex');
+                setAssistant(e.target.value as 'claude' | 'codex' | 'qwen');
               }}
               className={selectClass}
             >
               <option value="claude">Claude</option>
               <option value="codex">Codex</option>
+              <option value="qwen">Qwen</option>
             </select>
 
             <label htmlFor="claude-model">Claude Model</label>
@@ -554,6 +559,16 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
                 setCodexModel(e.target.value);
               }}
               placeholder="gpt-5.3-codex"
+            />
+
+            <label htmlFor="qwen-model">Qwen Model</label>
+            <Input
+              id="qwen-model"
+              value={qwenModel}
+              onChange={e => {
+                setQwenModel(e.target.value);
+              }}
+              placeholder="qwen-max"
             />
 
             <label htmlFor="reasoning">Reasoning Effort</label>

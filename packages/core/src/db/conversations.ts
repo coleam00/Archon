@@ -73,6 +73,9 @@ export async function getOrCreateConversation(
   let inheritedCodebaseId: string | null = null;
   let inheritedCwd: string | null = null;
   let assistantType = process.env.DEFAULT_AI_ASSISTANT ?? 'claude';
+  if (assistantType !== 'claude' && assistantType !== 'codex' && assistantType !== 'qwen') {
+    assistantType = 'claude';
+  }
 
   if (parentConversationId) {
     const parent = await pool.query<Conversation>(

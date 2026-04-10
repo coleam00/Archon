@@ -28,7 +28,7 @@ afterEach(async () => {
 function makeWorkflow(
   name: string,
   nodes: DagNode[],
-  provider?: 'claude' | 'codex'
+  provider?: 'claude' | 'codex' | 'qwen'
 ): WorkflowDefinition {
   return {
     name,

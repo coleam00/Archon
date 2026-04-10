@@ -285,7 +285,7 @@ describe('executeWorkflow', () => {
         loadConfig: mock(
           async (): Promise<WorkflowConfig> => ({
             assistant: 'claude' as const,
-            assistants: { claude: {}, codex: {} },
+            assistants: { claude: {}, codex: {}, qwen: {} },
             baseBranch: '',
             commands: { folder: '' },
             docsPath: 'packages/docs-web/src/content/docs',
@@ -488,7 +488,7 @@ describe('executeWorkflow', () => {
       // Override loadConfig to return file-level envVars
       (deps.loadConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
         assistant: 'claude' as const,
-        assistants: { claude: {}, codex: {} },
+        assistants: { claude: {}, codex: {}, qwen: {} },
         baseBranch: '',
         commands: { folder: '' },
         envVars: { FILE_KEY: 'file_val' },

@@ -15,7 +15,9 @@ import { stepRetryConfigSchema } from './retry';
 import { loopNodeConfigSchema } from './loop';
 import { workflowNodeHooksSchema } from './hooks';
 import { isValidCommandName } from '../command-validation';
-import { isModelCompatible } from '../model-validation';
+import { ASSISTANT_PROVIDER_VALUES, isModelCompatible } from '../model-validation';
+
+export { ASSISTANT_PROVIDER_VALUES };
 
 // ---------------------------------------------------------------------------
 // TriggerRule
@@ -116,7 +118,7 @@ export const dagNodeBaseSchema = z.object({
   when: z.string().optional(),
   trigger_rule: triggerRuleSchema.optional(),
   model: z.string().optional(),
-  provider: z.enum(['claude', 'codex']).optional(),
+  provider: z.enum(ASSISTANT_PROVIDER_VALUES).optional(),
   context: z.enum(['fresh', 'shared']).optional(),
   output_format: z.record(z.unknown()).optional(),
   allowed_tools: z.array(z.string()).optional(),

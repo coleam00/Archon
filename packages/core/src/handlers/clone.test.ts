@@ -547,6 +547,23 @@ describe('cloneRepository', () => {
       expect(createCall[0].ai_assistant_type).toBe('codex');
     });
 
+    test('detects qwen assistant when .qwen folder exists but .codex does not', async () => {
+      spyFsAccess.mockImplementation((path: string) => {
+        if (typeof path === 'string' && path.endsWith('.qwen')) {
+          return Promise.resolve(undefined);
+        }
+        return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      });
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({ ai_assistant_type: 'qwen' }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://github.com/owner/repo');
+
+      const createCall = mockCreateCodebase.mock.calls[0] as [{ ai_assistant_type: string }];
+      expect(createCall[0].ai_assistant_type).toBe('qwen');
+    });
+
     test('defaults to claude when neither .codex nor .claude folder exists', async () => {
       spyFsAccess.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
       mockCreateCodebase.mockResolvedValueOnce(

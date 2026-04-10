@@ -4,6 +4,7 @@
  */
 import { z } from '@hono/zod-openapi';
 import {
+  ASSISTANT_PROVIDER_VALUES,
   dagNodeSchema,
   effortLevelSchema,
   thinkingConfigSchema,
@@ -29,7 +30,7 @@ export type WebSearchMode = z.infer<typeof webSearchModeSchema>;
 export const workflowBaseSchema = z.object({
   name: z.string().min(1),
   description: z.string().min(1),
-  provider: z.enum(['claude', 'codex']).optional(),
+  provider: z.enum(ASSISTANT_PROVIDER_VALUES).optional(),
   model: z.string().optional(),
   modelReasoningEffort: modelReasoningEffortSchema.optional(),
   webSearchMode: webSearchModeSchema.optional(),

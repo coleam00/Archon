@@ -106,7 +106,7 @@ const mockLoadConfig = mock(() =>
   Promise.resolve({
     botName: 'Archon',
     assistant: 'claude',
-    assistants: { claude: {}, codex: {} },
+    assistants: { claude: {}, codex: {}, qwen: {} },
     streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
     paths: { workspaces: '/tmp', worktrees: '/tmp' },
     concurrency: { maxConversations: 10 },

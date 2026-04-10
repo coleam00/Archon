@@ -21,6 +21,7 @@ import {
 import { execFileAsync } from '@archon/git';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { isValidCommandName } from './command-validation';
+import type { AssistantProvider } from './model-validation';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -244,7 +245,7 @@ export async function checkRuntimeAvailable(runtime: ScriptRuntime): Promise<boo
 // =============================================================================
 
 /** Get the resolved provider for a node (node-level > workflow-level) */
-function resolveProvider(node: DagNode, workflowProvider?: string): string {
+function resolveProvider(node: DagNode, workflowProvider?: AssistantProvider): AssistantProvider {
   if ('provider' in node && node.provider) return node.provider;
   return workflowProvider ?? 'claude';
 }

@@ -268,7 +268,7 @@ The Web UI and CLI work out of the box. Optionally connect a chat platform for r
       ▼                ▼          ▼                ▼
 ┌───────────┐  ┌────────────┐  ┌──────────────────────────┐
 │  Command  │  │  Workflow  │  │    AI Assistant Clients  │
-│  Handler  │  │  Executor  │  │      (Claude / Codex)    │
+│  Handler  │  │  Executor  │  │   (Claude / Codex / Qwen)│
 │  (Slash)  │  │  (YAML)    │  │                          │
 └───────────┘  └────────────┘  └──────────────────────────┘
       │              │                      │
@@ -294,10 +294,22 @@ Full documentation is available at **[archon.diy](https://archon.diy)**.
 | [Authoring Workflows](https://archon.diy/guides/authoring-workflows/) | Create custom YAML workflows |
 | [Authoring Commands](https://archon.diy/guides/authoring-commands/) | Create reusable AI commands |
 | [Configuration](https://archon.diy/reference/configuration/) | All config options, env vars, YAML settings |
-| [AI Assistants](https://archon.diy/getting-started/ai-assistants/) | Claude and Codex setup details |
+| [AI Assistants](https://archon.diy/getting-started/ai-assistants/) | Claude, Codex, and Qwen setup details |
 | [Deployment](https://archon.diy/deployment/) | Docker, VPS, production setup |
 | [Architecture](https://archon.diy/reference/architecture/) | System design and internals |
 | [Troubleshooting](https://archon.diy/reference/troubleshooting/) | Common issues and fixes |
+
+### Qwen Support Boundaries
+
+Archon integrates Qwen through `@qwen-code/sdk` and can select it as the active assistant
+when configured globally, per repository, or per workflow node.
+
+- Qwen works with Archon's normal assistant selection and MCP wiring.
+- `pathToQwenExecutable` is optional; use it only if you want to point Archon at a specific
+  Qwen CLI binary.
+- Claude-only workflow features do not apply to Qwen: `settingSources`, `effort`,
+  `thinking`, `maxBudgetUsd`, `fallbackModel`, `betas`, `sandbox`, `hooks`, and `skills`.
+- Structured `output_format` support is currently limited compared with Claude and Codex.
 
 ## Contributing
 

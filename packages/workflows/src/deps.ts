@@ -12,6 +12,7 @@ import type {
   ThinkingConfig,
   SandboxSettings,
 } from './schemas';
+import type { AssistantProvider } from './model-validation';
 
 // ---------------------------------------------------------------------------
 // Workflow-local type copies — structurally identical to the originals in
@@ -226,7 +227,7 @@ export interface IWorkflowAssistantClient {
   getType(): string;
 }
 
-export type AssistantClientFactory = (provider: 'claude' | 'codex') => IWorkflowAssistantClient;
+export type AssistantClientFactory = (provider: AssistantProvider) => IWorkflowAssistantClient;
 
 // ---------------------------------------------------------------------------
 // Narrow config interface (subset of MergedConfig)
@@ -237,8 +238,8 @@ export type AssistantClientFactory = (provider: 'claude' | 'codex') => IWorkflow
 // ---------------------------------------------------------------------------
 
 export interface WorkflowConfig {
-  /** Default assistant provider ('claude' | 'codex') */
-  assistant: 'claude' | 'codex';
+  /** Default assistant provider ('claude' | 'codex' | 'qwen') */
+  assistant: AssistantProvider;
   baseBranch?: string;
   docsPath?: string;
   /**
@@ -262,6 +263,13 @@ export interface WorkflowConfig {
       modelReasoningEffort?: ModelReasoningEffort;
       webSearchMode?: WebSearchMode;
       additionalDirectories?: string[];
+    };
+    qwen?: {
+      model?: string;
+      pathToQwenExecutable?: string;
+      permissionMode?: 'default' | 'plan' | 'auto-edit' | 'yolo';
+      authType?: 'openai' | 'qwen-oauth';
+      includePartialMessages?: boolean;
     };
   };
 }

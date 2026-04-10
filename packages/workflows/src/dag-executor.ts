@@ -45,7 +45,11 @@ import { formatToolCall } from './utils/tool-formatter';
 import { createLogger } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { evaluateCondition } from './condition-evaluator';
-import { isClaudeModel, isModelCompatible } from './model-validation';
+import {
+  inferProviderFromModel,
+  isModelCompatible,
+  type AssistantProvider,
+} from './model-validation';
 import {
   logNodeStart,
   logNodeComplete,
@@ -362,7 +366,7 @@ function expandEnvVars(config: Record<string, unknown>): {
  */
 async function resolveNodeProviderAndModel(
   node: DagNode,
-  workflowProvider: 'claude' | 'codex',
+  workflowProvider: AssistantProvider,
   workflowModel: string | undefined,
   config: WorkflowConfig,
   platform: IWorkflowPlatform,
@@ -371,18 +375,16 @@ async function resolveNodeProviderAndModel(
   cwd: string,
   workflowLevelOptions: WorkflowLevelOptions
 ): Promise<{
-  provider: 'claude' | 'codex';
+  provider: AssistantProvider;
   model: string | undefined;
   options: WorkflowAssistantOptions | undefined;
 }> {
-  let provider: 'claude' | 'codex';
+  let provider: AssistantProvider;
 
   if (node.provider) {
     provider = node.provider;
-  } else if (node.model && isClaudeModel(node.model)) {
-    provider = 'claude';
   } else if (node.model) {
-    provider = 'codex';
+    provider = inferProviderFromModel(node.model) ?? workflowProvider;
   } else {
     provider = workflowProvider;
   }
@@ -414,13 +416,14 @@ async function resolveNodeProviderAndModel(
     }
   }
 
-  // Warn if Codex node has hooks (unsupported)
-  if (provider === 'codex' && node.hooks) {
+  // Warn if Codex/Qwen node has hooks (unsupported in the current workflow mapping)
+  if ((provider === 'codex' || provider === 'qwen') && node.hooks) {
+    const providerLabel = provider === 'qwen' ? 'Qwen' : 'Codex';
     getLog().warn({ nodeId: node.id }, 'dag_node_hooks_ignored_codex');
     const delivered = await safeSendMessage(
       platform,
       conversationId,
-      `Warning: Node '${node.id}' has hooks set but uses Codex provider — hooks are Claude-only and will be ignored.`,
+      `Warning: Node '${node.id}' has hooks set but uses ${providerLabel} provider — hooks are Claude-only and will be ignored.`,
       { workflowId: workflowRunId, nodeName: node.id }
     );
     if (!delivered) {
@@ -443,12 +446,13 @@ async function resolveNodeProviderAndModel(
   }
 
   // Warn if Codex node has skills (unsupported)
-  if (provider === 'codex' && node.skills) {
+  if ((provider === 'codex' || provider === 'qwen') && node.skills) {
+    const providerLabel = provider === 'qwen' ? 'Qwen' : 'Codex';
     getLog().warn({ nodeId: node.id }, 'dag.skills_ignored_codex');
     const delivered = await safeSendMessage(
       platform,
       conversationId,
-      `Warning: Node '${node.id}' has skills set but uses Codex — per-node skills are not supported for Codex.`,
+      `Warning: Node '${node.id}' has skills set but uses ${providerLabel} — per-node skills are not supported for ${providerLabel}.`,
       { workflowId: workflowRunId, nodeName: node.id }
     );
     if (!delivered) {
@@ -457,7 +461,8 @@ async function resolveNodeProviderAndModel(
   }
 
   // Warn if Codex node has Claude-only SDK options (effort, thinking, maxBudgetUsd, systemPrompt, fallbackModel, betas, sandbox)
-  if (provider === 'codex') {
+  if (provider === 'codex' || provider === 'qwen') {
+    const providerLabel = provider === 'qwen' ? 'Qwen' : 'Codex';
     const claudeOnlyFields = [
       ['effort', node.effort ?? workflowLevelOptions.effort],
       ['thinking', node.thinking ?? workflowLevelOptions.thinking],
@@ -473,7 +478,7 @@ async function resolveNodeProviderAndModel(
       const delivered = await safeSendMessage(
         platform,
         conversationId,
-        `Warning: Node '${node.id}' has Claude-only options (${present.join(', ')}) but uses Codex — these will be ignored.`,
+        `Warning: Node '${node.id}' has Claude-only options (${present.join(', ')}) but uses ${providerLabel} — these will be ignored.`,
         { workflowId: workflowRunId, nodeName: node.id }
       );
       if (!delivered) {
@@ -495,6 +500,41 @@ async function resolveNodeProviderAndModel(
     };
     if (node.output_format) {
       options.outputFormat = { type: 'json_schema', schema: node.output_format };
+    }
+  } else if (provider === 'qwen') {
+    options = {
+      model,
+      systemPrompt: node.systemPrompt,
+      allowedTools: node.allowed_tools,
+      disallowedTools: node.denied_tools,
+    };
+    if (node.mcp) {
+      try {
+        const { servers, serverNames, missingVars } = await loadMcpConfig(node.mcp, cwd);
+        options.mcpServers = servers as unknown as WorkflowAssistantOptions['mcpServers'];
+        const mcpWildcards = serverNames.map(name => `mcp__${name}__*`);
+        options.allowedTools = [...(options.allowedTools ?? []), ...mcpWildcards];
+        getLog().info({ nodeId: node.id, serverNames, mcpPath: node.mcp }, 'dag.mcp_config_loaded');
+        if (missingVars.length > 0) {
+          const uniqueVars = [...new Set(missingVars)];
+          getLog().warn({ nodeId: node.id, missingVars: uniqueVars }, 'dag.mcp_env_vars_missing');
+          const delivered = await safeSendMessage(
+            platform,
+            conversationId,
+            `Warning: Node '${node.id}' MCP config references undefined env vars: ${uniqueVars.join(', ')}. These will be empty strings — MCP servers may fail to authenticate.`,
+            { workflowId: workflowRunId, nodeName: node.id }
+          );
+          if (!delivered) {
+            getLog().error(
+              { nodeId: node.id, workflowRunId },
+              'dag.mcp_env_vars_warning_delivery_failed'
+            );
+          }
+        }
+      } catch (error) {
+        getLog().error({ nodeId: node.id, err: error as Error }, 'dag.mcp_config_failed_qwen');
+        throw error;
+      }
     }
   } else {
     const claudeOptions: WorkflowAssistantOptions = {};
@@ -716,7 +756,7 @@ async function executeNodeInternal(
   cwd: string,
   workflowRun: WorkflowRun,
   node: CommandNode | PromptNode,
-  provider: 'claude' | 'codex',
+  provider: AssistantProvider,
   nodeOptions: WorkflowAssistantOptions | undefined,
   artifactsDir: string,
   logDir: string,
@@ -1667,7 +1707,7 @@ async function executeScriptNode(
  * Caller is responsible for resolving per-node overrides before passing model.
  */
 function buildLoopNodeOptions(
-  provider: 'claude' | 'codex',
+  provider: AssistantProvider,
   model: string | undefined,
   config: WorkflowConfig
 ): WorkflowAssistantOptions | undefined {
@@ -1704,7 +1744,7 @@ async function executeLoopNode(
   cwd: string,
   workflowRun: WorkflowRun,
   node: LoopNode,
-  workflowProvider: 'claude' | 'codex',
+  workflowProvider: AssistantProvider,
   workflowModel: string | undefined,
   artifactsDir: string,
   logDir: string,
@@ -2192,7 +2232,7 @@ async function executeApprovalNode(
   deps: WorkflowDeps,
   platform: IWorkflowPlatform,
   conversationId: string,
-  workflowProvider: 'claude' | 'codex',
+  workflowProvider: AssistantProvider,
   workflowModel: string | undefined,
   cwd: string,
   artifactsDir: string,
@@ -2362,7 +2402,7 @@ export async function executeDagWorkflow(
   cwd: string,
   workflow: { name: string; nodes: readonly DagNode[] } & WorkflowLevelOptions,
   workflowRun: WorkflowRun,
-  workflowProvider: 'claude' | 'codex',
+  workflowProvider: AssistantProvider,
   workflowModel: string | undefined,
   artifactsDir: string,
   logDir: string,
@@ -2599,13 +2639,11 @@ export async function executeDagWorkflow(
           // 3b. Loop node dispatch — manages its own AI sessions and iteration
           if (isLoopNode(node)) {
             // Resolve per-node provider/model overrides (same logic as other node types)
-            let loopProvider: 'claude' | 'codex';
+            let loopProvider: AssistantProvider;
             if (node.provider) {
               loopProvider = node.provider;
-            } else if (node.model && isClaudeModel(node.model)) {
-              loopProvider = 'claude';
             } else if (node.model) {
-              loopProvider = 'codex';
+              loopProvider = inferProviderFromModel(node.model) ?? workflowProvider;
             } else {
               loopProvider = workflowProvider;
             }

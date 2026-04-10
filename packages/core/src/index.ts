@@ -2,7 +2,7 @@
  * @archon/core - Shared business logic for Archon
  *
  * This package contains:
- * - AI client adapters (Claude, Codex)
+ * - AI client adapters (Claude, Codex, Qwen)
  * - Database operations (SQLite/PostgreSQL)
  * - Orchestration logic
  * - Workflow store adapter (bridges core DB to @archon/workflows IWorkflowStore)
@@ -57,6 +57,7 @@ export { SessionNotFoundError } from './db/sessions';
 // =============================================================================
 export { ClaudeClient } from './clients/claude';
 export { CodexClient } from './clients/codex';
+export { QwenClient } from './clients/qwen';
 export { getAssistantClient } from './clients/factory';
 
 // =============================================================================

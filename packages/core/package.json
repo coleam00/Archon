@@ -34,6 +34,7 @@
     "@archon/paths": "workspace:*",
     "@archon/workflows": "workspace:*",
     "@openai/codex-sdk": "^0.116.0",
+    "@qwen-code/sdk": "^0.1.6",
     "pg": "^8.11.0",
     "zod": "^3"
   },

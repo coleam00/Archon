@@ -134,6 +134,7 @@ CODEX_ACCOUNT_ID=account1
           claude: true,
           claudeAuthType: 'global',
           codex: false,
+          qwen: false,
           defaultAssistant: 'claude',
         },
         platforms: {
@@ -160,6 +161,7 @@ CODEX_ACCOUNT_ID=account1
           claudeAuthType: 'apiKey',
           claudeApiKey: 'sk-test-key',
           codex: false,
+          qwen: false,
           defaultAssistant: 'claude',
         },
         platforms: {
@@ -183,6 +185,7 @@ CODEX_ACCOUNT_ID=account1
           claude: true,
           claudeAuthType: 'global',
           codex: false,
+          qwen: false,
           defaultAssistant: 'claude',
         },
         platforms: {
@@ -220,6 +223,7 @@ CODEX_ACCOUNT_ID=account1
         ai: {
           claude: false,
           codex: true,
+          qwen: false,
           codexTokens: {
             idToken: 'id-token',
             accessToken: 'access-token',
@@ -251,6 +255,7 @@ CODEX_ACCOUNT_ID=account1
           claude: true,
           claudeAuthType: 'global',
           codex: false,
+          qwen: false,
           defaultAssistant: 'claude',
         },
         platforms: {
@@ -272,6 +277,7 @@ CODEX_ACCOUNT_ID=account1
           claude: true,
           claudeAuthType: 'global',
           codex: false,
+          qwen: false,
           defaultAssistant: 'claude',
         },
         platforms: {
@@ -293,6 +299,7 @@ CODEX_ACCOUNT_ID=account1
           claude: true,
           claudeAuthType: 'global',
           codex: false,
+          qwen: false,
           defaultAssistant: 'claude',
         },
         platforms: {
@@ -322,6 +329,7 @@ CODEX_ACCOUNT_ID=account1
           claude: true,
           claudeAuthType: 'global',
           codex: false,
+          qwen: false,
           defaultAssistant: 'claude',
         },
         platforms: {

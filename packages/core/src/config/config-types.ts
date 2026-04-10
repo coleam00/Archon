@@ -12,6 +12,9 @@
  */
 import type { ModelReasoningEffort, WebSearchMode } from '../types';
 
+export const ASSISTANT_TYPE_VALUES = ['claude', 'codex', 'qwen'] as const;
+export type AssistantType = (typeof ASSISTANT_TYPE_VALUES)[number];
+
 export interface AssistantDefaults {
   model?: string;
   modelReasoningEffort?: ModelReasoningEffort;
@@ -20,6 +23,18 @@ export interface AssistantDefaults {
   /** Path to the Codex CLI binary. Overrides auto-detection in compiled Archon builds.
    *  Only relevant for the Codex provider; ignored for Claude. */
   codexBinaryPath?: string;
+}
+
+export interface QwenAssistantDefaults {
+  model?: string;
+  /** Path to the Qwen CLI executable. Overrides auto-detection in compiled Archon builds. */
+  pathToQwenExecutable?: string;
+  /** Qwen permission mode. Defaults to `yolo` for autonomous execution. */
+  permissionMode?: 'default' | 'plan' | 'auto-edit' | 'yolo';
+  /** Qwen authentication mode. Defaults to `openai` for Archon's server-side usage. */
+  authType?: 'openai' | 'qwen-oauth';
+  /** Whether to stream partial assistant messages while a turn is running. */
+  includePartialMessages?: boolean;
 }
 
 export interface ClaudeAssistantDefaults {
@@ -41,7 +56,7 @@ export interface GlobalConfig {
    * Default AI assistant when no codebase-specific preference
    * @default 'claude'
    */
-  defaultAssistant?: 'claude' | 'codex';
+  defaultAssistant?: AssistantType;
 
   /**
    * Assistant-specific defaults (model, reasoning effort, etc.)
@@ -49,6 +64,7 @@ export interface GlobalConfig {
   assistants?: {
     claude?: ClaudeAssistantDefaults;
     codex?: AssistantDefaults;
+    qwen?: QwenAssistantDefaults;
   };
 
   /**
@@ -112,7 +128,7 @@ export interface RepoConfig {
    * AI assistant preference for this repository
    * Overrides global default
    */
-  assistant?: 'claude' | 'codex';
+  assistant?: AssistantType;
 
   /**
    * Assistant-specific defaults for this repository
@@ -120,6 +136,7 @@ export interface RepoConfig {
   assistants?: {
     claude?: ClaudeAssistantDefaults;
     codex?: AssistantDefaults;
+    qwen?: QwenAssistantDefaults;
   };
 
   /**
@@ -215,10 +232,11 @@ export interface RepoConfig {
  */
 export interface MergedConfig {
   botName: string;
-  assistant: 'claude' | 'codex';
+  assistant: AssistantType;
   assistants: {
     claude: ClaudeAssistantDefaults;
     codex: AssistantDefaults;
+    qwen?: QwenAssistantDefaults;
   };
   streaming: {
     telegram: 'stream' | 'batch';
@@ -279,10 +297,11 @@ export interface MergedConfig {
  */
 export interface SafeConfig {
   botName: string;
-  assistant: 'claude' | 'codex';
+  assistant: AssistantType;
   assistants: {
     claude: Pick<ClaudeAssistantDefaults, 'model'>;
     codex: Pick<AssistantDefaults, 'model' | 'modelReasoningEffort' | 'webSearchMode'>;
+    qwen?: Pick<QwenAssistantDefaults, 'model'>;
   };
   streaming: {
     telegram: 'stream' | 'batch';

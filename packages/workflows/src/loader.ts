@@ -4,7 +4,12 @@
 import type { WorkflowDefinition, WorkflowLoadError, DagNode, WorkflowNodeHooks } from './schemas';
 import { isLoopNode, isApprovalNode, isCancelNode, isScriptNode } from './schemas';
 import { createLogger } from '@archon/paths';
-import { isModelCompatible } from './model-validation';
+import {
+  ASSISTANT_PROVIDER_VALUES,
+  inferProviderFromModel,
+  isModelCompatible,
+  type AssistantProvider,
+} from './model-validation';
 import { dagNodeSchema, BASH_NODE_AI_FIELDS, SCRIPT_NODE_AI_FIELDS } from './schemas/dag-node';
 import { modelReasoningEffortSchema, webSearchModeSchema } from './schemas/workflow';
 import { workflowNodeHooksSchema } from './schemas/hooks';
@@ -271,16 +276,20 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     // Note: modelReasoningEffort and webSearchMode use warn-and-ignore for invalid values
     // (consistent with original behavior) rather than schema-level rejection.
     const provider =
-      raw.provider === 'claude' || raw.provider === 'codex' ? raw.provider : undefined;
+      typeof raw.provider === 'string' &&
+      ASSISTANT_PROVIDER_VALUES.includes(raw.provider as AssistantProvider)
+        ? (raw.provider as AssistantProvider)
+        : undefined;
     const model = typeof raw.model === 'string' ? raw.model : undefined;
+    const inferredProvider = provider ?? inferProviderFromModel(model);
 
     // Validate model/provider compatibility at workflow level
-    if (provider && model && !isModelCompatible(provider, model)) {
+    if (inferredProvider && model && !isModelCompatible(inferredProvider, model)) {
       return {
         workflow: null,
         error: {
           filename,
-          error: `Model "${model}" is not compatible with provider "${provider}"`,
+          error: `Model "${model}" is not compatible with provider "${inferredProvider}"`,
           errorType: 'validation_error',
         },
       };

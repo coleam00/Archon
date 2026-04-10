@@ -96,6 +96,7 @@ async function registerRepoAtPath(
   // Auto-detect assistant type based on folder structure
   let suggestedAssistant = 'claude';
   const codexFolder = join(targetPath, '.codex');
+  const qwenFolder = join(targetPath, '.qwen');
   const claudeFolder = join(targetPath, '.claude');
 
   try {
@@ -104,11 +105,17 @@ async function registerRepoAtPath(
     getLog().debug({ path: codexFolder }, 'assistant_detected_codex');
   } catch {
     try {
-      await access(claudeFolder);
-      suggestedAssistant = 'claude';
-      getLog().debug({ path: claudeFolder }, 'assistant_detected_claude');
+      await access(qwenFolder);
+      suggestedAssistant = 'qwen';
+      getLog().debug({ path: qwenFolder }, 'assistant_detected_qwen');
     } catch {
-      getLog().debug('assistant_default_claude');
+      try {
+        await access(claudeFolder);
+        suggestedAssistant = 'claude';
+        getLog().debug({ path: claudeFolder }, 'assistant_detected_claude');
+      } catch {
+        getLog().debug('assistant_default_claude');
+      }
     }
   }
 

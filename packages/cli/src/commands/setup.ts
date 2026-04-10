@@ -45,7 +45,8 @@ interface SetupConfig {
     claudeOauthToken?: string;
     codex: boolean;
     codexTokens?: CodexTokens;
-    defaultAssistant: 'claude' | 'codex';
+    qwen: boolean;
+    defaultAssistant: 'claude' | 'codex' | 'qwen';
   };
   platforms: {
     github: boolean;
@@ -538,6 +539,7 @@ async function collectAIConfig(): Promise<SetupConfig['ai']> {
     options: [
       { value: 'claude', label: 'Claude (Recommended)', hint: 'Anthropic Claude Code SDK' },
       { value: 'codex', label: 'Codex', hint: 'OpenAI Codex SDK' },
+      { value: 'qwen', label: 'Qwen', hint: 'Qwen Code SDK' },
     ],
     required: false,
   });
@@ -549,6 +551,7 @@ async function collectAIConfig(): Promise<SetupConfig['ai']> {
 
   let hasClaude = assistants.includes('claude');
   let hasCodex = assistants.includes('codex');
+  const hasQwen = assistants.includes('qwen');
 
   // Check if selected CLI tools are installed
   if (hasClaude && !isCommandAvailable('claude')) {
@@ -648,11 +651,23 @@ After upgrading, run 'archon setup' again.`,
     }
   }
 
-  if (!hasClaude && !hasCodex) {
+  if (hasQwen && !isCommandAvailable('qwen')) {
+    note(
+      'Qwen Code SDK can use its bundled CLI by default, so this is usually safe to skip.\n\n' +
+        'If you want to point Archon at a specific Qwen executable later, set:\n' +
+        '  assistants:\n' +
+        '    qwen:\n' +
+        '      pathToQwenExecutable: qwen\n',
+      'Qwen CLI Not Found'
+    );
+  }
+
+  if (!hasClaude && !hasCodex && !hasQwen) {
     log.warning('No AI assistant selected. You can add one later by running `archon setup` again.');
     return {
       claude: false,
       codex: false,
+      qwen: false,
       defaultAssistant: 'claude',
     };
   }
@@ -677,14 +692,15 @@ After upgrading, run 'archon setup' again.`,
   }
 
   // Determine default assistant
-  let defaultAssistant: 'claude' | 'codex' = 'claude';
+  let defaultAssistant: 'claude' | 'codex' | 'qwen' = 'claude';
 
-  if (hasClaude && hasCodex) {
+  if ([hasClaude, hasCodex, hasQwen].filter(Boolean).length > 1) {
     const defaultChoice = await select({
       message: 'Which should be the default AI assistant?',
       options: [
         { value: 'claude', label: 'Claude (Recommended)' },
         { value: 'codex', label: 'Codex' },
+        { value: 'qwen', label: 'Qwen' },
       ],
     });
 
@@ -696,6 +712,8 @@ After upgrading, run 'archon setup' again.`,
     defaultAssistant = defaultChoice;
   } else if (hasCodex && !hasClaude) {
     defaultAssistant = 'codex';
+  } else if (hasQwen && !hasClaude && !hasCodex) {
+    defaultAssistant = 'qwen';
   }
 
   return {
@@ -705,6 +723,7 @@ After upgrading, run 'archon setup' again.`,
     claudeOauthToken,
     codex: hasCodex,
     codexTokens,
+    qwen: hasQwen,
     defaultAssistant,
   };
 }
@@ -1420,6 +1439,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       ai: {
         claude: existing?.hasClaude ?? false,
         codex: existing?.hasCodex ?? false,
+        qwen: false,
         defaultAssistant: 'claude',
       },
       platforms: {
