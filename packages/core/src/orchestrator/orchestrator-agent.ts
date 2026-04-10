@@ -7,6 +7,8 @@
  * - Does NOT require a project to be selected before starting a conversation
  */
 import { existsSync } from 'fs';
+import { writeFile, readFile, readdir, mkdir } from 'fs/promises';
+import { join } from 'path';
 import { createLogger } from '@archon/paths';
 import type {
   IPlatformAdapter,
@@ -445,7 +447,7 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
 }
 
 /** Build the full prompt with system prompt, user message, and optional contexts */
-function buildFullPrompt(
+async function buildFullPrompt(
   conversation: Conversation,
   codebases: readonly Codebase[],
   workflows: readonly WorkflowDefinition[],
@@ -453,7 +455,7 @@ function buildFullPrompt(
   issueContext: string | undefined,
   threadContext: string | undefined,
   attachedFiles?: AttachedFile[]
-): string {
+): Promise<string> {
   const scopedCodebase = conversation.codebase_id
     ? codebases.find(c => c.id === conversation.codebase_id)
     : undefined;
@@ -462,9 +464,18 @@ function buildFullPrompt(
     ? buildProjectScopedPrompt(scopedCodebase, codebases, workflows)
     : buildOrchestratorPrompt(codebases, workflows);
 
-  const summarySuffix = conversation.context_summary
-    ? '\n\n---\n\n## Previous Conversation Summary\n\nThe following is a summary from a prior session in this conversation. Use it as context.\nIf you need more history, check the Obsidian vault at `Claude/Session-Logs/` using Obsidian MCP tools.\n\n' +
-      conversation.context_summary
+  // Load context: prefer DB summary, fall back to latest Obsidian session log
+  let contextContent = conversation.context_summary;
+  if (!contextContent && conversation.codebase_id) {
+    const codebase = codebases.find(c => c.id === conversation.codebase_id);
+    if (codebase) {
+      contextContent = await loadLatestSessionLog(getProjectSlug(codebase));
+    }
+  }
+
+  const summarySuffix = contextContent
+    ? '\n\n---\n\n## Previous Session Context\n\nThe following is context from a prior session (shared across CLI and Telegram). Use it to maintain continuity.\nFor more history, check Obsidian vault at `Claude/Session-Logs/` using Obsidian MCP tools.\n\n' +
+      contextContent
     : '';
 
   const contextSuffix = issueContext ? '\n\n---\n\n## Additional Context\n\n' + issueContext : '';
@@ -761,7 +772,7 @@ export async function handleMessage(
       });
     }
 
-    const fullPrompt = buildFullPrompt(
+    const fullPrompt = await buildFullPrompt(
       conversation,
       codebases,
       workflows,
@@ -1357,6 +1368,102 @@ async function handleRemoveProject(message: string): Promise<string> {
   return `Project "${projectName}" removed.\nPath was: ${codebase.default_cwd}`;
 }
 
+// ─── Shared Memory (Obsidian Session Logs) ─────────────────────────────────
+
+/** Obsidian vault path (iCloud). Both CLI (/compress) and Archon (/compact) use this. */
+const VAULT_SESSION_LOGS = join(
+  process.env.HOME ?? '',
+  'Library/Mobile Documents/iCloud~md~obsidian/Documents/Claude/Session-Logs'
+);
+
+/**
+ * Resolve the project folder name from a codebase (last segment of name).
+ * e.g., "CryptixSamurai/ai-ofm" → "ai-ofm"
+ */
+function getProjectSlug(codebase: Codebase): string {
+  const parts = codebase.name.split('/');
+  return parts[parts.length - 1];
+}
+
+/**
+ * Save a session summary to Obsidian vault as a session log.
+ * Mirrors /compress CLI format so both tools produce a unified timeline.
+ */
+async function saveSessionLogToVault(
+  projectSlug: string,
+  summary: string,
+  platform: string,
+  title?: string | null
+): Promise<string | null> {
+  try {
+    const dir = join(VAULT_SESSION_LOGS, projectSlug);
+    await mkdir(dir, { recursive: true });
+
+    const date = new Date().toISOString().slice(0, 10);
+    const slug = (title ?? 'compact-session')
+      .toLowerCase()
+      .replace(/[^a-z0-9а-яіїєґ]+/gu, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 50);
+    const fileName = `${date}-${slug}.md`;
+
+    await writeFile(
+      join(dir, fileName),
+      `---\ntype: session-log\ndate: ${date}\nproject: ${projectSlug}\nsource: archon-compact\nplatform: ${platform}\nstatus: completed\ntags: [claude, session, ${projectSlug.toLowerCase()}, archon]\n---\n\n# ${projectSlug} — Compact Summary\n\n${summary}\n`,
+      'utf-8'
+    );
+    return `Claude/Session-Logs/${projectSlug}/${fileName}`;
+  } catch (error) {
+    getLog().warn({ err: error as Error, projectSlug }, 'session.vault_save_failed');
+    return null;
+  }
+}
+
+/** Max session logs to load for context (most recent first) */
+const MAX_SESSION_LOGS = 3;
+/** Max chars per session log to avoid blowing up the prompt */
+const MAX_LOG_CHARS = 2000;
+
+/**
+ * Load recent session logs from Obsidian vault for a project.
+ * Used when a new session has no context_summary — pulls shared memory
+ * that may have been written by CLI (/compress) or another Archon session.
+ * Loads up to MAX_SESSION_LOGS most recent logs, newest first.
+ */
+async function loadLatestSessionLog(projectSlug: string): Promise<string | null> {
+  try {
+    const dir = join(VAULT_SESSION_LOGS, projectSlug);
+    if (!existsSync(dir)) return null;
+
+    const files = await readdir(dir);
+    const sorted = files.filter(f => f.endsWith('.md')).sort().reverse();
+    if (sorted.length === 0) return null;
+
+    const logs: string[] = [];
+    for (const file of sorted.slice(0, MAX_SESSION_LOGS)) {
+      const content = await readFile(join(dir, file), 'utf-8');
+      const body = content.replace(/^---[\s\S]*?---\s*/, '').trim();
+      if (body) {
+        const truncated = body.length > MAX_LOG_CHARS
+          ? body.slice(0, MAX_LOG_CHARS) + '\n...(truncated)'
+          : body;
+        logs.push(`### ${file.replace('.md', '')}\n\n${truncated}`);
+      }
+    }
+
+    if (logs.length === 0) return null;
+
+    getLog().debug(
+      { projectSlug, count: logs.length, files: sorted.slice(0, MAX_SESSION_LOGS) },
+      'session.vault_logs_loaded'
+    );
+    return logs.join('\n\n---\n\n');
+  } catch (error) {
+    getLog().warn({ err: error as Error, projectSlug }, 'session.vault_load_failed');
+    return null;
+  }
+}
+
 /**
  * Persist user + assistant messages to the database.
  * Fire-and-forget — errors are logged but never thrown.
@@ -1444,18 +1551,32 @@ async function handleCompact(
     return;
   }
 
-  // Save summary and reset session
+  // Save summary to DB + Obsidian vault (shared with CLI /compress)
   const trimmedSummary = summary.trim();
   await db.updateConversationSummary(conversation.id, trimmedSummary);
   await sessionDb.deactivateSession(session.id, 'reset-requested');
 
+  let vaultPath: string | null = null;
+  if (conversation.codebase_id) {
+    const codebase = await codebaseDb.getCodebase(conversation.codebase_id);
+    if (codebase) {
+      vaultPath = await saveSessionLogToVault(
+        getProjectSlug(codebase),
+        trimmedSummary,
+        conversation.platform_type,
+        conversation.title
+      );
+    }
+  }
+
   getLog().info(
-    { conversationId, summaryLength: trimmedSummary.length },
+    { conversationId, summaryLength: trimmedSummary.length, vaultPath },
     'session.compact_completed'
   );
+  const vaultNote = vaultPath ? `\nSaved to Obsidian: ${vaultPath}` : '';
   await platform.sendMessage(
     conversationId,
-    `Session compacted. Summary saved (${String(trimmedSummary.length)} chars).\nNext message will start a fresh session with full context.`
+    `Session compacted. Summary saved (${String(trimmedSummary.length)} chars).${vaultNote}\nNext message will start a fresh session with full context.`
   );
 }
 
