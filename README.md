@@ -254,7 +254,7 @@ The Web UI and CLI work out of the box. Optionally connect a chat platform for r
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Platform Adapters (Web UI, CLI, Telegram, Slack,       │
-│                    Discord, GitHub)                      │
+│                    Discord, GitHub)                     │
 └──────────────────────────┬──────────────────────────────┘
                            │
                            ▼
