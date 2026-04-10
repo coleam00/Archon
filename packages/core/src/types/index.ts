@@ -29,6 +29,7 @@ export interface Conversation {
   ai_assistant_type: string;
   title: string | null;
   hidden: boolean;
+  context_summary: string | null;
   deleted_at: Date | null;
   last_activity_at: Date | null; // For staleness detection
   created_at: Date;

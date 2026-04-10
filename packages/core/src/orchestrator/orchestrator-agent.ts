@@ -462,6 +462,11 @@ function buildFullPrompt(
     ? buildProjectScopedPrompt(scopedCodebase, codebases, workflows)
     : buildOrchestratorPrompt(codebases, workflows);
 
+  const summarySuffix = conversation.context_summary
+    ? '\n\n---\n\n## Previous Conversation Summary\n\nThe following is a summary from a prior session in this conversation. Use it as context:\n\n' +
+      conversation.context_summary
+    : '';
+
   const contextSuffix = issueContext ? '\n\n---\n\n## Additional Context\n\n' + issueContext : '';
 
   const fileSuffix =
@@ -475,6 +480,7 @@ function buildFullPrompt(
   if (threadContext) {
     return (
       systemPrompt +
+      summarySuffix +
       '\n\n---\n\n## Thread Context (previous messages)\n\n' +
       threadContext +
       '\n\n---\n\n## Current Request\n\n' +
@@ -484,7 +490,7 @@ function buildFullPrompt(
     );
   }
 
-  return systemPrompt + '\n\n---\n\n## User Message\n\n' + message + contextSuffix + fileSuffix;
+  return systemPrompt + summarySuffix + '\n\n---\n\n## User Message\n\n' + message + contextSuffix + fileSuffix;
 }
 
 // ─── Main Handler ───────────────────────────────────────────────────────────
@@ -657,6 +663,8 @@ export async function handleMessage(
         'update-project',
         'remove-project',
         'setproject',
+        'compact',
+        'resume',
         'commands',
         'init',
         'worktree',
@@ -688,6 +696,18 @@ export async function handleMessage(
           getLog().debug({ command, conversationId }, 'deterministic_command');
           const result = await handleSetProject(message, conversation.id);
           await platform.sendMessage(conversationId, result);
+          return;
+        }
+
+        if (command === 'compact') {
+          getLog().debug({ command, conversationId }, 'deterministic_command');
+          await handleCompact(platform, conversationId, conversation);
+          return;
+        }
+
+        if (command === 'resume') {
+          getLog().debug({ command, conversationId }, 'deterministic_command');
+          await handleResume(platform, conversationId, conversation);
           return;
         }
 
@@ -1298,6 +1318,87 @@ async function handleRemoveProject(message: string): Promise<string> {
   await codebaseDb.deleteCodebase(codebase.id);
   getLog().info({ name: projectName, id: codebase.id }, 'project.remove_completed');
   return `Project "${projectName}" removed.\nPath was: ${codebase.default_cwd}`;
+}
+
+/**
+ * Handle /compact command.
+ * Summarizes the current conversation via AI, saves the summary, and resets the session.
+ * Next message will include the summary as context for continuity.
+ */
+async function handleCompact(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  conversation: Conversation
+): Promise<void> {
+  const session = await sessionDb.getActiveSession(conversation.id);
+  if (!session?.assistant_session_id) {
+    await platform.sendMessage(conversationId, 'No active session to compact.');
+    return;
+  }
+
+  await platform.sendMessage(conversationId, 'Compacting session...');
+
+  // Ask the current session to summarize itself
+  const aiClient = getAssistantClient(conversation.ai_assistant_type);
+  const cwd = conversation.cwd ?? getArchonWorkspacesPath();
+  let summary = '';
+
+  for await (const chunk of aiClient.sendQuery(
+    'Summarize our entire conversation so far in a structured way. Include: key decisions made, current state of work, important context, and any pending items. Be concise but complete — this summary will be used to continue the conversation in a fresh session. Output ONLY the summary, no preamble.',
+    cwd,
+    session.assistant_session_id,
+    { tools: [] }
+  )) {
+    if (chunk.type === 'assistant') {
+      summary += chunk.content;
+    }
+  }
+
+  if (!summary.trim()) {
+    await platform.sendMessage(conversationId, 'Failed to generate summary. Session not reset.');
+    return;
+  }
+
+  // Save summary and reset session
+  await db.updateConversationSummary(conversation.id, summary.trim());
+  await sessionDb.deactivateSession(session.id, 'reset-requested');
+
+  getLog().info(
+    { conversationId, summaryLength: summary.length },
+    'session.compact_completed'
+  );
+  await platform.sendMessage(
+    conversationId,
+    `Session compacted. Summary saved (${String(summary.length)} chars).\nNext message will start a fresh session with full context.`
+  );
+}
+
+/**
+ * Handle /resume command.
+ * Shows the stored context summary and confirms it will be loaded on next message.
+ */
+async function handleResume(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  conversation: Conversation
+): Promise<void> {
+  if (!conversation.context_summary) {
+    await platform.sendMessage(
+      conversationId,
+      'No saved context. Use `/compact` first to save a conversation summary.'
+    );
+    return;
+  }
+
+  const preview =
+    conversation.context_summary.length > 500
+      ? conversation.context_summary.slice(0, 500) + '...'
+      : conversation.context_summary;
+
+  await platform.sendMessage(
+    conversationId,
+    `**Saved context** (${String(conversation.context_summary.length)} chars):\n\n${preview}\n\n_This context is automatically loaded into every new message._`
+  );
 }
 
 /**

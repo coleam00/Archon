@@ -245,6 +245,23 @@ export async function updateConversationTitle(id: string, title: string): Promis
 }
 
 /**
+ * Update conversation context summary (used by /compact)
+ */
+export async function updateConversationSummary(
+  id: string,
+  summary: string | null
+): Promise<void> {
+  const dialect = getDialect();
+  const result = await pool.query(
+    `UPDATE remote_agent_conversations SET context_summary = $1, updated_at = ${dialect.now()} WHERE id = $2`,
+    [summary, id]
+  );
+  if (result.rowCount === 0) {
+    throw new ConversationNotFoundError(id);
+  }
+}
+
+/**
  * Soft delete a conversation (sets deleted_at timestamp)
  */
 export async function softDeleteConversation(id: string): Promise<void> {

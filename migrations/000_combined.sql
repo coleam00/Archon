@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_conversations (
   title VARCHAR(255),
   deleted_at TIMESTAMP WITH TIME ZONE,
   hidden BOOLEAN DEFAULT FALSE,
+  context_summary TEXT,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW(),
   last_activity_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
