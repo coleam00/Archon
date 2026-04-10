@@ -1,7 +1,7 @@
 import { NavLink, Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { LayoutDashboard, MessageSquare, Workflow, Settings } from 'lucide-react';
-import { listWorkflowRuns } from '@/lib/api';
+import { listWorkflowRuns, getUpdateCheck } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 const tabs = [
@@ -18,6 +18,14 @@ export function TopNav(): React.ReactElement {
     refetchInterval: 10_000,
   });
   const hasRunning = (runningRuns?.length ?? 0) > 0;
+
+  const { data: updateCheck } = useQuery({
+    queryKey: ['update-check'],
+    queryFn: getUpdateCheck,
+    staleTime: 60 * 60 * 1000,
+    refetchInterval: 60 * 60 * 1000,
+    retry: false,
+  });
 
   return (
     <nav className="flex items-center gap-1 border-b border-border bg-surface px-4">
@@ -52,6 +60,18 @@ export function TopNav(): React.ReactElement {
       ))}
       <span className="ml-auto text-xs text-text-secondary">
         v{import.meta.env.VITE_APP_VERSION as string}
+        {updateCheck?.updateAvailable && (
+          <a
+            href={updateCheck.releaseUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="ml-1.5 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+            title={`v${updateCheck.latestVersion} available`}
+          >
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />v
+            {updateCheck.latestVersion}
+          </a>
+        )}
       </span>
     </nav>
   );

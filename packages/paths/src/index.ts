@@ -34,3 +34,12 @@ export type { Logger } from './logger';
 
 // Build-time constants (rewritten by scripts/build-binaries.sh)
 export { BUNDLED_IS_BINARY, BUNDLED_VERSION, BUNDLED_GIT_COMMIT } from './bundled-build';
+
+// Update check
+export {
+  checkForUpdate,
+  getCachedUpdateCheck,
+  isNewerVersion,
+  parseLatestRelease,
+} from './update-check';
+export type { UpdateCheckResult } from './update-check';

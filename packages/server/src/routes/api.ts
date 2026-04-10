@@ -41,6 +41,7 @@ import {
   getRunArtifactsPath,
   getArchonHome,
   isDocker,
+  checkForUpdate,
 } from '@archon/paths';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { parseWorkflow } from '@archon/workflows/loader';
@@ -67,6 +68,7 @@ import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventDb from '@archon/core/db/workflow-events';
 import * as messageDb from '@archon/core/db/messages';
 import { errorSchema } from './schemas/common.schemas';
+import { updateCheckResponseSchema } from './schemas/system.schemas';
 import {
   workflowListResponseSchema,
   validateWorkflowBodySchema,
@@ -827,6 +829,23 @@ const getHealthRoute = createRoute({
         },
       },
       description: 'Health status',
+    },
+  },
+});
+
+const getUpdateCheckRoute = createRoute({
+  method: 'get',
+  path: '/api/update-check',
+  tags: ['System'],
+  summary: 'Check for available updates',
+  responses: {
+    200: {
+      content: {
+        'application/json': {
+          schema: updateCheckResponseSchema,
+        },
+      },
+      description: 'Update check result',
     },
   },
 });
@@ -2588,5 +2607,18 @@ export function registerApiRoutes(
       version: appVersion,
       is_docker: isDocker(),
     });
+  });
+
+  registerOpenApiRoute(getUpdateCheckRoute, async c => {
+    const result = await checkForUpdate(appVersion);
+    if (!result) {
+      return c.json({
+        updateAvailable: false,
+        currentVersion: appVersion,
+        latestVersion: appVersion,
+        releaseUrl: '',
+      });
+    }
+    return c.json(result);
   });
 }
