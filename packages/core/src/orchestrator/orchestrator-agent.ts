@@ -1464,6 +1464,43 @@ async function loadLatestSessionLog(projectSlug: string): Promise<string | null>
   }
 }
 
+// ─── Project Memory (MEMORY.md — shared with CLI) ──────────────────────────
+
+/**
+ * Compute the path to Claude Code's per-project memory directory.
+ * CLI encodes the CWD by replacing '/' with '-' as the project folder name.
+ * Example: /Users/anton/Claude workspace/ai-ofm
+ *   → ~/.claude/projects/-Users-anton-Claude-workspace-ai-ofm/memory/
+ */
+export function computeMemoryPath(cwd: string): string {
+  const encoded = cwd.replace(/\//g, '-');
+  const home = process.env.HOME ?? '';
+  return join(home, '.claude', 'projects', encoded, 'memory');
+}
+
+/**
+ * Load MEMORY.md index from the CLI memory directory for a project.
+ * Returns the file content (typically 10-50 lines) or null if not found.
+ * This is the same file Claude Code CLI auto-loads — sharing it gives
+ * Archon agents identical project knowledge.
+ */
+export async function loadMemoryIndex(cwd: string): Promise<string | null> {
+  try {
+    const memoryDir = computeMemoryPath(cwd);
+    const indexPath = join(memoryDir, 'MEMORY.md');
+    if (!existsSync(indexPath)) return null;
+
+    const content = await readFile(indexPath, 'utf-8');
+    if (!content.trim()) return null;
+
+    getLog().debug({ cwd, memoryDir }, 'memory.index_loaded');
+    return content.trim();
+  } catch (error) {
+    getLog().warn({ err: error as Error, cwd }, 'memory.index_load_failed');
+    return null;
+  }
+}
+
 /**
  * Persist user + assistant messages to the database.
  * Fire-and-forget — errors are logged but never thrown.
