@@ -7,7 +7,7 @@
  * - Does NOT require a project to be selected before starting a conversation
  */
 import { existsSync } from 'fs';
-import { writeFile, readFile, readdir, mkdir } from 'fs/promises';
+import { writeFile, readFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { createLogger } from '@archon/paths';
 import type {
@@ -465,18 +465,17 @@ async function buildFullPrompt(
     ? buildProjectScopedPrompt(scopedCodebase, codebases, workflows)
     : buildOrchestratorPrompt(codebases, workflows);
 
-  // Load context: prefer DB summary, fall back to latest Obsidian session log
-  let contextContent = conversation.context_summary;
-  if (!contextContent && conversation.codebase_id) {
-    const codebase = codebases.find(c => c.id === conversation.codebase_id);
-    if (codebase) {
-      contextContent = await loadLatestSessionLog(getProjectSlug(codebase));
-    }
+  // Load project memory (MEMORY.md) — shared with CLI Claude Code
+  let memoryContent: string | null = null;
+  if (conversation.cwd) {
+    memoryContent = await loadMemoryIndex(conversation.cwd);
   }
 
-  const summarySuffix = contextContent
-    ? '\n\n---\n\n## Previous Session Context\n\nThe following is context from a prior session (shared across CLI and Telegram). Use it to maintain continuity.\nFor more history, check Obsidian vault at `Claude/Session-Logs/` using Obsidian MCP tools.\n\n' +
-      contextContent
+  const memorySuffix = memoryContent
+    ? '\n\n---\n\n## Project Memory\n\nLoaded from MEMORY.md (shared with CLI). Topic files can be read on demand via the Read tool at: `' +
+      computeMemoryPath(conversation.cwd ?? '') + '/`\n' +
+      'For session history, check Obsidian vault at `Claude/Session-Logs/` via Obsidian MCP or filesystem.\n\n' +
+      memoryContent
     : '';
 
   const contextSuffix = issueContext ? '\n\n---\n\n## Additional Context\n\n' + issueContext : '';
@@ -492,7 +491,7 @@ async function buildFullPrompt(
   if (threadContext) {
     return (
       systemPrompt +
-      summarySuffix +
+      memorySuffix +
       '\n\n---\n\n## Thread Context (previous messages)\n\n' +
       threadContext +
       '\n\n---\n\n## Current Request\n\n' +
@@ -502,7 +501,7 @@ async function buildFullPrompt(
     );
   }
 
-  return systemPrompt + summarySuffix + '\n\n---\n\n## User Message\n\n' + message + contextSuffix + fileSuffix;
+  return systemPrompt + memorySuffix + '\n\n---\n\n## User Message\n\n' + message + contextSuffix + fileSuffix;
 }
 
 // ─── Main Handler ───────────────────────────────────────────────────────────
@@ -895,9 +894,7 @@ export async function handleMessage(
             if (chunk.type === 'assistant') summary += chunk.content;
           }
 
-          if (summary.trim()) {
-            await db.updateConversationSummary(conversation.id, summary.trim());
-          }
+          // context_summary writes removed — MEMORY.md is the shared memory now
         }
 
         // Reset the expired session
@@ -1445,51 +1442,6 @@ async function saveSessionLogToVault(
   }
 }
 
-/** Max session logs to load for context (most recent first) */
-const MAX_SESSION_LOGS = 3;
-/** Max chars per session log to avoid blowing up the prompt */
-const MAX_LOG_CHARS = 2000;
-
-/**
- * Load recent session logs from Obsidian vault for a project.
- * Used when a new session has no context_summary — pulls shared memory
- * that may have been written by CLI (/compress) or another Archon session.
- * Loads up to MAX_SESSION_LOGS most recent logs, newest first.
- */
-async function loadLatestSessionLog(projectSlug: string): Promise<string | null> {
-  try {
-    const dir = join(VAULT_SESSION_LOGS, projectSlug);
-    if (!existsSync(dir)) return null;
-
-    const files = await readdir(dir);
-    const sorted = files.filter(f => f.endsWith('.md')).sort().reverse();
-    if (sorted.length === 0) return null;
-
-    const logs: string[] = [];
-    for (const file of sorted.slice(0, MAX_SESSION_LOGS)) {
-      const content = await readFile(join(dir, file), 'utf-8');
-      const body = content.replace(/^---[\s\S]*?---\s*/, '').trim();
-      if (body) {
-        const truncated = body.length > MAX_LOG_CHARS
-          ? body.slice(0, MAX_LOG_CHARS) + '\n...(truncated)'
-          : body;
-        logs.push(`### ${file.replace('.md', '')}\n\n${truncated}`);
-      }
-    }
-
-    if (logs.length === 0) return null;
-
-    getLog().debug(
-      { projectSlug, count: logs.length, files: sorted.slice(0, MAX_SESSION_LOGS) },
-      'session.vault_logs_loaded'
-    );
-    return logs.join('\n\n---\n\n');
-  } catch (error) {
-    getLog().warn({ err: error as Error, projectSlug }, 'session.vault_load_failed');
-    return null;
-  }
-}
-
 // ─── Project Memory (MEMORY.md — shared with CLI) ──────────────────────────
 
 /**
@@ -1614,9 +1566,9 @@ async function handleCompact(
     return;
   }
 
-  // Save summary to DB + Obsidian vault (shared with CLI /compress)
+  // Save summary to Obsidian vault (shared with CLI /compress)
+  // context_summary writes removed — MEMORY.md is the shared memory now
   const trimmedSummary = summary.trim();
-  await db.updateConversationSummary(conversation.id, trimmedSummary);
   await sessionDb.deactivateSession(session.id, 'reset-requested');
 
   let vaultPath: string | null = null;
@@ -1652,22 +1604,25 @@ async function handleResume(
   conversationId: string,
   conversation: Conversation
 ): Promise<void> {
-  if (!conversation.context_summary) {
+  // Show MEMORY.md content (shared with CLI)
+  const memoryContent = conversation.cwd ? await loadMemoryIndex(conversation.cwd) : null;
+
+  if (!memoryContent) {
     await platform.sendMessage(
       conversationId,
-      'No saved context. Use `/compact` first to save a conversation summary.'
+      'No project memory found. Memory is shared with CLI — work in either interface to build it up.'
     );
     return;
   }
 
-  const preview =
-    conversation.context_summary.length > 500
-      ? conversation.context_summary.slice(0, 500) + '...'
-      : conversation.context_summary;
+  const preview = memoryContent.length > 1000
+    ? memoryContent.slice(0, 1000) + '\n...(truncated)'
+    : memoryContent;
 
+  const memoryPath = computeMemoryPath(conversation.cwd ?? '');
   await platform.sendMessage(
     conversationId,
-    `**Saved context** (${String(conversation.context_summary.length)} chars):\n\n${preview}\n\n_This context is automatically loaded into every new message._`
+    `**Project Memory** (${String(memoryContent.length)} chars, shared with CLI):\n\n${preview}\n\nPath: \`${memoryPath}/\``
   );
 }
 
