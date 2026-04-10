@@ -148,4 +148,80 @@ describe('QwenClient smoke test', () => {
     });
     expect(capturedOptions).not.toHaveProperty('authType');
   });
+
+  test('does not duplicate tool calls when partial streaming emits tool start first', async () => {
+    mockQuery.mockImplementationOnce(async function* ({
+      prompt,
+      options,
+    }: {
+      prompt: string;
+      options?: Record<string, unknown>;
+    }) {
+      capturedPrompt = prompt;
+      capturedOptions = options;
+
+      yield {
+        kind: 'partial-assistant',
+        event: {
+          type: 'content_block_start',
+          content_block: {
+            type: 'tool_use',
+            id: 'tool-1',
+            name: 'read_file',
+            input: { path: 'README.md' },
+          },
+        },
+      };
+
+      yield {
+        kind: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', id: 'tool-1', name: 'read_file', input: { path: 'README.md' } },
+            { type: 'tool_result', tool_use_id: 'tool-1', content: 'done' },
+          ],
+        },
+      };
+
+      yield {
+        kind: 'result',
+        session_id: 'qwen-session-2',
+        usage: {
+          input_tokens: 4,
+          output_tokens: 2,
+        },
+      };
+    });
+
+    const client = new QwenClient();
+    const chunks = [];
+
+    for await (const chunk of client.sendQuery('tool prompt', '/workspace')) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.filter(chunk => chunk.type === 'tool')).toHaveLength(1);
+    expect(chunks).toEqual([
+      {
+        type: 'tool',
+        toolName: 'read_file',
+        toolInput: { path: 'README.md' },
+        toolCallId: 'tool-1',
+      },
+      {
+        type: 'tool_result',
+        toolName: 'read_file',
+        toolOutput: 'done',
+        toolCallId: 'tool-1',
+      },
+      {
+        type: 'result',
+        sessionId: 'qwen-session-2',
+        tokens: {
+          input: 4,
+          output: 2,
+        },
+      },
+    ]);
+  });
 });

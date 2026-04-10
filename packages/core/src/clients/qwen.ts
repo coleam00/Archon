@@ -110,7 +110,8 @@ function serializeContentBlockContent(content: unknown): string {
 
 function emitAssistantMessageBlocks(
   message: SDKAssistantMessage,
-  shouldEmitText: boolean
+  shouldEmitText: boolean,
+  emittedToolCallIds?: ReadonlySet<string>
 ): MessageChunk[] {
   const chunks: MessageChunk[] = [];
   const toolNames = new Map<string, string>();
@@ -128,6 +129,9 @@ function emitAssistantMessageBlocks(
         break;
       case 'tool_use':
         if (block.id) toolNames.set(block.id, block.name);
+        if (block.id && emittedToolCallIds?.has(block.id)) {
+          break;
+        }
         chunks.push({
           type: 'tool',
           toolName: block.name,
@@ -263,6 +267,7 @@ export class QwenClient implements IAssistantClient {
 
       const shouldStreamPartials = includePartialMessages;
       let sawPartialAssistantMessage = false;
+      const partialToolCallIds = new Set<string>();
       const attemptOptions: QueryOptions = {
         ...queryOptions,
         resume: resumeEnabled ? resumeSessionId : undefined,
@@ -277,6 +282,13 @@ export class QwenClient implements IAssistantClient {
 
           if (isSDKPartialAssistantMessage(message)) {
             sawPartialAssistantMessage = true;
+            if (
+              message.event.type === 'content_block_start' &&
+              message.event.content_block.type === 'tool_use' &&
+              message.event.content_block.id
+            ) {
+              partialToolCallIds.add(message.event.content_block.id);
+            }
             for (const chunk of emitPartialMessage(message)) {
               yield chunk;
             }
@@ -286,7 +298,8 @@ export class QwenClient implements IAssistantClient {
           if (isSDKAssistantMessage(message)) {
             for (const chunk of emitAssistantMessageBlocks(
               message,
-              !shouldStreamPartials || !sawPartialAssistantMessage
+              !shouldStreamPartials || !sawPartialAssistantMessage,
+              partialToolCallIds
             )) {
               yield chunk;
             }

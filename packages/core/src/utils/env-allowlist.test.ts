@@ -55,6 +55,14 @@ describe('buildCleanSubprocessEnv', () => {
     expect(env.OPENAI_BASE_URL).toBe('https://api.example.com/v1');
   });
 
+  it('includes native Qwen auth vars when present', () => {
+    process.env.DASHSCOPE_API_KEY = 'dashscope-test';
+    process.env.BAILIAN_CODING_PLAN_API_KEY = 'bailian-test';
+    const env = buildCleanSubprocessEnv();
+    expect(env.DASHSCOPE_API_KEY).toBe('dashscope-test');
+    expect(env.BAILIAN_CODING_PLAN_API_KEY).toBe('bailian-test');
+  });
+
   it('does not include keys with undefined values', () => {
     const env = buildCleanSubprocessEnv();
     for (const value of Object.values(env)) {
@@ -78,5 +86,9 @@ describe('SUBPROCESS_ENV_ALLOWLIST', () => {
 
   it('contains OPENAI_API_KEY', () => {
     expect(SUBPROCESS_ENV_ALLOWLIST.has('OPENAI_API_KEY')).toBe(true);
+  });
+
+  it('contains DASHSCOPE_API_KEY', () => {
+    expect(SUBPROCESS_ENV_ALLOWLIST.has('DASHSCOPE_API_KEY')).toBe(true);
   });
 });
