@@ -15,9 +15,12 @@ export const safeConfigSchema = z
         modelReasoningEffort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
         webSearchMode: z.enum(['disabled', 'cached', 'live']).optional(),
       }),
-      qwen: z.object({
-        model: z.string().optional(),
-      }),
+      qwen: z
+        .object({
+          model: z.string().optional(),
+        })
+        .optional()
+        .nullable(),
     }),
     streaming: z.object({
       telegram: z.enum(['stream', 'batch']),

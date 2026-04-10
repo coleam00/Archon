@@ -336,7 +336,7 @@ export async function validateWorkflowResources(
         }
       }
 
-      // Warn if using MCP with Codex
+      // Warn if using MCP with Codex or Qwen
       if (provider === 'codex') {
         issues.push({
           level: 'warning',
@@ -344,6 +344,14 @@ export async function validateWorkflowResources(
           field: 'mcp',
           message: 'MCP servers are Claude-only per-node — this will be ignored on Codex',
           hint: 'For Codex, configure MCP servers globally in ~/.codex/config.toml instead',
+        });
+      } else if (provider === 'qwen') {
+        issues.push({
+          level: 'warning',
+          nodeId: node.id,
+          field: 'mcp',
+          message: 'MCP servers are Claude-only per-node — this will be ignored on Qwen',
+          hint: 'For Qwen, configure MCP servers globally in your Qwen CLI config instead',
         });
       }
     }
@@ -368,7 +376,7 @@ export async function validateWorkflowResources(
         }
       }
 
-      // Warn if using skills with Codex
+      // Warn if using skills with Codex or Qwen
       if (provider === 'codex') {
         issues.push({
           level: 'warning',
@@ -377,32 +385,42 @@ export async function validateWorkflowResources(
           message: 'Skills are Claude-only per-node — this will be ignored on Codex',
           hint: 'For Codex, place skills in ~/.agents/skills/ for global discovery instead',
         });
+      } else if (provider === 'qwen') {
+        issues.push({
+          level: 'warning',
+          nodeId: node.id,
+          field: 'skills',
+          message: 'Skills are Claude-only per-node — this will be ignored on Qwen',
+          hint: 'Skills are not supported for Qwen. Remove them or switch to provider: claude',
+        });
       }
     }
 
-    // --- Hooks with Codex warning ---
-    if ('hooks' in node && node.hooks && provider === 'codex') {
+    // --- Hooks with Codex/Qwen warning ---
+    if ('hooks' in node && node.hooks && (provider === 'codex' || provider === 'qwen')) {
+      const providerLabel = provider === 'qwen' ? 'Qwen' : 'Codex';
       issues.push({
         level: 'warning',
         nodeId: node.id,
         field: 'hooks',
-        message: 'Hooks are Claude-only — this will be ignored on Codex',
-        hint: 'Hooks have no Codex equivalent. Remove them or switch to provider: claude',
+        message: `Hooks are Claude-only — this will be ignored on ${providerLabel}`,
+        hint: `Hooks have no ${providerLabel} equivalent. Remove them or switch to provider: claude`,
       });
     }
 
-    // --- Tool restrictions with Codex warning ---
-    if (provider === 'codex') {
+    // --- Tool restrictions with Codex/Qwen warning ---
+    if (provider === 'codex' || provider === 'qwen') {
       if (
         ('allowed_tools' in node && node.allowed_tools !== undefined) ||
         ('denied_tools' in node && node.denied_tools !== undefined)
       ) {
+        const providerLabel = provider === 'qwen' ? 'Qwen' : 'Codex';
         issues.push({
           level: 'warning',
           nodeId: node.id,
           field: 'allowed_tools/denied_tools',
-          message: 'Tool restrictions are Claude-only — this will be ignored on Codex',
-          hint: 'For Codex, configure tool restrictions per MCP server in ~/.codex/config.toml',
+          message: `Tool restrictions are Claude-only — this will be ignored on ${providerLabel}`,
+          hint: `For ${providerLabel}, tool restrictions are not supported per-node`,
         });
       }
     }

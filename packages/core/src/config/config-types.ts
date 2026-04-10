@@ -31,7 +31,10 @@ export interface QwenAssistantDefaults {
   pathToQwenExecutable?: string;
   /** Qwen permission mode. Defaults to `yolo` for autonomous execution. */
   permissionMode?: 'default' | 'plan' | 'auto-edit' | 'yolo';
-  /** Qwen authentication mode. Defaults to `openai` for Archon's server-side usage. */
+  /** Qwen authentication mode.
+   *  When unset, the Qwen SDK resolves auth from its own config (e.g. ~/.qwen settings or Qwen OAuth).
+   *  Set explicitly to override (e.g. `openai` for API-key-based auth via provider env vars).
+   */
   authType?: 'openai' | 'qwen-oauth';
   /** Whether to stream partial assistant messages while a turn is running. */
   includePartialMessages?: boolean;
