@@ -556,7 +556,10 @@ export class WorktreeProvider implements IIsolationProvider {
       await mkdirAsync(join(worktreeBase, owner, repo), { recursive: true });
     }
 
-    const timeout = worktreeConfig?.timeout ?? 30000;
+    const timeout =
+      typeof worktreeConfig?.timeout === 'number' && worktreeConfig.timeout > 0
+        ? worktreeConfig.timeout
+        : 30000;
 
     if (isPRIsolationRequest(request)) {
       // For PRs: fetch and checkout the PR branch (actual or synthetic)
