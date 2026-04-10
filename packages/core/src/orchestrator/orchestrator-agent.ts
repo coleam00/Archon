@@ -509,11 +509,12 @@ export async function handleMessage(
 ): Promise<void> {
   const { issueContext, threadContext, parentConversationId, isolationHints, attachedFiles } =
     context ?? {};
+  let conversation: Conversation | undefined;
   try {
     getLog().debug({ conversationId }, 'orchestrator_message_received');
 
     // 1. Get/create conversation and inherit thread context
-    let conversation = await db.getOrCreateConversation(
+    conversation = await db.getOrCreateConversation(
       platform.getPlatformType(),
       conversationId,
       undefined,
@@ -831,6 +832,56 @@ export async function handleMessage(
     getLog().debug({ conversationId }, 'orchestrator_message_completed');
   } catch (error) {
     const err = toError(error);
+
+    // Auto-compact on expired session: save summary from messages, reset, and retry
+    if (conversation && err.message.includes('No conversation found with session ID')) {
+      getLog().info({ conversationId }, 'session.expired_auto_compacting');
+      try {
+        const messages = await messageDb.listMessages(conversation.id, 50);
+        if (messages.length > 0) {
+          const transcript = messages
+            .map(m => `[${m.role}]: ${m.content.slice(0, 500)}`)
+            .join('\n\n');
+
+          const aiClient = getAssistantClient(conversation.ai_assistant_type);
+          const summaryCwd = conversation.cwd ?? getArchonWorkspacesPath();
+          let summary = '';
+          for await (const chunk of aiClient.sendQuery(
+            `Summarize this conversation transcript concisely. Include: key decisions, current state, important context, pending items. Output ONLY the summary.\n\n---\n\n${transcript}`,
+            summaryCwd,
+            undefined,
+            { tools: [] }
+          )) {
+            if (chunk.type === 'assistant') summary += chunk.content;
+          }
+
+          if (summary.trim()) {
+            await db.updateConversationSummary(conversation.id, summary.trim());
+          }
+        }
+
+        // Reset the expired session
+        const expiredSession = await sessionDb.getActiveSession(conversation.id);
+        if (expiredSession) {
+          await sessionDb.deactivateSession(expiredSession.id, 'reset-requested');
+        }
+
+        await platform.sendMessage(
+          conversationId,
+          'Session expired — context saved automatically. Retrying your message...'
+        );
+
+        // Retry the message (recursive call via handleMessage will create a fresh session)
+        await handleMessage(platform, conversationId, message, context);
+        return;
+      } catch (compactError) {
+        getLog().error(
+          { err: toError(compactError), conversationId },
+          'session.auto_compact_failed'
+        );
+      }
+    }
+
     getLog().error({ err, conversationId }, 'orchestrator_message_failed');
     const userMessage = classifyAndFormatError(err);
     try {
