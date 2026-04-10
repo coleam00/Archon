@@ -495,3 +495,9 @@ export async function deleteCodebaseEnvVar(
 export async function getHealth(): Promise<HealthResponse> {
   return fetchJSON<HealthResponse>('/api/health');
 }
+
+export type UpdateCheckResult = components['schemas']['UpdateCheckResponse'];
+
+export async function getUpdateCheck(): Promise<UpdateCheckResult> {
+  return fetchJSON<UpdateCheckResult>('/api/update-check');
+}

@@ -78,8 +78,15 @@ import { continueCommand } from './commands/continue';
 import { chatCommand } from './commands/chat';
 import { setupCommand } from './commands/setup';
 import { validateWorkflowsCommand, validateCommandsCommand } from './commands/validate';
+import { serveCommand } from './commands/serve';
 import { closeDatabase } from '@archon/core';
-import { setLogLevel, createLogger } from '@archon/paths';
+import {
+  setLogLevel,
+  createLogger,
+  checkForUpdate,
+  BUNDLED_IS_BINARY,
+  BUNDLED_VERSION,
+} from '@archon/paths';
 import * as git from '@archon/git';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -110,6 +117,7 @@ Commands:
   isolation cleanup --merged Remove environments with branches merged into main
   continue <branch> [msg]    Continue work on an existing worktree with prior context
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
+  serve                      Start the web UI server (downloads web UI on first run)
   validate workflows [name]  Validate workflow definitions and their references
   validate commands [name]   Validate command files
   version                    Show version info
@@ -130,6 +138,8 @@ Options:
   --allow-env-keys           Grant env-key consent during auto-registration
                              (bypasses the env-leak gate for this codebase;
                              logs an audit entry)
+  --port <port>              Override server port for 'serve' (default: 3090)
+  --download-only            Download web UI without starting the server
 
 Examples:
   archon chat "What does the orchestrator do?"
@@ -152,6 +162,20 @@ async function closeDb(): Promise<void> {
     const err = error as Error;
     // Log with details but don't throw - we want the original error to be visible
     getLog().warn({ err }, 'db_close_failed');
+  }
+}
+
+async function printUpdateNotice(quiet: boolean | undefined): Promise<void> {
+  if (quiet || !BUNDLED_IS_BINARY) return;
+  try {
+    const result = await checkForUpdate(BUNDLED_VERSION);
+    if (result?.updateAvailable) {
+      process.stderr.write(
+        `Update available: v${result.currentVersion} → v${result.latestVersion} — ${result.releaseUrl}\n`
+      );
+    }
+  } catch (err) {
+    getLog().debug({ err }, 'update_check.notice_failed');
   }
 }
 
@@ -194,6 +218,8 @@ async function main(): Promise<number> {
         workflow: { type: 'string' },
         'no-context': { type: 'boolean' },
         'allow-env-keys': { type: 'boolean' },
+        port: { type: 'string' },
+        'download-only': { type: 'boolean' },
       },
       allowPositionals: true,
       strict: false, // Allow unknown flags to pass through
@@ -228,7 +254,7 @@ async function main(): Promise<number> {
   const subcommand = positionals[1];
 
   // Commands that don't require git repo validation
-  const noGitCommands = ['version', 'help', 'setup', 'chat', 'continue'];
+  const noGitCommands = ['version', 'help', 'setup', 'chat', 'continue', 'serve'];
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
 
   try {
@@ -376,10 +402,11 @@ async function main(): Promise<number> {
           case 'reject': {
             const rejectRunId = positionals[2];
             if (!rejectRunId) {
-              console.error('Usage: archon workflow reject <run-id> [--reason "..."]');
+              console.error('Usage: archon workflow reject <run-id> [reason]');
               return 1;
             }
-            const rejectReason = values.reason as string | undefined;
+            const rejectReason =
+              (values.reason as string | undefined) || positionals.slice(3).join(' ') || undefined;
             await workflowRejectCommand(rejectRunId, rejectReason);
             break;
           }
@@ -534,6 +561,12 @@ async function main(): Promise<number> {
         break;
       }
 
+      case 'serve': {
+        const servePort = values.port !== undefined ? Number(values.port) : undefined;
+        const downloadOnly = Boolean(values['download-only']);
+        return await serveCommand({ port: servePort, downloadOnly });
+      }
+
       default:
         if (command === undefined) {
           console.error('Missing command');
@@ -543,6 +576,7 @@ async function main(): Promise<number> {
         printUsage();
         return 1;
     }
+    await printUpdateNotice(values.quiet as boolean | undefined);
     return 0;
   } catch (error) {
     const err = error as Error;

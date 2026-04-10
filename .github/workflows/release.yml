@@ -145,10 +145,25 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build web UI
+        run: bun --filter @archon/web run build
+
+      - name: Package web dist
+        run: |
+          tar czf dist/archon-web.tar.gz -C packages/web/dist .
+
       - name: Generate checksums
         run: |
           cd dist
-          sha256sum archon-* > checksums.txt
+          sha256sum archon-* archon-web.tar.gz > checksums.txt
           cat checksums.txt
 
       - name: Get version
@@ -170,6 +185,7 @@ jobs:
           generate_release_notes: true
           files: |
             dist/archon-*
+            dist/archon-web.tar.gz
             dist/checksums.txt
           body: |
             ## Installation

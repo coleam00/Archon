@@ -186,11 +186,21 @@ git pull origin main
 git push origin dev
 ```
 
+> **Important**: This sync ensures dev has the merge commit from main. Without it,
+> dev and main diverge. The CI `update-homebrew` job only pushes the formula
+> commit to dev — it does not bring the PR merge commit onto dev. This manual
+> `git pull origin main` is what ensures dev has the merge commit.
+
 The GitHub Release is distinct from the git tag — without it, the release won't appear on the repository's Releases page. Always create it.
 
 If the user merges the PR themselves and comes back, still offer to tag, release, and sync.
 
 ### Step 10: Wait for Release Workflow and Update Homebrew Formula
+
+> **Note**: The `update-homebrew` CI job in `.github/workflows/release.yml` runs automatically
+> after the release job and handles the formula update + push to dev (part of Step 10).
+> Step 11 (tap sync to `coleam00/homebrew-archon`) is always manual. Check the Actions tab
+> before running Step 10 manually.
 
 After the tag is pushed, `.github/workflows/release.yml` builds platform binaries and uploads them to the GitHub release. This takes 5-10 minutes. The Homebrew formula SHA256 values cannot be known until these binaries exist.
 
@@ -200,16 +210,16 @@ After the tag is pushed, `.github/workflows/release.yml` builds platform binarie
 echo "Waiting for release workflow to finish uploading binaries..."
 for i in {1..30}; do
   ASSET_COUNT=$(gh release view "vx.y.z" --repo coleam00/Archon --json assets --jq '.assets | length')
-  # Expect 6 assets: 5 binaries (darwin-arm64, darwin-x64, linux-arm64, linux-x64, windows-x64.exe) + checksums.txt
-  if [ "$ASSET_COUNT" -ge 6 ]; then
+  # Expect 7 assets: 5 binaries (darwin-arm64, darwin-x64, linux-arm64, linux-x64, windows-x64.exe) + archon-web.tar.gz + checksums.txt
+  if [ "$ASSET_COUNT" -ge 7 ]; then
     echo "All $ASSET_COUNT assets uploaded"
     break
   fi
-  echo "  Assets so far: $ASSET_COUNT/6 — waiting 30s (attempt $i/30)..."
+  echo "  Assets so far: $ASSET_COUNT/7 — waiting 30s (attempt $i/30)..."
   sleep 30
 done
 
-if [ "$ASSET_COUNT" -lt 6 ]; then
+if [ "$ASSET_COUNT" -lt 7 ]; then
   echo "ERROR: Release workflow did not finish uploading assets after 15 minutes"
   echo "Check https://github.com/coleam00/Archon/actions for the release workflow run"
   exit 1

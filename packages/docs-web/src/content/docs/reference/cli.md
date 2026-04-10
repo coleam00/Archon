@@ -50,7 +50,7 @@ archon workflow run plan --cwd /path/to/repo --branch feature-auth "Add OAuth su
 archon workflow run assist --cwd /path/to/repo --no-worktree "Quick question"
 ```
 
-**Note:** Workflow and isolation commands require running from within a git repository. Running from subdirectories automatically resolves to the repo root. The `version`, `help`, `chat`, and `setup` commands work anywhere.
+**Note:** Workflow and isolation commands require running from within a git repository. Running from subdirectories automatically resolves to the repo root. The `version`, `help`, `chat`, `setup`, and `serve` commands work anywhere.
 
 ## Commands
 
@@ -302,6 +302,32 @@ archon complete feature-auth --force  # bypass uncommitted-changes check
 | `--force` | Skip uncommitted-changes guard |
 
 Use this after a PR is merged and you no longer need the worktree or branches. Accepts multiple branch names in one call.
+
+### `serve`
+
+Start the web UI server. On first run, downloads a pre-built web UI tarball from the matching GitHub release, verifies the SHA-256 checksum, and extracts it. Subsequent runs use the cached copy.
+
+**Binary installs only** — in development, use `bun run dev` instead.
+
+```bash
+# Start web UI server (downloads on first run)
+archon serve
+
+# Override the default port
+archon serve --port 4000
+
+# Download the web UI without starting the server
+archon serve --download-only
+```
+
+**Flags:**
+
+| Flag | Effect |
+|------|--------|
+| `--port <port>` | Override server port (default: 3090, range: 1–65535) |
+| `--download-only` | Download and cache the web UI, then exit without starting the server |
+
+The cached web UI is stored at `~/.archon/web-dist/<version>/`. Each version is cached independently, so upgrading the binary automatically downloads the matching web UI.
 
 ### `version`
 

@@ -244,6 +244,11 @@ bun run cli validate commands my-command    # Single command
 bun run cli complete <branch-name>
 bun run cli complete <branch-name> --force  # Skip uncommitted-changes check
 
+# Start the web UI server (compiled binary only, downloads web UI on first run)
+bun run cli serve
+bun run cli serve --port 4000
+bun run cli serve --download-only  # Download without starting
+
 # Show version
 bun run cli version
 ```
@@ -394,11 +399,11 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 ### Architecture Layers
 
 **Package Split:**
-- **@archon/paths**: Path resolution utilities and Pino logger factory (no @archon/* deps)
+- **@archon/paths**: Path resolution utilities, Pino logger factory, web dist cache path (`getWebDistDir`) (no @archon/* deps)
 - **@archon/git**: Git operations - worktrees, branches, repos, exec wrappers (depends only on @archon/paths)
 - **@archon/isolation**: Worktree isolation types, providers, resolver, error classifiers (depends only on @archon/git + @archon/paths)
 - **@archon/workflows**: Workflow engine - loader, router, executor, DAG, logger, bundled defaults (depends only on @archon/git + @archon/paths + @hono/zod-openapi + zod; DB/AI/config injected via `WorkflowDeps`)
-- **@archon/cli**: Command-line interface for running workflows
+- **@archon/cli**: Command-line interface for running workflows and starting the web UI server (depends on @archon/server + @archon/adapters for the serve command)
 - **@archon/core**: Business logic, database, orchestration, AI clients (provides `createWorkflowStore()` adapter bridging core DB → `IWorkflowStore`)
 - **@archon/adapters**: Platform adapters for Slack, Telegram, GitHub, Discord (depends on @archon/core)
 - **@archon/server**: OpenAPIHono HTTP server (Zod + OpenAPI spec generation via `@hono/zod-openapi`), Web adapter (SSE), API routes, Web UI static serving (depends on @archon/adapters)
@@ -532,6 +537,8 @@ curl http://localhost:3637/api/conversations/<conversationId>/messages
 │   │   └── uploads/{convId}/     # Web UI file uploads (ephemeral)
 │   └── logs/                     # Workflow execution logs
 ├── vendor/codex/                  # Codex native binary (binary builds, user-placed)
+├── web-dist/<version>/            # Cached web UI dist (archon serve, binary only)
+├── update-check.json              # Update check cache (binary builds, 24h TTL)
 ├── archon.db                     # SQLite database (when DATABASE_URL not set)
 └── config.yaml                   # Global configuration (non-secrets)
 ```
@@ -761,6 +768,9 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 
 **Command Listing:**
 - `GET /api/commands` - List available command names (bundled + project-defined); optional `?cwd=`; returns `{ commands: [{ name, source: 'bundled' | 'project' }] }`
+
+**System:**
+- `GET /api/update-check` - Check for available updates; returns `{ updateAvailable, currentVersion, latestVersion, releaseUrl }`; skips GitHub API call for non-binary builds
 
 **OpenAPI Spec:**
 - `GET /api/openapi.json` - Generated OpenAPI 3.0 spec for all Zod-validated routes
