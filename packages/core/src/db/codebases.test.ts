@@ -202,9 +202,7 @@ describe('codebases', () => {
 
     test('parses valid JSON string from SQLite TEXT column', async () => {
       const commands = { plan: { path: 'plan.md', description: 'Plan' } };
-      mockQuery.mockResolvedValueOnce(
-        createQueryResult([{ commands: JSON.stringify(commands) }])
-      );
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ commands: JSON.stringify(commands) }]));
 
       const result = await getCodebaseCommands('codebase-123');
       expect(result).toEqual(commands);
