@@ -878,7 +878,7 @@ export async function handleMessage(
     const isSessionExpired =
       err.message.includes('No conversation found with session ID') ||
       err.message.includes('not a valid UUID') ||
-      err.message.includes('session') && err.message.includes('not found');
+      (err.message.includes('session') && err.message.includes('not found'));
     if (conversation && isSessionExpired) {
       getLog().info({ conversationId }, 'session.expired_auto_compacting');
       try {
@@ -896,9 +896,14 @@ export async function handleMessage(
           'Session expired — context saved automatically. Retrying your message...'
         );
 
-        // Retry the message (recursive call via handleMessage will create a fresh session)
-        await handleMessage(platform, conversationId, message, context);
-        return;
+        // Retry once (guard against infinite recursion)
+        const retryDepth = ((context as Record<string, unknown> | undefined)?._retryDepth as number | undefined) ?? 0;
+        if (retryDepth > 0) {
+          getLog().error({ conversationId, retryDepth }, 'session.auto_compact_retry_limit');
+        } else {
+          await handleMessage(platform, conversationId, message, { ...context, _retryDepth: retryDepth + 1 } as HandleMessageContext);
+          return;
+        }
       } catch (compactError) {
         getLog().error(
           { err: toError(compactError), conversationId },
@@ -1439,7 +1444,7 @@ async function saveSessionLogToVault(
  *   → ~/.claude/projects/-Users-anton-Claude-workspace-ai-ofm/memory/
  */
 export function computeMemoryPath(cwd: string): string {
-  const encoded = cwd.replace(/[/ ]/g, '-');
+  const encoded = cwd.replace(/[/. ]/g, '-');
   const home = process.env.HOME ?? '';
   return join(home, '.claude', 'projects', encoded, 'memory');
 }
@@ -1478,8 +1483,8 @@ async function persistConversationMessages(
   assistantResponse: string
 ): Promise<void> {
   try {
-    // Skip internal orchestrator commands (they're not useful context)
-    if (assistantResponse.startsWith('/invoke-workflow') || assistantResponse.startsWith('/register-project')) {
+    // Skip responses containing orchestrator commands (not user-facing content)
+    if (/^\/invoke-workflow\s/m.test(assistantResponse) || /^\/register-project\s/m.test(assistantResponse)) {
       return;
     }
     await messageDb.addMessage(conversationDbId, 'user', userMessage);
@@ -1691,7 +1696,7 @@ async function handleResume(
  * Binds a registered codebase to the current conversation so all subsequent
  * messages route to that project automatically.
  */
-async function handleSetProject(message: string, conversationId: string): Promise<string> {
+async function handleSetProject(message: string, conversationDbId: string): Promise<string> {
   const { args } = commandHandler.parseCommand(message);
   if (args.length < 1) {
     return 'Usage: /setproject <project-name>';
@@ -1709,13 +1714,13 @@ async function handleSetProject(message: string, conversationId: string): Promis
   }
 
   // Update conversation record
-  await db.updateConversation(conversationId, {
+  await db.updateConversation(conversationDbId, {
     codebase_id: codebase.id,
     cwd: codebase.default_cwd,
   });
 
   getLog().info(
-    { conversationId, projectName: codebase.name, codebaseId: codebase.id },
+    { conversationDbId, projectName: codebase.name, codebaseId: codebase.id },
     'project.setproject_completed'
   );
   return `Project set to **${codebase.name}**\nWorking directory: ${codebase.default_cwd}`;
