@@ -851,26 +851,7 @@ export async function handleMessage(
     if (conversation && isSessionExpired) {
       getLog().info({ conversationId }, 'session.expired_auto_compacting');
       try {
-        const messages = await messageDb.listMessages(conversation.id, 50);
-        if (messages.length > 0) {
-          const transcript = messages
-            .map(m => `[${m.role}]: ${m.content.slice(0, 500)}`)
-            .join('\n\n');
-
-          const aiClient = getAssistantClient(conversation.ai_assistant_type);
-          const summaryCwd = conversation.cwd ?? getArchonWorkspacesPath();
-          let summary = '';
-          for await (const chunk of aiClient.sendQuery(
-            `Summarize this conversation transcript concisely. Include: key decisions, current state, important context, pending items. Output ONLY the summary.\n\n---\n\n${transcript}`,
-            summaryCwd,
-            undefined,
-            { tools: [] }
-          )) {
-            if (chunk.type === 'assistant') summary += chunk.content;
-          }
-
-          // context_summary writes removed — MEMORY.md is the shared memory now
-        }
+        // No summary generation needed — MEMORY.md provides context for the new session
 
         // Reset the expired session
         const expiredSession = await sessionDb.getActiveSession(conversation.id);
@@ -1420,12 +1401,12 @@ async function saveSessionLogToVault(
 
 /**
  * Compute the path to Claude Code's per-project memory directory.
- * CLI encodes the CWD by replacing '/' with '-' as the project folder name.
+ * CLI encodes the CWD by replacing '/' and spaces with '-' as the project folder name.
  * Example: /Users/anton/Claude workspace/ai-ofm
  *   → ~/.claude/projects/-Users-anton-Claude-workspace-ai-ofm/memory/
  */
 export function computeMemoryPath(cwd: string): string {
-  const encoded = cwd.replace(/\//g, '-');
+  const encoded = cwd.replace(/[/ ]/g, '-');
   const home = process.env.HOME ?? '';
   return join(home, '.claude', 'projects', encoded, 'memory');
 }
