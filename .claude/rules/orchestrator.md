@@ -37,7 +37,7 @@ Only **13 commands** are handled deterministically:
 | `/status` | Show conversation/session state |
 | `/reset` | Deactivate current session |
 | `/compact` | Handled inline — AI summarizes session, saves summary, resets session |
-| `/resume` | Handled inline — shows stored context summary |
+| `/resume` | Handled inline — shows MEMORY.md content (shared with CLI) |
 | `/workflow` | Subcommands: `list`, `run`, `status`, `cancel`, `reload` |
 | `/register-project` | Handled inline — creates codebase DB record |
 | `/update-project` | Handled inline — updates codebase path |
