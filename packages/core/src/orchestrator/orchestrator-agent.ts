@@ -686,7 +686,7 @@ export async function handleMessage(
 
         if (command === 'setproject') {
           getLog().debug({ command, conversationId }, 'deterministic_command');
-          const result = await handleSetProject(message, conversationId);
+          const result = await handleSetProject(message, conversation.id);
           await platform.sendMessage(conversationId, result);
           return;
         }
