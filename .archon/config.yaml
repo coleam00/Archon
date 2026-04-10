@@ -1,5 +1,11 @@
 worktree:
   baseBranch: dev
 
+assistants:
+  claude:
+    settingSources:
+      - project
+      - user
+
 docs:
   path: packages/docs-web/src/content/docs
