@@ -166,16 +166,16 @@ async function closeDb(): Promise<void> {
 }
 
 async function printUpdateNotice(quiet: boolean | undefined): Promise<void> {
+  if (quiet || !BUNDLED_IS_BINARY) return;
   try {
-    if (quiet || !BUNDLED_IS_BINARY) return;
     const result = await checkForUpdate(BUNDLED_VERSION);
     if (result?.updateAvailable) {
       process.stderr.write(
         `Update available: v${result.currentVersion} → v${result.latestVersion} — ${result.releaseUrl}\n`
       );
     }
-  } catch {
-    // Never fail the CLI command because of update check
+  } catch (err) {
+    getLog().debug({ err }, 'update_check.notice_failed');
   }
 }
 

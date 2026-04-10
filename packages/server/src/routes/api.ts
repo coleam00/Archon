@@ -2611,23 +2611,14 @@ export function registerApiRoutes(
   });
 
   registerOpenApiRoute(getUpdateCheckRoute, async c => {
-    if (!BUNDLED_IS_BINARY) {
-      return c.json({
-        updateAvailable: false,
-        currentVersion: appVersion,
-        latestVersion: appVersion,
-        releaseUrl: '',
-      });
-    }
+    const noUpdate = {
+      updateAvailable: false,
+      currentVersion: appVersion,
+      latestVersion: appVersion,
+      releaseUrl: '',
+    };
+    if (!BUNDLED_IS_BINARY) return c.json(noUpdate);
     const result = await checkForUpdate(appVersion);
-    if (!result) {
-      return c.json({
-        updateAvailable: false,
-        currentVersion: appVersion,
-        latestVersion: appVersion,
-        releaseUrl: '',
-      });
-    }
-    return c.json(result);
+    return c.json(result ?? noUpdate);
   });
 }

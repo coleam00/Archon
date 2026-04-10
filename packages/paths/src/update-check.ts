@@ -28,8 +28,8 @@ function getCachePath(): string {
 }
 
 function readCache(): UpdateCheckCache | null {
+  const cachePath = getCachePath();
   try {
-    const cachePath = getCachePath();
     if (!existsSync(cachePath)) return null;
     const raw = readFileSync(cachePath, 'utf-8');
     const data = JSON.parse(raw) as UpdateCheckCache;
@@ -41,7 +41,7 @@ function readCache(): UpdateCheckCache | null {
     }
     return data;
   } catch (err) {
-    log.debug({ err, cachePath: getCachePath() }, 'update_check.cache_read_failed');
+    log.debug({ err, cachePath }, 'update_check.cache_read_failed');
     return null;
   }
 }
@@ -142,21 +142,12 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateChec
  * Returns null for stale or corrupt cache entries.
  */
 export function getCachedUpdateCheck(currentVersion: string): UpdateCheckResult | null {
-  try {
-    const cachePath = getCachePath();
-    if (!existsSync(cachePath)) return null;
-    const raw = readFileSync(cachePath, 'utf-8');
-    const data = JSON.parse(raw) as UpdateCheckCache;
-    if (!data.latestVersion || !data.releaseUrl || typeof data.checkedAt !== 'number') return null;
-    if (Date.now() - data.checkedAt > STALENESS_MS) return null;
-    return {
-      updateAvailable: isNewerVersion(currentVersion, data.latestVersion),
-      currentVersion,
-      latestVersion: data.latestVersion,
-      releaseUrl: data.releaseUrl,
-    };
-  } catch (err) {
-    log.debug({ err, cachePath: getCachePath() }, 'update_check.cached_read_failed');
-    return null;
-  }
+  const cached = readCache();
+  if (!cached) return null;
+  return {
+    updateAvailable: isNewerVersion(currentVersion, cached.latestVersion),
+    currentVersion,
+    latestVersion: cached.latestVersion,
+    releaseUrl: cached.releaseUrl,
+  };
 }
