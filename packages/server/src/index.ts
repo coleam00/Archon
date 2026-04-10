@@ -469,7 +469,15 @@ async function main(): Promise<void> {
   });
 
   // Register Web UI API routes
-  registerApiRoutes(app, webAdapter, lockManager);
+  // Lazy callback: telegram is initialized after server.listen(), so we read at request time
+  registerApiRoutes(app, webAdapter, lockManager, () => ({
+    slack: slack !== null,
+    telegram: telegram !== null,
+    discord: discord !== null,
+    github: github !== null,
+    gitea: gitea !== null,
+    gitlab: gitlab !== null,
+  }));
 
   // GitHub webhook endpoint
   if (github) {

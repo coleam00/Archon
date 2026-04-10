@@ -47,6 +47,14 @@ export interface CodebaseResponse {
 export interface HealthResponse {
   status: string;
   adapter: string;
+  adapters?: {
+    slack: boolean;
+    telegram: boolean;
+    discord: boolean;
+    github: boolean;
+    gitea: boolean;
+    gitlab: boolean;
+  };
   concurrency: {
     active: number;
     queuedTotal: number;
