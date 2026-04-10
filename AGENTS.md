@@ -54,7 +54,8 @@ bd close <id>         # Complete work
 
 - Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
 - Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+- Use Claude Code memory (MEMORY.md) for session-persistent knowledge (user profile, feedback, preferences)
+- Use `bd` only for issue tracking — NOT for memory storage (beads pushes to upstream fork, not your remote)
 
 ## Session Completion
 
