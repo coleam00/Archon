@@ -77,15 +77,19 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
 
   test('checks vendor directory when no env or config path', async () => {
     fileExistsSpy = spyOn(resolver, 'fileExists').mockImplementation((path: string) => {
-      // Match both forward and back slashes for cross-platform compatibility
       const normalized = path.replace(/\\/g, '/');
       return normalized.includes('vendor/codex');
     });
 
     const result = await resolver.resolveCodexBinaryPath();
     expect(typeof result).toBe('string');
-    // Normalize for cross-platform assertion
     const normalized = result!.replace(/\\/g, '/');
     expect(normalized).toContain('/tmp/test-archon-home/vendor/codex/');
+  });
+
+  test('throws with install instructions when binary not found anywhere', async () => {
+    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(false);
+
+    await expect(resolver.resolveCodexBinaryPath()).rejects.toThrow('Codex CLI binary not found');
   });
 });

@@ -124,6 +124,43 @@ describe('CodexClient binary mode resolution', () => {
     await expect(generator.next()).rejects.toThrow('Codex native binary not found');
   });
 
+  test('retries initialization after first failure (rejected promise not cached)', async () => {
+    mockResolveCodexBinaryPath
+      .mockRejectedValueOnce(new Error('Codex CLI binary not found'))
+      .mockResolvedValueOnce('/tmp/test-archon/vendor/codex/codex');
+
+    const client = new CodexClient();
+
+    // First call fails
+    await expect(client.sendQuery('test prompt', '/tmp/test').next()).rejects.toThrow(
+      'Codex CLI binary not found'
+    );
+
+    // Reset singleton so second call can retry
+    resetCodexSingleton();
+
+    // Second call succeeds (promise was cleared on failure)
+    const generator = client.sendQuery('test prompt', '/tmp/test');
+    for await (const _chunk of generator) {
+      // drain
+    }
+    expect(mockResolveCodexBinaryPath).toHaveBeenCalledTimes(2);
+  });
+
+  test('does not pass codexPathOverride when resolver returns undefined', async () => {
+    mockResolveCodexBinaryPath.mockResolvedValueOnce(undefined);
+
+    const client = new CodexClient();
+    const generator = client.sendQuery('test prompt', '/tmp/test');
+
+    for await (const _chunk of generator) {
+      // drain
+    }
+
+    expect(capturedOptions).toBeDefined();
+    expect(capturedOptions?.codexPathOverride).toBeUndefined();
+  });
+
   test('passes config codexBinaryPath to resolver', async () => {
     mockLoadConfig.mockResolvedValueOnce({
       allowTargetRepoKeys: false,

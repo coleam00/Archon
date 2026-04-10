@@ -11,17 +11,14 @@
  * Resolution order:
  * 1. `CODEX_BIN_PATH` environment variable
  * 2. `assistants.codex.codexBinaryPath` in config
- * 3. `~/.archon/vendor/codex/<platform-binary>` (auto-downloaded)
- * 4. Throw with clear instructions
+ * 3. `~/.archon/vendor/codex/<platform-binary>` (user-placed)
+ * 4. Throw with install instructions
  *
  * In dev mode (BUNDLED_IS_BINARY=false), returns undefined so the SDK
  * uses its normal node_modules-based resolution.
  */
-import { existsSync as _existsSync, readFileSync } from 'node:fs';
-import { chmod, mkdir, rename, rm, writeFile } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { existsSync as _existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { BUNDLED_IS_BINARY, getArchonHome, createLogger } from '@archon/paths';
 
 /** Wrapper for existsSync — enables spyOn in tests (direct imports can't be spied on). */
@@ -38,141 +35,27 @@ function getLog(): ReturnType<typeof createLogger> {
 
 const CODEX_VENDOR_DIR = 'vendor/codex';
 
-/**
- * Platform key → target triple → npm version tag suffix → binary subpath.
- * Mirrors @openai/codex-sdk's PLATFORM_PACKAGE_BY_TARGET.
- */
-interface PlatformInfo {
-  triple: string;
-  npmTag: string;
-  binarySubpath: string;
-}
+const SUPPORTED_PLATFORMS = ['darwin', 'linux', 'win32'];
 
-const PLATFORM_MAP: Record<string, PlatformInfo> = {
-  'darwin-arm64': {
-    triple: 'aarch64-apple-darwin',
-    npmTag: 'darwin-arm64',
-    binarySubpath: 'aarch64-apple-darwin/codex/codex',
-  },
-  'darwin-x64': {
-    triple: 'x86_64-apple-darwin',
-    npmTag: 'darwin-x64',
-    binarySubpath: 'x86_64-apple-darwin/codex/codex',
-  },
-  'linux-arm64': {
-    triple: 'aarch64-unknown-linux-musl',
-    npmTag: 'linux-arm64',
-    binarySubpath: 'aarch64-linux-gnu/codex/codex',
-  },
-  'linux-x64': {
-    triple: 'x86_64-unknown-linux-musl',
-    npmTag: 'linux-x64',
-    binarySubpath: 'x86_64-linux-gnu/codex/codex',
-  },
-  'win32-x64': {
-    triple: 'x86_64-pc-windows-msvc',
-    npmTag: 'win32-x64',
-    binarySubpath: 'x86_64-pc-windows-msvc/codex/codex.exe',
-  },
-  'win32-arm64': {
-    triple: 'aarch64-pc-windows-msvc',
-    npmTag: 'win32-arm64',
-    binarySubpath: 'aarch64-pc-windows-msvc/codex/codex.exe',
-  },
-};
-
-function getPlatformKey(): string {
-  const arch = process.arch === 'x64' ? 'x64' : 'arm64';
-  return `${process.platform}-${arch}`;
-}
-
-/**
- * Get the installed @openai/codex-sdk version to match the binary download.
- * Reads the SDK's package.json to find its @openai/codex dependency version.
- */
-function getCodexSdkVersion(): string {
-  try {
-    // Resolve the SDK's package.json relative to the installed location
-    const sdkPath = import.meta.resolve('@openai/codex-sdk/package.json');
-    const sdkUrl = sdkPath.startsWith('file://') ? new URL(sdkPath).pathname : sdkPath;
-    const raw = readFileSync(sdkUrl, 'utf-8');
-    const sdkPkg = JSON.parse(raw) as { dependencies?: Record<string, string> };
-    const codexDep = sdkPkg.dependencies?.['@openai/codex'];
-    if (codexDep) return codexDep;
-  } catch {
-    // Fall through
-  }
-  throw new Error('Could not determine @openai/codex-sdk version for binary download');
-}
-
-const execFileAsync = promisify(execFile);
-
-/**
- * Download the platform-specific Codex binary from npm registry.
- * Uses atomic download (temp dir + rename) to prevent partial installs.
- */
-async function downloadCodexBinary(vendorDir: string, platformInfo: PlatformInfo): Promise<string> {
-  const version = getCodexSdkVersion();
-  const tarballUrl = `https://registry.npmjs.org/@openai/codex/-/codex-${version}-${platformInfo.npmTag}.tgz`;
-  const binaryPath = join(vendorDir, platformInfo.binarySubpath);
-  const tempDir = join(vendorDir, `.download-${Date.now()}`);
-
-  getLog().info({ tarballUrl, vendorDir }, 'codex.binary_download_started');
-
-  try {
-    await mkdir(tempDir, { recursive: true });
-
-    // Download tarball
-    const response = await fetch(tarballUrl);
-    if (!response.ok) {
-      throw new Error(
-        `Failed to download Codex binary: HTTP ${response.status} from ${tarballUrl}\n\n` +
-          'If you have Codex CLI installed separately, set CODEX_BIN_PATH to its location,\n' +
-          'or set assistants.codex.codexBinaryPath in .archon/config.yaml.'
-      );
-    }
-
-    const tarballPath = join(tempDir, 'codex.tgz');
-    const buffer = await response.arrayBuffer();
-    await writeFile(tarballPath, Buffer.from(buffer));
-
-    // Extract using system tar (available on macOS and Linux)
-    await execFileAsync('tar', ['xzf', tarballPath, '-C', tempDir, '--strip-components=1']);
-
-    // Move extracted vendor dir to final location
-    const extractedVendor = join(tempDir, 'vendor');
-    const targetDir = dirname(binaryPath);
-    await mkdir(dirname(targetDir), { recursive: true });
-
-    // If target already exists (race condition), remove it first
-    if (fileExists(targetDir)) {
-      await rm(targetDir, { recursive: true });
-    }
-    await rename(join(extractedVendor, platformInfo.triple), targetDir);
-
-    await chmod(binaryPath, 0o755);
-
-    getLog().info({ binaryPath, version }, 'codex.binary_download_completed');
-    return binaryPath;
-  } finally {
-    // Clean up temp dir
-    await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
-  }
+/** Returns the vendor binary filename for the current platform, or undefined if unsupported. */
+function getVendorBinaryName(): string | undefined {
+  if (!SUPPORTED_PLATFORMS.includes(process.platform)) return undefined;
+  if (process.arch !== 'x64' && process.arch !== 'arm64') return undefined;
+  return process.platform === 'win32' ? 'codex.exe' : 'codex';
 }
 
 /**
  * Resolve the path to the Codex native binary.
  *
  * In dev mode: returns undefined (let SDK resolve via node_modules).
- * In binary mode: resolves from env/config/vendor dir, downloads if needed.
+ * In binary mode: resolves from env/config/vendor dir, or throws with install instructions.
  */
 export async function resolveCodexBinaryPath(
   configCodexBinaryPath?: string
 ): Promise<string | undefined> {
   if (!BUNDLED_IS_BINARY) return undefined;
 
-  // 1. Environment variable override (checked before platform detection —
-  //    user-supplied paths work on any platform including Windows)
+  // 1. Environment variable override
   const envPath = process.env.CODEX_BIN_PATH;
   if (envPath) {
     if (!fileExists(envPath)) {
@@ -185,7 +68,7 @@ export async function resolveCodexBinaryPath(
     return envPath;
   }
 
-  // 2. Config file override (also platform-independent)
+  // 2. Config file override
   if (configCodexBinaryPath) {
     if (!fileExists(configCodexBinaryPath)) {
       throw new Error(
@@ -197,29 +80,31 @@ export async function resolveCodexBinaryPath(
     return configCodexBinaryPath;
   }
 
-  // 3. Platform detection (needed for vendor dir lookup and auto-download)
-  const platformKey = getPlatformKey();
-  const platformInfo = PLATFORM_MAP[platformKey];
-  if (!platformInfo) {
-    throw new Error(
-      `Unsupported platform for Codex auto-download: ${process.platform} (${process.arch})\n\n` +
-        'Codex CLI binaries are only available for darwin-arm64, darwin-x64, linux-arm64, and linux-x64.\n' +
-        'To use Codex on this platform, install the Codex CLI manually and set\n' +
-        'CODEX_BIN_PATH or assistants.codex.codexBinaryPath in .archon/config.yaml.'
-    );
+  // 3. Check vendor directory (user-placed binary)
+  const binaryName = getVendorBinaryName();
+  if (binaryName) {
+    const archonHome = getArchonHome();
+    const vendorBinaryPath = join(archonHome, CODEX_VENDOR_DIR, binaryName);
+
+    if (fileExists(vendorBinaryPath)) {
+      getLog().info({ binaryPath: vendorBinaryPath, source: 'vendor' }, 'codex.binary_resolved');
+      return vendorBinaryPath;
+    }
   }
 
-  // 4. Check vendor directory
-  const archonHome = getArchonHome();
-  const vendorDir = join(archonHome, CODEX_VENDOR_DIR);
-  const vendorBinaryPath = join(vendorDir, platformInfo.binarySubpath);
-
-  if (fileExists(vendorBinaryPath)) {
-    getLog().info({ binaryPath: vendorBinaryPath, source: 'vendor' }, 'codex.binary_resolved');
-    return vendorBinaryPath;
-  }
-
-  // 4. Auto-download
-  getLog().info({ platformKey, vendorDir }, 'codex.binary_not_found_downloading');
-  return downloadCodexBinary(vendorDir, platformInfo);
+  // 4. Not found — throw with install instructions
+  const vendorPath = `~/.archon/${CODEX_VENDOR_DIR}/`;
+  throw new Error(
+    'Codex CLI binary not found. The Codex provider requires a native binary\n' +
+      'that cannot be resolved automatically in compiled Archon builds.\n\n' +
+      'To fix, choose one of:\n' +
+      '  1. Install globally: npm install -g @openai/codex\n' +
+      '     Then set: CODEX_BIN_PATH=$(which codex)\n\n' +
+      `  2. Place the binary at: ${vendorPath}\n\n` +
+      '  3. Set the path in config:\n' +
+      '     # .archon/config.yaml\n' +
+      '     assistants:\n' +
+      '       codex:\n' +
+      '         codexBinaryPath: /path/to/codex\n'
+  );
 }

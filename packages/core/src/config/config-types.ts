@@ -17,7 +17,7 @@ export interface AssistantDefaults {
   modelReasoningEffort?: ModelReasoningEffort;
   webSearchMode?: WebSearchMode;
   additionalDirectories?: string[];
-  /** Path to a pre-installed Codex CLI binary. Overrides auto-detection.
+  /** Path to the Codex CLI binary. Overrides auto-detection in compiled Archon builds.
    *  Only relevant for the Codex provider; ignored for Claude. */
   codexBinaryPath?: string;
 }

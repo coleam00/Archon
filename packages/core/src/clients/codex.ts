@@ -30,7 +30,7 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-// Singleton Codex instance (async because binary path resolution may download)
+// Singleton Codex instance (async because binary path resolution is async)
 let codexInstance: Codex | null = null;
 let codexInitPromise: Promise<Codex> | null = null;
 
@@ -42,22 +42,24 @@ export function resetCodexSingleton(): void {
 
 /**
  * Get or create Codex SDK instance.
- * Async because in compiled binary mode, the first call may need to
- * download the native Codex binary (~112 MB).
+ * Async because in compiled binary mode, binary path resolution is async.
+ * Once initialized, the binary path is fixed for the process lifetime.
  */
 async function getCodex(configCodexBinaryPath?: string): Promise<Codex> {
   if (codexInstance) return codexInstance;
 
-  // Prevent concurrent initialization (first-use download race)
+  // Prevent concurrent initialization race
   if (!codexInitPromise) {
     codexInitPromise = (async (): Promise<Codex> => {
       const codexPathOverride = await resolveCodexBinaryPath(configCodexBinaryPath);
-      const instance = new Codex({
-        ...(codexPathOverride ? { codexPathOverride } : {}),
-      });
+      const instance = new Codex({ codexPathOverride });
       codexInstance = instance;
       return instance;
-    })();
+    })().catch(err => {
+      // Clear promise so next call can retry (e.g. after user installs Codex)
+      codexInitPromise = null;
+      throw err;
+    });
   }
   return codexInitPromise;
 }
@@ -176,12 +178,13 @@ export class CodexClient implements IAssistantClient {
     resumeSessionId?: string,
     options?: AssistantRequestOptions
   ): AsyncGenerator<MessageChunk> {
-    // Load config once — used for both env-leak gate and codexBinaryPath resolution.
+    // Load config once — used for env-leak gate and (on first call) codexBinaryPath resolution.
     let mergedConfig: Awaited<ReturnType<typeof loadConfig>> | undefined;
     try {
       mergedConfig = await loadConfig(cwd);
     } catch (configErr) {
-      getLog().warn({ err: configErr, cwd }, 'config_load_failed');
+      // Fail-closed: config load failure enforces the env-leak gate (allowTargetRepoKeys stays false)
+      getLog().warn({ err: configErr, cwd }, 'env_leak_gate.config_load_failed_gate_enforced');
     }
 
     // Pre-spawn: check for env key leak if codebase is not explicitly consented.
@@ -201,9 +204,9 @@ export class CodexClient implements IAssistantClient {
       }
     }
 
-    // Initialize Codex SDK with binary path override (resolved from config/env/vendor).
+    // Initialize Codex SDK with binary path override (resolved from env/config/vendor).
     // In dev mode, resolveCodexBinaryPath returns undefined and the SDK uses node_modules.
-    // In binary mode, it resolves or auto-downloads the native Codex CLI binary.
+    // In binary mode, it resolves from env/config/vendor or throws with install instructions.
     const codex = await getCodex(mergedConfig?.assistants.codex.codexBinaryPath);
     const threadOptions = buildThreadOptions(cwd, options);
 
