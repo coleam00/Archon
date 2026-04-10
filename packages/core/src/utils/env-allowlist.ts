@@ -34,6 +34,13 @@ export const SUBPROCESS_ENV_ALLOWLIST = new Set([
   'ANTHROPIC_BEDROCK_BASE_URL',
   'ANTHROPIC_VERTEX_PROJECT_ID',
   'ANTHROPIC_VERTEX_REGION',
+  // AWS credentials (needed for Bedrock auth)
+  'AWS_ACCESS_KEY_ID',
+  'AWS_SECRET_ACCESS_KEY',
+  'AWS_SESSION_TOKEN',
+  'AWS_PROFILE',
+  'AWS_REGION',
+  'AWS_DEFAULT_REGION',
   // Archon runtime config
   'ARCHON_HOME',
   'ARCHON_DOCKER',
