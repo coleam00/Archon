@@ -38,9 +38,6 @@ export const SUBPROCESS_ENV_ALLOWLIST = new Set([
   'OPENAI_API_KEY',
   'OPENAI_BASE_URL',
   'OPENAI_MODEL',
-  // Native Qwen / DashScope auth
-  'DASHSCOPE_API_KEY',
-  'BAILIAN_CODING_PLAN_API_KEY',
   // Archon runtime config
   'ARCHON_HOME',
   'ARCHON_DOCKER',

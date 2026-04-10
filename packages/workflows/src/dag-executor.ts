@@ -536,6 +536,10 @@ async function resolveNodeProviderAndModel(
         throw error;
       }
     }
+    // Inject per-project env vars (config file + DB) into subprocess env
+    if (config.envVars && Object.keys(config.envVars).length > 0) {
+      options.env = config.envVars;
+    }
   } else {
     const claudeOptions: WorkflowAssistantOptions = {};
     if (model) claudeOptions.model = model;

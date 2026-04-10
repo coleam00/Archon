@@ -87,6 +87,10 @@ function buildQwenEnv(
       }
     }
   }
+  // Add Qwen-specific credentials that are not in the shared allowlist
+  if (process.env.DASHSCOPE_API_KEY) env.DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY;
+  if (process.env.BAILIAN_CODING_PLAN_API_KEY)
+    env.BAILIAN_CODING_PLAN_API_KEY = process.env.BAILIAN_CODING_PLAN_API_KEY;
   return env;
 }
 
@@ -266,7 +270,7 @@ export class QwenClient implements IAssistantClient {
       }
 
       const shouldStreamPartials = includePartialMessages;
-      let sawPartialAssistantMessage = false;
+      let sawPartialText = false;
       const partialToolCallIds = new Set<string>();
       const attemptOptions: QueryOptions = {
         ...queryOptions,
@@ -281,13 +285,17 @@ export class QwenClient implements IAssistantClient {
           }
 
           if (isSDKPartialAssistantMessage(message)) {
-            sawPartialAssistantMessage = true;
             if (
               message.event.type === 'content_block_start' &&
               message.event.content_block.type === 'tool_use' &&
               message.event.content_block.id
             ) {
               partialToolCallIds.add(message.event.content_block.id);
+            } else if (
+              message.event.type === 'content_block_delta' &&
+              (message.event.delta.type === 'text_delta' || message.event.delta.type === 'thinking_delta')
+            ) {
+              sawPartialText = true;
             }
             for (const chunk of emitPartialMessage(message)) {
               yield chunk;
@@ -298,7 +306,7 @@ export class QwenClient implements IAssistantClient {
           if (isSDKAssistantMessage(message)) {
             for (const chunk of emitAssistantMessageBlocks(
               message,
-              !shouldStreamPartials || !sawPartialAssistantMessage,
+              !shouldStreamPartials || !sawPartialText,
               partialToolCallIds
             )) {
               yield chunk;

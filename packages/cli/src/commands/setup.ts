@@ -95,6 +95,8 @@ interface ExistingConfig {
   hasDatabase: boolean;
   hasClaude: boolean;
   hasCodex: boolean;
+  hasQwen: boolean;
+  defaultAssistant: 'claude' | 'codex' | 'qwen';
   platforms: {
     github: boolean;
     telegram: boolean;
@@ -238,6 +240,27 @@ export function checkExistingConfig(): ExistingConfig | null {
 
   const content = readFileSync(envPath, 'utf-8');
 
+  // Detect Qwen: either Qwen SDK auth files or OpenAI-compatible endpoint configured
+  const hasQwen =
+    hasEnvValue(content, 'DASHSCOPE_API_KEY') ||
+    hasEnvValue(content, 'BAILIAN_CODING_PLAN_API_KEY') ||
+    hasEnvValue(content, 'QWEN_AUTH_TYPE');
+
+  // Detect default assistant from env, fallback to claude
+  const envDefaultAssistant = hasEnvValue(content, 'DEFAULT_AI_ASSISTANT')
+    ? (content.match(/^DEFAULT_AI_ASSISTANT=(.+)$/m)?.[1]?.trim() as
+        | 'claude'
+        | 'codex'
+        | 'qwen'
+        | undefined)
+    : undefined;
+  const defaultAssistant: 'claude' | 'codex' | 'qwen' =
+    envDefaultAssistant === 'claude' ||
+    envDefaultAssistant === 'codex' ||
+    envDefaultAssistant === 'qwen'
+      ? envDefaultAssistant
+      : 'claude';
+
   return {
     hasDatabase: hasEnvValue(content, 'DATABASE_URL'),
     hasClaude:
@@ -249,6 +272,8 @@ export function checkExistingConfig(): ExistingConfig | null {
       hasEnvValue(content, 'CODEX_ACCESS_TOKEN') &&
       hasEnvValue(content, 'CODEX_REFRESH_TOKEN') &&
       hasEnvValue(content, 'CODEX_ACCOUNT_ID'),
+    hasQwen,
+    defaultAssistant,
     platforms: {
       github: hasEnvValue(content, 'GITHUB_TOKEN') || hasEnvValue(content, 'GH_TOKEN'),
       telegram: hasEnvValue(content, 'TELEGRAM_BOT_TOKEN'),
@@ -704,13 +729,14 @@ After upgrading, run 'archon setup' again.`,
   let defaultAssistant: 'claude' | 'codex' | 'qwen' = 'claude';
 
   if ([hasClaude, hasCodex, hasQwen].filter(Boolean).length > 1) {
+    const defaultOptions = [
+      ...(hasClaude ? [{ value: 'claude' as const, label: 'Claude (Recommended)' }] : []),
+      ...(hasCodex ? [{ value: 'codex' as const, label: 'Codex' }] : []),
+      ...(hasQwen ? [{ value: 'qwen' as const, label: 'Qwen' }] : []),
+    ];
     const defaultChoice = await select({
       message: 'Which should be the default AI assistant?',
-      options: [
-        { value: 'claude', label: 'Claude (Recommended)' },
-        { value: 'codex', label: 'Codex' },
-        { value: 'qwen', label: 'Qwen' },
-      ],
+      options: defaultOptions,
     });
 
     if (isCancel(defaultChoice)) {
@@ -1453,14 +1479,14 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     // For 'add' mode, we keep existing and only collect new platforms
     s.start('Loading existing configuration...');
 
-    // Read existing config values - for simplicity, start with defaults and merge
+    // Read existing config values - preserve ALL existing AI assistant settings
     config = {
       database: { type: 'sqlite' },
       ai: {
         claude: existing?.hasClaude ?? false,
         codex: existing?.hasCodex ?? false,
-        qwen: false,
-        defaultAssistant: 'claude',
+        qwen: existing?.hasQwen ?? false,
+        defaultAssistant: existing?.defaultAssistant ?? 'claude',
       },
       platforms: {
         github: existing?.platforms.github ?? false,

@@ -460,7 +460,7 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
   const [assistant, setAssistant] = useState(config.assistant);
   const [claudeModel, setClaudeModel] = useState(config.assistants.claude.model ?? 'sonnet');
   const [codexModel, setCodexModel] = useState(config.assistants.codex.model ?? '');
-  const [qwenModel, setQwenModel] = useState(config.assistants.qwen.model ?? '');
+  const [qwenModel, setQwenModel] = useState(config.assistants.qwen?.model ?? '');
   const [reasoning, setReasoning] = useState<'minimal' | 'low' | 'medium' | 'high' | 'xhigh'>(
     config.assistants.codex.modelReasoningEffort ?? 'medium'
   );
@@ -473,7 +473,7 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
     assistant !== config.assistant ||
     claudeModel !== (config.assistants.claude.model ?? 'sonnet') ||
     codexModel !== (config.assistants.codex.model ?? '') ||
-    qwenModel !== (config.assistants.qwen.model ?? '') ||
+    qwenModel !== (config.assistants.qwen?.model ?? '') ||
     reasoning !== (config.assistants.codex.modelReasoningEffort ?? 'medium') ||
     webSearch !== (config.assistants.codex.webSearchMode ?? 'disabled');
 
@@ -481,7 +481,7 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
     setAssistant(config.assistant);
     setClaudeModel(config.assistants.claude.model ?? 'sonnet');
     setCodexModel(config.assistants.codex.model ?? '');
-    setQwenModel(config.assistants.qwen.model ?? '');
+    setQwenModel(config.assistants.qwen?.model ?? '');
     setReasoning(config.assistants.codex.modelReasoningEffort ?? 'medium');
     setWebSearch(config.assistants.codex.webSearchMode ?? 'disabled');
   }, [config]);

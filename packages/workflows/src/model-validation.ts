@@ -22,7 +22,7 @@ export function inferProviderFromModel(model?: string): AssistantProvider | unde
   if (!model) return undefined;
   if (isClaudeModel(model)) return 'claude';
   if (isQwenModel(model)) return 'qwen';
-  return 'codex';
+  return undefined;
 }
 
 export function isModelCompatible(provider: AssistantProvider, model?: string): boolean {
