@@ -152,6 +152,13 @@ export interface RepoConfig {
      * @example [".env", ".archon", "data/fixtures/"]
      */
     copyFiles?: string[];
+
+    /**
+     * Timeout in milliseconds for worktree creation (git worktree add, fetch, checkout).
+     * Increase for repos with heavy post-checkout hooks.
+     * @default 30000
+     */
+    timeout?: number;
   };
 
   /**

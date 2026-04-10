@@ -556,12 +556,14 @@ export class WorktreeProvider implements IIsolationProvider {
       await mkdirAsync(join(worktreeBase, owner, repo), { recursive: true });
     }
 
+    const timeout = worktreeConfig?.timeout ?? 30000;
+
     if (isPRIsolationRequest(request)) {
       // For PRs: fetch and checkout the PR branch (actual or synthetic)
-      await this.createFromPR(request, worktreePath);
+      await this.createFromPR(request, worktreePath, timeout);
     } else {
       // For issues, tasks, threads: create new branch
-      await this.createNewBranch(request, repoPath, worktreePath, branchName, baseBranch);
+      await this.createNewBranch(request, repoPath, worktreePath, branchName, baseBranch, timeout);
     }
 
     // Copy git-ignored files based on repo config
@@ -722,7 +724,11 @@ export class WorktreeProvider implements IIsolationProvider {
    * When prSha is provided, the worktree is initially created at the specific
    * commit (detached HEAD), then a local tracking branch is created.
    */
-  private async createFromPR(request: PRIsolationRequest, worktreePath: string): Promise<void> {
+  private async createFromPR(
+    request: PRIsolationRequest,
+    worktreePath: string,
+    timeout: number
+  ): Promise<void> {
     // Clean up any orphan directory before creating worktree
     await this.cleanOrphanDirectoryIfExists(worktreePath);
 
@@ -732,10 +738,10 @@ export class WorktreeProvider implements IIsolationProvider {
     try {
       if (!request.isForkPR) {
         // Same-repo PR: Use the actual branch so changes push directly to PR
-        await this.createFromSameRepoPR(repoPath, worktreePath, request.prBranch);
+        await this.createFromSameRepoPR(repoPath, worktreePath, request.prBranch, timeout);
       } else {
         // Fork PR: Use synthetic review branch
-        await this.createFromForkPR(repoPath, worktreePath, prNumber, request.prSha);
+        await this.createFromForkPR(repoPath, worktreePath, prNumber, timeout, request.prSha);
       }
     } catch (error) {
       // Clean up orphaned git-registered worktree from partial failure
@@ -752,11 +758,12 @@ export class WorktreeProvider implements IIsolationProvider {
   private async createFromSameRepoPR(
     repoPath: string,
     worktreePath: string,
-    prBranch: string
+    prBranch: string,
+    timeout: number
   ): Promise<void> {
     // Fetch the PR's actual branch
     await execFileAsync('git', ['-C', repoPath, 'fetch', 'origin', prBranch], {
-      timeout: 30000,
+      timeout,
     });
 
     // Try to create worktree with the branch
@@ -765,14 +772,14 @@ export class WorktreeProvider implements IIsolationProvider {
       await execFileAsync(
         'git',
         ['-C', repoPath, 'worktree', 'add', worktreePath, '-b', prBranch, `origin/${prBranch}`],
-        { timeout: 30000 }
+        { timeout }
       );
     } catch (error) {
       const err = error as Error & { stderr?: string };
       // Branch already exists locally - use it directly
       if (err.stderr?.includes('already exists')) {
         await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, prBranch], {
-          timeout: 30000,
+          timeout,
         });
       } else {
         throw error;
@@ -784,7 +791,7 @@ export class WorktreeProvider implements IIsolationProvider {
       await execFileAsync(
         'git',
         ['-C', worktreePath, 'branch', '--set-upstream-to', `origin/${prBranch}`],
-        { timeout: 30000 }
+        { timeout }
       );
     } catch (trackingError) {
       getLog().warn({ err: trackingError, worktreePath, prBranch }, 'upstream_tracking_failed');
@@ -802,6 +809,7 @@ export class WorktreeProvider implements IIsolationProvider {
     repoPath: string,
     worktreePath: string,
     prNumber: string,
+    timeout: number,
     prSha?: string
   ): Promise<void> {
     const reviewBranch = `pr-${prNumber}-review`;
@@ -809,11 +817,11 @@ export class WorktreeProvider implements IIsolationProvider {
     if (prSha) {
       // SHA provided: create at specific commit for reproducible reviews
       await execFileAsync('git', ['-C', repoPath, 'fetch', 'origin', `pull/${prNumber}/head`], {
-        timeout: 30000,
+        timeout,
       });
 
       await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, prSha], {
-        timeout: 30000,
+        timeout,
       });
 
       // Create a local tracking branch so it's not detached HEAD
@@ -821,7 +829,7 @@ export class WorktreeProvider implements IIsolationProvider {
         repoPath,
         () =>
           execFileAsync('git', ['-C', worktreePath, 'checkout', '-b', reviewBranch, prSha], {
-            timeout: 30000,
+            timeout,
           }),
         reviewBranch
       );
@@ -833,13 +841,13 @@ export class WorktreeProvider implements IIsolationProvider {
           execFileAsync(
             'git',
             ['-C', repoPath, 'fetch', 'origin', `pull/${prNumber}/head:${reviewBranch}`],
-            { timeout: 30000 }
+            { timeout }
           ),
         reviewBranch
       );
 
       await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, reviewBranch], {
-        timeout: 30000,
+        timeout,
       });
     }
   }
@@ -877,7 +885,8 @@ export class WorktreeProvider implements IIsolationProvider {
     repoPath: string,
     worktreePath: string,
     branchName: string,
-    baseBranch: string
+    baseBranch: string,
+    timeout: number
   ): Promise<void> {
     // Clean up any orphan directory before creating worktree
     await this.cleanOrphanDirectoryIfExists(worktreePath);
@@ -894,7 +903,7 @@ export class WorktreeProvider implements IIsolationProvider {
         'git',
         ['-C', repoPath, 'worktree', 'add', worktreePath, '-b', branchName, startPoint],
         {
-          timeout: 30000,
+          timeout,
         }
       );
     } catch (error) {
@@ -911,7 +920,7 @@ export class WorktreeProvider implements IIsolationProvider {
           );
         }
         await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, branchName], {
-          timeout: 30000,
+          timeout,
         });
       } else {
         throw error;
