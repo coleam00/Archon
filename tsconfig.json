@@ -1,4 +1,4 @@
-{
+ki{
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
@@ -20,4 +20,4 @@
   },
   "include": ["global.d.ts"]
 }
-//comment
+//
