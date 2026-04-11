@@ -14,7 +14,15 @@ export function isClaudeModel(model: string): boolean {
 export function isQwenModel(model: string): boolean {
   const normalized = model.trim().toLowerCase();
   return (
-    normalized.startsWith('qwen') || normalized.startsWith('qwq') || normalized.startsWith('qvq')
+    normalized.startsWith('qwen') ||
+    normalized.startsWith('qwq') ||
+    normalized.startsWith('qvq') ||
+    normalized.endsWith('-coder-model') ||
+    normalized === 'coder-model' ||
+    normalized.includes('qwen-coder') ||
+    normalized.includes('qwen-max') ||
+    normalized.includes('qwen-turbo') ||
+    normalized.includes('qwen-plus')
   );
 }
 
