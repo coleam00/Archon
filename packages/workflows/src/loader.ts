@@ -271,7 +271,9 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     // Note: modelReasoningEffort and webSearchMode use warn-and-ignore for invalid values
     // (consistent with original behavior) rather than schema-level rejection.
     const provider =
-      raw.provider === 'claude' || raw.provider === 'codex' ? raw.provider : undefined;
+      raw.provider === 'claude' || raw.provider === 'codex' || raw.provider === 'pi'
+        ? raw.provider
+        : undefined;
     const model = typeof raw.model === 'string' ? raw.model : undefined;
 
     // Validate model/provider compatibility at workflow level

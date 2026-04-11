@@ -18,7 +18,7 @@ export interface AssistantDefaults {
   webSearchMode?: WebSearchMode;
   additionalDirectories?: string[];
   /** Path to the Codex CLI binary. Overrides auto-detection in compiled Archon builds.
-   *  Only relevant for the Codex provider; ignored for Claude. */
+   *  Only relevant for the Codex provider; ignored for Claude and Pi. */
   codexBinaryPath?: string;
 }
 
@@ -28,6 +28,15 @@ export interface ClaudeAssistantDefaults {
    *  @default ['project']
    *  @see https://github.com/anthropics/claude-agent-sdk */
   settingSources?: ('project' | 'user')[];
+}
+
+/**
+ * Pi.dev agent defaults.
+ * Model must be specified in "provider/model-id" format, e.g. "anthropic/claude-opus-4-5".
+ * Pi supports many providers — see https://pi.dev for the full list.
+ */
+export interface PiAssistantDefaults {
+  model?: string;
 }
 
 export interface GlobalConfig {
@@ -41,7 +50,7 @@ export interface GlobalConfig {
    * Default AI assistant when no codebase-specific preference
    * @default 'claude'
    */
-  defaultAssistant?: 'claude' | 'codex';
+  defaultAssistant?: 'claude' | 'codex' | 'pi';
 
   /**
    * Assistant-specific defaults (model, reasoning effort, etc.)
@@ -49,6 +58,7 @@ export interface GlobalConfig {
   assistants?: {
     claude?: ClaudeAssistantDefaults;
     codex?: AssistantDefaults;
+    pi?: PiAssistantDefaults;
   };
 
   /**
@@ -112,7 +122,7 @@ export interface RepoConfig {
    * AI assistant preference for this repository
    * Overrides global default
    */
-  assistant?: 'claude' | 'codex';
+  assistant?: 'claude' | 'codex' | 'pi';
 
   /**
    * Assistant-specific defaults for this repository
@@ -120,6 +130,7 @@ export interface RepoConfig {
   assistants?: {
     claude?: ClaudeAssistantDefaults;
     codex?: AssistantDefaults;
+    pi?: PiAssistantDefaults;
   };
 
   /**
@@ -215,10 +226,11 @@ export interface RepoConfig {
  */
 export interface MergedConfig {
   botName: string;
-  assistant: 'claude' | 'codex';
+  assistant: 'claude' | 'codex' | 'pi';
   assistants: {
     claude: ClaudeAssistantDefaults;
     codex: AssistantDefaults;
+    pi: PiAssistantDefaults;
   };
   streaming: {
     telegram: 'stream' | 'batch';
@@ -279,10 +291,11 @@ export interface MergedConfig {
  */
 export interface SafeConfig {
   botName: string;
-  assistant: 'claude' | 'codex';
+  assistant: 'claude' | 'codex' | 'pi';
   assistants: {
     claude: Pick<ClaudeAssistantDefaults, 'model'>;
     codex: Pick<AssistantDefaults, 'model' | 'modelReasoningEffort' | 'webSearchMode'>;
+    pi: Pick<PiAssistantDefaults, 'model'>;
   };
   streaming: {
     telegram: 'stream' | 'batch';

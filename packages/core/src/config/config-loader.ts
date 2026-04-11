@@ -75,7 +75,7 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 # Bot display name (shown in messages)
 # botName: Archon
 
-# Default AI assistant (claude or codex)
+# Default AI assistant (claude, codex, or pi)
 # defaultAssistant: claude
 
 # Assistant defaults
@@ -88,6 +88,9 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 #     webSearchMode: disabled
 #     additionalDirectories:
 #       - /absolute/path/to/other/repo
+#   pi:
+#     model: anthropic/claude-opus-4-5   # provider/model-id format
+#     # Pi supports: anthropic, openai, google, and many more providers
 
 # Streaming mode per platform (stream or batch)
 # streaming:
@@ -194,6 +197,7 @@ function getDefaults(): MergedConfig {
     assistants: {
       claude: {},
       codex: {},
+      pi: {},
     },
     streaming: {
       telegram: 'stream',
@@ -232,7 +236,7 @@ function applyEnvOverrides(config: MergedConfig): MergedConfig {
 
   // Assistant override
   const envAssistant = process.env.DEFAULT_AI_ASSISTANT;
-  if (envAssistant === 'claude' || envAssistant === 'codex') {
+  if (envAssistant === 'claude' || envAssistant === 'codex' || envAssistant === 'pi') {
     config.assistant = envAssistant;
   }
 
@@ -277,6 +281,7 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
     assistants: {
       claude: { ...defaults.assistants.claude },
       codex: { ...defaults.assistants.codex },
+      pi: { ...defaults.assistants.pi },
     },
   };
 
@@ -300,6 +305,12 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
     result.assistants.codex = {
       ...result.assistants.codex,
       ...global.assistants.codex,
+    };
+  }
+  if (global.assistants?.pi) {
+    result.assistants.pi = {
+      ...result.assistants.pi,
+      ...global.assistants.pi,
     };
   }
 
@@ -339,6 +350,7 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
     assistants: {
       claude: { ...merged.assistants.claude },
       codex: { ...merged.assistants.codex },
+      pi: { ...merged.assistants.pi },
     },
   };
 
@@ -357,6 +369,12 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
     result.assistants.codex = {
       ...result.assistants.codex,
       ...repo.assistants.codex,
+    };
+  }
+  if (repo.assistants?.pi) {
+    result.assistants.pi = {
+      ...result.assistants.pi,
+      ...repo.assistants.pi,
     };
   }
 
@@ -479,6 +497,7 @@ export async function updateGlobalConfig(updates: Partial<GlobalConfig>): Promis
       merged.assistants = {
         claude: { ...current.assistants?.claude, ...updates.assistants.claude },
         codex: { ...current.assistants?.codex, ...updates.assistants.codex },
+        pi: { ...current.assistants?.pi, ...updates.assistants.pi },
       };
     }
 
@@ -528,6 +547,9 @@ export function toSafeConfig(config: MergedConfig): SafeConfig {
         model: config.assistants.codex.model,
         modelReasoningEffort: config.assistants.codex.modelReasoningEffort,
         webSearchMode: config.assistants.codex.webSearchMode,
+      },
+      pi: {
+        model: config.assistants.pi.model,
       },
     },
     streaming: {

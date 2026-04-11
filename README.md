@@ -268,7 +268,7 @@ The Web UI and CLI work out of the box. Optionally connect a chat platform for r
       ▼                ▼          ▼                ▼
 ┌───────────┐  ┌────────────┐  ┌──────────────────────────┐
 │  Command  │  │  Workflow  │  │    AI Assistant Clients  │
-│  Handler  │  │  Executor  │  │      (Claude / Codex)    │
+│  Handler  │  │  Executor  │  │  (Claude / Codex / Pi)   │
 │  (Slash)  │  │  (YAML)    │  │                          │
 └───────────┘  └────────────┘  └──────────────────────────┘
       │              │                      │
@@ -280,6 +280,94 @@ The Web UI and CLI work out of the box. Optionally connect a chat platform for r
 │   Codebases • Conversations • Sessions • Workflow Runs  │
 │    Isolation Environments • Messages • Workflow Events  │
 └─────────────────────────────────────────────────────────┘
+```
+
+## Using Pi.dev as Your AI Backend
+
+[Pi](https://pi.dev) is a multi-provider coding agent that works with Anthropic, OpenAI, Google, and many other LLM providers. Archon integrates Pi as a first-class AI assistant alongside Claude and Codex.
+
+### Why Pi?
+
+- **Multi-provider** — One integration, many models: Anthropic, OpenAI, Google Gemini, OpenRouter, Mistral, and more
+- **Same tools** — Pi uses the same file tools (read, bash, edit, write) as Claude Code
+- **No vendor lock-in** — Swap models without changing your workflows
+
+### Setup
+
+**1. Install Pi**
+
+```bash
+npm install -g @mariozechner/pi-coding-agent
+```
+
+**2. Authenticate with your LLM provider**
+
+Pi reads API keys from environment variables. Set the key for your chosen provider:
+
+```bash
+# Anthropic (Claude models)
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# OpenAI (GPT models, Codex)
+export OPENAI_API_KEY=sk-...
+
+# Google (Gemini models)
+export GOOGLE_API_KEY=AIza...
+
+# Or log in interactively (OAuth for supported providers)
+pi /login
+```
+
+**3. Set Pi as the default assistant in `.archon/config.yaml`**
+
+```yaml
+# ~/.archon/config.yaml  (global)  or  .archon/config.yaml  (per-repo)
+defaultAssistant: pi
+
+assistants:
+  pi:
+    model: anthropic/claude-opus-4-5   # provider/model-id format
+```
+
+Model format is `provider/model-id`. Omit `model` to let Pi auto-select based on available API keys.
+
+**Supported providers and example model strings:**
+
+| Provider | Example `model` value |
+|----------|----------------------|
+| Anthropic | `anthropic/claude-opus-4-5` |
+| OpenAI | `openai/gpt-4o` |
+| Google | `google/gemini-2.5-pro` |
+| OpenRouter | `openrouter/openai/gpt-5.1-codex` |
+| Mistral | `mistral/devstral-medium-latest` |
+| Azure OpenAI | `azure-openai-responses/gpt-5.2` |
+
+### Using Pi in Workflows
+
+Set `provider: pi` on a workflow or individual node:
+
+```yaml
+# .archon/workflows/my-workflow.yaml
+provider: pi
+model: openai/gpt-4o   # optional — falls back to config default
+
+nodes:
+  - id: plan
+    prompt: "Explore the codebase and create an implementation plan"
+
+  - id: implement
+    depends_on: [plan]
+    provider: anthropic   # per-node override (uses node-level provider)
+    model: anthropic/claude-opus-4-5
+    prompt: "Implement the plan"
+```
+
+> **Note:** Claude-specific features (hooks, MCP servers, skills, structured output) are silently skipped when using `provider: pi`. Pi workflows use the standard read/bash/edit/write tool set.
+
+### Environment Variable Override
+
+```bash
+DEFAULT_AI_ASSISTANT=pi bun run dev
 ```
 
 ## Documentation
@@ -294,7 +382,7 @@ Full documentation is available at **[archon.diy](https://archon.diy)**.
 | [Authoring Workflows](https://archon.diy/guides/authoring-workflows/) | Create custom YAML workflows |
 | [Authoring Commands](https://archon.diy/guides/authoring-commands/) | Create reusable AI commands |
 | [Configuration](https://archon.diy/reference/configuration/) | All config options, env vars, YAML settings |
-| [AI Assistants](https://archon.diy/getting-started/ai-assistants/) | Claude and Codex setup details |
+| [AI Assistants](https://archon.diy/getting-started/ai-assistants/) | Claude, Codex, and Pi setup details |
 | [Deployment](https://archon.diy/deployment/) | Docker, VPS, production setup |
 | [Architecture](https://archon.diy/reference/architecture/) | System design and internals |
 | [Troubleshooting](https://archon.diy/reference/troubleshooting/) | Common issues and fixes |
