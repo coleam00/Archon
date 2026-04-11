@@ -394,30 +394,43 @@ function ProjectsSection(): React.ReactElement {
         )}
 
         {showAdd ? (
-          <form onSubmit={handleAddSubmit} className="mt-3 flex gap-2">
-            <Input
-              value={addPath}
-              onChange={e => {
-                setAddPath(e.target.value);
-              }}
-              placeholder="/path/to/repository"
-              className="flex-1"
-            />
-            <Button type="submit" size="sm" disabled={addMutation.isPending}>
-              Add
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setShowAdd(false);
-                setAddPath('');
-              }}
-            >
-              Cancel
-            </Button>
-          </form>
+          <div className="mt-3 space-y-2">
+            <form onSubmit={handleAddSubmit} className="flex gap-2">
+              <Input
+                value={addPath}
+                onChange={e => {
+                  setAddPath(e.target.value);
+                }}
+                placeholder="/path/to/repository"
+                className="flex-1"
+              />
+              <Button type="submit" size="sm" disabled={addMutation.isPending}>
+                Add
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setShowAdd(false);
+                  setAddPath('');
+                  setAllowEnvKeys(false);
+                }}
+              >
+                Cancel
+              </Button>
+            </form>
+            <label className="flex items-center gap-2 text-sm text-text-secondary">
+              <input
+                type="checkbox"
+                checked={allowEnvKeys}
+                onChange={e => {
+                  setAllowEnvKeys(e.target.checked);
+                }}
+              />
+              Allow env keys (I understand the risk)
+            </label>
+          </div>
         ) : (
           <Button
             variant="outline"
