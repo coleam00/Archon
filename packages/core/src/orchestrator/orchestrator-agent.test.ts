@@ -37,10 +37,6 @@ const mockExecuteWorkflow = mock(() => Promise.resolve());
 const mockHandleCommand = mock(() =>
   Promise.resolve({ success: true, message: 'ok', workflow: undefined })
 );
-const mockSendQuery = mock(async function* () {
-  yield { type: 'assistant', content: 'test response' };
-  yield { type: 'result', sessionId: 'session-1' };
-});
 const mockGetCodebaseEnvVars = mock(() => Promise.resolve({}));
 const mockLoadConfig = mock(() =>
   Promise.resolve({
@@ -104,12 +100,14 @@ mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
 }));
 
+const mockSendQuery = mock(async function* () {});
+const mockGetAgentProvider = mock(() => ({
+  sendQuery: mockSendQuery,
+  getType: mock(() => 'claude'),
+  getCapabilities: mock(() => ({})),
+}));
 mock.module('@archon/providers', () => ({
-  getAgentProvider: mock(() => ({
-    sendQuery: mockSendQuery,
-    getType: mock(() => 'claude'),
-    getCapabilities: mock(() => ({})),
-  })),
+  getAgentProvider: mockGetAgentProvider,
   getProviderCapabilities: mock(() => ({ envInjection: true })),
 }));
 
@@ -1564,5 +1562,148 @@ describe('handleMessage — workflow context injection', () => {
 
     // Non-critical path — must not block message handling
     await expect(handleMessage(platform, 'conv-1', 'Hello')).resolves.toBeUndefined();
+  });
+});
+
+// ─── AI error result handling (stream + batch) ──────────────────────────────
+
+describe('AI error result handling', () => {
+  beforeEach(() => {
+    mockSendQuery.mockReset();
+    mockGetAgentProvider.mockClear();
+    mockGetAgentProvider.mockImplementation(() => ({
+      sendQuery: mockSendQuery,
+      getType: mock(() => 'claude'),
+      getCapabilities: mock(() => ({})),
+    }));
+    mockGetOrCreateConversation.mockReset();
+    mockGetCodebase.mockReset();
+    mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null));
+    mockGetCodebase.mockImplementation(() => Promise.resolve(null));
+    mockLogger.debug.mockClear();
+  });
+
+  describe('stream mode', () => {
+    function makeStreamPlatform(): IPlatformAdapter {
+      return {
+        sendMessage: mock(() => Promise.resolve()),
+        ensureThread: mock((id: string) => Promise.resolve(id)),
+        getStreamingMode: mock(() => 'stream' as const),
+        getPlatformType: mock(() => 'web'),
+        start: mock(() => Promise.resolve()),
+        stop: mock(() => {}),
+      };
+    }
+
+    test('sends error message when result has isError=true and no assistant messages', async () => {
+      const conversation = makeConversation({ codebase_id: null });
+      mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+      mockGetPausedWorkflowRun.mockReturnValueOnce(Promise.resolve(null));
+
+      mockSendQuery.mockImplementation(async function* () {
+        yield {
+          type: 'result',
+          isError: true,
+          errorSubtype: 'authentication_error',
+        };
+      });
+
+      const platform = makeStreamPlatform();
+      await handleMessage(platform, 'conv-1', 'hello');
+
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'conv-1',
+        'AI error (authentication_error). Check your Claude credentials or use /reset.'
+      );
+    });
+
+    test('sends generic hint when errorSubtype is not authentication_error', async () => {
+      const conversation = makeConversation({ codebase_id: null });
+      mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+      mockGetPausedWorkflowRun.mockReturnValueOnce(Promise.resolve(null));
+
+      mockSendQuery.mockImplementation(async function* () {
+        yield {
+          type: 'result',
+          isError: true,
+          errorSubtype: 'rate_limit',
+        };
+      });
+
+      const platform = makeStreamPlatform();
+      await handleMessage(platform, 'conv-1', 'hello');
+
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'conv-1',
+        'AI error (rate_limit). Check server logs for details.'
+      );
+    });
+
+    test('sends error message without subtype when errorSubtype is undefined', async () => {
+      const conversation = makeConversation({ codebase_id: null });
+      mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+      mockGetPausedWorkflowRun.mockReturnValueOnce(Promise.resolve(null));
+
+      mockSendQuery.mockImplementation(async function* () {
+        yield {
+          type: 'result',
+          isError: true,
+        };
+      });
+
+      const platform = makeStreamPlatform();
+      await handleMessage(platform, 'conv-1', 'hello');
+
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'conv-1',
+        'AI error. Check server logs for details.'
+      );
+    });
+  });
+
+  describe('batch mode', () => {
+    test('sends error message when result has isError=true and no assistant messages', async () => {
+      const conversation = makeConversation({ codebase_id: null });
+      mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+      mockGetPausedWorkflowRun.mockReturnValueOnce(Promise.resolve(null));
+
+      mockSendQuery.mockImplementation(async function* () {
+        yield {
+          type: 'result',
+          isError: true,
+          errorSubtype: 'authentication_error',
+        };
+      });
+
+      const platform = makePlatform(); // batch mode by default
+      await handleMessage(platform, 'conv-1', 'hello');
+
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'conv-1',
+        'AI error (authentication_error). Check your Claude credentials or use /reset.'
+      );
+    });
+
+    test('sends generic hint for non-authentication errors', async () => {
+      const conversation = makeConversation({ codebase_id: null });
+      mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+      mockGetPausedWorkflowRun.mockReturnValueOnce(Promise.resolve(null));
+
+      mockSendQuery.mockImplementation(async function* () {
+        yield {
+          type: 'result',
+          isError: true,
+          errorSubtype: 'internal_error',
+        };
+      });
+
+      const platform = makePlatform();
+      await handleMessage(platform, 'conv-1', 'hello');
+
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'conv-1',
+        'AI error (internal_error). Check server logs for details.'
+      );
+    });
   });
 });

@@ -916,6 +916,7 @@ async function handleStreamMode(
 ): Promise<void> {
   const allMessages: string[] = [];
   let newSessionId: string | undefined;
+  let errorResult: { subtype?: string } | undefined;
   let commandDetected = false;
 
   for await (const msg of aiClient.sendQuery(
@@ -959,13 +960,7 @@ async function handleStreamMode(
         newSessionId = msg.sessionId;
       }
       if (msg.isError) {
-        getLog().warn({ conversationId, errorSubtype: msg.errorSubtype }, 'ai_result_error');
-        const syntheticError = new Error(msg.errorSubtype ?? 'AI result error');
-        await platform.sendMessage(conversationId, classifyAndFormatError(syntheticError));
-        if (newSessionId) {
-          await tryPersistSessionId(session.id, newSessionId);
-        }
-        return;
+        errorResult = { subtype: msg.errorSubtype };
       }
       if (!commandDetected && platform.sendStructuredEvent) {
         await platform.sendStructuredEvent(conversationId, msg);
@@ -978,7 +973,17 @@ async function handleStreamMode(
   }
 
   if (allMessages.length === 0) {
-    getLog().debug({ conversationId }, 'no_ai_response');
+    if (errorResult) {
+      const hint =
+        errorResult.subtype === 'authentication_error'
+          ? 'Check your Claude credentials or use /reset.'
+          : 'Check server logs for details.';
+      await platform.sendMessage(
+        conversationId,
+        `AI error${errorResult.subtype ? ` (${errorResult.subtype})` : ''}. ${hint}`
+      );
+    }
+    getLog().debug({ conversationId, errorResult }, 'no_ai_response');
     return;
   }
 
@@ -1046,6 +1051,7 @@ async function handleBatchMode(
   let assistantChunksTruncated = false;
   let totalChunksTruncated = false;
   let newSessionId: string | undefined;
+  let errorResult: { subtype?: string } | undefined;
   let commandDetected = false;
 
   for await (const msg of aiClient.sendQuery(
@@ -1082,13 +1088,7 @@ async function handleBatchMode(
         newSessionId = msg.sessionId;
       }
       if (msg.isError) {
-        getLog().warn({ conversationId, errorSubtype: msg.errorSubtype }, 'ai_result_error');
-        const syntheticError = new Error(msg.errorSubtype ?? 'AI result error');
-        await platform.sendMessage(conversationId, classifyAndFormatError(syntheticError));
-        if (newSessionId) {
-          await tryPersistSessionId(session.id, newSessionId);
-        }
-        return;
+        errorResult = { subtype: msg.errorSubtype };
       }
     }
 
@@ -1123,7 +1123,17 @@ async function handleBatchMode(
   const finalMessage = filterToolIndicators(assistantMessages);
 
   if (!finalMessage) {
-    getLog().debug({ conversationId }, 'no_ai_response');
+    if (errorResult) {
+      const hint =
+        errorResult.subtype === 'authentication_error'
+          ? 'Check your Claude credentials or use /reset.'
+          : 'Check server logs for details.';
+      await platform.sendMessage(
+        conversationId,
+        `AI error${errorResult.subtype ? ` (${errorResult.subtype})` : ''}. ${hint}`
+      );
+    }
+    getLog().debug({ conversationId, errorResult }, 'no_ai_response');
     return;
   }
 
