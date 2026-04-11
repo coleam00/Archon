@@ -26,9 +26,9 @@
 
 services:
   # -------------------------------------------------------------------------
-  # App (always runs)
+  # Archon app (always runs)
   # -------------------------------------------------------------------------
-  app:
+  archon:
     build: .
     image: archon
     env_file: .env
@@ -105,7 +105,7 @@ services:
     networks:
       - archon-network
     depends_on:
-      app:
+      archon:
         condition: service_healthy
 
   # -------------------------------------------------------------------------
