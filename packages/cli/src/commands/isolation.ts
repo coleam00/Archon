@@ -318,8 +318,11 @@ export async function isolationCompleteCommand(
         }
         failed++;
       } else if (!result.worktreeRemoved) {
+        const parts: string[] = [];
+        if (result.branchDeleted) parts.push('branch deleted');
+        parts.push('DB updated');
         console.error(
-          `  Partial: ${branch} — worktree was not removed from disk (branch/DB cleaned up)`
+          `  Partial: ${branch} — worktree was not removed from disk (${parts.join(', ')})`
         );
         for (const warning of result.warnings) {
           console.error(`    ⚠ ${warning}`);

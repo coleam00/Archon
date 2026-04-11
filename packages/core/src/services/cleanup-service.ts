@@ -297,8 +297,12 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
         const pathExists = await worktreeExists(toWorktreePath(env.working_path));
         if (!pathExists) {
           // Path doesn't exist - call removeEnvironment to clean up branch and mark as destroyed
-          await removeEnvironment(env.id, { force: false });
-          report.removed.push(`${env.id} (path missing)`);
+          const removeResult = await removeEnvironment(env.id, { force: false });
+          if (removeResult.skippedReason) {
+            report.skipped.push({ id: env.id, reason: removeResult.skippedReason });
+          } else {
+            report.removed.push(`${env.id} (path missing)`);
+          }
           continue;
         }
 
@@ -327,8 +331,15 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
           }
 
           // Safe to remove merged branch (also delete remote branch)
-          await removeEnvironment(env.id, { force: false, deleteRemoteBranch: true });
-          report.removed.push(`${env.id} (merged)`);
+          const mergedResult = await removeEnvironment(env.id, {
+            force: false,
+            deleteRemoteBranch: true,
+          });
+          if (mergedResult.skippedReason) {
+            report.skipped.push({ id: env.id, reason: mergedResult.skippedReason });
+          } else {
+            report.removed.push(`${env.id} (merged)`);
+          }
           continue;
         }
 
@@ -354,8 +365,12 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
             continue;
           }
 
-          await removeEnvironment(env.id, { force: false });
-          report.removed.push(`${env.id} (stale)`);
+          const staleResult = await removeEnvironment(env.id, { force: false });
+          if (staleResult.skippedReason) {
+            report.skipped.push({ id: env.id, reason: staleResult.skippedReason });
+          } else {
+            report.removed.push(`${env.id} (stale)`);
+          }
         }
       } catch (error) {
         const err = error as Error;
@@ -516,8 +531,12 @@ export async function cleanupStaleWorktrees(
 
     // Safe to remove
     try {
-      await removeEnvironment(env.id);
-      result.removed.push(env.branch_name);
+      const removeResult = await removeEnvironment(env.id);
+      if (removeResult.skippedReason) {
+        result.skipped.push({ branchName: env.branch_name, reason: removeResult.skippedReason });
+      } else {
+        result.removed.push(env.branch_name);
+      }
     } catch (error) {
       const err = error as Error;
       result.skipped.push({ branchName: env.branch_name, reason: err.message });
@@ -617,8 +636,12 @@ export async function cleanupMergedWorktrees(
 
     // Safe to remove (also delete remote branch since it's merged)
     try {
-      await removeEnvironment(env.id, { deleteRemoteBranch: true });
-      result.removed.push(env.branch_name);
+      const removeResult = await removeEnvironment(env.id, { deleteRemoteBranch: true });
+      if (removeResult.skippedReason) {
+        result.skipped.push({ branchName: env.branch_name, reason: removeResult.skippedReason });
+      } else {
+        result.removed.push(env.branch_name);
+      }
     } catch (error) {
       const err = error as Error;
       result.skipped.push({ branchName: env.branch_name, reason: err.message });

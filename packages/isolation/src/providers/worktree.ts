@@ -178,24 +178,25 @@ export class WorktreeProvider implements IIsolationProvider {
       } else {
         result.directoryClean = true;
       }
+    }
 
-      // Prune stale worktree references (git may keep refs to deleted paths)
-      try {
-        await execFileAsync('git', ['-C', repoPath, 'worktree', 'prune'], { timeout: 15000 });
-      } catch (_error) {
-        // Best-effort — pruning failure is not critical
-        getLog().debug({ repoPath }, 'worktree_prune_failed');
-      }
+    // Prune stale worktree references — runs even when path is already gone,
+    // because git may still have a stale ref for a manually-deleted worktree
+    try {
+      await execFileAsync('git', ['-C', repoPath, 'worktree', 'prune'], { timeout: 15000 });
+    } catch (_error) {
+      // Best-effort — pruning failure is not critical
+      getLog().debug({ repoPath }, 'worktree_prune_failed');
+    }
 
-      // Post-removal verification: confirm worktree is actually gone from git
-      if (result.worktreeRemoved) {
-        const stillRegistered = await this.isWorktreeRegistered(repoPath, worktreePath);
-        if (stillRegistered) {
-          result.worktreeRemoved = false;
-          const warning = `Worktree at ${worktreePath} was reported removed but is still registered in git`;
-          getLog().warn({ worktreePath, repoPath }, 'worktree_removal_verification_failed');
-          result.warnings.push(warning);
-        }
+    // Post-removal verification: confirm worktree is actually gone from git
+    if (result.worktreeRemoved) {
+      const stillRegistered = await this.isWorktreeRegistered(repoPath, worktreePath);
+      if (stillRegistered) {
+        result.worktreeRemoved = false;
+        const warning = `Worktree at ${worktreePath} was reported removed but is still registered in git`;
+        getLog().warn({ worktreePath, repoPath }, 'worktree_removal_verification_failed');
+        result.warnings.push(warning);
       }
     }
 
