@@ -20,6 +20,7 @@ import { ConversationNotFoundError } from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
+import * as messageDb from '../db/messages';
 import * as commandHandler from '../handlers/command-handler';
 import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
 import { classifyAndFormatError } from '../utils/error-formatter';
@@ -502,11 +503,15 @@ export async function handleMessage(
 ): Promise<void> {
   const { issueContext, threadContext, parentConversationId, isolationHints, attachedFiles } =
     context ?? {};
+  // Hoisted so the top-level catch block can persist error messages for
+  // non-web platforms (telegram, etc.) — see the catch handler at the end
+  // of handleMessage for the rationale.
+  let conversation: Conversation | undefined;
   try {
     getLog().debug({ conversationId }, 'orchestrator_message_received');
 
     // 1. Get/create conversation and inherit thread context
-    let conversation = await db.getOrCreateConversation(
+    conversation = await db.getOrCreateConversation(
       platform.getPlatformType(),
       conversationId,
       undefined,
@@ -527,6 +532,27 @@ export async function handleMessage(
         conversation.ai_assistant_type,
         getArchonWorkspacesPath()
       );
+    }
+
+    // 1d. Persist inbound user message for non-web chat platforms (currently
+    // telegram only; broaden once slack/discord/github webhook replay is
+    // audited). Web's PersistenceBuffer and the HTTP routes already own the
+    // web path. Deterministic slash commands (/help, /status, etc.) skip
+    // this by design — they're ephemeral utility chatter, not conversation
+    // content. Gated before the approval-routing block on purpose so that
+    // natural-language approval responses ARE captured.
+    if (platform.getPlatformType() === 'telegram' && !message.startsWith('/')) {
+      try {
+        await messageDb.addMessage(conversation.id, 'user', message, {
+          platformType: 'telegram',
+        });
+      } catch (persistErr) {
+        getLog().error(
+          { err: toError(persistErr), conversationId: conversation.id },
+          'telegram_user_message_persistence_failed'
+        );
+        // Swallow — persistence failure must not break the user-facing reply.
+      }
     }
 
     // Natural-language approval routing — if a workflow is paused in this
@@ -809,6 +835,24 @@ export async function handleMessage(
     } catch (sendError) {
       getLog().error({ err: toError(sendError), conversationId }, 'error_notification_failed');
     }
+    // Persist the error response as the assistant turn for non-web chat
+    // platforms. Without this, the Web UI view of a telegram conversation
+    // would show an orphan user row with no assistant counterpart whenever
+    // the orchestrator throws. Skipped silently if the conversation lookup
+    // failed before reaching getOrCreateConversation.
+    if (conversation && platform.getPlatformType() === 'telegram') {
+      try {
+        await messageDb.addMessage(conversation.id, 'assistant', userMessage, {
+          platformType: 'telegram',
+          error: true,
+        });
+      } catch (persistErr) {
+        getLog().error(
+          { err: toError(persistErr), conversationId: conversation.id },
+          'telegram_error_message_persistence_failed'
+        );
+      }
+    }
   }
 }
 
@@ -925,7 +969,22 @@ async function handleStreamMode(
     return;
   }
 
-  // Text was already streamed — nothing more to send
+  // Text was already streamed — nothing more to send.
+  // Persist the assistant turn for non-web chat platforms (telegram today).
+  // Gated AFTER the retract branches above so retracted text is never saved,
+  // matching the semantics MessagePersistence.retractLastSegment uses on web.
+  if (platform.getPlatformType() === 'telegram' && fullResponse.trim().length > 0) {
+    try {
+      await messageDb.addMessage(conversation.id, 'assistant', fullResponse, {
+        platformType: 'telegram',
+      });
+    } catch (persistErr) {
+      getLog().error(
+        { err: toError(persistErr), conversationId: conversation.id },
+        'telegram_assistant_message_persistence_failed'
+      );
+    }
+  }
 }
 
 // ─── Batch Mode ─────────────────────────────────────────────────────────────
@@ -1061,6 +1120,23 @@ async function handleBatchMode(
   // No orchestrator commands — send the clean response
   getLog().debug({ messageLength: finalMessage.length }, 'sending_final_message');
   await platform.sendMessage(conversationId, finalMessage);
+
+  // Persist the assistant turn for non-web chat platforms (telegram today).
+  // Placed after the successful send so we don't record messages the user
+  // never actually saw. Same retract semantics as stream mode — the two
+  // early returns above (workflowInvocation, projectRegistration) skip this.
+  if (platform.getPlatformType() === 'telegram' && finalMessage.trim().length > 0) {
+    try {
+      await messageDb.addMessage(conversation.id, 'assistant', finalMessage, {
+        platformType: 'telegram',
+      });
+    } catch (persistErr) {
+      getLog().error(
+        { err: toError(persistErr), conversationId: conversation.id },
+        'telegram_assistant_message_persistence_failed'
+      );
+    }
+  }
 }
 
 // ─── Orchestrator Command Handlers ──────────────────────────────────────────
