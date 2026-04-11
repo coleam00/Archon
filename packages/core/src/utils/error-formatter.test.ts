@@ -19,6 +19,40 @@ describe('classifyAndFormatError', () => {
     });
   });
 
+  describe('OAuth refresh-token errors', () => {
+    test('detects "refresh token" in message', () => {
+      const result = classifyAndFormatError(new Error('Your refresh token was already used'));
+      expect(result).toBe(
+        '⚠️ AI authentication error. Please re-login (e.g. `claude /login`) and try again.'
+      );
+    });
+
+    test('detects "could not be refreshed" in message', () => {
+      const result = classifyAndFormatError(new Error('Your access token could not be refreshed'));
+      expect(result).toBe(
+        '⚠️ AI authentication error. Please re-login (e.g. `claude /login`) and try again.'
+      );
+    });
+
+    test('detects "log out and sign in" in message', () => {
+      const result = classifyAndFormatError(new Error('Please log out and sign in again'));
+      expect(result).toBe(
+        '⚠️ AI authentication error. Please re-login (e.g. `claude /login`) and try again.'
+      );
+    });
+
+    test('handles full Claude OAuth error message', () => {
+      const result = classifyAndFormatError(
+        new Error(
+          'Claude Code auth error: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.'
+        )
+      );
+      expect(result).toBe(
+        '⚠️ AI authentication error. Please re-login (e.g. `claude /login`) and try again.'
+      );
+    });
+  });
+
   describe('authentication errors', () => {
     test('detects "API key" in message', () => {
       const result = classifyAndFormatError(new Error('Invalid API key provided'));
@@ -27,6 +61,13 @@ describe('classifyAndFormatError', () => {
 
     test('detects "authentication" in message', () => {
       const result = classifyAndFormatError(new Error('authentication failed'));
+      expect(result).toBe('⚠️ AI service authentication error. Please check configuration.');
+    });
+
+    test('detects "auth error" prefix in message', () => {
+      const result = classifyAndFormatError(
+        new Error('Claude Code auth error: something went wrong')
+      );
       expect(result).toBe('⚠️ AI service authentication error. Please check configuration.');
     });
 
@@ -230,6 +271,16 @@ describe('classifyAndFormatError', () => {
       // "rate limit" message is also short, but rate-limit branch fires first
       const result = classifyAndFormatError(new Error('rate limit'));
       expect(result).toBe('⚠️ AI rate limit reached. Please wait a moment and try again.');
+    });
+
+    test('OAuth check takes precedence over general auth check', () => {
+      // Contains both "refresh token" and "auth error" — OAuth branch fires first
+      const result = classifyAndFormatError(
+        new Error('Claude Code auth error: refresh token expired')
+      );
+      expect(result).toBe(
+        '⚠️ AI authentication error. Please re-login (e.g. `claude /login`) and try again.'
+      );
     });
 
     test('auth check takes precedence over short-message fallback', () => {

@@ -19,10 +19,20 @@ export function classifyAndFormatError(error: Error): string {
     return '⚠️ AI rate limit reached. Please wait a moment and try again.';
   }
 
+  // AI/SDK errors - OAuth credential refresh (e.g. "claude /login" token expired)
+  if (
+    message.includes('refresh token') ||
+    message.includes('could not be refreshed') ||
+    message.includes('log out and sign in')
+  ) {
+    return '⚠️ AI authentication error. Please re-login (e.g. `claude /login`) and try again.';
+  }
+
   // AI/SDK errors - authentication
   if (
     message.includes('API key') ||
     message.includes('authentication') ||
+    message.includes('auth error') ||
     message.includes('401')
   ) {
     return '⚠️ AI service authentication error. Please check configuration.';

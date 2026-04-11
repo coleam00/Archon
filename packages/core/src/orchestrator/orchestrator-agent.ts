@@ -954,8 +954,17 @@ async function handleStreamMode(
       if (!commandDetected && platform.sendStructuredEvent) {
         await platform.sendStructuredEvent(conversationId, msg);
       }
-    } else if (msg.type === 'result' && msg.sessionId) {
-      newSessionId = msg.sessionId;
+    } else if (msg.type === 'result') {
+      if (msg.sessionId) {
+        newSessionId = msg.sessionId;
+      }
+      if (msg.isError) {
+        await platform.sendMessage(
+          conversationId,
+          '⚠️ AI error. Check your credentials or use /reset.'
+        );
+        return;
+      }
       if (!commandDetected && platform.sendStructuredEvent) {
         await platform.sendStructuredEvent(conversationId, msg);
       }
@@ -1066,8 +1075,17 @@ async function handleBatchMode(
         allChunks.push({ type: 'tool', content: toolMessage });
         getLog().debug({ toolName: msg.toolName }, 'tool_call');
       }
-    } else if (msg.type === 'result' && msg.sessionId) {
-      newSessionId = msg.sessionId;
+    } else if (msg.type === 'result') {
+      if (msg.sessionId) {
+        newSessionId = msg.sessionId;
+      }
+      if (msg.isError) {
+        await platform.sendMessage(
+          conversationId,
+          '⚠️ AI error. Check your credentials or use /reset.'
+        );
+        return;
+      }
     }
 
     if (!commandDetected && allChunks.length > MAX_BATCH_TOTAL_CHUNKS) {
