@@ -84,7 +84,7 @@ export class PiClient implements IAssistantClient {
     if (resumeSessionId) {
       getLog().warn(
         { resumeSessionId },
-        'pi.session_resume_not_supported — starting fresh session'
+        'pi.session_resume_unsupported'
       );
     }
 
@@ -107,13 +107,13 @@ export class PiClient implements IAssistantClient {
         if (!model) {
           getLog().warn(
             { model: options.model },
-            'pi.model_not_found_in_registry — using auto-selected default'
+            'pi.model_not_found'
           );
         }
       } else {
         getLog().warn(
           { model: options.model },
-          'pi.model_format_invalid — expected "provider/model-id" format, using auto-selected default'
+          'pi.model_format_invalid'
         );
       }
     }

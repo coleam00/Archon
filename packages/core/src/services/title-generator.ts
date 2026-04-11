@@ -26,7 +26,7 @@ const MAX_TITLE_LENGTH = 100;
  *
  * @param conversationDbId - Database UUID of the conversation
  * @param userMessage - The user's message to generate a title from
- * @param assistantType - 'claude' or 'codex'
+ * @param assistantType - 'claude', 'codex', or 'pi'
  * @param cwd - Working directory for the AI client
  * @param workflowName - Optional workflow name for additional context
  */
