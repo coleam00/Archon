@@ -299,6 +299,53 @@ Full documentation is available at **[archon.diy](https://archon.diy)**.
 | [Architecture](https://archon.diy/reference/architecture/) | System design and internals |
 | [Troubleshooting](https://archon.diy/reference/troubleshooting/) | Common issues and fixes |
 
+### Supported AI Assistants
+
+Archon supports three first-class AI assistants:
+
+| Assistant | SDK | Best For | Setup Guide |
+|-----------|-----|----------|-------------|
+| **Claude** | Claude Code SDK | General-purpose coding, complex reasoning | [Claude Setup](https://archon.diy/getting-started/ai-assistants/) |
+| **Codex** | Codex CLI | OpenAI ecosystem integration | [Codex Setup](https://archon.diy/getting-started/ai-assistants/) |
+| **Qwen** | Qwen Code SDK | Code generation, cost-effective workflows | [Qwen Setup](./docs/qwen-setup.md) |
+
+All three assistants support:
+- ✅ Full workflow execution (plan, implement, review, PR creation)
+- ✅ Streaming responses with real-time output
+- ✅ Tool use and MCP server integration
+- ✅ Worktree isolation for parallel development
+- ✅ Session resume capability
+- ✅ AI-powered title generation
+
+You can mix assistants within a single workflow:
+
+```yaml
+nodes:
+  - id: plan
+    prompt: "Create implementation plan"
+    model: qwen-max  # Use Qwen for planning
+
+  - id: implement
+    depends_on: [plan]
+    prompt: "Implement the plan"
+    model: claude-sonnet-4-5  # Use Claude for coding
+
+  - id: review
+    depends_on: [implement]
+    prompt: "Review changes"
+    model: qwen-coder  # Use Qwen for code review
+```
+
+### Qwen Support Details
+
+For comprehensive Qwen setup and configuration, see the **[Qwen Setup Guide](./docs/qwen-setup.md)**.
+
+Quick highlights:
+- **Authentication**: Follows your existing Qwen Code CLI auth (OAuth or API key)
+- **Models**: Auto-detects `qwen-max`, `qwen-coder`, `qwen-turbo`, `qwen-plus`, `qwq-*`, `qvq-*`, and more
+- **Configuration**: Set via `~/.archon/config.yaml` under `assistants.qwen`
+- **Per-workflow override**: Specify `model: qwen-max` in any workflow node
+
 ### Qwen Support Boundaries
 
 Archon integrates Qwen through `@qwen-code/sdk` and can select it as the active assistant
