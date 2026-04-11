@@ -39,8 +39,8 @@ services:
       DEFAULT_AI_ASSISTANT: ${DEFAULT_AI_ASSISTANT:-claude}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       MAX_CONCURRENT_CONVERSATIONS: ${MAX_CONCURRENT_CONVERSATIONS:-10}
-    ports:
-      - "${ARCHON_PORT:-3000}:${ARCHON_PORT:-3000}"
+    expose:
+      - "${ARCHON_PORT:-3000}"
     volumes:
       - ${ARCHON_DATA:-archon_data}:/.archon
     networks:
