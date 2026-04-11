@@ -974,9 +974,10 @@ async function handleStreamMode(
 
   if (allMessages.length === 0) {
     if (errorResult) {
+      const providerLabel = aiClient.getType() === 'claude' ? 'Claude' : 'AI';
       const hint =
         errorResult.subtype === 'authentication_error'
-          ? 'Check your Claude credentials or use /reset.'
+          ? `Check your ${providerLabel} credentials or use /reset.`
           : 'Check server logs for details.';
       await platform.sendMessage(
         conversationId,
@@ -1124,9 +1125,10 @@ async function handleBatchMode(
 
   if (!finalMessage) {
     if (errorResult) {
+      const providerLabel = aiClient.getType() === 'claude' ? 'Claude' : 'AI';
       const hint =
         errorResult.subtype === 'authentication_error'
-          ? 'Check your Claude credentials or use /reset.'
+          ? `Check your ${providerLabel} credentials or use /reset.`
           : 'Check server logs for details.';
       await platform.sendMessage(
         conversationId,
