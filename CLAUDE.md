@@ -47,6 +47,38 @@
 - Workspaces automatically sync with origin before worktree creation (ensures latest code)
 - **NEVER run `git clean -fd`** - it permanently deletes untracked files (use `git checkout .` instead)
 
+**Fork & Upstream Integration (local clone only)**
+
+This working copy is a fork of `coleam00/Archon`. Remotes are set up fork-first so local customizations survive upstream releases without merge chaos:
+
+- `origin` → `https://github.com/matzls/Archon.git` (your fork, push access)
+- `upstream` → `https://github.com/coleam00/Archon.git` (Cole's repo, read-only)
+- `dev` tracks `upstream/dev` — keep it a clean mirror of upstream and never commit directly to it
+
+**Where different customizations belong:**
+
+1. **Personal config** — already outside git: `~/.archon/.env`, `~/.archon/config.yaml`, `~/.archon/archon.db`, per-target-repo `.archon/commands/` and `.archon/workflows/`. Upstream never touches these.
+2. **Broadly useful code changes** — open a PR from a feature branch on the fork to `coleam00/Archon:dev`. If merged, zero ongoing maintenance.
+3. **Personal code changes** — live on a feature branch on the fork; rebase on `upstream/dev` when pulling new releases.
+
+**Integrating upstream releases:**
+
+```bash
+git fetch upstream
+git checkout dev
+git merge --ff-only upstream/dev          # dev stays a clean mirror of upstream
+git checkout feature/my-branch
+git rebase dev                            # replay local commits on top of new dev
+git push --force-with-lease origin feature/my-branch
+```
+
+**Contributing back upstream:**
+
+```bash
+git push -u origin feature/my-branch
+gh pr create --repo coleam00/Archon --base dev --head matzls:feature/my-branch
+```
+
 ## Engineering Principles
 
 These are implementation constraints, not slogans. Apply them by default.
