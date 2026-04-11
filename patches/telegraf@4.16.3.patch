@@ -1,0 +1,18 @@
+diff --git a/lib/core/network/client.js b/lib/core/network/client.js
+index 25fbbbb47c7f88e83ae26f629e5ae1a0c141725c..7ee7bc4fc5e5d8fdb2f6307ecfdf0e3b932d1943 100644
+--- a/lib/core/network/client.js
++++ b/lib/core/network/client.js
+@@ -245,7 +245,12 @@ async function answerToWebhook(response, payload, options) {
+     return true;
+ }
+ function redactToken(error) {
+-    error.message = error.message.replace(/\/(bot|user)(\d+):[^/]+\//, '/$1$2:[REDACTED]/');
++    // Bun frozen Error.message workaround: assignment may throw TypeError in Bun
++    // runtimes where error.message is non-writable. Fall back to re-throwing the
++    // original error rather than killing the polling loop.
++    try {
++        error.message = error.message.replace(/\/(bot|user)(\d+):[^/]+\//, '/$1$2:[REDACTED]/');
++    } catch (_) { /* message is read-only; re-throw original */ }
+     throw error;
+ }
+ class ApiClient {

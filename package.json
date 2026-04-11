@@ -50,5 +50,8 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.74"
+  },
+  "patchedDependencies": {
+    "telegraf@4.16.3": "patches/telegraf@4.16.3.patch"
   }
 }

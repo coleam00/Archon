@@ -38,6 +38,21 @@ if (!process.env.CLAUDE_API_KEY && !process.env.CLAUDE_CODE_OAUTH_TOKEN) {
   }
 }
 
+// Strip Claude Code's nested-session markers from process.env.
+// When Archon is launched from inside a Claude Code terminal session, the parent
+// exports CLAUDECODE and several CLAUDE_CODE_* markers. The embedded CLI spawned
+// by the Claude Agent SDK refuses to launch if it sees any of them (nested-session
+// guard). SUBPROCESS_ENV_ALLOWLIST already excludes these, but the SDK leaks
+// process.env into the subprocess anyway, so we delete at the process level.
+// Auth/config vars (OAUTH_TOKEN, USE_BEDROCK, USE_VERTEX) are kept — only the
+// nested-session markers below are removed.
+delete process.env.CLAUDECODE;
+delete process.env.CLAUDE_CODE_ENTRYPOINT;
+delete process.env.CLAUDE_CODE_EXECPATH;
+delete process.env.CLAUDE_CODE_HIDE_ACCOUNT_INFO;
+delete process.env.CLAUDE_CODE_NO_FLICKER;
+delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS;
+
 // DATABASE_URL is no longer required - SQLite will be used as default
 
 // Import commands after dotenv is loaded
