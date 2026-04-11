@@ -357,7 +357,7 @@ nodes:
 
   - id: implement
     depends_on: [plan]
-    provider: anthropic   # per-node override (uses node-level provider)
+    provider: pi          # per-node override (uses Pi backend)
     model: anthropic/claude-opus-4-5
     prompt: "Implement the plan"
 ```
