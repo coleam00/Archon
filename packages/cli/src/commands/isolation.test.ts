@@ -410,6 +410,24 @@ describe('isolationCompleteCommand', () => {
     expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
   });
 
+  it('counts as failed when removeEnvironment returns partial (worktree not removed, branch deleted)', async () => {
+    mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
+    mockRemoveEnvironment.mockResolvedValueOnce({
+      worktreeRemoved: false,
+      branchDeleted: true,
+      warnings: ['Some warning'],
+      skippedReason: undefined,
+    });
+
+    await isolationCompleteCommand(['partial-branch'], { force: true, deleteRemote: true });
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '  Partial: partial-branch — worktree was not removed from disk (branch deleted, DB updated)'
+    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith('    ⚠ Some warning');
+    expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
+  });
+
   it('surfaces warnings from removeEnvironment result', async () => {
     mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
     mockRemoveEnvironment.mockResolvedValueOnce({
