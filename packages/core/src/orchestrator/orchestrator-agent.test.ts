@@ -125,6 +125,15 @@ mock.module('../db/workflow-events', () => ({
   createWorkflowEvent: mockCreateWorkflowEvent,
 }));
 
+// Mock db/messages so handleMessage persistence hooks (for non-web platforms)
+// don't try to open a real DB connection. addMessage is the only function we
+// exercise in these tests.
+const mockAddMessage = mock(() => Promise.resolve({} as unknown));
+mock.module('../db/messages', () => ({
+  addMessage: mockAddMessage,
+  listMessages: mock(() => Promise.resolve([])),
+}));
+
 mock.module('../config/config-loader', () => ({
   loadConfig: mock(() => Promise.resolve({})),
 }));
@@ -1405,5 +1414,112 @@ describe('discoverAllWorkflows — merge repo workflows over global', () => {
 
     // discoverWorkflowsWithConfig should have been called twice (global + repo)
     expect(mockDiscoverWorkflowsWithConfig).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ─── Telegram user-message persistence ────────────────────────────────────────
+
+/**
+ * These tests cover the `platform.getPlatformType() === 'telegram'` persistence
+ * gate added to handleMessage. They verify that:
+ *   1. natural-language telegram messages are persisted with role='user'
+ *   2. deterministic slash commands skip persistence (stay ephemeral)
+ *   3. web conversations do NOT trigger the centralized path (web's existing
+ *      PersistenceBuffer still owns the web flow)
+ *
+ * Assistant-message persistence hooks (inside handleStreamMode / handleBatchMode
+ * and in the top-level catch) are not covered here — they require mocking
+ * sendQuery to yield actual content, which is out of scope for this test batch.
+ * Track as a follow-up.
+ */
+function makeTelegramPlatform(): IPlatformAdapter {
+  return {
+    sendMessage: mock(() => Promise.resolve()),
+    ensureThread: mock((id: string) => Promise.resolve(id)),
+    getStreamingMode: mock(() => 'stream' as const),
+    getPlatformType: mock(() => 'telegram'),
+    start: mock(() => Promise.resolve()),
+    stop: mock(() => {}),
+  };
+}
+
+describe('telegram user-message persistence', () => {
+  beforeEach(() => {
+    mockAddMessage.mockClear();
+    mockGetOrCreateConversation.mockReset();
+    mockGetCodebase.mockReset();
+    mockListCodebases.mockReset();
+    mockDiscoverWorkflowsWithConfig.mockReset();
+    mockParseCommand.mockReset();
+
+    mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null));
+    mockGetCodebase.mockImplementation(() => Promise.resolve(null));
+    mockListCodebases.mockImplementation(() => Promise.resolve([]));
+    mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
+      Promise.resolve({ workflows: [], errors: [] })
+    );
+  });
+
+  test('natural-language telegram message is persisted as user turn', async () => {
+    const conversation = makeConversation({
+      id: 'telegram-conv-db-id',
+      platform_type: 'telegram',
+      platform_conversation_id: '8579582275',
+      title: null,
+    });
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+
+    const platform = makeTelegramPlatform();
+    await handleMessage(platform, '8579582275', 'What does the orchestrator do?');
+
+    // user message persisted exactly once
+    expect(mockAddMessage).toHaveBeenCalled();
+    const userCalls = mockAddMessage.mock.calls.filter(c => c[1] === 'user');
+    expect(userCalls).toHaveLength(1);
+    expect(userCalls[0]?.[0]).toBe('telegram-conv-db-id');
+    expect(userCalls[0]?.[2]).toBe('What does the orchestrator do?');
+    expect(userCalls[0]?.[3]).toEqual({ platformType: 'telegram' });
+  });
+
+  test('deterministic slash command (/help) skips persistence', async () => {
+    const conversation = makeConversation({
+      id: 'telegram-conv-db-id',
+      platform_type: 'telegram',
+      platform_conversation_id: '8579582275',
+      title: null,
+    });
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockParseCommand.mockReturnValueOnce({ command: 'help', args: [] });
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({ success: true, message: 'help text', workflow: undefined })
+    );
+
+    const platform = makeTelegramPlatform();
+    await handleMessage(platform, '8579582275', '/help');
+
+    // /help must not persist anything — neither user nor assistant row
+    const userCalls = mockAddMessage.mock.calls.filter(c => c[1] === 'user');
+    const assistantCalls = mockAddMessage.mock.calls.filter(c => c[1] === 'assistant');
+    expect(userCalls).toHaveLength(0);
+    expect(assistantCalls).toHaveLength(0);
+  });
+
+  test('web platform does not trigger centralized persistence path', async () => {
+    const conversation = makeConversation({
+      id: 'web-conv-db-id',
+      platform_type: 'web',
+      platform_conversation_id: 'web-test-1',
+      title: 'Web Test',
+    });
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+
+    // Default makePlatform() returns platform_type='web'
+    const platform = makePlatform();
+    await handleMessage(platform, 'web-test-1', 'Hello from the web UI');
+
+    // Centralized path is gated to telegram only — web is handled by its own
+    // PersistenceBuffer at the server layer, not by this code path.
+    const userCalls = mockAddMessage.mock.calls.filter(c => c[1] === 'user');
+    expect(userCalls).toHaveLength(0);
   });
 });
