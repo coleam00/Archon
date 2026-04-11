@@ -959,6 +959,7 @@ async function handleStreamMode(
         newSessionId = msg.sessionId;
       }
       if (msg.isError) {
+        getLog().warn({ conversationId, errorSubtype: msg.errorSubtype }, 'ai_result_error');
         await platform.sendMessage(
           conversationId,
           '⚠️ AI error. Check your credentials or use /reset.'
@@ -1080,6 +1081,7 @@ async function handleBatchMode(
         newSessionId = msg.sessionId;
       }
       if (msg.isError) {
+        getLog().warn({ conversationId, errorSubtype: msg.errorSubtype }, 'ai_result_error');
         await platform.sendMessage(
           conversationId,
           '⚠️ AI error. Check your credentials or use /reset.'
