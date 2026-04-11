@@ -25,6 +25,7 @@ export const SUBPROCESS_ENV_ALLOWLIST = new Set([
   'TZ',
   'SSH_AUTH_SOCK',
   // Claude auth and config
+  'CLAUDE_CONFIG_DIR',
   'CLAUDE_USE_GLOBAL_AUTH',
   'CLAUDE_API_KEY',
   'CLAUDE_CODE_OAUTH_TOKEN',
