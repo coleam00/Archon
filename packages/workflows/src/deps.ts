@@ -226,7 +226,7 @@ export interface IWorkflowAssistantClient {
   getType(): string;
 }
 
-export type AssistantClientFactory = (provider: 'claude' | 'codex') => IWorkflowAssistantClient;
+export type AssistantClientFactory = (provider: 'claude' | 'codex' | 'pi') => IWorkflowAssistantClient;
 
 // ---------------------------------------------------------------------------
 // Narrow config interface (subset of MergedConfig)
@@ -237,8 +237,8 @@ export type AssistantClientFactory = (provider: 'claude' | 'codex') => IWorkflow
 // ---------------------------------------------------------------------------
 
 export interface WorkflowConfig {
-  /** Default assistant provider ('claude' | 'codex') */
-  assistant: 'claude' | 'codex';
+  /** Default assistant provider ('claude' | 'codex' | 'pi') */
+  assistant: 'claude' | 'codex' | 'pi';
   baseBranch?: string;
   docsPath?: string;
   /**
@@ -262,6 +262,9 @@ export interface WorkflowConfig {
       modelReasoningEffort?: ModelReasoningEffort;
       webSearchMode?: WebSearchMode;
       additionalDirectories?: string[];
+    };
+    pi: {
+      model?: string;
     };
   };
 }

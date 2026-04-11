@@ -335,14 +335,16 @@ export async function validateWorkflowResources(
         }
       }
 
-      // Warn if using MCP with Codex
-      if (provider === 'codex') {
+      // Warn if using MCP with Codex or Pi
+      if (provider === 'codex' || provider === 'pi') {
         issues.push({
           level: 'warning',
           nodeId: node.id,
           field: 'mcp',
-          message: 'MCP servers are Claude-only per-node — this will be ignored on Codex',
-          hint: 'For Codex, configure MCP servers globally in ~/.codex/config.toml instead',
+          message: `MCP servers are Claude-only per-node — this will be ignored on ${provider}`,
+          hint: provider === 'codex'
+            ? 'For Codex, configure MCP servers globally in ~/.codex/config.toml instead'
+            : 'For Pi, MCP is not supported per-node. Use Pi extensions for equivalent functionality',
         });
       }
     }
@@ -367,31 +369,33 @@ export async function validateWorkflowResources(
         }
       }
 
-      // Warn if using skills with Codex
-      if (provider === 'codex') {
+      // Warn if using skills with Codex or Pi
+      if (provider === 'codex' || provider === 'pi') {
         issues.push({
           level: 'warning',
           nodeId: node.id,
           field: 'skills',
-          message: 'Skills are Claude-only per-node — this will be ignored on Codex',
-          hint: 'For Codex, place skills in ~/.agents/skills/ for global discovery instead',
+          message: `Skills are Claude-only per-node — this will be ignored on ${provider}`,
+          hint: provider === 'codex'
+            ? 'For Codex, place skills in ~/.agents/skills/ for global discovery instead'
+            : 'For Pi, skills are not supported. Use Pi extensions instead',
         });
       }
     }
 
-    // --- Hooks with Codex warning ---
-    if ('hooks' in node && node.hooks && provider === 'codex') {
+    // --- Hooks with Codex or Pi warning ---
+    if ('hooks' in node && node.hooks && (provider === 'codex' || provider === 'pi')) {
       issues.push({
         level: 'warning',
         nodeId: node.id,
         field: 'hooks',
-        message: 'Hooks are Claude-only — this will be ignored on Codex',
-        hint: 'Hooks have no Codex equivalent. Remove them or switch to provider: claude',
+        message: `Hooks are Claude-only — this will be ignored on ${provider}`,
+        hint: `Hooks have no ${provider} equivalent. Remove them or switch to provider: claude`,
       });
     }
 
-    // --- Tool restrictions with Codex warning ---
-    if (provider === 'codex') {
+    // --- Tool restrictions with Codex or Pi warning ---
+    if (provider === 'codex' || provider === 'pi') {
       if (
         ('allowed_tools' in node && node.allowed_tools !== undefined) ||
         ('denied_tools' in node && node.denied_tools !== undefined)
@@ -400,8 +404,10 @@ export async function validateWorkflowResources(
           level: 'warning',
           nodeId: node.id,
           field: 'allowed_tools/denied_tools',
-          message: 'Tool restrictions are Claude-only — this will be ignored on Codex',
-          hint: 'For Codex, configure tool restrictions per MCP server in ~/.codex/config.toml',
+          message: `Tool restrictions are Claude-only — this will be ignored on ${provider}`,
+          hint: provider === 'codex'
+            ? 'For Codex, configure tool restrictions per MCP server in ~/.codex/config.toml'
+            : 'For Pi, tool restrictions are not supported per-node',
         });
       }
     }

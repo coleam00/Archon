@@ -116,7 +116,7 @@ export const dagNodeBaseSchema = z.object({
   when: z.string().optional(),
   trigger_rule: triggerRuleSchema.optional(),
   model: z.string().optional(),
-  provider: z.enum(['claude', 'codex']).optional(),
+  provider: z.enum(['claude', 'codex', 'pi']).optional(),
   context: z.enum(['fresh', 'shared']).optional(),
   output_format: z.record(z.unknown()).optional(),
   allowed_tools: z.array(z.string()).optional(),

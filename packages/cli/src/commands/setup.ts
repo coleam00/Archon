@@ -45,7 +45,7 @@ interface SetupConfig {
     claudeOauthToken?: string;
     codex: boolean;
     codexTokens?: CodexTokens;
-    defaultAssistant: 'claude' | 'codex';
+    defaultAssistant: 'claude' | 'codex' | 'pi';
   };
   platforms: {
     github: boolean;
@@ -677,7 +677,7 @@ After upgrading, run 'archon setup' again.`,
   }
 
   // Determine default assistant
-  let defaultAssistant: 'claude' | 'codex' = 'claude';
+  let defaultAssistant: 'claude' | 'codex' | 'pi' = 'claude';
 
   if (hasClaude && hasCodex) {
     const defaultChoice = await select({

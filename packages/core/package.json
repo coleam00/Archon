@@ -33,6 +33,7 @@
     "@archon/isolation": "workspace:*",
     "@archon/paths": "workspace:*",
     "@archon/workflows": "workspace:*",
+    "@mariozechner/pi-coding-agent": "^0.66.1",
     "@openai/codex-sdk": "^0.116.0",
     "pg": "^8.11.0",
     "zod": "^3"
