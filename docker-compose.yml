@@ -75,8 +75,8 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./migrations/000_combined.sql:/docker-entrypoint-initdb.d/000_combined.sql:ro
       - ./migrations:/migrations:ro
-    ports:
-      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    expose:
+      - "5432"
     networks:
       - archon-network
     healthcheck:
