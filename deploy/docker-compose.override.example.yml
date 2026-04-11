@@ -1,17 +1,52 @@
-# Docker Compose override for user-extended builds (server / deploy).
+# Docker Compose override for local server builds (server / deploy).
 # Copy this file to docker-compose.override.yml — do NOT modify docker-compose.override.example.yml.
 # docker-compose.override.yml is gitignored so your customizations stay local.
 #
 # Docker Compose automatically merges docker-compose.override.yml with docker-compose.yml
 # when both files are present — no extra flags needed:
-#   docker compose up -d
+#   docker compose up -d --build
 #
-# NOTE: The base docker-compose.yml uses `image:` (no build section). This override
-# adds a full `build:` section so Compose builds from Dockerfile.user instead of
-# pulling the pre-built image.
+# NOTE:
+# - The base docker-compose.yml uses `image:` (no build section). This override
+#   switches the app to a local build from the tracked Dockerfile instead of
+#   pulling the pre-built image.
+# - To build from Dockerfile.user instead, set ARCHON_DOCKERFILE=Dockerfile.user
+#   in .env or edit the dockerfile path below.
+# - This override also adds a local PostgreSQL service and wires DATABASE_URL to it.
 
 services:
   app:
+    image: archon-local
     build:
       context: .
-      dockerfile: Dockerfile.user
+      dockerfile: ${ARCHON_DOCKERFILE:-Dockerfile}
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-remote_coding_agent}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-remote_coding_agent}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations/000_combined.sql:/docker-entrypoint-initdb.d/000_combined.sql:ro
+      - ./migrations:/migrations:ro
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-remote_coding_agent}
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  postgres_data:

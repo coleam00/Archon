@@ -9,7 +9,7 @@ sidebar:
   order: 5
 ---
 
-Archon supports two database backends: **SQLite** (default, zero setup) and **PostgreSQL** (optional, for cloud/advanced deployments). The database backend is selected automatically based on whether the `DATABASE_URL` environment variable is set.
+Archon supports two database backends: **SQLite** (default outside Docker, zero setup) and **PostgreSQL** (default in the root Docker Compose stack, optional elsewhere). The database backend is selected automatically based on whether the `DATABASE_URL` environment variable is set.
 
 ## SQLite (Default - No Setup Required)
 
@@ -68,15 +68,16 @@ psql $DATABASE_URL < migrations/020_codebase_env_vars.sql
 
 ## Local PostgreSQL via Docker
 
-Use the `with-db` Docker Compose profile for automatic PostgreSQL setup.
+The root `docker-compose.yml` starts PostgreSQL by default.
 
 Set in `.env`:
 
 ```ini
+POSTGRES_PASSWORD=postgres
 DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
 ```
 
-**For fresh installations**, the database schema is created automatically when you start with `docker compose --profile with-db`. The combined migration runs on first startup.
+**For fresh installations**, the database schema is created automatically when you start with `docker compose up -d`. The combined migration runs on first startup.
 
 **For updates to existing Docker installations**, you need to manually run new migrations:
 

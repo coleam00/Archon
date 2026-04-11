@@ -3,16 +3,15 @@
 # =============================================================================
 #
 # Usage:
-#   docker compose up -d                                  # App with SQLite (default)
-#   docker compose --profile with-db up -d                # App + local PostgreSQL
-#   docker compose --profile cloud up -d                  # App + Caddy HTTPS reverse proxy
-#   docker compose --profile with-db --profile cloud up -d  # All three
+#   docker compose up -d                                  # App + local PostgreSQL (default)
+#   docker compose --profile cloud up -d                  # App + local PostgreSQL + Caddy HTTPS reverse proxy
+#   docker compose --profile cloud --profile auth up -d   # Add form-based auth
 #
 # Database:
-#   SQLite is the default (zero config). For PostgreSQL, either:
-#   - Use --profile with-db for a local container, and set in .env:
-#     DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
-#   - Or point DATABASE_URL to an external database (Supabase, Neon, etc.)
+#   Local PostgreSQL is started by default. The app connects to the bundled
+#   postgres service unless DATABASE_URL is explicitly overridden in .env.
+#   Default internal URL:
+#     postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-archon}
 #
 # Data:
 #   Set ARCHON_DATA in .env to control where Archon stores data on the host:
@@ -35,15 +34,20 @@ services:
     env_file: .env
     environment:
       ARCHON_DOCKER: "true"
+      PORT: ${ARCHON_PORT:-3000}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-archon}}
+      DEFAULT_AI_ASSISTANT: ${DEFAULT_AI_ASSISTANT:-claude}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      MAX_CONCURRENT_CONVERSATIONS: ${MAX_CONCURRENT_CONVERSATIONS:-10}
     ports:
-      - "${PORT:-3000}:${PORT:-3000}"
+      - "${ARCHON_PORT:-3000}:${ARCHON_PORT:-3000}"
     volumes:
       - ${ARCHON_DATA:-archon_data}:/.archon
     networks:
       - archon-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-3000}/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:${ARCHON_PORT:-3000}/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -53,17 +57,19 @@ services:
       - 8.8.4.4
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=1
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   # -------------------------------------------------------------------------
-  # PostgreSQL (optional: --profile with-db)
-  # Set DATABASE_URL in .env to connect the app to this container.
+  # PostgreSQL (default)
+  # Set DATABASE_URL in .env only when you want the app to use an external DB.
   # -------------------------------------------------------------------------
   postgres:
-    image: postgres:17-alpine
-    profiles: ["with-db"]
+    image: postgres:16-alpine
     environment:
-      POSTGRES_DB: remote_coding_agent
-      POSTGRES_USER: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-archon}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -74,7 +80,7 @@ services:
     networks:
       - archon-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-archon}"]
       interval: 5s
       timeout: 5s
       retries: 5

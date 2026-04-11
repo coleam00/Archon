@@ -301,9 +301,10 @@ export class GitHubAdapter implements IPlatformAdapter {
    * Handles:
    * - issues.closed / pull_request.closed → cleanup (isCloseEvent: true)
    * - issue_comment.created → bot @mention detection
+   * - pull_request.opened → initial PR review processing
    *
    * Does NOT handle:
-   * - issues.opened / pull_request.opened → returns null (see #96)
+   * - issues.opened → returns null (see #96)
    */
   private parseEvent(event: WebhookEvent): {
     owner: string;
@@ -346,6 +347,18 @@ export class GitHubAdapter implements IPlatformAdapter {
       };
     }
 
+    // Detect newly opened PRs for automatic review processing.
+    if (event.pull_request && event.action === 'opened') {
+      return {
+        owner,
+        repo,
+        number: event.pull_request.number,
+        comment: event.pull_request.body ?? '',
+        eventType: 'pull_request',
+        pullRequest: event.pull_request,
+      };
+    }
+
     // issue_comment (covers both issues and PRs)
     if (event.comment) {
       const number = event.issue?.number ?? event.pull_request?.number;
@@ -361,11 +374,10 @@ export class GitHubAdapter implements IPlatformAdapter {
       };
     }
 
-    // Note: We intentionally do NOT handle issues.opened or pull_request.opened
-    // events here. Issue/PR descriptions often contain example commands or
-    // documentation about how to use the bot - these are NOT command invocations.
-    // Only actual comments (issue_comment events) trigger bot responses.
-    // See issue #96 for details.
+    // Note: We intentionally do NOT handle issues.opened events here. Issue
+    // descriptions often contain example commands or documentation about how to
+    // use the bot - these are NOT command invocations. PR descriptions are
+    // carried as context when the PR is opened for review processing.
 
     return null;
   }
@@ -741,8 +753,9 @@ ${userComment}`;
       return;
     }
 
-    // 5. Check @mention
-    if (!this.hasMention(comment)) return;
+    // 5. Check @mention for comments. Newly opened PRs are processed automatically.
+    const isPrOpenedEvent = eventType === 'pull_request' && event.action === 'opened';
+    if (!isPrOpenedEvent && !this.hasMention(comment)) return;
 
     getLog().info({ eventType, owner, repo, number }, 'github.webhook_processing');
 
@@ -877,7 +890,9 @@ ${userComment}`;
     }
 
     // 11. Build message with context
-    const strippedComment = this.stripMention(comment);
+    const strippedComment = isPrOpenedEvent
+      ? 'Review this pull request.'
+      : this.stripMention(comment);
     let finalMessage = strippedComment;
     let contextToAppend: string | undefined;
 

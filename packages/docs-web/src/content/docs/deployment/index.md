@@ -24,9 +24,9 @@ Archon can run locally for development or be deployed to a server for always-on 
 
 | Option | Setup | Best For |
 |--------|-------|----------|
-| **SQLite** (default) | Zero config, just omit `DATABASE_URL` | Single-user, CLI usage, local development |
+| **SQLite** (default outside Docker) | Zero config, just omit `DATABASE_URL` | Single-user, CLI usage, local development |
 | **Remote PostgreSQL** | Set `DATABASE_URL` to hosted DB | Cloud deployments, shared access |
-| **Local PostgreSQL** | Docker `--profile with-db` | Self-hosted, Docker-based setups |
+| **Local PostgreSQL** | Docker `docker compose up -d` | Self-hosted, Docker-based setups |
 
 SQLite stores data at `~/.archon/archon.db` (or `/.archon/archon.db` in Docker). It is auto-initialized on first run.
 

@@ -56,7 +56,7 @@ In development mode, two servers run simultaneously:
 If you prefer PostgreSQL for local development:
 
 ```bash
-docker compose --profile with-db up -d postgres
+docker compose up -d postgres
 # Set DATABASE_URL=postgresql://postgres:postgres@localhost:5432/remote_coding_agent in .env
 ```
 
@@ -142,7 +142,7 @@ Use this option to run both the app and PostgreSQL in Docker containers. The dat
 # Set: DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
 
 # 2. Start both containers
-docker compose --profile with-db up -d --build
+docker compose up -d --build
 
 # 3. Wait for startup (watch logs)
 docker compose logs -f app
@@ -172,7 +172,7 @@ docker compose exec postgres psql -U postgres -d remote_coding_agent
 ### Stop
 
 ```bash
-docker compose --profile with-db down
+docker compose down
 ```
 
 ---
@@ -189,7 +189,7 @@ For deploying to a VPS (DigitalOcean, Linode, AWS EC2, etc.) with automatic HTTP
 |--------|-------|----------|
 | **SQLite** (default) | Zero config, just omit `DATABASE_URL` | Single-user, CLI usage, local development |
 | **Remote PostgreSQL** | Set `DATABASE_URL` to hosted DB | Cloud deployments, shared access |
-| **Local PostgreSQL** | Docker `--profile with-db` | Self-hosted, Docker-based setups |
+| **Local PostgreSQL** | Docker `docker compose up -d` | Self-hosted, Docker-based setups |
 
 SQLite stores data at `~/.archon/archon.db` (or `/.archon/archon.db` in Docker). It is auto-initialized on first run.
 
@@ -238,7 +238,7 @@ curl http://localhost:3090/health/concurrency  # Concurrency status
 ```bash
 # Check logs
 docker compose logs app          # default (SQLite or external DB)
-docker compose logs app          # --profile with-db
+docker compose logs app          # bundled PostgreSQL
 
 # Verify environment
 docker compose config

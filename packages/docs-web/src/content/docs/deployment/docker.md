@@ -49,7 +49,8 @@ nano /opt/archon/.env
 # Set at minimum:
 #   CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 #   DOMAIN=archon.example.com
-#   DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
+#   POSTGRES_PASSWORD=change-me
+#   DATABASE_URL=postgresql://postgres:change-me@postgres:5432/remote_coding_agent
 
 # (Optional) Set up basic auth to protect Web UI:
 # docker run caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
@@ -57,7 +58,7 @@ nano /opt/archon/.env
 
 # Start
 cd /opt/archon
-docker compose --profile with-db --profile cloud up -d
+docker compose --profile cloud up -d
 ```
 
 > **Don't forget DNS**: Before starting, point your domain's A record to the server's IP.
@@ -76,7 +77,7 @@ docker compose --profile with-db --profile cloud up -d
 
 ## Local Docker Desktop (Windows / macOS)
 
-Run Archon locally with Docker Desktop — no domain, no VPS required. Uses SQLite and the Web UI only.
+Run Archon locally with Docker Desktop — no domain, no VPS required. The default stack includes the Web UI and a local PostgreSQL container.
 
 ### Quick start
 
@@ -111,21 +112,21 @@ git reset --hard
 | Feature | Status |
 |---------|--------|
 | Web UI | http://localhost:3000 |
-| Database | SQLite (automatic, zero setup) |
+| Database | PostgreSQL 17 (automatic, local container) |
 | HTTPS / Caddy | Not needed locally |
 | Auth | None (single-user, localhost only) |
 | Platform adapters | Optional (Telegram, Slack, etc.) |
 
-### Using PostgreSQL locally (optional)
+### Database defaults
 
-```bash
-docker compose --profile with-db up -d
-```
+`docker compose up -d` now starts both `app` and `postgres`. By default, the app uses the bundled database service:
 
-Then add to `.env`:
 ```env
+POSTGRES_PASSWORD=postgres
 DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
 ```
+
+Set `DATABASE_URL` only if you want the app to use an external PostgreSQL instance instead.
 
 ---
 
@@ -177,8 +178,9 @@ CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-xxxxx
 DOMAIN=archon.example.com
 
 # Database — connect to the Docker PostgreSQL container
-# Without this, the app uses SQLite (fine for getting started, but PostgreSQL recommended)
-DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
+# Default Docker setup uses the bundled postgres service
+POSTGRES_PASSWORD=change-me
+DATABASE_URL=postgresql://postgres:change-me@postgres:5432/remote_coding_agent
 
 # Basic Auth (optional) — protects Web UI when exposed to the internet
 # Skip if using IP-based firewall rules instead.
@@ -195,7 +197,7 @@ DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
 
 > **Docker does not support `CLAUDE_USE_GLOBAL_AUTH=true`** — there is no local `claude` CLI inside the container. You must provide either `CLAUDE_CODE_OAUTH_TOKEN` or `CLAUDE_API_KEY` explicitly.
 >
-> **If you use `--profile with-db` without setting `DATABASE_URL`**, the app will fall back to SQLite and log a warning. The PostgreSQL container runs but is unused.
+> **Docker Compose now starts PostgreSQL by default.** If `DATABASE_URL` is omitted, the root compose file injects a default connection string that points to the bundled `postgres` service.
 
 ### 4. Point your domain to the server
 
@@ -219,7 +221,7 @@ sudo ufw --force enable
 ### 6. Start
 
 ```bash
-docker compose --profile with-db --profile cloud up -d
+docker compose --profile cloud up -d
 ```
 
 This starts three containers:
@@ -231,7 +233,7 @@ This starts three containers:
 
 ```bash
 # Check all containers are running
-docker compose --profile with-db --profile cloud ps
+docker compose --profile cloud ps
 
 # Watch logs
 docker compose logs -f app
@@ -247,28 +249,26 @@ Open **https://archon.example.com** in your browser — you should see the Archo
 
 ## Profiles
 
-Archon uses Docker Compose profiles to optionally add PostgreSQL and/or HTTPS. Mix and match:
+Archon uses Docker Compose profiles only for optional HTTPS/auth layers. PostgreSQL is part of the default stack:
 
 | Command | What runs |
 |---------|-----------|
-| `docker compose up -d` | App with SQLite |
-| `docker compose --profile with-db up -d` | App + PostgreSQL |
-| `docker compose --profile cloud up -d` | App + Caddy (HTTPS) |
-| `docker compose --profile with-db --profile cloud up -d` | App + PostgreSQL + Caddy |
+| `docker compose up -d` | App + PostgreSQL |
+| `docker compose --profile cloud up -d` | App + PostgreSQL + Caddy |
+| `docker compose --profile cloud --profile auth up -d` | App + PostgreSQL + Caddy + form auth |
 
 :::note
 There is no `external-db` profile. When using an external PostgreSQL database (Supabase, Neon, etc.), just set `DATABASE_URL` in `.env` and run `docker compose up -d` without any profile. The base `app` service always starts.
 :::
 
-### No profile (SQLite)
+### No profile (App + PostgreSQL)
 
-Zero-config default. No database container needed — SQLite file is stored in the `archon_data` volume.
+Default stack. Starts the app plus a PostgreSQL 17 container.
 
-### `--profile with-db` (PostgreSQL)
-
-Starts a PostgreSQL 17 container. Set the connection URL in `.env`:
+Set in `.env`:
 
 ```ini
+POSTGRES_PASSWORD=postgres
 DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
 ```
 
@@ -355,7 +355,7 @@ An alternative to basic auth that serves a styled HTML login form instead of the
 5. Start with both `cloud` and `auth` profiles:
 
    ```bash
-   docker compose --profile with-db --profile cloud --profile auth up -d
+   docker compose --profile cloud --profile auth up -d
    ```
 
 6. Visit your domain — you should be redirected to `/login`.
@@ -494,7 +494,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Uses `ghcr.io/coleam00/archon:latest`. To add PostgreSQL, uncomment the `postgres` service in the compose file and set `DATABASE_URL` in `.env`.
+Uses `ghcr.io/coleam00/archon:latest`. To switch this deploy stack to a local Dockerfile build plus bundled PostgreSQL, copy `deploy/docker-compose.override.example.yml` to `docker-compose.override.yml` and run `docker compose up -d --build`.
 
 To layer custom tools on top of the pre-built image, see [Customizing the Image](#customizing-the-image).
 
@@ -535,7 +535,8 @@ To add extra tools without modifying the tracked Dockerfile:
 3. Copy the override file:
    - **Local/dev**: `cp docker-compose.override.example.yml docker-compose.override.yml`
    - **Server/deploy**: `cp deploy/docker-compose.override.example.yml docker-compose.override.yml`
-4. Run `docker compose up -d` — Compose merges the override automatically.
+4. If you want the deploy override to build from `Dockerfile.user`, set `ARCHON_DOCKERFILE=Dockerfile.user` in `.env` (otherwise it builds from the tracked `Dockerfile`).
+5. Run `docker compose up -d --build` — Compose merges the override automatically.
 
 `Dockerfile.user` and `docker-compose.override.yml` are gitignored so your customizations stay local.
 
@@ -555,7 +556,7 @@ docker compose logs --tail=100 app  # Last 100 lines
 
 ```bash
 git pull
-docker compose --profile with-db --profile cloud up -d --build
+docker compose --profile cloud up -d --build
 ```
 
 ### Restart
@@ -643,7 +644,7 @@ curl http://localhost:3000/api/health
 
 ### PostgreSQL connection refused
 
-When using `--profile with-db`, ensure:
+When using the bundled PostgreSQL container, ensure:
 
 1. `DATABASE_URL` uses `postgres` as hostname (Docker service name), not `localhost`:
    ```ini

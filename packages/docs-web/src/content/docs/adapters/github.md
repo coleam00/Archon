@@ -114,7 +114,7 @@ Interact by @mentioning your bot in issue or PR **comments**:
 - Maintains full context across comments
 
 :::note
-Only comments trigger the bot. @mentions in issue or PR descriptions are ignored -- descriptions often contain example commands or documentation that are not intended as bot invocations.
+Issue descriptions are ignored. Opening a pull request always triggers PR review processing on `pull_request.opened`; the PR body is included as context, and regular follow-up interaction still happens through comments.
 :::
 
 ## Adding Additional Repositories
