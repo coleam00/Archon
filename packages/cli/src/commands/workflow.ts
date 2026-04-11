@@ -30,6 +30,7 @@ import {
 } from '@archon/core/operations/workflow-operations';
 import * as conversationDb from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
+import * as envVarDb from '@archon/core/db/env-vars';
 import * as isolationDb from '@archon/core/db/isolation-environments';
 import * as messageDb from '@archon/core/db/messages';
 import * as workflowDb from '@archon/core/db/workflows';
@@ -590,6 +591,25 @@ export async function workflowRunCommand(
     : getWorkflowEventEmitter().subscribeForConversation(conversationId, event => {
         renderWorkflowEvent(event, verbose ?? false);
       });
+
+  // Inject codebase env vars into process.env so bash nodes inherit them.
+  // AI nodes already receive them via the Claude SDK client, but bash nodes
+  // are spawned directly and only see process.env.
+  if (codebase) {
+    try {
+      const codebaseEnvVars = await envVarDb.getCodebaseEnvVars(codebase.id);
+      const injectedCount = Object.keys(codebaseEnvVars).length;
+      if (injectedCount > 0) {
+        Object.assign(process.env, codebaseEnvVars);
+        getLog().info({ codebaseId: codebase.id, injectedCount }, 'cli.codebase_env_vars_injected');
+      }
+    } catch (error) {
+      getLog().warn(
+        { err: error as Error, codebaseId: codebase.id },
+        'cli.codebase_env_vars_load_failed'
+      );
+    }
+  }
 
   // Execute workflow with workingCwd (may be worktree path)
   let result: Awaited<ReturnType<typeof executeWorkflow>>;
