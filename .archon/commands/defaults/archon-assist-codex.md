@@ -30,6 +30,24 @@ workflow.
    "Note: Using archon-assist-codex. Consider creating or using a more specific
    Codex workflow for this use case."
 
+## Workflow Log Debugging
+
+When the request is mainly about a failed, paused, or confusing workflow run:
+
+1. **Check the active surface first**
+   - Terminal or server output for Archon runtime logs
+   - Web UI run details or `archon workflow status --verbose` for current run
+     state
+2. **Open the raw per-run JSONL when you need the full trace**
+   - Default path:
+     `~/.archon/workspaces/<owner>/<repo>/logs/<run-id>.jsonl`
+   - If `ARCHON_HOME` is set, use that base directory instead of `~/.archon`
+3. **Increase verbosity when current output is too thin**
+   - `archon --verbose workflow run <workflow-name> "..."`
+   - `LOG_LEVEL=debug <archon command>` for Archon process logs
+4. **Use the detailed reference for repeated log analysis**
+   - Read `.claude/skills/archon/references/log-debugging.md`
+
 ## Guardrails
 
 - Prefer small, reversible changes.

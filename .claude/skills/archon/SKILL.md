@@ -41,6 +41,7 @@ Determine the user's intent and dispatch to the appropriate guide:
 | **Create a command file** | Read `references/authoring-commands.md` |
 | **Variable substitution reference** | Read `references/variables.md` |
 | **CLI command reference** | Read `references/cli-commands.md` |
+| **Debug workflow logs / inspect a run** | Read `references/log-debugging.md` — log locations, layers, filtering, interpretation |
 | **Run an interactive workflow** | Read `references/interactive-workflows.md` — transparent relay protocol |
 | **Run a workflow (default)** | Continue with "Running Workflows" below |
 
