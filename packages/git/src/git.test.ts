@@ -1954,6 +1954,54 @@ branch refs/heads/feature/auth
     test('returns null for single-segment input', () => {
       expect(git.parseOwnerRepoFromRemoteUrl('repo')).toBeNull();
     });
+
+    // ─── Path-traversal safety (defense in depth) ─────────────────────────
+    // These cases simulate what a crafted `git remote set-url origin ...`
+    // could inject. The parser must reject any owner/repo segment that
+    // could steer downstream path construction outside ~/.archon/workspaces/.
+
+    test('rejects .. as owner segment', () => {
+      expect(git.parseOwnerRepoFromRemoteUrl('git@host:../evil.git')).toBeNull();
+    });
+
+    test('rejects .. as repo segment', () => {
+      // `git@host:owner/..` normalizes to `https://__ssh__/owner/..`, the split
+      // produces owner='owner' repo='..' — must be rejected.
+      expect(git.parseOwnerRepoFromRemoteUrl('git@host:owner/..')).toBeNull();
+    });
+
+    test('rejects . (single-dot) segments', () => {
+      expect(git.parseOwnerRepoFromRemoteUrl('git@host:./repo')).toBeNull();
+      expect(git.parseOwnerRepoFromRemoteUrl('git@host:owner/.')).toBeNull();
+    });
+
+    test('rejects segments containing backslash', () => {
+      // An attacker-controlled remote URL could embed a backslash which on
+      // Windows or weird normalization paths is a separator.
+      expect(git.parseOwnerRepoFromRemoteUrl('git@host:ow\\ner/repo')).toBeNull();
+    });
+
+    test('rejects segments containing whitespace', () => {
+      expect(git.parseOwnerRepoFromRemoteUrl('git@host:own er/repo')).toBeNull();
+      expect(git.parseOwnerRepoFromRemoteUrl('git@host:owner/re\tpo')).toBeNull();
+    });
+
+    test('rejects segments containing shell metacharacters', () => {
+      expect(git.parseOwnerRepoFromRemoteUrl('git@host:owner/re;po')).toBeNull();
+      expect(git.parseOwnerRepoFromRemoteUrl('git@host:owner/re$po')).toBeNull();
+      expect(git.parseOwnerRepoFromRemoteUrl('git@host:owner/re|po')).toBeNull();
+    });
+
+    test('rejects segments containing null bytes', () => {
+      expect(git.parseOwnerRepoFromRemoteUrl('git@host:owner/re\x00po')).toBeNull();
+    });
+
+    test('accepts common legitimate slug characters', () => {
+      expect(git.parseOwnerRepoFromRemoteUrl('git@host:my-org/my_repo.js.git')).toEqual({
+        owner: 'my-org',
+        repo: 'my_repo.js',
+      });
+    });
   });
 
   describe('parseOwnerRepoFromGitRemote (async)', () => {

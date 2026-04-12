@@ -39,6 +39,34 @@ export async function findRepoRoot(startPath: string): Promise<RepoPath | null> 
 }
 
 /**
+ * Safe path segment pattern for owner/repo slugs. Rejects anything that
+ * could escape `~/.archon/workspaces/<owner>/<repo>/` — path separators,
+ * null bytes, dot segments, and control characters.
+ *
+ * Matches the character set GitHub and GitLab both allow in user/org and
+ * repo names (alphanumerics plus `-`, `_`, `.`). Strings containing only
+ * dots (`.`, `..`) are explicitly rejected by the additional check in
+ * `isSafePathSegment` below.
+ */
+const SAFE_SLUG_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * Return true iff `s` is safe to use as a single path segment when
+ * constructing a `~/.archon/workspaces/<owner>/<repo>/` directory path.
+ *
+ * Rejects:
+ *   - Empty strings
+ *   - `.` and `..` (directory traversal)
+ *   - Strings containing path separators, control characters, or other
+ *     characters outside the GitHub/GitLab-compatible slug character set
+ */
+function isSafePathSegment(s: string): boolean {
+  if (!s) return false;
+  if (s === '.' || s === '..') return false;
+  return SAFE_SLUG_PATTERN.test(s);
+}
+
+/**
  * Parse a git remote URL into an `{ owner, repo }` slug suitable for use
  * under `~/.archon/workspaces/`. Pure function — no I/O, safe to reuse.
  *
@@ -50,7 +78,11 @@ export async function findRepoRoot(startPath: string): Promise<RepoPath | null> 
  *     the leading group segment is dropped because the workspace layout is
  *     two-level: `~/.archon/workspaces/<owner>/<repo>/`)
  *
- * Returns `null` for unparseable URLs.
+ * Returns `null` for unparseable URLs **or** for URLs whose owner/repo
+ * segments contain anything outside the GitHub/GitLab-compatible safe
+ * slug character set (see `isSafePathSegment`). This prevents a crafted
+ * remote URL (`git remote set-url origin git@host:../../evil`) from
+ * steering workspace path construction outside `~/.archon/workspaces/`.
  */
 export function parseOwnerRepoFromRemoteUrl(url: string): { owner: string; repo: string } | null {
   const trimmed = url.trim();
@@ -69,6 +101,12 @@ export function parseOwnerRepoFromRemoteUrl(url: string): { owner: string; repo:
   const repo = parts.pop();
   const owner = parts.pop();
   if (!owner || !repo) return null;
+
+  // Defense-in-depth: reject any segment that could be used for directory
+  // traversal or contains unsafe characters. Callers rely on the result
+  // being usable as literal path components without further sanitization.
+  if (!isSafePathSegment(owner) || !isSafePathSegment(repo)) return null;
+
   return { owner, repo };
 }
 
