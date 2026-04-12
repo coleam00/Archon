@@ -10,6 +10,7 @@
 // Must be the very first import — strips Bun-auto-loaded CWD .env keys before
 // any module reads process.env at init time (e.g. @archon/paths/logger reads LOG_LEVEL).
 import '@archon/paths/strip-cwd-env-boot';
+import { getArchonHome } from '@archon/paths';
 import { parseArgs } from 'util';
 import { config } from 'dotenv';
 import { resolve } from 'path';
@@ -19,7 +20,7 @@ import { existsSync } from 'fs';
 // over shell-inherited env vars (e.g. PORT, LOG_LEVEL from shell profile).
 // CWD .env keys are already gone (stripCwdEnv above), so override only
 // affects shell-inherited values, which is the intended behavior.
-const globalEnvPath = resolve(process.env.HOME ?? '~', '.archon', '.env');
+const globalEnvPath = resolve(getArchonHome(), '.env');
 if (existsSync(globalEnvPath)) {
   const result = config({ path: globalEnvPath, override: true });
   if (result.error) {

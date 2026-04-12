@@ -13,7 +13,7 @@ import '@archon/paths/strip-cwd-env-boot';
 import { config } from 'dotenv';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
-import { BUNDLED_IS_BINARY } from '@archon/paths';
+import { BUNDLED_IS_BINARY, getArchonHome } from '@archon/paths';
 
 // In dev/source mode, load the repo root .env (platform tokens, API keys, etc.)
 // import.meta.dir is frozen at build time, so skip in compiled binaries.
@@ -31,7 +31,7 @@ if (envPath) {
 // Load ~/.archon/.env with override — Archon's config always wins over any
 // Bun-auto-loaded CWD vars. In binary mode this is the single source of truth.
 // In dev mode it overrides CWD vars for keys like DATABASE_URL.
-const globalEnvPath = resolve(process.env.HOME ?? '~', '.archon', '.env');
+const globalEnvPath = resolve(getArchonHome(), '.env');
 if (existsSync(globalEnvPath)) {
   const globalResult = config({ path: globalEnvPath, override: true });
   if (globalResult.error) {

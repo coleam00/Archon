@@ -822,6 +822,11 @@ async function executeNodeInternal(
   const aiClient = deps.getAgentProvider(provider);
   const streamingMode = platform.getStreamingMode();
 
+  // Track workflow-configured MCP server names to distinguish from user plugin MCP servers.
+  // User plugins (e.g., telegram) can fail to connect in headless subprocesses — those
+  // failures are non-fatal noise and should not be surfaced to the user.
+  const workflowMcpNames = new Set(Object.keys(nodeOptions?.mcpServers ?? {}));
+
   let nodeOutputText = ''; // Always accumulate regardless of streaming mode
   let structuredOutput: unknown;
   let newSessionId: string | undefined;
@@ -1026,22 +1031,48 @@ async function executeNodeInternal(
         }
         break; // Result is the "I'm done" signal — don't wait for subprocess to exit
       } else if (msg.type === 'system' && msg.content) {
-        // Surface MCP connection failures to the user
+        // MCP connection failures — only surface for workflow-configured servers,
+        // not for user plugins (e.g., telegram) that fail in headless subprocesses.
         if (msg.content.startsWith('MCP server connection failed:')) {
-          getLog().warn(
-            { nodeId: node.id, mcpStatus: msg.content },
-            'dag.mcp_server_connection_failed'
-          );
-          const delivered = await safeSendMessage(
-            platform,
-            conversationId,
-            msg.content,
-            nodeContext
-          );
-          if (!delivered) {
-            getLog().error(
-              { nodeId: node.id, mcpStatus: msg.content, workflowRunId: workflowRun.id },
-              'dag.mcp_connection_failure_delivery_failed'
+          // Parse failed entries: "MCP server connection failed: name1 (status1), name2 (status2)"
+          const failedEntries = msg.content
+            .slice('MCP server connection failed: '.length)
+            .split(', ')
+            .map(entry => entry.trim())
+            .filter(Boolean);
+          const workflowFailures = failedEntries.filter(entry => {
+            const name = entry.split(' (')[0];
+            return workflowMcpNames.has(name);
+          });
+
+          if (workflowFailures.length > 0) {
+            const workflowMsg = `MCP server connection failed: ${workflowFailures.join(', ')}`;
+            getLog().warn(
+              { nodeId: node.id, mcpStatus: workflowMsg },
+              'dag.mcp_server_connection_failed'
+            );
+            const delivered = await safeSendMessage(
+              platform,
+              conversationId,
+              workflowMsg,
+              nodeContext
+            );
+            if (!delivered) {
+              getLog().error(
+                { nodeId: node.id, mcpStatus: workflowMsg, workflowRunId: workflowRun.id },
+                'dag.mcp_connection_failure_delivery_failed'
+              );
+            }
+          }
+          // User-plugin MCP failures: log at debug, don't surface to user
+          const pluginFailures = failedEntries.filter(entry => {
+            const name = entry.split(' (')[0];
+            return !workflowMcpNames.has(name);
+          });
+          if (pluginFailures.length > 0) {
+            getLog().debug(
+              { nodeId: node.id, mcpStatus: pluginFailures.join(', ') },
+              'dag.mcp_plugin_connection_failed'
             );
           }
         } else {

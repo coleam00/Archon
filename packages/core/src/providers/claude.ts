@@ -385,6 +385,10 @@ export class ClaudeProvider implements IAgentProvider {
         allowDangerouslySkipPermissions: true,
         systemPrompt: requestOptions?.systemPrompt ?? { type: 'preset', preset: 'claude_code' },
         settingSources: requestOptions?.settingSources ?? ['project'],
+        // Disable user plugins in the subprocess — Archon manages its own MCP servers
+        // via the mcpServers option. User plugins (e.g., telegram) can fail to connect
+        // in the headless subprocess and produce spurious warnings.
+        settings: { enabledPlugins: {} },
         // Merge user-provided hooks with our PostToolUse capture hook
         hooks: {
           ...(requestOptions?.hooks ?? {}),

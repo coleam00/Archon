@@ -6,6 +6,7 @@
  */
 import { describe, it, expect } from 'bun:test';
 import { parseArgs } from 'util';
+import { getArchonHome } from '@archon/paths';
 import * as git from '@archon/git';
 
 // Test the argument parsing logic used in cli.ts
@@ -237,7 +238,7 @@ describe('CLI env isolation', () => {
     process.env.TEST_ARCHON_OVERRIDE = 'from-cwd-env';
 
     // Write a temporary env content and load with override
-    const globalEnvPath = resolve(process.env.HOME ?? '~', '.archon', '.env');
+    const globalEnvPath = resolve(getArchonHome(), '.env');
     if (existsSync(globalEnvPath)) {
       const result = config({ path: globalEnvPath, override: true });
       // If ~/.archon/.env exists and has DATABASE_URL, it should override
