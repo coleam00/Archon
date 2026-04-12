@@ -810,7 +810,8 @@ async function executeNodeInternal(
       baseBranch,
       docsDir,
       issueContext,
-      `dag node '${node.id}' prompt`
+      `dag node '${node.id}' prompt`,
+      workspaceSearchPath ? resolve(workspaceSearchPath, '.archon') : undefined
     );
   } catch (error) {
     const err = error as Error;
@@ -1322,6 +1323,7 @@ async function executeBashNode(
   baseBranch: string,
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
+  workspaceSearchPath?: string,
   issueContext?: string
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
@@ -1352,7 +1354,12 @@ async function executeBashNode(
     nodeName: node.id,
   });
 
-  // Variable substitution on script
+  // Variable substitution on script. Derive $WORKSPACE_ARCHON_DIR from the
+  // workspace search path so bash scripts can wrap `bun run` on named workspace
+  // scripts via an absolute path.
+  const workspaceArchonDir = workspaceSearchPath
+    ? resolve(workspaceSearchPath, '.archon')
+    : undefined;
   const { prompt: substitutedScript } = substituteWorkflowVariables(
     node.bash,
     workflowRun.id,
@@ -1360,7 +1367,10 @@ async function executeBashNode(
     artifactsDir,
     baseBranch,
     docsDir,
-    issueContext
+    issueContext,
+    undefined,
+    undefined,
+    workspaceArchonDir
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true);
 
@@ -1503,7 +1513,11 @@ async function executeScriptNode(
     nodeName: node.id,
   });
 
-  // Variable substitution on script field
+  // Variable substitution on script field. Derive $WORKSPACE_ARCHON_DIR so
+  // inline scripts can reference the workspace-tier .archon dir directly.
+  const workspaceArchonDir = workspaceSearchPath
+    ? resolve(workspaceSearchPath, '.archon')
+    : undefined;
   const { prompt: substitutedScript } = substituteWorkflowVariables(
     node.script,
     workflowRun.id,
@@ -1511,7 +1525,10 @@ async function executeScriptNode(
     artifactsDir,
     baseBranch,
     docsDir,
-    issueContext
+    issueContext,
+    undefined,
+    undefined,
+    workspaceArchonDir
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, false);
 
@@ -1770,7 +1787,8 @@ async function executeLoopNode(
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
   config: WorkflowConfig,
-  issueContext?: string
+  issueContext?: string,
+  workspaceSearchPath?: string
 ): Promise<NodeExecutionResult> {
   const loop = node.loop;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -1871,7 +1889,9 @@ async function executeLoopNode(
         baseBranch,
         docsDir,
         issueContext,
-        i === startIteration ? loopUserInput : ''
+        i === startIteration ? loopUserInput : '',
+        undefined,
+        workspaceSearchPath ? resolve(workspaceSearchPath, '.archon') : undefined
       );
       const finalPrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
 
@@ -2069,7 +2089,10 @@ async function executeLoopNode(
           artifactsDir,
           baseBranch,
           docsDir,
-          issueContext
+          issueContext,
+          undefined,
+          undefined,
+          workspaceSearchPath ? resolve(workspaceSearchPath, '.archon') : undefined
         );
         const substitutedBash = substituteNodeOutputRefs(
           bashPrompt,
@@ -2322,7 +2345,8 @@ async function executeApprovalNode(
       docsDir,
       issueContext,
       undefined, // loopUserInput
-      rejectionReason
+      rejectionReason,
+      workspaceSearchPath ? resolve(workspaceSearchPath, '.archon') : undefined
     );
 
     // Build a synthetic PromptNode to reuse executeNodeInternal
@@ -2673,6 +2697,7 @@ export async function executeDagWorkflow(
               baseBranch,
               docsDir,
               nodeOutputs,
+              resolvedWorkspaceSearchPath,
               issueContext
             );
             return { nodeId: node.id, output };
@@ -2723,7 +2748,8 @@ export async function executeDagWorkflow(
               docsDir,
               nodeOutputs,
               config,
-              issueContext
+              issueContext,
+              resolvedWorkspaceSearchPath
             );
             return { nodeId: node.id, output };
           }

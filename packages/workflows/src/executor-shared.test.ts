@@ -92,6 +92,36 @@ describe('substituteWorkflowVariables', () => {
     expect(prompt).toBe('Goal: add dark mode. Args: add dark mode');
   });
 
+  it('replaces $WORKSPACE_ARCHON_DIR with the provided path', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'bun run "$WORKSPACE_ARCHON_DIR/scripts/foo.ts"',
+      'run-1',
+      'msg',
+      '/tmp',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      '/Users/test/.archon/workspaces/owner/repo/.archon'
+    );
+    expect(prompt).toBe(
+      'bun run "/Users/test/.archon/workspaces/owner/repo/.archon/scripts/foo.ts"'
+    );
+  });
+
+  it('replaces $WORKSPACE_ARCHON_DIR with empty string when omitted', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'prefix=$WORKSPACE_ARCHON_DIR/x',
+      'run-1',
+      'msg',
+      '/tmp',
+      'main',
+      'docs/'
+    );
+    expect(prompt).toBe('prefix=/x');
+  });
+
   it('replaces $DOCS_DIR with configured path', () => {
     const { prompt } = substituteWorkflowVariables(
       'Check $DOCS_DIR for changes',

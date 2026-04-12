@@ -351,6 +351,11 @@ export const CONTEXT_VAR_PATTERN_STR = '\\$(?:CONTEXT|EXTERNAL_CONTEXT|ISSUE_CON
  * - $LOOP_USER_INPUT - User feedback from interactive loop approval. Only populated on the
  *   first iteration of a resumed interactive loop; empty string on all other iterations.
  * - $REJECTION_REASON - Reviewer feedback from approval node rejection (on_reject prompts only).
+ * - $WORKSPACE_ARCHON_DIR - The user-global workspace-tier `.archon` directory
+ *   (`~/.archon/workspaces/<owner>/<repo>/.archon`) when resolvable from the cwd,
+ *   empty string otherwise. Useful in bash/script nodes that wrap `bun run`
+ *   on named scripts — since worktrees may not contain `.archon/`, bash wrappers
+ *   need an absolute path into the workspace-tier scripts directory.
  *
  * When issueContext is undefined, context variables are replaced with empty string
  * to avoid sending literal "$CONTEXT" to the AI.
@@ -364,7 +369,8 @@ export function substituteWorkflowVariables(
   docsDir: string,
   issueContext?: string,
   loopUserInput?: string,
-  rejectionReason?: string
+  rejectionReason?: string,
+  workspaceArchonDir?: string
 ): { prompt: string; contextSubstituted: boolean } {
   // Fail fast if the prompt references $BASE_BRANCH but no base branch could be resolved
   if (!baseBranch && prompt.includes('$BASE_BRANCH')) {
@@ -386,7 +392,8 @@ export function substituteWorkflowVariables(
     .replace(/\$BASE_BRANCH/g, baseBranch)
     .replace(/\$DOCS_DIR/g, resolvedDocsDir)
     .replace(/\$LOOP_USER_INPUT/g, loopUserInput ?? '')
-    .replace(/\$REJECTION_REASON/g, rejectionReason ?? '');
+    .replace(/\$REJECTION_REASON/g, rejectionReason ?? '')
+    .replace(/\$WORKSPACE_ARCHON_DIR/g, workspaceArchonDir ?? '');
 
   // Check if context variables exist (use fresh regex to avoid lastIndex issues)
   const hasContextVariables = new RegExp(CONTEXT_VAR_PATTERN_STR).test(result);
@@ -432,7 +439,8 @@ export function buildPromptWithContext(
   baseBranch: string,
   docsDir: string,
   issueContext: string | undefined,
-  logLabel: string
+  logLabel: string,
+  workspaceArchonDir?: string
 ): string {
   const { prompt, contextSubstituted } = substituteWorkflowVariables(
     template,
@@ -441,7 +449,10 @@ export function buildPromptWithContext(
     artifactsDir,
     baseBranch,
     docsDir,
-    issueContext
+    issueContext,
+    undefined,
+    undefined,
+    workspaceArchonDir
   );
 
   if (issueContext && !contextSubstituted) {
