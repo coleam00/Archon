@@ -480,8 +480,13 @@ function buildFullPrompt(
     : undefined;
 
   const systemPrompt = scopedCodebase
-    ? buildProjectScopedPrompt(scopedCodebase, codebases, workflows)
-    : buildOrchestratorPrompt(codebases, workflows);
+    ? buildProjectScopedPrompt(
+        scopedCodebase,
+        codebases,
+        workflows,
+        scopedCodebase.ai_assistant_type || conversation.ai_assistant_type
+      )
+    : buildOrchestratorPrompt(codebases, workflows, conversation.ai_assistant_type);
 
   const contextSuffix = issueContext ? '\n\n---\n\n## Additional Context\n\n' + issueContext : '';
 

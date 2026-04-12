@@ -264,6 +264,9 @@ archon workflow list
 # Ask a question about the codebase
 archon workflow run archon-assist "How does the auth module work?"
 
+# Codex-tuned catch-all
+archon workflow run archon-assist-codex "How does the auth module work?"
+
 # Plan a feature on an isolated branch
 archon workflow run archon-feature-development --branch feat/dark-mode "Add dark mode"
 
@@ -339,6 +342,7 @@ archon complete <branch> --force   # skip uncommitted-changes check
 | Workflow | What It Does |
 |----------|-------------|
 | `archon-assist` | General Q&A, debugging, exploration, CI failures — catch-all |
+| `archon-assist-codex` | Codex-tuned catch-all for general Q&A, debugging, exploration, and CI failures |
 | `archon-fix-github-issue` | Investigate, root cause analysis, implement fix, validate, PR |
 | `archon-idea-to-pr` | Feature idea, plan, implement, validate, PR, parallel reviews, self-fix |
 | `archon-plan-to-pr` | Execute existing plan, implement, validate, PR, review |
@@ -360,7 +364,7 @@ archon complete <branch> --force   # skip uncommitted-changes check
 
 These bundled workflows work for most projects. To customize, copy one from `.archon/workflows/defaults/` into `.archon/workflows/` and modify it — same-named files override the defaults.
 
-> **Auto-selection:** You don't need to remember workflow names. Just describe what you want — the router reads all workflow descriptions and picks the best match. For example, "fix issue #42" routes to `archon-fix-github-issue`, while "review this PR" routes to `archon-smart-pr-review`. If nothing matches clearly, it falls back to `archon-assist`.
+> **Auto-selection:** You don't need to remember workflow names. Just describe what you want — the router reads all workflow descriptions and picks the best match. For example, "fix issue #42" routes to `archon-fix-github-issue`, while "review this PR" routes to `archon-smart-pr-review`. If nothing matches clearly, it falls back to `archon-assist` for Claude and `archon-assist-codex` for Codex-oriented flows.
 
 ---
 

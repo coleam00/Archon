@@ -5,6 +5,7 @@ import { workflowRunCommand } from './workflow';
 import * as isolationDb from '@archon/core/db/isolation-environments';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as workflowDb from '@archon/core/db/workflows';
+import { loadConfig } from '@archon/core';
 import { execFileAsync } from '@archon/git';
 import { createLogger, getRunArtifactsPath, parseOwnerRepo } from '@archon/paths';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -24,6 +25,7 @@ export interface ContinueOptions {
 }
 
 const DEFAULT_WORKFLOW = 'archon-assist';
+const DEFAULT_CODEX_WORKFLOW = 'archon-assist-codex';
 
 /**
  * Continue work on an existing worktree with prior run context injected.
@@ -37,8 +39,6 @@ export async function continueCommand(
   userMessage: string,
   options: ContinueOptions = {}
 ): Promise<void> {
-  const workflowName = options.workflow ?? DEFAULT_WORKFLOW;
-
   // 1. Resolve branch → isolation environment
   const env = await isolationDb.findActiveByBranchName(branch);
   if (!env) {
@@ -47,6 +47,9 @@ export async function continueCommand(
         "Run 'archon isolation list' to see available worktrees."
     );
   }
+
+  const workflowName =
+    options.workflow ?? (await getDefaultContinueWorkflow(env.working_path, env.codebase_id));
 
   // 2. Find prior run on this worktree path
   const priorRun = await workflowDb.findLatestRunByWorkingPath(env.working_path);
@@ -83,6 +86,27 @@ export async function continueCommand(
     throw new Error(
       `Failed to run workflow '${workflowName}' on branch '${branch}': ${err.message}`
     );
+  }
+}
+
+async function getDefaultContinueWorkflow(cwd: string, codebaseId: string): Promise<string> {
+  try {
+    const codebase = await codebaseDb.getCodebase(codebaseId);
+    if (codebase?.ai_assistant_type === 'codex') {
+      return DEFAULT_CODEX_WORKFLOW;
+    }
+    if (codebase?.ai_assistant_type === 'claude') {
+      return DEFAULT_WORKFLOW;
+    }
+  } catch {
+    // Fall through to config lookup.
+  }
+
+  try {
+    const config = await loadConfig(cwd);
+    return config.assistant === 'codex' ? DEFAULT_CODEX_WORKFLOW : DEFAULT_WORKFLOW;
+  } catch {
+    return DEFAULT_WORKFLOW;
   }
 }
 

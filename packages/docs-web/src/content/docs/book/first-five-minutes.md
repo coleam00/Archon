@@ -54,13 +54,14 @@ Navigate to any git repository on your machine, then run:
 cd /path/to/your/project
 
 archon workflow run archon-assist "What's the entry point for this application?"
+archon workflow run archon-assist-codex "What's the entry point for this application?"
 ```
 
 Archon will analyze your codebase and answer the question with full context. You'll see it thinking through your files in real time, streamed to your terminal.
 
 **You just ran your first Archon workflow.** It's a single-step workflow — one command, one AI call, one answer. Simple, but useful.
 
-> **Tip:** `archon-assist` works for any question. "How does auth work?", "Where is the database configured?", "What does this function do?" — it's your always-available codebase expert.
+> **Tip:** `archon-assist` is the default catch-all, and `archon-assist-codex` is the Codex-tuned variant. Use the Codex lane when you want general help to stay on Codex-specific prompts and workflow names.
 
 ---
 

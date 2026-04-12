@@ -34,6 +34,7 @@ Archon ships with ready-to-use workflows that cover common coding tasks. You do 
 | Workflow | What It Does |
 |----------|-------------|
 | `archon-assist` | General Q&A, debugging, exploration -- the catch-all |
+| `archon-assist-codex` | Codex-tuned catch-all for general Q&A, debugging, and exploration |
 | `archon-fix-github-issue` | Investigate, root cause, implement fix, validate, PR |
 | `archon-smart-pr-review` | Complexity-adaptive PR review |
 | `archon-comprehensive-pr-review` | Multi-agent PR review (5 parallel reviewers) |

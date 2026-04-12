@@ -269,7 +269,8 @@ defaults:
 |-------|-------------|-----|
 | `Workflow "X" not found` | YAML file not discovered | Check file is in `.archon/workflows/` and `archon workflow list` shows it |
 | `Command "X" not found` | Command file missing | Check `.archon/commands/X.md` exists and `archon validate commands X` passes |
-| `Routing unclear — falling back to archon-assist` | No workflow matched the input | Use an explicit workflow name: `archon workflow run my-workflow "..."` |
+| `Routing unclear — falling back to archon-assist` | No workflow matched the input on Claude/default flows | Use an explicit workflow name: `archon workflow run my-workflow "..."` |
+| `Routing unclear — falling back to archon-assist-codex` | No workflow matched the input on Codex-oriented flows | Use an explicit workflow name: `archon workflow run my-workflow "..."` |
 | `Worktree already exists for branch X` | Prior run left a worktree | Run `archon complete X` or `archon isolation cleanup` |
 | `Not a git repository` | Running outside a repo | `cd` into a git repo first — workflow and isolation commands require one |
 | `Model X is not valid for provider Y` | Provider/model mismatch | Use Claude models (`sonnet`, `opus`, `haiku`) with `provider: claude`; use other models with `provider: codex` |
@@ -303,6 +304,7 @@ archon workflow run my-workflow --no-worktree "..."
 **Test a command directly** before embedding it in a workflow:
 ```bash
 archon workflow run archon-assist "/command-invoke my-command some-arg"
+archon workflow run archon-assist-codex "/command-invoke my-command some-arg"
 ```
 
 ### Getting Help

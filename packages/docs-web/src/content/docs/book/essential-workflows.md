@@ -21,6 +21,7 @@ What do you want to do?
 │
 ├── Ask a question or explore the codebase
 │   └── archon-assist
+│   └── archon-assist-codex
 │
 ├── Fix a bug from a GitHub issue
 │   └── archon-fix-github-issue
@@ -60,6 +61,17 @@ The starting point for anything that doesn't fit elsewhere. It runs a single ful
 archon workflow run archon-assist "What does the orchestrator do?"
 archon workflow run archon-assist "Why are tests failing in the auth module?"
 archon workflow run archon-assist "Explain the isolation system to me"
+
+#### `archon-assist-codex`
+
+Codex-tuned catch-all for the same class of work when you want the assist lane
+to stay on the Codex side of the house.
+
+```bash
+archon workflow run archon-assist-codex "What does the orchestrator do?"
+archon workflow run archon-assist-codex "Why are tests failing in the auth module?"
+archon workflow run archon-assist-codex "Explain the isolation system to me"
+```
 ```
 
 **What it produces**: A direct answer. No PR, no artifacts — just the AI working through your question with full access to your code.
@@ -209,6 +221,7 @@ archon workflow run archon-resolve-conflicts "Resolve conflicts on PR #94"
 | Workflow | Use When | Creates PR? | Uses Isolation? |
 |----------|----------|-------------|-----------------|
 | `archon-assist` | Questions, exploration, debugging | No | No |
+| `archon-assist-codex` | Questions, exploration, debugging (Codex-tuned) | No | No |
 | `archon-fix-github-issue` | Fix a GitHub issue (smart routing) | Yes (draft) | Yes |
 | `archon-idea-to-pr` | Feature from description | Yes | Yes |
 | `archon-plan-to-pr` | Execute an existing plan | Yes | Yes |
@@ -229,7 +242,7 @@ To see all workflows available in your current directory:
 archon workflow list
 ```
 
-The list shows both Archon's bundled defaults and any custom workflows in your repo's `.archon/workflows/` directory. Custom workflows override bundled ones by name — if you create a workflow named `archon-assist`, it replaces the built-in.
+The list shows both Archon's bundled defaults and any custom workflows in your repo's `.archon/workflows/` directory. Custom workflows override bundled ones by name — if you create a workflow named `archon-assist`, it replaces the built-in. Codex-tuned variants use the `-codex` suffix, for example `archon-assist-codex`.
 
 Ready to build your own? In [Chapter 7: Creating Your First Workflow →](/book/first-workflow/), you'll build one from scratch — incrementally, version by version, until you've got a mini version of `archon-idea-to-pr`.
 

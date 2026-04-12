@@ -1,0 +1,8 @@
+interface:
+  display_name: "Archon"
+  short_description: "Run Codex-safe Archon workflows from this repo."
+  default_prompt: "Use Archon to "
+
+policy:
+  allow_implicit_invocation: true
+

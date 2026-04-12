@@ -16,6 +16,7 @@ describe('bundled-defaults', () => {
     it('should have all expected default commands', () => {
       const expectedCommands = [
         'archon-assist',
+        'archon-assist-codex',
         'archon-code-review-agent',
         'archon-comment-quality-agent',
         'archon-create-pr',
@@ -42,7 +43,7 @@ describe('bundled-defaults', () => {
         expect(BUNDLED_COMMANDS).toHaveProperty(cmd);
       }
 
-      expect(Object.keys(BUNDLED_COMMANDS)).toHaveLength(21);
+      expect(Object.keys(BUNDLED_COMMANDS)).toHaveLength(22);
     });
 
     it('should have non-empty content for all commands', () => {
@@ -79,6 +80,7 @@ describe('bundled-defaults', () => {
     it('should have all expected default workflows', () => {
       const expectedWorkflows = [
         'archon-assist',
+        'archon-assist-codex',
         'archon-comprehensive-pr-review',
         'archon-create-issue',
         'archon-feature-development',
@@ -97,7 +99,7 @@ describe('bundled-defaults', () => {
         expect(BUNDLED_WORKFLOWS).toHaveProperty(wf);
       }
 
-      expect(Object.keys(BUNDLED_WORKFLOWS)).toHaveLength(13);
+      expect(Object.keys(BUNDLED_WORKFLOWS)).toHaveLength(14);
     });
 
     it('should have non-empty content for all workflows', () => {

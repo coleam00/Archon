@@ -47,7 +47,9 @@ e2e-screenshots/
 artifacts/
 
 # Agent artifacts (generated, local only)
-.agents/
+.agents/*
+!.agents/skills/
+!.agents/skills/**
 .agents/rca-reports/
 .agents/plans/
 .agents/pr-reviews

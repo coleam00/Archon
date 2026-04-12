@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { buildRoutingRulesWithProject } from './prompt-builder';
+import { buildRoutingRulesWithProject, getAssistWorkflowName } from './prompt-builder';
 
 describe('buildRoutingRulesWithProject', () => {
   test('routing rules include --prompt in invocation format', () => {
@@ -29,5 +29,23 @@ describe('buildRoutingRulesWithProject', () => {
     const rules = buildRoutingRulesWithProject();
 
     expect(rules).toContain('NO knowledge of the conversation history');
+  });
+
+  test('uses Codex assist workflow when assistant type is codex', () => {
+    const rules = buildRoutingRulesWithProject('my-project', 'codex');
+
+    expect(rules).toContain('**archon-assist-codex**');
+    expect(rules).toContain('/invoke-workflow archon-assist-codex --project my-project');
+  });
+});
+
+describe('getAssistWorkflowName', () => {
+  test('returns Codex assist workflow for codex assistant', () => {
+    expect(getAssistWorkflowName('codex')).toBe('archon-assist-codex');
+  });
+
+  test('returns Claude assist workflow by default', () => {
+    expect(getAssistWorkflowName('claude')).toBe('archon-assist');
+    expect(getAssistWorkflowName()).toBe('archon-assist');
   });
 });

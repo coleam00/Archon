@@ -87,6 +87,7 @@ mock.module('@archon/workflows/defaults', () => ({
   BUNDLED_WORKFLOWS: {},
   BUNDLED_COMMANDS: {
     'archon-assist': '# archon-assist command',
+    'archon-assist-codex': '# archon-assist-codex command',
     plan: '# plan command',
     implement: '# implement command',
   },
@@ -433,7 +434,7 @@ describe('GET /api/commands', () => {
     const body = (await response.json()) as { commands: Array<{ name: string; source: string }> };
     expect(Array.isArray(body.commands)).toBe(true);
 
-    // BUNDLED_COMMANDS mock has 3 entries
+    // BUNDLED_COMMANDS mock includes the bundled defaults for this test
     const bundledCommands = body.commands.filter(c => c.source === 'bundled');
     expect(bundledCommands.length).toBeGreaterThan(0);
   });
@@ -447,6 +448,17 @@ describe('GET /api/commands', () => {
     const archonAssist = body.commands.find(c => c.name === 'archon-assist');
     expect(archonAssist).toBeDefined();
     expect(archonAssist?.source).toBe('bundled');
+  });
+
+  test('includes archon-assist-codex as bundled command', async () => {
+    const app = makeApp();
+    const response = await app.request('/api/commands');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as { commands: Array<{ name: string; source: string }> };
+    const archonAssistCodex = body.commands.find(c => c.name === 'archon-assist-codex');
+    expect(archonAssistCodex).toBeDefined();
+    expect(archonAssistCodex?.source).toBe('bundled');
   });
 
   test('includes plan and implement as bundled commands', async () => {

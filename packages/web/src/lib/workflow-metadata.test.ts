@@ -135,6 +135,10 @@ describe('getWorkflowDisplayName', () => {
   test('handles single-word names', () => {
     expect(getWorkflowDisplayName('archon-assist')).toBe('Assist');
   });
+
+  test('handles Codex suffixed workflow names', () => {
+    expect(getWorkflowDisplayName('archon-assist-codex')).toBe('Assist Codex');
+  });
 });
 
 describe('getWorkflowCategory', () => {
@@ -172,6 +176,7 @@ describe('getWorkflowCategory', () => {
       'Development'
     );
     expect(getWorkflowCategory('archon-assist', 'General help')).toBe('Development');
+    expect(getWorkflowCategory('archon-assist-codex', 'General Codex help')).toBe('Development');
     expect(getWorkflowCategory('archon-idea-to-pr', 'From idea to PR')).toBe('Development');
   });
 });

@@ -1,0 +1,15 @@
+name: archon-assist-codex
+description: |
+  Use when: No other Codex-safe workflow matches the request, or the user wants general help through Codex.
+  Triggers: "codex assist", "assist codex", "archon assist codex", "codex archon",
+            "use archon codex", "general help codex", "codex workflow help".
+  Handles: Questions, debugging, exploration, one-off tasks, explanations, CI failures, general help.
+  Capability: Full Codex agent session with file, shell, git, and network access as configured by Archon.
+  NOT for: Claude-tuned assist mode (use archon-assist) or guided Codex PIV work (use archon-piv-loop-codex).
+  Note: Will inform user when Codex assist mode is used for tracking.
+
+provider: codex
+
+nodes:
+  - id: assist
+    command: archon-assist-codex

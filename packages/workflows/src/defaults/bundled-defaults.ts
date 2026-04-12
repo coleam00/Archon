@@ -11,10 +11,11 @@
 import { BUNDLED_IS_BINARY } from '@archon/paths';
 
 // =============================================================================
-// Default Commands (21 total)
+// Default Commands (22 total)
 // =============================================================================
 
 import archonAssistCmd from '../../../../.archon/commands/defaults/archon-assist.md' with { type: 'text' };
+import archonAssistCodexCmd from '../../../../.archon/commands/defaults/archon-assist-codex.md' with { type: 'text' };
 import archonCodeReviewAgentCmd from '../../../../.archon/commands/defaults/archon-code-review-agent.md' with { type: 'text' };
 import archonCommentQualityAgentCmd from '../../../../.archon/commands/defaults/archon-comment-quality-agent.md' with { type: 'text' };
 import archonCreatePrCmd from '../../../../.archon/commands/defaults/archon-create-pr.md' with { type: 'text' };
@@ -37,10 +38,11 @@ import archonValidatePrE2eMainCmd from '../../../../.archon/commands/defaults/ar
 import archonValidatePrReportCmd from '../../../../.archon/commands/defaults/archon-validate-pr-report.md' with { type: 'text' };
 
 // =============================================================================
-// Default Workflows (13 total)
+// Default Workflows (14 total)
 // =============================================================================
 
 import archonAssistWf from '../../../../.archon/workflows/defaults/archon-assist.yaml' with { type: 'text' };
+import archonAssistCodexWf from '../../../../.archon/workflows/defaults/archon-assist-codex.yaml' with { type: 'text' };
 import archonComprehensivePrReviewWf from '../../../../.archon/workflows/defaults/archon-comprehensive-pr-review.yaml' with { type: 'text' };
 import archonCreateIssueWf from '../../../../.archon/workflows/defaults/archon-create-issue.yaml' with { type: 'text' };
 import archonFeatureDevelopmentWf from '../../../../.archon/workflows/defaults/archon-feature-development.yaml' with { type: 'text' };
@@ -63,6 +65,7 @@ import archonWorkflowBuilderWf from '../../../../.archon/workflows/defaults/arch
  */
 export const BUNDLED_COMMANDS: Record<string, string> = {
   'archon-assist': archonAssistCmd,
+  'archon-assist-codex': archonAssistCodexCmd,
   'archon-code-review-agent': archonCodeReviewAgentCmd,
   'archon-comment-quality-agent': archonCommentQualityAgentCmd,
   'archon-create-pr': archonCreatePrCmd,
@@ -90,6 +93,7 @@ export const BUNDLED_COMMANDS: Record<string, string> = {
  */
 export const BUNDLED_WORKFLOWS: Record<string, string> = {
   'archon-assist': archonAssistWf,
+  'archon-assist-codex': archonAssistCodexWf,
   'archon-comprehensive-pr-review': archonComprehensivePrReviewWf,
   'archon-create-issue': archonCreateIssueWf,
   'archon-feature-development': archonFeatureDevelopmentWf,

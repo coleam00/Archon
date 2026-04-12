@@ -6,6 +6,10 @@
 import type { Codebase } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 
+export function getAssistWorkflowName(assistantType?: string): string {
+  return assistantType === 'codex' ? 'archon-assist-codex' : 'archon-assist';
+}
+
 /**
  * Format a single project for the orchestrator prompt.
  */
@@ -40,18 +44,19 @@ export function formatWorkflowSection(workflows: readonly WorkflowDefinition[]):
 /**
  * Build the routing rules section of the prompt.
  */
-export function buildRoutingRules(): string {
-  return buildRoutingRulesWithProject();
+export function buildRoutingRules(assistantType?: string): string {
+  return buildRoutingRulesWithProject(undefined, assistantType);
 }
 
 /**
  * Build the routing rules section, optionally scoped to a specific project.
  * When projectName is provided, rule #4 defaults to that project instead of asking.
  */
-export function buildRoutingRulesWithProject(projectName?: string): string {
+export function buildRoutingRulesWithProject(projectName?: string, assistantType?: string): string {
   const rule4 = projectName
     ? `4. If ambiguous which project → use **${projectName}** (the active project)`
     : '4. If ambiguous which project → ask the user';
+  const assistWorkflow = getAssistWorkflowName(assistantType);
 
   return `## Routing Rules
 
@@ -77,15 +82,15 @@ Rules:
 
 Routing behavior:
 - If the user clearly wants work done (e.g., "create a plan for X", "implement Y", "fix Z") → include a brief explanation of what you're doing, then invoke the workflow.
-- If the user is asking a question or it's unclear whether they want a workflow → answer their question directly. You may suggest a workflow by name (e.g., "I can run the **archon-assist** workflow for this if you'd like"), but do NOT include /invoke-workflow in your response.
+- If the user is asking a question or it's unclear whether they want a workflow → answer their question directly. You may suggest a workflow by name (e.g., "I can run the **${assistWorkflow}** workflow for this if you'd like"), but do NOT include /invoke-workflow in your response.
 
 Example (clear intent):
 I'll analyze the orchestrator module architecture for you.
-/invoke-workflow archon-assist --project my-project --prompt "Analyze the orchestrator module architecture: explain how it routes messages, manages sessions, and dispatches workflows to AI clients"
+/invoke-workflow ${assistWorkflow} --project my-project --prompt "Analyze the orchestrator module architecture: explain how it routes messages, manages sessions, and dispatches workflows to AI clients"
 
 Example (ambiguous — answer directly):
 User: "What do you think about adding dark mode?"
-Response: "Adding dark mode would involve... [answer the question]. If you'd like me to create a plan for this, I can run the **archon-idea-to-pr** workflow."
+Response: "Adding dark mode would involve... [answer the question]. If you'd like me to create a plan for this, I can run the **archon-idea-to-pr** workflow." 
 
 ## Project Setup
 
@@ -113,7 +118,8 @@ IMPORTANT: Always clone into ~/.archon/workspaces/{owner}/{repo}/source unless t
  */
 export function buildOrchestratorPrompt(
   codebases: readonly Codebase[],
-  workflows: readonly WorkflowDefinition[]
+  workflows: readonly WorkflowDefinition[],
+  assistantType?: string
 ): string {
   let prompt = `# Archon Orchestrator
 
@@ -138,7 +144,7 @@ You can answer questions directly or invoke workflows for structured development
   prompt += '## Available Workflows\n\n';
   prompt += formatWorkflowSection(workflows);
 
-  prompt += buildRoutingRules();
+  prompt += buildRoutingRules(assistantType);
 
   return prompt;
 }
@@ -151,7 +157,8 @@ You can answer questions directly or invoke workflows for structured development
 export function buildProjectScopedPrompt(
   scopedCodebase: Codebase,
   allCodebases: readonly Codebase[],
-  workflows: readonly WorkflowDefinition[]
+  workflows: readonly WorkflowDefinition[],
+  assistantType?: string
 ): string {
   const otherCodebases = allCodebases.filter(c => c.id !== scopedCodebase.id);
 
@@ -179,7 +186,7 @@ ${formatProjectSection(scopedCodebase)}
   prompt += '## Available Workflows\n\n';
   prompt += formatWorkflowSection(workflows);
 
-  prompt += buildRoutingRulesWithProject(scopedCodebase.name);
+  prompt += buildRoutingRulesWithProject(scopedCodebase.name, assistantType);
 
   return prompt;
 }

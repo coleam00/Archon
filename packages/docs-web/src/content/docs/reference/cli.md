@@ -146,6 +146,10 @@ Workflow names are resolved using a 4-tier fallback hierarchy. This applies cons
 3. **Suffix match** - `assist` matches `archon-assist` (looks for `-assist` suffix)
 4. **Substring match** - `smart` matches `archon-smart-pr-review`
 
+Codex-specific workflow names use the `-codex` suffix. For example:
+- `assist-codex` matches `archon-assist-codex`
+- `piv-loop-codex` matches `archon-piv-loop-codex`
+
 If multiple workflows match at the same tier, an error lists the candidates:
 ```
 Ambiguous workflow 'review'. Did you mean:

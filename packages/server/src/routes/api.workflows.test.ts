@@ -21,10 +21,20 @@ const mockDiscoverWorkflows = mock(async (_cwd: string) => ({
 }));
 
 // Default: returns a valid workflow. Use mockReturnValueOnce in tests that need a parse failure.
-const mockParseWorkflow = mock((_content: string, _filename: string) => ({
-  workflow: makeTestWorkflow({ name: 'test', description: 'Test workflow' }),
-  error: null,
-}));
+const mockParseWorkflow = mock((content: string, _filename: string) => {
+  const nameMatch = /^name:\s*(.+)$/m.exec(content);
+  const descriptionMatch = /^description:\s*(.+)$/m.exec(content);
+  const providerMatch = /^provider:\s*(.+)$/m.exec(content);
+
+  return {
+    workflow: makeTestWorkflow({
+      name: nameMatch?.[1] ?? 'test',
+      description: descriptionMatch?.[1] ?? 'Test workflow',
+      ...(providerMatch?.[1] ? { provider: providerMatch[1] } : {}),
+    }),
+    error: null,
+  };
+});
 
 mock.module('@archon/core', () => ({
   handleMessage: mock(async () => {}),
@@ -74,9 +84,12 @@ mock.module('@archon/workflows/command-validation', () => ({
 mock.module('@archon/workflows/defaults', () => ({
   BUNDLED_WORKFLOWS: {
     'archon-assist': 'name: archon-assist\ndescription: Archon Assist\nnodes: []',
+    'archon-assist-codex':
+      'name: archon-assist-codex\ndescription: Archon Assist Codex\nprovider: codex\nnodes: []',
   },
   BUNDLED_COMMANDS: {
     'archon-assist': '# archon-assist command',
+    'archon-assist-codex': '# archon-assist-codex command',
   },
   isBinaryBuild: mock(() => false),
 }));
@@ -222,6 +235,24 @@ describe('GET /api/workflows/:name', () => {
     expect(body.source).toBe('bundled');
     expect(body.filename).toBe('archon-assist.yaml');
     expect(body.workflow).toBeDefined();
+  });
+
+  test('returns bundled Codex workflow with source:bundled', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    mockListCodebases.mockImplementationOnce(async () => []);
+
+    const response = await app.request('/api/workflows/archon-assist-codex');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      source: string;
+      filename: string;
+      workflow: { provider?: string };
+    };
+    expect(body.source).toBe('bundled');
+    expect(body.filename).toBe('archon-assist-codex.yaml');
+    expect(body.workflow.provider).toBe('codex');
   });
 
   test('returns project workflow with source:project when file exists on disk', async () => {

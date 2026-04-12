@@ -120,7 +120,7 @@ Options:
   --quiet, -q                Reduce log verbosity to warnings and errors only
   --verbose, -v              Show debug-level output
   --json                     Output machine-readable JSON (for workflow list)
-  --workflow <name>          Workflow to run for 'continue' (default: archon-assist)
+  --workflow <name>          Workflow to run for 'continue' (default: archon-assist or archon-assist-codex by assistant)
   --no-context               Skip context injection for 'continue'
   --allow-env-keys           Grant env-key consent during auto-registration
                              (bypasses the env-leak gate for this codebase;
