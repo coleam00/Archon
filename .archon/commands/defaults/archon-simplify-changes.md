@@ -35,21 +35,21 @@ Review ALL code changed on this branch and implement simplifications directly. Y
 | **Nested ternaries** | Multiple conditions in ternary chains — use if/else |
 | **Dense one-liners** | Compact code that sacrifices readability |
 | **Obvious comments** | Comments that describe what code clearly shows |
-| **Inconsistent patterns** | Code that doesn't follow project conventions (read CLAUDE.md) |
+| **Inconsistent patterns** | Code that doesn't follow project conventions (read ARCHON.md) |
 
 ## Rules
 
 - **Preserve exact functionality** — simplification must not change behavior
 - **Clarity over brevity** — readable beats compact
 - **No speculative refactors** — only simplify what's obviously improvable
-- **Follow project conventions** — read CLAUDE.md before making changes
+- **Follow project conventions** — read ARCHON.md before making changes
 - **Small, obvious changes** — each simplification should be self-evidently correct
 
 ## Process
 
 ### Phase 1: ANALYZE
 
-1. Read CLAUDE.md for project conventions
+1. Read ARCHON.md for project conventions
 2. Get changed files: `git diff $BASE_BRANCH...HEAD --name-only`
 3. Read each changed file
 4. Identify simplification opportunities per file

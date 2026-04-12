@@ -82,6 +82,12 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+function hasCodexAuthFile(): boolean {
+  const homeDir = process.env.USERPROFILE ?? process.env.HOME;
+  if (!homeDir) return false;
+  return existsSync(resolve(homeDir, '.codex', 'auth.json'));
+}
+
 /**
  * Creates an error handler for message processing failures.
  * Logs the error and attempts to send a user-friendly message to the platform.
@@ -151,18 +157,21 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     process.env.CLAUDE_CODE_OAUTH_TOKEN ||
     process.env.CLAUDE_USE_GLOBAL_AUTH
   );
-  const hasCodexCredentials = process.env.CODEX_ID_TOKEN && process.env.CODEX_ACCESS_TOKEN;
+  const hasCodexCredentials = Boolean(
+    (process.env.CODEX_ID_TOKEN && process.env.CODEX_ACCESS_TOKEN) || hasCodexAuthFile()
+  );
 
   if (!hasClaudeCredentials && !hasCodexCredentials) {
     getLog().fatal(
       {
         checked: {
           claude: ['CLAUDE_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_USE_GLOBAL_AUTH'],
-          codex: ['CODEX_ID_TOKEN', 'CODEX_ACCESS_TOKEN'],
+          codex: ['CODEX_ID_TOKEN', 'CODEX_ACCESS_TOKEN', '~/.codex/auth.json'],
         },
         hints: [
           'Set CLAUDE_USE_GLOBAL_AUTH=true in .env (requires `claude /login` first)',
           'Or set CLAUDE_API_KEY in .env',
+          'Or run `codex login` so ~/.codex/auth.json exists',
           'Or set CODEX_ID_TOKEN + CODEX_ACCESS_TOKEN in .env',
           'See .env.example for all options',
         ],
@@ -181,7 +190,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   }
   if (!hasCodexCredentials) {
     getLog().warn(
-      { checked: ['CODEX_ID_TOKEN', 'CODEX_ACCESS_TOKEN'] },
+      { checked: ['CODEX_ID_TOKEN', 'CODEX_ACCESS_TOKEN', '~/.codex/auth.json'] },
       'codex_credentials_missing'
     );
   }

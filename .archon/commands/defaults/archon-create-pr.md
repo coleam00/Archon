@@ -12,32 +12,36 @@ argument-hint: [base-branch] (default: auto-detected from config or repo)
 
 ---
 
-## Pre-flight: Check for Existing PRs
+## Pre-flight: Detect Repos and Existing PRs
 
-Extract the issue number from the current branch name or context (e.g., `fix/issue-580` → `580`).
+Resolve the push remote and PR target before doing anything else:
 
 ```bash
 BRANCH=$(git branch --show-current)
+PUSH_REMOTE=$(git config --get "branch.$BRANCH.remote" || echo origin)
+BASE_REMOTE=$(git remote | grep -qx upstream && echo upstream || echo "$PUSH_REMOTE")
+HEAD_REPO=$(gh repo view --repo "$(git remote get-url "$PUSH_REMOTE")" --json nameWithOwner -q .nameWithOwner)
+BASE_REPO=$(gh repo view --repo "$(git remote get-url "$BASE_REMOTE")" --json nameWithOwner -q .nameWithOwner)
+BASE_BRANCH=${ARGUMENTS:-$BASE_BRANCH}
+```
+
+Extract the issue number from the current branch name or context (e.g., `fix/issue-580` -> `580`).
+
+```bash
 ISSUE_NUM=$(echo "$BRANCH" | grep -oE '[0-9]+' | tail -1)
 ```
 
-If an issue number was found, search for open PRs that already reference it:
+If an issue number was found, search for open PRs that already reference it in the base repo:
 
 ```bash
 gh pr list \
+  --repo "$BASE_REPO" \
   --search "Fixes #${ISSUE_NUM} OR Closes #${ISSUE_NUM}" \
   --state open \
   --json number,url,headRefName
 ```
 
-**If a matching PR is returned**: stop here, report the existing PR URL, and do **not** proceed to Phase 2 or Phase 3.
-
-```
-Existing PR found for issue #${ISSUE_NUM}: [url]
-Skipping PR creation.
-```
-
-**If no match is found** (or no issue number could be extracted): continue to Phase 1.
+If a matching PR is returned: stop here, report the existing PR URL, and do not proceed.
 
 ---
 
@@ -48,7 +52,7 @@ Skipping PR creation.
 ```bash
 git branch --show-current
 git status --short
-git log origin/$BASE_BRANCH..HEAD --oneline
+git log "$BASE_REMOTE/$BASE_BRANCH"..HEAD --oneline
 ```
 
 ### 1.2 Check for Implementation Report
@@ -56,7 +60,7 @@ git log origin/$BASE_BRANCH..HEAD --oneline
 Look for the most recent implementation report:
 
 ```bash
-ls -t $ARTIFACTS_DIR/../reports/*-report.md 2>/dev/null | head -1
+ls -t "$ARTIFACTS_DIR"/../reports/*-report.md 2>/dev/null | head -1
 ```
 
 If found, read it to extract:
@@ -68,7 +72,7 @@ If found, read it to extract:
 ### 1.3 Get Commit Summary
 
 ```bash
-git log origin/$BASE_BRANCH..HEAD --pretty=format:"- %s"
+git log "$BASE_REMOTE/$BASE_BRANCH"..HEAD --pretty=format:"- %s"
 ```
 
 ---
@@ -83,14 +87,14 @@ If uncommitted changes exist:
 git status --porcelain
 ```
 
-**If dirty**:
+If dirty:
 1. Stage changes: `git add -A`
 2. Commit: `git commit -m "Final changes before PR"`
 
 ### 2.2 Push Branch
 
 ```bash
-git push -u origin HEAD
+git push -u "$PUSH_REMOTE" HEAD
 ```
 
 ---
@@ -101,99 +105,50 @@ git push -u origin HEAD
 
 Look for the project's PR template at `.github/pull_request_template.md`, `.github/PULL_REQUEST_TEMPLATE.md`, or `docs/PULL_REQUEST_TEMPLATE.md`. Read whichever one exists.
 
-**If template found**: Use it as the structure, fill in **every section** with details from the implementation report and commits. Don't skip sections or leave placeholders.
-
-**If no template**, use this format:
-
-```markdown
-## Summary
-
-[Brief description from implementation report or commits]
-
-## Changes
-
-[List from implementation report "Files Changed" section, or from commits]
-- file1.ts - description
-- file2.ts - description
-
-## Validation
-
-[From implementation report "Validation Results" section]
-- [x] Type check passes
-- [x] Lint passes
-- [x] Tests pass
-- [x] Build succeeds
-
-## Testing Notes
-
-[Any manual testing done or integration test results]
-
----
-
-[If from a GitHub issue, add: Closes #XXX]
-```
-
 ### 3.2 Determine PR Title
 
-**Title**: Concise, imperative mood
-- From implementation report summary, OR
-- From commit messages
+Title: concise, imperative mood.
 
 ### 3.3 Create the PR
 
+When `HEAD_REPO` differs from `BASE_REPO`, use explicit cross-repo targeting:
+
 ```bash
-# Write body to file to avoid shell escaping
-cat > $ARTIFACTS_DIR/pr-body.md <<'EOF'
-[body from above]
-EOF
+HEAD_OWNER=$(echo "$HEAD_REPO" | cut -d/ -f1)
 
 gh pr create \
+  --repo "$BASE_REPO" \
+  --head "$HEAD_OWNER:$BRANCH" \
+  --base "$BASE_BRANCH" \
   --title "[title]" \
-  --body-file $ARTIFACTS_DIR/pr-body.md \
-  --base $BASE_BRANCH
+  --body-file "$ARTIFACTS_DIR/pr-body.md"
 ```
 
-Or if the content is simple:
+If the repo is same-repo, the explicit `--head` form still works and keeps behavior deterministic.
+
+After creating the PR, capture its identifiers for downstream steps:
 
 ```bash
-gh pr create --fill --base $BASE_BRANCH
-```
-
-After creating the PR, capture its identifiers for downstream steps. Only write artifacts if PR creation succeeded — never persist stale data from a pre-existing PR:
-
-```bash
-# After creating the PR, capture and persist the PR number for downstream steps
-# IMPORTANT: Only write artifacts after confirmed successful PR creation
-if gh pr view --json number,url -q '.number,.url' > /dev/null 2>&1; then
-  PR_NUMBER=$(gh pr view --json number -q '.number')
-  PR_URL=$(gh pr view --json url -q '.url')
-  echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
-  echo "$PR_URL" > "$ARTIFACTS_DIR/.pr-url"
-else
-  echo "WARNING: Could not confirm PR creation; skipping .pr-number/.pr-url artifacts"
-fi
+PR_NUMBER=$(gh pr view --repo "$BASE_REPO" --json number -q '.number')
+PR_URL=$(gh pr view --repo "$BASE_REPO" --json url -q '.url')
+echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
+echo "$PR_URL" > "$ARTIFACTS_DIR/.pr-url"
 ```
 
 ---
 
 ## Phase 4: Output
 
-Report the result:
+Report:
 
 ```markdown
 ## PR Created
 
 **URL**: [PR URL]
-**Branch**: [branch-name] → [base-branch]
+**Branch**: [branch-name] -> [base-branch]
+**Head Repo**: [head-repo]
+**Base Repo**: [base-repo]
 **Title**: [PR title]
-
-### Summary
-[Brief summary of what the PR contains]
-
-### Next Steps
-1. Request review if needed
-2. Address any CI failures
-3. Merge when approved
 ```
 
 ---
@@ -202,21 +157,16 @@ Report the result:
 
 ### No Commits to Push
 
-```
-No commits between origin/$BASE_BRANCH and HEAD.
-Nothing to create a PR for.
-```
+`No commits between $BASE_REMOTE/$BASE_BRANCH and HEAD.`
 
 ### Branch Already Has PR
 
 ```bash
-gh pr view --web
+gh pr view --repo "$BASE_REPO" --web
 ```
-
-Opens the existing PR instead of creating a duplicate.
 
 ### Push Fails
 
-1. Check if branch exists remotely: `git ls-remote --heads origin [branch]`
-2. If conflicts: `git pull --rebase origin $BASE_BRANCH` then retry push
-3. If permission issues: Check GitHub access
+1. Check if branch exists remotely: `git ls-remote --heads "$PUSH_REMOTE" "$BRANCH"`
+2. If conflicts: `git pull --rebase "$BASE_REMOTE" "$BASE_BRANCH"` then retry push
+3. If permission issues: check access to the fork remote

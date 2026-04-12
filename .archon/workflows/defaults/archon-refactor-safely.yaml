@@ -15,12 +15,11 @@ description: |
   - PostToolUse hooks force type-check after every file change
   - Behavior verification confirms no logic changes after refactoring
 
-provider: claude
-
+provider: codex
 nodes:
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 1: SCAN — Find files matching the refactoring target
-  # ═══════════════════════════════════════════════════════════════
+  # Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+  # PHASE 1: SCAN Ã¢â‚¬â€ Find files matching the refactoring target
+  # Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 
   - id: scan-scope
     bash: |
@@ -56,10 +55,10 @@ nodes:
       done | sort -rn | head -20
     timeout: 60000
 
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 2: ANALYZE IMPACT — Read-only deep analysis
+  # Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+  # PHASE 2: ANALYZE IMPACT Ã¢â‚¬â€ Read-only deep analysis
   # Maps call sites, identifies risk areas, understands dependencies
-  # ═══════════════════════════════════════════════════════════════
+  # Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 
   - id: analyze-impact
     prompt: |
@@ -77,7 +76,7 @@ nodes:
 
       1. Identify the PRIMARY file(s) targeted for refactoring based on the user's request
          and the scan results above
-      2. Read each target file thoroughly — understand every function, type, and export
+      2. Read each target file thoroughly Ã¢â‚¬â€ understand every function, type, and export
       3. For each target file, map ALL call sites:
          - Use Grep to find every import of the target file across the codebase
          - Track which specific exports are used and where
@@ -117,12 +116,10 @@ nodes:
       - Rationale for each grouping (cohesion, shared dependencies)
     depends_on: [scan-scope]
     context: fresh
-    denied_tools: [Write, Edit, Bash]
-
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 3: PLAN REFACTOR — Ordered task list with rollback strategy
+  # Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+  # PHASE 3: PLAN REFACTOR Ã¢â‚¬â€ Ordered task list with rollback strategy
   # Read-only: produces the plan, does not execute it
-  # ═══════════════════════════════════════════════════════════════
+  # Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 
   - id: plan-refactor
     prompt: |
@@ -139,7 +136,7 @@ nodes:
 
       ## Principles
 
-      - **Behavior preservation**: The refactoring must NOT change any behavior — only structure
+      - **Behavior preservation**: The refactoring must NOT change any behavior Ã¢â‚¬â€ only structure
       - **Incremental**: Each step must leave the codebase in a compilable state
       - **Reversible**: Each step can be independently reverted
       - **No mixed concerns**: Do not combine refactoring with bug fixes or improvements
@@ -199,32 +196,30 @@ nodes:
       - Format: `bun run format:check`
     depends_on: [analyze-impact]
     context: fresh
-    denied_tools: [Write, Edit, Bash]
-
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 4: EXECUTE REFACTOR — Implements the plan with guardrails
+  # Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+  # PHASE 4: EXECUTE REFACTOR Ã¢â‚¬â€ Implements the plan with guardrails
   # Hooks enforce type-check after every edit and plan adherence
-  # ═══════════════════════════════════════════════════════════════
+  # Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 
   - id: execute-refactor
-    model: claude-opus-4-6[1m]
+    model: gpt-5.4
     prompt: |
       You are executing a refactoring plan with strict safety guardrails.
 
       ## Plan
 
-      Read the full plan from `$ARTIFACTS_DIR/refactor-plan.md` — follow it LITERALLY.
+      Read the full plan from `$ARTIFACTS_DIR/refactor-plan.md` Ã¢â‚¬â€ follow it LITERALLY.
 
       ## Rules
 
-      - **Follow the plan exactly** — do not add extra improvements or cleanups
-      - **One task at a time** — complete each task fully before starting the next
-      - **Type-check after every file change** — you'll be prompted to do this after each edit
-      - **Preserve all behavior** — refactoring means moving code, not changing it
-      - **Preserve the public API** — if the original file exported something, it must still be
+      - **Follow the plan exactly** Ã¢â‚¬â€ do not add extra improvements or cleanups
+      - **One task at a time** Ã¢â‚¬â€ complete each task fully before starting the next
+      - **Type-check after every file change** Ã¢â‚¬â€ you'll be prompted to do this after each edit
+      - **Preserve all behavior** Ã¢â‚¬â€ refactoring means moving code, not changing it
+      - **Preserve the public API** Ã¢â‚¬â€ if the original file exported something, it must still be
         importable from the same path (use re-exports in the original file if needed)
-      - **Update all import sites** — every file that imported from the original must be updated
-      - **Commit after each logical task** — one commit per plan task with a clear message
+      - **Update all import sites** Ã¢â‚¬â€ every file that imported from the original must be updated
+      - **Commit after each logical task** Ã¢â‚¬â€ one commit per plan task with a clear message
 
       ## Process for Each Task
 
@@ -243,269 +238,6 @@ nodes:
       - If type-check fails after a change: fix it immediately before proceeding
       - If a task is more complex than planned: complete it anyway, note the deviation
       - If you discover the plan missed an import site: update it and note it
-      - NEVER skip a task — complete them in order
+      - NEVER skip a task Ã¢â‚¬â€ complete them in order
     depends_on: [plan-refactor]
     context: fresh
-    hooks:
-      PreToolUse:
-        - matcher: "Write|Edit"
-          response:
-            hookSpecificOutput:
-              hookEventName: PreToolUse
-              additionalContext: >
-                Before modifying this file: Is this file in your refactoring plan
-                ($ARTIFACTS_DIR/refactor-plan.md)? If it's not a planned target file
-                AND not a file that imports from the target, explain why you're touching it.
-                Unplanned changes increase risk.
-      PostToolUse:
-        - matcher: "Write|Edit"
-          response:
-            systemMessage: >
-              You just modified a file. STOP and do these things NOW before making any
-              other changes:
-              1. Run `bun run type-check` to verify the change compiles
-              2. If type-check fails, fix the error immediately
-              3. Verify you preserved the exact same behavior — no logic changes, only structural moves
-              Only proceed to the next change after type-check passes.
-        - matcher: "Bash"
-          response:
-            hookSpecificOutput:
-              hookEventName: PostToolUse
-              additionalContext: >
-                Check the exit code. If type-check or any validation failed, fix the issue
-                before continuing. Do not accumulate broken state.
-
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 5: VALIDATE — Full test suite (bash, no AI escape hatch)
-  # ═══════════════════════════════════════════════════════════════
-
-  - id: validate
-    bash: |
-      echo "=== TYPE CHECK ==="
-      bun run type-check 2>&1
-      TC_EXIT=$?
-
-      echo ""
-      echo "=== LINT ==="
-      bun run lint 2>&1
-      LINT_EXIT=$?
-
-      echo ""
-      echo "=== FORMAT CHECK ==="
-      bun run format:check 2>&1
-      FMT_EXIT=$?
-
-      echo ""
-      echo "=== TESTS ==="
-      bun run test 2>&1
-      TEST_EXIT=$?
-
-      echo ""
-      echo "=== FILE SIZE CHECK ==="
-      echo "Files still over 500 lines:"
-      find . -name '*.ts' -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -name '*.test.ts' -not -name '*.d.ts' \
-        -exec sh -c 'lines=$(wc -l < "$1"); if [ "$lines" -gt 500 ]; then echo "$lines $1"; fi' _ {} \; 2>/dev/null | sort -rn
-      echo ""
-
-      echo "=== RESULTS ==="
-      echo "Type check: $([ $TC_EXIT -eq 0 ] && echo 'PASS' || echo 'FAIL')"
-      echo "Lint: $([ $LINT_EXIT -eq 0 ] && echo 'PASS' || echo 'FAIL')"
-      echo "Format: $([ $FMT_EXIT -eq 0 ] && echo 'PASS' || echo 'FAIL')"
-      echo "Tests: $([ $TEST_EXIT -eq 0 ] && echo 'PASS' || echo 'FAIL')"
-
-      if [ $TC_EXIT -eq 0 ] && [ $LINT_EXIT -eq 0 ] && [ $FMT_EXIT -eq 0 ] && [ $TEST_EXIT -eq 0 ]; then
-        echo "VALIDATION_STATUS: PASS"
-      else
-        echo "VALIDATION_STATUS: FAIL"
-      fi
-    depends_on: [execute-refactor]
-    timeout: 300000
-
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 6: FIX VALIDATION FAILURES (if any)
-  # Only does real work if validation failed
-  # ═══════════════════════════════════════════════════════════════
-
-  - id: fix-failures
-    prompt: |
-      Review the validation output below.
-
-      ## Validation Output
-
-      $validate.output
-
-      ## Instructions
-
-      If the output ends with "VALIDATION_STATUS: PASS", respond with
-      "All checks passed — no fixes needed." and stop.
-
-      If there are failures:
-
-      1. Read the validation failures carefully
-      2. Fix ONLY what's broken — do not make additional improvements
-      3. If a fix requires changing behavior (not just fixing a type/lint error),
-         revert the original change instead
-      4. Run the specific failing check after each fix to confirm it passes
-      5. After all fixes, run the full validation suite: `bun run validate`
-
-      If there are files still over 500 lines, note them but do NOT attempt further
-      splitting in this node — that would require a new plan cycle.
-    depends_on: [validate]
-    context: fresh
-    hooks:
-      PostToolUse:
-        - matcher: "Write|Edit"
-          response:
-            systemMessage: >
-              You just made a fix. Run the specific failing validation check NOW
-              to verify your fix works. Do not batch fixes — verify each one.
-      PreToolUse:
-        - matcher: "Write|Edit"
-          response:
-            hookSpecificOutput:
-              hookEventName: PreToolUse
-              additionalContext: >
-                You are fixing validation failures only. Do not make any changes
-                beyond what's needed to pass the failing checks. If in doubt, revert
-                the original change that caused the failure.
-
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 7: VERIFY BEHAVIOR — Read-only confirmation
-  # Ensures the refactoring preserved behavior by tracing call paths
-  # ═══════════════════════════════════════════════════════════════
-
-  - id: verify-behavior
-    prompt: |
-      You are a code reviewer verifying that a refactoring preserved exact behavior.
-      You can ONLY read files — you cannot make any changes.
-
-      ## Refactoring Plan
-
-      Read the plan from `$ARTIFACTS_DIR/refactor-plan.md` to understand what was intended.
-
-      ## Instructions
-
-      1. Use Grep and Glob to find all files in the new module locations listed in
-         the plan, then Read each one. (Note: Bash is denied in this read-only node,
-         so use Grep/Glob/Read to discover changes instead of git commands.)
-      2. For each new file created by the refactoring:
-         - Verify the extracted functions match the originals exactly (no logic changes)
-         - Check that all types and interfaces are preserved
-      3. For the original file(s):
-         - Verify re-exports exist for all symbols that were previously exported
-         - Confirm no function bodies were changed (only moved)
-      4. For all import sites updated:
-         - Verify imports resolve to the correct new locations
-         - Check that no import was missed
-      5. Verify the public API is preserved:
-         - Any code that imported from the original file should still work unchanged
-         - Re-exports in the original file should cover all moved symbols
-
-      ## Output
-
-      Write your verification report to `$ARTIFACTS_DIR/behavior-verification.md`:
-
-      ### Verdict: PASS | FAIL
-
-      ### Functions Verified
-      | Function | Original Location | New Location | Behavior Preserved |
-      |----------|------------------|--------------|-------------------|
-      | funcName | file.ts:42 | new-file.ts:10 | Yes/No |
-
-      ### Public API Check
-      - [ ] All original exports still accessible from original import path
-      - [ ] Re-exports correctly configured
-
-      ### Import Sites Updated
-      - [ ] All N import sites verified
-
-      ### Issues Found
-      [List any behavior changes detected, or "None — refactoring is behavior-preserving"]
-    depends_on: [fix-failures]
-    context: fresh
-    denied_tools: [Write, Edit, Bash]
-
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 8: CREATE PR — Detailed description with before/after
-  # ═══════════════════════════════════════════════════════════════
-
-  - id: create-pr
-    prompt: |
-      Create a pull request for the refactoring.
-
-      ## Context
-
-      - **Refactoring goal**: $ARGUMENTS
-      - **Impact analysis**: Read `$ARTIFACTS_DIR/impact-analysis.md`
-      - **Refactoring plan**: Read `$ARTIFACTS_DIR/refactor-plan.md`
-      - **Validation**: $validate.output
-      - **Behavior verification**: Read `$ARTIFACTS_DIR/behavior-verification.md`
-
-      ## Instructions
-
-      1. Stage all changes and create a final commit if there are uncommitted changes
-      2. Push the branch: `git push -u origin HEAD`
-      3. Check if a PR already exists: `gh pr list --head $(git branch --show-current)`
-      4. Create the PR with the format below
-      5. Save the PR URL to `$ARTIFACTS_DIR/.pr-url`
-
-      ## PR Format
-
-      - **Title**: `refactor: [concise description]` (under 70 chars)
-      - **Body**:
-
-      ```markdown
-      ## Refactoring: [goal]
-
-      ### Motivation
-
-      [Why this refactoring was needed — file sizes, complexity, maintainability]
-
-      ### Before
-
-      ```
-      [Original file structure with line counts from the plan]
-      ```
-
-      ### After
-
-      ```
-      [New file structure with line counts]
-      ```
-
-      ### Changes
-
-      [For each new module: what was extracted and why it's a cohesive unit]
-
-      ### Safety
-
-      - [x] Type check passes
-      - [x] Lint passes
-      - [x] Tests pass (all existing tests still green)
-      - [x] Public API preserved (re-exports maintain backward compatibility)
-      - [x] Behavior verification passed (read-only audit confirmed no logic changes)
-      - [x] Each task committed separately for easy review/revert
-
-      ### Review Guide
-
-      Each commit represents one extraction step. Review commits individually for easiest review.
-      All commits are behavior-preserving structural moves.
-      ```
-    depends_on: [verify-behavior]
-    context: fresh
-    hooks:
-      PreToolUse:
-        - matcher: "Write|Edit"
-          response:
-            hookSpecificOutput:
-              hookEventName: PreToolUse
-              permissionDecision: deny
-              permissionDecisionReason: "PR creation node — do not modify source files. Use only git and gh commands."
-      PostToolUse:
-        - matcher: "Bash"
-          response:
-            hookSpecificOutput:
-              hookEventName: PostToolUse
-              additionalContext: >
-                Verify this command succeeded. If git push or gh pr create failed,
-                read the error message carefully before retrying.

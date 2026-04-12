@@ -218,10 +218,10 @@ gh pr view {number} --json files --jq '.files[].path'
 - Configuration (`.json`, `.yaml`, `.toml`)
 - Types/interfaces
 
-### 3.3 Check for CLAUDE.md
+### 3.3 Check for ARCHON.md
 
 ```bash
-cat CLAUDE.md 2>/dev/null | head -100
+cat ARCHON.md 2>/dev/null | head -100
 ```
 
 Note key rules that reviewers should check against.
@@ -244,7 +244,7 @@ gh pr diff {number} | grep "^+" | sed 's/^+//' | grep -E "(^interface |^export i
 **PHASE_3_CHECKPOINT:**
 - [ ] Diff available
 - [ ] Files categorized by type
-- [ ] CLAUDE.md rules noted
+- [ ] ARCHON.md rules noted
 - [ ] New abstractions scanned
 
 ---
@@ -383,14 +383,14 @@ Based on changes, reviewers should focus on:
 2. **Error Handling**: {files with try/catch, error handling}
 3. **Test Coverage**: {new functionality needing tests}
 4. **Comments/Docs**: {files with documentation changes}
-5. **Docs Impact**: {check if CLAUDE.md or $DOCS_DIR need updates}
+5. **Docs Impact**: {check if ARCHON.md or $DOCS_DIR need updates}
 6. **Primitive Alignment**: {If new abstractions found: list them} — verify no duplication of existing primitives
 
 ---
 
-## CLAUDE.md Rules to Check
+## ARCHON.md Rules to Check
 
-{Extract key rules from CLAUDE.md that apply to this PR}
+{Extract key rules from ARCHON.md that apply to this PR}
 
 ---
 

@@ -1,5 +1,5 @@
 ---
-description: Review code quality, CLAUDE.md compliance, and detect bugs
+description: Review code quality, ARCHON.md compliance, and detect bugs
 argument-hint: (none - reads from scope artifact)
 ---
 
@@ -9,7 +9,7 @@ argument-hint: (none - reads from scope artifact)
 
 ## Your Mission
 
-Review the PR for code quality, CLAUDE.md compliance, patterns, and bugs. Produce a structured artifact with findings, fix suggestions with multiple options, and reasoning.
+Review the PR for code quality, ARCHON.md compliance, patterns, and bugs. Produce a structured artifact with findings, fix suggestions with multiple options, and reasoning.
 
 **Output artifact**: `$ARTIFACTS_DIR/review/code-review-findings.md`
 
@@ -31,7 +31,7 @@ cat $ARTIFACTS_DIR/review/scope.md
 
 Note:
 - Changed files list
-- CLAUDE.md rules to check
+- ARCHON.md rules to check
 - Focus areas
 
 **CRITICAL**: Check for "NOT Building (Scope Limits)" section. Items listed there are **intentionally excluded** - do NOT flag them as bugs or missing features!
@@ -42,10 +42,10 @@ Note:
 gh pr diff {number}
 ```
 
-### 1.4 Read CLAUDE.md
+### 1.4 Read ARCHON.md
 
 ```bash
-cat CLAUDE.md
+cat ARCHON.md
 ```
 
 Note all coding standards, patterns, and rules.
@@ -54,13 +54,13 @@ Note all coding standards, patterns, and rules.
 - [ ] PR number identified
 - [ ] Scope loaded
 - [ ] Diff available
-- [ ] CLAUDE.md rules noted
+- [ ] ARCHON.md rules noted
 
 ---
 
 ## Phase 2: ANALYZE - Review Code
 
-### 2.1 Check CLAUDE.md Compliance
+### 2.1 Check ARCHON.md Compliance
 
 For each changed file, verify:
 - Import patterns match project style
@@ -111,10 +111,10 @@ grep -r "interface {Name}\|class {Name}\|type {Name}" packages/ --include="*.ts"
 
 2. Flag if the new abstraction duplicates or closely overlaps an existing one.
 3. Flag if a new utility function reimplements logic already available in a shared package.
-4. Note findings in the CLAUDE.md Compliance section with verdict: **EXTENDS** (extends existing primitive) or **DUPLICATE** (redundant with existing) or **NEW** (genuinely new, no existing primitive).
+4. Note findings in the ARCHON.md Compliance section with verdict: **EXTENDS** (extends existing primitive) or **DUPLICATE** (redundant with existing) or **NEW** (genuinely new, no existing primitive).
 
 **PHASE_2_CHECKPOINT:**
-- [ ] CLAUDE.md compliance checked
+- [ ] ARCHON.md compliance checked
 - [ ] Bugs identified
 - [ ] Quality issues noted
 - [ ] Patterns found for fixes
@@ -177,7 +177,7 @@ Write to `$ARTIFACTS_DIR/review/code-review-findings.md`:
 **Reasoning**:
 {Explain why this option is preferred, referencing:
 - Codebase patterns
-- CLAUDE.md rules
+- ARCHON.md rules
 - Best practices
 - Specific project context}
 
@@ -213,11 +213,11 @@ Write to `$ARTIFACTS_DIR/review/code-review-findings.md`:
 
 ---
 
-## CLAUDE.md Compliance
+## ARCHON.md Compliance
 
 | Rule | Status | Notes |
 |------|--------|-------|
-| {rule from CLAUDE.md} | PASS/FAIL | {details} |
+| {rule from ARCHON.md} | PASS/FAIL | {details} |
 | ... | ... | ... |
 
 ---
@@ -266,7 +266,7 @@ Verify artifact contains:
 - Summary with verdict
 - At least findings section (even if empty)
 - Statistics table
-- CLAUDE.md compliance table
+- ARCHON.md compliance table
 
 **PHASE_4_CHECKPOINT:**
 - [ ] Artifact file exists

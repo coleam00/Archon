@@ -114,7 +114,7 @@ FIND:
 ### 3.3 Read Project Rules
 
 ```bash
-cat CLAUDE.md
+cat ARCHON.md
 ```
 
 Extract: coding standards, naming conventions, testing requirements, lint rules.
@@ -123,7 +123,7 @@ Extract: coding standards, naming conventions, testing requirements, lint rules.
 - [ ] Similar implementations found with file:line references
 - [ ] Types and interfaces identified
 - [ ] Integration points mapped
-- [ ] CLAUDE.md rules noted
+- [ ] ARCHON.md rules noted
 
 ---
 

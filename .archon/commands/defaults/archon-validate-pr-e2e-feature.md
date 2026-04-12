@@ -17,7 +17,7 @@ Example: `agent-browser --session $WORKFLOW_ID open "http://..."`, `agent-browse
 
 **ABSOLUTELY FORBIDDEN — NEVER DO ANY OF THESE**:
 - `taskkill //F //IM chrome.exe` or ANY variant that kills chrome by image name — this kills the USER's browser
-- `taskkill //F //IM node.exe` or `taskkill //F //IM bun.exe` — this kills Claude Code, the Archon server, and all other workflows
+- `taskkill //F //IM node.exe` or `taskkill //F //IM bun.exe` — this kills the coding agent process, the Archon server, and all other workflows
 - `pkill chrome`, `pkill node`, `pkill bun`, or any broad process-name kill
 - `agent-browser close` without `--session $WORKFLOW_ID` — this kills OTHER workflows' browser sessions
 - Any "kill everything" or "kill all" escalation pattern — if agent-browser isn't working, SKIP E2E testing and note it in your report

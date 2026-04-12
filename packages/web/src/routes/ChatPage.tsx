@@ -9,6 +9,7 @@ import { Separator } from '@/components/ui/separator';
 import { useProject } from '@/contexts/ProjectContext';
 import { listConversations, listWorkflowRuns, addCodebase } from '@/lib/api';
 import type { CodebaseResponse } from '@/lib/api';
+import { getEffectiveProjectId } from '@/lib/chat-state';
 import { cn } from '@/lib/utils';
 
 const PANEL_MIN = 220;
@@ -32,6 +33,7 @@ export function ChatPage(): React.ReactElement {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { selectedProjectId, setSelectedProjectId, codebases, isLoadingCodebases } = useProject();
+  const effectiveProjectId = getEffectiveProjectId(selectedProjectId, codebases);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [width, setWidth] = useState(getInitialWidth);
@@ -88,8 +90,8 @@ export function ChatPage(): React.ReactElement {
   );
 
   const { data: conversations } = useQuery({
-    queryKey: ['conversations', selectedProjectId],
-    queryFn: () => listConversations(selectedProjectId ?? undefined),
+    queryKey: ['conversations', effectiveProjectId],
+    queryFn: () => listConversations(effectiveProjectId),
     refetchInterval: 10_000,
   });
 

@@ -99,15 +99,19 @@ Examples:
 ```bash
 git branch --show-current
 git status --porcelain
-git remote get-url origin
+git remote -v
 ```
 
 ### 2.2 Determine Repository Info
 
-Extract owner/repo from the remote URL for PR creation:
+Extract owner/repo for both the writable fork and the intended base repo:
 
 ```bash
-gh repo view --json nameWithOwner -q .nameWithOwner
+BRANCH=$(git branch --show-current)
+PUSH_REMOTE=$(git config --get "branch.$BRANCH.remote" || echo origin)
+BASE_REMOTE=$(git remote | grep -qx upstream && echo upstream || echo "$PUSH_REMOTE")
+gh repo view --repo "$(git remote get-url "$PUSH_REMOTE")" --json nameWithOwner -q .nameWithOwner
+gh repo view --repo "$(git remote get-url "$BASE_REMOTE")" --json nameWithOwner -q .nameWithOwner
 ```
 
 ### 2.3 Branch Decision
@@ -123,8 +127,8 @@ gh repo view --json nameWithOwner -q .nameWithOwner
 ### 2.4 Sync with Remote
 
 ```bash
-git fetch origin
-git rebase origin/$BASE_BRANCH || git merge origin/$BASE_BRANCH
+git fetch "$BASE_REMOTE"
+git rebase "$BASE_REMOTE/$BASE_BRANCH" || git merge "$BASE_REMOTE/$BASE_BRANCH"
 ```
 
 If conflicts occur, STOP with error: "Merge conflicts with $BASE_BRANCH. Resolve manually."
@@ -133,7 +137,7 @@ If conflicts occur, STOP with error: "Merge conflicts with $BASE_BRANCH. Resolve
 
 If there are commits on the branch:
 ```bash
-git push -u origin HEAD
+git push -u "$PUSH_REMOTE" HEAD
 ```
 
 If no commits yet (fresh branch), skip push - it will happen after implementation.

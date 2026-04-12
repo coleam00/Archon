@@ -13,6 +13,7 @@ import {
 } from '@/stores/workflow-store';
 import {
   sendMessage as apiSendMessage,
+  getConversation,
   listConversations,
   listCodebases,
   getMessages,
@@ -36,6 +37,7 @@ import {
 } from '@/lib/message-cache';
 import { useProject } from '@/contexts/ProjectContext';
 import { ensureUtc } from '@/lib/format';
+import { resolveCurrentConversation } from '@/lib/chat-state';
 
 function mapMessageRow(row: MessageResponse): ChatMessage {
   let meta: {
@@ -264,11 +266,16 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
     queryKey: ['conversations'],
     queryFn: () => listConversations(),
   });
+  const { data: routeConversation, isError: routeConversationError } = useQuery({
+    queryKey: ['conversation', conversationId],
+    queryFn: () => getConversation(conversationId),
+    enabled: !isNewChat,
+  });
   const { data: codebases, isError: codebasesError } = useQuery<CodebaseResponse[]>({
     queryKey: ['codebases'],
     queryFn: listCodebases,
   });
-  const currentConv = conversations?.find(c => c.platform_conversation_id === conversationId);
+  const currentConv = resolveCurrentConversation(conversationId, routeConversation, conversations);
   const currentCodebase = codebases?.find(cb => cb.id === currentConv?.codebase_id);
   // Fall back to selectedProjectId codebase for header before conversation exists in DB
   const contextCodebase =
@@ -754,11 +761,15 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
         connected={isNewChat ? undefined : connected}
         isDocker={isDocker}
       />
-      {(conversationsError || codebasesError) && (
+      {(conversationsError || routeConversationError || codebasesError) && (
         <div className="flex gap-2 px-4 py-1">
           {conversationsError && (
             <span className="text-xs text-red-400">Failed to load conversations</span>
           )}
+          {routeConversationError &&
+            !conversations?.some(c => c.platform_conversation_id === conversationId) && (
+              <span className="text-xs text-red-400">Failed to load active conversation</span>
+            )}
           {codebasesError && <span className="text-xs text-red-400">Failed to load projects</span>}
         </div>
       )}

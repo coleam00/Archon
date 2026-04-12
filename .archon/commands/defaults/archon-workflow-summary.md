@@ -134,7 +134,7 @@ Compare across artifacts:
 
 | Finding | Severity | Category | Suggested Action |
 |---------|----------|----------|------------------|
-| {issue} | MEDIUM | docs | Update CLAUDE.md |
+| {issue} | MEDIUM | docs | Update ARCHON.md |
 | {issue} | LOW | test | Add edge case test |
 | {issue} | MEDIUM | error-handling | Log instead of silent |
 
@@ -177,7 +177,7 @@ Structure the output for easy decision-making:
 
 | # | Item | Action | Command |
 |---|------|--------|---------|
-| 1 | Update CLAUDE.md with new column | Docs update | `Run docs agent` |
+| 1 | Update ARCHON.md with new column | Docs update | `Run docs agent` |
 | 2 | Add missing JSDoc to deactivateSession | Comment | `Auto-fix` |
 
 **Your choice**:
@@ -205,7 +205,7 @@ Structure the output for easy decision-making:
 
 | File | Section | Update Needed |
 |------|---------|---------------|
-| CLAUDE.md | Database Schema | Add ended_reason column |
+| ARCHON.md | Database Schema | Add ended_reason column |
 | $DOCS_DIR/architecture.md | Sessions | Update deactivateSession signature |
 
 **Your choice**:

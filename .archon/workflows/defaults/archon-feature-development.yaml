@@ -8,8 +8,7 @@ description: |
 nodes:
   - id: implement
     command: archon-implement
-    model: claude-opus-4-6[1m]
-
+    model: gpt-5.4
   - id: create-pr
     command: archon-create-pr
     depends_on: [implement]

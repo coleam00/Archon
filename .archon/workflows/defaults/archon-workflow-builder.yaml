@@ -33,11 +33,11 @@ nodes:
       fi
 
       echo ""
-      echo "=== Project Context (CLAUDE.md first 50 lines) ==="
-      if [ -f "CLAUDE.md" ]; then
-        head -50 CLAUDE.md
+      echo "=== Project Context (ARCHON.md first 50 lines) ==="
+      if [ -f "ARCHON.md" ]; then
+        head -50 ARCHON.md
       else
-        echo "(no CLAUDE.md)"
+        echo "(no ARCHON.md)"
       fi
 
   - id: extract-intent
@@ -62,8 +62,7 @@ nodes:
 
       Be specific and concrete. Each proposed node should have a clear type
       (bash, prompt, command, or loop) and a one-line description of what it does.
-    model: haiku
-    allowed_tools: []
+    model: gpt-5.4-mini
     output_format:
       type: object
       properties:
@@ -109,8 +108,8 @@ nodes:
         NOT for: ...
 
       # Optional top-level settings:
-      # provider: claude    (or codex)
-      # model: sonnet       (or haiku, opus, etc.)
+      # provider: codex    (or codex)
+      # model: gpt-5.4      (or gpt-5.4-mini, etc.)
       # interactive: true   (forces foreground execution in web UI)
 
       nodes:
@@ -147,11 +146,11 @@ nodes:
       ```
 
       ## Variable Reference
-      - `$ARGUMENTS` — user's input text
-      - `$ARTIFACTS_DIR` — pre-created directory for workflow artifacts
-      - `$<nodeId>.output` — stdout from a bash node or AI response from a prompt node
-      - `$<nodeId>.output.field` — JSON field from a node with output_format
-      - `$BASE_BRANCH` — base git branch
+      - `$ARGUMENTS` â€” user's input text
+      - `$ARTIFACTS_DIR` â€” pre-created directory for workflow artifacts
+      - `$<nodeId>.output` â€” stdout from a bash node or AI response from a prompt node
+      - `$<nodeId>.output.field` â€” JSON field from a node with output_format
+      - `$BASE_BRANCH` â€” base git branch
 
       ## Rules
       1. The `name:` field MUST match: $extract-intent.output.workflow_name
@@ -163,7 +162,7 @@ nodes:
       7. Use `output_format` on prompt nodes when downstream nodes need structured data
       8. Use `allowed_tools: []` on classification/analysis nodes that don't need tools
       9. Use `denied_tools: [Edit, Bash]` when a node should only use Write (not edit existing files)
-      10. Prefer `model: haiku` for simple classification tasks to save cost
+      10. Prefer `model: gpt-5.4-mini` for simple classification tasks to save cost
 
       ## Output
 
@@ -171,7 +170,6 @@ nodes:
 
       Use the Write tool. Do NOT use Edit or Bash. The file must be valid YAML and follow
       all the patterns above.
-    denied_tools: [Edit, Bash]
     depends_on: [extract-intent]
 
   - id: validate-yaml

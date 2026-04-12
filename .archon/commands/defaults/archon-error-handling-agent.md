@@ -37,10 +37,10 @@ cat $ARTIFACTS_DIR/review/scope.md
 gh pr diff {number}
 ```
 
-### 1.4 Read CLAUDE.md Error Handling Rules
+### 1.4 Read ARCHON.md Error Handling Rules
 
 ```bash
-cat CLAUDE.md | grep -A 20 -i "error"
+cat ARCHON.md | grep -A 20 -i "error"
 ```
 
 **PHASE_1_CHECKPOINT:**
@@ -166,7 +166,7 @@ This catch block could silently hide:
 - Aligns with project error handling patterns
 - Provides better debugging experience
 - Gives users actionable feedback
-- Follows CLAUDE.md rules}
+- Follows ARCHON.md rules}
 
 **Recommended Fix**:
 ```typescript

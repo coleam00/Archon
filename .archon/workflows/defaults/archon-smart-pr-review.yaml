@@ -19,6 +19,7 @@ nodes:
     depends_on: [scope]
 
   - id: classify
+    provider: codex
     prompt: |
       You are a PR complexity classifier. Analyze the PR scope below and determine
       which review agents should run.
@@ -45,8 +46,7 @@ nodes:
 
       Provide your reasoning for each decision.
     depends_on: [scope]
-    model: haiku
-    allowed_tools: []
+    model: gpt-5.4-mini
     output_format:
       type: object
       properties:
@@ -114,27 +114,8 @@ nodes:
     depends_on: [synthesize]
 
   # Optional: push notification when review completes.
-  # To enable, create .archon/mcp/ntfy.json — see docs/mcp-servers.md
+  # To enable, create .archon/mcp/ntfy.json ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â see docs/mcp-servers.md
   - id: check-ntfy
-    bash: "test -f .archon/mcp/ntfy.json && echo 'true' || echo 'false'"
+    bash: "test -f .archon/mcp/ntfy.json && test -n \"${NTFY_TOPIC:-}\" && echo 'true' || echo 'false'"
     depends_on: [implement-fixes]
 
-  - id: notify
-    depends_on: [check-ntfy, synthesize, implement-fixes]
-    when: "$check-ntfy.output == 'true'"
-    trigger_rule: all_success
-    mcp: .archon/mcp/ntfy.json
-    allowed_tools: []
-    prompt: |
-      Send a push notification summarizing the PR review results.
-
-      Review synthesis:
-      $synthesize.output
-
-      Fix results:
-      $implement-fixes.output
-
-      Send with:
-      - title: "PR Review Complete"
-      - message: 1-2 sentence summary — verdict and issue count. Short enough for a lock screen.
-      - priority: 3 if ready to merge, 4 if needs fixes, 5 if critical issues remain

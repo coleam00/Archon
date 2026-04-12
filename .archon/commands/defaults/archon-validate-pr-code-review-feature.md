@@ -65,9 +65,9 @@ For each changed file:
    - Does it handle edge cases?
    - Could it introduce new bugs?
    - Does it follow existing patterns in the codebase?
-4. **Check CLAUDE.md compliance**:
+4. **Check ARCHON.md compliance**:
    ```bash
-   cat CLAUDE.md
+   cat ARCHON.md
    ```
    - Import patterns correct?
    - Type annotations complete?
@@ -158,7 +158,7 @@ If the current approach is optimal, say so and explain why.}
 ### Missing Changes
 {Files or areas that should have been changed but weren't. If everything is covered, say so.}
 
-## CLAUDE.md Compliance
+## ARCHON.md Compliance
 
 | Rule | Status | Notes |
 |------|--------|-------|
@@ -182,5 +182,5 @@ If the current approach is optimal, say so and explain why.}
 - **DIFF_ANALYZED**: Full PR diff reviewed
 - **FILES_READ**: All changed files read in full context
 - **MAIN_COMPARED**: Feature code compared against main branch code
-- **CLAUDE_MD_CHECKED**: CLAUDE.md compliance verified
+- **ARCHON_MD_CHECKED**: ARCHON.md compliance verified
 - **ARTIFACT_WRITTEN**: `$ARTIFACTS_DIR/code-review-feature.md` created

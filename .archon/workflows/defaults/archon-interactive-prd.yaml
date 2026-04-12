@@ -6,24 +6,24 @@ description: |
   NOT for: Autonomous PRD generation without human input (use archon-ralph-generate).
 
   Interactive workflow that guides the user through problem-first PRD creation:
-  1. Understand the idea → ask foundation questions → wait for answers
-  2. Research market & codebase → ask deep dive questions → wait for answers
-  3. Assess technical feasibility → ask scope questions → wait for answers
-  4. Generate PRD → validate technical claims against codebase → output
+  1. Understand the idea â†’ ask foundation questions â†’ wait for answers
+  2. Research market & codebase â†’ ask deep dive questions â†’ wait for answers
+  3. Assess technical feasibility â†’ ask scope questions â†’ wait for answers
+  4. Generate PRD â†’ validate technical claims against codebase â†’ output
 
-provider: claude
+provider: codex
 interactive: true
 
 nodes:
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 1: INITIATE — Understand the idea
-  # ═══════════════════════════════════════════════════════════════
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  # PHASE 1: INITIATE â€” Understand the idea
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   - id: initiate
-    model: sonnet
+    model: gpt-5.4
     prompt: |
       You are a sharp product manager starting a PRD creation process.
-      You think from first principles — start with primitives, not features.
+      You think from first principles â€” start with primitives, not features.
 
       The user wants to build: $ARGUMENTS
 
@@ -33,11 +33,11 @@ nodes:
       If the input is vague or empty, ask:
       "What do you want to build? Describe the product, feature, or capability."
 
-      Then present the Foundation Questions (all at once — the user will answer in the next step):
+      Then present the Foundation Questions (all at once â€” the user will answer in the next step):
 
       **Foundation Questions:**
 
-      1. **Who** has this problem? Be specific — not just "users" but what type of person/role?
+      1. **Who** has this problem? Be specific â€” not just "users" but what type of person/role?
       2. **What** problem are they facing? Describe the observable pain, not the assumed need.
       3. **Why** can't they solve it today? What alternatives exist and why do they fail?
       4. **Why now?** What changed that makes this worth building?
@@ -45,9 +45,9 @@ nodes:
 
       Keep it conversational. Don't generate any PRD content yet.
 
-  # ═══════════════════════════════════════════════════════════════
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   # GATE 1: User answers foundation questions
-  # ═══════════════════════════════════════════════════════════════
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   - id: foundation-gate
     approval:
@@ -55,14 +55,14 @@ nodes:
       capture_response: true
     depends_on: [initiate]
 
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 2: GROUNDING — Research market & codebase
-  # ═══════════════════════════════════════════════════════════════
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  # PHASE 2: GROUNDING â€” Research market & codebase
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   - id: research
-    model: sonnet
+    model: gpt-5.4
     prompt: |
-      You are researching context for a PRD. Think from first principles —
+      You are researching context for a PRD. Think from first principles â€”
       what already exists before proposing anything new.
 
       **The idea**: $ARGUMENTS
@@ -73,7 +73,7 @@ nodes:
       Research the landscape:
 
       1. Search the web for similar products, competitors, and how others solve this problem
-      2. **Explore the codebase deeply** — find related existing functionality, APIs, UI components,
+      2. **Explore the codebase deeply** â€” find related existing functionality, APIs, UI components,
          database tables, and patterns. Read actual files, don't assume. Note exact file paths and
          what each file does.
       3. Look for common patterns, anti-patterns, and recent trends
@@ -85,14 +85,14 @@ nodes:
       Present a summary to the user:
 
       **What I found:**
-      - {Market insights — similar products, competitor approaches}
-      - {What already exists in the codebase — specific files, endpoints, components}
+      - {Market insights â€” similar products, competitor approaches}
+      - {What already exists in the codebase â€” specific files, endpoints, components}
       - {Key insight that might change the approach}
 
       Then ask the **Deep Dive Questions**:
 
       1. **Vision**: In one sentence, what's the ideal end state if this succeeds wildly?
-      2. **Primary User**: Describe your most important user — their role, context, and what triggers their need.
+      2. **Primary User**: Describe your most important user â€” their role, context, and what triggers their need.
       3. **Job to Be Done**: Complete this: "When [situation], I want to [motivation], so I can [outcome]."
       4. **Non-Users**: Who is explicitly NOT the target?
       5. **Constraints**: What limitations exist? (time, budget, technical, regulatory)
@@ -100,9 +100,9 @@ nodes:
       Does the research change or refine your thinking? Answer the deep dive questions.
     depends_on: [foundation-gate]
 
-  # ═══════════════════════════════════════════════════════════════
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   # GATE 2: User answers deep dive questions
-  # ═══════════════════════════════════════════════════════════════
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   - id: deepdive-gate
     approval:
@@ -110,15 +110,15 @@ nodes:
       capture_response: true
     depends_on: [research]
 
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 3: TECHNICAL GROUNDING — Feasibility from what exists
-  # ═══════════════════════════════════════════════════════════════
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  # PHASE 3: TECHNICAL GROUNDING â€” Feasibility from what exists
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   - id: technical
-    model: sonnet
+    model: gpt-5.4
     prompt: |
       You are assessing technical feasibility for a PRD.
-      Think from first principles — start with what exists, not what you'd build from scratch.
+      Think from first principles â€” start with what exists, not what you'd build from scratch.
 
       **The idea**: $ARGUMENTS
       **Foundation answers**: $foundation-gate.output
@@ -146,12 +146,12 @@ nodes:
       Present a summary:
 
       **What Already Exists (verified by reading code):**
-      - {endpoint/component/query} at `{file:line}` — {what it does}
-      - {endpoint/component/query} at `{file:line}` — {what it does}
+      - {endpoint/component/query} at `{file:line}` â€” {what it does}
+      - {endpoint/component/query} at `{file:line}` â€” {what it does}
 
       **Smallest Change to Solve the Problem:**
-      - {change 1}: {extend/modify} `{file}` — {what to do}
-      - {change 2}: {extend/modify} `{file}` — {what to do}
+      - {change 1}: {extend/modify} `{file}` â€” {what to do}
+      - {change 2}: {extend/modify} `{file}` â€” {what to do}
 
       **Technical Context:**
       - Feasibility: {HIGH/MEDIUM/LOW} because {reason}
@@ -167,9 +167,9 @@ nodes:
       5. **Open Questions**: What uncertainties could change the approach?
     depends_on: [deepdive-gate]
 
-  # ═══════════════════════════════════════════════════════════════
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   # GATE 3: User answers scope questions
-  # ═══════════════════════════════════════════════════════════════
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   - id: scope-gate
     approval:
@@ -177,12 +177,12 @@ nodes:
       capture_response: true
     depends_on: [technical]
 
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 4: GENERATE — Write the PRD
-  # ═══════════════════════════════════════════════════════════════
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  # PHASE 4: GENERATE â€” Write the PRD
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   - id: generate
-    model: sonnet
+    model: gpt-5.4
     prompt: |
       You are generating a PRD from the user's guided inputs.
 
@@ -208,72 +208,72 @@ nodes:
 
       The PRD must include ALL of these sections, filled from the user's answers:
 
-      1. **Problem Statement** — from foundation answers (who/what/why)
-      2. **Evidence** — from research findings and user's evidence
-      3. **Proposed Solution** — synthesized from all inputs. Prefer extending existing
+      1. **Problem Statement** â€” from foundation answers (who/what/why)
+      2. **Evidence** â€” from research findings and user's evidence
+      3. **Proposed Solution** â€” synthesized from all inputs. Prefer extending existing
          primitives over creating new ones.
-      4. **Key Hypothesis** — from scope answers
-      5. **What We're NOT Building** — from scope answers
-      6. **Success Metrics** — from foundation "how will you know" + scope
-      7. **Open Questions** — from scope answers
-      8. **Users & Context** — from deep dive (primary user, JTBD, non-users)
-      9. **Solution Detail** — MoSCoW table from scope must-haves, MVP definition
-      10. **Technical Approach** — from technical feasibility. MUST reference actual
+      4. **Key Hypothesis** â€” from scope answers
+      5. **What We're NOT Building** â€” from scope answers
+      6. **Success Metrics** â€” from foundation "how will you know" + scope
+      7. **Open Questions** â€” from scope answers
+      8. **Users & Context** â€” from deep dive (primary user, JTBD, non-users)
+      9. **Solution Detail** â€” MoSCoW table from scope must-haves, MVP definition
+      10. **Technical Approach** â€” from technical feasibility. MUST reference actual
           verified file paths, function names, and schemas. Mark anything unverified
           as "needs verification".
-      11. **Implementation Phases** — from technical breakdown, with status table
+      11. **Implementation Phases** â€” from technical breakdown, with status table
           and parallel opportunities
-      12. **Decisions Log** — key decisions made during the conversation
+      12. **Decisions Log** â€” key decisions made during the conversation
 
       **Rules:**
-      - If info is missing, write "TBD — needs research" not filler
+      - If info is missing, write "TBD â€” needs research" not filler
       - Be specific and concrete, not generic
       - Every file path in Technical Approach must be verified by reading the file
       - Prefer "extend X" over "create new Y" in implementation phases
 
-      After writing the file, output the file path only — the validator will check it.
+      After writing the file, output the file path only â€” the validator will check it.
     depends_on: [scope-gate]
 
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 5: VALIDATE — Check technical claims against codebase
-  # ═══════════════════════════════════════════════════════════════
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  # PHASE 5: VALIDATE â€” Check technical claims against codebase
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   - id: validate
-    model: sonnet
+    model: gpt-5.4
     prompt: |
       You are a technical validator checking a PRD for accuracy.
 
       Read the PRD file that was just generated. The generate node output the file path:
       $generate.output
 
-      Find the PRD file — check `$ARTIFACTS_DIR/prds/` for the most recently created `.prd.md` file:
+      Find the PRD file â€” check `$ARTIFACTS_DIR/prds/` for the most recently created `.prd.md` file:
       ```bash
       ls -t $ARTIFACTS_DIR/prds/*.prd.md | head -1
       ```
 
       Read the entire PRD, then verify EVERY technical claim against the actual codebase:
 
-      **Check 1: File paths** — For every file referenced in "Technical Approach" and
+      **Check 1: File paths** â€” For every file referenced in "Technical Approach" and
       "Implementation Phases", verify it exists. If it doesn't, note the correction.
 
-      **Check 2: API endpoints** — For every endpoint mentioned, check if it already exists
+      **Check 2: API endpoints** â€” For every endpoint mentioned, check if it already exists
       in `packages/server/src/routes/api.ts`. If it does, the PRD should say "extend" not "create".
       If the PRD proposes a new endpoint for data that an existing endpoint already returns,
       flag it.
 
-      **Check 3: DB schemas** — For every table/column referenced, verify the actual names
+      **Check 3: DB schemas** â€” For every table/column referenced, verify the actual names
       in the migration files or schema code. Check event type names against the
       `WORKFLOW_EVENT_TYPES` constant.
 
-      **Check 4: UI components** — For every component referenced, verify it exists.
+      **Check 4: UI components** â€” For every component referenced, verify it exists.
       If the PRD proposes a new page but an existing page already serves a similar purpose,
       flag it.
 
-      **Check 5: Function/type names** — Verify function names, type names, and interface
+      **Check 5: Function/type names** â€” Verify function names, type names, and interface
       names are correct.
 
       After checking, if there are ANY corrections needed:
-      1. Edit the PRD file directly — fix incorrect names, paths, and references
+      1. Edit the PRD file directly â€” fix incorrect names, paths, and references
       2. Add a `## Validation Notes` section at the bottom documenting what was corrected
 
       If everything checks out, add:

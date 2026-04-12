@@ -15,6 +15,7 @@ export default tseslint.config(
       'packages/docs-web/**',
       'workspace/**',
       'worktrees/**',
+      '.archon/skills/**',
       '.claude/worktrees/**',
       '.claude/skills/**',
       '**/*.js',

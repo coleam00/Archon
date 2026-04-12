@@ -104,10 +104,10 @@ Common alternatives to `src/`:
 - `cmd/`, `internal/`, `pkg/` (Go)
 - Root-level source files (Python, scripts)
 
-### 1.2 Read CLAUDE.md
+### 1.2 Read ARCHON.md
 
 ```bash
-cat CLAUDE.md
+cat ARCHON.md
 ```
 
 Note all coding standards, patterns, and rules that apply to this codebase.
@@ -131,7 +131,7 @@ So that <benefit/value>
 **PHASE_1_CHECKPOINT:**
 
 - [ ] Project structure discovered
-- [ ] CLAUDE.md rules noted
+- [ ] ARCHON.md rules noted
 - [ ] Problem statement is specific and testable
 - [ ] User story follows correct format
 - [ ] Complexity assessment has rationale

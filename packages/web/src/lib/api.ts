@@ -78,6 +78,12 @@ export async function listConversations(codebaseId?: string): Promise<Conversati
   return fetchJSON<ConversationResponse[]>(`/api/conversations${qs ? `?${qs}` : ''}`);
 }
 
+export async function getConversation(conversationId: string): Promise<ConversationResponse> {
+  return fetchJSON<ConversationResponse>(
+    `/api/conversations/${encodeURIComponent(conversationId)}`
+  );
+}
+
 export async function createConversation(
   codebaseId?: string,
   message?: string

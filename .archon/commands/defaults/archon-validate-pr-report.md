@@ -74,7 +74,7 @@ Look for cases where:
 | E2E confirms fix works | Yes (if E2E testable) |
 | No regressions | Yes |
 | Code quality acceptable | Yes |
-| CLAUDE.md compliant | Yes |
+| ARCHON.md compliant | Yes |
 
 ---
 

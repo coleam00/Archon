@@ -7,7 +7,7 @@ description: |
   NOT for: PRD creation (use archon-interactive-prd).
   NOT for: Ralph story-based implementation (use archon-ralph-dag).
 
-  Interactive PIV loop workflow — the foundational AI coding methodology:
+  Interactive PIV loop workflow â€” the foundational AI coding methodology:
   1. EXPLORE: Iterative conversation with human to understand the problem (arbitrary rounds)
   2. PLAN: Create structured plan -> iterative review & revision (arbitrary rounds)
   3. IMPLEMENT: Autonomous task-by-task implementation from plan (Ralph loop)
@@ -16,20 +16,20 @@ description: |
   The PIV loop comes AFTER a PRD exists. Each PIV loop focuses on ONE granular feature or bug fix.
   Input: A description of what to build, a path to an existing plan, or a GitHub issue number.
 
-provider: claude
+provider: codex
 interactive: true
 
 nodes:
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 1: EXPLORE — Iterative exploration with human
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  # PHASE 1: EXPLORE â€” Iterative exploration with human
   # Understand the idea, explore the codebase, converge on approach
   # Loops until the user says they're ready to create the plan.
-  # ═══════════════════════════════════════════════════════════════
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   - id: explore
     loop:
       prompt: |
-        # PIV Loop — Exploration
+        # PIV Loop â€” Exploration
 
         You are a senior engineering partner in an iterative exploration session.
         Your goal: DEEPLY UNDERSTAND what to build before any code is written.
@@ -47,8 +47,8 @@ nodes:
 
         **If it's a file path** (ends in `.md`, `.plan.md`, or `.prd.md`):
         - Read the file
-        - If it's an existing plan → summarize it and ask if they want to refine or proceed
-        - If it's a PRD → identify the specific phase/feature to focus on
+        - If it's an existing plan â†’ summarize it and ask if they want to refine or proceed
+        - If it's a PRD â†’ identify the specific phase/feature to focus on
 
         **If it's a GitHub issue** (`#123` format):
         - Fetch it: `gh issue view {number} --json title,body,labels,comments`
@@ -61,10 +61,10 @@ nodes:
 
         Before asking questions, DO YOUR HOMEWORK:
 
-        1. **Read CLAUDE.md** — understand project conventions, architecture, and constraints
-        2. **Search for related code** — find existing implementations similar to what the user wants
-        3. **Read key files** — understand the current state of code the user wants to change
-        4. **Check recent git history** — `git log --oneline -20` for recent changes in the area
+        1. **Read ARCHON.md** â€” understand project conventions, architecture, and constraints
+        2. **Search for related code** â€” find existing implementations similar to what the user wants
+        3. **Read key files** â€” understand the current state of code the user wants to change
+        4. **Check recent git history** â€” `git log --oneline -20` for recent changes in the area
 
         ### Step 3: Present Your Understanding
 
@@ -75,15 +75,15 @@ nodes:
 
         ## What Already Exists
 
-        - {file:line} — {what it does and how it relates}
-        - {file:line} — {what it does and how it relates}
-        - {pattern/component} — {how it could be extended or reused}
+        - {file:line} â€” {what it does and how it relates}
+        - {file:line} â€” {what it does and how it relates}
+        - {pattern/component} â€” {how it could be extended or reused}
 
         ## Initial Architecture Thoughts
 
         Based on what exists, I'm thinking:
-        - {approach 1 — extend existing X}
-        - {approach 2 — if approach 1 doesn't work}
+        - {approach 1 â€” extend existing X}
+        - {approach 2 â€” if approach 1 doesn't work}
         - {key architectural decision that needs your input}
         ```
 
@@ -92,7 +92,7 @@ nodes:
         Ask 4-6 questions focused on DECISIONS, not information gathering:
         - Scope boundaries, architecture preferences, tech decisions
         - Constraints, existing code extension vs fresh build, testing expectations
-        - Reference actual code you found — don't ask generic questions
+        - Reference actual code you found â€” don't ask generic questions
 
         ---
 
@@ -108,10 +108,10 @@ nodes:
         ### Step 2: Do Targeted Research
 
         Based on their response:
-        - If they mentioned specific technologies → research best practices
-        - If they pointed you to specific code → read it thoroughly
-        - If they asked you to explore an area → do a thorough investigation
-        - If they made architecture decisions → validate against the codebase
+        - If they mentioned specific technologies â†’ research best practices
+        - If they pointed you to specific code â†’ read it thoroughly
+        - If they asked you to explore an area â†’ do a thorough investigation
+        - If they made architecture decisions â†’ validate against the codebase
 
         ### Step 3: Present Updated Understanding
 
@@ -140,26 +140,26 @@ nodes:
         - {key decisions}
 
         ### Files That Will Change
-        - `{file}` — {what changes and why}
+        - `{file}` â€” {what changes and why}
 
         ### Success Criteria
         - [ ] {specific, testable criterion}
         - [ ] All validation passes
 
         ### Key Risks
-        - {risk — and mitigation}
+        - {risk â€” and mitigation}
         ```
 
         Then tell the user: "I have a clear picture. Say **ready** and I'll create
         the structured implementation plan, or share any final thoughts."
 
-        **CRITICAL — READ THIS CAREFULLY**:
+        **CRITICAL â€” READ THIS CAREFULLY**:
         - NEVER output <promise>PLAN_READY</promise> unless the user's LATEST message contains
           an EXPLICIT phrase like "ready", "create the plan", "let's go", "proceed", or "I'm done".
-        - If the user asked a question → do NOT emit the signal. Answer the question.
-        - If the user gave feedback or requested changes → do NOT emit the signal. Address it.
-        - If the user said "also check X" or "one more thing" → do NOT emit the signal. Explore it.
-        - If you are unsure whether the user is approving → do NOT emit the signal. Ask them.
+        - If the user asked a question â†’ do NOT emit the signal. Answer the question.
+        - If the user gave feedback or requested changes â†’ do NOT emit the signal. Address it.
+        - If the user said "also check X" or "one more thing" â†’ do NOT emit the signal. Explore it.
+        - If you are unsure whether the user is approving â†’ do NOT emit the signal. Ask them.
         - The ONLY correct time to emit the signal is when the user's message CLEARLY means
           "stop exploring, I'm ready for you to create the plan."
       until: PLAN_READY
@@ -169,19 +169,19 @@ nodes:
         Answer the questions above, ask me to explore specific areas,
         or say "ready" when you're satisfied with the exploration.
 
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 2: PLAN — Create the structured implementation plan
-  # ═══════════════════════════════════════════════════════════════
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  # PHASE 2: PLAN â€” Create the structured implementation plan
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   - id: create-plan
-    model: sonnet
+    model: gpt-5.4
     depends_on: [explore]
     context: fresh
     prompt: |
-      # PIV Loop — Create Structured Plan
+      # PIV Loop â€” Create Structured Plan
 
       You are creating a structured implementation plan from a completed exploration phase.
-      This plan will be the SOLE GUIDE for the implementation agent — it must be complete,
+      This plan will be the SOLE GUIDE for the implementation agent â€” it must be complete,
       specific, and actionable.
 
       **Original request**: $ARGUMENTS
@@ -193,18 +193,18 @@ nodes:
 
       Before writing the plan, verify your understanding is current:
 
-      1. **Read CLAUDE.md** — capture all relevant conventions
-      2. **Read every file you plan to change** — note exact current state
-      3. **Read example test files** — understand testing patterns
-      4. **Check for any recent changes** — `git log --oneline -10`
+      1. **Read ARCHON.md** â€” capture all relevant conventions
+      2. **Read every file you plan to change** â€” note exact current state
+      3. **Read example test files** â€” understand testing patterns
+      4. **Check for any recent changes** â€” `git log --oneline -10`
 
       ## Step 2: Determine Plan Location
 
       Generate a kebab-case slug from the feature name.
-      Save to `.claude/archon/plans/{slug}.plan.md`.
+      Save to `.archon/archon/plans/{slug}.plan.md`.
 
       ```bash
-      mkdir -p .claude/archon/plans
+      mkdir -p .archon/archon/plans
       ```
 
       ## Step 3: Write the Plan
@@ -229,7 +229,7 @@ nodes:
       ### In Scope
       - {What we ARE building}
       ### Out of Scope
-      - {What we are NOT building — and why}
+      - {What we are NOT building â€” and why}
 
       ## Codebase Context
       ### Key Files
@@ -241,15 +241,15 @@ nodes:
       {Actual code snippets from the codebase to mirror}
 
       ## Architecture
-      - {Decision 1 — with rationale}
-      - {Decision 2 — with rationale}
+      - {Decision 1 â€” with rationale}
+      - {Decision 2 â€” with rationale}
 
       ## Task List
       Execute in order. Each task is atomic and independently verifiable.
 
       ### Task 1: {ACTION} `{file path}`
       **Action**: CREATE / UPDATE
-      **Details**: {Exact changes — specific enough for an agent with no context}
+      **Details**: {Exact changes â€” specific enough for an agent with no context}
       **Pattern**: Follow `{source file}:{lines}`
       **Validate**: `{command to verify this task}`
 
@@ -272,17 +272,17 @@ nodes:
 
       ## Step 4: Verify the Plan
 
-      1. Check every file path referenced — verify they exist
-      2. Check every pattern cited — verify the code matches
-      3. Check task ordering — ensure dependencies are respected
-      4. Check completeness — could an agent with NO context implement this?
+      1. Check every file path referenced â€” verify they exist
+      2. Check every pattern cited â€” verify the code matches
+      3. Check task ordering â€” ensure dependencies are respected
+      4. Check completeness â€” could an agent with NO context implement this?
 
       ## Step 5: Report
 
       ```
       ## Plan Created
 
-      **File**: `.claude/archon/plans/{slug}.plan.md`
+      **File**: `.archon/archon/plans/{slug}.plan.md`
       **Tasks**: {count}
       **Files to change**: {count}
 
@@ -293,16 +293,16 @@ nodes:
       Please review the plan and provide feedback.
       ```
 
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 2b: PLAN — Iterative plan refinement
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  # PHASE 2b: PLAN â€” Iterative plan refinement
   # Review and revise the plan as many times as needed.
-  # ═══════════════════════════════════════════════════════════════
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   - id: refine-plan
     depends_on: [create-plan]
     loop:
       prompt: |
-        # PIV Loop — Plan Refinement
+        # PIV Loop â€” Plan Refinement
 
         The user is reviewing the implementation plan and providing feedback.
 
@@ -313,10 +313,10 @@ nodes:
         ## Step 1: Find and Read the Plan
 
         ```bash
-        ls -t .claude/archon/plans/*.plan.md 2>/dev/null | head -1
+        ls -t .archon/archon/plans/*.plan.md 2>/dev/null | head -1
         ```
 
-        Read the entire plan file. Also read CLAUDE.md for conventions.
+        Read the entire plan file. Also read ARCHON.md for conventions.
 
         ## Step 2: Process Feedback
 
@@ -365,20 +365,20 @@ nodes:
         Review the plan document. Provide specific feedback on what to change,
         or say "approved" to begin implementation.
 
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 3: IMPLEMENT — Setup
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  # PHASE 3: IMPLEMENT â€” Setup
   # Read the plan, prepare the environment
-  # ═══════════════════════════════════════════════════════════════
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   - id: implement-setup
     depends_on: [refine-plan]
     bash: |
       set -e
 
-      PLAN_FILE=$(ls -t .claude/archon/plans/*.plan.md 2>/dev/null | head -1)
+      PLAN_FILE=$(ls -t .archon/archon/plans/*.plan.md 2>/dev/null | head -1)
 
       if [ -z "$PLAN_FILE" ]; then
-        echo "ERROR: No plan file found in .claude/archon/plans/"
+        echo "ERROR: No plan file found in .archon/archon/plans/"
         exit 1
       fi
 
@@ -406,28 +406,28 @@ nodes:
       TASK_COUNT=$(grep -c "^### Task [0-9]" "$PLAN_FILE" || true)
       echo "TASK_COUNT=${TASK_COUNT:-0}"
 
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 3b: IMPLEMENT — Task-by-Task Loop (Ralph pattern)
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  # PHASE 3b: IMPLEMENT â€” Task-by-Task Loop (Ralph pattern)
   # Fresh context each iteration. Reads plan from disk.
   # One task per iteration. Validates before committing.
-  # ═══════════════════════════════════════════════════════════════
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   - id: implement
     depends_on: [implement-setup]
     idle_timeout: 600000
-    model: claude-opus-4-6[1m]
+    model: gpt-5.4
     loop:
       prompt: |
-        # PIV Loop — Implementation Agent
+        # PIV Loop â€” Implementation Agent
 
-        You are an autonomous coding agent in a FRESH session — no memory of previous iterations.
+        You are an autonomous coding agent in a FRESH session â€” no memory of previous iterations.
         Your job: Read the plan from disk, implement ONE task, validate, commit, update tracking, exit.
 
         **Golden Rule**: If validation fails, fix it before committing. Never commit broken code.
 
         ---
 
-        ## Phase 0: CONTEXT — Load State
+        ## Phase 0: CONTEXT â€” Load State
 
         The setup node produced this context:
 
@@ -441,14 +441,14 @@ nodes:
 
         Extract the `PLAN_FILE=...` line from the context above.
 
-        ### 0.2 Read Current State (from disk — not from context above)
+        ### 0.2 Read Current State (from disk â€” not from context above)
 
         The context above is a snapshot from before the loop started. Previous iterations
         may have changed things. **You MUST re-read from disk:**
 
-        1. **Read the plan file** — your implementation guide
-        2. **Read progress tracking** — check if `.claude/archon/plans/progress.txt` exists
-        3. **Read CLAUDE.md** — project conventions and constraints
+        1. **Read the plan file** â€” your implementation guide
+        2. **Read progress tracking** â€” check if `.archon/archon/plans/progress.txt` exists
+        3. **Read ARCHON.md** â€” project conventions and constraints
 
         ### 0.3 Check Git State
 
@@ -459,18 +459,18 @@ nodes:
 
         ---
 
-        ## Phase 1: SELECT — Pick Next Task
+        ## Phase 1: SELECT â€” Pick Next Task
 
         From the plan file, identify tasks by `### Task N:` headers.
         Cross-reference with commits from previous iterations and progress tracking.
 
-        **If ALL tasks are complete** → Skip to Phase 5 (Completion).
+        **If ALL tasks are complete** â†’ Skip to Phase 5 (Completion).
 
         ### Announce Selection
 
         ```
         -- Task Selected ------------------------------------------------
-        Task: {N} — {task title}
+        Task: {N} â€” {task title}
         Action: {CREATE / UPDATE}
         File: {file path}
         -----------------------------------------------------------------
@@ -478,7 +478,7 @@ nodes:
 
         ---
 
-        ## Phase 2: IMPLEMENT — Execute the Task
+        ## Phase 2: IMPLEMENT â€” Execute the Task
 
         1. Read the file you're about to change (if it exists)
         2. Read the pattern file referenced in the plan
@@ -487,7 +487,7 @@ nodes:
 
         ---
 
-        ## Phase 3: VALIDATE — Verify the Task
+        ## Phase 3: VALIDATE â€” Verify the Task
 
         ```bash
         bun run type-check && bun run lint && bun run test && bun run format:check
@@ -498,7 +498,7 @@ nodes:
 
         ---
 
-        ## Phase 4: COMMIT — Save Changes
+        ## Phase 4: COMMIT â€” Save Changes
 
         ```bash
         git add -A
@@ -511,9 +511,9 @@ nodes:
         )"
         ```
 
-        Track progress in `.claude/archon/plans/progress.txt`:
+        Track progress in `.archon/archon/plans/progress.txt`:
         ```
-        ## Task {N}: {title} — COMPLETED
+        ## Task {N}: {title} â€” COMPLETED
         Date: {ISO date}
         Files: {list}
         Commit: {short hash}
@@ -522,7 +522,7 @@ nodes:
 
         ---
 
-        ## Phase 5: COMPLETE — Check All Tasks
+        ## Phase 5: COMPLETE â€” Check All Tasks
 
         If ALL tasks are done:
         1. Run full validation: `bun run validate 2>&1`
@@ -534,17 +534,17 @@ nodes:
       max_iterations: 15
       fresh_context: true
 
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 4: VALIDATE — Automated code review
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  # PHASE 4: VALIDATE â€” Automated code review
   # Review all changes against the plan
-  # ═══════════════════════════════════════════════════════════════
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   - id: code-review
-    model: sonnet
+    model: gpt-5.4
     depends_on: [implement]
     context: fresh
     prompt: |
-      # PIV Loop — Automated Code Review
+      # PIV Loop â€” Automated Code Review
 
       The implementation phase is complete. Review ALL changes against the plan.
 
@@ -555,7 +555,7 @@ nodes:
       ## Step 1: Find and Read the Plan
 
       ```bash
-      ls -t .claude/archon/plans/*.plan.md 2>/dev/null | head -1
+      ls -t .archon/archon/plans/*.plan.md 2>/dev/null | head -1
       ```
 
       ## Step 2: Review All Changes
@@ -569,7 +569,7 @@ nodes:
       ## Step 3: Check Against Plan
 
       For EACH task: was it implemented correctly? Do success criteria hold?
-      For EACH file: check quality, security, patterns, CLAUDE.md compliance.
+      For EACH file: check quality, security, patterns, ARCHON.md compliance.
 
       ## Step 4: Run Validation
 
@@ -607,17 +607,17 @@ nodes:
       {READY FOR REVIEW / NEEDS FIXES}
       ```
 
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 4b: VALIDATE — Iterative human feedback & fixes
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  # PHASE 4b: VALIDATE â€” Iterative human feedback & fixes
   # The user tests the implementation and provides feedback.
   # Loops until the user approves.
-  # ═══════════════════════════════════════════════════════════════
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   - id: fix-feedback
     depends_on: [code-review]
     loop:
       prompt: |
-        # PIV Loop — Address Validation Feedback
+        # PIV Loop â€” Address Validation Feedback
 
         The human has reviewed the implementation and provided feedback.
 
@@ -628,10 +628,10 @@ nodes:
         ## Step 1: Read Context
 
         ```bash
-        ls -t .claude/archon/plans/*.plan.md 2>/dev/null | head -1
+        ls -t .archon/archon/plans/*.plan.md 2>/dev/null | head -1
         ```
 
-        Read the plan file and CLAUDE.md for conventions.
+        Read the plan file and ARCHON.md for conventions.
 
         ## Step 2: Process Feedback
 
@@ -692,16 +692,16 @@ nodes:
         Test the implementation yourself and review the code changes.
         Provide specific feedback on what needs fixing, or say "approved" to finalize.
 
-  # ═══════════════════════════════════════════════════════════════
-  # PHASE 5: FINALIZE — Push, create PR, generate summary
-  # ═══════════════════════════════════════════════════════════════
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  # PHASE 5: FINALIZE â€” Push, create PR, generate summary
+  # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   - id: finalize
-    model: sonnet
+    model: gpt-5.4
     depends_on: [fix-feedback]
     context: fresh
     prompt: |
-      # PIV Loop — Finalize
+      # PIV Loop â€” Finalize
 
       The implementation has been approved. Push changes and create a PR.
 
@@ -743,7 +743,7 @@ nodes:
 
       ```
       ===============================================================
-      PIV LOOP — COMPLETE
+      PIV LOOP â€” COMPLETE
       ===============================================================
 
       Feature: {from plan}

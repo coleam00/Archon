@@ -1,5 +1,5 @@
 ---
-description: Check if PR changes require documentation updates (CLAUDE.md, docs/, agents)
+description: Check if PR changes require documentation updates (ARCHON.md, docs/, agents)
 argument-hint: (none - reads from scope artifact)
 ---
 
@@ -9,7 +9,7 @@ argument-hint: (none - reads from scope artifact)
 
 ## Your Mission
 
-Analyze if the PR changes require updates to project documentation: CLAUDE.md, docs/ folder, agent definitions, or other documentation. Produce a structured artifact with recommendations.
+Analyze if the PR changes require updates to project documentation: ARCHON.md, docs/ folder, agent definitions, or other documentation. Produce a structured artifact with recommendations.
 
 **Output artifact**: `$ARTIFACTS_DIR/review/docs-impact-findings.md`
 
@@ -40,14 +40,14 @@ gh pr diff {number}
 ### 1.4 Read Current Documentation
 
 ```bash
-# Read CLAUDE.md
-cat CLAUDE.md
+# Read ARCHON.md
+cat ARCHON.md
 
 # List docs folder
 ls -la $DOCS_DIR
 
 # List agent definitions
-ls -la .claude/agents/ 2>/dev/null || true
+ls -la .archon/agents/ 2>/dev/null || true
 ls -la .archon/commands/ 2>/dev/null || true
 ```
 
@@ -60,7 +60,7 @@ ls -la .archon/commands/ 2>/dev/null || true
 
 ## Phase 2: ANALYZE - Check Documentation Impact
 
-### 2.1 CLAUDE.md Impact
+### 2.1 ARCHON.md Impact
 
 Check if changes affect documented:
 - Commands or slash commands
@@ -98,7 +98,7 @@ Check if changes affect:
 - Configuration options
 
 **PHASE_2_CHECKPOINT:**
-- [ ] CLAUDE.md impact assessed
+- [ ] ARCHON.md impact assessed
 - [ ] docs/ impact assessed
 - [ ] Agent definitions checked
 - [ ] README checked
@@ -114,7 +114,7 @@ Write to `$ARTIFACTS_DIR/review/docs-impact-findings.md`:
 
 **Reviewer**: docs-impact-agent
 **Date**: {ISO timestamp}
-**Docs Checked**: CLAUDE.md, docs/, agents, README
+**Docs Checked**: ARCHON.md, docs/, agents, README
 
 ---
 
@@ -130,11 +130,11 @@ Write to `$ARTIFACTS_DIR/review/docs-impact-findings.md`:
 
 | Document | Impact | Required Update |
 |----------|--------|-----------------|
-| CLAUDE.md | NONE/LOW/HIGH | {description or "None"} |
+| ARCHON.md | NONE/LOW/HIGH | {description or "None"} |
 | $DOCS_DIR/architecture.md | NONE/LOW/HIGH | {description or "None"} |
 | $DOCS_DIR/configuration.md | NONE/LOW/HIGH | {description or "None"} |
 | README.md | NONE/LOW/HIGH | {description or "None"} |
-| .claude/agents/*.md | NONE/LOW/HIGH | {description or "None"} |
+| .archon/agents/*.md | NONE/LOW/HIGH | {description or "None"} |
 | .archon/commands/*.md | NONE/LOW/HIGH | {description or "None"} |
 
 ---
@@ -202,7 +202,7 @@ Write to `$ARTIFACTS_DIR/review/docs-impact-findings.md`:
 
 ---
 
-## CLAUDE.md Sections to Update
+## ARCHON.md Sections to Update
 
 | Section | Current | Needed Update |
 |---------|---------|---------------|

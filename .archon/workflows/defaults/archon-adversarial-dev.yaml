@@ -3,7 +3,7 @@ description: |
   Use when: User wants to build a complete application from scratch using adversarial development.
   Triggers: "adversarial dev", "adversarial development", "build with adversarial", "gan dev",
             "adversarial build", "build app adversarially", "adversarial coding".
-  Does: Three-role GAN-inspired development — Planner creates spec with sprints, then a state-machine
+  Does: Three-role GAN-inspired development ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Planner creates spec with sprints, then a state-machine
         loop alternates between Generator (builds code) and Evaluator (attacks it) with hard pass/fail
         thresholds. The evaluator's job is to BREAK what the generator builds. If any criterion scores
         below 7/10, the sprint goes back to the generator with adversarial feedback. Stops on sprint
@@ -12,12 +12,12 @@ description: |
 
   Based on Anthropic's harness design article for long-running application development.
   Separates planning, building, and evaluation into distinct roles with adversarial tension.
-provider: claude
-model: sonnet
-
+provider: codex
+model: gpt-5.4
 nodes:
-  # ─── Phase 1: Planning ───────────────────────────────────────────────
+  # ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Phase 1: Planning ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
   - id: plan
+    provider: codex
     prompt: |
       You are a product planning expert. Your job is to take a short user prompt and expand it
       into a comprehensive product specification.
@@ -36,7 +36,7 @@ nodes:
       What the product does, who it's for, core value proposition.
 
       ### 2. Tech Stack
-      Specific technologies, frameworks, and libraries. Be opinionated — pick concrete choices,
+      Specific technologies, frameworks, and libraries. Be opinionated ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pick concrete choices,
       not "a modern framework." Include exact package names and versions where relevant.
 
       ### 3. Design Language
@@ -57,9 +57,7 @@ nodes:
 
       IMPORTANT: Write the spec to `$ARTIFACTS_DIR/spec.md` using the Write tool. Do NOT just output
       it as conversation text.
-    allowed_tools: [Read, Write, Glob, Grep]
-
-  # ─── Phase 2: Workspace Initialization ───────────────────────────────
+  # ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Phase 2: Workspace Initialization ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
   - id: init-workspace
     depends_on: [plan]
     bash: |
@@ -106,7 +104,7 @@ nodes:
       echo "{\"totalSprints\": $SPRINT_COUNT, \"appDir\": \"$ARTIFACTS/app\", \"artifactsDir\": \"$ARTIFACTS\"}"
     timeout: 30000
 
-  # ─── Phase 3: Adversarial Sprint Loop ────────────────────────────────
+  # ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Phase 3: Adversarial Sprint Loop ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
   #
   # State machine driven by $ARTIFACTS_DIR/state.json
   # Each iteration plays ONE role: negotiator, generator, or evaluator
@@ -115,10 +113,10 @@ nodes:
   - id: adversarial-sprint
     depends_on: [init-workspace]
     idle_timeout: 600000
-    model: claude-opus-4-6[1m]
+    model: gpt-5.4
     loop:
       prompt: |
-        # Adversarial Development — Sprint Loop
+        # Adversarial Development ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Sprint Loop
 
         You are part of a GAN-inspired adversarial development system with three distinct roles.
         Each iteration you play ONE role, determined by the current phase in the state file.
@@ -126,12 +124,12 @@ nodes:
         ## FIRST: Read State
 
         Read `$ARTIFACTS_DIR/state.json` to determine:
-        - `phase` — which role you play this iteration
-        - `sprint` — current sprint number
-        - `totalSprints` — how many sprints total
-        - `retry` — current retry attempt (0 = first try)
-        - `maxRetries` — max retries before hard failure (default 3)
-        - `passThreshold` — minimum score to pass (default 7)
+        - `phase` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â which role you play this iteration
+        - `sprint` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â current sprint number
+        - `totalSprints` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â how many sprints total
+        - `retry` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â current retry attempt (0 = first try)
+        - `maxRetries` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â max retries before hard failure (default 3)
+        - `passThreshold` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â minimum score to pass (default 7)
 
         Then read `$ARTIFACTS_DIR/spec.md` for product context.
 
@@ -148,7 +146,7 @@ nodes:
 
         You negotiate the success criteria for the current sprint. Play BOTH sides sequentially:
 
-        **Step 1 — Generator's Proposal:**
+        **Step 1 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Generator's Proposal:**
         Read the spec carefully. Identify what Sprint {N} should deliver based on the sprint plan.
         Propose a sprint contract with 5-15 specific, testable criteria.
 
@@ -158,7 +156,7 @@ nodes:
         - BAD: "The API works well"
         - BAD: "Tasks can be managed"
 
-        **Step 2 — Evaluator's Tightening:**
+        **Step 2 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Evaluator's Tightening:**
         Now review your proposal as an adversary. For EACH criterion ask:
         - Is it specific enough to test programmatically?
         - What edge cases are missing? (empty inputs, special characters, concurrent requests)
@@ -191,8 +189,8 @@ nodes:
         who will actively try to break your code.
 
         **Read these files:**
-        1. `$ARTIFACTS_DIR/spec.md` — full product spec (design language, tech stack, all features)
-        2. `$ARTIFACTS_DIR/contracts/sprint-{N}.json` — the contract you must satisfy
+        1. `$ARTIFACTS_DIR/spec.md` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â full product spec (design language, tech stack, all features)
+        2. `$ARTIFACTS_DIR/contracts/sprint-{N}.json` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the contract you must satisfy
         3. If `retry` > 0: read `$ARTIFACTS_DIR/feedback/sprint-{N}-round-{R-1}.json` for the
            evaluator's previous feedback
 
@@ -200,7 +198,7 @@ nodes:
         Read the feedback CAREFULLY. Every failed criterion must be addressed.
         - If scores were close (5-6) and trending up: REFINE your approach
         - If scores were low (1-4) or the approach is fundamentally broken: PIVOT to a new strategy
-        - Address EVERY feedback item — the evaluator WILL check
+        - Address EVERY feedback item ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the evaluator WILL check
         - Re-verify each fix by running the code before committing
 
         **Build rules:**
@@ -210,9 +208,9 @@ nodes:
           cd $ARTIFACTS_DIR/app && git add -A && git commit -m "feat: description of what was built"
           ```
         - Install dependencies as needed (npm/bun/pip/etc)
-        - Test your code — start the server, hit the endpoints, verify the UI renders
+        - Test your code ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â start the server, hit the endpoints, verify the UI renders
         - Think about what the evaluator will attack: edge cases, error handling, input validation
-        - Build defensively — the evaluator's job is to break you
+        - Build defensively ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the evaluator's job is to break you
 
         **Update state.json**: Set `"phase": "evaluating"`. Keep all other fields unchanged.
 
@@ -245,7 +243,7 @@ nodes:
         **For each criterion:**
         1. Read the relevant source code
         2. Run the application (start server, test endpoints, check rendered UI)
-        3. Try to BREAK it — invalid inputs, missing fields, edge cases, error handling gaps
+        3. Try to BREAK it ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â invalid inputs, missing fields, edge cases, error handling gaps
         4. Score it honestly
 
         **Write evaluation** to `$ARTIFACTS_DIR/feedback/sprint-{N}-round-{R}.json`:
@@ -267,7 +265,7 @@ nodes:
         }
         ```
 
-        **Determine pass/fail** — `passed` is `true` ONLY if every single score >= `passThreshold`.
+        **Determine pass/fail** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `passed` is `true` ONLY if every single score >= `passThreshold`.
 
         **Update state.json based on result:**
 
@@ -290,9 +288,9 @@ nodes:
         ## COMPLETION
 
         After updating state.json, check the `status` field:
-        - If `"status": "complete"` → all sprints passed! Output: `<promise>ALL_SPRINTS_COMPLETE</promise>`
-        - If `"status": "failed"` → sprint failed after max retries. Output: `<promise>ALL_SPRINTS_COMPLETE</promise>`
-        - If `"status": "running"` → more work to do. Do NOT output any completion signal.
+        - If `"status": "complete"` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ all sprints passed! Output: `<promise>ALL_SPRINTS_COMPLETE</promise>`
+        - If `"status": "failed"` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ sprint failed after max retries. Output: `<promise>ALL_SPRINTS_COMPLETE</promise>`
+        - If `"status": "running"` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ more work to do. Do NOT output any completion signal.
 
       until: ALL_SPRINTS_COMPLETE
       max_iterations: 60
@@ -300,20 +298,21 @@ nodes:
       until_bash: |
         grep -qE '"status"\s*:\s*"(complete|failed)"' "$ARTIFACTS_DIR/state.json"
 
-  # ─── Phase 4: Report ─────────────────────────────────────────────────
+  # ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Phase 4: Report ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
   - id: report
+    provider: codex
     depends_on: [adversarial-sprint]
     trigger_rule: all_done
     context: fresh
-    model: haiku
+    model: gpt-5.4-mini
     prompt: |
       You are a project reporter. Generate a comprehensive summary of the adversarial development run.
 
       ## Read ALL of these files:
-      1. `$ARTIFACTS_DIR/state.json` — final state (tells you success/failure, sprint count)
-      2. `$ARTIFACTS_DIR/spec.md` — the original product spec
-      3. All files in `$ARTIFACTS_DIR/contracts/` — sprint contracts (use Glob to find them)
-      4. All files in `$ARTIFACTS_DIR/feedback/` — evaluation results (use Glob to find them)
+      1. `$ARTIFACTS_DIR/state.json` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â final state (tells you success/failure, sprint count)
+      2. `$ARTIFACTS_DIR/spec.md` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the original product spec
+      3. All files in `$ARTIFACTS_DIR/contracts/` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â sprint contracts (use Glob to find them)
+      4. All files in `$ARTIFACTS_DIR/feedback/` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â evaluation results (use Glob to find them)
 
       ## Generate a report covering:
 
@@ -341,4 +340,3 @@ nodes:
 
       Write this report to `$ARTIFACTS_DIR/report.md` AND output it as your response so the user
       sees it directly.
-    allowed_tools: [Read, Write, Glob, Grep]

@@ -413,7 +413,7 @@ bun run lint
 
 ## Metadata
 
-- **Investigated by**: Claude
+- **Investigated by**: Codex
 - **Timestamp**: {ISO timestamp}
 - **Artifact**: `$ARTIFACTS_DIR/investigation.md`
 ```
@@ -489,7 +489,7 @@ bun run type-check && bun test {pattern} && bun run lint
 To implement: `/implement-issue {number}`
 
 ---
-*Investigated by Claude • {timestamp}*
+*Investigated by Codex • {timestamp}*
 EOF
 )"
 ```
