@@ -751,7 +751,7 @@ export async function handleMessage(
       });
     }
 
-    // 5. Send to AI client
+    // 5. Send to AI provider
     const aiClient = getAgentProvider(conversation.ai_assistant_type);
     getLog().debug({ assistantType: conversation.ai_assistant_type }, 'sending_to_ai');
 

@@ -50,7 +50,7 @@ nodes:
 ```typescript
 interface WorkflowDeps {
   store: IWorkflowStore;                           // DB abstraction
-  getAgentProvider: AgentProviderFactory;             // Returns claude or codex provider
+  getAgentProvider: AgentProviderFactory;  // Returns claude or codex provider
   loadConfig: (cwd: string) => Promise<WorkflowConfig>;
 }
 

@@ -12,7 +12,7 @@
  */
 import type { ModelReasoningEffort, WebSearchMode } from '../types';
 
-export interface ProviderDefaults {
+export interface CodexProviderDefaults {
   model?: string;
   modelReasoningEffort?: ModelReasoningEffort;
   webSearchMode?: WebSearchMode;
@@ -22,7 +22,7 @@ export interface ProviderDefaults {
   codexBinaryPath?: string;
 }
 
-export interface ClaudeProviderDefaults {
+export interface ClaudeCodexProviderDefaults {
   model?: string;
   /** Claude Code settingSources — controls which CLAUDE.md files are loaded.
    *  @default ['project']
@@ -47,8 +47,8 @@ export interface GlobalConfig {
    * Assistant-specific defaults (model, reasoning effort, etc.)
    */
   assistants?: {
-    claude?: ClaudeProviderDefaults;
-    codex?: ProviderDefaults;
+    claude?: ClaudeCodexProviderDefaults;
+    codex?: CodexProviderDefaults;
   };
 
   /**
@@ -118,8 +118,8 @@ export interface RepoConfig {
    * Assistant-specific defaults for this repository
    */
   assistants?: {
-    claude?: ClaudeProviderDefaults;
-    codex?: ProviderDefaults;
+    claude?: ClaudeCodexProviderDefaults;
+    codex?: CodexProviderDefaults;
   };
 
   /**
@@ -217,8 +217,8 @@ export interface MergedConfig {
   botName: string;
   assistant: 'claude' | 'codex';
   assistants: {
-    claude: ClaudeProviderDefaults;
-    codex: ProviderDefaults;
+    claude: ClaudeCodexProviderDefaults;
+    codex: CodexProviderDefaults;
   };
   streaming: {
     telegram: 'stream' | 'batch';
@@ -281,8 +281,8 @@ export interface SafeConfig {
   botName: string;
   assistant: 'claude' | 'codex';
   assistants: {
-    claude: Pick<ClaudeProviderDefaults, 'model'>;
-    codex: Pick<ProviderDefaults, 'model' | 'modelReasoningEffort' | 'webSearchMode'>;
+    claude: Pick<ClaudeCodexProviderDefaults, 'model'>;
+    codex: Pick<CodexProviderDefaults, 'model' | 'modelReasoningEffort' | 'webSearchMode'>;
   };
   streaming: {
     telegram: 'stream' | 'batch';

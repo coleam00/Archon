@@ -676,7 +676,7 @@ describe('orchestrator-agent handleMessage', () => {
       await handleMessage(platform, 'chat-456', 'hello');
 
       expect(mockTransitionSession).not.toHaveBeenCalled();
-      // Should pass existing assistant_session_id to AI client
+      // Should pass existing assistant_session_id to AI provider
       expect(mockClient.sendQuery).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(String),
@@ -700,7 +700,7 @@ describe('orchestrator-agent handleMessage', () => {
   // ─── settingSources forwarding ────────────────────────────────────────
 
   describe('settingSources forwarding', () => {
-    test('passes settingSources from config to AI client for claude', async () => {
+    test('passes settingSources from config to AI provider for claude', async () => {
       mockLoadConfig.mockResolvedValueOnce({
         botName: 'Archon',
         assistant: 'claude',
