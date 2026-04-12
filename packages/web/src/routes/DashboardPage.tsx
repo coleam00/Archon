@@ -293,8 +293,8 @@ export function DashboardPage(): React.ReactElement {
     runAction(deleteWorkflowRun, runId, 'Failed to delete workflow run');
   const handleApprove = (runId: string): Promise<void> =>
     runAction(approveWorkflowRun, runId, 'Failed to approve workflow');
-  const handleReject = (runId: string): Promise<void> =>
-    runAction(rejectWorkflowRun, runId, 'Failed to reject workflow');
+  const handleReject = (runId: string, reason?: string): Promise<void> =>
+    runAction(id => rejectWorkflowRun(id, reason), runId, 'Failed to reject workflow');
 
   const totalPages = Math.ceil(total / pageSize);
   const hasMore = page + 1 < totalPages;

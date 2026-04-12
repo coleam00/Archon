@@ -1972,9 +1972,37 @@ export function registerApiRoutes(
         status: 'failed',
         metadata: metadataUpdate,
       });
+
+      // Auto-resume: dispatch to the orchestrator so the workflow continues
+      // without requiring the user to send a follow-up message.
+      // Mirror what the CLI does in workflowApproveCommand.
+      if (run.parent_conversation_id) {
+        try {
+          const parentConv = await conversationDb.getConversationById(run.parent_conversation_id);
+          if (parentConv?.platform_conversation_id) {
+            const resumeMessage = `/workflow run ${run.workflow_name} ${run.user_message}`;
+            void dispatchToOrchestrator(parentConv.platform_conversation_id, resumeMessage);
+            getLog().info(
+              {
+                runId,
+                workflowName: run.workflow_name,
+                parentConvId: parentConv.platform_conversation_id,
+              },
+              'api.workflow_approve_auto_resume_dispatched'
+            );
+          }
+        } catch (resumeErr) {
+          // Non-fatal — the approval was recorded, user can still resume manually
+          getLog().warn(
+            { err: resumeErr as Error, runId },
+            'api.workflow_approve_auto_resume_failed'
+          );
+        }
+      }
+
       return c.json({
         success: true,
-        message: `Workflow approved: ${run.workflow_name}. Send a message to continue the workflow.`,
+        message: `Workflow approved: ${run.workflow_name}. Resuming workflow.`,
       });
     } catch (error) {
       getLog().error({ err: error, runId }, 'api.workflow_run_approve_failed');
@@ -2018,9 +2046,35 @@ export function registerApiRoutes(
           status: 'failed',
           metadata: { rejection_reason: reason, rejection_count: currentCount + 1 },
         });
+
+        // Auto-resume: dispatch to the orchestrator so the on_reject prompt runs
+        // without requiring the user to send a follow-up message.
+        if (run.parent_conversation_id) {
+          try {
+            const parentConv = await conversationDb.getConversationById(run.parent_conversation_id);
+            if (parentConv?.platform_conversation_id) {
+              const resumeMessage = `/workflow run ${run.workflow_name} ${run.user_message}`;
+              void dispatchToOrchestrator(parentConv.platform_conversation_id, resumeMessage);
+              getLog().info(
+                {
+                  runId,
+                  workflowName: run.workflow_name,
+                  parentConvId: parentConv.platform_conversation_id,
+                },
+                'api.workflow_reject_auto_resume_dispatched'
+              );
+            }
+          } catch (resumeErr) {
+            getLog().warn(
+              { err: resumeErr as Error, runId },
+              'api.workflow_reject_auto_resume_failed'
+            );
+          }
+        }
+
         return c.json({
           success: true,
-          message: `Workflow rejected: ${run.workflow_name}. On-reject prompt will run on resume.`,
+          message: `Workflow rejected: ${run.workflow_name}. Running on-reject prompt.`,
         });
       }
 

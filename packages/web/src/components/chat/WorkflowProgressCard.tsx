@@ -87,7 +87,7 @@ export function WorkflowProgressCard({
     mutationFn: () => approveWorkflowRun(runId ?? ''),
   });
   const rejectMutation = useMutation({
-    mutationFn: () => rejectWorkflowRun(runId ?? ''),
+    mutationFn: (reason?: string) => rejectWorkflowRun(runId ?? '', reason),
   });
   const mutationError = approveMutation.error ?? rejectMutation.error;
 
@@ -222,8 +222,11 @@ export function WorkflowProgressCard({
                 </button>
                 <button
                   onClick={() => {
-                    if (window.confirm(`Reject workflow "${workflowName}"?`)) {
-                      rejectMutation.mutate();
+                    const reason = window.prompt(
+                      `Reject workflow "${workflowName}"?\n\nProvide a reason (or leave empty):`
+                    );
+                    if (reason !== null) {
+                      rejectMutation.mutate(reason || undefined);
                     }
                   }}
                   disabled={!runId || approveMutation.isPending || rejectMutation.isPending}

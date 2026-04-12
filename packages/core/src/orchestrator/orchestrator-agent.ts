@@ -274,7 +274,10 @@ async function dispatchOrchestratorWorkflow(
         workflow,
         userMessage,
         conversation.id,
-        codebase.id
+        codebase.id,
+        undefined,
+        undefined,
+        conversation.id
       );
     } else if (workflow.interactive) {
       // Interactive workflows run in foreground so output stays in the user's conversation
@@ -286,7 +289,10 @@ async function dispatchOrchestratorWorkflow(
         workflow,
         userMessage,
         conversation.id,
-        codebase.id
+        codebase.id,
+        undefined,
+        undefined,
+        conversation.id
       );
     } else {
       await dispatchBackgroundWorkflow(

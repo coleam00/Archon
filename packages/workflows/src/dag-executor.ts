@@ -866,7 +866,7 @@ async function executeNodeInternal(
         lastNodeCancelCheck.set(nodeKey, tickNow);
         try {
           const streamStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
-          if (streamStatus === null || streamStatus !== 'running') {
+          if (streamStatus === null || (streamStatus !== 'running' && streamStatus !== 'paused')) {
             getLog().info(
               { workflowRunId: workflowRun.id, nodeId: node.id, status: streamStatus ?? 'deleted' },
               'dag.stop_detected_during_streaming'
@@ -2909,6 +2909,8 @@ export async function executeDagWorkflow(
   }
 
   // Helper: bail out if the run was transitioned externally (cancelled, deleted, etc.)
+  // Also bail on 'paused' — the approval gate owns the lifecycle from here;
+  // attempting to mark a paused run as completed/failed would violate the DB constraint.
   async function skipIfStatusChanged(logEvent: string): Promise<boolean> {
     const status = await deps.store.getWorkflowRunStatus(workflowRun.id);
     if (status === null || status !== 'running') {

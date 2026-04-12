@@ -31,7 +31,7 @@ interface WorkflowRunCardProps {
   onAbandon?: (runId: string) => void;
   onDelete?: (runId: string) => void;
   onApprove?: (runId: string) => void;
-  onReject?: (runId: string) => void;
+  onReject?: (runId: string, reason?: string) => void;
 }
 
 const PLATFORM_ICONS: Record<string, React.ReactElement> = {
@@ -320,8 +320,11 @@ export function WorkflowRunCard({
           {run.status === 'paused' && onReject && (
             <button
               onClick={(): void => {
-                if (window.confirm(`Reject workflow "${run.workflow_name}"?`)) {
-                  onReject(run.id);
+                const reason = window.prompt(
+                  `Reject workflow "${run.workflow_name}"?\n\nProvide a reason (or leave empty):`
+                );
+                if (reason !== null) {
+                  onReject(run.id, reason || undefined);
                 }
               }}
               className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-error/80 hover:bg-error/10 hover:text-error transition-colors"
