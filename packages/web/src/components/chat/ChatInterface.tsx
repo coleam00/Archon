@@ -37,6 +37,18 @@ import {
 import { useProject } from '@/contexts/ProjectContext';
 import { ensureUtc } from '@/lib/format';
 
+/**
+ * Human-readable reply hints for conversations whose input is disabled because
+ * the conversation originated on another platform. Web UI input remains
+ * disabled for these platforms — users reply from the originating app.
+ */
+const PLATFORM_REPLY_HINTS: Record<string, string> = {
+  telegram: 'This conversation is running in Telegram — reply from the Telegram app.',
+  slack: 'This conversation is running in Slack — reply there.',
+  discord: 'This conversation is running in Discord — reply there.',
+  github: 'This conversation is running in a GitHub issue — reply there.',
+};
+
 function mapMessageRow(row: MessageResponse): ChatMessage {
   let meta: {
     toolCalls?: {
@@ -787,7 +799,8 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
         }
         disabledReason={
           currentConv != null && currentConv.platform_type !== 'web'
-            ? 'Continuing chats from other platforms in the Web UI is coming soon'
+            ? (PLATFORM_REPLY_HINTS[currentConv.platform_type] ??
+              'This conversation is running on another platform — reply from there.')
             : undefined
         }
       />
