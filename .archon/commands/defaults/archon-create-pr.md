@@ -133,7 +133,7 @@ Look for the project's PR template at `.github/pull_request_template.md`, `.gith
 
 ---
 
-[If from a GitHub issue, add: Closes #XXX]
+[If from a $FORGE_NAME issue, add: Closes #XXX]
 ```
 
 ### 3.2 Determine PR Title
@@ -222,4 +222,4 @@ Opens the existing PR instead of creating a duplicate.
 
 1. Check if branch exists remotely: `git ls-remote --heads origin [branch]`
 2. If conflicts: `git pull --rebase origin $BASE_BRANCH` then retry push
-3. If permission issues: Check GitHub access
+3. If permission issues: Check $FORGE_NAME access

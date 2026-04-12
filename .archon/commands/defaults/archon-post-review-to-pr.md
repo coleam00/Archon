@@ -57,7 +57,7 @@ From the review findings, extract:
 
 ### 2.2 Build Comment Body
 
-Format the review as a GitHub-friendly comment:
+Format the review as a $FORGE_NAME-compatible comment:
 
 ```markdown
 ## 🔍 Code Review
@@ -172,7 +172,7 @@ Review comment has been posted to the pull request.
 - Report error to user
 
 ### Comment fails to post
-- Check GitHub authentication
+- Check $FORGE_NAME authentication
 - Try with shorter body if too large
 - Report error with details
 

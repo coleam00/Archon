@@ -1,6 +1,6 @@
 name: archon-issue-review-full
 description: |
-  Use when: User wants a FULL, COMPREHENSIVE fix + review pipeline for a GitHub issue.
+  Use when: User wants a FULL, COMPREHENSIVE fix + review pipeline for a $FORGE_NAME issue.
   Triggers: "full review", "comprehensive fix", "fix with full review", "deep review", "issue review full".
   NOT for: Simple issue fixes (use archon-fix-github-issue instead),
            questions about issues, CI failures, PR reviews, general exploration.

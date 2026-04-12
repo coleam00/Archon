@@ -37,7 +37,7 @@ From the PR title, body, and linked issue(s):
 - What is the expected behavior vs actual behavior?
 - Which files/components are involved?
 
-If the PR body references a GitHub issue, fetch it:
+If the PR body references a $FORGE_NAME issue, fetch it:
 
 ```bash
 # Extract issue number from PR body (looks for "Fixes #N", "Closes #N", etc.)

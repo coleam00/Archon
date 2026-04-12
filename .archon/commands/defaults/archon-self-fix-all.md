@@ -9,7 +9,7 @@ argument-hint: (none - reads all review artifacts from $ARTIFACTS_DIR/review/)
 
 ## IMPORTANT: Output Behavior
 
-**Your output will be posted as a GitHub comment.** Keep working output minimal:
+**Your output will be posted as a $FORGE_NAME comment.** Keep working output minimal:
 - Do NOT narrate each step
 - Do NOT output verbose progress updates
 - Only output the final structured report at the end
@@ -24,7 +24,7 @@ Read all review artifacts and fix EVERYTHING surfaced. Unlike conservative auto-
 
 **Output artifact**: `$ARTIFACTS_DIR/review/fix-report.md`
 **Git action**: Commit AND push fixes to the PR branch
-**GitHub action**: Post fix report as a comment on the PR
+**$FORGE_NAME action**: Post fix report as a comment on the PR
 
 ---
 
@@ -315,7 +315,7 @@ Write to `$ARTIFACTS_DIR/review/fix-report.md`:
 
 ---
 
-## Phase 7: POST — GitHub Comment
+## Phase 7: POST — $FORGE_NAME Comment
 
 Post the fix report as a PR comment:
 
@@ -387,7 +387,7 @@ EOF
 
 **PHASE_7_CHECKPOINT:**
 
-- [ ] GitHub comment posted
+- [ ] $FORGE_NAME comment posted
 
 ---
 
@@ -423,4 +423,4 @@ Fix report: $ARTIFACTS_DIR/review/fix-report.md
 - **DOCS_UPDATED**: Documentation gaps filled
 - **VALIDATION_PASSED**: Type check, lint, and tests all pass
 - **COMMITTED_AND_PUSHED**: Changes committed and pushed to PR branch
-- **REPORTED**: Fix report artifact written and GitHub comment posted
+- **REPORTED**: Fix report artifact written and $FORGE_NAME comment posted

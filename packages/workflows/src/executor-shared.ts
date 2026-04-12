@@ -266,6 +266,20 @@ export const CONTEXT_VAR_PATTERN_STR = '\\$(?:CONTEXT|EXTERNAL_CONTEXT|ISSUE_CON
  * When issueContext is undefined, context variables are replaced with empty string
  * to avoid sending literal "$CONTEXT" to the AI.
  */
+
+/** Map forge type to display name for use in prompts */
+function forgeDisplayName(forgeType: string | undefined): string {
+  switch (forgeType) {
+    case 'gitea':
+      return 'Gitea';
+    case 'gitlab':
+      return 'GitLab';
+    case 'github':
+    default:
+      return 'GitHub';
+  }
+}
+
 export function substituteWorkflowVariables(
   prompt: string,
   workflowId: string,
@@ -303,7 +317,8 @@ export function substituteWorkflowVariables(
     .replace(/\$REJECTION_REASON/g, rejectionReason ?? '')
     .replace(/\$FORGE_TYPE/g, forgeType ?? 'github')
     .replace(/\$FORGE_API_BASE/g, forgeApiBase ?? 'https://api.github.com')
-    .replace(/\$FORGE_CLI/g, forgeCli ?? '');
+    .replace(/\$FORGE_CLI/g, forgeCli ?? '')
+    .replace(/\$FORGE_NAME/g, forgeDisplayName(forgeType));
 
   // Check if context variables exist (use fresh regex to avoid lastIndex issues)
   const hasContextVariables = new RegExp(CONTEXT_VAR_PATTERN_STR).test(result);

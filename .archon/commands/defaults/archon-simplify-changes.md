@@ -9,7 +9,7 @@ argument-hint: (none - operates on the current branch diff against $BASE_BRANCH)
 
 ## IMPORTANT: Output Behavior
 
-**Your output will be posted as a GitHub comment.** Keep working output minimal:
+**Your output will be posted as a $FORGE_NAME comment.** Keep working output minimal:
 - Do NOT narrate each step
 - Do NOT output verbose progress updates
 - Only output the final structured report at the end

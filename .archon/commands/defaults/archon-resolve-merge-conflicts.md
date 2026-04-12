@@ -20,8 +20,8 @@ Analyze merge conflicts in the PR, automatically resolve simple conflicts where 
 ### 1.1 Parse Input
 
 **Check input format:**
-- Number (`123`, `#123`) → GitHub PR number
-- URL (`https://github.com/...`) → Extract PR number
+- Number (`123`, `#123`) → $FORGE_NAME PR number
+- URL → Extract PR number
 - Empty → Check current branch for open PR
 
 ```bash
@@ -364,7 +364,7 @@ Resolved {N} conflicts in {M} files.
 - **Timestamp**: {ISO timestamp}
 ```
 
-### 6.2 Post GitHub Comment
+### 6.2 Post $FORGE_NAME Comment
 
 ```bash
 gh pr comment {number} --body "$(cat <<'EOF'
@@ -394,7 +394,7 @@ EOF
 
 **PHASE_6_CHECKPOINT:**
 - [ ] Artifact created
-- [ ] GitHub comment posted
+- [ ] $FORGE_NAME comment posted
 
 ---
 
@@ -476,5 +476,5 @@ If type-check/tests fail after resolution:
 - **CONFLICTS_RESOLVED**: All conflicts resolved (auto or manual)
 - **VALIDATION_PASSED**: Type check, tests, lint all pass
 - **BRANCH_PUSHED**: PR branch updated with resolution
-- **PR_MERGEABLE**: GitHub shows PR as mergeable
-- **DOCUMENTED**: Resolution artifact and GitHub comment created
+- **PR_MERGEABLE**: $FORGE_NAME shows PR as mergeable
+- **DOCUMENTED**: Resolution artifact and $FORGE_NAME comment created

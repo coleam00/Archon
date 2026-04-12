@@ -53,7 +53,7 @@ Read the plan file:
 cat $PLAN_PATH
 ```
 
-If `$ARGUMENTS` is a GitHub issue URL or number (e.g., `#123`), fetch the issue body instead.
+If `$ARGUMENTS` is a $FORGE_NAME issue URL or number (e.g., `#123`), fetch the issue body instead.
 
 ### 1.3 Extract Key Information
 

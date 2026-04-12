@@ -8,7 +8,7 @@ description: |
   NOT for: Quick questions about a PR, checking CI status, simple "what changed" queries.
 
   This workflow produces artifacts in $ARTIFACTS_DIR/../reviews/pr-{number}/ and posts
-  a comprehensive review comment to the GitHub PR.
+  a comprehensive review comment to the PR.
 
 nodes:
   - id: scope

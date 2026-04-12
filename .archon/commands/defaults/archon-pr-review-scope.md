@@ -81,7 +81,7 @@ gh pr view {number} --json mergeable,mergeStateStatus --jq '.mergeable, .mergeSt
 |--------|--------|
 | `MERGEABLE` | Continue |
 | `CONFLICTING` | **STOP** - Tell user to resolve conflicts first |
-| `UNKNOWN` | Warn, continue (GitHub still calculating) |
+| `UNKNOWN` | Warn, continue ($FORGE_NAME still calculating) |
 
 **If conflicts exist:**
 ```markdown

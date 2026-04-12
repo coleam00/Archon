@@ -14,7 +14,7 @@ description: |
   4. VALIDATE: Automated code review -> iterative human feedback & fixes (arbitrary rounds)
 
   The PIV loop comes AFTER a PRD exists. Each PIV loop focuses on ONE granular feature or bug fix.
-  Input: A description of what to build, a path to an existing plan, or a GitHub issue number.
+  Input: A description of what to build, a path to an existing plan, or a $FORGE_NAME issue number.
 
 provider: claude
 interactive: true
@@ -50,7 +50,7 @@ nodes:
         - If it's an existing plan → summarize it and ask if they want to refine or proceed
         - If it's a PRD → identify the specific phase/feature to focus on
 
-        **If it's a GitHub issue** (`#123` format):
+        **If it's a $FORGE_NAME issue** (`#123` format):
         - Fetch it: `gh issue view {number} --json title,body,labels,comments`
         - Summarize the issue context
 

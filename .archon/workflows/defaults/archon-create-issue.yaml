@@ -1,8 +1,8 @@
 name: archon-create-issue
 description: |
-  Use when: User wants to report a bug or problem as a GitHub issue with automated reproduction.
+  Use when: User wants to report a bug or problem as a $FORGE_NAME issue with automated reproduction.
   Triggers: "create issue", "file a bug", "report this bug", "open an issue for",
-            "create github issue", "report issue", "log this bug".
+            "create github issue", "create issue", "report issue", "log this bug".
   Does: Classifies problem area (haiku) -> gathers context in parallel (templates, git state, duplicates) ->
         investigates relevant code -> reproduces the issue using area-specific tools (agent-browser, CLI, DB queries) ->
         gates on reproduction success -> creates issue with full evidence OR reports back if cannot reproduce.
@@ -452,7 +452,7 @@ nodes:
 
       Report to the user clearly:
 
-      1. **State upfront**: "Could not reproduce the reported issue. No GitHub issue was created."
+      1. **State upfront**: "Could not reproduce the reported issue. No $FORGE_NAME issue was created."
 
       2. **Summarize what was tried**: List the specific steps the reproduce node took,
          based on the area playbook. Be concrete — "Started server on port X, navigated to Y,
@@ -471,7 +471,7 @@ nodes:
       5. **Offer to retry**: "If you can provide more specific steps, run the workflow
          again with those details."
 
-      Do NOT create a GitHub issue. The purpose of this node is to communicate back to the
+      Do NOT create a $FORGE_NAME issue. The purpose of this node is to communicate back to the
       user so they can provide better information or investigate manually.
     depends_on: [check-reproduction]
     when: "$check-reproduction.output == 'NOT_REPRODUCED'"
@@ -479,7 +479,7 @@ nodes:
 
   - id: draft-issue
     prompt: |
-      You are a technical writer drafting a GitHub issue. Assemble all gathered
+      You are a technical writer drafting a $FORGE_NAME issue. Assemble all gathered
       context into a clear, well-structured issue body.
 
       ## Classification
@@ -558,7 +558,7 @@ nodes:
 
   - id: create-issue
     prompt: |
-      Create the GitHub issue using the drafted content.
+      Create the $FORGE_NAME issue using the drafted content.
 
       ## Instructions
 

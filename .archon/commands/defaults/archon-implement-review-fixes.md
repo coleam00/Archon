@@ -9,7 +9,7 @@ argument-hint: (none - reads from consolidated review artifact)
 
 ## IMPORTANT: Output Behavior
 
-**Your output will be posted as a GitHub comment.** Keep your working output minimal:
+**Your output will be posted as a $FORGE_NAME comment.** Keep your working output minimal:
 - Do NOT narrate each step ("Now I'll read the file...", "Let me check...")
 - Do NOT output verbose progress updates
 - Only output the final structured report at the end
@@ -23,7 +23,7 @@ Read the consolidated review artifact and implement all CRITICAL and HIGH priori
 
 **Output artifact**: `$ARTIFACTS_DIR/review/fix-report.md`
 **Git action**: Commit AND push fixes to the PR branch
-**GitHub action**: Post fix report comment
+**$FORGE_NAME action**: Post fix report comment
 
 ---
 
@@ -325,7 +325,7 @@ Write to `$ARTIFACTS_DIR/review/fix-report.md`:
 
 ---
 
-## Phase 6: POST - GitHub Comment
+## Phase 6: POST - $FORGE_NAME Comment
 
 ### 6.1 Post Fix Report
 
@@ -393,7 +393,7 @@ EOF
 ```
 
 **PHASE_6_CHECKPOINT:**
-- [ ] GitHub comment posted
+- [ ] $FORGE_NAME comment posted
 
 ---
 
@@ -451,4 +451,4 @@ See fix report: `$ARTIFACTS_DIR/review/fix-report.md`
 - **HIGH_ADDRESSED**: All HIGH issues attempted
 - **VALIDATION_PASSED**: Type check, lint, tests, build all pass
 - **COMMITTED_AND_PUSHED**: Changes committed AND pushed to PR branch
-- **REPORTED**: Fix report artifact and GitHub comment created
+- **REPORTED**: Fix report artifact and $FORGE_NAME comment created
