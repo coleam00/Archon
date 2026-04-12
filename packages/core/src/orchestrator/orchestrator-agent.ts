@@ -62,6 +62,18 @@ function getLog(): ReturnType<typeof createLogger> {
 const MAX_BATCH_ASSISTANT_CHUNKS = 20;
 /** Max total chunks (assistant + tool) to keep in batch mode */
 const MAX_BATCH_TOTAL_CHUNKS = 200;
+const DETERMINISTIC_COMMANDS = new Set([
+  'help',
+  'status',
+  'reset',
+  'workflow',
+  'register-project',
+  'update-project',
+  'remove-project',
+  'commands',
+  'init',
+  'worktree',
+]);
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -97,6 +109,15 @@ function findCodebaseByName(
     const nameLower = c.name.toLowerCase();
     return nameLower === projectLower || nameLower.endsWith(`/${projectLower}`);
   });
+}
+
+function isDeterministicCommandMessage(message: string): boolean {
+  if (!message.startsWith('/')) {
+    return false;
+  }
+
+  const { command } = commandHandler.parseCommand(message);
+  return DETERMINISTIC_COMMANDS.has(command);
 }
 
 /**
@@ -541,7 +562,7 @@ export async function handleMessage(
     // this by design — they're ephemeral utility chatter, not conversation
     // content. Gated before the approval-routing block on purpose so that
     // natural-language approval responses ARE captured.
-    if (platform.getPlatformType() === 'telegram' && !message.startsWith('/')) {
+    if (platform.getPlatformType() === 'telegram' && !isDeterministicCommandMessage(message)) {
       try {
         await messageDb.addMessage(conversation.id, 'user', message, {
           platformType: 'telegram',
@@ -673,20 +694,8 @@ export async function handleMessage(
     // 2. Check for deterministic commands
     if (message.startsWith('/')) {
       const { command } = commandHandler.parseCommand(message);
-      const deterministicCommands = [
-        'help',
-        'status',
-        'reset',
-        'workflow',
-        'register-project',
-        'update-project',
-        'remove-project',
-        'commands',
-        'init',
-        'worktree',
-      ];
 
-      if (deterministicCommands.includes(command)) {
+      if (DETERMINISTIC_COMMANDS.has(command)) {
         if (command === 'register-project') {
           getLog().debug({ command, conversationId }, 'deterministic_command');
           const result = await handleRegisterProject(message, platform, conversationId);

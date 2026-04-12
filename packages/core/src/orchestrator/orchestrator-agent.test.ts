@@ -1450,6 +1450,7 @@ describe('telegram user-message persistence', () => {
     mockGetCodebase.mockReset();
     mockListCodebases.mockReset();
     mockDiscoverWorkflowsWithConfig.mockReset();
+    mockHandleCommand.mockReset();
     mockParseCommand.mockReset();
 
     mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null));
@@ -1458,6 +1459,28 @@ describe('telegram user-message persistence', () => {
     mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
       Promise.resolve({ workflows: [], errors: [] })
     );
+    mockHandleCommand.mockImplementation(() =>
+      Promise.resolve({ success: true, message: 'ok', workflow: undefined })
+    );
+    mockParseCommand.mockImplementation((text: string) => {
+      const matches = text.match(/"[^"]+"|'[^']+'|\S+/g) ?? [];
+      if (matches.length === 0 || !matches[0] || !matches[0].startsWith('/')) {
+        return { command: '', args: [] };
+      }
+
+      return {
+        command: matches[0].slice(1),
+        args: matches.slice(1).map(arg => {
+          if (
+            (arg.startsWith('"') && arg.endsWith('"')) ||
+            (arg.startsWith("'") && arg.endsWith("'"))
+          ) {
+            return arg.slice(1, -1);
+          }
+          return arg;
+        }),
+      };
+    });
   });
 
   test('natural-language telegram message is persisted as user turn', async () => {
@@ -1489,7 +1512,6 @@ describe('telegram user-message persistence', () => {
       title: null,
     });
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
-    mockParseCommand.mockReturnValueOnce({ command: 'help', args: [] });
     mockHandleCommand.mockReturnValueOnce(
       Promise.resolve({ success: true, message: 'help text', workflow: undefined })
     );
@@ -1502,6 +1524,25 @@ describe('telegram user-message persistence', () => {
     const assistantCalls = mockAddMessage.mock.calls.filter(c => c[1] === 'assistant');
     expect(userCalls).toHaveLength(0);
     expect(assistantCalls).toHaveLength(0);
+  });
+
+  test('slash-prefixed AI prompt (/etc/hosts) is persisted as user turn', async () => {
+    const conversation = makeConversation({
+      id: 'telegram-conv-db-id',
+      platform_type: 'telegram',
+      platform_conversation_id: '8579582275',
+      title: null,
+    });
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    const platform = makeTelegramPlatform();
+    await handleMessage(platform, '8579582275', '/etc/hosts');
+
+    const userCalls = mockAddMessage.mock.calls.filter(c => c[1] === 'user');
+    expect(userCalls).toHaveLength(1);
+    expect(userCalls[0]?.[0]).toBe('telegram-conv-db-id');
+    expect(userCalls[0]?.[2]).toBe('/etc/hosts');
+    expect(userCalls[0]?.[3]).toEqual({ platformType: 'telegram' });
+    expect(mockHandleCommand).not.toHaveBeenCalled();
   });
 
   test('web platform does not trigger centralized persistence path', async () => {
