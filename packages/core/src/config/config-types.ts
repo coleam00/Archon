@@ -260,6 +260,14 @@ export interface MergedConfig {
    */
   baseBranch?: string;
   /**
+   * Per-project worktree directory path from repo config (worktree.path).
+   * When set, worktrees are created at `<repoRoot>/<worktreePath>/<branchName>`
+   * instead of the global `paths.worktrees` directory.
+   * Undefined when not configured (uses global paths.worktrees).
+   * @example '.worktrees'
+   */
+  worktreePath?: string;
+  /**
    * Docs directory path from repo config (docs.path).
    * Used for $DOCS_DIR substitution in workflow commands.
    * @default 'docs/'
