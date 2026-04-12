@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import type {
   SSEEvent,
   ErrorDisplay,
+  LoopIterationEvent,
   WorkflowStatusEvent,
   WorkflowArtifactEvent,
   WorkflowDispatchEvent,
@@ -37,6 +38,7 @@ interface SSEHandlers {
   onWorkflowStatus?: (event: WorkflowStatusEvent) => void;
   onWorkflowArtifact?: (event: WorkflowArtifactEvent) => void;
   onDagNode?: (event: DagNodeEvent) => void;
+  onLoopIteration?: (event: LoopIterationEvent) => void;
   onWorkflowDispatch?: (event: WorkflowDispatchEvent) => void;
   onWorkflowOutputPreview?: (event: WorkflowOutputPreviewEvent) => void;
   onWarning?: (message: string) => void;
@@ -186,6 +188,9 @@ export function useSSE(
             break;
           case 'dag_node':
             h.onDagNode?.(data);
+            break;
+          case 'workflow_step':
+            h.onLoopIteration?.(data);
             break;
           case 'workflow_dispatch':
             // Flush buffered text before dispatch events to ensure the dispatch

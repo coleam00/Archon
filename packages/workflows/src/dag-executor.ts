@@ -1915,7 +1915,9 @@ async function executeLoopNode(
           if (platform.getStreamingMode() === 'stream') {
             const toolMsg = formatToolCall(msg.toolName, msg.toolInput);
             if (toolMsg) {
-              await safeSendMessage(platform, conversationId, toolMsg, msgContext);
+              await safeSendMessage(platform, conversationId, toolMsg, msgContext, {
+                category: 'tool_call_formatted',
+              } as WorkflowMessageMetadata);
             }
             if (platform.sendStructuredEvent) {
               await platform.sendStructuredEvent(conversationId, msg);

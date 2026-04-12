@@ -21,6 +21,7 @@ import type {
   WorkflowRunStatus,
   DagNodeState,
   WorkflowStepStatus,
+  LoopIterationInfo,
 } from '@/lib/types';
 
 import type { WorkflowEventResponse } from '@/lib/api';
@@ -133,6 +134,49 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
                 });
               }
             }
+
+            // Second pass: enrich loop nodes with iteration data
+            for (const e of data.events.filter(ev => ev.event_type.startsWith('loop_iteration_'))) {
+              const nodeId = e.step_name ?? '';
+              if (!nodeId) continue;
+              const existing = nodeMap.get(nodeId);
+              if (!existing) continue; // No node_started event yet — skip (events ordered in DB)
+
+              const iteration = e.data.iteration as number | undefined;
+              const maxIter = e.data.maxIterations as number | undefined;
+              if (iteration === undefined) continue;
+
+              let iterStatus: LoopIterationInfo['status'];
+              if (e.event_type === 'loop_iteration_started') {
+                iterStatus = 'running';
+              } else if (e.event_type === 'loop_iteration_completed') {
+                iterStatus = 'completed';
+              } else {
+                iterStatus = 'failed';
+              }
+
+              const existingIters: LoopIterationInfo[] = existing.iterations ?? [];
+              const iterIdx = existingIters.findIndex(it => it.iteration === iteration);
+              const iterState: LoopIterationInfo = {
+                iteration,
+                status: iterStatus,
+                duration: e.data.duration_ms as number | undefined,
+              };
+              const newIters = [...existingIters];
+              if (iterIdx >= 0) {
+                newIters[iterIdx] = iterState;
+              } else {
+                newIters.push(iterState);
+              }
+
+              nodeMap.set(nodeId, {
+                ...existing,
+                currentIteration: iteration,
+                maxIterations: maxIter ?? existing.maxIterations,
+                iterations: newIters,
+              });
+            }
+
             return Array.from(nodeMap.values());
           })(),
           artifacts: data.events

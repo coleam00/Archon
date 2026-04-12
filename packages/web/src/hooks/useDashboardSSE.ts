@@ -1,6 +1,11 @@
 import { useEffect } from 'react';
 import { workflowSSEHandlers } from '@/stores/workflow-store';
-import type { WorkflowStatusEvent, DagNodeEvent, WorkflowToolActivityEvent } from '@/lib/types';
+import type {
+  WorkflowStatusEvent,
+  DagNodeEvent,
+  WorkflowToolActivityEvent,
+  LoopIterationEvent,
+} from '@/lib/types';
 
 /** Connects to the multiplexed dashboard SSE stream and routes events to the Zustand store. */
 export function useDashboardSSE(): void {
@@ -24,6 +29,9 @@ export function useDashboardSSE(): void {
           break;
         case 'workflow_tool_activity':
           workflowSSEHandlers.onToolActivity(event as WorkflowToolActivityEvent);
+          break;
+        case 'workflow_step':
+          workflowSSEHandlers.onLoopIteration(event as LoopIterationEvent);
           break;
         // heartbeat — ignore
       }

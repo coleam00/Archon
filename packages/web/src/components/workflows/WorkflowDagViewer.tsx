@@ -89,6 +89,8 @@ export function WorkflowDagViewer({
           duration: live?.duration,
           error: live?.error,
           selected: node.id === selectedNodeId,
+          currentIteration: live?.currentIteration,
+          maxIterations: live?.maxIterations,
         },
       } as ExecutionFlowNode;
     });
