@@ -57,9 +57,22 @@ export class WorktreeProvider implements IIsolationProvider {
    * Create an isolated environment using git worktrees
    */
   async create(request: IsolationRequest): Promise<IsolatedEnvironment> {
+    // Load config early so worktree.path can influence path resolution.
+    // On success, pass to createWorktree to avoid double loading.
+    // On failure, let createWorktree reload (so config errors propagate correctly).
+    let earlyConfig: WorktreeCreateConfig | null = null;
+    let earlyConfigLoaded = false;
+    try {
+      earlyConfig = await this.loadConfig(request.canonicalRepoPath);
+      earlyConfigLoaded = true;
+    } catch {
+      // Non-fatal here: fall back to default path resolution.
+      // createWorktree will re-attempt the load and throw if needed.
+    }
+
     const branchName = toBranchName(this.generateBranchName(request));
-    const worktreePath = this.getWorktreePath(request, branchName);
-    const envId = this.generateEnvId(request);
+    const worktreePath = this.getWorktreePath(request, branchName, earlyConfig);
+    const envId = worktreePath;
 
     // Check for existing worktree (adoption)
     const existing = await this.findExisting(request, branchName, worktreePath);
@@ -67,8 +80,14 @@ export class WorktreeProvider implements IIsolationProvider {
       return existing;
     }
 
-    // Create new worktree
-    const { warnings } = await this.createWorktree(request, worktreePath, branchName);
+    // Create new worktree. Pass pre-loaded config only when early load succeeded;
+    // otherwise pass undefined so createWorktree reloads (and throws on error).
+    const { warnings } = await this.createWorktree(
+      request,
+      worktreePath,
+      branchName,
+      earlyConfigLoaded ? earlyConfig : undefined
+    );
 
     return {
       id: envId,
@@ -454,16 +473,26 @@ export class WorktreeProvider implements IIsolationProvider {
   /**
    * Get worktree path for request.
    *
-   * Path format depends on the worktree base layout:
-   * - Project-scoped: `~/.archon/workspaces/{owner}/{repo}/worktrees/{branch}`
-   * - Legacy global:  `~/.archon/worktrees/{owner}/{repo}/{branch}`
+   * Path format depends on configuration:
+   * - Per-project path: `<repoRoot>/<worktree.path>/<branch>` (when repo config sets worktree.path)
+   * - Project-scoped:   `~/.archon/workspaces/{owner}/{repo}/worktrees/{branch}`
+   * - Legacy global:    `~/.archon/worktrees/{owner}/{repo}/{branch}`
    *
    * When the worktree base is project-scoped (under workspaces/owner/repo/worktrees/),
    * only append the branch name since the base already includes owner/repo.
    * When using the legacy global worktrees path, append owner/repo/branch to
    * avoid collisions between repos.
    */
-  getWorktreePath(request: IsolationRequest, branchName: string): string {
+  getWorktreePath(
+    request: IsolationRequest,
+    branchName: string,
+    config?: WorktreeCreateConfig | null
+  ): string {
+    // Per-project worktree path takes highest priority
+    if (config?.path?.trim()) {
+      return join(request.canonicalRepoPath, config.path.trim(), branchName);
+    }
+
     const worktreeBase = getWorktreeBase(request.canonicalRepoPath, request.codebaseName);
 
     if (isProjectScopedWorktreeBase(request.canonicalRepoPath, request.codebaseName)) {
@@ -530,30 +559,41 @@ export class WorktreeProvider implements IIsolationProvider {
   private async createWorktree(
     request: IsolationRequest,
     worktreePath: string,
-    branchName: string
+    branchName: string,
+    preloadedConfig?: WorktreeCreateConfig | null
   ): Promise<{ warnings: string[] }> {
     const repoPath = request.canonicalRepoPath;
 
     let worktreeConfig: WorktreeCreateConfig | null;
-    try {
-      worktreeConfig = await this.loadConfig(repoPath);
-    } catch (error) {
-      const err = error as Error;
-      getLog().error({ err, repoPath }, 'repo_config_load_failed');
-      throw new Error(`Failed to load config: ${err.message}`);
+    if (preloadedConfig !== undefined) {
+      // Use pre-loaded config (avoids double loading from create())
+      worktreeConfig = preloadedConfig;
+    } else {
+      try {
+        worktreeConfig = await this.loadConfig(repoPath);
+      } catch (error) {
+        const err = error as Error;
+        getLog().error({ err, repoPath }, 'repo_config_load_failed');
+        throw new Error(`Failed to load config: ${err.message}`);
+      }
     }
 
     // Sync uses only the configured base branch (or auto-detects via getDefaultBranch).
     // request.fromBranch is the start-point for worktree creation, not a sync target.
     const baseBranch = await this.syncWorkspaceBeforeCreate(repoPath, worktreeConfig?.baseBranch);
 
-    const worktreeBase = getWorktreeBase(repoPath, request.codebaseName);
-
-    if (isProjectScopedWorktreeBase(repoPath, request.codebaseName)) {
-      await mkdirAsync(worktreeBase, { recursive: true });
+    // Ensure parent directory for worktree exists
+    if (worktreeConfig?.path?.trim()) {
+      // Per-project path: create the configured directory under the repo root
+      await mkdirAsync(join(repoPath, worktreeConfig.path.trim()), { recursive: true });
     } else {
-      const { owner, repo } = this.extractOwnerRepo(repoPath);
-      await mkdirAsync(join(worktreeBase, owner, repo), { recursive: true });
+      const worktreeBase = getWorktreeBase(repoPath, request.codebaseName);
+      if (isProjectScopedWorktreeBase(repoPath, request.codebaseName)) {
+        await mkdirAsync(worktreeBase, { recursive: true });
+      } else {
+        const { owner, repo } = this.extractOwnerRepo(repoPath);
+        await mkdirAsync(join(worktreeBase, owner, repo), { recursive: true });
+      }
     }
 
     if (isPRIsolationRequest(request)) {

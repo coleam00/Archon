@@ -242,6 +242,13 @@ export interface IsolationEnvironmentRow {
 export interface WorktreeCreateConfig {
   baseBranch?: string;
   copyFiles?: string[];
+  /**
+   * Per-project worktree directory path (relative to repo root).
+   * When set, worktrees are created at `<repoRoot>/<path>/<branchName>`
+   * instead of the global `~/.archon/worktrees/` directory.
+   * @example '.worktrees'
+   */
+  path?: string;
 }
 
 export type RepoConfigLoader = (repoPath: string) => Promise<WorktreeCreateConfig | null>;

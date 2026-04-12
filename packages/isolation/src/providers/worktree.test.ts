@@ -2161,6 +2161,73 @@ describe('WorktreeProvider', () => {
     });
   });
 
+  describe('per-project worktree.path', () => {
+    test('getWorktreePath uses config.path when set', () => {
+      const request: IsolationRequest = {
+        codebaseId: 'cb-123',
+        canonicalRepoPath: '/Users/joel/Projects/myapp',
+        workflowType: 'task',
+        identifier: 'add-feature',
+      };
+      const branchName = provider.generateBranchName(request);
+      const config = { path: '.worktrees' };
+      const path = provider.getWorktreePath(request, branchName, config);
+      expect(path).toBe(join('/Users/joel/Projects/myapp', '.worktrees', branchName));
+    });
+
+    test('getWorktreePath ignores empty or whitespace-only path', () => {
+      const request: IsolationRequest = {
+        codebaseId: 'cb-123',
+        canonicalRepoPath: '/Users/joel/Projects/myapp',
+        workflowType: 'task',
+        identifier: 'add-feature',
+      };
+      const branchName = provider.generateBranchName(request);
+
+      // Empty string
+      const path1 = provider.getWorktreePath(request, branchName, { path: '' });
+      expect(path1).not.toContain('.worktrees');
+
+      // Whitespace-only
+      const path2 = provider.getWorktreePath(request, branchName, { path: '   ' });
+      expect(path2).not.toContain('.worktrees');
+    });
+
+    test('getWorktreePath falls back to default when config is null', () => {
+      const request: IsolationRequest = {
+        codebaseId: 'cb-123',
+        canonicalRepoPath: '/Users/joel/Projects/myapp',
+        workflowType: 'task',
+        identifier: 'add-feature',
+      };
+      const branchName = provider.generateBranchName(request);
+      const pathWithNull = provider.getWorktreePath(request, branchName, null);
+      const pathWithUndefined = provider.getWorktreePath(request, branchName, undefined);
+      const pathDefault = provider.getWorktreePath(request, branchName);
+      expect(pathWithNull).toBe(pathDefault);
+      expect(pathWithUndefined).toBe(pathDefault);
+    });
+
+    test('getWorktreePath config.path overrides project-scoped and legacy paths', () => {
+      // Even for repos under workspaces/, config.path should win
+      const request: IsolationRequest = {
+        codebaseId: 'cb-123',
+        codebaseName: 'owner/repo',
+        canonicalRepoPath: join(TEST_ARCHON_HOME, 'workspaces', 'owner', 'repo'),
+        workflowType: 'task',
+        identifier: 'my-task',
+      };
+      const branchName = provider.generateBranchName(request);
+      const config = { path: 'worktrees-local' };
+      const path = provider.getWorktreePath(request, branchName, config);
+      expect(path).toBe(
+        join(TEST_ARCHON_HOME, 'workspaces', 'owner', 'repo', 'worktrees-local', branchName)
+      );
+      // Should NOT use the project-scoped worktrees/ path
+      expect(path).not.toContain('/worktrees/archon/');
+    });
+  });
+
   // ---------------------------------------------------------------------------
   // Additional lifecycle method tests
   // ---------------------------------------------------------------------------
