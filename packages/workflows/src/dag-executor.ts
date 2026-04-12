@@ -10,7 +10,7 @@ import { resolve, isAbsolute } from 'path';
 import { execFileAsync } from '@archon/git';
 import { discoverScripts } from './script-discovery';
 import type {
-  WorkflowAssistantOptions,
+  WorkflowAgentOptions,
   IWorkflowPlatform,
   WorkflowMessageMetadata,
   WorkflowTokenUsage,
@@ -229,7 +229,7 @@ export function substituteNodeOutputRefs(
 }
 
 /** SDK-compatible hook structure returned by buildSDKHooksFromYAML */
-type SDKHooksMap = NonNullable<WorkflowAssistantOptions['hooks']>;
+type SDKHooksMap = NonNullable<WorkflowAgentOptions['hooks']>;
 
 /**
  * Convert declarative YAML hook definitions to SDK HookCallbackMatcher arrays.
@@ -373,7 +373,7 @@ async function resolveNodeProviderAndModel(
 ): Promise<{
   provider: 'claude' | 'codex';
   model: string | undefined;
-  options: WorkflowAssistantOptions | undefined;
+  options: WorkflowAgentOptions | undefined;
 }> {
   let provider: 'claude' | 'codex';
 
@@ -485,7 +485,7 @@ async function resolveNodeProviderAndModel(
     }
   }
 
-  let options: WorkflowAssistantOptions | undefined;
+  let options: WorkflowAgentOptions | undefined;
   if (provider === 'codex') {
     options = {
       model,
@@ -497,7 +497,7 @@ async function resolveNodeProviderAndModel(
       options.outputFormat = { type: 'json_schema', schema: node.output_format };
     }
   } else {
-    const claudeOptions: WorkflowAssistantOptions = {};
+    const claudeOptions: WorkflowAgentOptions = {};
     if (model) claudeOptions.model = model;
     // Propagate settingSources from config (controls which CLAUDE.md files the SDK loads)
     if (config.assistants.claude.settingSources) {
@@ -521,7 +521,7 @@ async function resolveNodeProviderAndModel(
         const { servers, serverNames, missingVars } = await loadMcpConfig(node.mcp, cwd);
         // loadMcpConfig returns Record<string, unknown> from JSON; cast to the structural
         // union type — the SDK validates server configs at connection time
-        claudeOptions.mcpServers = servers as unknown as WorkflowAssistantOptions['mcpServers'];
+        claudeOptions.mcpServers = servers as unknown as WorkflowAgentOptions['mcpServers'];
         // Auto-allow all MCP tools via wildcards
         const mcpWildcards = serverNames.map(name => `mcp__${name}__*`);
         claudeOptions.allowedTools = [...(claudeOptions.allowedTools ?? []), ...mcpWildcards];
@@ -717,7 +717,7 @@ async function executeNodeInternal(
   workflowRun: WorkflowRun,
   node: CommandNode | PromptNode,
   provider: 'claude' | 'codex',
-  nodeOptions: WorkflowAssistantOptions | undefined,
+  nodeOptions: WorkflowAgentOptions | undefined,
   artifactsDir: string,
   logDir: string,
   baseBranch: string,
@@ -819,7 +819,7 @@ async function executeNodeInternal(
   // Substitute upstream node output references
   const finalPrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
 
-  const aiClient = deps.getAssistantClient(provider);
+  const aiClient = deps.getAgentProvider(provider);
   const streamingMode = platform.getStreamingMode();
 
   let nodeOutputText = ''; // Always accumulate regardless of streaming mode
@@ -836,7 +836,7 @@ async function executeNodeInternal(
   const nodeAbortController = new AbortController();
   // Fork when resuming — leaves the source session untouched so retries are safe.
   const shouldForkSession = resumeSessionId !== undefined;
-  const nodeOptionsWithAbort: WorkflowAssistantOptions | undefined = {
+  const nodeOptionsWithAbort: WorkflowAgentOptions | undefined = {
     ...nodeOptions,
     abortSignal: nodeAbortController.signal,
     ...(shouldForkSession ? { forkSession: true } : {}),
@@ -1663,14 +1663,14 @@ async function executeScriptNode(
 }
 
 /**
- * Build WorkflowAssistantOptions from resolved provider, model, and config.
+ * Build WorkflowAgentOptions from resolved provider, model, and config.
  * Caller is responsible for resolving per-node overrides before passing model.
  */
 function buildLoopNodeOptions(
   provider: 'claude' | 'codex',
   model: string | undefined,
   config: WorkflowConfig
-): WorkflowAssistantOptions | undefined {
+): WorkflowAgentOptions | undefined {
   const codexOptions =
     provider === 'codex'
       ? {
@@ -1718,9 +1718,9 @@ async function executeLoopNode(
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
 
   // Resolve AI client — fail fast with descriptive error
-  let aiClient: ReturnType<typeof deps.getAssistantClient>;
+  let aiClient: ReturnType<typeof deps.getAgentProvider>;
   try {
-    aiClient = deps.getAssistantClient(workflowProvider);
+    aiClient = deps.getAgentProvider(workflowProvider);
   } catch (error) {
     const err = error as Error;
     const errorMsg = `Invalid provider '${workflowProvider}' for loop node '${node.id}'. Check workflow YAML or .archon/config.yaml. Original: ${err.message}`;
@@ -1817,7 +1817,7 @@ async function executeLoopNode(
       );
       const finalPrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
 
-      const iterationOptions: WorkflowAssistantOptions | undefined = {
+      const iterationOptions: WorkflowAgentOptions | undefined = {
         ...resolvedOptions,
         abortSignal: iterationAbortController.signal,
       };

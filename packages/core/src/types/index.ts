@@ -238,7 +238,7 @@ import type {
 } from '@archon/workflows/schemas/dag-node';
 export type { EffortLevel, ThinkingConfig, SandboxSettings };
 
-export interface AssistantRequestOptions {
+export interface AgentRequestOptions {
   model?: string;
   modelReasoningEffort?: ModelReasoningEffort;
   webSearchMode?: WebSearchMode;
@@ -358,14 +358,14 @@ export interface AssistantRequestOptions {
 }
 
 /**
- * Generic AI assistant client interface
- * Allows supporting multiple AI assistants (Claude, Codex, etc.)
+ * Generic agent provider interface
+ * Allows supporting multiple agent providers (Claude, Codex, etc.)
  */
-export interface IAssistantClient {
+export interface IAgentProvider {
   /**
    * Send a message and get streaming response
    * @param prompt - User message or prompt
-   * @param cwd - Working directory for the assistant
+   * @param cwd - Working directory for the provider
    * @param resumeSessionId - Optional session ID to resume
    * @param options - Optional request options (model, provider-specific settings)
    */
@@ -373,11 +373,11 @@ export interface IAssistantClient {
     prompt: string,
     cwd: string,
     resumeSessionId?: string,
-    options?: AssistantRequestOptions
+    options?: AgentRequestOptions
   ): AsyncGenerator<MessageChunk>;
 
   /**
-   * Get the assistant type identifier
+   * Get the provider type identifier
    */
   getType(): string;
 }

@@ -12,8 +12,8 @@ import {
   type TurnCompletedEvent,
 } from '@openai/codex-sdk';
 import {
-  type AssistantRequestOptions,
-  type IAssistantClient,
+  type AgentRequestOptions,
+  type IAgentProvider,
   type MessageChunk,
   type TokenUsage,
 } from '../types';
@@ -68,7 +68,7 @@ async function getCodex(configCodexBinaryPath?: string): Promise<Codex> {
  * Build thread options for Codex SDK
  * Extracted to avoid duplication across thread creation paths
  */
-function buildThreadOptions(cwd: string, options?: AssistantRequestOptions): ThreadOptions {
+function buildThreadOptions(cwd: string, options?: AgentRequestOptions): ThreadOptions {
   return {
     workingDirectory: cwd,
     skipGitRepoCheck: true,
@@ -111,7 +111,7 @@ function buildModelAccessMessage(model?: string): string {
 }
 
 /** Max retries for transient failures (3 = 4 total attempts).
- *  Mirrors ClaudeClient retry logic — Codex process crashes are similarly intermittent. */
+ *  Mirrors ClaudeProvider retry logic — Codex process crashes are similarly intermittent. */
 const MAX_SUBPROCESS_RETRIES = 3;
 
 /** Delay between retries in milliseconds */
@@ -157,9 +157,9 @@ function extractUsageFromCodexEvent(event: TurnCompletedEvent): TokenUsage {
 
 /**
  * Codex AI assistant client
- * Implements generic IAssistantClient interface
+ * Implements generic IAgentProvider interface
  */
-export class CodexClient implements IAssistantClient {
+export class CodexProvider implements IAgentProvider {
   private readonly retryBaseDelayMs: number;
 
   constructor(options?: { retryBaseDelayMs?: number }) {
@@ -176,7 +176,7 @@ export class CodexClient implements IAssistantClient {
     prompt: string,
     cwd: string,
     resumeSessionId?: string,
-    options?: AssistantRequestOptions
+    options?: AgentRequestOptions
   ): AsyncGenerator<MessageChunk> {
     // Load config once — used for env-leak gate and (on first call) codexBinaryPath resolution.
     let mergedConfig: Awaited<ReturnType<typeof loadConfig>> | undefined;

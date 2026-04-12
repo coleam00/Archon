@@ -114,7 +114,7 @@ function makeDeps(store?: IWorkflowStore): WorkflowDeps {
         commands: { folder: '' },
       })
     ),
-    createAssistantClient: mock(() => ({
+    getAgentProvider: mock(() => ({
       run: mock(async () => {}),
     })),
   } as unknown as WorkflowDeps;

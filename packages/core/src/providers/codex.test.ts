@@ -39,15 +39,15 @@ mock.module('@openai/codex-sdk', () => ({
   Codex: MockCodex,
 }));
 
-import { CodexClient } from './codex';
+import { CodexProvider } from './codex';
 import * as codebaseDb from '../db/codebases';
 import * as envLeakScanner from '../utils/env-leak-scanner';
 
-describe('CodexClient', () => {
-  let client: CodexClient;
+describe('CodexProvider', () => {
+  let client: CodexProvider;
 
   beforeEach(() => {
-    client = new CodexClient({ retryBaseDelayMs: 1 });
+    client = new CodexProvider({ retryBaseDelayMs: 1 });
     mockStartThread.mockClear();
     mockResumeThread.mockClear();
     mockRunStreamed.mockClear();

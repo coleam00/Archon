@@ -60,7 +60,7 @@ export interface WorkflowMessageMetadata {
   workflowResult?: { workflowName: string; runId: string };
 }
 
-export interface WorkflowAssistantOptions {
+export interface WorkflowAgentOptions {
   model?: string;
   modelReasoningEffort?: ModelReasoningEffort;
   webSearchMode?: WebSearchMode;
@@ -95,8 +95,8 @@ export interface WorkflowAssistantOptions {
   >;
   /**
    * MCP server configuration. Structural match for Record<string, McpServerConfig>.
-   * Discriminated union mirrors the SDK types so that WorkflowAssistantOptions is
-   * assignable to AssistantRequestOptions without casts.
+   * Discriminated union mirrors the SDK types so that WorkflowAgentOptions is
+   * assignable to AgentRequestOptions without casts.
    * @archon/workflows must not depend on @anthropic-ai/claude-agent-sdk.
    * Claude only — ignored for Codex.
    */
@@ -213,20 +213,20 @@ export interface IWorkflowPlatform {
 }
 
 // ---------------------------------------------------------------------------
-// Narrow assistant client interface (subset of IAssistantClient)
+// Narrow agent provider interface (subset of IAgentProvider)
 // ---------------------------------------------------------------------------
 
-export interface IWorkflowAssistantClient {
+export interface IWorkflowAgentProvider {
   sendQuery(
     prompt: string,
     cwd: string,
     resumeSessionId?: string,
-    options?: WorkflowAssistantOptions
+    options?: WorkflowAgentOptions
   ): AsyncGenerator<WorkflowMessageChunk>;
   getType(): string;
 }
 
-export type AssistantClientFactory = (provider: 'claude' | 'codex') => IWorkflowAssistantClient;
+export type AgentProviderFactory = (provider: 'claude' | 'codex') => IWorkflowAgentProvider;
 
 // ---------------------------------------------------------------------------
 // Narrow config interface (subset of MergedConfig)
@@ -272,6 +272,6 @@ export interface WorkflowConfig {
 
 export interface WorkflowDeps {
   store: IWorkflowStore;
-  getAssistantClient: AssistantClientFactory;
+  getAgentProvider: AgentProviderFactory;
   loadConfig: (cwd: string) => Promise<WorkflowConfig>;
 }

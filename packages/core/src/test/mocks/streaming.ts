@@ -14,7 +14,7 @@ export async function* createMockStream(events: StreamEvent[]): AsyncGenerator<S
   }
 }
 
-export const createMockAssistantClient = (
+export const createMockAgentProvider = (
   events: StreamEvent[] = []
 ): {
   sendMessage: Mock<() => AsyncGenerator<StreamEvent>>;

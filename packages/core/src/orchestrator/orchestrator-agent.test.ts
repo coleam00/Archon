@@ -93,8 +93,8 @@ mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
 }));
 
-mock.module('../clients/factory', () => ({
-  getAssistantClient: mock(() => ({
+mock.module('../providers/factory', () => ({
+  getAgentProvider: mock(() => ({
     sendQuery: mock(async function* () {}),
     getType: mock(() => 'claude'),
   })),

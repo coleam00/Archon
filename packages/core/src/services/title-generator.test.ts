@@ -31,13 +31,13 @@ const mockSendQuery = mock(async function* (): AsyncGenerator<MessageChunk> {
   ) => AsyncGenerator<MessageChunk>
 >;
 
-const mockGetAssistantClient = mock(() => ({
+const mockGetAgentProvider = mock(() => ({
   sendQuery: mockSendQuery,
   getType: () => 'claude',
 }));
 
-mock.module('../clients/factory', () => ({
-  getAssistantClient: mockGetAssistantClient,
+mock.module('../providers/factory', () => ({
+  getAgentProvider: mockGetAgentProvider,
 }));
 
 // ─── Import module under test (AFTER all mocks) ─────────────────────────────
@@ -50,7 +50,7 @@ describe('title-generator', () => {
   beforeEach(() => {
     mockUpdateConversationTitle.mockClear();
     mockSendQuery.mockClear();
-    mockGetAssistantClient.mockClear();
+    mockGetAgentProvider.mockClear();
 
     // Reset to default happy-path behavior
     mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
@@ -58,7 +58,7 @@ describe('title-generator', () => {
       yield { type: 'result' };
     });
 
-    mockGetAssistantClient.mockImplementation(() => ({
+    mockGetAgentProvider.mockImplementation(() => ({
       sendQuery: mockSendQuery,
       getType: () => 'claude',
     }));

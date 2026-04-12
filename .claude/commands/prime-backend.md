@@ -39,11 +39,11 @@ Read `packages/core/src/state/session-transitions.ts` in full — `TransitionTri
 
 ### 5. Understand AI Client Patterns
 
-List clients:
-!`ls packages/core/src/clients/`
+List providers:
+!`ls packages/core/src/providers/`
 
-Read `packages/core/src/clients/factory.ts` for provider selection logic.
-Read `packages/core/src/clients/claude.ts` first 50 lines — `IAssistantClient` implementation
+Read `packages/core/src/providers/factory.ts` for provider selection logic.
+Read `packages/core/src/providers/claude.ts` first 50 lines — `IAgentProvider` implementation
 with streaming event loop pattern.
 
 ### 6. Understand Database Layer
@@ -52,7 +52,7 @@ List DB modules:
 !`ls packages/core/src/db/`
 
 Read `packages/core/src/types/index.ts` (or the main types file) first 60 lines for key
-interfaces: `IPlatformAdapter`, `IAssistantClient`, `Conversation`, `Session`.
+interfaces: `IPlatformAdapter`, `IAgentProvider`, `Conversation`, `Session`.
 
 ### 7. Understand the Server
 
@@ -81,9 +81,9 @@ Summarize (under 250 words):
 - `TransitionTrigger` values and their behaviors
 - Only `plan-to-execute` immediately creates a new session; others deactivate first
 
-### AI Clients
-- `ClaudeClient` (claude-agent-sdk) and `CodexClient` (codex-sdk)
-- `IAssistantClient` streaming pattern: `for await (const event of events)`
+### AI Providers
+- `ClaudeProvider` (claude-agent-sdk) and `CodexProvider` (codex-sdk)
+- `IAgentProvider` streaming pattern: `for await (const event of events)`
 
 ### Key Database Tables
 - conversations, sessions, codebases, isolation_environments, workflow_runs, workflow_events, messages

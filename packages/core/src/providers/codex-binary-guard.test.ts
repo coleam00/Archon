@@ -75,9 +75,9 @@ mock.module('../utils/env-leak-scanner', () => ({
   EnvLeakError: class extends Error {},
 }));
 
-import { CodexClient, resetCodexSingleton } from './codex';
+import { CodexProvider, resetCodexSingleton } from './codex';
 
-describe('CodexClient binary mode resolution', () => {
+describe('CodexProvider binary mode resolution', () => {
   beforeEach(() => {
     resetCodexSingleton();
     MockCodex.mockClear();
@@ -101,7 +101,7 @@ describe('CodexClient binary mode resolution', () => {
   test('passes resolved binary path to Codex constructor via codexPathOverride', async () => {
     mockResolveCodexBinaryPath.mockResolvedValueOnce('/custom/path/to/codex');
 
-    const client = new CodexClient();
+    const client = new CodexProvider();
     const generator = client.sendQuery('test prompt', '/tmp/test');
 
     // Consume events to trigger initialization
@@ -118,7 +118,7 @@ describe('CodexClient binary mode resolution', () => {
       new Error('Codex native binary not found at /tmp/test-archon/vendor/codex/codex')
     );
 
-    const client = new CodexClient();
+    const client = new CodexProvider();
     const generator = client.sendQuery('test prompt', '/tmp/test');
 
     await expect(generator.next()).rejects.toThrow('Codex native binary not found');
@@ -129,7 +129,7 @@ describe('CodexClient binary mode resolution', () => {
       .mockRejectedValueOnce(new Error('Codex CLI binary not found'))
       .mockResolvedValueOnce('/tmp/test-archon/vendor/codex/codex');
 
-    const client = new CodexClient();
+    const client = new CodexProvider();
 
     // First call fails
     await expect(client.sendQuery('test prompt', '/tmp/test').next()).rejects.toThrow(
@@ -150,7 +150,7 @@ describe('CodexClient binary mode resolution', () => {
   test('does not pass codexPathOverride when resolver returns undefined', async () => {
     mockResolveCodexBinaryPath.mockResolvedValueOnce(undefined);
 
-    const client = new CodexClient();
+    const client = new CodexProvider();
     const generator = client.sendQuery('test prompt', '/tmp/test');
 
     for await (const _chunk of generator) {
@@ -167,7 +167,7 @@ describe('CodexClient binary mode resolution', () => {
       assistants: { codex: { codexBinaryPath: '/user/custom/codex' } },
     });
 
-    const client = new CodexClient();
+    const client = new CodexProvider();
     const generator = client.sendQuery('test prompt', '/tmp/test');
 
     for await (const _chunk of generator) {

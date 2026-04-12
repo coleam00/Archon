@@ -124,7 +124,7 @@ Step-by-step content here. The agent loads this when the skill activates.
 ## Skill Discovery
 
 Skills are discovered from these locations (via `settingSources: ['project']`
-set in ClaudeClient):
+set in ClaudeProvider):
 
 | Location | Scope |
 |----------|-------|

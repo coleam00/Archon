@@ -68,7 +68,7 @@ These are implementation constraints, not slogans. Apply them by default.
 
 **SRP + ISP — Single Responsibility + Interface Segregation**
 - Keep each module and package focused on one concern
-- Extend behavior by implementing existing narrow interfaces (`IPlatformAdapter`, `IAssistantClient`, `IDatabase`, `IWorkflowStore`) whenever possible
+- Extend behavior by implementing existing narrow interfaces (`IPlatformAdapter`, `IAgentProvider`, `IDatabase`, `IWorkflowStore`) whenever possible
 - Avoid fat interfaces and "god modules" that mix policy, transport, and storage
 - Do not add unrelated methods to an existing interface — define a new one
 
@@ -268,7 +268,7 @@ packages/
 │       └── cli.ts            # CLI entry point
 ├── core/                     # @archon/core - Shared business logic
 │   └── src/
-│       ├── clients/          # AI SDK clients (Claude, Codex)
+│       ├── providers/         # AI SDK providers (Claude, Codex)
 │       ├── config/           # YAML config loading
 │       ├── db/               # Database connection, queries
 │       ├── handlers/         # Command handler (slash commands)
@@ -289,7 +289,7 @@ packages/
 │       ├── executor.ts       # Workflow execution orchestrator (executeWorkflow)
 │       ├── dag-executor.ts   # DAG-specific execution logic
 │       ├── store.ts          # IWorkflowStore interface (database abstraction)
-│       ├── deps.ts           # WorkflowDeps injection types (IWorkflowPlatform, IWorkflowAssistantClient)
+│       ├── deps.ts           # WorkflowDeps injection types (IWorkflowPlatform, IWorkflowAgentProvider)
 │       ├── event-emitter.ts  # Workflow observability events
 │       ├── logger.ts         # JSONL file logger
 │       ├── validator.ts      # Resource validation (command files, MCP configs, skill dirs)
@@ -404,7 +404,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 - **@archon/isolation**: Worktree isolation types, providers, resolver, error classifiers (depends only on @archon/git + @archon/paths)
 - **@archon/workflows**: Workflow engine - loader, router, executor, DAG, logger, bundled defaults (depends only on @archon/git + @archon/paths + @hono/zod-openapi + zod; DB/AI/config injected via `WorkflowDeps`)
 - **@archon/cli**: Command-line interface for running workflows and starting the web UI server (depends on @archon/server + @archon/adapters for the serve command)
-- **@archon/core**: Business logic, database, orchestration, AI clients (provides `createWorkflowStore()` adapter bridging core DB → `IWorkflowStore`)
+- **@archon/core**: Business logic, database, orchestration, AI providers (provides `createWorkflowStore()` adapter bridging core DB → `IWorkflowStore`)
 - **@archon/adapters**: Platform adapters for Slack, Telegram, GitHub, Discord (depends on @archon/core)
 - **@archon/server**: OpenAPIHono HTTP server (Zod + OpenAPI spec generation via `@hono/zod-openapi`), Web adapter (SSE), API routes, Web UI static serving (depends on @archon/adapters)
 - **@archon/web**: React frontend (Vite + Tailwind v4 + shadcn/ui + Zustand), SSE streaming to server. `WorkflowRunStatus`, `WorkflowDefinition`, and `DagNode` are all derived from `src/lib/api.generated.d.ts` (generated from the OpenAPI spec via `bun generate:types`; never import from `@archon/workflows`)
@@ -439,10 +439,10 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 - Session management: Create new or resume existing
 - Stream AI responses to platform
 
-**4. AI Assistant Clients** (`packages/core/src/clients/`)
-- Implement `IAssistantClient` interface
-- **ClaudeClient**: `@anthropic-ai/claude-agent-sdk`
-- **CodexClient**: `@openai/codex-sdk`
+**4. AI Agent Providers** (`packages/core/src/providers/`)
+- Implement `IAgentProvider` interface
+- **ClaudeProvider**: `@anthropic-ai/claude-agent-sdk`
+- **CodexProvider**: `@openai/codex-sdk`
 - Streaming: `for await (const event of events) { await platform.send(event) }`
 
 ### Configuration
@@ -561,7 +561,7 @@ curl http://localhost:3637/api/conversations/<conversationId>/messages
 
 **Quick reference:**
 - **Platform Adapters**: Implement `IPlatformAdapter`, handle auth, polling/webhooks
-- **AI Clients**: Implement `IAssistantClient`, session management, streaming
+- **AI Providers**: Implement `IAgentProvider`, session management, streaming
 - **Slash Commands**: Add to command-handler.ts, update database, no AI
 - **Database Operations**: Use `IDatabase` interface (supports PostgreSQL and SQLite via adapters)
 

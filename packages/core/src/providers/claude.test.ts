@@ -16,17 +16,17 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => ({
   query: mockQuery,
 }));
 
-import { ClaudeClient } from './claude';
+import { ClaudeProvider } from './claude';
 import * as claudeModule from './claude';
 import * as codebaseDb from '../db/codebases';
 import * as envLeakScanner from '../utils/env-leak-scanner';
 import * as configLoader from '../config/config-loader';
 
-describe('ClaudeClient', () => {
-  let client: ClaudeClient;
+describe('ClaudeProvider', () => {
+  let client: ClaudeProvider;
 
   beforeEach(() => {
-    client = new ClaudeClient({ retryBaseDelayMs: 1 });
+    client = new ClaudeProvider({ retryBaseDelayMs: 1 });
     mockQuery.mockClear();
     mockLogger.info.mockClear();
     mockLogger.warn.mockClear();
@@ -37,7 +37,7 @@ describe('ClaudeClient', () => {
   describe('constructor', () => {
     test('throws when running as root (UID 0)', () => {
       const spy = spyOn(claudeModule, 'getProcessUid').mockReturnValue(0);
-      expect(() => new ClaudeClient()).toThrow(
+      expect(() => new ClaudeProvider()).toThrow(
         'does not support bypassPermissions when running as root'
       );
       spy.mockRestore();
@@ -45,13 +45,13 @@ describe('ClaudeClient', () => {
 
     test('does not throw for non-root user', () => {
       const spy = spyOn(claudeModule, 'getProcessUid').mockReturnValue(1000);
-      expect(() => new ClaudeClient()).not.toThrow();
+      expect(() => new ClaudeProvider()).not.toThrow();
       spy.mockRestore();
     });
 
     test('does not throw when process.getuid is unavailable (Windows)', () => {
       const spy = spyOn(claudeModule, 'getProcessUid').mockReturnValue(undefined);
-      expect(() => new ClaudeClient()).not.toThrow();
+      expect(() => new ClaudeProvider()).not.toThrow();
       spy.mockRestore();
     });
   });
