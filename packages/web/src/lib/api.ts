@@ -19,6 +19,10 @@ export const SSE_BASE_URL = import.meta.env.DEV
   ? `http://${window.location.hostname}:${apiPort}`
   : '';
 
+export function getSSEStreamUrl(streamPath: string): string {
+  return `${SSE_BASE_URL}/api/stream/${streamPath}`;
+}
+
 export interface ConversationResponse {
   id: string;
   platform_type: string;

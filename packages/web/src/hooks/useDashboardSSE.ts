@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { getSSEStreamUrl } from '@/lib/api';
 import { workflowSSEHandlers } from '@/stores/workflow-store';
 import type {
   WorkflowStatusEvent,
@@ -10,7 +11,7 @@ import type {
 /** Connects to the multiplexed dashboard SSE stream and routes events to the Zustand store. */
 export function useDashboardSSE(): void {
   useEffect(() => {
-    const es = new EventSource('/api/stream/__dashboard__');
+    const es = new EventSource(getSSEStreamUrl('__dashboard__'));
 
     es.onmessage = (e: MessageEvent<string>): void => {
       let event: { type: string };
