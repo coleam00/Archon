@@ -23,6 +23,10 @@ mock.module('@archon/paths', () => ({
     return paths;
   },
   getDefaultCommandsPath: () => '/nonexistent/defaults',
+  // Deliberately point at a nonexistent path so global script fallback is a no-op
+  // in tests that don't set up a global scripts dir. Tests that exercise the
+  // fallback live in dag-executor-script-global.test.ts (separate batch).
+  getArchonHome: () => '/nonexistent/archon-home',
 }));
 
 // --- Imports (after mocks) ---

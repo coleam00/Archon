@@ -42,7 +42,7 @@ import {
   isApprovalContext,
 } from './schemas';
 import { formatToolCall } from './utils/tool-formatter';
-import { createLogger } from '@archon/paths';
+import { createLogger, getArchonHome } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { evaluateCondition } from './condition-evaluator';
 import { isClaudeModel, isModelCompatible } from './model-validation';
@@ -1527,13 +1527,39 @@ async function executeScriptNode(
         args = ['run', ...withFlags, 'python', '-c', finalScript];
       }
     } else {
-      // Named script — look up in .archon/scripts/ directory
+      // Named script — look up in .archon/scripts/ directory.
+      // Priority: repo-local first, then ~/.archon/.archon/scripts/ (user-global).
+      // Mirrors the global command/workflow fallback so users can keep per-machine
+      // script libraries outside any repo.
       const scriptsDir = resolve(cwd, '.archon', 'scripts');
       const scripts = await discoverScripts(scriptsDir);
-      const scriptDef = scripts.get(finalScript);
+      let scriptDef = scripts.get(finalScript);
 
       if (!scriptDef) {
-        const errorMsg = `Script node '${node.id}': named script '${finalScript}' not found in .archon/scripts/`;
+        const globalScriptsDir = resolve(getArchonHome(), '.archon', 'scripts');
+        if (globalScriptsDir !== scriptsDir) {
+          try {
+            const globalScripts = await discoverScripts(globalScriptsDir);
+            scriptDef = globalScripts.get(finalScript);
+            if (scriptDef) {
+              getLog().debug(
+                { nodeId: node.id, scriptName: finalScript, source: 'global' },
+                'dag.script_loaded_global'
+              );
+            }
+          } catch (discoveryErr) {
+            // discoverScripts swallows ENOENT; surface any other error as a warning
+            // but still fall through to the not-found path below.
+            getLog().warn(
+              { err: discoveryErr as Error, globalScriptsDir },
+              'dag.script_global_discovery_failed'
+            );
+          }
+        }
+      }
+
+      if (!scriptDef) {
+        const errorMsg = `Script node '${node.id}': named script '${finalScript}' not found in .archon/scripts/ (repo or global)`;
         getLog().error({ nodeId: node.id, scriptName: finalScript }, 'script_not_found');
         await safeSendMessage(platform, conversationId, errorMsg, nodeContext);
         await logNodeError(logDir, workflowRun.id, node.id, errorMsg);

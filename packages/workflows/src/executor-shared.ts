@@ -195,6 +195,46 @@ export async function loadCommandPrompt(
     }
   }
 
+  // Then search the user-global dir (~/.archon/.archon/commands/)
+  // Mirrors the global workflow discovery behavior so users can keep
+  // per-machine command libraries outside any repo.
+  const archonHome = archonPaths.getArchonHome();
+  for (const folder of searchPaths) {
+    const filePath = join(archonHome, folder, `${commandName}.md`);
+    try {
+      const content = await readFile(filePath, 'utf-8');
+      if (!content.trim()) {
+        getLog().error({ commandName, source: 'global' }, 'command_file_empty');
+        return {
+          success: false,
+          reason: 'empty_file',
+          message: `Command file is empty (global): ${commandName}.md`,
+        };
+      }
+      getLog().debug({ commandName, folder, source: 'global' }, 'command_loaded_global');
+      return { success: true, content };
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') {
+        continue;
+      }
+      if (err.code === 'EACCES') {
+        getLog().error({ commandName, filePath }, 'command_file_permission_denied');
+        return {
+          success: false,
+          reason: 'permission_denied',
+          message: `Permission denied reading global command: ${commandName}.md`,
+        };
+      }
+      getLog().error({ err, commandName, filePath }, 'command_file_read_error');
+      return {
+        success: false,
+        reason: 'read_error',
+        message: `Error reading global command ${commandName}.md: ${err.message}`,
+      };
+    }
+  }
+
   // If not found in repo and app defaults enabled, search app defaults
   const loadDefaultCommands = config.defaults?.loadDefaultCommands ?? true;
   if (loadDefaultCommands) {
@@ -235,7 +275,10 @@ export async function loadCommandPrompt(
   }
 
   // Not found anywhere
-  const allSearchPaths = loadDefaultCommands ? [...searchPaths, 'app defaults'] : searchPaths;
+  const globalPaths = searchPaths.map(p => `${archonHome}/${p}`);
+  const allSearchPaths = loadDefaultCommands
+    ? [...searchPaths, ...globalPaths, 'app defaults']
+    : [...searchPaths, ...globalPaths];
   getLog().error({ commandName, searchPaths: allSearchPaths }, 'command_not_found');
   return {
     success: false,
