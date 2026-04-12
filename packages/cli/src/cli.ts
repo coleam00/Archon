@@ -7,18 +7,18 @@
  *   archon workflow run <name> [msg]  Run a workflow
  *   archon version                    Show version info
  */
+// Must be the very first import — strips Bun-auto-loaded CWD .env keys before
+// any module reads process.env at init time (e.g. @archon/paths/logger reads LOG_LEVEL).
+import '@archon/paths/strip-cwd-env-boot';
 import { parseArgs } from 'util';
 import { config } from 'dotenv';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 
-// Load .env from global Archon config (override: true so ~/.archon/.env
-// always wins over any Bun-auto-loaded CWD vars).
-//
-// Credential safety: target repo .env keys that Bun auto-loads from CWD
-// cannot leak into AI subprocesses — SUBPROCESS_ENV_ALLOWLIST blocks them.
-// The env-leak gate provides a second layer by scanning target repos before
-// spawning. No CWD stripping needed.
+// Load ~/.archon/.env with override: true — Archon-specific config must win
+// over shell-inherited env vars (e.g. PORT, LOG_LEVEL from shell profile).
+// CWD .env keys are already gone (stripCwdEnv above), so override only
+// affects shell-inherited values, which is the intended behavior.
 const globalEnvPath = resolve(process.env.HOME ?? '~', '.archon', '.env');
 if (existsSync(globalEnvPath)) {
   const result = config({ path: globalEnvPath, override: true });
@@ -29,6 +29,9 @@ if (existsSync(globalEnvPath)) {
     process.exit(1);
   }
 }
+
+// CLAUDECODE=1 warning is emitted inside stripCwdEnv() (boot import above)
+// BEFORE the marker is deleted from process.env. No duplicate warning here.
 
 // Smart defaults for Claude auth
 // If no explicit tokens, default to global auth from `claude /login`

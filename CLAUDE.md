@@ -431,7 +431,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 ### Architecture Layers
 
 **Package Split:**
-- **@archon/paths**: Path resolution utilities, Pino logger factory, web dist cache path (`getWebDistDir`) (no @archon/* deps)
+- **@archon/paths**: Path resolution utilities, Pino logger factory, web dist cache path (`getWebDistDir`), CWD env stripper (`stripCwdEnv`, `strip-cwd-env-boot`) (no @archon/* deps; `pino` and `dotenv` are allowed external deps)
 - **@archon/git**: Git operations - worktrees, branches, repos, exec wrappers (depends only on @archon/paths)
 - **@archon/isolation**: Worktree isolation types, providers, resolver, error classifiers (depends only on @archon/git + @archon/paths)
 - **@archon/workflows**: Workflow engine - loader, router, executor, DAG, logger, bundled defaults (depends only on @archon/git + @archon/paths + @hono/zod-openapi + zod; DB/AI/config injected via `WorkflowDeps`)

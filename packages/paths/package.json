@@ -1,17 +1,20 @@
 {
   "name": "@archon/paths",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./strip-cwd-env": "./src/strip-cwd-env.ts",
+    "./strip-cwd-env-boot": "./src/strip-cwd-env-boot.ts"
   },
   "scripts": {
     "test": "bun test src/",
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
+    "dotenv": "^17",
     "pino": "^9",
     "pino-pretty": "^13"
   },

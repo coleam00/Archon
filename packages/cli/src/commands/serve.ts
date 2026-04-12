@@ -60,7 +60,6 @@ export async function serveCommand(opts: ServeOptions): Promise<number> {
     await startServer({
       webDistPath: webDistDir,
       port: opts.port,
-      skipPlatformAdapters: true,
     });
   } catch (err) {
     const error = toError(err);

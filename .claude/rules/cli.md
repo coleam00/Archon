@@ -29,9 +29,10 @@ bun run cli version
 
 ## Startup Behavior
 
-1. Loads `~/.archon/.env` with `override: true` (Archon's config wins over any Bun-auto-loaded CWD vars)
-2. Smart Claude auth default: if no `CLAUDE_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`, sets `CLAUDE_USE_GLOBAL_AUTH=true`
-3. Imports all commands AFTER dotenv setup
+1. `@archon/paths/strip-cwd-env-boot` (first import) removes all Bun-auto-loaded CWD `.env` keys from `process.env`
+2. Loads `~/.archon/.env` with `override: true` (Archon config wins over shell-inherited vars)
+3. Smart Claude auth default: if no `CLAUDE_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`, sets `CLAUDE_USE_GLOBAL_AUTH=true`
+4. Imports all commands AFTER dotenv setup
 
 ## WorkflowRunOptions Interface
 

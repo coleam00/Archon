@@ -3,12 +3,13 @@
  * Multi-platform AI coding assistant (Telegram, Discord, Slack, GitHub, Gitea)
  */
 
-// Load environment variables FIRST — before any application imports.
-//
-// Credential safety: target repo `.env` keys (like CLAUDE_API_KEY) that Bun
-// auto-loads from CWD cannot leak into AI subprocesses because
-// SUBPROCESS_ENV_ALLOWLIST blocks them. The env-leak gate provides a second
-// layer by scanning target repos before spawning. No CWD stripping needed.
+// Strip CWD .env keys FIRST — before any application imports read process.env.
+// Bun auto-loads .env/.env.local/.env.development/.env.production from CWD;
+// when `bun run dev:server` is run from inside a target repo those keys leak
+// into the server process. stripCwdEnv() removes them before ~/.archon/.env loads.
+import '@archon/paths/strip-cwd-env-boot';
+
+// Load environment variables — after CWD stripping, before application imports.
 import { config } from 'dotenv';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
@@ -38,6 +39,9 @@ if (existsSync(globalEnvPath)) {
     console.error('Hint: Check for syntax errors in your ~/.archon/.env file.');
   }
 }
+
+// CLAUDECODE=1 warning is emitted inside stripCwdEnv() (boot import above)
+// BEFORE the marker is deleted from process.env. No duplicate warning here.
 
 // Smart default: use Claude Code's built-in OAuth if no explicit credentials
 if (

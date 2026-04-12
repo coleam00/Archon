@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-04-12
+
+Web UI workflow experience improvements, CWD environment leak protection, and bug fixes.
+
+### Added
+
+- Workflow result card now shows status, duration, node count, and artifact links in chat (#1015)
+- Loop iteration progress display in the workflow execution view (#1014)
+- Artifact file paths in chat messages are now clickable (#1023)
+
+### Changed
+
+- CWD `.env` variables are now stripped from AI subprocess environments at the `@archon/paths` layer, replacing the old `SUBPROCESS_ENV_ALLOWLIST` approach. Prevents accidental credential leaks from target repo `.env` files (#1067, #1030, #1098, #1070)
+- Update check cache TTL reduced from 24 hours to 1 hour
+
+### Fixed
+
+- Duplicate text and tool calls appearing in workflow execution view
+- `workflow_step` SSE events not handled correctly, causing missing progress updates
+- Nested interactive elements in workflow UI causing React warnings
+- Workflow status messages not splitting correctly in WorkflowLogs
+- Incorrect `remainingMessage` suppression in stream mode causing lost output
+- Binary builds now use `BUNDLED_VERSION` for the app version instead of reading `package.json`
+
 ## [0.3.5] - 2026-04-10
 
 Fixes for `archon serve` process lifecycle and static file serving.
