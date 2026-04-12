@@ -230,14 +230,24 @@ function WorkflowBuilderInner(): React.ReactElement {
     [selectedNodeId, setNodes, markDirty]
   );
 
+  // Delete a node by explicit id. Used by both the keyboard/inspector path
+  // (via handleNodeDelete below, which deletes the currently-selected node)
+  // and the canvas right-click context menu (#971).
+  const handleNodeDeleteById = useCallback(
+    (nodeId: string): void => {
+      pushSnapshot({ nodes, edges });
+      setNodes(nds => nds.filter(n => n.id !== nodeId));
+      setEdges(eds => eds.filter(e => e.source !== nodeId && e.target !== nodeId));
+      setSelectedNodeId(prev => (prev === nodeId ? null : prev));
+      markDirty();
+    },
+    [setNodes, setEdges, markDirty, pushSnapshot, nodes, edges]
+  );
+
   const handleNodeDelete = useCallback((): void => {
     if (!selectedNodeId) return;
-    pushSnapshot({ nodes, edges });
-    setNodes(nds => nds.filter(n => n.id !== selectedNodeId));
-    setEdges(eds => eds.filter(e => e.source !== selectedNodeId && e.target !== selectedNodeId));
-    setSelectedNodeId(null);
-    markDirty();
-  }, [selectedNodeId, setNodes, setEdges, markDirty, pushSnapshot, nodes, edges]);
+    handleNodeDeleteById(selectedNodeId);
+  }, [selectedNodeId, handleNodeDeleteById]);
 
   // Toolbar action handlers
   const handleValidate = useCallback(async (): Promise<void> => {
@@ -476,6 +486,7 @@ function WorkflowBuilderInner(): React.ReactElement {
                   setNodes={setNodes}
                   setEdges={setEdges}
                   onNodeSelect={setSelectedNodeId}
+                  onNodeDelete={handleNodeDeleteById}
                   onDirty={markDirty}
                   onPushSnapshot={(): void => {
                     pushSnapshot({ nodes, edges });

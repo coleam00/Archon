@@ -82,6 +82,7 @@ interface WorkflowCanvasProps {
   setNodes: React.Dispatch<React.SetStateAction<DagFlowNode[]>>;
   setEdges: React.Dispatch<React.SetStateAction<Edge[]>>;
   onNodeSelect: (nodeId: string | null) => void;
+  onNodeDelete: (nodeId: string) => void;
   onDirty: () => void;
   onPushSnapshot?: () => void;
   commands: CommandEntry[];
@@ -100,12 +101,19 @@ export function WorkflowCanvas({
   setNodes,
   setEdges,
   onNodeSelect,
+  onNodeDelete,
   onDirty,
   onPushSnapshot,
   commands,
 }: WorkflowCanvasProps): React.ReactElement {
   const { screenToFlowPosition } = useReactFlow();
   const [quickAddPosition, setQuickAddPosition] = useState<QuickAddPosition | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    nodeId: string;
+  } | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
 
   const nodeTypes: NodeTypes = useMemo(() => ({ dagNode: dagNodeComponent }), []);
 
@@ -165,9 +173,12 @@ export function WorkflowCanvas({
       };
 
       setNodes(nds => [...nds, newNode]);
+      // Auto-select the new node so keyboard shortcuts (Delete/Backspace) and the
+      // inspector panel work immediately without an extra click. Fixes #971.
+      onNodeSelect(id);
       onDirty();
     },
-    [screenToFlowPosition, setNodes, onDirty]
+    [screenToFlowPosition, setNodes, onNodeSelect, onDirty]
   );
 
   // Track whether we've already pushed a snapshot for the current drag gesture
@@ -279,15 +290,61 @@ export function WorkflowCanvas({
       };
 
       setNodes(nds => [...nds, newNode]);
+      // Auto-select for the same reason as onDrop above (#971).
+      onNodeSelect(id);
       onDirty();
       setQuickAddPosition(null);
     },
-    [quickAddPosition, setNodes, onDirty]
+    [quickAddPosition, setNodes, onNodeSelect, onDirty]
   );
 
   const handleQuickAddClose = useCallback(() => {
     setQuickAddPosition(null);
   }, []);
+
+  // Right-click on a node opens a small context menu with a Delete option (#971).
+  // We must call preventDefault() to suppress the browser's native menu.
+  const handleNodeContextMenu = useCallback(
+    (e: React.MouseEvent, node: DagFlowNode) => {
+      e.preventDefault();
+      onNodeSelect(node.id);
+      setContextMenu({ x: e.clientX, y: e.clientY, nodeId: node.id });
+    },
+    [onNodeSelect]
+  );
+
+  const closeContextMenu = useCallback(() => {
+    setContextMenu(null);
+  }, []);
+
+  // Dismiss the context menu on Escape or any click/contextmenu outside it.
+  useEffect(() => {
+    if (!contextMenu) return;
+
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') closeContextMenu();
+    };
+    const onPointer = (e: MouseEvent): void => {
+      if (
+        contextMenuRef.current &&
+        e.target instanceof Node &&
+        contextMenuRef.current.contains(e.target)
+      ) {
+        return;
+      }
+      closeContextMenu();
+    };
+
+    window.addEventListener('keydown', onKey);
+    // Use capture so we beat ReactFlow's own handlers and any stopPropagation.
+    window.addEventListener('mousedown', onPointer, true);
+    window.addEventListener('contextmenu', onPointer, true);
+    return (): void => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('mousedown', onPointer, true);
+      window.removeEventListener('contextmenu', onPointer, true);
+    };
+  }, [contextMenu, closeContextMenu]);
 
   return (
     <div className="relative w-full h-full">
@@ -302,6 +359,7 @@ export function WorkflowCanvas({
         onNodeClick={(_e, node): void => {
           onNodeSelect(node.id);
         }}
+        onNodeContextMenu={handleNodeContextMenu}
         onPaneClick={handlePaneClick}
         nodeTypes={nodeTypes}
         panOnDrag
@@ -323,6 +381,29 @@ export function WorkflowCanvas({
           onClose={handleQuickAddClose}
           commands={commands}
         />
+      )}
+
+      {/* Right-click context menu (#971). Positioned with fixed viewport coords. */}
+      {contextMenu && (
+        <div
+          ref={contextMenuRef}
+          role="menu"
+          aria-label="Node actions"
+          className="fixed z-50 min-w-[140px] rounded-md border border-border bg-surface-elevated py-1 shadow-md"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={(): void => {
+              onNodeDelete(contextMenu.nodeId);
+              closeContextMenu();
+            }}
+            className="w-full px-3 py-1.5 text-left text-xs text-error hover:bg-surface"
+          >
+            Delete node
+          </button>
+        </div>
       )}
     </div>
   );

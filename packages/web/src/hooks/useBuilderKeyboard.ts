@@ -101,6 +101,11 @@ export function useBuilderKeyboard(actions: BuilderKeyboardActions, enabled = tr
           actions.onAddBash();
           break;
         case 'Delete':
+        case 'Backspace':
+          // Backspace is the natural delete key on macOS keyboards, which lack
+          // a dedicated Delete key. The isInputTarget() guard above prevents
+          // this from interfering with text fields. Fixes #971.
+          e.preventDefault();
           actions.onDeleteSelected();
           break;
         case 'f':
