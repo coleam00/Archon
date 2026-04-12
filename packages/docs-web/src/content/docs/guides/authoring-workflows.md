@@ -483,7 +483,7 @@ When a `nodes:` (DAG) workflow fails (including due to a server restart), the ne
 3. Completed nodes are skipped; only failed and not-yet-run nodes are executed.
 4. You receive a platform message like: `Resuming workflow — skipping 3 already-completed node(s).`
 
-**Server restart**: If a server restart leaves runs in `running` status, they are automatically marked as `failed` on the next startup (with `metadata.failure_reason = 'server_restart'`). The next invocation of the same workflow at the same path auto-resumes from completed nodes.
+**Server restart**: If a server restart leaves server-owned runs in `running` status, they are automatically marked as `failed` on the next startup (with `metadata.failure_reason = 'server_restart'`). CLI-owned runs are excluded because they can continue executing outside the server process while sharing the same database. The next invocation of the same workflow at the same path auto-resumes from completed nodes.
 
 **Known limitation**: AI session context from prior nodes is not restored. If a downstream node relies on in-context knowledge from a prior run's session (rather than artifacts), it may need to re-read those artifacts explicitly.
 

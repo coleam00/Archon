@@ -828,6 +828,8 @@ export async function updateWorkflowActivity(id: string): Promise<void> {
 /**
  * Transition all 'running' workflow runs to 'failed'.
  * Called on server startup to mark runs orphaned by process termination.
+ * Excludes CLI-owned runs because they may still be executing in a separate
+ * process while sharing the same database with the server.
  * The next invocation of the same workflow at the same path will auto-resume
  * from completed nodes via findResumableRun.
  */
@@ -839,7 +841,10 @@ export async function failOrphanedRuns(): Promise<{ count: number }> {
        SET status = 'failed',
            completed_at = ${dialect.now()},
            metadata = ${dialect.jsonMerge('metadata', 1)}
-       WHERE status = 'running'`,
+       WHERE status = 'running'
+         AND conversation_id IN (
+           SELECT id FROM remote_agent_conversations WHERE platform_type != 'cli'
+         )`,
       [JSON.stringify({ failure_reason: 'server_restart' })]
     );
     const count = result.rowCount ?? 0;

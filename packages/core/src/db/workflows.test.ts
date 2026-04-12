@@ -618,7 +618,7 @@ describe('workflows database', () => {
   });
 
   describe('failOrphanedRuns', () => {
-    test('transitions all running runs to failed with completed_at and returns count', async () => {
+    test('transitions non-CLI running runs to failed with completed_at and returns count', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 2));
 
       const result = await failOrphanedRuns();
@@ -628,6 +628,7 @@ describe('workflows database', () => {
       expect(query).toContain("status = 'failed'");
       expect(query).toContain('completed_at = NOW()');
       expect(query).toContain("status = 'running'");
+      expect(query).toContain("platform_type != 'cli'");
       expect(params).toContain(JSON.stringify({ failure_reason: 'server_restart' }));
     });
 
