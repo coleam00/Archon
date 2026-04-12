@@ -27,6 +27,7 @@ import {
   registerRepository,
   ConversationNotFoundError,
   generateAndSetTitle,
+  dispatchMatchedWebhookRule,
   EnvLeakError,
   scanPathForSensitiveKeys,
 } from '@archon/core';
@@ -69,6 +70,7 @@ import * as isolationEnvDb from '@archon/core/db/isolation-environments';
 import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventDb from '@archon/core/db/workflow-events';
 import * as messageDb from '@archon/core/db/messages';
+import * as webhookRuleDb from '@archon/core/db/webhook-rules';
 import { errorSchema } from './schemas/common.schemas';
 import { updateCheckResponseSchema } from './schemas/system.schemas';
 import {
@@ -122,6 +124,15 @@ import {
   configResponseSchema,
   codebaseEnvironmentsResponseSchema,
 } from './schemas/config.schemas';
+import {
+  webhookRuleSchema,
+  webhookRuleListResponseSchema,
+  webhookRuleBodySchema,
+  webhookRuleUpdateBodySchema,
+  webhookRuleIdParamsSchema,
+  webhookRuleOptionsResponseSchema,
+  deleteWebhookRuleResponseSchema,
+} from './schemas/webhook-rule.schemas';
 
 // Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
@@ -265,6 +276,97 @@ const getCommandsRoute = createRoute({
       description: 'OK',
     },
     400: jsonError('Bad request'),
+    500: jsonError('Server error'),
+  },
+});
+
+const listWebhookRulesRoute = createRoute({
+  method: 'get',
+  path: '/api/webhook-rules',
+  tags: ['Webhook Rules'],
+  summary: 'List configured webhook rules',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: webhookRuleListResponseSchema } },
+      description: 'Configured webhook rules',
+    },
+    500: jsonError('Server error'),
+  },
+});
+
+const getWebhookRuleOptionsRoute = createRoute({
+  method: 'get',
+  path: '/api/webhook-rules/options',
+  tags: ['Webhook Rules'],
+  summary: 'List codebase and workflow options for webhook rules',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: webhookRuleOptionsResponseSchema } },
+      description: 'Webhook rule options',
+    },
+    500: jsonError('Server error'),
+  },
+});
+
+const createWebhookRuleRoute = createRoute({
+  method: 'post',
+  path: '/api/webhook-rules',
+  tags: ['Webhook Rules'],
+  summary: 'Create a slug-based webhook rule',
+  request: {
+    body: {
+      content: { 'application/json': { schema: webhookRuleBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: webhookRuleSchema } },
+      description: 'Created webhook rule',
+    },
+    400: jsonError('Bad request'),
+    409: jsonError('Conflict'),
+    500: jsonError('Server error'),
+  },
+});
+
+const updateWebhookRuleRoute = createRoute({
+  method: 'patch',
+  path: '/api/webhook-rules/{id}',
+  tags: ['Webhook Rules'],
+  summary: 'Update a slug-based webhook rule',
+  request: {
+    params: webhookRuleIdParamsSchema,
+    body: {
+      content: { 'application/json': { schema: webhookRuleUpdateBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: webhookRuleSchema } },
+      description: 'Updated webhook rule',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
+    409: jsonError('Conflict'),
+    500: jsonError('Server error'),
+  },
+});
+
+const deleteWebhookRuleRoute = createRoute({
+  method: 'delete',
+  path: '/api/webhook-rules/{id}',
+  tags: ['Webhook Rules'],
+  summary: 'Delete a webhook rule',
+  request: {
+    params: webhookRuleIdParamsSchema,
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: deleteWebhookRuleResponseSchema } },
+      description: 'Webhook rule deleted',
+    },
     500: jsonError('Server error'),
   },
 });
@@ -865,7 +967,7 @@ export function registerApiRoutes(
 ): void {
   function apiError(
     c: Context,
-    status: 400 | 404 | 422 | 500,
+    status: 400 | 404 | 409 | 422 | 500,
     message: string,
     detail?: string
   ): Response {
@@ -885,9 +987,167 @@ export function registerApiRoutes(
     });
   }
 
+  function serializeWebhookRule(
+    rule:
+      | Awaited<ReturnType<typeof webhookRuleDb.getWebhookRule>>
+      | Awaited<ReturnType<typeof webhookRuleDb.listWebhookRules>>[number],
+    codebaseName?: string
+  ): {
+    id: string;
+    codebaseId: string;
+    codebaseName: string;
+    urlSlug: string;
+    workflowName: string;
+    enabled: boolean;
+    createdAt: string;
+    updatedAt: string;
+  } {
+    if (!rule) {
+      throw new Error('Webhook rule serialization requires a rule');
+    }
+
+    return {
+      id: rule.id,
+      codebaseId: rule.codebase_id,
+      codebaseName:
+        codebaseName ??
+        ('codebase_name' in rule && typeof rule.codebase_name === 'string'
+          ? rule.codebase_name
+          : ''),
+      urlSlug: rule.path_slug,
+      workflowName: rule.workflow_name,
+      enabled: rule.enabled,
+      createdAt:
+        rule.created_at instanceof Date ? rule.created_at.toISOString() : String(rule.created_at),
+      updatedAt:
+        rule.updated_at instanceof Date ? rule.updated_at.toISOString() : String(rule.updated_at),
+    };
+  }
+
+  async function discoverWorkflowsForCodebase(
+    codebase: Awaited<ReturnType<typeof codebaseDb.getCodebase>>
+  ): Promise<{ name: string; description: string | null; source: 'project' | 'bundled' }[]> {
+    if (!codebase) return [];
+
+    const result = await discoverWorkflowsWithConfig(codebase.default_cwd, loadConfig);
+    return result.workflows.map(entry => ({
+      name: entry.workflow.name,
+      description: entry.workflow.description ?? null,
+      source: entry.source,
+    }));
+  }
+
+  async function validateWebhookRuleTarget(input: {
+    codebaseId: string;
+    urlSlug: string;
+    workflowName: string;
+  }): Promise<
+    | { ok: true; codebase: NonNullable<Awaited<ReturnType<typeof codebaseDb.getCodebase>>> }
+    | { ok: false; status: 400 | 404; message: string; detail?: string }
+  > {
+    const codebase = await codebaseDb.getCodebase(input.codebaseId);
+    if (!codebase) {
+      return {
+        ok: false,
+        status: 404,
+        message: 'Codebase not found',
+        detail: `No codebase with id "${input.codebaseId}"`,
+      };
+    }
+
+    if (!input.urlSlug.trim()) {
+      return {
+        ok: false,
+        status: 400,
+        message: 'Webhook URL slug is required',
+        detail: 'urlSlug must not be empty',
+      };
+    }
+
+    const workflows = await discoverWorkflowsForCodebase(codebase);
+    if (!workflows.some(workflow => workflow.name === input.workflowName)) {
+      return {
+        ok: false,
+        status: 400,
+        message: 'Workflow not found for codebase',
+        detail: `Workflow "${input.workflowName}" is not available for codebase "${codebase.name}"`,
+      };
+    }
+
+    return { ok: true, codebase };
+  }
+
   // CORS for Web UI — allow-all is fine for a single-developer tool.
   // Override with WEB_UI_ORIGIN env var to restrict if exposing publicly.
   app.use('/api/*', cors({ origin: process.env.WEB_UI_ORIGIN || '*' }));
+
+  app.post('/webhooks/:slug', async c => {
+    const pathSlug = c.req.param('slug') ?? '';
+    const contentType = c.req.header('content-type');
+
+    try {
+      const matchedRule = await webhookRuleDb.findWebhookRuleBySlug(pathSlug);
+      if (!matchedRule) {
+        return c.json({ error: 'Webhook rule not found' }, 404);
+      }
+
+      const codebase = await codebaseDb.getCodebase(matchedRule.codebase_id);
+      if (!codebase) {
+        getLog().error(
+          { pathSlug, codebaseId: matchedRule.codebase_id },
+          'generic_webhook_codebase_not_found'
+        );
+        return c.json({ error: 'Webhook rule target codebase not found' }, 404);
+      }
+
+      const rawBody = await c.req.text();
+      const conversationId = `webhook-${pathSlug}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const conversation = await conversationDb.getOrCreateConversation(
+        'web',
+        conversationId,
+        codebase.id
+      );
+      webAdapter.setConversationDbId(conversation.platform_conversation_id, conversation.id);
+
+      if (conversation.codebase_id !== codebase.id || conversation.cwd !== codebase.default_cwd) {
+        await conversationDb.updateConversation(conversation.id, {
+          codebase_id: codebase.id,
+          cwd: codebase.default_cwd,
+        });
+      }
+
+      await lockManager.acquireLock(conversationId, async () => {
+        await dispatchMatchedWebhookRule({
+          platform: webAdapter,
+          conversationId,
+          conversation: {
+            ...conversation,
+            codebase_id: codebase.id,
+            cwd: codebase.default_cwd,
+          },
+          codebase,
+          pathSlug,
+          rawBody,
+          contentType,
+          matchedRule,
+          isolationHints: { workflowType: 'thread', workflowId: conversationId },
+        });
+      });
+
+      return c.json(
+        {
+          accepted: true,
+          conversationId,
+          ruleId: matchedRule.id,
+          workflowName: matchedRule.workflow_name,
+        },
+        202
+      );
+    } catch (error) {
+      getLog().error({ err: error, pathSlug }, 'generic_webhook_dispatch_failed');
+      return c.json({ error: 'Failed to dispatch webhook' }, 500);
+    }
+  });
 
   // Shared lock/dispatch/error handling for message and workflow endpoints
   /** Maximum allowed upload size per file (10 MB) */
@@ -1713,6 +1973,127 @@ export function registerApiRoutes(
     } catch (error) {
       getLog().error({ err: error, codebaseId: id, key }, 'delete_env_var_failed');
       return apiError(c, 500, 'Failed to delete env var');
+    }
+  });
+
+  // GET /api/webhook-rules - List configured webhook rules
+  registerOpenApiRoute(listWebhookRulesRoute, async c => {
+    try {
+      const rules = await webhookRuleDb.listWebhookRules();
+      return c.json({ rules: rules.map(rule => serializeWebhookRule(rule)) });
+    } catch (error) {
+      getLog().error({ err: error }, 'list_webhook_rules_failed');
+      return apiError(c, 500, 'Failed to list webhook rules');
+    }
+  });
+
+  // GET /api/webhook-rules/options - Codebase and workflow options
+  // MUST be registered before /api/webhook-rules/{id}
+  registerOpenApiRoute(getWebhookRuleOptionsRoute, async c => {
+    try {
+      const codebases = await codebaseDb.listCodebases();
+      const workflowsByCodebase = await Promise.all(
+        codebases.map(async codebase => ({
+          codebaseId: codebase.id,
+          workflows: await discoverWorkflowsForCodebase(codebase),
+        }))
+      );
+
+      return c.json({
+        codebases: codebases.map(codebase => ({
+          id: codebase.id,
+          name: codebase.name,
+        })),
+        workflowsByCodebase,
+      });
+    } catch (error) {
+      getLog().error({ err: error }, 'get_webhook_rule_options_failed');
+      return apiError(c, 500, 'Failed to load webhook rule options');
+    }
+  });
+
+  // POST /api/webhook-rules - Create a webhook rule
+  registerOpenApiRoute(createWebhookRuleRoute, async c => {
+    try {
+      const body = getValidatedBody(c, webhookRuleBodySchema);
+      const validation = await validateWebhookRuleTarget(body);
+      if (!validation.ok) {
+        return apiError(c, validation.status, validation.message, validation.detail);
+      }
+
+      const rule = await webhookRuleDb.createWebhookRule({
+        codebase_id: body.codebaseId,
+        path_slug: body.urlSlug,
+        workflow_name: body.workflowName,
+        enabled: body.enabled,
+      });
+
+      return c.json(serializeWebhookRule(rule, validation.codebase.name));
+    } catch (error) {
+      if (webhookRuleDb.isWebhookRuleConflictError(error)) {
+        return apiError(
+          c,
+          409,
+          'Webhook rule conflict',
+          'A webhook rule already exists for this URL slug'
+        );
+      }
+      getLog().error({ err: error }, 'create_webhook_rule_failed');
+      return apiError(c, 500, 'Failed to create webhook rule');
+    }
+  });
+
+  // PATCH /api/webhook-rules/:id - Update a webhook rule
+  registerOpenApiRoute(updateWebhookRuleRoute, async c => {
+    try {
+      const id = c.req.param('id') ?? '';
+      const body = getValidatedBody(c, webhookRuleUpdateBodySchema);
+      const existingRule = await webhookRuleDb.getWebhookRule(id);
+      if (!existingRule) {
+        return apiError(c, 404, 'Webhook rule not found');
+      }
+
+      const nextState = {
+        codebaseId: body.codebaseId ?? existingRule.codebase_id,
+        urlSlug: body.urlSlug ?? existingRule.path_slug,
+        workflowName: body.workflowName ?? existingRule.workflow_name,
+      };
+      const validation = await validateWebhookRuleTarget(nextState);
+      if (!validation.ok) {
+        return apiError(c, validation.status, validation.message, validation.detail);
+      }
+
+      const updatedRule = await webhookRuleDb.updateWebhookRule(id, {
+        codebase_id: body.codebaseId,
+        path_slug: body.urlSlug,
+        workflow_name: body.workflowName,
+        enabled: body.enabled,
+      });
+
+      return c.json(serializeWebhookRule(updatedRule, validation.codebase.name));
+    } catch (error) {
+      if (webhookRuleDb.isWebhookRuleConflictError(error)) {
+        return apiError(
+          c,
+          409,
+          'Webhook rule conflict',
+          'A webhook rule already exists for this URL slug'
+        );
+      }
+      getLog().error({ err: error }, 'update_webhook_rule_failed');
+      return apiError(c, 500, 'Failed to update webhook rule');
+    }
+  });
+
+  // DELETE /api/webhook-rules/:id - Delete a webhook rule
+  registerOpenApiRoute(deleteWebhookRuleRoute, async c => {
+    try {
+      const id = c.req.param('id') ?? '';
+      await webhookRuleDb.deleteWebhookRule(id);
+      return c.json({ success: true });
+    } catch (error) {
+      getLog().error({ err: error }, 'delete_webhook_rule_failed');
+      return apiError(c, 500, 'Failed to delete webhook rule');
     }
   });
 

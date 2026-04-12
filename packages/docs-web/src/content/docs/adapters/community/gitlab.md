@@ -111,6 +111,10 @@ Mention your bot in issue or MR comments:
 
 **Subsequent mentions** resume the existing conversation with full context.
 
+:::note
+GitLab webhooks are used here for explicit `@archon` comment flows and cleanup only. Automatic workflow dispatch now uses slug-based webhook rules via `/webhooks/<your-slug>`.
+:::
+
 ## Conversation ID Format
 
 | Type | Format | Example |
@@ -126,7 +130,7 @@ Mention your bot in issue or MR comments:
 | **Note Hook** (comment with @mention) | Triggers AI conversation |
 | **Issue Hook** (close) | Cleans up isolation environment |
 | **MR Hook** (close/merge) | Cleans up isolation environment |
-| Issue/MR opened | Ignored (descriptions are not commands) |
+| Issue opened | Ignored (descriptions are not commands) |
 
 ## Adding Additional Projects
 

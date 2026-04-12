@@ -8,6 +8,11 @@ import type { components } from '@/lib/api.generated';
 
 export type WorkflowDefinition = components['schemas']['WorkflowDefinition'];
 export type DagNode = components['schemas']['DagNode'];
+export type WebhookRuleResponse = components['schemas']['WebhookRule'];
+export type WebhookWorkflowOption = components['schemas']['WebhookWorkflowOption'];
+export type WebhookRulesOptionsResponse = components['schemas']['WebhookRuleOptionsResponse'];
+export type CreateWebhookRuleBody = components['schemas']['CreateWebhookRuleBody'];
+export type UpdateWebhookRuleBody = components['schemas']['UpdateWebhookRuleBody'];
 
 /**
  * Base URL for SSE streams. In dev, bypasses Vite proxy by connecting directly
@@ -180,6 +185,42 @@ export async function updateCodebase(
 
 export async function deleteCodebase(id: string): Promise<{ success: boolean }> {
   return fetchJSON<{ success: boolean }>(`/api/codebases/${id}`, { method: 'DELETE' });
+}
+
+export async function listWebhookRules(): Promise<WebhookRuleResponse[]> {
+  const result = await fetchJSON<{ rules: WebhookRuleResponse[] }>('/api/webhook-rules');
+  return result.rules;
+}
+
+export async function getWebhookRuleOptions(): Promise<WebhookRulesOptionsResponse> {
+  return fetchJSON<WebhookRulesOptionsResponse>('/api/webhook-rules/options');
+}
+
+export async function createWebhookRule(
+  input: CreateWebhookRuleBody
+): Promise<WebhookRuleResponse> {
+  return fetchJSON<WebhookRuleResponse>('/api/webhook-rules', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateWebhookRule(
+  id: string,
+  input: UpdateWebhookRuleBody
+): Promise<WebhookRuleResponse> {
+  return fetchJSON<WebhookRuleResponse>(`/api/webhook-rules/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteWebhookRule(id: string): Promise<{ success: boolean }> {
+  return fetchJSON<{ success: boolean }>(`/api/webhook-rules/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
 }
 
 export interface WorkflowRunResponse {

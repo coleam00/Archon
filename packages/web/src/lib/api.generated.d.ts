@@ -726,6 +726,256 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/webhook-rules': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List configured webhook rules */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Configured webhook rules */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['WebhookRuleListResponse'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    /** Create a slug-based webhook rule */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['CreateWebhookRuleBody'];
+        };
+      };
+      responses: {
+        /** @description Created webhook rule */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['WebhookRule'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Conflict */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/webhook-rules/options': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List codebase and workflow options for webhook rules */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Webhook rule options */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['WebhookRuleOptionsResponse'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/webhook-rules/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /** Delete a webhook rule */
+    delete: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          id: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Webhook rule deleted */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['DeleteWebhookRuleResponse'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    options?: never;
+    head?: never;
+    /** Update a slug-based webhook rule */
+    patch: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          id: string;
+        };
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['UpdateWebhookRuleBody'];
+        };
+      };
+      responses: {
+        /** @description Updated webhook rule */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['WebhookRule'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Conflict */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    trace?: never;
+  };
   '/api/workflows': {
     parameters: {
       query?: never;
@@ -2039,6 +2289,54 @@ export interface components {
       key: string;
       value: string;
     };
+    WebhookSlug: string;
+    WebhookRule: {
+      id: string;
+      codebaseId: string;
+      codebaseName: string;
+      urlSlug: components['schemas']['WebhookSlug'];
+      workflowName: string;
+      enabled: boolean;
+      createdAt: string;
+      updatedAt: string;
+    };
+    WebhookRuleListResponse: {
+      rules: components['schemas']['WebhookRule'][];
+    };
+    WebhookRuleCodebaseOption: {
+      id: string;
+      name: string;
+    };
+    /** @enum {string} */
+    WorkflowSource: 'project' | 'bundled';
+    WebhookWorkflowOption: {
+      name: string;
+      description: string | null;
+      source: components['schemas']['WorkflowSource'];
+    };
+    WebhookWorkflowsByCodebase: {
+      codebaseId: string;
+      workflows: components['schemas']['WebhookWorkflowOption'][];
+    };
+    WebhookRuleOptionsResponse: {
+      codebases: components['schemas']['WebhookRuleCodebaseOption'][];
+      workflowsByCodebase: components['schemas']['WebhookWorkflowsByCodebase'][];
+    };
+    CreateWebhookRuleBody: {
+      codebaseId: string;
+      urlSlug: components['schemas']['WebhookSlug'];
+      workflowName: string;
+      enabled?: boolean;
+    };
+    UpdateWebhookRuleBody: {
+      codebaseId?: string;
+      urlSlug?: components['schemas']['WebhookSlug'];
+      workflowName?: string;
+      enabled?: boolean;
+    };
+    DeleteWebhookRuleResponse: {
+      success: boolean;
+    };
     DagNode: {
       id: string;
       depends_on?: string[];
@@ -2351,8 +2649,6 @@ export interface components {
       };
       nodes: components['schemas']['DagNode'][];
     };
-    /** @enum {string} */
-    WorkflowSource: 'project' | 'bundled';
     WorkflowListEntry: {
       workflow: components['schemas']['WorkflowDefinition'];
       source: components['schemas']['WorkflowSource'];

@@ -114,7 +114,7 @@ Interact by @mentioning your bot in issue or PR **comments**:
 - Maintains full context across comments
 
 :::note
-Issue descriptions are ignored. Opening a pull request always triggers PR review processing on `pull_request.opened`; the PR body is included as context, and regular follow-up interaction still happens through comments.
+Issue descriptions are ignored. GitHub webhooks are used here for explicit `@archon` comment flows and cleanup only. If you want to trigger a workflow automatically, configure a slug-based webhook rule in the Web UI and POST to `/webhooks/<your-slug>`.
 :::
 
 ## Adding Additional Repositories

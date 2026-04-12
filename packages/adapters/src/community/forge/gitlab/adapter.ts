@@ -307,6 +307,16 @@ export class GitLabAdapter implements IPlatformAdapter {
     // MR closed or merged
     if (event.object_kind === 'merge_request') {
       const action = event.object_attributes.action;
+      if (action === 'open') {
+        return {
+          projectPath,
+          iid: event.object_attributes.iid,
+          comment: event.object_attributes.description ?? '',
+          eventType: 'merge_request',
+          isMR: true,
+          mergeRequest: event.object_attributes,
+        };
+      }
       if (action === 'close' || action === 'merge') {
         return {
           projectPath,
@@ -658,128 +668,121 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
       return;
     }
 
-    // 6. Check @mention
-    if (!this.hasMention(comment)) return;
+    const isMentionComment = eventType === 'note' && this.hasMention(comment);
+    if (!isMentionComment) return;
 
-    getLog().info({ eventType, projectPath, iid, isMR }, 'gitlab.webhook_processing');
+    getLog().info(
+      { eventType, projectPath, iid, isMR, isMentionComment },
+      'gitlab.webhook_processing'
+    );
 
     // Steps 7-13 wrapped in try-catch so user gets error feedback on setup failures
     try {
-      // 7. Conversation + codebase setup
       const conversationId = this.buildConversationId(projectPath, iid, isMR);
-      const existingConv = await db.getOrCreateConversation('gitlab', conversationId);
-      const isNewConversation = !existingConv.codebase_id;
+      if (isMentionComment) {
+        const existingConv = await db.getOrCreateConversation('gitlab', conversationId);
+        const isNewConversation = !existingConv.codebase_id;
+        const {
+          codebase,
+          repoPath,
+          isNew: isNewCodebase,
+        } = await this.getOrCreateCodebaseForRepo(projectPath);
 
-      const {
-        codebase,
-        repoPath,
-        isNew: isNewCodebase,
-      } = await this.getOrCreateCodebaseForRepo(projectPath);
-
-      if (isNewConversation) {
-        try {
-          await db.updateConversation(existingConv.id, {
-            codebase_id: codebase.id,
-            cwd: repoPath,
-          });
-        } catch (updateError) {
-          if (updateError instanceof ConversationNotFoundError) {
-            getLog().error(
-              { conversationId: existingConv.id, codebaseId: codebase.id },
-              'gitlab.conversation_codebase_link_failed'
-            );
-            throw new Error('Failed to set up GitLab conversation - please try again');
+        if (isNewConversation) {
+          try {
+            await db.updateConversation(existingConv.id, {
+              codebase_id: codebase.id,
+              cwd: repoPath,
+            });
+          } catch (updateError) {
+            if (updateError instanceof ConversationNotFoundError) {
+              getLog().error(
+                { conversationId: existingConv.id, codebaseId: codebase.id },
+                'gitlab.conversation_codebase_link_failed'
+              );
+              throw new Error('Failed to set up GitLab conversation - please try again');
+            }
+            throw updateError;
           }
-          throw updateError;
         }
-      }
 
-      // 8. Get default branch
-      const defaultBranch = event.project.default_branch;
+        const defaultBranch = event.project.default_branch;
+        await this.ensureRepoReady(projectPath, defaultBranch, repoPath, isNewCodebase);
+        if (isNewCodebase) {
+          await this.autoDetectAndLoadCommands(repoPath, codebase.id);
+        }
 
-      // 9. Ensure repo ready
-      await this.ensureRepoReady(projectPath, defaultBranch, repoPath, isNewCodebase);
-
-      // 10. Auto-load commands
-      if (isNewCodebase) {
-        await this.autoDetectAndLoadCommands(repoPath, codebase.id);
-      }
-
-      // 11. Isolation hints
-      const isolationHints: IsolationHints = {
-        workflowType: isMR ? 'pr' : 'issue',
-        workflowId: String(iid),
-      };
-
-      if (isMR && mergeRequest) {
-        isolationHints.prBranch = toBranchName(mergeRequest.source_branch);
-        isolationHints.isForkPR = mergeRequest.source_project_id !== mergeRequest.target_project_id;
-
-        getLog().info(
-          {
-            mrIid: iid,
-            sourceBranch: mergeRequest.source_branch,
-            isFork: isolationHints.isForkPR,
-          },
-          'gitlab.mr_head_info'
-        );
-      }
-
-      // 12. Build message with context
-      const strippedComment = this.stripMention(comment);
-      let finalMessage = strippedComment;
-      let contextToAppend: string | undefined;
-
-      const isSlashCommand = strippedComment.trim().startsWith('/');
-
-      if (isSlashCommand) {
-        finalMessage = strippedComment.split('\n')[0].trim();
-        getLog().debug({ command: finalMessage }, 'gitlab.slash_command_processing');
+        const isolationHints: IsolationHints = {
+          workflowType: isMR ? 'pr' : 'issue',
+          workflowId: String(iid),
+        };
 
         if (isMR && mergeRequest) {
-          contextToAppend = `GitLab Merge Request !${String(mergeRequest.iid)}: "${mergeRequest.title}"\nUse 'glab mr view ${String(mergeRequest.iid)}' for full details if needed.`;
-        } else if (issue) {
-          contextToAppend = `GitLab Issue #${String(issue.iid)}: "${issue.title}"\nUse 'glab issue view ${String(issue.iid)}' for full details if needed.`;
+          isolationHints.prBranch = toBranchName(mergeRequest.source_branch);
+          isolationHints.isForkPR =
+            mergeRequest.source_project_id !== mergeRequest.target_project_id;
+
+          getLog().info(
+            {
+              mrIid: iid,
+              sourceBranch: mergeRequest.source_branch,
+              isFork: isolationHints.isForkPR,
+            },
+            'gitlab.mr_head_info'
+          );
         }
-      } else {
-        if (isMR && mergeRequest) {
+
+        const strippedComment = this.stripMention(comment);
+        let finalMessage = strippedComment;
+        let contextToAppend: string | undefined;
+        const isSlashCommand = strippedComment.trim().startsWith('/');
+
+        if (isSlashCommand) {
+          finalMessage = strippedComment.split('\n')[0].trim();
+          getLog().debug({ command: finalMessage }, 'gitlab.slash_command_processing');
+
+          if (isMR && mergeRequest) {
+            contextToAppend = `GitLab Merge Request !${String(mergeRequest.iid)}: "${mergeRequest.title}"\nUse 'glab mr view ${String(mergeRequest.iid)}' for full details if needed.`;
+          } else if (issue) {
+            contextToAppend = `GitLab Issue #${String(issue.iid)}: "${issue.title}"\nUse 'glab issue view ${String(issue.iid)}' for full details if needed.`;
+          }
+        } else if (isMR && mergeRequest) {
           finalMessage = this.buildMRContext(mergeRequest, strippedComment);
           contextToAppend = `GitLab Merge Request !${String(mergeRequest.iid)}: "${mergeRequest.title}"\nUse 'glab mr view ${String(mergeRequest.iid)}' for full details if needed.`;
         } else if (issue) {
           finalMessage = this.buildIssueContext(issue, strippedComment);
           contextToAppend = `GitLab Issue #${String(issue.iid)}: "${issue.title}"\nUse 'glab issue view ${String(issue.iid)}' for full details if needed.`;
         }
-      }
 
-      // 13. Thread context + dispatch
-      const commentHistory = await this.fetchCommentHistory(projectPath, iid, isMR);
-      const threadContext = commentHistory.length > 0 ? commentHistory.join('\n') : undefined;
-      getLog().debug(
-        { commentCount: threadContext ? commentHistory.length : 0, conversationId },
-        'gitlab.thread_context_loaded'
-      );
+        const commentHistory = await this.fetchCommentHistory(projectPath, iid, isMR);
+        const threadContext = commentHistory.length > 0 ? commentHistory.join('\n') : undefined;
+        getLog().debug(
+          { commentCount: threadContext ? commentHistory.length : 0, conversationId },
+          'gitlab.thread_context_loaded'
+        );
 
-      await this.lockManager.acquireLock(conversationId, async () => {
-        try {
-          await handleMessage(this, conversationId, finalMessage, {
-            issueContext: contextToAppend,
-            threadContext,
-            isolationHints,
-          });
-        } catch (error) {
-          const err = toError(error);
-          getLog().error({ err, conversationId }, 'gitlab.message_handling_error');
+        await this.lockManager.acquireLock(conversationId, async () => {
           try {
-            const userMessage = classifyAndFormatError(err);
-            await this.sendMessage(conversationId, userMessage);
-          } catch (sendError) {
-            getLog().error(
-              { err: toError(sendError), conversationId },
-              'gitlab.error_message_send_failed'
-            );
+            await handleMessage(this, conversationId, finalMessage, {
+              issueContext: contextToAppend,
+              threadContext,
+              isolationHints,
+            });
+          } catch (error) {
+            const err = toError(error);
+            getLog().error({ err, conversationId }, 'gitlab.message_handling_error');
+            try {
+              await this.sendMessage(conversationId, classifyAndFormatError(err));
+            } catch (sendError) {
+              getLog().error(
+                { err: toError(sendError), conversationId },
+                'gitlab.error_message_send_failed'
+              );
+            }
           }
-        }
-      });
+        });
+        return;
+      }
     } catch (error) {
       const err = toError(error);
       const conversationId = this.buildConversationId(projectPath, iid, isMR);

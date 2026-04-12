@@ -49,6 +49,7 @@ mock.module('@archon/core', () => ({
     }
   },
   scanPathForSensitiveKeys: mock((_p: string) => ({ path: _p, findings: [] })),
+  dispatchMatchedWebhookRule: mock(async () => undefined),
   EnvLeakError: class EnvLeakError extends Error {
     constructor(public report: { path: string; findings: { file: string; keys: string[] }[] }) {
       super(
@@ -162,6 +163,20 @@ mock.module('@archon/core/db/messages', () => ({
     created_at: new Date().toISOString(),
   })),
   listMessages: mock(async () => []),
+}));
+
+mock.module('@archon/core/db/webhook-rules', () => ({
+  listWebhookRules: mock(async () => []),
+  getWebhookRule: mock(async () => null),
+  findWebhookRuleBySlug: mock(async () => null),
+  createWebhookRule: mock(async () => {
+    throw new Error('createWebhookRule not mocked in this test');
+  }),
+  updateWebhookRule: mock(async () => {
+    throw new Error('updateWebhookRule not mocked in this test');
+  }),
+  deleteWebhookRule: mock(async () => {}),
+  isWebhookRuleConflictError: mock(() => false),
 }));
 
 mock.module('@archon/core/utils/commands', () => ({

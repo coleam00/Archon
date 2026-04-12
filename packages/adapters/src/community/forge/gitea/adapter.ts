@@ -350,6 +350,19 @@ export class GiteaAdapter implements IPlatformAdapter {
       };
     }
 
+    // Detect newly opened PRs for rule-based processing
+    if (event.pull_request && event.action === 'opened') {
+      return {
+        owner,
+        repo,
+        number: event.pull_request.number,
+        comment: event.pull_request.body ?? '',
+        eventType: 'pull_request',
+        isPR: true,
+        pullRequest: event.pull_request,
+      };
+    }
+
     // issue_comment (covers both issues and PRs in Gitea)
     if (event.comment) {
       const number = event.issue?.number ?? event.pull_request?.number;
@@ -774,139 +787,119 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
       return;
     }
 
-    // 5. Check @mention
-    if (!this.hasMention(comment)) return;
+    const isMentionComment = eventType === 'issue_comment' && this.hasMention(comment);
+    if (!isMentionComment) return;
 
-    getLog().info({ eventType, owner, repo, number, isPR }, 'webhook_processing');
+    getLog().info({ eventType, owner, repo, number, isPR, isMentionComment }, 'webhook_processing');
 
-    // 6. Build conversationId
     const conversationId = this.buildConversationId(owner, repo, number, isPR);
 
-    // 7. Check if new conversation
-    const existingConv = await db.getOrCreateConversation('gitea', conversationId);
-    const isNewConversation = !existingConv.codebase_id;
+    if (isMentionComment) {
+      const existingConv = await db.getOrCreateConversation('gitea', conversationId);
+      const isNewConversation = !existingConv.codebase_id;
+      const {
+        codebase,
+        repoPath,
+        isNew: isNewCodebase,
+      } = await this.getOrCreateCodebaseForRepo(owner, repo);
 
-    // 8. Get/create codebase (checks for existing first!)
-    const {
-      codebase,
-      repoPath,
-      isNew: isNewCodebase,
-    } = await this.getOrCreateCodebaseForRepo(owner, repo);
-
-    // 8b. Link conversation to codebase
-    if (isNewConversation) {
-      try {
-        await db.updateConversation(existingConv.id, {
-          codebase_id: codebase.id,
-          cwd: repoPath,
-        });
-      } catch (updateError) {
-        if (updateError instanceof ConversationNotFoundError) {
-          getLog().error(
-            { conversationId: existingConv.id, codebaseId: codebase.id },
-            'conversation_codebase_link_failed'
-          );
-          // Re-throw as this is a critical setup step
-          throw new Error('Failed to set up Gitea conversation - please try again');
+      if (isNewConversation) {
+        try {
+          await db.updateConversation(existingConv.id, {
+            codebase_id: codebase.id,
+            cwd: repoPath,
+          });
+        } catch (updateError) {
+          if (updateError instanceof ConversationNotFoundError) {
+            getLog().error(
+              { conversationId: existingConv.id, codebaseId: codebase.id },
+              'conversation_codebase_link_failed'
+            );
+            throw new Error('Failed to set up Gitea conversation - please try again');
+          }
+          throw updateError;
         }
-        throw updateError;
       }
-    }
 
-    // 9. Get default branch from repository info
-    const defaultBranch = event.repository.default_branch;
-
-    // 10. Ensure repo ready (clone if needed, sync if new conversation)
-    await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewCodebase);
-
-    // 11. Auto-load commands if new codebase
-    if (isNewCodebase) {
-      await this.autoDetectAndLoadCommands(repoPath, codebase.id);
-    }
-
-    // 12. Gather isolation hints for orchestrator
-    const isolationHints: IsolationHints = {
-      workflowType: isPR ? 'pr' : 'issue',
-      workflowId: String(number),
-    };
-
-    // For PRs: get branch info from the event payload
-    if (isPR && pullRequest?.head) {
-      isolationHints.prBranch = toBranchName(pullRequest.head.ref);
-      isolationHints.prSha = pullRequest.head.sha;
-
-      // Detect if PR is from a fork
-      const headRepoFullName = pullRequest.head.repo?.full_name;
-      const baseRepoFullName = pullRequest.base?.repo?.full_name;
-      isolationHints.isForkPR = headRepoFullName !== baseRepoFullName;
-
-      getLog().info(
-        {
-          prNumber: number,
-          headRef: pullRequest.head.ref,
-          headSha: pullRequest.head.sha?.substring(0, 7),
-          isFork: isolationHints.isForkPR,
-        },
-        'pr_head_info'
-      );
-    }
-
-    // 13. Build message with context
-    const strippedComment = this.stripMention(comment);
-    let finalMessage = strippedComment;
-    let contextToAppend: string | undefined;
-
-    // IMPORTANT: Slash commands must be processed deterministically (not by AI)
-    const isSlashCommand = strippedComment.trim().startsWith('/');
-
-    if (isSlashCommand) {
-      // For slash commands, use only the first line
-      finalMessage = strippedComment.split('\n')[0].trim();
-      getLog().debug({ command: finalMessage }, 'slash_command_processing');
-
-      // Add issue/PR reference context
-      if (isPR && pullRequest) {
-        contextToAppend = `Gitea Pull Request #${String(pullRequest.number)}: "${pullRequest.title}"\nUse 'tea pr view ${String(pullRequest.number)}' for full details if needed.`;
-      } else if (issue) {
-        contextToAppend = `Gitea Issue #${String(issue.number)}: "${issue.title}"\nUse 'tea issue view ${String(issue.number)}' for full details if needed.`;
+      const defaultBranch = event.repository.default_branch;
+      await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewCodebase);
+      if (isNewCodebase) {
+        await this.autoDetectAndLoadCommands(repoPath, codebase.id);
       }
-    } else {
-      // For non-command messages, add rich context
-      if (isPR && pullRequest) {
+
+      const isolationHints: IsolationHints = {
+        workflowType: isPR ? 'pr' : 'issue',
+        workflowId: String(number),
+      };
+
+      if (isPR && pullRequest?.head) {
+        isolationHints.prBranch = toBranchName(pullRequest.head.ref);
+        isolationHints.prSha = pullRequest.head.sha;
+        const headRepoFullName = pullRequest.head.repo?.full_name;
+        const baseRepoFullName = pullRequest.base?.repo?.full_name;
+        isolationHints.isForkPR = headRepoFullName !== baseRepoFullName;
+
+        getLog().info(
+          {
+            prNumber: number,
+            headRef: pullRequest.head.ref,
+            headSha: pullRequest.head.sha?.substring(0, 7),
+            isFork: isolationHints.isForkPR,
+          },
+          'pr_head_info'
+        );
+      }
+
+      const strippedComment = this.stripMention(comment);
+      let finalMessage = strippedComment;
+      let contextToAppend: string | undefined;
+      const isSlashCommand = strippedComment.trim().startsWith('/');
+
+      if (isSlashCommand) {
+        finalMessage = strippedComment.split('\n')[0].trim();
+        getLog().debug({ command: finalMessage }, 'slash_command_processing');
+
+        if (isPR && pullRequest) {
+          contextToAppend = `Gitea Pull Request #${String(pullRequest.number)}: "${pullRequest.title}"\nUse 'tea pr view ${String(pullRequest.number)}' for full details if needed.`;
+        } else if (issue) {
+          contextToAppend = `Gitea Issue #${String(issue.number)}: "${issue.title}"\nUse 'tea issue view ${String(issue.number)}' for full details if needed.`;
+        }
+      } else if (isPR && pullRequest) {
         finalMessage = this.buildPRContext(pullRequest, strippedComment);
         contextToAppend = `Gitea Pull Request #${String(pullRequest.number)}: "${pullRequest.title}"\nUse 'tea pr view ${String(pullRequest.number)}' for full details if needed.`;
       } else if (issue) {
         finalMessage = this.buildIssueContext(issue, strippedComment);
         contextToAppend = `Gitea Issue #${String(issue.number)}: "${issue.title}"\nUse 'tea issue view ${String(issue.number)}' for full details if needed.`;
       }
-    }
 
-    // 14. Fetch comment history for thread context
-    const commentHistory = await this.fetchCommentHistory(owner, repo, number);
-    const threadContext = commentHistory.length > 0 ? commentHistory.join('\n') : undefined;
-    getLog().debug(
-      { commentCount: threadContext ? commentHistory.length : 0, conversationId },
-      'thread_context_loaded'
-    );
+      const commentHistory = await this.fetchCommentHistory(owner, repo, number);
+      const threadContext = commentHistory.length > 0 ? commentHistory.join('\n') : undefined;
+      getLog().debug(
+        { commentCount: threadContext ? commentHistory.length : 0, conversationId },
+        'thread_context_loaded'
+      );
 
-    // 15. Route to orchestrator with isolation hints (with lock for concurrency control)
-    await this.lockManager.acquireLock(conversationId, async () => {
-      try {
-        await handleMessage(this, conversationId, finalMessage, {
-          issueContext: contextToAppend,
-          threadContext,
-          isolationHints,
-        });
-      } catch (error) {
-        const err = toError(error);
-        getLog().error({ err, conversationId }, 'message_handling_error');
+      await this.lockManager.acquireLock(conversationId, async () => {
         try {
-          const userMessage = classifyAndFormatError(err);
-          await this.sendMessage(conversationId, userMessage);
-        } catch (sendError) {
-          getLog().error({ err: toError(sendError), conversationId }, 'error_message_send_failed');
+          await handleMessage(this, conversationId, finalMessage, {
+            issueContext: contextToAppend,
+            threadContext,
+            isolationHints,
+          });
+        } catch (error) {
+          const err = toError(error);
+          getLog().error({ err, conversationId }, 'message_handling_error');
+          try {
+            await this.sendMessage(conversationId, classifyAndFormatError(err));
+          } catch (sendError) {
+            getLog().error(
+              { err: toError(sendError), conversationId },
+              'error_message_send_failed'
+            );
+          }
         }
-      }
-    });
+      });
+      return;
+    }
   }
 }

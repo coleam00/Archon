@@ -231,6 +231,92 @@ export class SqliteAdapter implements IDatabase {
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_codebases_columns_failed');
     }
+
+    // Webhook rules columns/indexes
+    try {
+      let webhookCols = this.db
+        .prepare("PRAGMA table_info('remote_agent_webhook_rules')")
+        .all() as {
+        name: string;
+      }[];
+      let webhookColNames = new Set(webhookCols.map(c => c.name));
+
+      const hasLegacyProviderColumns =
+        webhookColNames.has('provider') || webhookColNames.has('event_type');
+
+      if (hasLegacyProviderColumns) {
+        this.db.run('BEGIN');
+        try {
+          this.db.run(`
+            CREATE TABLE IF NOT EXISTS remote_agent_webhook_rules__new (
+              id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+              codebase_id TEXT NOT NULL REFERENCES remote_agent_codebases(id) ON DELETE CASCADE,
+              path_slug TEXT NOT NULL,
+              workflow_name TEXT NOT NULL,
+              enabled INTEGER NOT NULL DEFAULT 1,
+              created_at TEXT DEFAULT (datetime('now')),
+              updated_at TEXT DEFAULT (datetime('now'))
+            )
+          `);
+
+          this.db.run(`
+            INSERT INTO remote_agent_webhook_rules__new
+              (id, codebase_id, path_slug, workflow_name, enabled, created_at, updated_at)
+            SELECT
+              id,
+              codebase_id,
+              CASE
+                WHEN path_slug IS NULL OR trim(path_slug) = ''
+                  THEN 'legacy-' || lower(hex(randomblob(6)))
+                ELSE path_slug
+              END,
+              workflow_name,
+              COALESCE(enabled, 1),
+              COALESCE(created_at, datetime('now')),
+              COALESCE(updated_at, datetime('now'))
+            FROM remote_agent_webhook_rules
+          `);
+
+          this.db.run('DROP TABLE remote_agent_webhook_rules');
+          this.db.run(
+            'ALTER TABLE remote_agent_webhook_rules__new RENAME TO remote_agent_webhook_rules'
+          );
+          this.db.run('COMMIT');
+
+          webhookCols = this.db
+            .prepare("PRAGMA table_info('remote_agent_webhook_rules')")
+            .all() as {
+            name: string;
+          }[];
+          webhookColNames = new Set(webhookCols.map(c => c.name));
+        } catch (migrationError) {
+          this.db.run('ROLLBACK');
+          throw migrationError;
+        }
+      }
+
+      if (!webhookColNames.has('path_slug')) {
+        this.db.run('ALTER TABLE remote_agent_webhook_rules ADD COLUMN path_slug TEXT');
+      }
+
+      this.db.run(`
+        UPDATE remote_agent_webhook_rules
+           SET path_slug = 'legacy-' || lower(hex(randomblob(6)))
+         WHERE path_slug IS NULL OR trim(path_slug) = ''
+      `);
+
+      this.db.run(
+        'CREATE INDEX IF NOT EXISTS idx_webhook_rules_path_slug ON remote_agent_webhook_rules(path_slug)'
+      );
+      this.db.run('DROP INDEX IF EXISTS idx_webhook_rules_provider_event');
+      this.db.run('DROP INDEX IF EXISTS idx_webhook_rules_active_unique');
+      this.db.run(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_webhook_rules_path_slug_unique
+          ON remote_agent_webhook_rules(path_slug)
+      `);
+    } catch (e: unknown) {
+      getLog().warn({ err: e as Error }, 'db.sqlite_migration_webhook_rule_columns_failed');
+    }
   }
 
   /**
@@ -353,6 +439,17 @@ export class SqliteAdapter implements IDatabase {
         created_at TEXT DEFAULT (datetime('now'))
       );
 
+      -- Webhook rules table
+      CREATE TABLE IF NOT EXISTS remote_agent_webhook_rules (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        codebase_id TEXT NOT NULL REFERENCES remote_agent_codebases(id) ON DELETE CASCADE,
+        path_slug TEXT NOT NULL,
+        workflow_name TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      );
+
       -- Messages table (conversation history for Web UI)
       CREATE TABLE IF NOT EXISTS remote_agent_messages (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
@@ -374,6 +471,7 @@ export class SqliteAdapter implements IDatabase {
       CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON remote_agent_workflow_runs(status);
       CREATE INDEX IF NOT EXISTS idx_workflow_events_run_id ON remote_agent_workflow_events(workflow_run_id);
       CREATE INDEX IF NOT EXISTS idx_workflow_events_type ON remote_agent_workflow_events(event_type);
+      CREATE INDEX IF NOT EXISTS idx_webhook_rules_codebase ON remote_agent_webhook_rules(codebase_id);
       CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON remote_agent_messages(conversation_id, created_at ASC);
       CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent_conv ON remote_agent_workflow_runs(parent_conversation_id);
       CREATE INDEX IF NOT EXISTS idx_conversations_hidden ON remote_agent_conversations(hidden);

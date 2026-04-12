@@ -40,6 +40,7 @@ mock.module('@archon/core', () => ({
     }
   },
   generateAndSetTitle: mockGenerateAndSetTitle,
+  dispatchMatchedWebhookRule: mock(async () => undefined),
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
   createLogger: () => ({
     fatal: mock(() => undefined),
@@ -84,6 +85,19 @@ const mockAddMessage = mock(async (_convId: string, _role: string, _content: str
 }));
 mock.module('@archon/core/db/messages', () => ({
   addMessage: mockAddMessage,
+}));
+mock.module('@archon/core/db/webhook-rules', () => ({
+  listWebhookRules: mock(async () => []),
+  getWebhookRule: mock(async () => null),
+  findWebhookRuleBySlug: mock(async () => null),
+  createWebhookRule: mock(async () => {
+    throw new Error('createWebhookRule not mocked in this test');
+  }),
+  updateWebhookRule: mock(async () => {
+    throw new Error('updateWebhookRule not mocked in this test');
+  }),
+  deleteWebhookRule: mock(async () => {}),
+  isWebhookRuleConflictError: mock(() => false),
 }));
 mock.module('@archon/core/db/codebases', () => ({
   listCodebases: mock(async () => [{ default_cwd: '/tmp/project' }]),

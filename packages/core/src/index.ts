@@ -48,6 +48,7 @@ export * as sessionDb from './db/sessions';
 export * as isolationEnvDb from './db/isolation-environments';
 export * as workflowDb from './db/workflows';
 export * as messageDb from './db/messages';
+export * as webhookRuleDb from './db/webhook-rules';
 
 // Re-export SessionNotFoundError for error handling
 export { SessionNotFoundError } from './db/sessions';
@@ -78,8 +79,19 @@ export * as isolationOperations from './operations/isolation-operations';
 // =============================================================================
 // Orchestrator
 // =============================================================================
-export { handleMessage } from './orchestrator/orchestrator-agent';
+export { handleMessage, dispatchNamedWorkflow } from './orchestrator/orchestrator-agent';
 export { buildOrchestratorPrompt, buildProjectScopedPrompt } from './orchestrator/prompt-builder';
+
+// =============================================================================
+// Webhooks
+// =============================================================================
+export { type WebhookRule, type WebhookRuleWithCodebaseName } from './webhooks/types';
+export {
+  matchRuleBySlug,
+  normalizeWebhookPayload,
+  buildWebhookWorkflowInput,
+  dispatchMatchedWebhookRule,
+} from './webhooks/rules-engine';
 
 // =============================================================================
 // Handlers

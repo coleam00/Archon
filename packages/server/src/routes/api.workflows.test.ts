@@ -39,6 +39,7 @@ mock.module('@archon/core', () => ({
   removeWorktree: mock(async () => ({ success: true })),
   ConversationNotFoundError: class extends Error {},
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
+  dispatchMatchedWebhookRule: mock(async () => undefined),
   createLogger: () => ({
     fatal: mock(() => undefined),
     error: mock(() => undefined),
@@ -91,6 +92,19 @@ mock.module('@archon/core/db/isolation-environments', () => ({}));
 mock.module('@archon/core/db/workflows', () => ({}));
 mock.module('@archon/core/db/workflow-events', () => ({}));
 mock.module('@archon/core/db/messages', () => ({}));
+mock.module('@archon/core/db/webhook-rules', () => ({
+  listWebhookRules: mock(async () => []),
+  getWebhookRule: mock(async () => null),
+  findWebhookRuleBySlug: mock(async () => null),
+  createWebhookRule: mock(async () => {
+    throw new Error('createWebhookRule not mocked in this test');
+  }),
+  updateWebhookRule: mock(async () => {
+    throw new Error('updateWebhookRule not mocked in this test');
+  }),
+  deleteWebhookRule: mock(async () => {}),
+  isWebhookRuleConflictError: mock(() => false),
+}));
 
 const mockListCodebases = mock(async () => [{ default_cwd: '/tmp/project' }]);
 mock.module('@archon/core/db/codebases', () => ({

@@ -317,6 +317,37 @@ async function dispatchOrchestratorWorkflow(
   }
 }
 
+export async function dispatchNamedWorkflow(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  conversation: Conversation,
+  codebase: Codebase,
+  workflowName: string,
+  userMessage: string,
+  isolationHints?: HandleMessageContext['isolationHints']
+): Promise<void> {
+  const discoverResult = await discoverAllWorkflows({
+    ...conversation,
+    codebase_id: codebase.id,
+  });
+  const workflowDefinitions = discoverResult.workflows.map(entry => entry.workflow);
+  const workflow = findWorkflow(workflowName, workflowDefinitions);
+
+  if (!workflow) {
+    throw new Error(`Workflow "${workflowName}" not found for codebase ${codebase.name}`);
+  }
+
+  await dispatchOrchestratorWorkflow(
+    platform,
+    conversationId,
+    conversation,
+    codebase,
+    workflow,
+    userMessage,
+    isolationHints
+  );
+}
+
 // ─── Session Helpers ────────────────────────────────────────────────────────
 
 async function tryPersistSessionId(sessionId: string, assistantSessionId: string): Promise<void> {

@@ -585,39 +585,15 @@ export class GitHubAdapter implements IPlatformAdapter {
     repoPath: string;
     isNew: boolean;
   }> {
-    // Try both with and without .git suffix to match existing clones
-    const repoUrlNoGit = `https://github.com/${owner}/${repo}`;
-    const repoUrlWithGit = `${repoUrlNoGit}.git`;
-
-    let existing = await codebaseDb.findCodebaseByRepoUrl(repoUrlNoGit);
-    existing ??= await codebaseDb.findCodebaseByRepoUrl(repoUrlWithGit);
-
-    // Canonical path includes owner to prevent collisions between repos with same name
-    // e.g., alice/utils and bob/utils get separate directories
-    const canonicalPath = join(getArchonWorkspacesPath(), owner, repo);
-
+    const existing = await this.findExistingCodebaseForRepo(owner, repo);
     if (existing) {
-      // Check if existing codebase points to a worktree path - fix it if so
-      // Either it's an actual worktree, or it looks like one (contains /worktrees/ in path)
-      const looksLikeWorktreePath = existing.default_cwd.includes('/worktrees/');
-      if (looksLikeWorktreePath || (await isWorktreePath(existing.default_cwd))) {
-        getLog().info(
-          { codebaseName: existing.name, canonicalPath },
-          'github.stale_worktree_path_fixed'
-        );
-        await codebaseDb.updateCodebase(existing.id, { default_cwd: canonicalPath });
-        existing.default_cwd = canonicalPath;
-      }
-
-      getLog().info(
-        { codebaseName: existing.name, path: existing.default_cwd },
-        'github.existing_codebase_found'
-      );
-      return { codebase: existing, repoPath: existing.default_cwd, isNew: false };
+      return { ...existing, isNew: false };
     }
 
     // Include owner in name to distinguish repos with same name from different owners
     // resolve() converts relative paths to absolute (cross-platform)
+    const repoUrlNoGit = `https://github.com/${owner}/${repo}`;
+    const canonicalPath = join(getArchonWorkspacesPath(), owner, repo);
     const codebase = await codebaseDb.createCodebase({
       name: `${owner}/${repo}`,
       repository_url: repoUrlNoGit, // Store without .git for consistency
@@ -626,6 +602,38 @@ export class GitHubAdapter implements IPlatformAdapter {
 
     getLog().info({ codebaseName: codebase.name, path: canonicalPath }, 'github.codebase_created');
     return { codebase, repoPath: canonicalPath, isNew: true };
+  }
+
+  private async findExistingCodebaseForRepo(
+    owner: string,
+    repo: string
+  ): Promise<{
+    codebase: { id: string; name: string; default_cwd: string };
+    repoPath: string;
+  } | null> {
+    const repoUrlNoGit = `https://github.com/${owner}/${repo}`;
+    const repoUrlWithGit = `${repoUrlNoGit}.git`;
+
+    let existing = await codebaseDb.findCodebaseByRepoUrl(repoUrlNoGit);
+    existing ??= await codebaseDb.findCodebaseByRepoUrl(repoUrlWithGit);
+    if (!existing) return null;
+
+    const canonicalPath = join(getArchonWorkspacesPath(), owner, repo);
+    const looksLikeWorktreePath = existing.default_cwd.includes('/worktrees/');
+    if (looksLikeWorktreePath || (await isWorktreePath(existing.default_cwd))) {
+      getLog().info(
+        { codebaseName: existing.name, canonicalPath },
+        'github.stale_worktree_path_fixed'
+      );
+      await codebaseDb.updateCodebase(existing.id, { default_cwd: canonicalPath });
+      existing.default_cwd = canonicalPath;
+    }
+
+    getLog().info(
+      { codebaseName: existing.name, path: existing.default_cwd },
+      'github.existing_codebase_found'
+    );
+    return { codebase: existing, repoPath: existing.default_cwd };
   }
 
   /**
@@ -753,215 +761,168 @@ ${userComment}`;
       return;
     }
 
-    // 5. Check @mention for comments. Newly opened PRs are processed automatically.
-    const isPrOpenedEvent = eventType === 'pull_request' && event.action === 'opened';
-    if (!isPrOpenedEvent && !this.hasMention(comment)) return;
+    const isMentionComment = eventType === 'issue_comment' && this.hasMention(comment);
+    if (!isMentionComment) return;
 
-    getLog().info({ eventType, owner, repo, number }, 'github.webhook_processing');
-
-    // 4. Build conversationId
-    const conversationId = this.buildConversationId(owner, repo, number);
-
-    // 5. Check if new conversation
-    const existingConv = await db.getOrCreateConversation('github', conversationId);
-    const isNewConversation = !existingConv.codebase_id;
-
-    // 6. Get/create codebase (checks for existing first!)
-    const {
-      codebase,
-      repoPath,
-      isNew: isNewCodebase,
-    } = await this.getOrCreateCodebaseForRepo(owner, repo);
-
-    // 6b. Link conversation to codebase (fixes #97)
-    if (isNewConversation) {
-      try {
-        await db.updateConversation(existingConv.id, {
-          codebase_id: codebase.id,
-          cwd: repoPath,
-        });
-      } catch (updateError) {
-        if (updateError instanceof ConversationNotFoundError) {
-          getLog().error(
-            { conversationId: existingConv.id, codebaseId: codebase.id },
-            'github.conversation_codebase_link_failed'
-          );
-          // Re-throw as this is a critical setup step
-          throw new Error('Failed to set up GitHub conversation - please try again');
-        }
-        throw updateError;
-      }
-    }
-
-    // 7. Get default branch
-    let defaultBranch: string;
-    try {
-      const { data: repoData } = await this.octokit.rest.repos.get({ owner, repo });
-      defaultBranch = repoData.default_branch;
-    } catch (error) {
-      const err = toError(error);
-      getLog().error({ err, owner, repo, conversationId }, 'github.repo_metadata_fetch_failed');
-      try {
-        const userMessage = classifyAndFormatError(err);
-        await this.sendMessage(conversationId, userMessage);
-      } catch (sendError) {
-        getLog().error(
-          { err: toError(sendError), conversationId },
-          'github.error_message_send_failed'
-        );
-      }
-      return;
-    }
-
-    // 8. Ensure repo ready (clone if needed, sync if new conversation)
-    await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewCodebase);
-
-    // 9. Auto-load commands if new codebase (defaults loaded at runtime, not copied)
-    if (isNewCodebase) {
-      await this.autoDetectAndLoadCommands(repoPath, codebase.id);
-    }
-
-    // 10. Gather isolation hints for orchestrator
-    // The orchestrator now handles all isolation decisions
-    const isPR = eventType === 'pull_request' || !!pullRequest || !!issue?.pull_request;
-
-    // Build isolation hints for orchestrator
-    const isolationHints: IsolationHints = {
-      workflowType: isPR ? 'pr' : 'issue',
-      workflowId: String(number),
-    };
-
-    // For PRs: get linked issues and branch info
-    if (isPR) {
-      // Get linked issues for worktree sharing
-      const linkedIssues = await getLinkedIssueNumbers(owner, repo, number);
-      if (linkedIssues.length > 0) {
-        isolationHints.linkedIssues = linkedIssues;
-        getLog().info({ prNumber: number, linkedIssues }, 'github.pr_linked_issues');
-      }
-
-      // Fetch PR head branch, SHA, and fork status for isolation
-      try {
-        const { data: prData } = await this.octokit.rest.pulls.get({
-          owner,
-          repo,
-          pull_number: number,
-        });
-        isolationHints.prBranch = toBranchName(prData.head.ref);
-        isolationHints.prSha = prData.head.sha;
-
-        // Detect if PR is from a fork (different repo than base)
-        // For fork PRs: head.repo is different from base.repo
-        // For same-repo PRs: head.repo.full_name === base.repo.full_name
-        // Note: head.repo can be null if the fork was deleted after PR creation
-        // In that case, we treat it as a fork (can't push to deleted repo anyway)
-        const headRepoFullName = prData.head.repo?.full_name;
-        const baseRepoFullName = prData.base.repo.full_name;
-        isolationHints.isForkPR = headRepoFullName !== baseRepoFullName;
-
-        getLog().info(
-          {
-            prNumber: number,
-            headRef: prData.head.ref,
-            headSha: prData.head.sha.substring(0, 7),
-            isFork: isolationHints.isForkPR,
-          },
-          'github.pr_head_info'
-        );
-      } catch (error) {
-        const err = error as Error;
-        // Log at appropriate level based on error type
-        const isNonTransient =
-          err.message.includes('rate limit') ||
-          err.message.includes('403') ||
-          err.message.includes('401') ||
-          err.message.includes('Bad credentials');
-
-        const logData = { err, owner, repo, prNumber: number };
-        if (isNonTransient) {
-          getLog().error(logData, 'github.pr_head_fetch_failed');
-        } else {
-          getLog().warn(logData, 'github.pr_head_fetch_failed');
-        }
-
-        // Mark degraded mode - worktree isolation will use fallback naming
-        isolationHints.prFetchFailed = true;
-      }
-    }
-
-    // 11. Build message with context
-    const strippedComment = isPrOpenedEvent
-      ? 'Review this pull request.'
-      : this.stripMention(comment);
-    let finalMessage = strippedComment;
-    let contextToAppend: string | undefined;
-
-    // IMPORTANT: Slash commands must be processed deterministically (not by AI)
-    const isSlashCommand = strippedComment.trim().startsWith('/');
-
-    if (isSlashCommand) {
-      // For slash commands, use only the first line
-      finalMessage = strippedComment.split('\n')[0].trim();
-      getLog().debug({ command: finalMessage }, 'github.slash_command_processing');
-
-      // Add issue/PR reference context
-      if (eventType === 'issue' && issue) {
-        contextToAppend = `GitHub Issue #${String(issue.number)}: "${issue.title}"\nUse 'gh issue view ${String(issue.number)}' for full details if needed.`;
-      } else if (eventType === 'pull_request' && pullRequest) {
-        contextToAppend = `GitHub Pull Request #${String(pullRequest.number)}: "${pullRequest.title}"\nUse 'gh pr view ${String(pullRequest.number)}' for full details if needed.`;
-      } else if (eventType === 'issue_comment') {
-        if (pullRequest) {
-          contextToAppend = `GitHub Pull Request #${String(pullRequest.number)}: "${pullRequest.title}"\nUse 'gh pr view ${String(pullRequest.number)}' for full details if needed.`;
-        } else if (issue) {
-          contextToAppend = `GitHub Issue #${String(issue.number)}: "${issue.title}"\nUse 'gh issue view ${String(issue.number)}' for full details if needed.`;
-        }
-      }
-    } else {
-      // For non-command messages, add rich context and issue/PR reference for workflows
-      if (eventType === 'issue' && issue) {
-        finalMessage = this.buildIssueContext(issue, strippedComment);
-        contextToAppend = `GitHub Issue #${String(issue.number)}: "${issue.title}"\nUse 'gh issue view ${String(issue.number)}' for full details if needed.`;
-      } else if (eventType === 'issue_comment' && issue) {
-        finalMessage = this.buildIssueContext(issue, strippedComment);
-        contextToAppend = `GitHub Issue #${String(issue.number)}: "${issue.title}"\nUse 'gh issue view ${String(issue.number)}' for full details if needed.`;
-      } else if (eventType === 'pull_request' && pullRequest) {
-        finalMessage = this.buildPRContext(pullRequest, strippedComment);
-        contextToAppend = `GitHub Pull Request #${String(pullRequest.number)}: "${pullRequest.title}"\nUse 'gh pr view ${String(pullRequest.number)}' for full details if needed.`;
-      } else if (eventType === 'issue_comment' && pullRequest) {
-        finalMessage = this.buildPRContext(pullRequest, strippedComment);
-        contextToAppend = `GitHub Pull Request #${String(pullRequest.number)}: "${pullRequest.title}"\nUse 'gh pr view ${String(pullRequest.number)}' for full details if needed.`;
-      }
-    }
-
-    // 12. Fetch comment history for thread context
-    const commentHistory = await this.fetchCommentHistory(owner, repo, number);
-    const threadContext = commentHistory.length > 0 ? commentHistory.join('\n') : undefined;
-    getLog().debug(
-      { commentCount: threadContext ? commentHistory.length : 0, conversationId },
-      'github.thread_context_loaded'
+    getLog().info(
+      { eventType, owner, repo, number, isMentionComment },
+      'github.webhook_processing'
     );
 
-    // 13. Route to orchestrator with isolation hints (with lock for concurrency control)
-    await this.lockManager.acquireLock(conversationId, async () => {
+    const conversationId = this.buildConversationId(owner, repo, number);
+
+    if (isMentionComment) {
+      const existingConv = await db.getOrCreateConversation('github', conversationId);
+      const isNewConversation = !existingConv.codebase_id;
+      const {
+        codebase,
+        repoPath,
+        isNew: isNewCodebase,
+      } = await this.getOrCreateCodebaseForRepo(owner, repo);
+
+      if (isNewConversation) {
+        try {
+          await db.updateConversation(existingConv.id, {
+            codebase_id: codebase.id,
+            cwd: repoPath,
+          });
+        } catch (updateError) {
+          if (updateError instanceof ConversationNotFoundError) {
+            getLog().error(
+              { conversationId: existingConv.id, codebaseId: codebase.id },
+              'github.conversation_codebase_link_failed'
+            );
+            throw new Error('Failed to set up GitHub conversation - please try again');
+          }
+          throw updateError;
+        }
+      }
+
+      let defaultBranch: string;
       try {
-        await handleMessage(this, conversationId, finalMessage, {
-          issueContext: contextToAppend,
-          threadContext,
-          isolationHints,
-        });
+        const { data: repoData } = await this.octokit.rest.repos.get({ owner, repo });
+        defaultBranch = repoData.default_branch;
       } catch (error) {
         const err = toError(error);
-        getLog().error({ err, conversationId }, 'github.message_handling_error');
+        getLog().error({ err, owner, repo, conversationId }, 'github.repo_metadata_fetch_failed');
         try {
-          const userMessage = classifyAndFormatError(err);
-          await this.sendMessage(conversationId, userMessage);
+          await this.sendMessage(conversationId, classifyAndFormatError(err));
         } catch (sendError) {
           getLog().error(
             { err: toError(sendError), conversationId },
             'github.error_message_send_failed'
           );
         }
+        return;
       }
-    });
+
+      await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewCodebase);
+      if (isNewCodebase) {
+        await this.autoDetectAndLoadCommands(repoPath, codebase.id);
+      }
+
+      const isPR = !!pullRequest || !!issue?.pull_request;
+      const isolationHints: IsolationHints = {
+        workflowType: isPR ? 'pr' : 'issue',
+        workflowId: String(number),
+      };
+
+      if (isPR) {
+        const linkedIssues = await getLinkedIssueNumbers(owner, repo, number);
+        if (linkedIssues.length > 0) {
+          isolationHints.linkedIssues = linkedIssues;
+          getLog().info({ prNumber: number, linkedIssues }, 'github.pr_linked_issues');
+        }
+
+        try {
+          const { data: prData } = await this.octokit.rest.pulls.get({
+            owner,
+            repo,
+            pull_number: number,
+          });
+          isolationHints.prBranch = toBranchName(prData.head.ref);
+          isolationHints.prSha = prData.head.sha;
+          const headRepoFullName = prData.head.repo?.full_name;
+          const baseRepoFullName = prData.base.repo.full_name;
+          isolationHints.isForkPR = headRepoFullName !== baseRepoFullName;
+
+          getLog().info(
+            {
+              prNumber: number,
+              headRef: prData.head.ref,
+              headSha: prData.head.sha.substring(0, 7),
+              isFork: isolationHints.isForkPR,
+            },
+            'github.pr_head_info'
+          );
+        } catch (error) {
+          const err = error as Error;
+          const isNonTransient =
+            err.message.includes('rate limit') ||
+            err.message.includes('403') ||
+            err.message.includes('401') ||
+            err.message.includes('Bad credentials');
+
+          if (isNonTransient) {
+            getLog().error({ err, owner, repo, prNumber: number }, 'github.pr_head_fetch_failed');
+          } else {
+            getLog().warn({ err, owner, repo, prNumber: number }, 'github.pr_head_fetch_failed');
+          }
+
+          isolationHints.prFetchFailed = true;
+        }
+      }
+
+      const strippedComment = this.stripMention(comment);
+      let finalMessage = strippedComment;
+      let contextToAppend: string | undefined;
+      const isSlashCommand = strippedComment.trim().startsWith('/');
+
+      if (isSlashCommand) {
+        finalMessage = strippedComment.split('\n')[0].trim();
+        getLog().debug({ command: finalMessage }, 'github.slash_command_processing');
+
+        if (pullRequest) {
+          contextToAppend = `GitHub Pull Request #${String(pullRequest.number)}: "${pullRequest.title}"\nUse 'gh pr view ${String(pullRequest.number)}' for full details if needed.`;
+        } else if (issue) {
+          contextToAppend = `GitHub Issue #${String(issue.number)}: "${issue.title}"\nUse 'gh issue view ${String(issue.number)}' for full details if needed.`;
+        }
+      } else if (pullRequest) {
+        finalMessage = this.buildPRContext(pullRequest, strippedComment);
+        contextToAppend = `GitHub Pull Request #${String(pullRequest.number)}: "${pullRequest.title}"\nUse 'gh pr view ${String(pullRequest.number)}' for full details if needed.`;
+      } else if (issue) {
+        finalMessage = this.buildIssueContext(issue, strippedComment);
+        contextToAppend = `GitHub Issue #${String(issue.number)}: "${issue.title}"\nUse 'gh issue view ${String(issue.number)}' for full details if needed.`;
+      }
+
+      const commentHistory = await this.fetchCommentHistory(owner, repo, number);
+      const threadContext = commentHistory.length > 0 ? commentHistory.join('\n') : undefined;
+      getLog().debug(
+        { commentCount: threadContext ? commentHistory.length : 0, conversationId },
+        'github.thread_context_loaded'
+      );
+
+      await this.lockManager.acquireLock(conversationId, async () => {
+        try {
+          await handleMessage(this, conversationId, finalMessage, {
+            issueContext: contextToAppend,
+            threadContext,
+            isolationHints,
+          });
+        } catch (error) {
+          const err = toError(error);
+          getLog().error({ err, conversationId }, 'github.message_handling_error');
+          try {
+            await this.sendMessage(conversationId, classifyAndFormatError(err));
+          } catch (sendError) {
+            getLog().error(
+              { err: toError(sendError), conversationId },
+              'github.error_message_send_failed'
+            );
+          }
+        }
+      });
+      return;
+    }
   }
 }

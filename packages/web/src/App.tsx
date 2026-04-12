@@ -11,6 +11,7 @@ import { WorkflowsPage } from '@/routes/WorkflowsPage';
 import { WorkflowExecutionPage } from '@/routes/WorkflowExecutionPage';
 import { WorkflowBuilderPage } from '@/routes/WorkflowBuilderPage';
 import { SettingsPage } from '@/routes/SettingsPage';
+import { WebhooksPage } from '@/routes/WebhooksPage';
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -76,6 +77,7 @@ export function App(): React.ReactElement {
                 <Route path="/workflows/builder" element={<WorkflowBuilderPage />} />
                 <Route path="/workflows/runs/:runId" element={<WorkflowExecutionPage />} />
                 <Route path="/workflows/runs" element={<Navigate to="/workflows" replace />} />
+                <Route path="/webhooks" element={<WebhooksPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Route>
             </Routes>

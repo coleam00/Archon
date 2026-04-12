@@ -99,7 +99,11 @@ Interact by @mentioning the bot in issue or PR **comments**:
 - Maintains full context across comments
 
 :::note
-Only comments trigger the bot. @mentions in issue or PR descriptions are ignored -- descriptions often contain example commands or documentation that are not intended as bot invocations.
+Only comments trigger the bot directly. @mentions in issue or PR descriptions are ignored -- descriptions often contain example commands or documentation that are not intended as bot invocations.
+:::
+
+:::note
+Gitea webhooks are used here for explicit `@archon` comment flows and cleanup only. Automatic workflow dispatch now uses slug-based webhook rules via `/webhooks/<your-slug>`.
 :::
 
 ## How It Works

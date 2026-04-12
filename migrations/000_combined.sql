@@ -1,5 +1,5 @@
 -- Remote Coding Agent - Combined Schema
--- Version: Combined (final state after migrations 001-020)
+-- Version: Combined (final state after migrations 001-022)
 -- Description: Complete database schema (idempotent - safe to run multiple times)
 --
 -- 8 Tables:
@@ -11,6 +11,7 @@
 --   5. remote_agent_workflow_runs
 --   6. remote_agent_workflow_events
 --   7. remote_agent_messages
+--   8. remote_agent_webhook_rules
 --
 -- Dropped tables (via migrations):
 --   - remote_agent_command_templates (017)
@@ -251,6 +252,29 @@ CREATE TABLE IF NOT EXISTS remote_agent_messages (
 
 CREATE INDEX IF NOT EXISTS idx_messages_conversation_id
   ON remote_agent_messages(conversation_id, created_at ASC);
+
+-- ============================================================================
+-- Table 8: Webhook Rules
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS remote_agent_webhook_rules (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  codebase_id UUID NOT NULL REFERENCES remote_agent_codebases(id) ON DELETE CASCADE,
+  path_slug TEXT NOT NULL,
+  workflow_name TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_webhook_rules_codebase
+  ON remote_agent_webhook_rules(codebase_id);
+
+CREATE INDEX IF NOT EXISTS idx_webhook_rules_path_slug
+  ON remote_agent_webhook_rules(path_slug);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_webhook_rules_path_slug_unique
+  ON remote_agent_webhook_rules(path_slug);
 
 -- ============================================================================
 -- Cleanup: Drop legacy objects from older schemas

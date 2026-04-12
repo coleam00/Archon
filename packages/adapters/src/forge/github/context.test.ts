@@ -395,34 +395,4 @@ describe('GitHubAdapter non-slash command context passing', () => {
       'GitHub Issue #42: "Test Issue"\nUse \'gh issue view 42\' for full details if needed.'
     );
   });
-
-  test('should process pull_request.opened without requiring a bot mention', async () => {
-    const payload = createPullRequestPayload('Regular PR description without summon', {
-      prNumber: 77,
-      prTitle: 'Implement webhook fix',
-    });
-
-    await adapter.handleWebhook(payload, signPayload(payload));
-
-    expect(mockHandleMessage).toHaveBeenCalledTimes(1);
-    expect(mockHandleMessage.mock.calls[0][1]).toBe('testuser/testrepo#77');
-    expect(mockHandleMessage.mock.calls[0][2]).toContain('[GitHub Pull Request Context]');
-    expect(mockHandleMessage.mock.calls[0][2]).toContain('Review this pull request.');
-    const contextArg = mockHandleMessage.mock.calls[0][3]?.issueContext as string;
-    expect(contextArg).toBe(
-      'GitHub Pull Request #77: "Implement webhook fix"\nUse \'gh pr view 77\' for full details if needed.'
-    );
-  });
-
-  test('should process pull_request.opened even when PR body is empty', async () => {
-    const payload = createPullRequestPayload(null, {
-      prNumber: 78,
-      prTitle: 'Refactor adapter',
-    });
-
-    await adapter.handleWebhook(payload, signPayload(payload));
-
-    expect(mockHandleMessage).toHaveBeenCalledTimes(1);
-    expect(mockHandleMessage.mock.calls[0][2]).toContain('Review this pull request.');
-  });
 });
