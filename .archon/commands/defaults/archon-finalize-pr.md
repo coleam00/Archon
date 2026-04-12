@@ -6,6 +6,9 @@ argument-hint: (no arguments - reads from workflow artifacts)
 # Finalize Pull Request
 
 **Workflow ID**: $WORKFLOW_ID
+**Forge**: $FORGE_TYPE
+
+> **Forge note**: When `$FORGE_TYPE` is not `github`, use `bun "$FORGE_CLI"` instead of `gh` for all forge operations (e.g., `"$FORGE_CLI" pr create`, `"$FORGE_CLI" pr list`, `"$FORGE_CLI" pr edit`). The tool handles authentication and API differences automatically.
 
 ---
 

@@ -508,8 +508,9 @@ describe('executeWorkflow', () => {
       // DB env vars should have been fetched for the codebaseId
       expect(store.getCodebaseEnvVars).toHaveBeenCalledWith('codebase-1');
 
-      // The config passed to executeDagWorkflow (arg index 12) should have merged envVars
-      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[12] as WorkflowConfig | undefined;
+      // The config passed to executeDagWorkflow (arg index 15) should have merged envVars
+      // (indices 12-14 are forgeType, forgeApiBase, forgeCli)
+      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[15] as WorkflowConfig | undefined;
       expect(configArg?.envVars).toEqual({ FILE_KEY: 'file_val', DB_KEY: 'db_val' });
     });
 

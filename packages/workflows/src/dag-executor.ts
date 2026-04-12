@@ -369,7 +369,10 @@ async function resolveNodeProviderAndModel(
   conversationId: string,
   workflowRunId: string,
   cwd: string,
-  workflowLevelOptions: WorkflowLevelOptions
+  workflowLevelOptions: WorkflowLevelOptions,
+  forgeType: string,
+  forgeApiBase: string,
+  forgeCli: string
 ): Promise<{
   provider: 'claude' | 'codex';
   model: string | undefined;
@@ -595,9 +598,12 @@ async function resolveNodeProviderAndModel(
       }
       getLog().info({ nodeId: node.id, skills: node.skills, agentId }, 'dag.skills_agent_created');
     }
-    // Inject per-project env vars (config file + DB) into subprocess env
+    // Inject per-project env vars (config file + DB) and forge detection into subprocess env
+    const forgeEnv = { FORGE_TYPE: forgeType, FORGE_API_BASE: forgeApiBase, FORGE_CLI: forgeCli };
     if (config.envVars && Object.keys(config.envVars).length > 0) {
-      claudeOptions.env = config.envVars;
+      claudeOptions.env = { ...config.envVars, ...forgeEnv };
+    } else {
+      claudeOptions.env = forgeEnv;
     }
 
     // Per-node overrides take precedence over workflow-level defaults; maxBudgetUsd and systemPrompt are per-node only
@@ -722,6 +728,9 @@ async function executeNodeInternal(
   logDir: string,
   baseBranch: string,
   docsDir: string,
+  forgeType: string,
+  forgeApiBase: string,
+  forgeCli: string,
   nodeOutputs: Map<string, NodeOutput>,
   resumeSessionId: string | undefined,
   configuredCommandFolder?: string,
@@ -802,7 +811,10 @@ async function executeNodeInternal(
       baseBranch,
       docsDir,
       issueContext,
-      `dag node '${node.id}' prompt`
+      `dag node '${node.id}' prompt`,
+      forgeType,
+      forgeApiBase,
+      forgeCli
     );
   } catch (error) {
     const err = error as Error;
@@ -1313,6 +1325,9 @@ async function executeBashNode(
   logDir: string,
   baseBranch: string,
   docsDir: string,
+  forgeType: string,
+  forgeApiBase: string,
+  forgeCli: string,
   nodeOutputs: Map<string, NodeOutput>,
   issueContext?: string
 ): Promise<NodeOutput> {
@@ -1352,7 +1367,12 @@ async function executeBashNode(
     artifactsDir,
     baseBranch,
     docsDir,
-    issueContext
+    issueContext,
+    undefined, // loopUserInput
+    undefined, // rejectionReason
+    forgeType,
+    forgeApiBase,
+    forgeCli
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true);
 
@@ -1362,6 +1382,12 @@ async function executeBashNode(
     const { stdout, stderr } = await execFileAsync('bash', ['-c', finalScript], {
       cwd,
       timeout,
+      env: {
+        ...process.env,
+        FORGE_TYPE: forgeType,
+        FORGE_API_BASE: forgeApiBase,
+        FORGE_CLI: forgeCli,
+      },
     });
 
     // Trim trailing newline from stdout (common shell behavior)
@@ -1463,6 +1489,9 @@ async function executeScriptNode(
   logDir: string,
   baseBranch: string,
   docsDir: string,
+  forgeType: string,
+  forgeApiBase: string,
+  forgeCli: string,
   nodeOutputs: Map<string, NodeOutput>,
   issueContext?: string
 ): Promise<NodeOutput> {
@@ -1502,7 +1531,12 @@ async function executeScriptNode(
     artifactsDir,
     baseBranch,
     docsDir,
-    issueContext
+    issueContext,
+    undefined, // loopUserInput
+    undefined, // rejectionReason
+    forgeType,
+    forgeApiBase,
+    forgeCli
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, false);
 
@@ -1576,6 +1610,12 @@ async function executeScriptNode(
     const { stdout, stderr } = await execFileAsync(cmd, args, {
       cwd,
       timeout,
+      env: {
+        ...process.env,
+        FORGE_TYPE: forgeType,
+        FORGE_API_BASE: forgeApiBase,
+        FORGE_CLI: forgeCli,
+      },
     });
 
     // Trim trailing newline from stdout (common shell behavior)
@@ -1710,6 +1750,9 @@ async function executeLoopNode(
   logDir: string,
   baseBranch: string,
   docsDir: string,
+  forgeType: string,
+  forgeApiBase: string,
+  forgeCli: string,
   nodeOutputs: Map<string, NodeOutput>,
   config: WorkflowConfig,
   issueContext?: string
@@ -1813,7 +1856,11 @@ async function executeLoopNode(
         baseBranch,
         docsDir,
         issueContext,
-        i === startIteration ? loopUserInput : ''
+        i === startIteration ? loopUserInput : '',
+        undefined, // rejectionReason
+        forgeType,
+        forgeApiBase,
+        forgeCli
       );
       const finalPrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
 
@@ -2011,7 +2058,12 @@ async function executeLoopNode(
           artifactsDir,
           baseBranch,
           docsDir,
-          issueContext
+          issueContext,
+          undefined, // loopUserInput
+          undefined, // rejectionReason
+          forgeType,
+          forgeApiBase,
+          forgeCli
         );
         const substitutedBash = substituteNodeOutputRefs(
           bashPrompt,
@@ -2201,6 +2253,9 @@ async function executeApprovalNode(
   logDir: string,
   baseBranch: string,
   docsDir: string,
+  forgeType: string,
+  forgeApiBase: string,
+  forgeCli: string,
   nodeOutputs: Map<string, NodeOutput>,
   config: WorkflowConfig,
   workflowLevelOptions: WorkflowLevelOptions,
@@ -2263,7 +2318,10 @@ async function executeApprovalNode(
       docsDir,
       issueContext,
       undefined, // loopUserInput
-      rejectionReason
+      rejectionReason,
+      forgeType,
+      forgeApiBase,
+      forgeCli
     );
 
     // Build a synthetic PromptNode to reuse executeNodeInternal
@@ -2283,7 +2341,10 @@ async function executeApprovalNode(
       conversationId,
       workflowRun.id,
       cwd,
-      workflowLevelOptions
+      workflowLevelOptions,
+      forgeType,
+      forgeApiBase,
+      forgeCli
     );
 
     const output = await executeNodeInternal(
@@ -2299,6 +2360,9 @@ async function executeApprovalNode(
       logDir,
       baseBranch,
       docsDir,
+      forgeType,
+      forgeApiBase,
+      forgeCli,
       nodeOutputs,
       undefined, // fresh session
       configuredCommandFolder,
@@ -2370,6 +2434,9 @@ export async function executeDagWorkflow(
   logDir: string,
   baseBranch: string,
   docsDir: string,
+  forgeType: string,
+  forgeApiBase: string,
+  forgeCli: string,
   config: WorkflowConfig,
   configuredCommandFolder?: string,
   issueContext?: string,
@@ -2592,6 +2659,9 @@ export async function executeDagWorkflow(
               logDir,
               baseBranch,
               docsDir,
+              forgeType,
+              forgeApiBase,
+              forgeCli,
               nodeOutputs,
               issueContext
             );
@@ -2641,6 +2711,9 @@ export async function executeDagWorkflow(
               logDir,
               baseBranch,
               docsDir,
+              forgeType,
+              forgeApiBase,
+              forgeCli,
               nodeOutputs,
               config,
               issueContext
@@ -2663,6 +2736,9 @@ export async function executeDagWorkflow(
               logDir,
               baseBranch,
               docsDir,
+              forgeType,
+              forgeApiBase,
+              forgeCli,
               nodeOutputs,
               config,
               workflowLevelOptions,
@@ -2717,6 +2793,9 @@ export async function executeDagWorkflow(
               logDir,
               baseBranch,
               docsDir,
+              forgeType,
+              forgeApiBase,
+              forgeCli,
               nodeOutputs,
               issueContext
             );
@@ -2733,7 +2812,10 @@ export async function executeDagWorkflow(
             conversationId,
             workflowRun.id,
             cwd,
-            workflowLevelOptions
+            workflowLevelOptions,
+            forgeType,
+            forgeApiBase,
+            forgeCli
           );
 
           // 5. Determine session — parallel or context:fresh → always fresh
@@ -2764,6 +2846,9 @@ export async function executeDagWorkflow(
               logDir,
               baseBranch,
               docsDir,
+              forgeType,
+              forgeApiBase,
+              forgeCli,
               nodeOutputs,
               // Always pass the prior session ID — forkSession:true in executeNodeInternal
               // ensures the source is never mutated, so retries can safely resume from it.

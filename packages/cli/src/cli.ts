@@ -19,6 +19,11 @@ import { existsSync } from 'fs';
 // cannot leak into AI subprocesses — SUBPROCESS_ENV_ALLOWLIST blocks them.
 // The env-leak gate provides a second layer by scanning target repos before
 // spawning. No CWD stripping needed.
+// Clear DATABASE_URL that Bun may have auto-loaded from CWD .env (e.g., a
+// Prisma project's "file:./dev.db"). If ~/.archon/.env sets its own
+// DATABASE_URL, dotenv override:true will re-populate it below.
+delete process.env.DATABASE_URL;
+
 const globalEnvPath = resolve(process.env.HOME ?? '~', '.archon', '.env');
 if (existsSync(globalEnvPath)) {
   const result = config({ path: globalEnvPath, override: true });

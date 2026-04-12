@@ -791,6 +791,9 @@ describe('executeDagWorkflow -- tool restrictions', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -827,6 +830,9 @@ describe('executeDagWorkflow -- tool restrictions', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       { ...minimalConfig, assistant: 'codex' }
     );
 
@@ -854,6 +860,9 @@ describe('executeDagWorkflow -- tool restrictions', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -891,6 +900,9 @@ describe('executeDagWorkflow -- tool restrictions', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -936,6 +948,9 @@ describe('executeDagWorkflow -- tool restrictions', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       { ...minimalConfig, assistant: 'codex' }
     );
 
@@ -1002,6 +1017,9 @@ describe('executeDagWorkflow -- bash nodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -1041,6 +1059,9 @@ describe('executeDagWorkflow -- bash nodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -1078,6 +1099,9 @@ describe('executeDagWorkflow -- bash nodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -1116,6 +1140,9 @@ describe('executeDagWorkflow -- bash nodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -1155,6 +1182,9 @@ describe('executeDagWorkflow -- bash nodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -1196,6 +1226,9 @@ describe('executeDagWorkflow -- bash nodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -1291,6 +1324,9 @@ describe('executeDagWorkflow -- output_format structured output', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -1335,6 +1371,9 @@ describe('executeDagWorkflow -- output_format structured output', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -1381,6 +1420,9 @@ describe('executeDagWorkflow -- output_format structured output', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -1449,6 +1491,9 @@ describe('executeDagWorkflow -- output_format structured output', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -1501,6 +1546,9 @@ describe('executeDagWorkflow -- output_format structured output', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -1576,6 +1624,9 @@ describe('executeDagWorkflow -- when condition parse errors (fail-closed)', () =
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -1604,6 +1655,9 @@ describe('executeDagWorkflow -- when condition parse errors (fail-closed)', () =
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -1636,6 +1690,9 @@ describe('executeDagWorkflow -- when condition parse errors (fail-closed)', () =
         join(testDir, 'logs'),
         'main',
         'docs/',
+        'github',
+        'https://api.github.com',
+        '',
         minimalConfig
       )
     ).resolves.toBeUndefined();
@@ -1707,6 +1764,9 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -1743,6 +1803,9 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -1779,6 +1842,9 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -1819,6 +1885,9 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -1884,6 +1953,9 @@ describe('executeDagWorkflow -- tool_called event persistence', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -1925,6 +1997,9 @@ describe('executeDagWorkflow -- tool_called event persistence', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -1989,6 +2064,9 @@ describe('executeDagWorkflow -- tool_completed event emission', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -2027,6 +2105,9 @@ describe('executeDagWorkflow -- tool_completed event emission', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -2063,6 +2144,9 @@ describe('executeDagWorkflow -- tool_completed event emission', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -2251,6 +2335,9 @@ describe('executeDagWorkflow -- skills options', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -2297,6 +2384,9 @@ describe('executeDagWorkflow -- skills options', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -2337,6 +2427,9 @@ describe('executeDagWorkflow -- skills options', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       { ...minimalConfig, assistant: 'codex' }
     );
 
@@ -2504,6 +2597,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig,
       undefined,
       undefined,
@@ -2548,6 +2644,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig,
       undefined,
       undefined,
@@ -2585,6 +2684,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig,
       undefined,
       undefined,
@@ -2625,6 +2727,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig,
       undefined,
       undefined,
@@ -2656,6 +2761,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -2695,6 +2803,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -2748,6 +2859,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         join(testDir, 'logs'),
         'main',
         'docs/',
+        'github',
+        'https://api.github.com',
+        '',
         minimalConfig
       );
 
@@ -2807,6 +2921,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         join(testDir, 'logs'),
         'main',
         'docs/',
+        'github',
+        'https://api.github.com',
+        '',
         minimalConfig
       );
 
@@ -2848,6 +2965,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         join(testDir, 'logs'),
         'main',
         'docs/',
+        'github',
+        'https://api.github.com',
+        '',
         minimalConfig
       );
 
@@ -2915,6 +3035,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         join(testDir, 'logs'),
         'main',
         'docs/',
+        'github',
+        'https://api.github.com',
+        '',
         minimalConfig
       );
 
@@ -2964,6 +3087,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         join(testDir, 'logs'),
         'main',
         'docs/',
+        'github',
+        'https://api.github.com',
+        '',
         minimalConfig
       );
 
@@ -3017,6 +3143,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         join(testDir, 'logs'),
         'main',
         'docs/',
+        'github',
+        'https://api.github.com',
+        '',
         minimalConfig
       );
 
@@ -3062,6 +3191,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         join(testDir, 'logs'),
         'main',
         'docs/',
+        'github',
+        'https://api.github.com',
+        '',
         minimalConfig
       );
 
@@ -3121,6 +3253,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         join(testDir, 'logs'),
         'main',
         'docs/',
+        'github',
+        'https://api.github.com',
+        '',
         minimalConfig
       );
 
@@ -3162,6 +3297,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         join(testDir, 'logs'),
         'main',
         'docs/',
+        'github',
+        'https://api.github.com',
+        '',
         minimalConfig
       );
 
@@ -3209,6 +3347,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         join(testDir, 'logs'),
         'main',
         'docs/',
+        'github',
+        'https://api.github.com',
+        '',
         minimalConfig
       );
 
@@ -3260,6 +3401,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         join(testDir, 'logs'),
         'main',
         'docs/',
+        'github',
+        'https://api.github.com',
+        '',
         minimalConfig
       );
 
@@ -3311,6 +3455,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         join(testDir, 'logs'),
         'main',
         'docs/',
+        'github',
+        'https://api.github.com',
+        '',
         minimalConfig
       );
 
@@ -3371,6 +3518,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         join(testDir, 'logs'),
         'main',
         'docs/',
+        'github',
+        'https://api.github.com',
+        '',
         minimalConfig
       );
 
@@ -3442,6 +3592,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         join(testDir, 'logs'),
         'main',
         'docs/',
+        'github',
+        'https://api.github.com',
+        '',
         minimalConfig
       );
 
@@ -3506,6 +3659,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         join(testDir, 'logs'),
         'main',
         'docs/',
+        'github',
+        'https://api.github.com',
+        '',
         minimalConfig
       );
 
@@ -3554,6 +3710,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         join(testDir, 'logs'),
         'main',
         'docs/',
+        'github',
+        'https://api.github.com',
+        '',
         minimalConfig
       );
 
@@ -3631,6 +3790,9 @@ describe('executeDagWorkflow -- break after result (no hang on subprocess exit)'
         join(testDir, 'logs'),
         'main',
         'docs/',
+        'github',
+        'https://api.github.com',
+        '',
         minimalConfig
       ).then(() => 'completed'),
       new Promise<string>((_, reject) =>
@@ -3676,6 +3838,9 @@ describe('executeDagWorkflow -- break after result (no hang on subprocess exit)'
         join(testDir, 'logs'),
         'main',
         'docs/',
+        'github',
+        'https://api.github.com',
+        '',
         minimalConfig
       ).then(() => 'completed'),
       new Promise<string>((_, reject) =>
@@ -3753,6 +3918,9 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -3782,6 +3950,9 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -3825,6 +3996,9 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -3890,6 +4064,9 @@ describe('executeDagWorkflow -- cancel node', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -3929,6 +4106,9 @@ describe('executeDagWorkflow -- cancel node', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -4001,6 +4181,9 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -4075,6 +4258,9 @@ describe('executeDagWorkflow -- approval node', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -4123,6 +4309,9 @@ describe('executeDagWorkflow -- approval node', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -4190,6 +4379,9 @@ describe('executeDagWorkflow -- approval node', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -4250,6 +4442,9 @@ describe('executeDagWorkflow -- approval node', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -4310,6 +4505,9 @@ describe('executeDagWorkflow -- approval node', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -4369,12 +4567,20 @@ describe('executeDagWorkflow -- env var injection', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       { ...minimalConfig, envVars: { MY_SECRET: 'abc123' } }
     );
 
     expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
     const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
-    expect(optionsArg?.env).toEqual({ MY_SECRET: 'abc123' });
+    expect(optionsArg?.env).toEqual({
+      MY_SECRET: 'abc123',
+      FORGE_TYPE: 'github',
+      FORGE_API_BASE: 'https://api.github.com',
+      FORGE_CLI: '',
+    });
   });
 
   it('does not set env on claudeOptions when config.envVars is empty', async () => {
@@ -4395,12 +4601,20 @@ describe('executeDagWorkflow -- env var injection', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       { ...minimalConfig, envVars: {} }
     );
 
     expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
     const optionsArg = mockSendQueryDag.mock.calls[0]?.[3] as Record<string, unknown> | undefined;
-    expect(optionsArg?.env).toBeUndefined();
+    // Forge env vars are always injected even when config.envVars is empty
+    expect(optionsArg?.env).toEqual({
+      FORGE_TYPE: 'github',
+      FORGE_API_BASE: 'https://api.github.com',
+      FORGE_CLI: '',
+    });
   });
 });
 
@@ -4469,6 +4683,9 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -4522,6 +4739,9 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -4553,6 +4773,9 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -4583,6 +4806,9 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -4617,6 +4843,9 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       { ...minimalConfig, assistant: 'codex' }
     );
 
@@ -4678,6 +4907,9 @@ describe('executeDagWorkflow -- cost tracking', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -4724,6 +4956,9 @@ describe('executeDagWorkflow -- cost tracking', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -4759,6 +4994,9 @@ describe('executeDagWorkflow -- cost tracking', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -4810,6 +5048,9 @@ describe('executeDagWorkflow -- cost tracking', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -4884,6 +5125,9 @@ describe('executeDagWorkflow -- script nodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -4923,6 +5167,9 @@ describe('executeDagWorkflow -- script nodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -4960,6 +5207,9 @@ describe('executeDagWorkflow -- script nodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -5000,6 +5250,9 @@ describe('executeDagWorkflow -- script nodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -5034,6 +5287,9 @@ describe('executeDagWorkflow -- script nodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -5073,6 +5329,9 @@ describe('executeDagWorkflow -- script nodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -5112,6 +5371,9 @@ describe('executeDagWorkflow -- script nodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -5161,6 +5423,9 @@ describe('executeDagWorkflow -- script nodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 
@@ -5201,6 +5466,9 @@ describe('executeDagWorkflow -- script nodes', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      'github',
+      'https://api.github.com',
+      '',
       minimalConfig
     );
 

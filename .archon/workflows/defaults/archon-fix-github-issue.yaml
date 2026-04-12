@@ -45,7 +45,7 @@ nodes:
         echo "Failed to extract issue number from: $extract-issue-number.output" >&2
         exit 1
       fi
-      gh issue view "$ISSUE_NUM" --json title,body,labels,comments,state,url,author
+      bun "$FORGE_CLI" issue view "$ISSUE_NUM" --json title,body,labels,comments,state,url,author
     depends_on: [extract-issue-number]
 
   - id: classify

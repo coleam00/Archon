@@ -7,7 +7,7 @@ import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import type { WorkflowDeps, WorkflowConfig } from './deps';
 import * as archonPaths from '@archon/paths';
 import { createLogger } from '@archon/paths';
-import { getDefaultBranch, toRepoPath } from '@archon/git';
+import { getDefaultBranch, detectForge, toRepoPath } from '@archon/git';
 import type { WorkflowDefinition, WorkflowRun, WorkflowExecutionResult } from './schemas';
 import { executeDagWorkflow } from './dag-executor';
 import { logWorkflowStart, logWorkflowError } from './logger';
@@ -274,6 +274,24 @@ export async function executeWorkflow(
   }
 
   const docsDir = config.docsPath ?? 'docs/';
+
+  // Auto-detect forge type from git remote URL.
+  // Defaults to 'github' for backwards compatibility if detection fails.
+  let forgeType = 'github';
+  let forgeApiBase = 'https://api.github.com';
+  try {
+    const forgeInfo = await detectForge(toRepoPath(cwd));
+    forgeType = forgeInfo.type;
+    forgeApiBase = forgeInfo.apiBase;
+  } catch (error) {
+    getLog().warn(
+      { err: error as Error, errorType: (error as Error).constructor.name, cwd },
+      'workflow.forge_detect_failed'
+    );
+  }
+
+  // Resolve path to forge-cli.ts helper script (runs via bun, no external deps)
+  const forgeCli = join(archonPaths.getAppArchonBasePath(), 'scripts', 'forge-cli.ts');
 
   // Resolve provider and model once (used by all nodes)
   // When workflow sets a model but not a provider, infer provider from the model.
@@ -632,6 +650,9 @@ export async function executeWorkflow(
       logDir,
       baseBranch,
       docsDir,
+      forgeType,
+      forgeApiBase,
+      forgeCli,
       config,
       configuredCommandFolder,
       issueContext,

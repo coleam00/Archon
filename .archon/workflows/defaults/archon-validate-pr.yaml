@@ -28,7 +28,7 @@ nodes:
       fi
       if [ -z "$PR_NUMBER" ]; then
         # Try getting PR from current branch
-        PR_NUMBER=$(gh pr view --json number -q '.number' 2>/dev/null)
+        PR_NUMBER=$(bun "$FORGE_CLI" pr view --json number -q '.number' 2>/dev/null)
       fi
 
       if [ -z "$PR_NUMBER" ]; then
@@ -39,7 +39,7 @@ nodes:
       echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
 
       # Fetch full PR details
-      gh pr view "$PR_NUMBER" --json number,title,body,url,headRefName,baseRefName,files,additions,deletions,changedFiles,state,author,labels,isDraft
+      bun "$FORGE_CLI" pr view "$PR_NUMBER" --json number,title,body,url,headRefName,baseRefName,files,additions,deletions,changedFiles,state,author,labels,isDraft
 
   - id: find-ports
     bash: |
@@ -62,8 +62,8 @@ nodes:
 
       # Get PR branch info
       PR_NUMBER=$(cat "$ARTIFACTS_DIR/.pr-number")
-      PR_HEAD=$(gh pr view "$PR_NUMBER" --json headRefName -q '.headRefName')
-      PR_BASE=$(gh pr view "$PR_NUMBER" --json baseRefName -q '.baseRefName')
+      PR_HEAD=$(bun "$FORGE_CLI" pr view "$PR_NUMBER" --json headRefName -q '.headRefName')
+      PR_BASE=$(bun "$FORGE_CLI" pr view "$PR_NUMBER" --json baseRefName -q '.baseRefName')
 
       echo "$CANONICAL_REPO" > "$ARTIFACTS_DIR/.canonical-repo"
       echo "$WORKTREE_PATH" > "$ARTIFACTS_DIR/.worktree-path"

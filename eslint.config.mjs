@@ -17,6 +17,7 @@ export default tseslint.config(
       'worktrees/**',
       '.claude/worktrees/**',
       '.claude/skills/**',
+      '.archon/scripts/**',
       '**/*.js',
       '*.mjs',
       '**/*.test.ts',

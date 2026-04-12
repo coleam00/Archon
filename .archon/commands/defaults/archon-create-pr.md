@@ -7,8 +7,11 @@ argument-hint: [base-branch] (default: auto-detected from config or repo)
 
 **Base branch override**: $ARGUMENTS
 **Default base branch**: $BASE_BRANCH
+**Forge**: $FORGE_TYPE
 
 > If a base branch was provided as argument above, use it for `--base`. Otherwise use the default base branch.
+
+> **Forge note**: When `$FORGE_TYPE` is not `github`, use `bun "$FORGE_CLI"` instead of `gh` for all forge operations (e.g., `"$FORGE_CLI" pr create`, `"$FORGE_CLI" pr list`). The tool handles authentication and API differences automatically.
 
 ---
 

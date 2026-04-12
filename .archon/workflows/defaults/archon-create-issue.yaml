@@ -134,10 +134,10 @@ nodes:
       echo "=== Searching for duplicates: $KEYWORDS ==="
 
       echo "--- Open Issues ---"
-      gh issue list --search "$KEYWORDS" --state open --limit 5 --json number,title,url,labels 2>/dev/null || echo "No open matches"
+      bun "$FORGE_CLI" issue list --search "$KEYWORDS" --state open --limit 5 --json number,title,url,labels 2>/dev/null || echo "No open matches"
 
       echo "--- Recently Closed ---"
-      gh issue list --search "$KEYWORDS" --state closed --limit 3 --json number,title,url,labels 2>/dev/null || echo "No closed matches"
+      bun "$FORGE_CLI" issue list --search "$KEYWORDS" --state closed --limit 3 --json number,title,url,labels 2>/dev/null || echo "No closed matches"
     depends_on: [classify]
 
   # ═══════════════════════════════════════════════════════════════

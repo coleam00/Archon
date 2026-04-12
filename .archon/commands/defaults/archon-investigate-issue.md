@@ -6,6 +6,9 @@ argument-hint: <issue-number|url|"description">
 # Investigate Issue
 
 **Input**: $ARGUMENTS
+**Forge**: $FORGE_TYPE
+
+> **Forge note**: When `$FORGE_TYPE` is not `github`, use `bun "$FORGE_CLI"` instead of `gh` for all forge operations (e.g., `"$FORGE_CLI" issue view`, `"$FORGE_CLI" issue comment`). The tool handles authentication and API differences automatically.
 
 ---
 

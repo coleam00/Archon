@@ -49,6 +49,15 @@ export const SUBPROCESS_ENV_ALLOWLIST = new Set([
   // GitHub CLI (used by Claude Code tools)
   'GITHUB_TOKEN',
   'GH_TOKEN',
+  // Gitea (used by Gitea forge adapter and forge-agnostic commands)
+  'GITEA_TOKEN',
+  'GITEA_URL',
+  // GitLab (used by GitLab forge adapter and forge-agnostic commands)
+  'GITLAB_TOKEN',
+  'GITLAB_URL',
+  // Forge detection (set by workflow executor for AI subprocess use)
+  'FORGE_TYPE',
+  'FORGE_API_BASE',
 ]);
 
 /**
