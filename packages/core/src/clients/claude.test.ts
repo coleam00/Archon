@@ -1,5 +1,6 @@
 import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
+import { classifySubprocessError } from './claude';
 
 const mockLogger = createMockLogger();
 mock.module('@archon/paths', () => ({
@@ -856,6 +857,91 @@ describe('ClaudeClient', () => {
       expect(chunks).toHaveLength(1);
       expect(chunks[0]).toEqual({ type: 'assistant', content: 'Real content' });
     });
+
+    test('classifies stale session as fatal (no retry)', async () => {
+      const error = new Error('No conversation found');
+      mockQuery.mockImplementation(async function* () {
+        throw error;
+      });
+
+      let thrown: unknown;
+      const consumeGenerator = async () => {
+        try {
+          for await (const _ of client.sendQuery('test', '/workspace')) {
+            // consume
+          }
+        } catch (e) {
+          thrown = e;
+          throw e;
+        }
+      };
+
+      await expect(consumeGenerator()).rejects.toThrow(/Claude Code stale session/);
+      // Stale session should NOT retry - single call
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      // Enriched error must preserve original cause for stack trace diagnostics
+      expect((thrown as Error).cause).toBeDefined();
+    });
+
+    test('classifies "conversation not found" variant as stale session (no retry)', async () => {
+      const error = new Error('conversation not found');
+      mockQuery.mockImplementation(async function* () {
+        throw error;
+      });
+
+      let thrown: unknown;
+      const consumeGenerator = async () => {
+        try {
+          for await (const _ of client.sendQuery('test', '/workspace')) {
+            // consume
+          }
+        } catch (e) {
+          thrown = e;
+          throw e;
+        }
+      };
+
+      await expect(consumeGenerator()).rejects.toThrow(/Claude Code stale session/);
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect((thrown as Error).cause).toBeDefined();
+    });
+  });
+});
+
+describe('classifySubprocessError', () => {
+  test('classifies "no conversation found" as stale_session', () => {
+    expect(classifySubprocessError('No conversation found', '')).toBe('stale_session');
+  });
+
+  test('classifies stale session case-insensitively', () => {
+    expect(classifySubprocessError('NO CONVERSATION FOUND', '')).toBe('stale_session');
+  });
+
+  test('classifies "conversation not found" variant as stale_session', () => {
+    expect(classifySubprocessError('query failed', 'conversation not found')).toBe('stale_session');
+  });
+
+  test('classifies rate_limit correctly', () => {
+    expect(classifySubprocessError('rate limit exceeded', '')).toBe('rate_limit');
+  });
+
+  test('classifies auth errors correctly', () => {
+    expect(classifySubprocessError('unauthorized', '')).toBe('auth');
+  });
+
+  test('classifies crash correctly', () => {
+    expect(classifySubprocessError('exited with code 1', '')).toBe('crash');
+  });
+
+  test('returns unknown for unrelated errors', () => {
+    expect(classifySubprocessError('network timeout', '')).toBe('unknown');
+  });
+
+  test('stale_session is checked before crash — overlapping message classifies as stale_session', () => {
+    // A message containing both a crash token and a stale session token should be stale_session
+    expect(classifySubprocessError('exited with code 1: no conversation found', '')).toBe(
+      'stale_session'
+    );
   });
 
   describe('pre-spawn env leak gate', () => {

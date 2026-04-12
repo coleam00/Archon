@@ -142,13 +142,18 @@ const SUBPROCESS_CRASH_PATTERNS = [
   'operation aborted',
 ];
 
-function classifySubprocessError(
+/** Patterns indicating the Claude SDK session no longer exists (stale resume ID) */
+export const STALE_SESSION_PATTERNS = ['no conversation found', 'conversation not found'];
+
+/** Exported for testing only */
+export function classifySubprocessError(
   errorMessage: string,
   stderrOutput: string
-): 'rate_limit' | 'auth' | 'crash' | 'unknown' {
+): 'rate_limit' | 'auth' | 'crash' | 'stale_session' | 'unknown' {
   const combined = `${errorMessage} ${stderrOutput}`.toLowerCase();
   if (RATE_LIMIT_PATTERNS.some(p => combined.includes(p))) return 'rate_limit';
   if (AUTH_PATTERNS.some(p => combined.includes(p))) return 'auth';
+  if (STALE_SESSION_PATTERNS.some(p => combined.includes(p))) return 'stale_session'; // checked before crash: stale session is specific and non-retryable, like auth
   if (SUBPROCESS_CRASH_PATTERNS.some(p => combined.includes(p))) return 'crash';
   return 'unknown';
 }
@@ -617,6 +622,15 @@ export class ClaudeClient implements IAssistantClient {
         if (errorClass === 'auth') {
           const enrichedError = new Error(
             `Claude Code auth error: ${err.message}${stderrContext ? ` (${stderrContext})` : ''}`
+          );
+          enrichedError.cause = error;
+          throw enrichedError;
+        }
+
+        // Don't retry stale session errors - the SDK session ID is gone; orchestrator handles reset
+        if (errorClass === 'stale_session') {
+          const enrichedError = new Error(
+            `Claude Code stale session: ${err.message}${stderrContext ? ` (${stderrContext})` : ''}`
           );
           enrichedError.cause = error;
           throw enrichedError;

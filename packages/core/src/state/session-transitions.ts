@@ -13,7 +13,8 @@ export type TransitionTrigger =
   | 'isolation-changed' // Working directory/worktree changed
   | 'reset-requested' // User requested /reset
   | 'worktree-removed' // Worktree manually removed
-  | 'conversation-closed'; // Platform conversation closed (issue/PR closed)
+  | 'conversation-closed' // Platform conversation closed (issue/PR closed)
+  | 'stale-session-cleared'; // Auto-reset on SDK stale session error (no conversation found)
 
 /**
  * Behavior category for each trigger.
@@ -31,6 +32,7 @@ const TRIGGER_BEHAVIOR: Record<TransitionTrigger, 'creates' | 'deactivates' | 'n
   'reset-requested': 'deactivates',
   'worktree-removed': 'deactivates',
   'conversation-closed': 'deactivates',
+  'stale-session-cleared': 'deactivates', // Deactivate only; next message creates new session
 };
 
 /**
