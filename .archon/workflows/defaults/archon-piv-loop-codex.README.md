@@ -29,9 +29,9 @@ It is one workflow run, but it executes as a series of nodes:
 The behavior below is grounded in:
 
 - [`archon-piv-loop-codex.yaml`](./archon-piv-loop-codex.yaml)
-- [`packages/workflows/src/dag-executor.ts`](../../packages/workflows/src/dag-executor.ts)
-- [`packages/workflows/src/schemas/loop.ts`](../../packages/workflows/src/schemas/loop.ts)
-- [`packages/core/src/clients/codex.ts`](../../packages/core/src/clients/codex.ts)
+- [`packages/workflows/src/dag-executor.ts`](../../../packages/workflows/src/dag-executor.ts)
+- [`packages/workflows/src/schemas/loop.ts`](../../../packages/workflows/src/schemas/loop.ts)
+- [`packages/core/src/clients/codex.ts`](../../../packages/core/src/clients/codex.ts)
 
 ## Context model
 

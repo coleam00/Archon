@@ -1,4 +1,4 @@
-# Execution notes: see `.archon/workflows/archon-piv-loop-codex.README.md`
+# Execution notes: see `.archon/workflows/defaults/archon-piv-loop-codex.README.md`
 # for workflow flow, session reuse, and context reset behavior.
 name: archon-piv-loop-codex
 description: |

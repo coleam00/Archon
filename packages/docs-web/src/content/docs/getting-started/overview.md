@@ -360,6 +360,7 @@ archon complete <branch> --force   # skip uncommitted-changes check
 | `archon-remotion-generate` | Generate or modify Remotion video compositions with AI |
 | `archon-interactive-prd` | Create a PRD through guided conversation |
 | `archon-piv-loop` | Guided Plan-Implement-Validate development with human-in-the-loop |
+| `archon-piv-loop-codex` | Guided Plan-Implement-Validate development using Codex/GPT models |
 | `archon-adversarial-dev` | Build a complete application from scratch using adversarial development |
 
 These bundled workflows work for most projects. To customize, copy one from `.archon/workflows/defaults/` into `.archon/workflows/` and modify it — same-named files override the defaults.
