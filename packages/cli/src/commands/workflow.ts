@@ -595,11 +595,16 @@ export async function workflowRunCommand(
   // Inject codebase env vars into process.env so bash nodes inherit them.
   // AI nodes already receive them via the Claude SDK client, but bash nodes
   // are spawned directly and only see process.env.
+  // Snapshot previous values so we can restore after execution.
+  const previousEnvForInjectedKeys: Record<string, string | undefined> = {};
   if (codebase) {
     try {
       const codebaseEnvVars = await envVarDb.getCodebaseEnvVars(codebase.id);
       const injectedCount = Object.keys(codebaseEnvVars).length;
       if (injectedCount > 0) {
+        for (const key of Object.keys(codebaseEnvVars)) {
+          previousEnvForInjectedKeys[key] = process.env[key];
+        }
         Object.assign(process.env, codebaseEnvVars);
         getLog().info({ codebaseId: codebase.id, injectedCount }, 'cli.codebase_env_vars_injected');
       }
@@ -625,6 +630,14 @@ export async function workflowRunCommand(
       codebase?.id
     );
   } finally {
+    // Restore process.env to its pre-injection state
+    for (const [key, previousValue] of Object.entries(previousEnvForInjectedKeys)) {
+      if (previousValue === undefined) {
+        Reflect.deleteProperty(process.env, key);
+      } else {
+        process.env[key] = previousValue;
+      }
+    }
     unsubscribe?.();
   }
 
