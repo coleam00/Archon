@@ -62,10 +62,39 @@ describe('substituteWorkflowVariables', () => {
     expect(prompt).toBe('Merge into develop');
   });
 
+  it('replaces $CANONICAL_REPO_PATH with resolved repo path', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Save to $CANONICAL_REPO_PATH/.archon/workflows/test.yaml',
+      'run-1',
+      'msg',
+      '/tmp',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      '/repo/root'
+    );
+    expect(prompt).toBe('Save to /repo/root/.archon/workflows/test.yaml');
+  });
+
   it('throws when $BASE_BRANCH is referenced but empty', () => {
     expect(() =>
       substituteWorkflowVariables('Merge into $BASE_BRANCH', 'run-1', 'msg', '/tmp', '', 'docs/')
     ).toThrow('No base branch could be resolved');
+  });
+
+  it('throws when $CANONICAL_REPO_PATH is referenced but empty', () => {
+    expect(() =>
+      substituteWorkflowVariables(
+        'Save to $CANONICAL_REPO_PATH/.archon/workflows/test.yaml',
+        'run-1',
+        'msg',
+        '/tmp',
+        'main',
+        'docs/'
+      )
+    ).toThrow('No canonical repository path could be resolved');
   });
 
   it('does not throw when $BASE_BRANCH is not referenced and baseBranch is empty', () => {
@@ -216,6 +245,7 @@ describe('buildPromptWithContext', () => {
       'msg',
       '/tmp',
       'main',
+      '/repo/root',
       'docs/',
       '## Issue #42\nDetails here',
       'test prompt'
@@ -231,6 +261,7 @@ describe('buildPromptWithContext', () => {
       'msg',
       '/tmp',
       'main',
+      '/repo/root',
       'docs/',
       '## Issue #42\nDetails here',
       'test prompt'
@@ -247,6 +278,7 @@ describe('buildPromptWithContext', () => {
       'msg',
       '/tmp',
       'main',
+      '/repo/root',
       'docs/',
       undefined,
       'test prompt'

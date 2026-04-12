@@ -83,6 +83,8 @@ function buildThreadOptions(cwd: string, options?: AssistantRequestOptions): Thr
 }
 
 const CODEX_MODEL_FALLBACKS: Record<string, string> = {
+  'gpt-5.4': 'gpt-5.3-codex',
+  'gpt-5.4-mini': 'gpt-5.4',
   'gpt-5.3-codex': 'gpt-5.2-codex',
 };
 
@@ -90,7 +92,10 @@ function isModelAccessError(errorMessage: string): boolean {
   const m = errorMessage.toLowerCase();
   const hasModel = m.includes('model');
   const hasAvailabilitySignal =
-    m.includes('not available') || m.includes('not found') || m.includes('access denied');
+    m.includes('not available') ||
+    m.includes('not found') ||
+    m.includes('access denied') ||
+    m.includes('not supported');
   return hasModel && hasAvailabilitySignal;
 }
 
@@ -107,7 +112,7 @@ function buildModelAccessMessage(model?: string): string {
     ? `Or set it per-workflow with \`model: ${suggested}\` in workflow YAML.`
     : 'Or set it per-workflow with a valid `model:` in workflow YAML.';
 
-  return `❌ Model "${selectedModel}" is not available for your account.\n\n${fixLine}\n\n${workflowLine}`;
+  return `❌ Model "${selectedModel}" is not available for your account.\n\nThis can happen when the model is unavailable or not supported in your current Codex runtime.\n\n${fixLine}\n\n${workflowLine}`;
 }
 
 /** Max retries for transient failures (3 = 4 total attempts).

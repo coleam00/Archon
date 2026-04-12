@@ -37,6 +37,7 @@ mock.module('@archon/paths', () => ({
 // ---------------------------------------------------------------------------
 
 mock.module('@archon/git', () => ({
+  getCanonicalRepoPath: mock(async (p: string) => p),
   getDefaultBranch: mock(async () => 'main'),
   toRepoPath: mock((p: string) => p),
 }));

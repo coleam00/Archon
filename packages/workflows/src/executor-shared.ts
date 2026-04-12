@@ -257,6 +257,7 @@ export const CONTEXT_VAR_PATTERN_STR = '\\$(?:CONTEXT|EXTERNAL_CONTEXT|ISSUE_CON
  * - $USER_MESSAGE, $ARGUMENTS - The user's trigger message
  * - $ARTIFACTS_DIR - External artifacts directory for this workflow run
  * - $BASE_BRANCH - The base branch (from config or auto-detected)
+ * - $CANONICAL_REPO_PATH - The primary repository root, even when running from a worktree
  * - $CONTEXT, $EXTERNAL_CONTEXT, $ISSUE_CONTEXT - GitHub issue/PR context (if available)
  * - $DOCS_DIR - Documentation directory path (configured or default 'docs/')
  * - $LOOP_USER_INPUT - User feedback from interactive loop approval. Only populated on the
@@ -275,13 +276,19 @@ export function substituteWorkflowVariables(
   docsDir: string,
   issueContext?: string,
   loopUserInput?: string,
-  rejectionReason?: string
+  rejectionReason?: string,
+  canonicalRepoPath?: string
 ): { prompt: string; contextSubstituted: boolean } {
   // Fail fast if the prompt references $BASE_BRANCH but no base branch could be resolved
   if (!baseBranch && prompt.includes('$BASE_BRANCH')) {
     throw new Error(
       'No base branch could be resolved. Auto-detection failed and `worktree.baseBranch` is not set in .archon/config.yaml. ' +
         'Set the config value or use the --from flag to select a branch (e.g., --from dev).'
+    );
+  }
+  if (!canonicalRepoPath && prompt.includes('$CANONICAL_REPO_PATH')) {
+    throw new Error(
+      'No canonical repository path could be resolved. Workflow is running without a primary repo root.'
     );
   }
 
@@ -295,6 +302,7 @@ export function substituteWorkflowVariables(
     .replace(/\$ARGUMENTS/g, userMessage)
     .replace(/\$ARTIFACTS_DIR/g, artifactsDir)
     .replace(/\$BASE_BRANCH/g, baseBranch)
+    .replace(/\$CANONICAL_REPO_PATH/g, canonicalRepoPath ?? '')
     .replace(/\$DOCS_DIR/g, resolvedDocsDir)
     .replace(/\$LOOP_USER_INPUT/g, loopUserInput ?? '')
     .replace(/\$REJECTION_REASON/g, rejectionReason ?? '');
@@ -330,6 +338,7 @@ export function substituteWorkflowVariables(
  * @param userMessage - The user's trigger message for variable substitution
  * @param artifactsDir - The external artifacts directory for $ARTIFACTS_DIR substitution
  * @param baseBranch - The resolved base branch for $BASE_BRANCH substitution
+ * @param canonicalRepoPath - The resolved primary repo root for $CANONICAL_REPO_PATH substitution
  * @param docsDir - The resolved docs directory for $DOCS_DIR substitution
  * @param issueContext - Optional GitHub issue/PR context to substitute or append
  * @param logLabel - Human-readable label for logging (e.g., 'workflow step prompt')
@@ -341,6 +350,7 @@ export function buildPromptWithContext(
   userMessage: string,
   artifactsDir: string,
   baseBranch: string,
+  canonicalRepoPath: string,
   docsDir: string,
   issueContext: string | undefined,
   logLabel: string
@@ -352,7 +362,10 @@ export function buildPromptWithContext(
     artifactsDir,
     baseBranch,
     docsDir,
-    issueContext
+    issueContext,
+    undefined,
+    undefined,
+    canonicalRepoPath
   );
 
   if (issueContext && !contextSubstituted) {

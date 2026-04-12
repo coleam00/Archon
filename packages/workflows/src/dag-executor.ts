@@ -721,6 +721,7 @@ async function executeNodeInternal(
   artifactsDir: string,
   logDir: string,
   baseBranch: string,
+  canonicalRepoPath: string,
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
   resumeSessionId: string | undefined,
@@ -800,6 +801,7 @@ async function executeNodeInternal(
       workflowRun.user_message,
       artifactsDir,
       baseBranch,
+      canonicalRepoPath,
       docsDir,
       issueContext,
       `dag node '${node.id}' prompt`
@@ -1312,6 +1314,7 @@ async function executeBashNode(
   artifactsDir: string,
   logDir: string,
   baseBranch: string,
+  canonicalRepoPath: string,
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
   issueContext?: string
@@ -1352,7 +1355,10 @@ async function executeBashNode(
     artifactsDir,
     baseBranch,
     docsDir,
-    issueContext
+    issueContext,
+    undefined,
+    undefined,
+    canonicalRepoPath
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true);
 
@@ -1462,6 +1468,7 @@ async function executeScriptNode(
   artifactsDir: string,
   logDir: string,
   baseBranch: string,
+  canonicalRepoPath: string,
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
   issueContext?: string
@@ -1502,7 +1509,10 @@ async function executeScriptNode(
     artifactsDir,
     baseBranch,
     docsDir,
-    issueContext
+    issueContext,
+    undefined,
+    undefined,
+    canonicalRepoPath
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, false);
 
@@ -1709,6 +1719,7 @@ async function executeLoopNode(
   artifactsDir: string,
   logDir: string,
   baseBranch: string,
+  canonicalRepoPath: string,
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
   config: WorkflowConfig,
@@ -1813,7 +1824,9 @@ async function executeLoopNode(
         baseBranch,
         docsDir,
         issueContext,
-        i === startIteration ? loopUserInput : ''
+        i === startIteration ? loopUserInput : '',
+        undefined,
+        canonicalRepoPath
       );
       const finalPrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
 
@@ -2011,7 +2024,10 @@ async function executeLoopNode(
           artifactsDir,
           baseBranch,
           docsDir,
-          issueContext
+          issueContext,
+          undefined,
+          undefined,
+          canonicalRepoPath
         );
         const substitutedBash = substituteNodeOutputRefs(
           bashPrompt,
@@ -2200,6 +2216,7 @@ async function executeApprovalNode(
   artifactsDir: string,
   logDir: string,
   baseBranch: string,
+  canonicalRepoPath: string,
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
   config: WorkflowConfig,
@@ -2263,7 +2280,8 @@ async function executeApprovalNode(
       docsDir,
       issueContext,
       undefined, // loopUserInput
-      rejectionReason
+      rejectionReason,
+      canonicalRepoPath
     );
 
     // Build a synthetic PromptNode to reuse executeNodeInternal
@@ -2298,6 +2316,7 @@ async function executeApprovalNode(
       artifactsDir,
       logDir,
       baseBranch,
+      canonicalRepoPath,
       docsDir,
       nodeOutputs,
       undefined, // fresh session
@@ -2373,7 +2392,8 @@ export async function executeDagWorkflow(
   config: WorkflowConfig,
   configuredCommandFolder?: string,
   issueContext?: string,
-  priorCompletedNodes?: Map<string, string>
+  priorCompletedNodes?: Map<string, string>,
+  canonicalRepoPath = ''
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
   const workflowLevelOptions = {
@@ -2591,6 +2611,7 @@ export async function executeDagWorkflow(
               artifactsDir,
               logDir,
               baseBranch,
+              canonicalRepoPath,
               docsDir,
               nodeOutputs,
               issueContext
@@ -2640,6 +2661,7 @@ export async function executeDagWorkflow(
               artifactsDir,
               logDir,
               baseBranch,
+              canonicalRepoPath,
               docsDir,
               nodeOutputs,
               config,
@@ -2662,6 +2684,7 @@ export async function executeDagWorkflow(
               artifactsDir,
               logDir,
               baseBranch,
+              canonicalRepoPath,
               docsDir,
               nodeOutputs,
               config,
@@ -2716,6 +2739,7 @@ export async function executeDagWorkflow(
               artifactsDir,
               logDir,
               baseBranch,
+              canonicalRepoPath,
               docsDir,
               nodeOutputs,
               issueContext
@@ -2763,6 +2787,7 @@ export async function executeDagWorkflow(
               artifactsDir,
               logDir,
               baseBranch,
+              canonicalRepoPath,
               docsDir,
               nodeOutputs,
               // Always pass the prior session ID — forkSession:true in executeNodeInternal

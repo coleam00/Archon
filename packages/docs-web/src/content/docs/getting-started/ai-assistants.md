@@ -115,7 +115,7 @@ You can configure Codex's behavior in `.archon/config.yaml`:
 ```yaml
 assistants:
   codex:
-    model: gpt-5.3-codex
+    model: gpt-5.4
     modelReasoningEffort: medium  # 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
     webSearchMode: live           # 'disabled' | 'cached' | 'live'
     additionalDirectories:

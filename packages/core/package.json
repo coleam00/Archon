@@ -33,7 +33,7 @@
     "@archon/isolation": "workspace:*",
     "@archon/paths": "workspace:*",
     "@archon/workflows": "workspace:*",
-    "@openai/codex-sdk": "^0.116.0",
+    "@openai/codex-sdk": "^0.120.0",
     "pg": "^8.11.0",
     "zod": "^3"
   },

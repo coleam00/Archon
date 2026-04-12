@@ -201,23 +201,52 @@ nodes:
       echo "VALID"
     depends_on: [generate-yaml]
 
+  - id: resolve-workflow-name
+    bash: |
+      FILE="$ARTIFACTS_DIR/generated-workflow.yaml"
+
+      if [ ! -f "$FILE" ]; then
+        echo "ERROR: generated-workflow.yaml not found at $FILE"
+        exit 1
+      fi
+
+      WORKFLOW_NAME="$(sed -n 's/^name:[[:space:]]*//p' "$FILE" | head -1 | tr -d '\r')"
+
+      if [ -z "$WORKFLOW_NAME" ]; then
+        echo "ERROR: generated workflow is missing a non-empty top-level name"
+        exit 1
+      fi
+
+      if ! printf '%s' "$WORKFLOW_NAME" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$'; then
+        echo "ERROR: generated workflow name must be kebab-case, got: $WORKFLOW_NAME"
+        exit 1
+      fi
+
+      printf '%s\n' "$WORKFLOW_NAME"
+    depends_on: [validate-yaml]
+
   - id: save-or-report
     prompt: |
       You are a workflow installer. Save the generated workflow and report to the user.
 
       ## Workflow Details
-      - **Name**: $extract-intent.output.workflow_name
+      - **Resolved Name**: $resolve-workflow-name.output
+      - **Extracted Intent Name**: $extract-intent.output.workflow_name
       - **Trigger Phrases**: $extract-intent.output.trigger_phrases
 
       ## Instructions
 
       1. Read the generated workflow from `$ARTIFACTS_DIR/generated-workflow.yaml`
-      2. Create the directory `.archon/workflows/` if it doesn't exist (use Bash: `mkdir -p .archon/workflows/`)
-      3. Save the workflow to `.archon/workflows/$extract-intent.output.workflow_name.yaml`
+      2. Treat `$resolve-workflow-name.output` as the source of truth for the filename and reported workflow name
+      3. If the YAML file's `name:` does not match `$resolve-workflow-name.output`, stop and report the mismatch instead of saving
+      4. If `$resolve-workflow-name.output` is empty, stop and report that the generated YAML is invalid
+      5. Create the directory `$CANONICAL_REPO_PATH/.archon/workflows/` if it doesn't exist (use Bash: `mkdir -p "$CANONICAL_REPO_PATH/.archon/workflows"`).
+         Do NOT save into the current worktree when `$CANONICAL_REPO_PATH` points to the primary repository root.
+      6. Save the workflow to `$CANONICAL_REPO_PATH/.archon/workflows/$resolve-workflow-name.output.yaml`
          Use the Write tool to write the file.
-      4. Report to the user:
+      7. Report to the user:
          - Workflow name and file location
          - Trigger phrases that will invoke it
-         - How to run it: `bun run cli workflow run $extract-intent.output.workflow_name "your input"`
-         - How to test it: `bun run cli validate workflows $extract-intent.output.workflow_name`
-    depends_on: [validate-yaml]
+         - How to run it: `bun run cli workflow run $resolve-workflow-name.output "your input"`
+         - How to test it: `bun run cli validate workflows $resolve-workflow-name.output`
+    depends_on: [resolve-workflow-name]

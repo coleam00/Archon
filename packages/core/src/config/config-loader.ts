@@ -83,7 +83,7 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 #   claude:
 #     model: sonnet
 #   codex:
-#     model: gpt-5.3-codex
+#     model: gpt-5.4
 #     modelReasoningEffort: medium
 #     webSearchMode: disabled
 #     additionalDirectories:

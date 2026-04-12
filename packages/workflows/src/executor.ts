@@ -7,7 +7,7 @@ import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import type { WorkflowDeps, WorkflowConfig } from './deps';
 import * as archonPaths from '@archon/paths';
 import { createLogger } from '@archon/paths';
-import { getDefaultBranch, toRepoPath } from '@archon/git';
+import { getCanonicalRepoPath, getDefaultBranch, toRepoPath } from '@archon/git';
 import type { WorkflowDefinition, WorkflowRun, WorkflowExecutionResult } from './schemas';
 import { executeDagWorkflow } from './dag-executor';
 import { logWorkflowStart, logWorkflowError } from './logger';
@@ -271,6 +271,16 @@ export async function executeWorkflow(
       );
       baseBranch = '';
     }
+  }
+
+  let canonicalRepoPath = '';
+  try {
+    canonicalRepoPath = await getCanonicalRepoPath(cwd);
+  } catch (error) {
+    getLog().warn(
+      { err: error as Error, errorType: (error as Error).constructor.name, cwd },
+      'workflow.canonical_repo_auto_detect_failed'
+    );
   }
 
   const docsDir = config.docsPath ?? 'docs/';
@@ -635,7 +645,8 @@ export async function executeWorkflow(
       config,
       configuredCommandFolder,
       issueContext,
-      dagPriorCompletedNodes
+      dagPriorCompletedNodes,
+      canonicalRepoPath
     );
 
     // executeDagWorkflow throws on fatal errors; check DB status for result

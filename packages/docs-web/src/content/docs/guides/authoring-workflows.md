@@ -554,7 +554,7 @@ model: sonnet        # Model override (default: from config assistants.claude.mo
 - `inherit` - Use model from previous session
 
 **Codex models:**
-- Any OpenAI model ID (e.g., `gpt-5.3-codex`, `o5-pro`)
+- Any OpenAI model ID (e.g., `gpt-5.4`, `o5-pro`)
 - Cannot use Claude model aliases
 
 ### Codex-Specific Options
@@ -562,7 +562,7 @@ model: sonnet        # Model override (default: from config assistants.claude.mo
 ```yaml
 name: my-workflow
 provider: codex
-model: gpt-5.3-codex
+model: gpt-5.4
 modelReasoningEffort: medium    # 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
 webSearchMode: live             # 'disabled' | 'cached' | 'live'
 additionalDirectories:
@@ -650,7 +650,7 @@ assistants:
   claude:
     model: haiku  # Fast model for most tasks
   codex:
-    model: gpt-5.3-codex
+    model: gpt-5.4
     modelReasoningEffort: low
     webSearchMode: disabled
 ```

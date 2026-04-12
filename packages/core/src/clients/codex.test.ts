@@ -862,21 +862,24 @@ describe('CodexClient', () => {
       );
     });
 
-    test('throws actionable model-access message for unavailable configured model', async () => {
-      mockRunStreamed.mockRejectedValue(new Error('403 Forbidden: model not available'));
+    test('throws actionable model-access message for unsupported configured model', async () => {
+      mockRunStreamed.mockRejectedValue(new Error('403 Forbidden: model not supported'));
 
       const consumeGenerator = async () => {
         for await (const _ of client.sendQuery('test', '/workspace', undefined, {
-          model: 'gpt-5.3-codex',
+          model: 'gpt-5.4',
         })) {
           // consume
         }
       };
 
       await expect(consumeGenerator()).rejects.toThrow(
-        'Model "gpt-5.3-codex" is not available for your account'
+        'Model "gpt-5.4" is not available for your account'
       );
-      await expect(consumeGenerator()).rejects.toThrow('model: gpt-5.2-codex');
+      await expect(consumeGenerator()).rejects.toThrow(
+        'unavailable or not supported in your current Codex runtime'
+      );
+      await expect(consumeGenerator()).rejects.toThrow('model: gpt-5.3-codex');
     });
 
     test('uses generic dashboard guidance when fallback mapping is unknown', async () => {
