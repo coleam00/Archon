@@ -90,7 +90,7 @@ const mockSendQuery = mock(function* () {
   yield { type: 'result', sessionId: 'session' };
 });
 
-const mockGetAssistantClient = mock(() => ({
+const mockGetAgentProvider = mock(() => ({
   sendQuery: mockSendQuery,
   getType: () => 'claude',
 }));
@@ -98,7 +98,7 @@ const mockGetAssistantClient = mock(() => ({
 function createMockDeps(): WorkflowDeps {
   return {
     store: createMockStore(),
-    getAssistantClient: mockGetAssistantClient,
+    getAgentProvider: mockGetAgentProvider,
     loadConfig: mock(() =>
       Promise.resolve({
         assistant: 'claude' as const,
