@@ -194,148 +194,8 @@ nodes:
 
   - id: detect-project
     depends_on: [explore]
-    bash: |
-      set -e
-
-      PROJECT_TYPE="unknown"
-      INSTALL_CMD=""
-      VALIDATE_CMD=""
-      TYPECHECK_CMD=""
-      LINT_CMD=""
-      TEST_CMD=""
-      FORMAT_CMD=""
-
-      # -------- Bun / TypeScript --------
-      if [ -f "bun.lock" ] || [ -f "bun.lockb" ]; then
-        PROJECT_TYPE="bun"
-        INSTALL_CMD="bun install --frozen-lockfile"
-        grep -q '"validate"' package.json 2>/dev/null && VALIDATE_CMD="bun run validate"
-        grep -q '"type-check"' package.json 2>/dev/null && TYPECHECK_CMD="bun run type-check"
-        grep -q '"lint"' package.json 2>/dev/null && LINT_CMD="bun run lint"
-        grep -q '"test"' package.json 2>/dev/null && TEST_CMD="bun run test"
-        grep -q '"format:check"' package.json 2>/dev/null && FORMAT_CMD="bun run format:check"
-
-      # -------- Python (via repo signals + source-repo venv lookup) --------
-      # Triggers on any Python signal (pyproject, requirements, setup.py, or tests/).
-      # In a git worktree, .venv is NOT copied from the source repo (git worktree add
-      # only copies tracked files), so we look up the source repo via git's
-      # --git-common-dir and reference its .venv/ directly from the worktree.
-      elif [ -f "pyproject.toml" ] || [ -f "requirements.txt" ] || \
-           [ -f "setup.py" ] || compgen -G "tests/test_*.py" > /dev/null 2>&1; then
-        PROJECT_TYPE="python"
-
-        # Resolve source repo root (the main checkout, not the worktree).
-        # git rev-parse --git-common-dir returns the main .git dir (even from a worktree).
-        SOURCE_REPO=""
-        GIT_COMMON="$(git rev-parse --git-common-dir 2>/dev/null)"
-        if [ -n "$GIT_COMMON" ]; then
-          case "$GIT_COMMON" in
-            /*) ABS_COMMON="$GIT_COMMON" ;;
-            *)  ABS_COMMON="$(pwd)/$GIT_COMMON" ;;
-          esac
-          SOURCE_REPO="$(dirname "$ABS_COMMON")"
-        fi
-
-        # Prefer worktree-local .venv if present (unusual), else source repo .venv.
-        VENV_BIN=""
-        if [ -d ".venv" ] && [ -x ".venv/bin/python" ]; then
-          VENV_BIN=".venv/bin"
-        elif [ -n "$SOURCE_REPO" ] && [ -x "$SOURCE_REPO/.venv/bin/python" ]; then
-          VENV_BIN="$SOURCE_REPO/.venv/bin"
-        fi
-
-        # Detect installed tools via the resolved VENV_BIN (most reliable).
-        if [ -n "$VENV_BIN" ]; then
-          [ -x "$VENV_BIN/pytest"  ] && TEST_CMD="$VENV_BIN/pytest tests/"
-          [ -x "$VENV_BIN/ruff"    ] && { LINT_CMD="$VENV_BIN/ruff check ."; FORMAT_CMD="$VENV_BIN/ruff format --check ."; }
-          [ -x "$VENV_BIN/mypy"    ] && TYPECHECK_CMD="$VENV_BIN/mypy ."
-          [ -x "$VENV_BIN/pyright" ] && TYPECHECK_CMD="${TYPECHECK_CMD:+$TYPECHECK_CMD && }$VENV_BIN/pyright"
-        fi
-
-        # Install command based on project metadata.
-        if [ -f "pyproject.toml" ]; then
-          if [ -f "uv.lock" ]; then
-            INSTALL_CMD="uv sync"
-          elif [ -f "poetry.lock" ]; then
-            INSTALL_CMD="poetry install"
-          elif [ -n "$VENV_BIN" ]; then
-            INSTALL_CMD="$VENV_BIN/python -m pip install -e ."
-          fi
-        elif [ -f "requirements.txt" ] && [ -n "$VENV_BIN" ]; then
-          INSTALL_CMD="$VENV_BIN/python -m pip install -r requirements.txt"
-        fi
-
-      # -------- Node (npm/yarn/pnpm) --------
-      elif [ -f "package.json" ]; then
-        PROJECT_TYPE="node"
-        if [ -f "pnpm-lock.yaml" ]; then
-          RUN="pnpm"
-          INSTALL_CMD="pnpm install --frozen-lockfile"
-        elif [ -f "yarn.lock" ]; then
-          RUN="yarn"
-          INSTALL_CMD="yarn install --frozen-lockfile"
-        else
-          RUN="npm run"
-          INSTALL_CMD="npm ci"
-        fi
-        grep -q '"validate"' package.json 2>/dev/null && VALIDATE_CMD="$RUN validate"
-        grep -q '"type-check"' package.json 2>/dev/null && TYPECHECK_CMD="$RUN type-check"
-        grep -q '"lint"' package.json 2>/dev/null && LINT_CMD="$RUN lint"
-        grep -q '"test"' package.json 2>/dev/null && TEST_CMD="$RUN test"
-        grep -q '"format:check"' package.json 2>/dev/null && FORMAT_CMD="$RUN format:check"
-
-      # -------- Go --------
-      elif [ -f "go.mod" ]; then
-        PROJECT_TYPE="go"
-        INSTALL_CMD="go mod download"
-        TEST_CMD="go test ./..."
-        TYPECHECK_CMD="go vet ./..."
-        command -v golangci-lint >/dev/null 2>&1 && LINT_CMD="golangci-lint run"
-        FORMAT_CMD="gofmt -l ."
-
-      # -------- Rust --------
-      elif [ -f "Cargo.toml" ]; then
-        PROJECT_TYPE="rust"
-        INSTALL_CMD="cargo fetch"
-        TEST_CMD="cargo test"
-        TYPECHECK_CMD="cargo check"
-        LINT_CMD="cargo clippy -- -D warnings"
-        FORMAT_CMD="cargo fmt -- --check"
-
-      # -------- Makefile fallback --------
-      elif [ -f "Makefile" ]; then
-        PROJECT_TYPE="makefile"
-        grep -q "^test:" Makefile 2>/dev/null && TEST_CMD="make test"
-        grep -q "^lint:" Makefile 2>/dev/null && LINT_CMD="make lint"
-        grep -q "^check:" Makefile 2>/dev/null && VALIDATE_CMD="make check"
-      fi
-
-      # Compose VALIDATE_CMD from available parts if not already set
-      if [ -z "$VALIDATE_CMD" ]; then
-        PARTS=""
-        [ -n "$TYPECHECK_CMD" ] && PARTS="${PARTS:+$PARTS && }$TYPECHECK_CMD"
-        [ -n "$LINT_CMD" ] && PARTS="${PARTS:+$PARTS && }$LINT_CMD"
-        [ -n "$TEST_CMD" ] && PARTS="${PARTS:+$PARTS && }$TEST_CMD"
-        [ -n "$FORMAT_CMD" ] && PARTS="${PARTS:+$PARTS && }$FORMAT_CMD"
-        VALIDATE_CMD="$PARTS"
-      fi
-
-      echo "=== PROJECT DETECTION ==="
-      echo "PROJECT_TYPE=$PROJECT_TYPE"
-      echo "INSTALL_CMD=${INSTALL_CMD:-}"
-      echo "VALIDATE_CMD=${VALIDATE_CMD:-}"
-      echo "TYPECHECK_CMD=${TYPECHECK_CMD:-}"
-      echo "LINT_CMD=${LINT_CMD:-}"
-      echo "TEST_CMD=${TEST_CMD:-}"
-      echo "FORMAT_CMD=${FORMAT_CMD:-}"
-      echo "=== END DETECTION ==="
-
-      if [ -z "$VALIDATE_CMD" ] && [ -z "$TEST_CMD" ] && [ -z "$TYPECHECK_CMD" ] && [ -z "$LINT_CMD" ]; then
-        echo ""
-        echo "NOTE: No automated validators detected in this project."
-        echo "The implement loop will proceed without automated validation gates."
-        echo "Human review is required before merging any changes."
-      fi
+    script: detect-project
+    runtime: bun
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 2: PLAN — Create the structured implementation plan
@@ -821,9 +681,10 @@ nodes:
 
         **HARD RULES**:
         1. Count your commits in this iteration via `git log HEAD ^<start-hash>` (the
-           hash you recorded in Phase 0.3). If count > 1, you did too much — revert the
-           extras with `git reset --mixed <start-hash>` and let the next iteration pick
-           up the rest.
+           hash you recorded in Phase 0.3). If count > 1, iteration discipline was
+           violated. **Do NOT rewrite history automatically.** Report the violation in
+           the Phase 4.5 status block, state how many commits were created, and end the
+           iteration immediately so a human or later cleanup pass can reconcile it.
         2. Verification tasks (like "VERIFY PRE-FLIGHT") count as numbered tasks and
            need their own iteration, even if they produce no code change.
         3. If Task N is a verification-only task, your "commit" for that iteration is
@@ -935,9 +796,13 @@ nodes:
       go in the "Pre-existing repo findings" section of Step 6's report instead.
 
       To distinguish changed-file issues from pre-existing ones:
-      - Run validators scoped to the changed files where possible (e.g.,
-        `$LINT_CMD <changed-file>` if the tool supports per-file args, or run the
-        full validator and filter its output to only lines referencing changed files)
+      - Use a changed-file scoped validator invocation ONLY when the command syntax
+        clearly supports it.
+      - Otherwise run the full validator and filter its output to findings that point
+        at files from `git diff --name-only $BASE_BRANCH..HEAD`.
+      - Never invent a scoped form of a repo command by appending file paths to
+        commands like `npm run lint`, `cargo test`, `go test ./...`, or similar
+        wrappers unless the command itself clearly accepts those extra args.
       - For each issue in a changed file: fix it, stage only that file, add it to
         a single scoped commit
 
@@ -1048,12 +913,17 @@ nodes:
         Do not run validators. Do not make commits. Proceed directly to Step 5 for
         the final report and signal emission.
 
-        **If this iteration made fixes in response to user feedback**: run validators
-        SCOPED to the files you fixed, not the repo-wide suite. Example: if you fixed
-        `foo.py`, run `$LINT_CMD foo.py` and `$TEST_CMD tests/test_foo.py` if those
-        tools accept per-file arguments. Do NOT run `ruff check .` or equivalent
-        repo-wide commands — the goal is "did my fixes work?", not "is the whole repo
-        healthy?".
+        **If this iteration made fixes in response to user feedback**: validate ONLY
+        the files you changed in this iteration, not the repo-wide suite.
+        - Use a file-scoped validator invocation only when the command syntax clearly
+          supports it.
+        - Otherwise run the full validator and filter the findings to the files you
+          just changed.
+        - Never invent a file-scoped form of `npm run lint`, `cargo test`,
+          `go test ./...`, or any similar wrapper by simply appending paths unless the
+          command itself clearly accepts those extra args.
+        Do NOT run `ruff check .` or equivalent repo-wide commands as a release gate
+        here — the goal is "did my fixes work?", not "is the whole repo healthy?".
 
         If scoped validation fails, attempt one more fix pass on the same file(s).
         If still failing, report to the user in Step 5 and do NOT emit VALIDATED.
@@ -1062,8 +932,14 @@ nodes:
 
         ## Step 4: Commit Fixes
 
+        If this iteration is an approval-only iteration, SKIP this step entirely.
+        Commit only when you actually made code changes in response to feedback.
+
+        Stage explicitly by file path and confirm the staged set before committing:
+
         ```bash
-        git add -A
+        git add <specific-fixed-files>    # only the files changed in THIS feedback pass
+        git diff --cached --stat
         git commit -m "$(cat <<'EOF'
         fix: address review feedback
 

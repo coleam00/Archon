@@ -40,7 +40,7 @@ export default tseslint.config(
 
   // Project-specific settings
   {
-    files: ['packages/*/src/**/*.{ts,tsx}'],
+    files: ['packages/*/src/**/*.{ts,tsx}', '.archon/scripts/**/*.{ts,tsx}'],
     languageOptions: {
       parserOptions: {
         projectService: true,
