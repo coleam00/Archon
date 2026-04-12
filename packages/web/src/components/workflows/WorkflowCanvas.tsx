@@ -172,13 +172,14 @@ export function WorkflowCanvas({
         },
       };
 
+      onPushSnapshot?.();
       setNodes(nds => [...nds, newNode]);
       // Auto-select the new node so keyboard shortcuts (Delete/Backspace) and the
       // inspector panel work immediately without an extra click. Fixes #971.
       onNodeSelect(id);
       onDirty();
     },
-    [screenToFlowPosition, setNodes, onNodeSelect, onDirty]
+    [screenToFlowPosition, setNodes, onNodeSelect, onDirty, onPushSnapshot]
   );
 
   // Track whether we've already pushed a snapshot for the current drag gesture
@@ -289,13 +290,14 @@ export function WorkflowCanvas({
         },
       };
 
+      onPushSnapshot?.();
       setNodes(nds => [...nds, newNode]);
       // Auto-select for the same reason as onDrop above (#971).
       onNodeSelect(id);
       onDirty();
       setQuickAddPosition(null);
     },
-    [quickAddPosition, setNodes, onNodeSelect, onDirty]
+    [quickAddPosition, setNodes, onNodeSelect, onDirty, onPushSnapshot]
   );
 
   const handleQuickAddClose = useCallback(() => {
