@@ -122,7 +122,7 @@ bun test --watch            # Watch mode (single package)
 bun test packages/core/src/handlers/command-handler.test.ts  # Single file
 ```
 
-**Test isolation (mock.module pollution):** Bun's `mock.module()` permanently replaces modules in the process-wide cache — `mock.restore()` does NOT undo it ([oven-sh/bun#7823](https://github.com/oven-sh/bun/issues/7823)). To prevent cross-file pollution, packages that have conflicting `mock.module()` calls split their tests into separate `bun test` invocations: `@archon/core` (7 batches), `@archon/workflows` (5), `@archon/adapters` (4), `@archon/isolation` (3). See each package's `package.json` for the exact splits.
+**Test isolation (mock.module pollution):** Bun's `mock.module()` permanently replaces modules in the process-wide cache — `mock.restore()` does NOT undo it ([oven-sh/bun#7823](https://github.com/oven-sh/bun/issues/7823)). To prevent cross-file pollution, packages that have conflicting `mock.module()` calls split their tests into separate `bun test` invocations: `@archon/core` (7 batches), `@archon/workflows` (5), `@archon/adapters` (3), `@archon/isolation` (3). See each package's `package.json` for the exact splits.
 
 **Do NOT run `bun test` from the repo root** — it discovers all test files across all packages and runs them in one process, causing ~135 mock pollution failures. Always use `bun run test` (which uses `bun --filter '*' test` for per-package isolation).
 
@@ -429,7 +429,8 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 
 **2. Command Handler** (`packages/core/src/handlers/`)
 - Process slash commands (deterministic, no AI)
-- Commands: `/command-set`, `/load-commands`, `/clone`, `/getcwd`, `/setcwd`, `/repos`, `/repo`, `/repo-remove`, `/worktree`, `/workflow`, `/status`, `/commands`, `/help`, `/reset`, `/reset-context`, `/init`
+- The orchestrator treats only these top-level commands as deterministic: `/help`, `/status`, `/reset`, `/workflow`, `/register-project`, `/update-project`, `/remove-project`, `/commands`, `/init`, `/worktree`
+- `/workflow` handles subcommands like `list`, `run`, `status`, `cancel`, `resume`, `abandon`, `approve`, `reject`
 - Update database, perform operations, return responses
 
 **3. Orchestrator** (`packages/core/src/orchestrator/`)
@@ -530,7 +531,7 @@ curl http://localhost:3637/api/conversations/<conversationId>/messages
 ```
 ~/.archon/
 ├── workspaces/owner/repo/        # Project-centric layout
-│   ├── source/                   # Clone (from /clone) or symlink → local path
+│   ├── source/                   # Cloned repo or symlink → local path
 │   ├── worktrees/                # Git worktrees for this project
 │   ├── artifacts/                # Workflow artifacts (NEVER in git)
 │   │   ├── runs/{id}/            # Per-run artifacts ($ARTIFACTS_DIR)
@@ -675,8 +676,8 @@ async function createSession(conversationId: string, codebaseId: string) {
 
 1. **Codebase Commands** (per-repo):
    - Stored in `.archon/commands/` (plain text/markdown)
-   - Auto-detected via `/clone` or `/load-commands <folder>`
-   - Loaded by `/clone` or `/load-commands`, invoked by AI via orchestrator routing
+   - Discovered from the repository `.archon/commands/` directory
+   - Surfaced via `GET /api/commands` for the workflow builder and invoked by workflow `command:` nodes
 
 2. **Workflows** (YAML-based):
    - Stored in `.archon/workflows/` (searched recursively)
@@ -762,6 +763,9 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 - `POST /api/codebases` - Register a codebase (clone or local path); body accepts `allowEnvKeys` for the env-leak gate
 - `PATCH /api/codebases/:id` - Flip the `allow_env_keys` consent bit; body: `{ allowEnvKeys: boolean }`. Audit-logged at `warn` level on every grant/revoke (`env_leak_consent_granted` / `env_leak_consent_revoked`) with `codebaseId`, `path`, `files`, `keys`, `scanStatus`, `actor`
 - `DELETE /api/codebases/:id` - Delete a codebase and clean up resources
+- `GET /api/codebases/:id/env` - List env var keys for a codebase (never returns values)
+- `PUT /api/codebases/:id/env` / `DELETE /api/codebases/:id/env/:key` - Upsert / delete a single codebase env var
+- `GET /api/codebases/:id/environments` - List tracked isolation environments for a codebase
 
 **Artifact Files:**
 - `GET /api/artifacts/:runId/*` - Serve a workflow artifact file by run ID and relative path; returns `text/markdown` for `.md` files, `text/plain` otherwise; 400 on path traversal (`..`), 404 if run or file not found
@@ -770,6 +774,7 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 - `GET /api/commands` - List available command names (bundled + project-defined); optional `?cwd=`; returns `{ commands: [{ name, source: 'bundled' | 'project' }] }`
 
 **System:**
+- `GET /api/health` - Health check with adapter/system status
 - `GET /api/update-check` - Check for available updates; returns `{ updateAvailable, currentVersion, latestVersion, releaseUrl }`; skips GitHub API call for non-binary builds
 
 **OpenAPI Spec:**
