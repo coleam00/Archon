@@ -42,6 +42,8 @@ export {
 export {
   findRepoRoot,
   getRemoteUrl,
+  parseOwnerRepoFromGitRemote,
+  parseOwnerRepoFromRemoteUrl,
   syncWorkspace,
   cloneRepository,
   syncRepository,

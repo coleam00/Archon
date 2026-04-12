@@ -19,6 +19,7 @@ export {
   getProjectWorktreesPath,
   getProjectArtifactsPath,
   getProjectLogsPath,
+  getProjectArchonDir,
   getRunArtifactsPath,
   getRunLogPath,
   resolveProjectRootFromCwd,

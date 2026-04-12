@@ -285,8 +285,142 @@ describe('executeScriptNode — user-global fallback', () => {
     const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
     const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
     const notFoundMsg = messages.find(m =>
-      m.includes('not found in .archon/scripts/ (repo or global)')
+      m.includes('not found in .archon/scripts/ (repo, workspace, or global)')
     );
     expect(notFoundMsg).toBeDefined();
+  });
+});
+
+// ─── Workspace-in-userspace tier (repo > workspace > global) ────────────────
+
+describe('executeScriptNode — workspace-in-userspace fallback', () => {
+  let repoCwd: string;
+  let globalHome: string;
+  let workspaceHome: string;
+
+  beforeAll(async () => {
+    repoCwd = await mkdtemp(join(tmpdir(), 'archon-script-wsr-repo-'));
+    globalHome = await mkdtemp(join(tmpdir(), 'archon-script-wsr-home-'));
+    // The workspace-in-userspace dir is ~/.archon/workspaces/<owner>/<repo>/.archon
+    // For test purposes we simulate that with a plain tmpdir — the engine just
+    // probes <dir>/scripts/<name>.ts and doesn't care about the parent layout.
+    workspaceHome = await mkdtemp(join(tmpdir(), 'archon-script-wsr-workspace-'));
+    process.env.ARCHON_HOME = globalHome;
+    await mkdir(join(repoCwd, 'artifacts'), { recursive: true });
+    await mkdir(join(repoCwd, 'logs'), { recursive: true });
+  });
+
+  afterAll(async () => {
+    await rm(repoCwd, { recursive: true, force: true });
+    await rm(globalHome, { recursive: true, force: true });
+    await rm(workspaceHome, { recursive: true, force: true });
+    delete process.env.ARCHON_HOME;
+  });
+
+  beforeEach(async () => {
+    await rm(join(repoCwd, '.archon'), { recursive: true, force: true });
+    await rm(join(globalHome, '.archon'), { recursive: true, force: true });
+    await rm(join(workspaceHome, 'scripts'), { recursive: true, force: true });
+  });
+
+  /**
+   * Dispatch a workflow with a script node, passing workspaceArchonDir through
+   * via the last-parameter hole in executeDagWorkflow. The engine will use
+   * the explicitly-provided value and skip its own git-based lookup.
+   */
+  async function runWithWorkspace(
+    platform: IWorkflowPlatform,
+    runId: string,
+    scriptName: string
+  ): Promise<IWorkflowStore> {
+    const store = createMockStore();
+    const deps: WorkflowDeps = {
+      ...createMockDeps(),
+      store,
+    };
+    const node: ScriptNode = { id: 'run-it', script: scriptName, runtime: 'bun' };
+    await executeDagWorkflow(
+      deps,
+      platform,
+      `conv-${runId}`,
+      repoCwd,
+      { name: `script-wsr-${runId}`, nodes: [node] },
+      makeRun(runId),
+      'claude',
+      undefined,
+      join(repoCwd, 'artifacts'),
+      join(repoCwd, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined, // configuredCommandFolder
+      undefined, // issueContext
+      undefined, // priorCompletedNodes
+      workspaceHome // workspaceArchonDir
+    );
+    return store;
+  }
+
+  it('executes a script found only in the workspace dir', async () => {
+    await mkdir(join(workspaceHome, 'scripts'), { recursive: true });
+    await writeFile(join(workspaceHome, 'scripts', 'ws-only.ts'), 'console.log("from-workspace")');
+
+    const platform = createMockPlatform();
+    const store = await runWithWorkspace(platform, 'ws-only-run', 'ws-only');
+
+    const createEvent = store.createWorkflowEvent as ReturnType<typeof mock>;
+    const nodeCompleted = createEvent.mock.calls.find((call: unknown[]) => {
+      const event = call[0] as { event_type: string; step_name?: string };
+      return event.event_type === 'node_completed' && event.step_name === 'run-it';
+    });
+    expect(nodeCompleted).toBeDefined();
+    if (nodeCompleted) {
+      const event = nodeCompleted[0] as { data?: { node_output?: string } };
+      expect(event.data?.node_output).toContain('from-workspace');
+    }
+  });
+
+  it('prefers repo over workspace', async () => {
+    await mkdir(join(repoCwd, '.archon', 'scripts'), { recursive: true });
+    await mkdir(join(workspaceHome, 'scripts'), { recursive: true });
+    await writeFile(join(repoCwd, '.archon', 'scripts', 'dup.ts'), 'console.log("from-repo")');
+    await writeFile(join(workspaceHome, 'scripts', 'dup.ts'), 'console.log("from-workspace")');
+
+    const platform = createMockPlatform();
+    const store = await runWithWorkspace(platform, 'dup-run', 'dup');
+
+    const createEvent = store.createWorkflowEvent as ReturnType<typeof mock>;
+    const nodeCompleted = createEvent.mock.calls.find((call: unknown[]) => {
+      const event = call[0] as { event_type: string; step_name?: string };
+      return event.event_type === 'node_completed' && event.step_name === 'run-it';
+    });
+    expect(nodeCompleted).toBeDefined();
+    if (nodeCompleted) {
+      const event = nodeCompleted[0] as { data?: { node_output?: string } };
+      expect(event.data?.node_output).toContain('from-repo');
+      expect(event.data?.node_output).not.toContain('from-workspace');
+    }
+  });
+
+  it('prefers workspace over user-global', async () => {
+    await mkdir(join(workspaceHome, 'scripts'), { recursive: true });
+    await mkdir(join(globalHome, '.archon', 'scripts'), { recursive: true });
+    await writeFile(join(workspaceHome, 'scripts', 'mid.ts'), 'console.log("from-workspace")');
+    await writeFile(join(globalHome, '.archon', 'scripts', 'mid.ts'), 'console.log("from-global")');
+
+    const platform = createMockPlatform();
+    const store = await runWithWorkspace(platform, 'mid-run', 'mid');
+
+    const createEvent = store.createWorkflowEvent as ReturnType<typeof mock>;
+    const nodeCompleted = createEvent.mock.calls.find((call: unknown[]) => {
+      const event = call[0] as { event_type: string; step_name?: string };
+      return event.event_type === 'node_completed' && event.step_name === 'run-it';
+    });
+    expect(nodeCompleted).toBeDefined();
+    if (nodeCompleted) {
+      const event = nodeCompleted[0] as { data?: { node_output?: string } };
+      expect(event.data?.node_output).toContain('from-workspace');
+      expect(event.data?.node_output).not.toContain('from-global');
+    }
   });
 });

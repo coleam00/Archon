@@ -116,6 +116,61 @@ nodes:
       expect(workflows[0].nodes[1].id).toBe('implement');
     });
 
+    it('should load workflows from workspaceSearchPath when absent from repo', async () => {
+      // workspaceSearchPath stands in for ~/.archon/workspaces/<owner>/<repo>/
+      // discoverWorkflows joins the workflow folder ('.archon/workflows') onto it.
+      const workspaceSearchPath = join(
+        tmpdir(),
+        `workspace-search-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      );
+      const wsWorkflowDir = join(workspaceSearchPath, '.archon', 'workflows');
+      await mkdir(wsWorkflowDir, { recursive: true });
+      const yaml = `name: ws-only\ndescription: workspace tier\nnodes:\n  - id: n\n    prompt: p\n`;
+      await writeFile(join(wsWorkflowDir, 'ws-only.yaml'), yaml);
+
+      try {
+        const result = await discoverWorkflows(testDir, {
+          loadDefaults: false,
+          workspaceSearchPath,
+        });
+        expect(result.workflows).toHaveLength(1);
+        expect(result.workflows[0].workflow.name).toBe('ws-only');
+      } finally {
+        await rm(workspaceSearchPath, { recursive: true, force: true });
+      }
+    });
+
+    it('repo workflow overrides workspace workflow with same filename', async () => {
+      const workspaceSearchPath = join(
+        tmpdir(),
+        `workspace-override-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      );
+      const wsWorkflowDir = join(workspaceSearchPath, '.archon', 'workflows');
+      await mkdir(wsWorkflowDir, { recursive: true });
+      await writeFile(
+        join(wsWorkflowDir, 'dup.yaml'),
+        `name: workspace-version\ndescription: ws\nnodes:\n  - id: n\n    prompt: p\n`
+      );
+
+      const repoWorkflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(repoWorkflowDir, { recursive: true });
+      await writeFile(
+        join(repoWorkflowDir, 'dup.yaml'),
+        `name: repo-version\ndescription: repo\nnodes:\n  - id: n\n    prompt: p\n`
+      );
+
+      try {
+        const result = await discoverWorkflows(testDir, {
+          loadDefaults: false,
+          workspaceSearchPath,
+        });
+        expect(result.workflows).toHaveLength(1);
+        expect(result.workflows[0].workflow.name).toBe('repo-version');
+      } finally {
+        await rm(workspaceSearchPath, { recursive: true, force: true });
+      }
+    });
+
     it('should return empty array for YAML missing name', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });

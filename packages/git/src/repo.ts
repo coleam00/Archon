@@ -39,6 +39,69 @@ export async function findRepoRoot(startPath: string): Promise<RepoPath | null> 
 }
 
 /**
+ * Parse a git remote URL into an `{ owner, repo }` slug suitable for use
+ * under `~/.archon/workspaces/`. Pure function — no I/O, safe to reuse.
+ *
+ * Handles common URL shapes:
+ *   - `https://github.com/owner/repo(.git)?`
+ *   - `git@github.com:owner/repo(.git)?`
+ *   - `ssh://git@host/owner/repo(.git)?`
+ *   - `https://gitlab.com/group/subgroup/repo.git` (returns `subgroup/repo`;
+ *     the leading group segment is dropped because the workspace layout is
+ *     two-level: `~/.archon/workspaces/<owner>/<repo>/`)
+ *
+ * Returns `null` for unparseable URLs.
+ */
+export function parseOwnerRepoFromRemoteUrl(url: string): { owner: string; repo: string } | null {
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+
+  // Strip trailing .git and any trailing slashes
+  const cleaned = trimmed.replace(/\.git$/, '').replace(/\/+$/, '');
+
+  // SSH form `git@host:path` → normalize so a single split works
+  const normalized =
+    cleaned.startsWith('git@') && cleaned.includes(':') && !cleaned.includes('://')
+      ? cleaned.replace(/^[^@]+@[^:]+:/, 'https://__ssh__/')
+      : cleaned;
+
+  const parts = normalized.split('/').filter(Boolean);
+  const repo = parts.pop();
+  const owner = parts.pop();
+  if (!owner || !repo) return null;
+  return { owner, repo };
+}
+
+/**
+ * Fetch `origin` for the repo containing `cwd` and parse it into an
+ * `{ owner, repo }` slug suitable for use under `~/.archon/workspaces/`.
+ *
+ * Returns `null` on ANY failure (not a git repo, no origin, unparseable URL,
+ * git binary missing, permission denied). Callers should treat null as
+ * "this cwd is not a recognizable project" and fall back silently — no
+ * throwing, no logging at warn/error level.
+ *
+ * Unlike `getRemoteUrl`, this takes a plain string cwd (not a branded
+ * `RepoPath`) so it is ergonomic to call from CLI entry points and workflow
+ * execution where the cwd has not yet been type-validated.
+ */
+export async function parseOwnerRepoFromGitRemote(
+  cwd: string
+): Promise<{ owner: string; repo: string } | null> {
+  let stdout: string;
+  try {
+    const result = await execFileAsync('git', ['-C', cwd, 'remote', 'get-url', 'origin'], {
+      timeout: 10000,
+    });
+    stdout = result.stdout;
+  } catch {
+    // Not a repo, no remote, git missing, etc. — silent null.
+    return null;
+  }
+  return parseOwnerRepoFromRemoteUrl(stdout);
+}
+
+/**
  * Get the remote URL for origin (if it exists)
  * Returns null if no remote is configured
  */

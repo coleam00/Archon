@@ -6,7 +6,7 @@ import { access, rm } from 'fs/promises';
 import { join, basename, resolve } from 'path';
 import * as codebaseDb from '../db/codebases';
 import { sanitizeError } from '../utils/credential-sanitizer';
-import { execFileAsync } from '@archon/git';
+import { execFileAsync, parseOwnerRepoFromRemoteUrl } from '@archon/git';
 import {
   expandTilde,
   getCommandFolderSearchPaths,
@@ -385,21 +385,14 @@ export async function registerRepository(
   // Extract repo name from directory name
   const repoName = basename(localPath);
 
-  // Try to build owner/repo name from remote URL
+  // Try to build owner/repo name from remote URL via the shared parser
   let name = repoName;
   let ownerName = '_local';
   if (remoteUrl) {
-    const cleaned = remoteUrl.replace(/\.git$/, '').replace(/\/+$/, '');
-    let workingRemote = cleaned;
-    if (cleaned.startsWith('git@github.com:')) {
-      workingRemote = cleaned.replace('git@github.com:', 'https://github.com/');
-    }
-    const parts = workingRemote.split('/');
-    const r = parts.pop();
-    const o = parts.pop();
-    if (o && r) {
-      name = `${o}/${r}`;
-      ownerName = o;
+    const parsed = parseOwnerRepoFromRemoteUrl(remoteUrl);
+    if (parsed) {
+      name = `${parsed.owner}/${parsed.repo}`;
+      ownerName = parsed.owner;
     }
   }
 

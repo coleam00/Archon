@@ -10,7 +10,7 @@ import {
 } from '@archon/core';
 import { WORKFLOW_EVENT_TYPES, type WorkflowEventType } from '@archon/workflows/store';
 import { configureIsolation, getIsolationProvider } from '@archon/isolation';
-import { createLogger, getArchonHome } from '@archon/paths';
+import { createLogger, getArchonHome, getProjectArchonDir } from '@archon/paths';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
@@ -116,13 +116,26 @@ function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): voi
 }
 
 /**
+ * Compute the per-project, per-user Archon config dir for a cwd, or undefined
+ * when the cwd has no recognizable origin remote. Silently skips the workspace
+ * tier in that case — two-tier behavior is preserved.
+ */
+async function resolveWorkspaceArchonDir(cwd: string): Promise<string | undefined> {
+  const ownerRepo = await git.parseOwnerRepoFromGitRemote(cwd);
+  if (!ownerRepo) return undefined;
+  return getProjectArchonDir(ownerRepo.owner, ownerRepo.repo);
+}
+
+/**
  * Load workflows from cwd with standardized error handling.
  * Returns the WorkflowLoadResult with both workflows and errors.
  */
 async function loadWorkflows(cwd: string): Promise<WorkflowLoadResult> {
   try {
+    const workspaceSearchPath = await resolveWorkspaceArchonDir(cwd);
     return await discoverWorkflowsWithConfig(cwd, loadConfig, {
       globalSearchPath: getArchonHome(),
+      ...(workspaceSearchPath ? { workspaceSearchPath } : {}),
     });
   } catch (error) {
     const err = error as Error;

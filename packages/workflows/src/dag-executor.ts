@@ -42,7 +42,8 @@ import {
   isApprovalContext,
 } from './schemas';
 import { formatToolCall } from './utils/tool-formatter';
-import { createLogger, getArchonHome } from '@archon/paths';
+import { createLogger, getArchonHome, getProjectArchonDir } from '@archon/paths';
+import { parseOwnerRepoFromGitRemote } from '@archon/git';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { evaluateCondition } from './condition-evaluator';
 import { isClaudeModel, isModelCompatible } from './model-validation';
@@ -725,7 +726,8 @@ async function executeNodeInternal(
   nodeOutputs: Map<string, NodeOutput>,
   resumeSessionId: string | undefined,
   configuredCommandFolder?: string,
-  issueContext?: string
+  issueContext?: string,
+  workspaceArchonDir?: string
 ): Promise<NodeExecutionResult> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -758,7 +760,13 @@ async function executeNodeInternal(
   // Load prompt
   let rawPrompt: string;
   if (node.command !== undefined) {
-    const promptResult = await loadCommandPrompt(deps, cwd, node.command, configuredCommandFolder);
+    const promptResult = await loadCommandPrompt(
+      deps,
+      cwd,
+      node.command,
+      configuredCommandFolder,
+      workspaceArchonDir
+    );
     if (!promptResult.success) {
       const errMsg = promptResult.message;
       getLog().error({ nodeId: node.id, error: errMsg }, 'dag_node_command_load_failed');
@@ -1464,6 +1472,7 @@ async function executeScriptNode(
   baseBranch: string,
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
+  workspaceArchonDir?: string,
   issueContext?: string
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
@@ -1528,13 +1537,36 @@ async function executeScriptNode(
       }
     } else {
       // Named script — look up in .archon/scripts/ directory.
-      // Priority: repo-local first, then ~/.archon/.archon/scripts/ (user-global).
-      // Mirrors the global command/workflow fallback so users can keep per-machine
-      // script libraries outside any repo.
+      // Priority: repo-local → workspace-in-userspace → user-global.
+      // Mirrors the command/workflow three-tier fallback so users can keep
+      // per-project or per-machine script libraries outside any repo.
       const scriptsDir = resolve(cwd, '.archon', 'scripts');
       const scripts = await discoverScripts(scriptsDir);
       let scriptDef = scripts.get(finalScript);
 
+      // Tier 2: workspace-in-userspace (~/.archon/workspaces/<owner>/<repo>/.archon/scripts/)
+      if (!scriptDef && workspaceArchonDir) {
+        const workspaceScriptsDir = resolve(workspaceArchonDir, 'scripts');
+        if (workspaceScriptsDir !== scriptsDir) {
+          try {
+            const workspaceScripts = await discoverScripts(workspaceScriptsDir);
+            scriptDef = workspaceScripts.get(finalScript);
+            if (scriptDef) {
+              getLog().debug(
+                { nodeId: node.id, scriptName: finalScript, source: 'workspace' },
+                'dag.script_loaded_workspace'
+              );
+            }
+          } catch (discoveryErr) {
+            getLog().warn(
+              { err: discoveryErr as Error, workspaceScriptsDir },
+              'dag.script_workspace_discovery_failed'
+            );
+          }
+        }
+      }
+
+      // Tier 3: user-global (~/.archon/.archon/scripts/)
       if (!scriptDef) {
         const globalScriptsDir = resolve(getArchonHome(), '.archon', 'scripts');
         if (globalScriptsDir !== scriptsDir) {
@@ -1559,7 +1591,7 @@ async function executeScriptNode(
       }
 
       if (!scriptDef) {
-        const errorMsg = `Script node '${node.id}': named script '${finalScript}' not found in .archon/scripts/ (repo or global)`;
+        const errorMsg = `Script node '${node.id}': named script '${finalScript}' not found in .archon/scripts/ (repo, workspace, or global)`;
         getLog().error({ nodeId: node.id, scriptName: finalScript }, 'script_not_found');
         await safeSendMessage(platform, conversationId, errorMsg, nodeContext);
         await logNodeError(logDir, workflowRun.id, node.id, errorMsg);
@@ -2231,7 +2263,8 @@ async function executeApprovalNode(
   config: WorkflowConfig,
   workflowLevelOptions: WorkflowLevelOptions,
   configuredCommandFolder?: string,
-  issueContext?: string
+  issueContext?: string,
+  workspaceArchonDir?: string
 ): Promise<NodeOutput> {
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
 
@@ -2328,7 +2361,8 @@ async function executeApprovalNode(
       nodeOutputs,
       undefined, // fresh session
       configuredCommandFolder,
-      issueContext
+      issueContext,
+      workspaceArchonDir
     );
 
     if (output.state === 'failed') {
@@ -2399,9 +2433,27 @@ export async function executeDagWorkflow(
   config: WorkflowConfig,
   configuredCommandFolder?: string,
   issueContext?: string,
-  priorCompletedNodes?: Map<string, string>
+  priorCompletedNodes?: Map<string, string>,
+  workspaceArchonDir?: string
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
+
+  // Resolve the workspace-in-userspace .archon dir once per run. If the caller
+  // didn't pre-compute it, derive it from the git remote. Null means the
+  // workspace tier is silently skipped for script/command lookups in this run.
+  let resolvedWorkspaceArchonDir: string | undefined = workspaceArchonDir;
+  if (resolvedWorkspaceArchonDir === undefined) {
+    const ownerRepo = await parseOwnerRepoFromGitRemote(cwd);
+    if (ownerRepo) {
+      resolvedWorkspaceArchonDir = getProjectArchonDir(ownerRepo.owner, ownerRepo.repo);
+      getLog().debug(
+        { cwd, workspaceArchonDir: resolvedWorkspaceArchonDir },
+        'dag.workspace_archon_dir_resolved'
+      );
+    } else {
+      getLog().debug({ cwd }, 'dag.workspace_archon_dir_unavailable');
+    }
+  }
   const workflowLevelOptions = {
     effort: workflow.effort,
     thinking: workflow.thinking,
@@ -2693,7 +2745,8 @@ export async function executeDagWorkflow(
               config,
               workflowLevelOptions,
               configuredCommandFolder,
-              issueContext
+              issueContext,
+              resolvedWorkspaceArchonDir
             );
             return { nodeId: node.id, output };
           }
@@ -2744,6 +2797,7 @@ export async function executeDagWorkflow(
               baseBranch,
               docsDir,
               nodeOutputs,
+              resolvedWorkspaceArchonDir,
               issueContext
             );
             return { nodeId: node.id, output };
@@ -2795,7 +2849,8 @@ export async function executeDagWorkflow(
               // ensures the source is never mutated, so retries can safely resume from it.
               resumeSessionId,
               configuredCommandFolder,
-              issueContext
+              issueContext,
+              resolvedWorkspaceArchonDir
             );
 
             if (output.state !== 'failed') break;

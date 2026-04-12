@@ -269,6 +269,20 @@ export function getProjectLogsPath(owner: string, repo: string): string {
 }
 
 /**
+ * Get the per-project, per-user Archon config directory.
+ * Returns: ~/.archon/workspaces/owner/repo/.archon/
+ *
+ * This is the third tier in workflow/command/script resolution:
+ * repo-local (`<cwd>/.archon/`) > this > user-global (`~/.archon/.archon/`) > defaults.
+ *
+ * Lets a user keep per-project automation outside the team repo (which
+ * doesn't want it committed) without making it apply to every project.
+ */
+export function getProjectArchonDir(owner: string, repo: string): string {
+  return join(getProjectRoot(owner, repo), '.archon');
+}
+
+/**
  * Get the artifacts directory for a specific workflow run.
  * Returns: ~/.archon/workspaces/owner/repo/artifacts/runs/{id}/
  */

@@ -135,7 +135,11 @@ function loadBundledWorkflows(): DirLoadResult {
  */
 export async function discoverWorkflows(
   cwd: string,
-  options?: { globalSearchPath?: string; loadDefaults?: boolean }
+  options?: {
+    globalSearchPath?: string;
+    workspaceSearchPath?: string;
+    loadDefaults?: boolean;
+  }
 ): Promise<WorkflowLoadResult> {
   // Map of filename -> workflow+source for deduplication
   const workflowsByFile = new Map<string, WorkflowWithSource>();
@@ -207,6 +211,37 @@ export async function discoverWorkflows(
         getLog().warn({ err, globalWorkflowPath }, 'global_workflows_access_error');
       } else {
         getLog().debug({ globalWorkflowPath }, 'global_workflows_not_found');
+      }
+    }
+  }
+
+  // 2b. Load from the workspace-in-userspace path
+  //     (~/.archon/workspaces/<owner>/<repo>/.archon/workflows/).
+  //     This tier lives between global and repo so precedence is
+  //     repo > workspace > global > bundled. Overrides by exact filename.
+  if (options?.workspaceSearchPath) {
+    const [workflowFolderName] = archonPaths.getWorkflowFolderSearchPaths();
+    const workspaceWorkflowPath = join(options.workspaceSearchPath, workflowFolderName);
+    getLog().debug({ workspaceWorkflowPath }, 'searching_workspace_workflows');
+    try {
+      await access(workspaceWorkflowPath);
+      const workspaceResult = await loadWorkflowsFromDir(workspaceWorkflowPath);
+      for (const [filename, workflow] of workspaceResult.workflows) {
+        if (workflowsByFile.has(filename)) {
+          getLog().debug({ filename }, 'workspace_workflow_overrides_global');
+        }
+        // Same scope decision as global: classified as 'project' (not a separate
+        // 'workspace' source badge). Can be split later if the UI needs it.
+        workflowsByFile.set(filename, { workflow, source: 'project' });
+      }
+      allErrors.push(...workspaceResult.errors);
+      getLog().info({ count: workspaceResult.workflows.size }, 'workspace_workflows_loaded');
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code !== 'ENOENT') {
+        getLog().warn({ err, workspaceWorkflowPath }, 'workspace_workflows_access_error');
+      } else {
+        getLog().debug({ workspaceWorkflowPath }, 'workspace_workflows_not_found');
       }
     }
   }
@@ -291,7 +326,7 @@ export async function discoverWorkflows(
 export async function discoverWorkflowsWithConfig(
   cwd: string,
   loadConfig: (cwd: string) => Promise<{ defaults?: { loadDefaultWorkflows?: boolean } }>,
-  options?: { globalSearchPath?: string }
+  options?: { globalSearchPath?: string; workspaceSearchPath?: string }
 ): Promise<WorkflowLoadResult> {
   let loadDefaults = true;
   try {

@@ -137,3 +137,118 @@ describe('loadCommandPrompt — user-global fallback', () => {
     }
   });
 });
+
+describe('loadCommandPrompt — workspace-in-userspace tier', () => {
+  let repoCwd: string;
+  let globalHome: string;
+  let workspaceArchonDir: string;
+
+  beforeAll(async () => {
+    repoCwd = await mkdtemp(join(tmpdir(), 'archon-wsr-repo-'));
+    globalHome = await mkdtemp(join(tmpdir(), 'archon-wsr-home-'));
+    workspaceArchonDir = await mkdtemp(join(tmpdir(), 'archon-wsr-workspace-'));
+    process.env.ARCHON_HOME = globalHome;
+  });
+
+  afterAll(async () => {
+    await rm(repoCwd, { recursive: true, force: true });
+    await rm(globalHome, { recursive: true, force: true });
+    await rm(workspaceArchonDir, { recursive: true, force: true });
+    delete process.env.ARCHON_HOME;
+  });
+
+  beforeEach(async () => {
+    await rm(join(repoCwd, '.archon'), { recursive: true, force: true });
+    await rm(join(globalHome, '.archon'), { recursive: true, force: true });
+    // workspaceArchonDir stands in for `~/.archon/workspaces/<owner>/<repo>/.archon`
+    // so its immediate children are `commands/`, `scripts/`, `workflows/` (no nested .archon).
+    await rm(join(workspaceArchonDir, 'commands'), { recursive: true, force: true });
+  });
+
+  it('loads a command found only in the workspace dir', async () => {
+    await mkdir(join(workspaceArchonDir, 'commands'), { recursive: true });
+    await writeFile(join(workspaceArchonDir, 'commands', 'ws-only.md'), 'workspace content');
+
+    const result = await loadCommandPrompt(
+      makeDeps(),
+      repoCwd,
+      'ws-only',
+      undefined,
+      workspaceArchonDir
+    );
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.content).toBe('workspace content');
+    }
+  });
+
+  it('prefers repo over workspace when both exist', async () => {
+    await mkdir(join(repoCwd, '.archon', 'commands'), { recursive: true });
+    await mkdir(join(workspaceArchonDir, 'commands'), { recursive: true });
+    await writeFile(join(repoCwd, '.archon', 'commands', 'dup.md'), 'from-repo');
+    await writeFile(join(workspaceArchonDir, 'commands', 'dup.md'), 'from-workspace');
+
+    const result = await loadCommandPrompt(
+      makeDeps(),
+      repoCwd,
+      'dup',
+      undefined,
+      workspaceArchonDir
+    );
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.content).toBe('from-repo');
+    }
+  });
+
+  it('prefers workspace over user-global when both exist', async () => {
+    await mkdir(join(workspaceArchonDir, 'commands'), { recursive: true });
+    await mkdir(join(globalHome, '.archon', 'commands'), { recursive: true });
+    await writeFile(join(workspaceArchonDir, 'commands', 'mid.md'), 'from-workspace');
+    await writeFile(join(globalHome, '.archon', 'commands', 'mid.md'), 'from-global');
+
+    const result = await loadCommandPrompt(
+      makeDeps(),
+      repoCwd,
+      'mid',
+      undefined,
+      workspaceArchonDir
+    );
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.content).toBe('from-workspace');
+    }
+  });
+
+  it('omitting workspaceArchonDir preserves two-tier behavior', async () => {
+    // Stage a workspace command; omit the param so it should NOT be found
+    await mkdir(join(workspaceArchonDir, 'commands'), { recursive: true });
+    await writeFile(join(workspaceArchonDir, 'commands', 'hidden.md'), 'should not be loaded');
+
+    const result = await loadCommandPrompt(makeDeps(), repoCwd, 'hidden');
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.reason).toBe('not_found');
+    }
+  });
+
+  it('not-found error message lists the workspace search paths', async () => {
+    const result = await loadCommandPrompt(
+      makeDeps(),
+      repoCwd,
+      'nope',
+      undefined,
+      workspaceArchonDir
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.reason).toBe('not_found');
+      expect(result.message).toContain(workspaceArchonDir);
+    }
+  });
+});

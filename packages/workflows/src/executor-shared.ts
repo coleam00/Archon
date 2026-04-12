@@ -125,7 +125,8 @@ export async function loadCommandPrompt(
   deps: WorkflowDeps,
   cwd: string,
   commandName: string,
-  configuredFolder?: string
+  configuredFolder?: string,
+  workspaceArchonDir?: string
 ): Promise<LoadCommandResult> {
   // Validate command name first
   if (!isValidCommandName(commandName)) {
@@ -192,6 +193,50 @@ export async function loadCommandPrompt(
         reason: 'read_error',
         message: `Error reading command ${commandName}.md: ${err.message}`,
       };
+    }
+  }
+
+  // Then search the workspace-in-userspace dir
+  // (~/.archon/workspaces/<owner>/<repo>/.archon/commands/) if provided.
+  // This tier lives between repo and global so precedence is
+  // repo > workspace > global > defaults.
+  if (workspaceArchonDir) {
+    for (const folder of searchPaths) {
+      const filePath = join(
+        workspaceArchonDir,
+        folder.replace(/^\.archon\//, ''),
+        `${commandName}.md`
+      );
+      try {
+        const content = await readFile(filePath, 'utf-8');
+        if (!content.trim()) {
+          getLog().error({ commandName, source: 'workspace' }, 'command_file_empty');
+          return {
+            success: false,
+            reason: 'empty_file',
+            message: `Command file is empty (workspace): ${commandName}.md`,
+          };
+        }
+        getLog().debug({ commandName, folder, source: 'workspace' }, 'command_loaded_workspace');
+        return { success: true, content };
+      } catch (error) {
+        const err = error as NodeJS.ErrnoException;
+        if (err.code === 'ENOENT') continue;
+        if (err.code === 'EACCES') {
+          getLog().error({ commandName, filePath }, 'command_file_permission_denied');
+          return {
+            success: false,
+            reason: 'permission_denied',
+            message: `Permission denied reading workspace command: ${commandName}.md`,
+          };
+        }
+        getLog().error({ err, commandName, filePath }, 'command_file_read_error');
+        return {
+          success: false,
+          reason: 'read_error',
+          message: `Error reading workspace command ${commandName}.md: ${err.message}`,
+        };
+      }
     }
   }
 
@@ -275,10 +320,13 @@ export async function loadCommandPrompt(
   }
 
   // Not found anywhere
+  const workspacePaths = workspaceArchonDir
+    ? searchPaths.map(p => `${workspaceArchonDir}/${p.replace(/^\.archon\//, '')}`)
+    : [];
   const globalPaths = searchPaths.map(p => `${archonHome}/${p}`);
   const allSearchPaths = loadDefaultCommands
-    ? [...searchPaths, ...globalPaths, 'app defaults']
-    : [...searchPaths, ...globalPaths];
+    ? [...searchPaths, ...workspacePaths, ...globalPaths, 'app defaults']
+    : [...searchPaths, ...workspacePaths, ...globalPaths];
   getLog().error({ commandName, searchPaths: allSearchPaths }, 'command_not_found');
   return {
     success: false,

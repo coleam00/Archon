@@ -1894,4 +1894,102 @@ branch refs/heads/feature/auth
       );
     });
   });
+
+  describe('parseOwnerRepoFromRemoteUrl (pure)', () => {
+    test('parses HTTPS GitHub URL', () => {
+      expect(git.parseOwnerRepoFromRemoteUrl('https://github.com/owner/repo')).toEqual({
+        owner: 'owner',
+        repo: 'repo',
+      });
+    });
+
+    test('parses HTTPS GitHub URL with trailing .git', () => {
+      expect(git.parseOwnerRepoFromRemoteUrl('https://github.com/owner/repo.git')).toEqual({
+        owner: 'owner',
+        repo: 'repo',
+      });
+    });
+
+    test('parses SSH GitHub URL', () => {
+      expect(git.parseOwnerRepoFromRemoteUrl('git@github.com:owner/repo.git')).toEqual({
+        owner: 'owner',
+        repo: 'repo',
+      });
+    });
+
+    test('parses SSH URL from non-github host', () => {
+      expect(git.parseOwnerRepoFromRemoteUrl('git@gitlab.example.com:team/project.git')).toEqual({
+        owner: 'team',
+        repo: 'project',
+      });
+    });
+
+    test('parses ssh:// scheme', () => {
+      expect(git.parseOwnerRepoFromRemoteUrl('ssh://git@github.com/owner/repo.git')).toEqual({
+        owner: 'owner',
+        repo: 'repo',
+      });
+    });
+
+    test('strips trailing slashes', () => {
+      expect(git.parseOwnerRepoFromRemoteUrl('https://github.com/owner/repo/')).toEqual({
+        owner: 'owner',
+        repo: 'repo',
+      });
+    });
+
+    test('returns subgroup/repo for GitLab subgroups (two-level slug)', () => {
+      // GitLab allows nested groups. Our workspace layout is two-level, so we
+      // take the last two segments. This is a deliberate simplification.
+      expect(git.parseOwnerRepoFromRemoteUrl('https://gitlab.com/group/subgroup/repo.git')).toEqual(
+        { owner: 'subgroup', repo: 'repo' }
+      );
+    });
+
+    test('returns null for empty string', () => {
+      expect(git.parseOwnerRepoFromRemoteUrl('')).toBeNull();
+      expect(git.parseOwnerRepoFromRemoteUrl('   ')).toBeNull();
+    });
+
+    test('returns null for single-segment input', () => {
+      expect(git.parseOwnerRepoFromRemoteUrl('repo')).toBeNull();
+    });
+  });
+
+  describe('parseOwnerRepoFromGitRemote (async)', () => {
+    test('returns {owner, repo} for a real git repo with https origin', async () => {
+      const { execFileAsync } = git;
+      await execFileAsync('git', ['-C', testDir, 'init']);
+      await execFileAsync('git', [
+        '-C',
+        testDir,
+        'remote',
+        'add',
+        'origin',
+        'https://github.com/test-owner/test-repo.git',
+      ]);
+
+      const result = await git.parseOwnerRepoFromGitRemote(testDir);
+      expect(result).toEqual({ owner: 'test-owner', repo: 'test-repo' });
+    });
+
+    test('returns null for a git repo with no origin', async () => {
+      const { execFileAsync } = git;
+      await execFileAsync('git', ['-C', testDir, 'init']);
+      // No remote added
+      const result = await git.parseOwnerRepoFromGitRemote(testDir);
+      expect(result).toBeNull();
+    });
+
+    test('returns null when cwd is not a git repo', async () => {
+      const nonRepoDir = join(tmpdir(), `non-repo-${String(Date.now())}`);
+      await realMkdir(nonRepoDir, { recursive: true });
+      try {
+        const result = await git.parseOwnerRepoFromGitRemote(nonRepoDir);
+        expect(result).toBeNull();
+      } finally {
+        await rm(nonRepoDir, { recursive: true, force: true });
+      }
+    });
+  });
 });
