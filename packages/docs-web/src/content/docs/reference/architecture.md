@@ -62,7 +62,7 @@ Archon is a **platform-agnostic AI coding assistant orchestrator** that connects
 
 ### Key Design Principles
 
-1. **Interface-driven**: Both platform adapters and AI clients implement strict interfaces for swappability
+1. **Interface-driven**: Both platform adapters and AI providers implement strict interfaces for swappability
 2. **Streaming-first**: All AI responses stream through async generators for real-time delivery
 3. **Session persistence**: AI sessions survive container restarts via database storage
 4. **Generic commands**: Users define commands in Git-versioned markdown files, not hardcoded
@@ -391,7 +391,7 @@ export function getAgentProvider(type: string): IAgentProvider {
     case 'your-assistant':
       return new YourAssistantProvider();
     default:
-      throw new Error(`Unknown assistant type: ${type}`);
+      throw new Error(`Unknown provider type: ${type}`);
   }
 }
 ```

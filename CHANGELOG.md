@@ -179,7 +179,7 @@ Chat-first navigation redesign, DAG graph viewer, per-node MCP and skills, and e
 - Idle timeout not detecting stuck tool calls during execution (#649)
 - `commitAllChanges` failing on empty commits (#745)
 - Explicit base branch config now required for worktree creation (#686)
-- Subprocess-level retry added to CodexClient (#641)
+- Subprocess-level retry added to CodexProvider (#641)
 - Validate `cwd` query param against registered codebases (#630)
 - Server-internal paths redacted from `/api/config` response (#632)
 - SQLite conversations index missing `WHERE deleted_at IS NULL` (#629)
@@ -231,7 +231,7 @@ DAG hardening, security fixes, validate-pr workflow, and worktree lifecycle mana
 - **`--json` flag for `workflow list`** — machine-readable workflow output (#594)
 - **`archon-validate-pr` workflow** with per-node idle timeout support (#635)
 - **Typed SessionMetadata** with Zod validation for safer metadata handling (#600)
-- **`persistSession: false`** in ClaudeClient to avoid disk pollution from session transcripts (#626)
+- **`persistSession: false`** in ClaudeProvider to avoid disk pollution from session transcripts (#626)
 - **DAG workflow for GitHub issue resolution** with structured node pipeline
 
 ### Changed

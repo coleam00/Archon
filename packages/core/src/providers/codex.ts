@@ -26,7 +26,7 @@ import { resolveCodexBinaryPath } from '../utils/codex-binary-resolver';
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('client.codex');
+  if (!cachedLog) cachedLog = createLogger('provider.codex');
   return cachedLog;
 }
 
@@ -156,7 +156,7 @@ function extractUsageFromCodexEvent(event: TurnCompletedEvent): TokenUsage {
 }
 
 /**
- * Codex AI assistant client
+ * Codex AI agent provider
  * Implements generic IAgentProvider interface
  */
 export class CodexProvider implements IAgentProvider {

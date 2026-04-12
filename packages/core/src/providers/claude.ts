@@ -46,7 +46,7 @@ import { loadConfig } from '../config/config-loader';
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('client.claude');
+  if (!cachedLog) cachedLog = createLogger('provider.claude');
   return cachedLog;
 }
 
@@ -244,7 +244,7 @@ export function getProcessUid(): number | undefined {
 }
 
 /**
- * Claude AI assistant client
+ * Claude AI agent provider
  * Implements generic IAgentProvider interface
  */
 export class ClaudeProvider implements IAgentProvider {

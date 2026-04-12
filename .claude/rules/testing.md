@@ -33,7 +33,7 @@ Each package splits tests into separate `bun test` invocations to prevent pollut
 
 | Package | Batches |
 |---------|---------|
-| `@archon/core` | 7 batches (clients, handlers, db+utils, path-validation, cleanup-service, title-generator, workflows, orchestrator) |
+| `@archon/core` | 7 batches (providers, handlers, db+utils, path-validation, cleanup-service, title-generator, workflows, orchestrator) |
 | `@archon/workflows` | 5 batches |
 | `@archon/adapters` | 3 batches (chat+community+forge-auth, github-adapter, github-context) |
 | `@archon/isolation` | 3 batches |
