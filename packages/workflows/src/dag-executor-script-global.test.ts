@@ -296,15 +296,14 @@ describe('executeScriptNode — user-global fallback', () => {
 describe('executeScriptNode — workspace-in-userspace fallback', () => {
   let repoCwd: string;
   let globalHome: string;
-  let workspaceHome: string;
+  // The workspace search path stands in for `~/.archon/workspaces/<owner>/<repo>/`
+  // — the PROJECT ROOT. The engine probes `<root>/.archon/scripts/<name>.ts`.
+  let workspaceSearchPath: string;
 
   beforeAll(async () => {
     repoCwd = await mkdtemp(join(tmpdir(), 'archon-script-wsr-repo-'));
     globalHome = await mkdtemp(join(tmpdir(), 'archon-script-wsr-home-'));
-    // The workspace-in-userspace dir is ~/.archon/workspaces/<owner>/<repo>/.archon
-    // For test purposes we simulate that with a plain tmpdir — the engine just
-    // probes <dir>/scripts/<name>.ts and doesn't care about the parent layout.
-    workspaceHome = await mkdtemp(join(tmpdir(), 'archon-script-wsr-workspace-'));
+    workspaceSearchPath = await mkdtemp(join(tmpdir(), 'archon-script-wsr-workspace-'));
     process.env.ARCHON_HOME = globalHome;
     await mkdir(join(repoCwd, 'artifacts'), { recursive: true });
     await mkdir(join(repoCwd, 'logs'), { recursive: true });
@@ -313,14 +312,14 @@ describe('executeScriptNode — workspace-in-userspace fallback', () => {
   afterAll(async () => {
     await rm(repoCwd, { recursive: true, force: true });
     await rm(globalHome, { recursive: true, force: true });
-    await rm(workspaceHome, { recursive: true, force: true });
+    await rm(workspaceSearchPath, { recursive: true, force: true });
     delete process.env.ARCHON_HOME;
   });
 
   beforeEach(async () => {
     await rm(join(repoCwd, '.archon'), { recursive: true, force: true });
     await rm(join(globalHome, '.archon'), { recursive: true, force: true });
-    await rm(join(workspaceHome, 'scripts'), { recursive: true, force: true });
+    await rm(join(workspaceSearchPath, '.archon'), { recursive: true, force: true });
   });
 
   /**
@@ -356,14 +355,17 @@ describe('executeScriptNode — workspace-in-userspace fallback', () => {
       undefined, // configuredCommandFolder
       undefined, // issueContext
       undefined, // priorCompletedNodes
-      workspaceHome // workspaceArchonDir
+      workspaceSearchPath // workspaceSearchPath (project root)
     );
     return store;
   }
 
   it('executes a script found only in the workspace dir', async () => {
-    await mkdir(join(workspaceHome, 'scripts'), { recursive: true });
-    await writeFile(join(workspaceHome, 'scripts', 'ws-only.ts'), 'console.log("from-workspace")');
+    await mkdir(join(workspaceSearchPath, '.archon', 'scripts'), { recursive: true });
+    await writeFile(
+      join(workspaceSearchPath, '.archon', 'scripts', 'ws-only.ts'),
+      'console.log("from-workspace")'
+    );
 
     const platform = createMockPlatform();
     const store = await runWithWorkspace(platform, 'ws-only-run', 'ws-only');
@@ -382,9 +384,12 @@ describe('executeScriptNode — workspace-in-userspace fallback', () => {
 
   it('prefers repo over workspace', async () => {
     await mkdir(join(repoCwd, '.archon', 'scripts'), { recursive: true });
-    await mkdir(join(workspaceHome, 'scripts'), { recursive: true });
+    await mkdir(join(workspaceSearchPath, '.archon', 'scripts'), { recursive: true });
     await writeFile(join(repoCwd, '.archon', 'scripts', 'dup.ts'), 'console.log("from-repo")');
-    await writeFile(join(workspaceHome, 'scripts', 'dup.ts'), 'console.log("from-workspace")');
+    await writeFile(
+      join(workspaceSearchPath, '.archon', 'scripts', 'dup.ts'),
+      'console.log("from-workspace")'
+    );
 
     const platform = createMockPlatform();
     const store = await runWithWorkspace(platform, 'dup-run', 'dup');
@@ -403,9 +408,12 @@ describe('executeScriptNode — workspace-in-userspace fallback', () => {
   });
 
   it('prefers workspace over user-global', async () => {
-    await mkdir(join(workspaceHome, 'scripts'), { recursive: true });
+    await mkdir(join(workspaceSearchPath, '.archon', 'scripts'), { recursive: true });
     await mkdir(join(globalHome, '.archon', 'scripts'), { recursive: true });
-    await writeFile(join(workspaceHome, 'scripts', 'mid.ts'), 'console.log("from-workspace")');
+    await writeFile(
+      join(workspaceSearchPath, '.archon', 'scripts', 'mid.ts'),
+      'console.log("from-workspace")'
+    );
     await writeFile(join(globalHome, '.archon', 'scripts', 'mid.ts'), 'console.log("from-global")');
 
     const platform = createMockPlatform();

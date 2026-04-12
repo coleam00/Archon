@@ -141,40 +141,43 @@ describe('loadCommandPrompt — user-global fallback', () => {
 describe('loadCommandPrompt — workspace-in-userspace tier', () => {
   let repoCwd: string;
   let globalHome: string;
-  let workspaceArchonDir: string;
+  // workspaceSearchPath stands in for `~/.archon/workspaces/<owner>/<repo>/` —
+  // the PROJECT ROOT. The loader appends `.archon/commands/` to find files.
+  let workspaceSearchPath: string;
 
   beforeAll(async () => {
     repoCwd = await mkdtemp(join(tmpdir(), 'archon-wsr-repo-'));
     globalHome = await mkdtemp(join(tmpdir(), 'archon-wsr-home-'));
-    workspaceArchonDir = await mkdtemp(join(tmpdir(), 'archon-wsr-workspace-'));
+    workspaceSearchPath = await mkdtemp(join(tmpdir(), 'archon-wsr-workspace-'));
     process.env.ARCHON_HOME = globalHome;
   });
 
   afterAll(async () => {
     await rm(repoCwd, { recursive: true, force: true });
     await rm(globalHome, { recursive: true, force: true });
-    await rm(workspaceArchonDir, { recursive: true, force: true });
+    await rm(workspaceSearchPath, { recursive: true, force: true });
     delete process.env.ARCHON_HOME;
   });
 
   beforeEach(async () => {
     await rm(join(repoCwd, '.archon'), { recursive: true, force: true });
     await rm(join(globalHome, '.archon'), { recursive: true, force: true });
-    // workspaceArchonDir stands in for `~/.archon/workspaces/<owner>/<repo>/.archon`
-    // so its immediate children are `commands/`, `scripts/`, `workflows/` (no nested .archon).
-    await rm(join(workspaceArchonDir, 'commands'), { recursive: true, force: true });
+    await rm(join(workspaceSearchPath, '.archon'), { recursive: true, force: true });
   });
 
   it('loads a command found only in the workspace dir', async () => {
-    await mkdir(join(workspaceArchonDir, 'commands'), { recursive: true });
-    await writeFile(join(workspaceArchonDir, 'commands', 'ws-only.md'), 'workspace content');
+    await mkdir(join(workspaceSearchPath, '.archon', 'commands'), { recursive: true });
+    await writeFile(
+      join(workspaceSearchPath, '.archon', 'commands', 'ws-only.md'),
+      'workspace content'
+    );
 
     const result = await loadCommandPrompt(
       makeDeps(),
       repoCwd,
       'ws-only',
       undefined,
-      workspaceArchonDir
+      workspaceSearchPath
     );
 
     expect(result.success).toBe(true);
@@ -185,16 +188,16 @@ describe('loadCommandPrompt — workspace-in-userspace tier', () => {
 
   it('prefers repo over workspace when both exist', async () => {
     await mkdir(join(repoCwd, '.archon', 'commands'), { recursive: true });
-    await mkdir(join(workspaceArchonDir, 'commands'), { recursive: true });
+    await mkdir(join(workspaceSearchPath, '.archon', 'commands'), { recursive: true });
     await writeFile(join(repoCwd, '.archon', 'commands', 'dup.md'), 'from-repo');
-    await writeFile(join(workspaceArchonDir, 'commands', 'dup.md'), 'from-workspace');
+    await writeFile(join(workspaceSearchPath, '.archon', 'commands', 'dup.md'), 'from-workspace');
 
     const result = await loadCommandPrompt(
       makeDeps(),
       repoCwd,
       'dup',
       undefined,
-      workspaceArchonDir
+      workspaceSearchPath
     );
 
     expect(result.success).toBe(true);
@@ -204,9 +207,9 @@ describe('loadCommandPrompt — workspace-in-userspace tier', () => {
   });
 
   it('prefers workspace over user-global when both exist', async () => {
-    await mkdir(join(workspaceArchonDir, 'commands'), { recursive: true });
+    await mkdir(join(workspaceSearchPath, '.archon', 'commands'), { recursive: true });
     await mkdir(join(globalHome, '.archon', 'commands'), { recursive: true });
-    await writeFile(join(workspaceArchonDir, 'commands', 'mid.md'), 'from-workspace');
+    await writeFile(join(workspaceSearchPath, '.archon', 'commands', 'mid.md'), 'from-workspace');
     await writeFile(join(globalHome, '.archon', 'commands', 'mid.md'), 'from-global');
 
     const result = await loadCommandPrompt(
@@ -214,7 +217,7 @@ describe('loadCommandPrompt — workspace-in-userspace tier', () => {
       repoCwd,
       'mid',
       undefined,
-      workspaceArchonDir
+      workspaceSearchPath
     );
 
     expect(result.success).toBe(true);
@@ -223,10 +226,13 @@ describe('loadCommandPrompt — workspace-in-userspace tier', () => {
     }
   });
 
-  it('omitting workspaceArchonDir preserves two-tier behavior', async () => {
+  it('omitting workspaceSearchPath preserves two-tier behavior', async () => {
     // Stage a workspace command; omit the param so it should NOT be found
-    await mkdir(join(workspaceArchonDir, 'commands'), { recursive: true });
-    await writeFile(join(workspaceArchonDir, 'commands', 'hidden.md'), 'should not be loaded');
+    await mkdir(join(workspaceSearchPath, '.archon', 'commands'), { recursive: true });
+    await writeFile(
+      join(workspaceSearchPath, '.archon', 'commands', 'hidden.md'),
+      'should not be loaded'
+    );
 
     const result = await loadCommandPrompt(makeDeps(), repoCwd, 'hidden');
 
@@ -242,13 +248,13 @@ describe('loadCommandPrompt — workspace-in-userspace tier', () => {
       repoCwd,
       'nope',
       undefined,
-      workspaceArchonDir
+      workspaceSearchPath
     );
 
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.reason).toBe('not_found');
-      expect(result.message).toContain(workspaceArchonDir);
+      expect(result.message).toContain(workspaceSearchPath);
     }
   });
 });

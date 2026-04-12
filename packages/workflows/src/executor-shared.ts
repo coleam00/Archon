@@ -126,7 +126,7 @@ export async function loadCommandPrompt(
   cwd: string,
   commandName: string,
   configuredFolder?: string,
-  workspaceArchonDir?: string
+  workspaceSearchPath?: string
 ): Promise<LoadCommandResult> {
   // Validate command name first
   if (!isValidCommandName(commandName)) {
@@ -198,15 +198,13 @@ export async function loadCommandPrompt(
 
   // Then search the workspace-in-userspace dir
   // (~/.archon/workspaces/<owner>/<repo>/.archon/commands/) if provided.
+  // workspaceSearchPath is the PROJECT ROOT; append the same .archon-prefixed
+  // folder name used for repo-local and global searches.
   // This tier lives between repo and global so precedence is
   // repo > workspace > global > defaults.
-  if (workspaceArchonDir) {
+  if (workspaceSearchPath) {
     for (const folder of searchPaths) {
-      const filePath = join(
-        workspaceArchonDir,
-        folder.replace(/^\.archon\//, ''),
-        `${commandName}.md`
-      );
+      const filePath = join(workspaceSearchPath, folder, `${commandName}.md`);
       try {
         const content = await readFile(filePath, 'utf-8');
         if (!content.trim()) {
@@ -320,8 +318,8 @@ export async function loadCommandPrompt(
   }
 
   // Not found anywhere
-  const workspacePaths = workspaceArchonDir
-    ? searchPaths.map(p => `${workspaceArchonDir}/${p.replace(/^\.archon\//, '')}`)
+  const workspacePaths = workspaceSearchPath
+    ? searchPaths.map(p => `${workspaceSearchPath}/${p}`)
     : [];
   const globalPaths = searchPaths.map(p => `${archonHome}/${p}`);
   const allSearchPaths = loadDefaultCommands

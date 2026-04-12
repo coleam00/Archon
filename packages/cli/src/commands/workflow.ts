@@ -10,7 +10,7 @@ import {
 } from '@archon/core';
 import { WORKFLOW_EVENT_TYPES, type WorkflowEventType } from '@archon/workflows/store';
 import { configureIsolation, getIsolationProvider } from '@archon/isolation';
-import { createLogger, getArchonHome, getProjectArchonDir } from '@archon/paths';
+import { createLogger, getArchonHome, getProjectRoot } from '@archon/paths';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
@@ -116,14 +116,17 @@ function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): voi
 }
 
 /**
- * Compute the per-project, per-user Archon config dir for a cwd, or undefined
- * when the cwd has no recognizable origin remote. Silently skips the workspace
- * tier in that case — two-tier behavior is preserved.
+ * Compute the per-project workspace search path (~/.archon/workspaces/<owner>/<repo>)
+ * for a cwd, or undefined when the cwd has no recognizable origin remote.
+ * Silently skips the workspace tier in that case — two-tier behavior preserved.
+ *
+ * The returned path is the PROJECT ROOT, not the `.archon` subdir — matching
+ * how `globalSearchPath` works. Callers append `.archon/{workflows,commands,scripts}`.
  */
-async function resolveWorkspaceArchonDir(cwd: string): Promise<string | undefined> {
+async function resolveWorkspaceSearchPath(cwd: string): Promise<string | undefined> {
   const ownerRepo = await git.parseOwnerRepoFromGitRemote(cwd);
   if (!ownerRepo) return undefined;
-  return getProjectArchonDir(ownerRepo.owner, ownerRepo.repo);
+  return getProjectRoot(ownerRepo.owner, ownerRepo.repo);
 }
 
 /**
@@ -132,7 +135,7 @@ async function resolveWorkspaceArchonDir(cwd: string): Promise<string | undefine
  */
 async function loadWorkflows(cwd: string): Promise<WorkflowLoadResult> {
   try {
-    const workspaceSearchPath = await resolveWorkspaceArchonDir(cwd);
+    const workspaceSearchPath = await resolveWorkspaceSearchPath(cwd);
     return await discoverWorkflowsWithConfig(cwd, loadConfig, {
       globalSearchPath: getArchonHome(),
       ...(workspaceSearchPath ? { workspaceSearchPath } : {}),

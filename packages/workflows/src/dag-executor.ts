@@ -42,7 +42,7 @@ import {
   isApprovalContext,
 } from './schemas';
 import { formatToolCall } from './utils/tool-formatter';
-import { createLogger, getArchonHome, getProjectArchonDir } from '@archon/paths';
+import { createLogger, getArchonHome, getProjectRoot } from '@archon/paths';
 import { parseOwnerRepoFromGitRemote } from '@archon/git';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { evaluateCondition } from './condition-evaluator';
@@ -727,7 +727,7 @@ async function executeNodeInternal(
   resumeSessionId: string | undefined,
   configuredCommandFolder?: string,
   issueContext?: string,
-  workspaceArchonDir?: string
+  workspaceSearchPath?: string
 ): Promise<NodeExecutionResult> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -765,7 +765,7 @@ async function executeNodeInternal(
       cwd,
       node.command,
       configuredCommandFolder,
-      workspaceArchonDir
+      workspaceSearchPath
     );
     if (!promptResult.success) {
       const errMsg = promptResult.message;
@@ -1472,7 +1472,7 @@ async function executeScriptNode(
   baseBranch: string,
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
-  workspaceArchonDir?: string,
+  workspaceSearchPath?: string,
   issueContext?: string
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
@@ -1545,8 +1545,8 @@ async function executeScriptNode(
       let scriptDef = scripts.get(finalScript);
 
       // Tier 2: workspace-in-userspace (~/.archon/workspaces/<owner>/<repo>/.archon/scripts/)
-      if (!scriptDef && workspaceArchonDir) {
-        const workspaceScriptsDir = resolve(workspaceArchonDir, 'scripts');
+      if (!scriptDef && workspaceSearchPath) {
+        const workspaceScriptsDir = resolve(workspaceSearchPath, '.archon', 'scripts');
         if (workspaceScriptsDir !== scriptsDir) {
           try {
             const workspaceScripts = await discoverScripts(workspaceScriptsDir);
@@ -2264,7 +2264,7 @@ async function executeApprovalNode(
   workflowLevelOptions: WorkflowLevelOptions,
   configuredCommandFolder?: string,
   issueContext?: string,
-  workspaceArchonDir?: string
+  workspaceSearchPath?: string
 ): Promise<NodeOutput> {
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
 
@@ -2362,7 +2362,7 @@ async function executeApprovalNode(
       undefined, // fresh session
       configuredCommandFolder,
       issueContext,
-      workspaceArchonDir
+      workspaceSearchPath
     );
 
     if (output.state === 'failed') {
@@ -2434,24 +2434,26 @@ export async function executeDagWorkflow(
   configuredCommandFolder?: string,
   issueContext?: string,
   priorCompletedNodes?: Map<string, string>,
-  workspaceArchonDir?: string
+  workspaceSearchPath?: string
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
 
-  // Resolve the workspace-in-userspace .archon dir once per run. If the caller
-  // didn't pre-compute it, derive it from the git remote. Null means the
+  // Resolve the workspace-in-userspace project root once per run. If the caller
+  // didn't pre-compute it, derive it from the git remote. Undefined means the
   // workspace tier is silently skipped for script/command lookups in this run.
-  let resolvedWorkspaceArchonDir: string | undefined = workspaceArchonDir;
-  if (resolvedWorkspaceArchonDir === undefined) {
+  // This is the PROJECT ROOT (no `.archon` suffix), matching how
+  // `globalSearchPath` works at the workflow-discovery layer.
+  let resolvedWorkspaceSearchPath: string | undefined = workspaceSearchPath;
+  if (resolvedWorkspaceSearchPath === undefined) {
     const ownerRepo = await parseOwnerRepoFromGitRemote(cwd);
     if (ownerRepo) {
-      resolvedWorkspaceArchonDir = getProjectArchonDir(ownerRepo.owner, ownerRepo.repo);
+      resolvedWorkspaceSearchPath = getProjectRoot(ownerRepo.owner, ownerRepo.repo);
       getLog().debug(
-        { cwd, workspaceArchonDir: resolvedWorkspaceArchonDir },
-        'dag.workspace_archon_dir_resolved'
+        { cwd, workspaceSearchPath: resolvedWorkspaceSearchPath },
+        'dag.workspace_search_path_resolved'
       );
     } else {
-      getLog().debug({ cwd }, 'dag.workspace_archon_dir_unavailable');
+      getLog().debug({ cwd }, 'dag.workspace_search_path_unavailable');
     }
   }
   const workflowLevelOptions = {
@@ -2746,7 +2748,7 @@ export async function executeDagWorkflow(
               workflowLevelOptions,
               configuredCommandFolder,
               issueContext,
-              resolvedWorkspaceArchonDir
+              resolvedWorkspaceSearchPath
             );
             return { nodeId: node.id, output };
           }
@@ -2797,7 +2799,7 @@ export async function executeDagWorkflow(
               baseBranch,
               docsDir,
               nodeOutputs,
-              resolvedWorkspaceArchonDir,
+              resolvedWorkspaceSearchPath,
               issueContext
             );
             return { nodeId: node.id, output };
@@ -2850,7 +2852,7 @@ export async function executeDagWorkflow(
               resumeSessionId,
               configuredCommandFolder,
               issueContext,
-              resolvedWorkspaceArchonDir
+              resolvedWorkspaceSearchPath
             );
 
             if (output.state !== 'failed') break;
