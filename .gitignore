@@ -44,6 +44,7 @@ e2e-screenshots/
 # Archon logs and artifacts (generated at runtime)
 .archon/logs/
 .archon/artifacts/
+artifacts/
 
 # Agent artifacts (generated, local only)
 .agents/

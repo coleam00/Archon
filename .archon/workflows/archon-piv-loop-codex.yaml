@@ -1,0 +1,1186 @@
+name: archon-piv-loop-codex
+description: |
+  Use when: User wants guided Plan-Implement-Validate development with human-in-the-loop,
+  using Codex/GPT models instead of Claude.
+  Triggers: "piv codex", "codex piv", "piv loop codex", "gpt piv", "piv with gpt",
+            "guided development codex", "structured development codex".
+  NOT for: Claude-based PIV loops (use archon-piv-loop instead).
+  NOT for: Autonomous implementation without planning (use archon-feature-development).
+  NOT for: PRD creation (use archon-interactive-prd).
+  NOT for: Ralph story-based implementation (use archon-ralph-dag).
+
+  Codex/GPT variant of archon-piv-loop — same 4-phase Plan-Implement-Validate methodology,
+  with prompt refinements tuned for Codex's behavioral tendencies:
+    * Explicit numbered SIGNAL EMISSION CONTRACTs in place of Claude-style CRITICAL framing
+    * Hard stop discipline for the implement loop (Phase 4.5 STOP, "SELECT EXACTLY ONE")
+    * Per-file staging instead of `git add -A` to prevent task-scope leaks
+    * Explicit negative guardrails on the implement loop's COMPLETE signal
+    * Tightened refine-plan approval branch (no tool use on approval)
+
+  Interactive PIV loop workflow — the foundational AI coding methodology:
+  1. EXPLORE: Iterative conversation with human to understand the problem (arbitrary rounds)
+  2. PLAN: Create structured plan -> iterative review & revision (arbitrary rounds)
+  3. IMPLEMENT: Autonomous task-by-task implementation from plan (Ralph loop, hard stop per task)
+  4. VALIDATE: Automated code review -> iterative human feedback & fixes (arbitrary rounds)
+
+  The PIV loop comes AFTER a PRD exists. Each PIV loop focuses on ONE granular feature or bug fix.
+  Input: A description of what to build, a path to an existing plan, or a GitHub issue number.
+
+provider: codex
+interactive: true
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1: EXPLORE — Iterative exploration with human
+  # Understand the idea, explore the codebase, converge on approach
+  # Loops until the user says they're ready to create the plan.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: explore
+    loop:
+      prompt: |
+        # PIV Loop — Exploration
+
+        You are a senior engineering partner in an iterative exploration session.
+        Your goal: DEEPLY UNDERSTAND what to build before any code is written.
+
+        **User's request**: $ARGUMENTS
+        **User's latest input** (empty on first iteration): "$LOOP_USER_INPUT"
+
+        ---
+
+        ## If this is the FIRST iteration (no user input yet):
+
+        **Important**: Do Steps 1-4 in order. Do not jump to questions until you have
+        shown the "## What I Understand" / "## What Already Exists" / "## Initial
+        Architecture Thoughts" sections first.
+
+        ### Step 1: Parse the Input
+
+        Determine what the user provided:
+
+        **If it's a file path** (ends in `.md`, `.plan.md`, or `.prd.md`):
+        - Read the file
+        - If it's an existing plan → summarize it and ask if they want to refine or proceed
+        - If it's a PRD → identify the specific phase/feature to focus on
+
+        **If it's a GitHub issue** (`#123` format):
+        - Fetch it: `gh issue view {number} --json title,body,labels,comments`
+        - Summarize the issue context
+
+        **If it's free text**:
+        - This is a feature idea or bug description. Use it directly.
+
+        ### Step 2: Explore the Codebase
+
+        Before asking questions, DO YOUR HOMEWORK:
+
+        1. **Read CLAUDE.md** — understand project conventions, architecture, and constraints
+        2. **Search for related code** — find existing implementations similar to what the user wants
+        3. **Read key files** — understand the current state of code the user wants to change
+        4. **Check recent git history** — `git log --oneline -20` for recent changes in the area
+
+        ### Step 3: Present Your Understanding
+
+        ```
+        ## What I Understand
+
+        You want to: {restated understanding in 2-3 sentences}
+
+        ## What Already Exists
+
+        - {file:line} — {what it does and how it relates}
+        - {file:line} — {what it does and how it relates}
+        - {pattern/component} — {how it could be extended or reused}
+
+        ## Initial Architecture Thoughts
+
+        Based on what exists, I'm thinking:
+        - {approach 1 — extend existing X}
+        - {approach 2 — if approach 1 doesn't work}
+        - {key architectural decision that needs your input}
+        ```
+
+        ### Step 4: Ask Targeted Questions
+
+        Ask 4-6 questions focused on DECISIONS, not information gathering:
+        - Scope boundaries, architecture preferences, tech decisions
+        - Constraints, existing code extension vs fresh build, testing expectations
+        - Reference actual code you found — don't ask generic questions
+
+        ---
+
+        ## If the user has provided input (subsequent iterations):
+
+        ### Step 1: Process Their Response
+
+        Read their answers carefully. Identify:
+        - Decisions they've made
+        - Areas they want you to explore further
+        - Questions they asked YOU back (answer these with evidence!)
+
+        ### Step 2: Do Targeted Research
+
+        Based on their response:
+        - If they mentioned specific technologies → research best practices
+        - If they pointed you to specific code → read it thoroughly
+        - If they asked you to explore an area → do a thorough investigation
+        - If they made architecture decisions → validate against the codebase
+
+        ### Step 3: Present Updated Understanding
+
+        Show what you learned, answer their questions with file:line references,
+        and present your refined architecture recommendation.
+
+        ### Step 4: Converge or Continue
+
+        **If there are still important open questions:**
+        Ask 2-4 focused questions about remaining ambiguities.
+
+        **If the picture is clear and you have enough to create a plan:**
+        Present a final implementation summary:
+
+        ```
+        ## Implementation Summary
+
+        ### What We're Building
+        {Clear, specific description}
+
+        ### Scope Boundary
+        - IN: {what's included}
+        - OUT: {what's explicitly excluded}
+
+        ### Architecture
+        - {key decisions}
+
+        ### Files That Will Change
+        - `{file}` — {what changes and why}
+
+        ### Success Criteria
+        - [ ] {specific, testable criterion}
+        - [ ] All validation passes
+
+        ### Key Risks
+        - {risk — and mitigation}
+        ```
+
+        Then tell the user: "I have a clear picture. Say **ready** and I'll create
+        the structured implementation plan, or share any final thoughts."
+
+        **SIGNAL EMISSION CONTRACT** — emit `<promise>PLAN_READY</promise>` only when
+        ALL of these are true:
+          1. The user's LATEST message (not any earlier one) contains an explicit
+             approval phrase from this list: "ready", "create the plan", "let's go",
+             "proceed", "I'm done"
+          2. The user's message does NOT contain a question, a new request, or
+             additional feedback to explore
+          3. You have addressed everything the user asked in previous turns
+
+        If ANY condition is false, DO NOT emit the tag. Continue the conversation
+        instead. When you reference this contract in your own output, write "the
+        PLAN_READY signal" (no angle brackets) so you do not trigger it accidentally.
+      until: PLAN_READY
+      max_iterations: 15
+      interactive: true
+      gate_message: |
+        Answer the questions above, ask me to explore specific areas,
+        or say "ready" when you're satisfied with the exploration.
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1b: DETECT — Discover project validation commands
+  # Runs once, output referenced by every downstream node so the
+  # workflow is portable across bun / npm / python / go / rust / etc.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: detect-project
+    depends_on: [explore]
+    bash: |
+      set -e
+
+      PROJECT_TYPE="unknown"
+      INSTALL_CMD=""
+      VALIDATE_CMD=""
+      TYPECHECK_CMD=""
+      LINT_CMD=""
+      TEST_CMD=""
+      FORMAT_CMD=""
+
+      # -------- Bun / TypeScript --------
+      if [ -f "bun.lock" ] || [ -f "bun.lockb" ]; then
+        PROJECT_TYPE="bun"
+        INSTALL_CMD="bun install --frozen-lockfile"
+        grep -q '"validate"' package.json 2>/dev/null && VALIDATE_CMD="bun run validate"
+        grep -q '"type-check"' package.json 2>/dev/null && TYPECHECK_CMD="bun run type-check"
+        grep -q '"lint"' package.json 2>/dev/null && LINT_CMD="bun run lint"
+        grep -q '"test"' package.json 2>/dev/null && TEST_CMD="bun run test"
+        grep -q '"format:check"' package.json 2>/dev/null && FORMAT_CMD="bun run format:check"
+
+      # -------- Python (via repo signals + source-repo venv lookup) --------
+      # Triggers on any Python signal (pyproject, requirements, setup.py, or tests/).
+      # In a git worktree, .venv is NOT copied from the source repo (git worktree add
+      # only copies tracked files), so we look up the source repo via git's
+      # --git-common-dir and reference its .venv/ directly from the worktree.
+      elif [ -f "pyproject.toml" ] || [ -f "requirements.txt" ] || \
+           [ -f "setup.py" ] || compgen -G "tests/test_*.py" > /dev/null 2>&1; then
+        PROJECT_TYPE="python"
+
+        # Resolve source repo root (the main checkout, not the worktree).
+        # git rev-parse --git-common-dir returns the main .git dir (even from a worktree).
+        SOURCE_REPO=""
+        GIT_COMMON="$(git rev-parse --git-common-dir 2>/dev/null)"
+        if [ -n "$GIT_COMMON" ]; then
+          case "$GIT_COMMON" in
+            /*) ABS_COMMON="$GIT_COMMON" ;;
+            *)  ABS_COMMON="$(pwd)/$GIT_COMMON" ;;
+          esac
+          SOURCE_REPO="$(dirname "$ABS_COMMON")"
+        fi
+
+        # Prefer worktree-local .venv if present (unusual), else source repo .venv.
+        VENV_BIN=""
+        if [ -d ".venv" ] && [ -x ".venv/bin/python" ]; then
+          VENV_BIN=".venv/bin"
+        elif [ -n "$SOURCE_REPO" ] && [ -x "$SOURCE_REPO/.venv/bin/python" ]; then
+          VENV_BIN="$SOURCE_REPO/.venv/bin"
+        fi
+
+        # Detect installed tools via the resolved VENV_BIN (most reliable).
+        if [ -n "$VENV_BIN" ]; then
+          [ -x "$VENV_BIN/pytest"  ] && TEST_CMD="$VENV_BIN/pytest tests/"
+          [ -x "$VENV_BIN/ruff"    ] && { LINT_CMD="$VENV_BIN/ruff check ."; FORMAT_CMD="$VENV_BIN/ruff format --check ."; }
+          [ -x "$VENV_BIN/mypy"    ] && TYPECHECK_CMD="$VENV_BIN/mypy ."
+          [ -x "$VENV_BIN/pyright" ] && TYPECHECK_CMD="${TYPECHECK_CMD:+$TYPECHECK_CMD && }$VENV_BIN/pyright"
+        fi
+
+        # Install command based on project metadata.
+        if [ -f "pyproject.toml" ]; then
+          if [ -f "uv.lock" ]; then
+            INSTALL_CMD="uv sync"
+          elif [ -f "poetry.lock" ]; then
+            INSTALL_CMD="poetry install"
+          elif [ -n "$VENV_BIN" ]; then
+            INSTALL_CMD="$VENV_BIN/python -m pip install -e ."
+          fi
+        elif [ -f "requirements.txt" ] && [ -n "$VENV_BIN" ]; then
+          INSTALL_CMD="$VENV_BIN/python -m pip install -r requirements.txt"
+        fi
+
+      # -------- Node (npm/yarn/pnpm) --------
+      elif [ -f "package.json" ]; then
+        PROJECT_TYPE="node"
+        if [ -f "pnpm-lock.yaml" ]; then
+          RUN="pnpm"
+          INSTALL_CMD="pnpm install --frozen-lockfile"
+        elif [ -f "yarn.lock" ]; then
+          RUN="yarn"
+          INSTALL_CMD="yarn install --frozen-lockfile"
+        else
+          RUN="npm run"
+          INSTALL_CMD="npm ci"
+        fi
+        grep -q '"validate"' package.json 2>/dev/null && VALIDATE_CMD="$RUN validate"
+        grep -q '"type-check"' package.json 2>/dev/null && TYPECHECK_CMD="$RUN type-check"
+        grep -q '"lint"' package.json 2>/dev/null && LINT_CMD="$RUN lint"
+        grep -q '"test"' package.json 2>/dev/null && TEST_CMD="$RUN test"
+        grep -q '"format:check"' package.json 2>/dev/null && FORMAT_CMD="$RUN format:check"
+
+      # -------- Go --------
+      elif [ -f "go.mod" ]; then
+        PROJECT_TYPE="go"
+        INSTALL_CMD="go mod download"
+        TEST_CMD="go test ./..."
+        TYPECHECK_CMD="go vet ./..."
+        command -v golangci-lint >/dev/null 2>&1 && LINT_CMD="golangci-lint run"
+        FORMAT_CMD="gofmt -l ."
+
+      # -------- Rust --------
+      elif [ -f "Cargo.toml" ]; then
+        PROJECT_TYPE="rust"
+        INSTALL_CMD="cargo fetch"
+        TEST_CMD="cargo test"
+        TYPECHECK_CMD="cargo check"
+        LINT_CMD="cargo clippy -- -D warnings"
+        FORMAT_CMD="cargo fmt -- --check"
+
+      # -------- Makefile fallback --------
+      elif [ -f "Makefile" ]; then
+        PROJECT_TYPE="makefile"
+        grep -q "^test:" Makefile 2>/dev/null && TEST_CMD="make test"
+        grep -q "^lint:" Makefile 2>/dev/null && LINT_CMD="make lint"
+        grep -q "^check:" Makefile 2>/dev/null && VALIDATE_CMD="make check"
+      fi
+
+      # Compose VALIDATE_CMD from available parts if not already set
+      if [ -z "$VALIDATE_CMD" ]; then
+        PARTS=""
+        [ -n "$TYPECHECK_CMD" ] && PARTS="${PARTS:+$PARTS && }$TYPECHECK_CMD"
+        [ -n "$LINT_CMD" ] && PARTS="${PARTS:+$PARTS && }$LINT_CMD"
+        [ -n "$TEST_CMD" ] && PARTS="${PARTS:+$PARTS && }$TEST_CMD"
+        [ -n "$FORMAT_CMD" ] && PARTS="${PARTS:+$PARTS && }$FORMAT_CMD"
+        VALIDATE_CMD="$PARTS"
+      fi
+
+      echo "=== PROJECT DETECTION ==="
+      echo "PROJECT_TYPE=$PROJECT_TYPE"
+      echo "INSTALL_CMD=${INSTALL_CMD:-}"
+      echo "VALIDATE_CMD=${VALIDATE_CMD:-}"
+      echo "TYPECHECK_CMD=${TYPECHECK_CMD:-}"
+      echo "LINT_CMD=${LINT_CMD:-}"
+      echo "TEST_CMD=${TEST_CMD:-}"
+      echo "FORMAT_CMD=${FORMAT_CMD:-}"
+      echo "=== END DETECTION ==="
+
+      if [ -z "$VALIDATE_CMD" ] && [ -z "$TEST_CMD" ] && [ -z "$TYPECHECK_CMD" ] && [ -z "$LINT_CMD" ]; then
+        echo ""
+        echo "NOTE: No automated validators detected in this project."
+        echo "The implement loop will proceed without automated validation gates."
+        echo "Human review is required before merging any changes."
+      fi
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2: PLAN — Create the structured implementation plan
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: create-plan
+    depends_on: [detect-project]
+    context: fresh
+    prompt: |
+      # PIV Loop — Create Structured Plan
+
+      You are creating a structured implementation plan from a completed exploration phase.
+      This plan will be the SOLE GUIDE for the implementation agent — it must be complete,
+      specific, and actionable.
+
+      **Original request**: $ARGUMENTS
+      **Final exploration summary**: $explore.output
+
+      **Project detection output** (used ONLY to fill in the informational Validation Commands section of the plan):
+      $detect-project.output
+
+      Parse the `PROJECT_TYPE=...`, `VALIDATE_CMD=...`, `TYPECHECK_CMD=...`, `LINT_CMD=...`,
+      `TEST_CMD=...`, `FORMAT_CMD=...` lines from the detection output above. These are
+      **informational** — copy them verbatim into the plan's `## Validation Commands`
+      section so the plan documents what detect-project found.
+
+      **CRITICAL — DO NOT create a plan task whose purpose is running repo-wide
+      validators.** The implement loop uses each task's own per-task `**Validate:**`
+      field (task-scoped). Repo-wide validators (`TYPECHECK_CMD`, `LINT_CMD`, `TEST_CMD`,
+      `FORMAT_CMD`, `VALIDATE_CMD`) are executed once by the `code-review` node after all
+      implement tasks complete — never as part of the implement loop's Task List.
+
+      Each `### Task N:` entry in the Task List must be EITHER:
+        - One CREATE or UPDATE change with a scoped `**Validate:**` field (a diff
+          readback, a targeted test command, or a file existence check), OR
+        - One verification-only task (like a pre-flight file-absence check) with a
+          `**Validate:**` field that reads current state without making changes.
+
+      **Never** a task whose `**Details:**` or `**Validate:**` field runs the repo-wide
+      validator suite. That pattern creates a deadlock on any repo with pre-existing
+      validator failures. Pre-existing repo-wide issues are the `code-review` node's
+      concern, not the implement loop's.
+
+      ---
+
+      ## Step 1: Read the Codebase (Again)
+
+      Before writing the plan, verify your understanding is current:
+
+      1. **Read CLAUDE.md** — capture all relevant conventions
+      2. **Read every file you plan to change** — note exact current state
+      3. **Read example test files** — understand testing patterns
+      4. **Check for any recent changes** — `git log --oneline -10`
+
+      ## Step 2: Determine Plan Location
+
+      Generate a kebab-case slug from the feature name.
+      Save to `.claude/archon/plans/{slug}.plan.md`.
+
+      ```bash
+      mkdir -p .claude/archon/plans
+      ```
+
+      ## Step 3: Write the Plan
+
+      Use this template. Fill EVERY section with specific, verified information.
+
+      ```markdown
+      # Feature: {Title}
+
+      ## Summary
+      {1-2 sentences: what changes and why}
+
+      ## Mission
+      {The core goal in one clear statement}
+
+      ## Success Criteria
+      - [ ] {Specific, testable criterion for this task}
+      - [ ] No regressions introduced in files this task touches
+      - [ ] Code-review (which runs automatically after all implement tasks) surfaces
+            no NEW validator failures attributable to this change (pre-existing repo-wide
+            failures are out of scope for this task)
+
+      ## Scope
+      ### In Scope
+      - {What we ARE building}
+      ### Out of Scope
+      - {What we are NOT building — and why}
+
+      ## Codebase Context
+      ### Key Files
+      | File | Role | Action |
+      |------|------|--------|
+      | `{path}` | {what it does} | CREATE / UPDATE |
+
+      ### Patterns to Follow
+      {Actual code snippets from the codebase to mirror}
+
+      ## Architecture
+      - {Decision 1 — with rationale}
+      - {Decision 2 — with rationale}
+
+      ## Task List
+      Execute in order. Each task is atomic and independently verifiable.
+
+      ### Task 1: {ACTION} `{file path}`
+      **Action**: CREATE / UPDATE
+      **Details**: {Exact changes — specific enough for an agent with no context}
+      **Pattern**: Follow `{source file}:{lines}`
+      **Validate**: `{command to verify this task}`
+
+      ## Testing Strategy
+      | Test File | Test Cases | Validates |
+      |-----------|-----------|-----------|
+      | `{path}` | {cases} | {what it validates} |
+
+      ## Validation Commands
+      Fill these from the `detect-project` output above. If a command is empty, write
+      `(none available — human verification only)` instead of inventing one.
+
+      1. Type check: `{TYPECHECK_CMD from detect-project, or "none available"}`
+      2. Lint: `{LINT_CMD, or "none available"}`
+      3. Tests: `{TEST_CMD, or "none available"}`
+      4. Format check: `{FORMAT_CMD, or "none available"}`
+      5. Full validation: `{VALIDATE_CMD, or "none available"}`
+      6. Project type: `{PROJECT_TYPE}`
+
+      ## Risks
+      | Risk | Impact | Mitigation |
+      |------|--------|------------|
+      | {risk} | {HIGH/MED/LOW} | {specific mitigation} |
+      ```
+
+      ## Step 4: Verify the Plan
+
+      1. Check every file path referenced — verify they exist
+      2. Check every pattern cited — verify the code matches
+      3. Check task ordering — ensure dependencies are respected
+      4. Check completeness — could an agent with NO context implement this?
+
+      ## Step 5: Report
+
+      ```
+      ## Plan Created
+
+      **File**: `.claude/archon/plans/{slug}.plan.md`
+      **Tasks**: {count}
+      **Files to change**: {count}
+
+      Key decisions:
+      - {decision 1}
+      - {decision 2}
+
+      Please review the plan and provide feedback.
+      ```
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2b: PLAN — Iterative plan refinement
+  # Review and revise the plan as many times as needed.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: refine-plan
+    depends_on: [create-plan]
+    loop:
+      prompt: |
+        # PIV Loop — Plan Refinement
+
+        The user is reviewing the implementation plan and providing feedback.
+
+        **User's feedback** (empty on first iteration): "$LOOP_USER_INPUT"
+
+        ---
+
+        ## Step 1: Find and Read the Plan
+
+        ```bash
+        ls -t .claude/archon/plans/*.plan.md 2>/dev/null | head -1
+        ```
+
+        Read the entire plan file. Also read CLAUDE.md for conventions.
+
+        ## Step 2: Process Feedback
+
+        **If there is no user feedback yet** (first iteration, `$LOOP_USER_INPUT` is empty):
+        - Read the plan carefully
+        - Present a summary of the plan's key decisions and task list
+        - Ask the user to review and provide feedback
+        - Do NOT emit the completion signal on the first iteration
+
+        **If the user EXPLICITLY approved** (said "approved", "looks good", "let's go", etc.):
+        - Do NOT open, read, or write the plan file.
+        - Do NOT run any tools.
+        - Output exactly this sentence: "Plan approved. Proceeding to implementation."
+        - Then emit `<promise>PLAN_APPROVED</promise>` on its own line.
+
+        **If the user provided specific feedback:**
+        - Parse each piece of feedback
+        - Edit the plan file directly:
+          - Add/remove/modify tasks as requested
+          - Update success criteria if needed
+          - Adjust testing strategy if needed
+          - Re-verify file paths and patterns after changes
+
+        **SIGNAL EMISSION CONTRACT** — emit `<promise>PLAN_APPROVED</promise>` only when
+        ALL of these are true:
+          1. The user's LATEST message contains an explicit approval phrase:
+             "approved", "looks good", "ship it", "let's go", "proceed"
+          2. The message does NOT contain questions, requested changes, or new feedback
+          3. This is NOT the first iteration (empty `$LOOP_USER_INPUT`)
+
+        If ANY condition is false, DO NOT emit the tag. When referencing this contract
+        in your output, write "the PLAN_APPROVED signal" (no angle brackets).
+
+        ## Step 3: Show Changes
+
+        ```
+        ## Plan Revised
+
+        Changes made:
+        - {change 1}
+        - {change 2}
+
+        Updated stats:
+        - Tasks: {count}
+        - Files to change: {count}
+
+        Review the updated plan and provide more feedback, or say "approved" to proceed.
+        ```
+      until: PLAN_APPROVED
+      max_iterations: 10
+      interactive: true
+      gate_message: |
+        Review the plan document. Provide specific feedback on what to change,
+        or say "approved" to begin implementation.
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 3: IMPLEMENT — Setup
+  # Read the plan, prepare the environment
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: implement-setup
+    depends_on: [refine-plan, detect-project]
+    bash: |
+      set -e
+
+      PLAN_FILE=$(ls -t .claude/archon/plans/*.plan.md 2>/dev/null | head -1)
+
+      if [ -z "$PLAN_FILE" ]; then
+        echo "ERROR: No plan file found in .claude/archon/plans/"
+        exit 1
+      fi
+
+      # Dependency install is portable — mirrors the detection node's logic.
+      # Failures here are non-fatal; the implement loop will surface them.
+      if [ -f "bun.lock" ] || [ -f "bun.lockb" ]; then
+        echo "Installing bun dependencies..."
+        bun install --frozen-lockfile 2>&1 | tail -3 || echo "NOTE: bun install failed; continuing"
+      elif [ -f "package-lock.json" ]; then
+        npm ci 2>&1 | tail -3 || echo "NOTE: npm ci failed; continuing"
+      elif [ -f "yarn.lock" ]; then
+        yarn install --frozen-lockfile 2>&1 | tail -3 || echo "NOTE: yarn install failed; continuing"
+      elif [ -f "pnpm-lock.yaml" ]; then
+        pnpm install --frozen-lockfile 2>&1 | tail -3 || echo "NOTE: pnpm install failed; continuing"
+      elif [ -f "uv.lock" ]; then
+        uv sync 2>&1 | tail -3 || echo "NOTE: uv sync failed; continuing"
+      elif [ -f "poetry.lock" ]; then
+        poetry install 2>&1 | tail -3 || echo "NOTE: poetry install failed; continuing"
+      elif [ -f "go.mod" ]; then
+        go mod download 2>&1 | tail -3 || echo "NOTE: go mod download failed; continuing"
+      elif [ -f "Cargo.toml" ]; then
+        cargo fetch 2>&1 | tail -3 || echo "NOTE: cargo fetch failed; continuing"
+      else
+        echo "NOTE: no recognized lockfile — skipping dependency install step"
+      fi
+
+      echo "BRANCH=$(git branch --show-current)"
+      echo "GIT_ROOT=$(git rev-parse --show-toplevel)"
+      echo "PLAN_FILE=$PLAN_FILE"
+
+      echo "=== PLAN_START ==="
+      cat "$PLAN_FILE"
+      echo ""
+      echo "=== PLAN_END ==="
+
+      TASK_COUNT=$(grep -c "^### Task [0-9]" "$PLAN_FILE" || true)
+      echo "TASK_COUNT=${TASK_COUNT:-0}"
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 3b: IMPLEMENT — Task-by-Task Loop (Ralph pattern, hard stop per task)
+  # Fresh context each iteration. Reads plan from disk.
+  # EXACTLY ONE task per iteration. Validates before committing.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: implement
+    depends_on: [implement-setup]
+    idle_timeout: 600000
+    loop:
+      prompt: |
+        # PIV Loop — Implementation Agent
+
+        You are an autonomous coding agent in a FRESH session — no memory of previous iterations.
+        Your job: Read the plan from disk, implement EXACTLY ONE task, run the task's
+        own task-scoped verification, commit, update tracking, exit. **Repo-wide
+        validation is `code-review`'s responsibility — not yours.** You do not run
+        repo-wide validators at any phase of this loop.
+
+        **Golden Rule 1**: If the task's OWN verification (Phase 3) fails, fix the
+        task-specific issue before committing. Never commit broken code. But NEVER
+        touch pre-existing repo-wide issues — those are out of your scope.
+        **Golden Rule 2**: One task per iteration. The loop engine starts a fresh iteration for the next task.
+
+        ---
+
+        ## Phase 0: CONTEXT — Load State
+
+        The setup node produced this context:
+
+        $implement-setup.output
+
+        **Project detection** (repo-wide validators — INFORMATIONAL ONLY, do not run):
+        $detect-project.output
+
+        **User's original request**: $USER_MESSAGE
+
+        The `VALIDATE_CMD`, `TYPECHECK_CMD`, `LINT_CMD`, `TEST_CMD`, `FORMAT_CMD` values
+        from detect-project are **informational only**. The implement loop does **NOT**
+        run them at any phase. They run later in the `code-review` node. The implement
+        loop uses only the TASK-SCOPED `**Validate:**` field from each task in the plan.
+
+        If you find yourself about to run `ruff check .`, `pytest tests/`,
+        `bun run validate`, or any similar repo-wide command — STOP. That is not your
+        job. Your job is the single task from the plan, with the task's own per-task
+        `**Validate:**` check.
+
+        ---
+
+        ### 0.1 Parse Plan File
+
+        Extract the `PLAN_FILE=...` line from the context above.
+
+        ### 0.2 Read Current State (from disk — not from context above)
+
+        The context above is a snapshot from before the loop started. Previous iterations
+        may have changed things. **You MUST re-read from disk:**
+
+        1. **Read the plan file** — your implementation guide
+        2. **Read progress tracking** — check if `$ARTIFACTS_DIR/progress.txt` exists
+        3. **Read CLAUDE.md** — project conventions and constraints
+
+        ### 0.3 Check Git State
+
+        ```bash
+        git log --oneline -10
+        git status
+        ```
+
+        Record the current HEAD hash — you will compare against this at the end of the iteration.
+
+        ---
+
+        ## Phase 1: SELECT EXACTLY ONE — Pick The Single Next Task
+
+        From the plan file, identify tasks by `### Task N:` headers.
+        Cross-reference with commits from previous iterations and progress tracking.
+
+        **STRICT ORDERING**: Always select the LOWEST-numbered incomplete task. Never
+        skip to a later task, even if it seems more actionable or if the earlier task
+        is "just a verification". Verification tasks are load-bearing — they are
+        numbered first precisely because they must run first and their evidence must
+        be captured before the state changes.
+
+        If Task N is already completed (per `$ARTIFACTS_DIR/progress.txt`), move to
+        Task N+1. If Task N is incomplete, work on Task N — never Task N+1 or later.
+
+        **If ALL tasks are complete** → Skip to Phase 5 (Completion).
+
+        ### Announce Selection
+
+        ```
+        -- Task Selected ------------------------------------------------
+        Task: {N} — {task title}
+        Action: {CREATE / UPDATE}
+        File: {file path}
+        -----------------------------------------------------------------
+        ```
+
+        ---
+
+        ## Phase 2: IMPLEMENT — Execute ONLY This Task
+
+        1. Read the file you're about to change (if it exists)
+        2. Read the pattern file referenced in the plan
+        3. Make changes following the plan EXACTLY — for Task {N} ONLY
+
+        Do NOT read, edit, or prepare files for Task N+1 in this iteration.
+
+        **DO NOT run repo-wide validators** (`TYPECHECK_CMD`, `LINT_CMD`, `TEST_CMD`,
+        `FORMAT_CMD`) during Phase 2. Those run once in `code-review` after the
+        implement loop finishes — not here. Task-scoped verification happens in Phase 3
+        using the task's own `**Validate:**` field from the plan.
+
+        ---
+
+        ## Phase 3: VALIDATE — Verify the Task (task-scoped, NOT repo-wide)
+
+        Run ONLY the task's own `**Validate:**` command from the plan file. This is a
+        TASK-SCOPED check (a diff readback, a targeted test command, a file existence
+        check). It is **NOT** the repo-wide validator suite.
+
+        **DO NOT run `TYPECHECK_CMD`, `LINT_CMD`, `TEST_CMD`, or `FORMAT_CMD` in this
+        phase.** Those are repo-wide commands from the `detect-project` output. They
+        check whether the WHOLE REPO is healthy — a different question from "did my
+        single task land correctly". Pre-existing repo-wide failures are NOT this
+        task's responsibility; they are handled by the `code-review` node later, which
+        runs the repo-wide suite once (not per task) and may make fix commits for
+        issues it surfaces.
+
+        If the task's `**Validate:**` command is missing or empty in the plan, fall
+        back to a minimal task-scoped check based on the task's Action:
+        - `CREATE` / `UPDATE`: `git diff --stat <target-file>` plus `cat <target-file>`
+          (confirm the diff shape and content match the intent)
+        - Verification-only task: no action — proceed directly to Phase 4
+
+        If the task's `**Validate:**` command fails:
+        1. The failure is task-specific (not repo-wide). Fix the task-specific issue
+           and re-run, up to 3 attempts.
+        2. If still unfixable, record the block in `$ARTIFACTS_DIR/progress.txt` and
+           do NOT commit.
+
+        **Never fail the iteration because of pre-existing repo-wide issues that were
+        already broken before your task started.** Phase 4.5 HARD RULE 1 forbids you
+        from fixing those — they are legitimately out of your scope. The repo-wide
+        health check happens once, later, in the `code-review` node.
+
+        ---
+
+        ## Phase 4: COMMIT — Save Changes
+
+        Before staging, verify the git diff contains ONLY files from the ONE task you just worked on:
+
+        ```bash
+        git status --short
+        git diff --stat
+        ```
+
+        If you see files outside the scope of the current task (e.g. changes you made while
+        exploring or testing for Task N+1), revert those extra changes with
+        `git checkout -- <file>` BEFORE staging. Do NOT use `git add -A`. Stage explicitly
+        by file path:
+
+        ```bash
+        git add <file1> <file2>  # only the files from THIS task
+        git diff --cached --stat  # confirm the staged set matches the task scope
+        git commit -m "$(cat <<'EOF'
+        {type}: {task description}
+
+        PIV Task {N}: {brief details}
+        EOF
+        )"
+        ```
+
+        Track progress in `$ARTIFACTS_DIR/progress.txt` (outside the repo — zero
+        staging risk, pre-created by the executor, survives resume):
+        ```
+        ## Task {N}: {title} — COMPLETED
+        Date: {ISO date}
+        Files: {list}
+        Commit: {short hash}
+        ---
+        ```
+
+        **DO NOT** stage or commit `$ARTIFACTS_DIR/progress.txt`. It lives outside
+        the repo entirely and is not a git-tracked file. It is local scratch state
+        for the loop only.
+
+        ---
+
+        ## Phase 4.5: STOP — Exit After One Task
+
+        "One task" means literally ONE numbered `### Task N:` entry from the plan file.
+        Not "one logical change." Not "one feature unit." Not "everything that naturally
+        goes together." ONE numbered entry.
+
+        **HARD RULES**:
+        1. Count your commits in this iteration via `git log HEAD ^<start-hash>` (the
+           hash you recorded in Phase 0.3). If count > 1, you did too much — revert the
+           extras with `git reset --mixed <start-hash>` and let the next iteration pick
+           up the rest.
+        2. Verification tasks (like "VERIFY PRE-FLIGHT") count as numbered tasks and
+           need their own iteration, even if they produce no code change.
+        3. If Task N is a verification-only task, your "commit" for that iteration is
+           writing to `$ARTIFACTS_DIR/progress.txt` and exiting — no git commit required.
+        4. After committing (or recording verification), end the iteration with the
+           Phase 4.5 status block below. Do NOT read, edit, stage, or validate files
+           for any other task in this iteration.
+
+        If tasks remain, end the iteration by reporting status in this exact format:
+
+        ```
+        Task {N} committed: {short hash}
+        Files touched: {list}
+        Remaining tasks: {count}
+        Next iteration will pick up Task {N+1}.
+        ```
+
+        Do NOT emit the completion tag here. Do NOT read or start any other task's files.
+
+        ---
+
+        ## Phase 5: COMPLETE — Check All Tasks
+
+        **SIGNAL EMISSION CONTRACT** — emit `<promise>COMPLETE</promise>` only when
+        BOTH of these are true:
+          1. Every `### Task N:` entry in the plan file has a matching "COMPLETED"
+             entry in `$ARTIFACTS_DIR/progress.txt`
+          2. `git log` on the current branch shows a commit for each code-affecting
+             task (verification-only tasks have no commit; see Phase 4.5 Rule 3)
+
+        **Phase 5 does NOT run repo-wide validation.** Repo-wide validators
+        (`TYPECHECK_CMD`, `LINT_CMD`, `TEST_CMD`, `FORMAT_CMD`, `VALIDATE_CMD`) are the
+        `code-review` node's responsibility — it runs them once after the implement
+        loop finishes. Pre-existing repo-wide failures are not this loop's problem.
+        The implement loop's job is "did I complete my assigned tasks?", not "is the
+        whole repo healthy?".
+
+        If BOTH conditions hold:
+        1. Push: `git push -u origin HEAD`
+        2. Emit the completion tag on its own line.
+
+        If either condition is false, tasks remain. Report status using the Phase 4.5
+        format and end the iteration normally. The loop engine will start a fresh
+        iteration. When referencing this contract in your output, write "the COMPLETE
+        signal" (no angle brackets).
+      until: COMPLETE
+      max_iterations: 15
+      fresh_context: true
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 4: VALIDATE — Automated code review
+  # Review all changes against the plan
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: code-review
+    depends_on: [implement, detect-project]
+    context: fresh
+    prompt: |
+      # PIV Loop — Automated Code Review
+
+      The implementation phase is complete. Review ALL changes against the plan.
+
+      **Implementation output**: $implement.output
+
+      **Project detection** (validation commands for this repo):
+      $detect-project.output
+
+      Parse `VALIDATE_CMD`, `TYPECHECK_CMD`, `LINT_CMD`, `TEST_CMD`, `FORMAT_CMD` from
+      the detect-project output above. Use them in Step 4 below.
+
+      ---
+
+      ## Step 1: Find and Read the Plan
+
+      ```bash
+      ls -t .claude/archon/plans/*.plan.md 2>/dev/null | head -1
+      ```
+
+      ## Step 2: Review All Changes
+
+      ```bash
+      git log --oneline --no-merges $(git merge-base HEAD $BASE_BRANCH)..HEAD
+      git diff $BASE_BRANCH..HEAD --stat
+      git diff $BASE_BRANCH..HEAD
+      ```
+
+      ## Step 3: Check Against Plan
+
+      For EACH task: was it implemented correctly? Do success criteria hold?
+      For EACH file: check quality, security, patterns, CLAUDE.md compliance.
+
+      ## Step 4: Run Validation
+
+      Run `VALIDATE_CMD` from the detect-project output. If `VALIDATE_CMD` is empty,
+      run each non-empty command from `TYPECHECK_CMD`, `LINT_CMD`, `TEST_CMD`,
+      `FORMAT_CMD` individually. If all five are empty, note "No automated validators
+      available for this project; relying on code review + human verification" and
+      skip this step.
+
+      ## Step 5: Fix Obvious Issues (SCOPED to files this branch changed)
+
+      Get the list of files this branch touched:
+      ```bash
+      git diff --name-only $BASE_BRANCH..HEAD
+      ```
+
+      Fix ONLY issues that appear in those files. Do NOT fix issues elsewhere in the
+      repo — those are pre-existing and out of scope for this branch's review. They
+      go in the "Pre-existing repo findings" section of Step 6's report instead.
+
+      To distinguish changed-file issues from pre-existing ones:
+      - Run validators scoped to the changed files where possible (e.g.,
+        `$LINT_CMD <changed-file>` if the tool supports per-file args, or run the
+        full validator and filter its output to only lines referencing changed files)
+      - For each issue in a changed file: fix it, stage only that file, add it to
+        a single scoped commit
+
+      Stage explicitly by file path and commit:
+      ```bash
+      git add <specific-fixed-files>    # NOT git add -A
+      git diff --cached --stat           # confirm only changed-file fixes are staged
+      git commit -m "fix: address review findings in this branch's changes" 2>/dev/null || true
+      ```
+
+      If none of the changed files have issues, skip this step and proceed to Step 6.
+
+      **Never fix pre-existing repo-wide issues in Step 5.** Document them in Step 6's
+      "Pre-existing repo findings" section instead. They are out of scope for this
+      branch — the user can address them in a separate PR if desired.
+
+      ## Step 6: Present Review
+
+      ```
+      ## Code Review Complete
+
+      ### Implementation Status
+      | Task | Status | Notes |
+      |------|--------|-------|
+      | {task} | DONE / PARTIAL / MISSING | {notes} |
+
+      ### Validation Results (scoped to files changed by this branch)
+      - Type-check: PASS / FAIL / SKIPPED
+      - Lint: PASS / FAIL / SKIPPED
+      - Tests: PASS / FAIL / SKIPPED
+      - Format: PASS / FAIL / SKIPPED
+
+      ### Code Quality Findings (in files changed by this branch)
+      {Issues found in files this branch touched, or "No issues found."}
+
+      ### Pre-existing Repo Findings (OUT OF SCOPE — not fixed)
+      {List pre-existing issues in files NOT changed by this branch. These are
+      documented for user awareness but were NOT fixed as part of this review —
+      they are out of scope for the current branch. The user can address them in
+      a separate PR if desired. Example: "ruff check reported 12 failures in
+      .claude/scripts/*.py that pre-date this branch; not fixed."}
+
+      ### Recommendation
+      {READY FOR REVIEW / NEEDS FIXES}
+      ```
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 4b: VALIDATE — Iterative human feedback & fixes
+  # The user tests the implementation and provides feedback.
+  # Loops until the user approves.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: fix-feedback
+    depends_on: [code-review, detect-project]
+    loop:
+      prompt: |
+        # PIV Loop — Address Validation Feedback
+
+        The human has reviewed the implementation and provided feedback.
+
+        **Human's feedback** (empty on first iteration): "$LOOP_USER_INPUT"
+
+        **Project detection** (validation commands for this repo):
+        $detect-project.output
+
+        Parse `VALIDATE_CMD` etc. from the detect-project output for Step 3 below.
+
+        ---
+
+        ## Step 1: Read Context
+
+        ```bash
+        ls -t .claude/archon/plans/*.plan.md 2>/dev/null | head -1
+        ```
+
+        Read the plan file and CLAUDE.md for conventions.
+
+        ## Step 2: Process Feedback
+
+        **If there is no user feedback yet** (first iteration, `$LOOP_USER_INPUT` is empty):
+        - Present the code review results and ask the user to test the implementation
+        - Do NOT emit the completion signal on the first iteration
+
+        **If the user EXPLICITLY approved** (said "approved", "looks good", "ship it", etc.):
+        - Output: "Implementation approved!"
+        - Then emit `<promise>VALIDATED</promise>` on its own line.
+
+        **SIGNAL EMISSION CONTRACT** — emit `<promise>VALIDATED</promise>` only when
+        ALL of these are true:
+          1. The user's LATEST message contains an explicit approval phrase:
+             "approved", "looks good", "ship it", "let's go", "proceed"
+          2. The message does NOT contain new feedback or requested fixes
+          3. This is NOT the first iteration (empty `$LOOP_USER_INPUT`)
+
+        If ANY condition is false, DO NOT emit the tag. When referencing this contract
+        in your output, write "the VALIDATED signal" (no angle brackets).
+
+        **If the user provided specific feedback:**
+        1. Read the relevant files
+        2. Understand each issue
+        3. Make the fixes
+        4. Type-check after each change
+
+        ## Step 3: Validation (conditional — only when fixes were made)
+
+        **If this iteration is an approval iteration** (Step 2 detected an explicit
+        approval and you are emitting the VALIDATED signal): SKIP this step entirely.
+        Do not run validators. Do not make commits. Proceed directly to Step 5 for
+        the final report and signal emission.
+
+        **If this iteration made fixes in response to user feedback**: run validators
+        SCOPED to the files you fixed, not the repo-wide suite. Example: if you fixed
+        `foo.py`, run `$LINT_CMD foo.py` and `$TEST_CMD tests/test_foo.py` if those
+        tools accept per-file arguments. Do NOT run `ruff check .` or equivalent
+        repo-wide commands — the goal is "did my fixes work?", not "is the whole repo
+        healthy?".
+
+        If scoped validation fails, attempt one more fix pass on the same file(s).
+        If still failing, report to the user in Step 5 and do NOT emit VALIDATED.
+        Pre-existing repo-wide failures unrelated to your fixes are out of scope —
+        never block VALIDATED on them.
+
+        ## Step 4: Commit Fixes
+
+        ```bash
+        git add -A
+        git commit -m "$(cat <<'EOF'
+        fix: address review feedback
+
+        Changes:
+        - {fix 1}
+        - {fix 2}
+        EOF
+        )"
+        ```
+
+        ## Step 5: Report
+
+        ```
+        ## Feedback Addressed
+
+        Changes made:
+        - {fix 1}
+        - {fix 2}
+
+        Validation: {PASS / FAIL with details}
+
+        Review again, or say "approved" to finalize.
+        ```
+      until: VALIDATED
+      max_iterations: 10
+      interactive: true
+      gate_message: |
+        Test the implementation yourself and review the code changes.
+        Provide specific feedback on what needs fixing, or say "approved" to finalize.
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 5: FINALIZE — Push, create PR, generate summary
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: finalize
+    depends_on: [fix-feedback, implement-setup]
+    context: fresh
+    prompt: |
+      # PIV Loop — Finalize
+
+      The implementation has been approved. Push changes and create a PR.
+
+      **Plan file** (the exact one `create-plan` wrote and `implement` worked on —
+      use THIS as the source of truth for PR title and body. Do NOT search the repo
+      for other plan files):
+
+      Parse the `PLAN_FILE=...` line from the implement-setup context below. If for
+      any reason that line is missing, re-derive with:
+      `ls -t .claude/archon/plans/*.plan.md | head -1`
+
+      Do NOT read plan files under `docs/plans/` or any other location — those
+      belong to other features and will pollute the PR title/body.
+
+      **Implementation setup context** (contains `PLAN_FILE=...`):
+      $implement-setup.output
+
+      ---
+
+      ## Step 1: Push Changes
+
+      ```bash
+      git push -u origin HEAD 2>&1 || true
+      ```
+
+      ## Step 2: Generate Summary
+
+      ```bash
+      git log --oneline --no-merges $(git merge-base HEAD $BASE_BRANCH)..HEAD
+      git diff --stat $(git merge-base HEAD $BASE_BRANCH)..HEAD
+      ```
+
+      Read the plan file from the `PLAN_FILE` path you parsed above (NOT any plan in
+      `docs/plans/`). The feature name for the PR title comes from the
+      `# Feature: {Title}` heading of THIS plan file only.
+
+      Read progress tracking from `$ARTIFACTS_DIR/progress.txt` for task completion
+      context.
+
+      ## Step 3: Create PR (if not already created)
+
+      ```bash
+      gh pr view HEAD --json url 2>/dev/null || echo "NO_PR"
+      ```
+
+      If no PR exists:
+
+      ```bash
+      cat .github/pull_request_template.md 2>/dev/null || echo "NO_TEMPLATE"
+      ```
+
+      Create with `gh pr create --draft --base $BASE_BRANCH`:
+      - Title from the plan's feature name
+      - Body summarizing the implementation
+      - Use a HEREDOC for the body
+
+      ## Step 4: Output Summary
+
+      ```
+      ===============================================================
+      PIV LOOP — COMPLETE
+      ===============================================================
+
+      Feature: {from plan}
+      Plan: {plan file path}
+      Branch: {branch name}
+      PR: {url}
+
+      -- Tasks Completed -----------------------------------------------
+      {list from progress tracking}
+
+      -- Commits -------------------------------------------------------
+      {git log output}
+
+      -- Files Changed -------------------------------------------------
+      {git diff --stat output}
+
+      -- Validation ----------------------------------------------------
+      All checks passed.
+      ===============================================================
+      ```
