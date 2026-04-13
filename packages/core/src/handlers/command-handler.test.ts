@@ -511,7 +511,7 @@ describe('CommandHandler', () => {
           repository_url: 'https://github.com/user/my-repo',
           default_cwd: '/workspace/my-repo',
           ai_assistant_type: 'claude',
-          allow_env_keys: false,
+
           commands: {},
           created_at: new Date(),
           updated_at: new Date(),
@@ -567,7 +567,7 @@ describe('CommandHandler', () => {
           repository_url: 'https://github.com/owner/repo',
           default_cwd: '/workspace/repo',
           ai_assistant_type: 'claude',
-          allow_env_keys: false,
+
           commands: {},
           created_at: new Date(),
           updated_at: new Date(),
@@ -606,7 +606,7 @@ describe('CommandHandler', () => {
           repository_url: 'https://github.com/owner/orphaned-repo',
           default_cwd: '/workspace/orphaned-repo',
           ai_assistant_type: 'claude',
-          allow_env_keys: false,
+
           commands: {},
           created_at: new Date(),
           updated_at: new Date(),
@@ -721,7 +721,7 @@ describe('CommandHandler', () => {
           repository_url: 'https://github.com/user/my-repo',
           default_cwd: '/workspace/my-repo',
           ai_assistant_type: 'claude',
-          allow_env_keys: false,
+
           commands: {},
           created_at: new Date(),
           updated_at: new Date(),

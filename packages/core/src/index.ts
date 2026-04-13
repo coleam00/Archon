@@ -142,7 +142,6 @@ export {
   scanPathForSensitiveKeys,
   formatLeakError,
   type LeakReport,
-  type LeakErrorContext,
 } from './utils/env-leak-scanner';
 
 // GitHub GraphQL

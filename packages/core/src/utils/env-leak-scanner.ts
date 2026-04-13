@@ -30,25 +30,10 @@ export interface LeakReport {
   findings: LeakFinding[];
 }
 
-/**
- * Context in which the env-leak error is being surfaced. Drives the remediation
- * copy so users see guidance that matches how they hit the gate.
- *
- * - `register-ui`: Add-Project flow in the Web UI (checkbox is visible)
- * - `register-cli`: CLI auto-register path (no Web UI)
- * - `spawn-existing`: Pre-spawn check for an already-registered codebase
- */
-export type LeakErrorContext = 'register-ui' | 'register-cli' | 'spawn-existing';
-
 export class EnvLeakError extends Error {
-  public readonly context: LeakErrorContext;
-  constructor(
-    public readonly report: LeakReport,
-    context: LeakErrorContext = 'register-ui'
-  ) {
-    super(formatLeakError(report, context));
+  constructor(public readonly report: LeakReport) {
+    super(formatLeakError(report));
     this.name = 'EnvLeakError';
-    this.context = context;
   }
 }
 
@@ -91,48 +76,10 @@ export function scanPathForSensitiveKeys(dirPath: string): LeakReport {
   return { path: dirPath, findings };
 }
 
-/**
- * Exhaustive per-context consent remediation copy. Using `switch` with a
- * `never` default means adding a new `LeakErrorContext` variant without
- * handling it here is a compile error — important for a security-visible path.
- */
-function consentCopy(context: LeakErrorContext): string {
-  switch (context) {
-    case 'register-cli':
-      return `    3. Acknowledge the risk and allow this codebase to use its .env key:
-       Re-run the CLI command with --allow-env-keys, or set
-       'allow_target_repo_keys: true' in ~/.archon/config.yaml to bypass this
-       gate globally.`;
-    case 'spawn-existing':
-      return `    3. Acknowledge the risk for this already-registered codebase:
-       Open the Web UI (Settings → Projects), find this project, and toggle
-       "Allow env keys". Or set 'allow_target_repo_keys: true' in
-       ~/.archon/config.yaml to bypass this gate globally.`;
-    case 'register-ui':
-      return `    3. Acknowledge the risk and allow this codebase to use its .env key:
-       Open the web UI (Settings → Projects → Add Project) and tick
-       "Allow env keys (I understand the risk)" when adding this project.`;
-    default: {
-      const exhaustive: never = context;
-      return exhaustive;
-    }
-  }
-}
-
-export function formatLeakError(
-  report: LeakReport,
-  context: LeakErrorContext = 'register-ui'
-): string {
+export function formatLeakError(report: LeakReport): string {
   const fileList = report.findings.map(f => `    ${f.file} — ${f.keys.join(', ')}`).join('\n');
 
-  const header =
-    context === 'spawn-existing'
-      ? `Cannot run workflow — ${report.path} contains keys that will leak into AI subprocesses`
-      : `Cannot add codebase — ${report.path} contains keys that will leak into AI subprocesses`;
-
-  const consent = consentCopy(context);
-
-  return `${header}
+  return `Cannot use codebase — ${report.path} contains keys that will leak into AI subprocesses
 
   Found:
 ${fileList}
@@ -140,16 +87,14 @@ ${fileList}
   Why this matters:
   Bun subprocesses auto-load .env from their working directory. Archon cleans
   its own environment, but Claude/Codex subprocesses running with cwd=<this repo>
-  will re-inject these keys at their own startup, bypassing archon's allowlist.
+  will re-inject these keys at their own startup, bypassing Archon's allowlist.
   This can bill the wrong API account silently.
 
-  Choose one:
+  Fix (choose one):
     1. Remove the key from this repo's .env (recommended):
          grep -v '^ANTHROPIC_API_KEY=' .env > .env.tmp && mv .env.tmp .env
 
     2. Rename to a non-auto-loaded file:
          mv .env .env.secrets
-         # update your app to load it explicitly
-
-${consent}`;
+         # update your app to load it explicitly`;
 }

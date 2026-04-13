@@ -198,10 +198,6 @@ bun run cli workflow run implement --branch feature-auth "Add auth"
 # Opt out of isolation (run in live checkout)
 bun run cli workflow run quick-fix --no-worktree "Fix typo"
 
-# Grant env-leak-gate consent during auto-registration (for repos whose .env
-# contains sensitive keys). Audit-logged with actor: 'user-cli'.
-bun run cli workflow run plan --cwd /path/to/leaky/repo --allow-env-keys "..."
-
 # Show running workflows
 bun run cli workflow status
 
@@ -768,8 +764,7 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 
 **Codebases:**
 - `GET /api/codebases` / `GET /api/codebases/:id` - List / fetch codebases
-- `POST /api/codebases` - Register a codebase (clone or local path); body accepts `allowEnvKeys` for the env-leak gate
-- `PATCH /api/codebases/:id` - Flip the `allow_env_keys` consent bit; body: `{ allowEnvKeys: boolean }`. Audit-logged at `warn` level on every grant/revoke (`env_leak_consent_granted` / `env_leak_consent_revoked`) with `codebaseId`, `path`, `files`, `keys`, `scanStatus`, `actor`
+- `POST /api/codebases` - Register a codebase (clone or local path); rejects repos with sensitive keys in auto-loaded `.env` files (no bypass)
 - `DELETE /api/codebases/:id` - Delete a codebase and clean up resources
 - `GET /api/codebases/:id/env` - List env var keys for a codebase (never returns values)
 - `PUT /api/codebases/:id/env` / `DELETE /api/codebases/:id/env/:key` - Upsert / delete a single codebase env var
