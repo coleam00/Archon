@@ -28,6 +28,7 @@ import type {
   NodeConfig,
 } from '../types';
 import { parseClaudeConfig } from './config';
+import { CLAUDE_CAPABILITIES } from './capabilities';
 import { createLogger } from '@archon/paths';
 import { readFile } from 'fs/promises';
 import { resolve, isAbsolute } from 'path';
@@ -819,20 +820,7 @@ export class ClaudeProvider implements IAgentProvider {
   }
 
   getCapabilities(): ProviderCapabilities {
-    return {
-      sessionResume: true,
-      mcp: true,
-      hooks: true,
-      skills: true,
-      toolRestrictions: true,
-      structuredOutput: true,
-      envInjection: true,
-      costControl: true,
-      effortControl: true,
-      thinkingControl: true,
-      fallbackModel: true,
-      sandbox: true,
-    };
+    return CLAUDE_CAPABILITIES;
   }
 
   /**

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { isClaudeModel, isModelCompatible } from './model-validation';
+import { isClaudeModel, isModelCompatible, inferProviderFromModel } from './model-validation';
 
 describe('model-validation', () => {
   describe('isClaudeModel', () => {
@@ -64,6 +64,32 @@ describe('model-validation', () => {
       // Empty string is falsy, so treated as "no model specified"
       expect(isModelCompatible('claude', '')).toBe(true);
       expect(isModelCompatible('codex', '')).toBe(true);
+    });
+  });
+
+  describe('inferProviderFromModel', () => {
+    it('should return default when model is undefined', () => {
+      expect(inferProviderFromModel(undefined, 'claude')).toBe('claude');
+      expect(inferProviderFromModel(undefined, 'codex')).toBe('codex');
+    });
+
+    it('should return default when model is empty string', () => {
+      expect(inferProviderFromModel('', 'claude')).toBe('claude');
+      expect(inferProviderFromModel('', 'codex')).toBe('codex');
+    });
+
+    it('should infer claude from Claude model names', () => {
+      expect(inferProviderFromModel('sonnet', 'codex')).toBe('claude');
+      expect(inferProviderFromModel('opus', 'codex')).toBe('claude');
+      expect(inferProviderFromModel('haiku', 'codex')).toBe('claude');
+      expect(inferProviderFromModel('inherit', 'codex')).toBe('claude');
+      expect(inferProviderFromModel('claude-opus-4-6', 'codex')).toBe('claude');
+    });
+
+    it('should infer codex from non-Claude model names', () => {
+      expect(inferProviderFromModel('gpt-5.3-codex', 'claude')).toBe('codex');
+      expect(inferProviderFromModel('gpt-4', 'claude')).toBe('codex');
+      expect(inferProviderFromModel('o1-mini', 'claude')).toBe('codex');
     });
   });
 });

@@ -13,7 +13,9 @@ export type {
 // Import from ./types directly or from the config modules — both work.
 
 // Factory
-export { getAgentProvider } from './factory';
+export { getAgentProvider, getProviderCapabilities } from './factory';
+// Static capability constants are intentionally NOT re-exported here.
+// Use getProviderCapabilities() instead — it's the correct public seam.
 
 // Error
 export { UnknownProviderError } from './errors';

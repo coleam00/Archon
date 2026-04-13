@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { getAgentProvider } from './factory';
+import { getAgentProvider, getProviderCapabilities } from './factory';
 import { UnknownProviderError } from './errors';
 
 describe('factory', () => {
@@ -60,6 +60,46 @@ describe('factory', () => {
       expect(codexCaps.mcp).toBe(false);
       expect(claudeCaps.hooks).toBe(true);
       expect(codexCaps.hooks).toBe(false);
+    });
+  });
+
+  describe('getProviderCapabilities', () => {
+    test('returns Claude capabilities without instantiation', () => {
+      const caps = getProviderCapabilities('claude');
+      expect(caps.mcp).toBe(true);
+      expect(caps.hooks).toBe(true);
+      expect(caps.envInjection).toBe(true);
+    });
+
+    test('returns Codex capabilities without instantiation', () => {
+      const caps = getProviderCapabilities('codex');
+      expect(caps.mcp).toBe(false);
+      expect(caps.hooks).toBe(false);
+      expect(caps.envInjection).toBe(true);
+    });
+
+    test('matches runtime getCapabilities for Claude', () => {
+      const staticCaps = getProviderCapabilities('claude');
+      const runtimeCaps = getAgentProvider('claude').getCapabilities();
+      expect(staticCaps).toEqual(runtimeCaps);
+    });
+
+    test('matches runtime getCapabilities for Codex', () => {
+      const staticCaps = getProviderCapabilities('codex');
+      const runtimeCaps = getAgentProvider('codex').getCapabilities();
+      expect(staticCaps).toEqual(runtimeCaps);
+    });
+
+    test('throws UnknownProviderError for unknown type', () => {
+      expect(() => getProviderCapabilities('unknown')).toThrow(UnknownProviderError);
+    });
+
+    test('throws UnknownProviderError for empty string', () => {
+      expect(() => getProviderCapabilities('')).toThrow(UnknownProviderError);
+    });
+
+    test('is case sensitive - Claude throws', () => {
+      expect(() => getProviderCapabilities('Claude')).toThrow(UnknownProviderError);
     });
   });
 });
