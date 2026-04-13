@@ -132,9 +132,11 @@ describe('env isolation integration', () => {
     expect(subprocessEnv.ANTHROPIC_API_KEY).toBeUndefined();
     // Archon key present
     expect(subprocessEnv.ARCHON_ONLY_KEY).toBe('trusted');
-    // Shell-inherited keys present
-    expect(subprocessEnv.PATH).toBeDefined();
-    expect(subprocessEnv.HOME).toBeDefined();
+    // Shell-inherited keys present (Windows uses "Path" casing and USERPROFILE instead of HOME)
+    const hasPath = subprocessEnv.PATH ?? subprocessEnv.Path;
+    expect(hasPath).toBeDefined();
+    const hasHome = subprocessEnv.HOME ?? subprocessEnv.USERPROFILE;
+    expect(hasHome).toBeDefined();
   });
 
   it('scenario 4: same key in both CWD and archon env — archon value wins', () => {

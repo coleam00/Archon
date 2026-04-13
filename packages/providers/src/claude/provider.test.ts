@@ -473,8 +473,13 @@ describe('ClaudeProvider', () => {
 
       const callArgs = mockQuery.mock.calls[0][0] as { options: { env: NodeJS.ProcessEnv } };
       expect(callArgs.options.env.CUSTOM_USER_KEY).toBe('user-trusted-value');
-      expect(callArgs.options.env.PATH).toBe(process.env.PATH);
-      expect(callArgs.options.env.HOME).toBe(process.env.HOME);
+      // Windows uses "Path" casing in spread objects and USERPROFILE instead of HOME
+      const envPath = callArgs.options.env.PATH ?? callArgs.options.env.Path;
+      const processPath = process.env.PATH ?? process.env.Path;
+      expect(envPath).toBe(processPath);
+      const envHome = callArgs.options.env.HOME ?? callArgs.options.env.USERPROFILE;
+      const processHome = process.env.HOME ?? process.env.USERPROFILE;
+      expect(envHome).toBe(processHome);
 
       // Cleanup
       if (originalKey !== undefined) process.env.CUSTOM_USER_KEY = originalKey;
