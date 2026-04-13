@@ -226,7 +226,8 @@ export function WorkflowProgressCard({
                       `Reject workflow "${workflowName}"?\n\nProvide a reason (or leave empty):`
                     );
                     if (reason !== null) {
-                      rejectMutation.mutate(reason || undefined);
+                      const trimmed = reason.trim();
+                      rejectMutation.mutate(trimmed === '' ? undefined : trimmed);
                     }
                   }}
                   disabled={!runId || approveMutation.isPending || rejectMutation.isPending}

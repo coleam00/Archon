@@ -324,7 +324,8 @@ export function WorkflowRunCard({
                   `Reject workflow "${run.workflow_name}"?\n\nProvide a reason (or leave empty):`
                 );
                 if (reason !== null) {
-                  onReject(run.id, reason || undefined);
+                  const trimmed = reason.trim();
+                  onReject(run.id, trimmed === '' ? undefined : trimmed);
                 }
               }}
               className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-error/80 hover:bg-error/10 hover:text-error transition-colors"
