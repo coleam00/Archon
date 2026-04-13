@@ -23,7 +23,7 @@
     },
     "packages/adapters": {
       "name": "@archon/adapters",
-      "version": "0.3.5",
+      "version": "0.3.6",
       "dependencies": {
         "@archon/core": "workspace:*",
         "@archon/git": "workspace:*",
@@ -41,7 +41,7 @@
     },
     "packages/cli": {
       "name": "@archon/cli",
-      "version": "0.3.5",
+      "version": "0.3.6",
       "bin": {
         "archon": "./src/cli.ts",
       },
@@ -62,7 +62,7 @@
     },
     "packages/core": {
       "name": "@archon/core",
-      "version": "0.3.5",
+      "version": "0.3.6",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.2.89",
         "@archon/git": "workspace:*",
@@ -83,7 +83,7 @@
     },
     "packages/docs-web": {
       "name": "@archon/docs-web",
-      "version": "0.3.5",
+      "version": "0.3.6",
       "dependencies": {
         "@astrojs/starlight": "^0.38.0",
         "astro": "^6.1.0",
@@ -92,7 +92,7 @@
     },
     "packages/git": {
       "name": "@archon/git",
-      "version": "0.3.5",
+      "version": "0.3.6",
       "dependencies": {
         "@archon/paths": "workspace:*",
       },
@@ -102,7 +102,7 @@
     },
     "packages/isolation": {
       "name": "@archon/isolation",
-      "version": "0.3.5",
+      "version": "0.3.6",
       "dependencies": {
         "@archon/git": "workspace:*",
         "@archon/paths": "workspace:*",
@@ -113,7 +113,7 @@
     },
     "packages/paths": {
       "name": "@archon/paths",
-      "version": "0.3.5",
+      "version": "0.3.6",
       "dependencies": {
         "dotenv": "^17",
         "pino": "^9",
@@ -125,7 +125,7 @@
     },
     "packages/server": {
       "name": "@archon/server",
-      "version": "0.3.5",
+      "version": "0.3.6",
       "dependencies": {
         "@archon/adapters": "workspace:*",
         "@archon/core": "workspace:*",
@@ -143,7 +143,7 @@
     },
     "packages/web": {
       "name": "@archon/web",
-      "version": "0.3.5",
+      "version": "0.3.6",
       "dependencies": {
         "@dagrejs/dagre": "^2.0.4",
         "@radix-ui/react-alert-dialog": "^1.1.15",
@@ -195,7 +195,7 @@
     },
     "packages/workflows": {
       "name": "@archon/workflows",
-      "version": "0.3.5",
+      "version": "0.3.6",
       "dependencies": {
         "@archon/git": "workspace:*",
         "@archon/paths": "workspace:*",
@@ -208,6 +208,7 @@
     },
   },
   "overrides": {
+    "axios": "^1.15.0",
     "test-exclude": "^7.0.1",
   },
   "packages": {
@@ -1021,7 +1022,7 @@
 
     "atomic-sleep": ["atomic-sleep@1.0.0", "", {}, "sha512-kNOjDqAh7px0XWNI+4QbzoiR/nTkHAWNud2uvnJquD1/x5a7EQZMJT0AczqK0Qn67oY/TTQ1LbUKajZpp3I9tQ=="],
 
-    "axios": ["axios@1.13.6", "", { "dependencies": { "follow-redirects": "^1.15.11", "form-data": "^4.0.5", "proxy-from-env": "^1.1.0" } }, "sha512-ChTCHMouEe2kn713WHbQGcuYrr6fXTBiu460OTwWrWob16g1bXn4vtz07Ope7ewMozJAnEquLk5lWQWtBig9DQ=="],
+    "axios": ["axios@1.15.0", "", { "dependencies": { "follow-redirects": "^1.15.11", "form-data": "^4.0.5", "proxy-from-env": "^2.1.0" } }, "sha512-wWyJDlAatxk30ZJer+GeCWS209sA42X+N5jU2jy6oHTp7ufw8uzUTVFBX9+wTfAlhiJXGS0Bq7X6efruWjuK9Q=="],
 
     "axobject-query": ["axobject-query@4.1.0", "", {}, "sha512-qIj0G9wZbMGNLjLmg1PT6v2mE9AH2zlnADJD/2tC6E00hgmhUOfEB6greHPAfLRSufHqROIUTkw6E+M3lH0PTQ=="],
 
@@ -2015,7 +2016,7 @@
 
     "proxy-addr": ["proxy-addr@2.0.7", "", { "dependencies": { "forwarded": "0.2.0", "ipaddr.js": "1.9.1" } }, "sha512-llQsMLSUDUPT44jdrU/O37qlnifitDP+ZwrmmZcoSKyLKvtZxpyV0n2/bD/N4tBAAZ/gJEdZU7KMraoK1+XYAg=="],
 
-    "proxy-from-env": ["proxy-from-env@1.1.0", "", {}, "sha512-D+zkORCbA9f1tdWRK0RaCR3GPv50cMxcrz4X8k5LTSUD1Dkw47mKJEZQNunItRTkWwgtaUSo1RVFRIG9ZXiFYg=="],
+    "proxy-from-env": ["proxy-from-env@2.1.0", "", {}, "sha512-cJ+oHTW1VAEa8cJslgmUZrc+sjRKgAKl3Zyse6+PV38hZe/V6Z14TbCuXcan9F9ghlz4QrFr2c92TNF82UkYHA=="],
 
     "pump": ["pump@3.0.4", "", { "dependencies": { "end-of-stream": "^1.1.0", "once": "^1.3.1" } }, "sha512-VS7sjc6KR7e1ukRFhQSY5LM2uBWAUPiOPa/A3mkKmiMwSmRFUITt0xuj+/lesgnCv+dPIEYlkzrcyXgquIHMcA=="],
 
