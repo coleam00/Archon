@@ -10,13 +10,16 @@ export type WorkflowDefinition = components['schemas']['WorkflowDefinition'];
 export type DagNode = components['schemas']['DagNode'];
 
 /**
- * Base URL for SSE streams. In dev, bypasses Vite proxy by connecting directly
- * to the backend server. In production, uses relative URLs (same origin).
- * Uses the page hostname so it works from any network interface.
+ * Base URL for SSE streams.
+ * - On localhost (direct dev access): connect directly to backend, bypassing Vite proxy
+ *   (avoids proxy buffering of SSE streams).
+ * - On any other hostname (Cloudflare tunnel, remote access): use relative URL so
+ *   requests go through the Vite proxy, which forwards to the backend.
+ *   This is required because the backend port is not directly accessible remotely.
  */
 const apiPort = (import.meta.env.VITE_API_PORT as string | undefined) ?? '3090';
-export const SSE_BASE_URL = import.meta.env.DEV
-  ? `http://${window.location.hostname}:${apiPort}`
+export const SSE_BASE_URL = import.meta.env.DEV && window.location.hostname === 'localhost'
+  ? `http://localhost:${apiPort}`
   : '';
 
 export interface ConversationResponse {
@@ -38,6 +41,7 @@ export interface CodebaseResponse {
   repository_url: string | null;
   default_cwd: string;
   ai_assistant_type: string;
+  allow_env_keys: boolean;
   commands: Record<string, { path: string; description: string }>;
   created_at: string;
   updated_at: string;
@@ -157,10 +161,21 @@ export async function getCodebase(id: string): Promise<CodebaseResponse> {
 }
 
 export async function addCodebase(
-  input: { url: string } | { path: string }
+  input: { url: string; allowEnvKeys?: boolean } | { path: string; allowEnvKeys?: boolean }
 ): Promise<CodebaseResponse> {
   return fetchJSON<CodebaseResponse>('/api/codebases', {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateCodebase(
+  id: string,
+  input: { allowEnvKeys: boolean }
+): Promise<CodebaseResponse> {
+  return fetchJSON<CodebaseResponse>(`/api/codebases/${id}`, {
+    method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
   });
