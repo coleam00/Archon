@@ -568,13 +568,13 @@ nodes:
 
       4. Check which labels actually exist in the repo:
          ```bash
-         gh label list --json name -q '.[].name' | head -50
+         bun "$FORGE_CLI" label list --json name -q '.[].name' | head -50
          ```
          Only use labels that exist. Skip any suggested label that doesn't match.
 
       5. Create the issue:
          ```bash
-         gh issue create \
+         bun "$FORGE_CLI" issue create \
            --title "$(cat "$ARTIFACTS_DIR/.issue-title")" \
            --body-file "$ARTIFACTS_DIR/issue-draft.md" \
            --label "label1,label2"
@@ -582,7 +582,7 @@ nodes:
 
       6. Capture the result:
          ```bash
-         ISSUE_URL=$(gh issue list --limit 1 --json url -q '.[0].url')
+         ISSUE_URL=$(bun "$FORGE_CLI" issue list --limit 1 --json url -q '.[0].url')
          echo "$ISSUE_URL" > "$ARTIFACTS_DIR/.issue-url"
          ```
 

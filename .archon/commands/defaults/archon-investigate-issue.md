@@ -36,7 +36,7 @@ Investigate the issue/problem and produce a comprehensive implementation plan th
 
 ```bash
 # If forge issue, fetch it:
-gh issue view {number} --json title,body,labels,comments,state,url,author
+bun "$FORGE_CLI" issue view {number} --json title,body,labels,comments,state,url,author
 ```
 
 ### 1.2 Extract Context
@@ -436,7 +436,7 @@ bun run lint
 Format the artifact for $FORGE_NAME and post:
 
 ```bash
-gh issue comment {number} --body "$(cat <<'EOF'
+bun "$FORGE_CLI" issue comment {number} --body "$(cat <<'EOF'
 ## 🔍 Investigation: {Title}
 
 **Type**: `{TYPE}`

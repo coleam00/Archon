@@ -25,13 +25,13 @@ Analyze merge conflicts in the PR, automatically resolve simple conflicts where 
 - Empty → Check current branch for open PR
 
 ```bash
-gh pr view {number} --json number,title,headRefName,baseRefName,mergeable,mergeStateStatus
+bun "$FORGE_CLI" pr view {number} --json number,title,headRefName,baseRefName,mergeable,mergeStateStatus
 ```
 
 ### 1.2 Verify Conflicts Exist
 
 ```bash
-gh pr view {number} --json mergeable,mergeStateStatus --jq '.mergeable, .mergeStateStatus'
+bun "$FORGE_CLI" pr view {number} --json mergeable,mergeStateStatus --jq '.mergeable, .mergeStateStatus'
 ```
 
 | Status | Action |
@@ -52,8 +52,8 @@ PR #{number} has no merge conflicts. It's ready for review/merge.
 
 ```bash
 # Get branch info
-PR_HEAD=$(gh pr view {number} --json headRefName --jq '.headRefName')
-PR_BASE=$(gh pr view {number} --json baseRefName --jq '.baseRefName')
+PR_HEAD=$(bun "$FORGE_CLI" pr view {number} --json headRefName --jq '.headRefName')
+PR_BASE=$(bun "$FORGE_CLI" pr view {number} --json baseRefName --jq '.baseRefName')
 
 # Fetch latest
 git fetch origin $PR_BASE
@@ -277,7 +277,7 @@ git push --force-with-lease origin $PR_HEAD
 ### 5.2 Verify PR is Now Mergeable
 
 ```bash
-gh pr view {number} --json mergeable,mergeStateStatus
+bun "$FORGE_CLI" pr view {number} --json mergeable,mergeStateStatus
 ```
 
 Should show `MERGEABLE`.
@@ -367,7 +367,7 @@ Resolved {N} conflicts in {M} files.
 ### 6.2 Post $FORGE_NAME Comment
 
 ```bash
-gh pr comment {number} --body "$(cat <<'EOF'
+bun "$FORGE_CLI" pr comment {number} --body "$(cat <<'EOF'
 ## ✅ Conflicts Resolved
 
 **Rebased onto**: `{base}`

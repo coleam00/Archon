@@ -15,7 +15,7 @@ Analyze the code changes in the PR to verify the fix is correct, complete, and i
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number | tr -d '\n')
-gh pr view "$PR_NUMBER" --json title,body,headRefName,baseRefName,labels
+bun "$FORGE_CLI" pr view "$PR_NUMBER" --json title,body,headRefName,baseRefName,labels
 ```
 
 ```bash
@@ -38,7 +38,7 @@ cat $ARTIFACTS_DIR/.feature-branch
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number | tr -d '\n')
-gh pr diff "$PR_NUMBER"
+bun "$FORGE_CLI" pr diff "$PR_NUMBER"
 ```
 
 ### 2.2 Read Changed Files on Feature Branch
@@ -48,7 +48,7 @@ The current working directory IS the feature branch (worktree). Read each change
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number | tr -d '\n')
 # List changed files
-gh pr view "$PR_NUMBER" --json files -q '.files[].path'
+bun "$FORGE_CLI" pr view "$PR_NUMBER" --json files -q '.files[].path'
 ```
 
 For each file, read the full file in the current working directory to understand the complete context, not just the diff hunks.

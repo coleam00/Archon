@@ -17,7 +17,7 @@ export default tseslint.config(
       'worktrees/**',
       '.claude/worktrees/**',
       '.claude/skills/**',
-      '.archon/scripts/**',
+      '.archon/scripts/**/!(forge-cli).ts',
       '**/*.js',
       '*.mjs',
       '**/*.test.ts',
@@ -38,6 +38,23 @@ export default tseslint.config(
 
   // Prettier integration
   prettierConfig,
+
+  // Disable type-checked rules for project-maintained scripts
+  {
+    files: ['.archon/scripts/forge-cli.ts'],
+    extends: [tseslint.configs.disableTypeChecked],
+    languageOptions: {
+      parser: tseslint.parser,
+    },
+    rules: {
+      'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+      'no-undef': 'off', // Bun globals, process, etc.
+      semi: ['error', 'always'],
+      quotes: ['error', 'single', { avoidEscape: true }],
+      eqeqeq: 'error',
+      'no-console': 'off',
+    },
+  },
 
   // Project-specific settings
   {

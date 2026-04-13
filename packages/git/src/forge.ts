@@ -53,10 +53,11 @@ function hostnameFromEnv(envVar: string): string | null {
  *
  * Detection order:
  * 1. github.com hostname → GitHub
- * 2. GITEA_URL env hostname match → Gitea
- * 3. gitlab.com hostname → GitLab
- * 4. GITLAB_URL env hostname match → GitLab
- * 5. No match → unknown
+ * 2. GITHUB_URL env hostname match → GitHub Enterprise
+ * 3. GITEA_URL env hostname match → Gitea
+ * 4. gitlab.com hostname → GitLab
+ * 5. GITLAB_URL env hostname match → GitLab (self-hosted)
+ * 6. No match → unknown
  *
  * Returns { type: 'github', apiBase: 'https://api.github.com' } as the
  * backwards-compatible default when no remote exists.
@@ -74,12 +75,20 @@ export async function detectForge(repoPath: RepoPath): Promise<ForgeInfo> {
     return { type: 'unknown', apiBase: '' };
   }
 
-  // 1. GitHub
+  // 1. GitHub (public)
   if (hostname === 'github.com') {
     return { type: 'github', apiBase: 'https://api.github.com' };
   }
 
-  // 2. Gitea — match against GITEA_URL env
+  // 2. GitHub Enterprise — match against GITHUB_URL env
+  const githubUrl = process.env.GITHUB_URL;
+  const githubHostname = hostnameFromEnv('GITHUB_URL');
+  if (githubUrl && githubHostname && hostname === githubHostname) {
+    const cleanUrl = githubUrl.replace(/\/+$/, '');
+    return { type: 'github', apiBase: `${cleanUrl}/api/v3` };
+  }
+
+  // 3. Gitea — match against GITEA_URL env
   const giteaUrl = process.env.GITEA_URL;
   const giteaHostname = hostnameFromEnv('GITEA_URL');
   if (giteaUrl && giteaHostname && hostname === giteaHostname) {

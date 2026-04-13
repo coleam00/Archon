@@ -35,7 +35,7 @@ Read the consolidated review artifact and implement all CRITICAL and HIGH priori
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number)
 
 # Get the PR's head branch name
-HEAD_BRANCH=$(gh pr view $PR_NUMBER --json headRefName --jq '.headRefName')
+HEAD_BRANCH=$(bun "$FORGE_CLI" pr view $PR_NUMBER --json headRefName --jq '.headRefName')
 echo "PR: $PR_NUMBER, Branch: $HEAD_BRANCH"
 ```
 
@@ -330,7 +330,7 @@ Write to `$ARTIFACTS_DIR/review/fix-report.md`:
 ### 6.1 Post Fix Report
 
 ```bash
-gh pr comment {number} --body "$(cat <<'EOF'
+bun "$FORGE_CLI" pr comment {number} --body "$(cat <<'EOF'
 # ⚡ Auto-Fix Report
 
 **Status**: {COMPLETE | PARTIAL}

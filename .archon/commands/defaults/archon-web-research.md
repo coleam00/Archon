@@ -27,7 +27,7 @@ Search the web for information relevant to the issue or feature being worked on.
 If input looks like a $FORGE_NAME issue number:
 
 ```bash
-gh issue view $ARGUMENTS --json title,body,labels
+bun "$FORGE_CLI" issue view $ARGUMENTS --json title,body,labels
 ```
 
 ### 1.2 Identify Research Targets

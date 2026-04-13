@@ -281,8 +281,13 @@ export async function executeWorkflow(
   let forgeApiBase = 'https://api.github.com';
   try {
     const forgeInfo = await detectForge(toRepoPath(cwd));
-    forgeType = forgeInfo.type;
-    forgeApiBase = forgeInfo.apiBase;
+    // Only override defaults if detection returned a known forge type.
+    // 'unknown' means the hostname didn't match any known forge, so keep
+    // the github defaults for backwards compatibility.
+    if (forgeInfo.type !== 'unknown') {
+      forgeType = forgeInfo.type;
+      forgeApiBase = forgeInfo.apiBase;
+    }
   } catch (error) {
     getLog().warn(
       { err: error as Error, errorType: (error as Error).constructor.name, cwd },

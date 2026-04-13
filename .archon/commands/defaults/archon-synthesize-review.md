@@ -263,7 +263,7 @@ If not addressing in this PR, create issues for:
 Create a $FORGE_NAME-compatible version of the review:
 
 ```bash
-gh pr comment {number} --body "$(cat <<'EOF'
+bun "$FORGE_CLI" pr comment {number} --body "$(cat <<'EOF'
 # 🔍 Comprehensive PR Review
 
 **PR**: #{number}

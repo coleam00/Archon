@@ -226,7 +226,7 @@ Post to the original $FORGE_NAME issue:
 ```bash
 ISSUE_NUMBER=$(echo "$ARGUMENTS" | grep -oE '[0-9]+')
 
-gh issue comment $ISSUE_NUMBER --body "$(cat <<'EOF'
+bun "$FORGE_CLI" issue comment $ISSUE_NUMBER --body "$(cat <<'EOF'
 ## ✅ Issue Resolution Report
 
 **PR**: #{pr-number} ({pr-url})

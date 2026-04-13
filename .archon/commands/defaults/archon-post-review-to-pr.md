@@ -131,7 +131,7 @@ Format the review as a $FORGE_NAME-compatible comment:
 ### 3.1 Post the Comment
 
 ```bash
-gh pr comment {PR_NUMBER} --body "$(cat <<'EOF'
+bun "$FORGE_CLI" pr comment {PR_NUMBER} --body "$(cat <<'EOF'
 {formatted comment body}
 EOF
 )"
@@ -141,7 +141,7 @@ EOF
 
 ```bash
 # Check the comment was posted
-gh pr view {PR_NUMBER} --comments --json comments --jq '.comments | length'
+bun "$FORGE_CLI" pr view {PR_NUMBER} --comments --json comments --jq '.comments | length'
 ```
 
 **PHASE_3_CHECKPOINT:**

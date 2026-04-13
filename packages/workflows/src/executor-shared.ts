@@ -385,7 +385,10 @@ export function buildPromptWithContext(
   );
 
   // Auto-inject forge compatibility preamble for non-GitHub forges.
-  // This ensures all AI command prompts know to use forge-cli.sh instead of gh.
+  // This ensures all AI command prompts know to use forge-cli instead of gh.
+  // NOTE: The `$FORGE_CLI` references in the preamble text below are intentionally
+  // un-substituted — they use shell variable syntax to show the AI how to invoke
+  // the forge-cli tool at runtime (the env var is set by the executor).
   const resolvedForgeType = forgeType ?? 'github';
   let finalPrompt = prompt;
   if (resolvedForgeType !== 'github' && resolvedForgeType !== 'unknown') {

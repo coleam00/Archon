@@ -330,7 +330,7 @@ These were **intentionally excluded** from scope:
 ### 4.2 Post to $FORGE_NAME
 
 ```bash
-gh pr comment {pr-number} --body "{formatted-summary}"
+bun "$FORGE_CLI" pr comment {pr-number} --body "{formatted-summary}"
 ```
 
 **PHASE_4_CHECKPOINT:**

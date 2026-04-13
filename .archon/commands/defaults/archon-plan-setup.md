@@ -107,7 +107,7 @@ git remote get-url origin
 Extract owner/repo from the remote URL for PR creation:
 
 ```bash
-gh repo view --json nameWithOwner -q .nameWithOwner
+bun "$FORGE_CLI" repo view --json nameWithOwner -q .nameWithOwner
 ```
 
 ### 2.3 Branch Decision

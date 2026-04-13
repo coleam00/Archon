@@ -33,7 +33,7 @@ Read all review artifacts produced in this workflow run and fix everything surfa
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number)
-HEAD_BRANCH=$(gh pr view $PR_NUMBER --json headRefName --jq '.headRefName')
+HEAD_BRANCH=$(bun "$FORGE_CLI" pr view $PR_NUMBER --json headRefName --jq '.headRefName')
 echo "PR: $PR_NUMBER, Branch: $HEAD_BRANCH"
 ```
 
@@ -266,7 +266,7 @@ Write to `$ARTIFACTS_DIR/review/fix-report.md`:
 Post the fix report as a PR comment:
 
 ```bash
-gh pr comment $PR_NUMBER --body "$(cat <<'EOF'
+bun "$FORGE_CLI" pr comment $PR_NUMBER --body "$(cat <<'EOF'
 ## ⚡ Auto-Fix Report
 
 **Status**: {COMPLETE | PARTIAL}
