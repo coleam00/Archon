@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { Layout } from '@/components/layout/Layout';
 import { ProjectProvider } from '@/contexts/ProjectContext';
+import { ThemeProvider } from '@/contexts/ThemeContext';
 import { queryClient } from '@/lib/query-client';
 import { DashboardPage } from '@/routes/DashboardPage';
 import { ChatPage } from '@/routes/ChatPage';
@@ -63,25 +64,28 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
 export function App(): React.ReactElement {
   return (
     <ErrorBoundary>
-      <QueryClientProvider client={queryClient}>
-        <ProjectProvider>
-          <BrowserRouter>
-            <Routes>
-              <Route element={<Layout />}>
-                <Route path="/" element={<Navigate to="/chat" replace />} />
-                <Route path="/chat" element={<ChatPage />} />
-                <Route path="/chat/*" element={<ChatPage />} />
-                <Route path="/dashboard" element={<DashboardPage />} />
-                <Route path="/workflows" element={<WorkflowsPage />} />
-                <Route path="/workflows/builder" element={<WorkflowBuilderPage />} />
-                <Route path="/workflows/runs/:runId" element={<WorkflowExecutionPage />} />
-                <Route path="/workflows/runs" element={<Navigate to="/workflows" replace />} />
-                <Route path="/settings" element={<SettingsPage />} />
-              </Route>
-            </Routes>
-          </BrowserRouter>
-        </ProjectProvider>
-      </QueryClientProvider>
+      <ThemeProvider>
+        <QueryClientProvider client={queryClient}>
+          <ProjectProvider>
+            <BrowserRouter>
+              <Routes>
+                <Route element={<Layout />}>
+                  <Route path="/" element={<Navigate to="/chat" replace />} />
+                  <Route path="/chat" element={<ChatPage />} />
+                  <Route path="/chat/*" element={<ChatPage />} />
+                  <Route path="/dashboard" element={<DashboardPage />} />
+                  <Route path="/workflows" element={<WorkflowsPage />} />
+                  <Route path="/workflows/builder" element={<WorkflowBuilderPage />} />
+                  <Route path="/workflows/runs/:runId" element={<WorkflowExecutionPage />} />
+                  <Route path="/workflows/runs" element={<Navigate to="/workflows" replace />} />
+                  <Route path="/settings" element={<SettingsPage />} />
+                  <Route path="*" element={<Navigate to="/chat" replace />} />
+                </Route>
+              </Routes>
+            </BrowserRouter>
+          </ProjectProvider>
+        </QueryClientProvider>
+      </ThemeProvider>
     </ErrorBoundary>
   );
 }
