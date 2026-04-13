@@ -4,11 +4,12 @@ import { readFileSync } from 'fs';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig, loadEnv } from 'vite';
+import { resolveApiPort } from './src/lib/api-port';
 
 export default defineConfig(({ mode }) => {
   // Load env from repo root so PORT from .env is available
   const env = loadEnv(mode, path.resolve(__dirname, '../..'), '');
-  const apiPort = env.PORT ?? '3090';
+  const apiPort = resolveApiPort(env.PORT);
 
   // Read version from root package.json
   const rootPkgPath = path.resolve(__dirname, '../../package.json');
