@@ -1,4 +1,4 @@
-/**
+﻿/**
  * REST API routes for the Archon Web UI.
  * Provides conversation, codebase, and SSE streaming endpoints.
  */
@@ -119,6 +119,7 @@ import {
   configResponseSchema,
   codebaseEnvironmentsResponseSchema,
 } from './schemas/config.schemas';
+import { getTunnelState, startTunnel, stopTunnel } from '../tunnel';
 
 // Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
@@ -830,6 +831,61 @@ const getUpdateCheckRoute = createRoute({
   },
 });
 
+const getTunnelRoute = createRoute({
+  method: 'get',
+  path: '/api/tunnel',
+  tags: ['System'],
+  summary: 'Get Cloudflare tunnel status',
+  responses: {
+    200: {
+      content: {
+        'application/json': {
+          schema: z
+            .object({
+              status: z.enum(['inactive', 'starting', 'active', 'error']),
+              url: z.string().nullable(),
+            })
+            .openapi('TunnelStatusResponse'),
+        },
+      },
+      description: 'Tunnel status',
+    },
+  },
+});
+
+const postTunnelStartRoute = createRoute({
+  method: 'post',
+  path: '/api/tunnel/start',
+  tags: ['System'],
+  summary: 'Start Cloudflare tunnel',
+  responses: {
+    200: {
+      content: {
+        'application/json': {
+          schema: z.object({ status: z.string() }).openapi('TunnelStartResponse'),
+        },
+      },
+      description: 'Tunnel start initiated',
+    },
+  },
+});
+
+const deleteTunnelStopRoute = createRoute({
+  method: 'delete',
+  path: '/api/tunnel/stop',
+  tags: ['System'],
+  summary: 'Stop Cloudflare tunnel',
+  responses: {
+    200: {
+      content: {
+        'application/json': {
+          schema: z.object({ status: z.string() }).openapi('TunnelStopResponse'),
+        },
+      },
+      description: 'Tunnel stopped',
+    },
+  },
+});
 /**
  * Register all /api/* routes on the Hono app.
  */
@@ -2523,5 +2579,21 @@ export function registerApiRoutes(
     if (!BUNDLED_IS_BINARY) return c.json(noUpdate);
     const result = await checkForUpdate(appVersion);
     return c.json(result ?? noUpdate);
+  });
+  // GET /api/tunnel - Get tunnel status
+  registerOpenApiRoute(getTunnelRoute, c => {
+    return c.json(getTunnelState());
+  });
+
+  // POST /api/tunnel/start - Start tunnel
+  registerOpenApiRoute(postTunnelStartRoute, async c => {
+    await startTunnel(5173);
+    return c.json({ status: getTunnelState().status });
+  });
+
+  // DELETE /api/tunnel/stop - Stop tunnel
+  registerOpenApiRoute(deleteTunnelStopRoute, c => {
+    stopTunnel();
+    return c.json({ status: 'inactive' });
   });
 }
