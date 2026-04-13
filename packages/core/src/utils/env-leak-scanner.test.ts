@@ -116,6 +116,28 @@ describe('EnvLeakError', () => {
     expect(spawn).toContain('Cannot run workflow');
   });
 
+  it('formats remediation command with the offending single key', () => {
+    const report = { path: '/x', findings: [{ file: '.env', keys: ['OPENAI_API_KEY'] }] };
+    const message = formatLeakError(report, 'register-ui');
+
+    expect(message).toContain("Remove the key from this repo's .env");
+    expect(message).toContain("grep -vE '^(OPENAI_API_KEY)=' .env > .env.tmp && mv .env.tmp .env");
+  });
+
+  it('formats remediation command with all offending keys', () => {
+    const report = {
+      path: '/x',
+      findings: [{ file: '.env', keys: ['GEMINI_API_KEY', 'OPENAI_API_KEY'] }],
+    };
+    const message = formatLeakError(report, 'register-ui');
+
+    expect(message).toContain("Remove the keys from this repo's .env");
+    expect(message).toContain(
+      "grep -vE '^(GEMINI_API_KEY|OPENAI_API_KEY)=' .env > .env.tmp && mv .env.tmp .env"
+    );
+    expect(message).not.toContain("grep -v '^ANTHROPIC_API_KEY=' .env");
+  });
+
   it('formats multiple findings', () => {
     const report = {
       path: '/test',

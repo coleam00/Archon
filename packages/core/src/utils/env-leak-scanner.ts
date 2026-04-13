@@ -119,11 +119,33 @@ function consentCopy(context: LeakErrorContext): string {
   }
 }
 
+function escapeRegexForGrep(raw: string): string {
+  return raw.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+}
+
+function collectOffendingKeys(report: LeakReport): string[] {
+  const ordered = report.findings.flatMap(f => f.keys).filter(key => !key.startsWith('['));
+  return [...new Set(ordered)];
+}
+
+function buildRemediationCommand(report: LeakReport): string {
+  const offendingKeys = collectOffendingKeys(report);
+  const keyPattern =
+    offendingKeys.length > 0
+      ? offendingKeys.map(escapeRegexForGrep).join('|')
+      : 'ANTHROPIC_API_KEY';
+
+  return `grep -vE '^(${keyPattern})=' .env > .env.tmp && mv .env.tmp .env`;
+}
+
 export function formatLeakError(
   report: LeakReport,
   context: LeakErrorContext = 'register-ui'
 ): string {
   const fileList = report.findings.map(f => `    ${f.file} — ${f.keys.join(', ')}`).join('\n');
+  const offendingKeys = collectOffendingKeys(report);
+  const keyWord = offendingKeys.length > 1 ? 'keys' : 'key';
+  const remediationCommand = buildRemediationCommand(report);
 
   const header =
     context === 'spawn-existing'
@@ -144,8 +166,8 @@ ${fileList}
   This can bill the wrong API account silently.
 
   Choose one:
-    1. Remove the key from this repo's .env (recommended):
-         grep -v '^ANTHROPIC_API_KEY=' .env > .env.tmp && mv .env.tmp .env
+    1. Remove the ${keyWord} from this repo's .env (recommended):
+         ${remediationCommand}
 
     2. Rename to a non-auto-loaded file:
          mv .env .env.secrets

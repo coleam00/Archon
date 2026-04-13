@@ -446,12 +446,15 @@ describe('ClaudeProvider', () => {
       );
     });
 
-    test('subprocess env passes through all process.env keys (no allowlist filtering)', async () => {
-      // With the allowlist removed, buildSubprocessEnv returns { ...process.env }.
-      // CWD .env leakage and CLAUDECODE markers are handled at entry point by
-      // stripCwdEnv(), not by buildSubprocessEnv(). See #1067, #1097.
-      const originalKey = process.env.CUSTOM_USER_KEY;
+    test('subprocess env keeps user keys but strips nested Claude markers', async () => {
+      const originalCustomKey = process.env.CUSTOM_USER_KEY;
+      const originalEntrypoint = process.env.CLAUDE_CODE_ENTRYPOINT;
+      const originalOauth = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      const originalNodeOptions = process.env.NODE_OPTIONS;
       process.env.CUSTOM_USER_KEY = 'user-trusted-value';
+      process.env.CLAUDE_CODE_ENTRYPOINT = 'nested';
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = 'oauth-token';
+      process.env.NODE_OPTIONS = '--inspect';
 
       mockQuery.mockImplementation(async function* () {
         // Empty generator
@@ -464,12 +467,23 @@ describe('ClaudeProvider', () => {
 
       const callArgs = mockQuery.mock.calls[0][0] as { options: { env: NodeJS.ProcessEnv } };
       expect(callArgs.options.env.CUSTOM_USER_KEY).toBe('user-trusted-value');
-      expect(callArgs.options.env.PATH).toBe(process.env.PATH);
+      expect(callArgs.options.env.PATH ?? callArgs.options.env.Path).toBe(
+        process.env.PATH ?? process.env.Path
+      );
       expect(callArgs.options.env.HOME).toBe(process.env.HOME);
+      expect(callArgs.options.env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
+      expect(callArgs.options.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('oauth-token');
+      expect(callArgs.options.env.NODE_OPTIONS).toBeUndefined();
 
       // Cleanup
-      if (originalKey !== undefined) process.env.CUSTOM_USER_KEY = originalKey;
+      if (originalCustomKey !== undefined) process.env.CUSTOM_USER_KEY = originalCustomKey;
       else delete process.env.CUSTOM_USER_KEY;
+      if (originalEntrypoint !== undefined) process.env.CLAUDE_CODE_ENTRYPOINT = originalEntrypoint;
+      else delete process.env.CLAUDE_CODE_ENTRYPOINT;
+      if (originalOauth !== undefined) process.env.CLAUDE_CODE_OAUTH_TOKEN = originalOauth;
+      else delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      if (originalNodeOptions !== undefined) process.env.NODE_OPTIONS = originalNodeOptions;
+      else delete process.env.NODE_OPTIONS;
     });
 
     test('classifies exit code errors as crash and retries up to 3 times', async () => {
@@ -687,6 +701,32 @@ describe('ClaudeProvider', () => {
       const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
       const env = callArgs.options.env as Record<string, string>;
       expect(env.HOME).toBe('/custom/home');
+    });
+
+    test('requestOptions.env cannot re-inject nested Claude markers', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      for await (const _ of client.sendQuery('test', '/tmp', undefined, {
+        env: {
+          SAFE_KEY: 'safe',
+          CLAUDECODE: '1',
+          CLAUDE_CODE_ENTRYPOINT: 'nested',
+          CLAUDE_CODE_OAUTH_TOKEN: 'oauth-from-override',
+        },
+      })) {
+        // consume
+      }
+
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+      const env = callArgs.options.env as Record<string, string>;
+      expect(env.SAFE_KEY).toBe('safe');
+      expect(env.CLAUDECODE).toBeUndefined();
+      expect(env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
+      expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('oauth-from-override');
     });
 
     test('passes effort to SDK when provided', async () => {

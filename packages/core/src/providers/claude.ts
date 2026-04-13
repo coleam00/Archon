@@ -35,10 +35,9 @@ import {
   type TokenUsage,
 } from '../types';
 import { createLogger } from '@archon/paths';
-// No env filtering here — process.env is already clean:
-// stripCwdEnv() at entry point stripped CWD .env keys + CLAUDECODE markers,
-// then ~/.archon/.env was loaded as the trusted source. All keys the user sets
-// in ~/.archon/.env are intentional and pass through to the subprocess.
+// process.env is cleaned at entry point by stripCwdEnv(), then ~/.archon/.env
+// is loaded as trusted source. We still sanitize the final subprocess env as
+// defense-in-depth so requestOptions.env cannot re-inject nested Claude markers.
 import { scanPathForSensitiveKeys, EnvLeakError } from '../utils/env-leak-scanner';
 import * as codebaseDb from '../db/codebases';
 import { loadConfig } from '../config/config-loader';
@@ -48,6 +47,28 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('provider.claude');
   return cachedLog;
+}
+
+const CLAUDE_CODE_AUTH_VARS = new Set([
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'CLAUDE_CODE_USE_BEDROCK',
+  'CLAUDE_CODE_USE_VERTEX',
+]);
+
+const BLOCKED_SUBPROCESS_ENV_KEYS = new Set([
+  'CLAUDECODE',
+  'NODE_OPTIONS',
+  'VSCODE_INSPECTOR_OPTIONS',
+]);
+
+function sanitizeSubprocessEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const sanitized: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (BLOCKED_SUBPROCESS_ENV_KEYS.has(key)) continue;
+    if (key.startsWith('CLAUDE_CODE_') && !CLAUDE_CODE_AUTH_VARS.has(key)) continue;
+    sanitized[key] = value;
+  }
+  return sanitized;
 }
 
 /**
@@ -93,12 +114,13 @@ function normalizeClaudeUsage(usage?: {
  * - No tokens → SDK uses `claude /login` credentials (global auth)
  * - User controls this by what they put in ~/.archon/.env
  *
- * We log the detected mode for diagnostics but don't filter — the user's
- * config is trusted. See coleam00/Archon#1067 for design rationale.
+ * We preserve user env keys, but always drop known nested-session/debugger
+ * markers to prevent subprocess deadlocks.
  */
 function buildSubprocessEnv(): NodeJS.ProcessEnv {
+  const subprocessEnv = sanitizeSubprocessEnv(process.env);
   const hasExplicitTokens = Boolean(
-    process.env.CLAUDE_CODE_OAUTH_TOKEN ?? process.env.CLAUDE_API_KEY
+    subprocessEnv.CLAUDE_CODE_OAUTH_TOKEN ?? subprocessEnv.CLAUDE_API_KEY
   );
   const authMode = hasExplicitTokens ? 'explicit' : 'global';
   getLog().info(
@@ -106,7 +128,7 @@ function buildSubprocessEnv(): NodeJS.ProcessEnv {
     authMode === 'global' ? 'using_global_auth' : 'using_explicit_tokens'
   );
 
-  return { ...process.env };
+  return subprocessEnv;
 }
 
 /** Max retries for transient subprocess failures (3 = 4 total attempts).
@@ -327,12 +349,15 @@ export class ClaudeProvider implements IAgentProvider {
         );
       }
 
+      const mergedSubprocessEnv = requestOptions?.env
+        ? { ...buildSubprocessEnv(), ...requestOptions.env }
+        : buildSubprocessEnv();
+      const subprocessEnv = sanitizeSubprocessEnv(mergedSubprocessEnv);
+
       const options: Options = {
         cwd,
         pathToClaudeCodeExecutable: cliPath,
-        env: requestOptions?.env
-          ? { ...buildSubprocessEnv(), ...requestOptions.env }
-          : buildSubprocessEnv(),
+        env: subprocessEnv,
         model: requestOptions?.model,
         abortController: controller,
         ...(requestOptions?.tools !== undefined ? { tools: requestOptions.tools } : {}),
