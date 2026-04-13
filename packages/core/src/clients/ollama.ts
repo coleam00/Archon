@@ -71,7 +71,8 @@ export class OllamaClient implements IAssistantClient {
     }
     messages.push({ role: 'user', content: prompt });
 
-    const url = `${this.baseUrl}${CHAT_PATH}`;
+    const baseUrl = options?.baseUrl ?? this.baseUrl;
+    const url = `${baseUrl}${CHAT_PATH}`;
     getLog().info({ model, url, messageCount: messages.length }, 'ollama.query_started');
 
     let response: Response;
