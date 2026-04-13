@@ -190,7 +190,7 @@ async function* streamCodexEvents(
   for await (const event of events) {
     if (abortSignal?.aborted) {
       getLog().info('query_aborted_between_events');
-      break;
+      throw new Error('Query aborted');
     }
 
     if (event.type === 'item.started') {
@@ -599,7 +599,7 @@ export class CodexProvider implements IAgentProvider {
         const delayMs = this.retryBaseDelayMs * Math.pow(2, attempt);
         getLog().info({ attempt, delayMs, errorClass }, 'retrying_query');
         await new Promise(resolve => setTimeout(resolve, delayMs));
-        lastError = err;
+        lastError = enrichedError;
       }
     }
 

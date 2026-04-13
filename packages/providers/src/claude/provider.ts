@@ -508,14 +508,13 @@ function buildBaseClaudeOptions(
   assistantDefaults: ReturnType<typeof parseClaudeConfig>,
   controller: AbortController,
   stderrLines: string[],
-  toolResultQueue: ToolResultEntry[]
+  toolResultQueue: ToolResultEntry[],
+  env: NodeJS.ProcessEnv
 ): Options {
   return {
     cwd,
     pathToClaudeCodeExecutable: cliPath,
-    env: requestOptions?.env
-      ? { ...buildSubprocessEnv(), ...requestOptions.env }
-      : buildSubprocessEnv(),
+    env,
     model: requestOptions?.model ?? assistantDefaults.model,
     abortController: controller,
     ...(requestOptions?.outputFormat !== undefined
@@ -575,17 +574,23 @@ function buildToolCaptureHooks(toolResultQueue: ToolResultEntry[]): Options['hoo
       {
         hooks: [
           (async (input: Record<string, unknown>): Promise<{ continue: true }> => {
-            const toolName = (input as { tool_name?: string }).tool_name ?? 'unknown';
-            const toolUseId = (input as { tool_use_id?: string }).tool_use_id;
-            const toolResponse = (input as { tool_response?: unknown }).tool_response;
-            const output =
-              typeof toolResponse === 'string' ? toolResponse : JSON.stringify(toolResponse ?? '');
-            const maxLen = 10_000;
-            toolResultQueue.push({
-              toolName,
-              toolOutput: output.length > maxLen ? output.slice(0, maxLen) + '...' : output,
-              ...(toolUseId !== undefined ? { toolCallId: toolUseId } : {}),
-            });
+            try {
+              const toolName = (input as { tool_name?: string }).tool_name ?? 'unknown';
+              const toolUseId = (input as { tool_use_id?: string }).tool_use_id;
+              const toolResponse = (input as { tool_response?: unknown }).tool_response;
+              const output =
+                typeof toolResponse === 'string'
+                  ? toolResponse
+                  : JSON.stringify(toolResponse ?? '');
+              const maxLen = 10_000;
+              toolResultQueue.push({
+                toolName,
+                toolOutput: output.length > maxLen ? output.slice(0, maxLen) + '...' : output,
+                ...(toolUseId !== undefined ? { toolCallId: toolUseId } : {}),
+              });
+            } catch (e) {
+              getLog().error({ err: e, input }, 'claude.post_tool_use_hook_error');
+            }
             return { continue: true };
           }) as HookCallback,
         ],
@@ -702,6 +707,12 @@ async function* streamClaudeMessages(
         >;
       };
       const tokens = normalizeClaudeUsage(resultMsg.usage);
+      if (resultMsg.is_error) {
+        getLog().error(
+          { sessionId: resultMsg.session_id, errorSubtype: resultMsg.subtype },
+          'claude.result_is_error'
+        );
+      }
       yield {
         type: 'result',
         sessionId: resultMsg.session_id,
@@ -745,7 +756,13 @@ function classifyAndEnrichError(
   stderrLines: string[],
   controller: AbortController
 ): { enrichedError: Error; errorClass: string; shouldRetry: boolean } {
+  // If the controller was aborted by withFirstMessageTimeout, the original
+  // timeout error carries the diagnostic message and #1067 breadcrumb.
+  // Preserve it instead of collapsing into a generic "Query aborted".
   if (controller.signal.aborted) {
+    if (error.message.includes('produced no output within')) {
+      return { enrichedError: error, errorClass: 'timeout', shouldRetry: false };
+    }
     return {
       enrichedError: new Error('Query aborted'),
       errorClass: 'aborted',
@@ -832,6 +849,35 @@ export class ClaudeProvider implements IAgentProvider {
     let lastError: Error | undefined;
     const assistantDefaults = parseClaudeConfig(requestOptions?.assistantConfig ?? {});
 
+    // Build subprocess env once (avoids re-logging auth mode per retry)
+    const subprocessEnv = buildSubprocessEnv();
+    const env = requestOptions?.env ? { ...subprocessEnv, ...requestOptions.env } : subprocessEnv;
+
+    // Apply nodeConfig translation once (deterministic, not retry-dependent)
+    // We need a throwaway Options to extract warnings from applyNodeConfig,
+    // then re-apply per attempt. But nodeConfig warnings are deterministic,
+    // so we compute them once and yield them before the first attempt.
+    let nodeConfigWarnings: ProviderWarning[] = [];
+    if (requestOptions?.nodeConfig) {
+      const tempOptions: Options = {} as Options;
+      nodeConfigWarnings = await applyNodeConfig(tempOptions, requestOptions.nodeConfig, cwd);
+    }
+
+    // Yield provider warnings once before retries
+    for (const warning of nodeConfigWarnings) {
+      yield { type: 'system' as const, content: `⚠️ ${warning.message}` };
+    }
+
+    // Track the current attempt's controller so a single abort listener
+    // can forward cancellation without accumulating per-retry listeners.
+    let currentController: AbortController | undefined;
+    const onAbort = (): void => {
+      currentController?.abort();
+    };
+    if (requestOptions?.abortSignal) {
+      requestOptions.abortSignal.addEventListener('abort', onAbort, { once: true });
+    }
+
     for (let attempt = 0; attempt <= MAX_SUBPROCESS_RETRIES; attempt++) {
       if (requestOptions?.abortSignal?.aborted) {
         throw new Error('Query aborted');
@@ -840,33 +886,22 @@ export class ClaudeProvider implements IAgentProvider {
       const stderrLines: string[] = [];
       const toolResultQueue: ToolResultEntry[] = [];
       const controller = new AbortController();
-      if (requestOptions?.abortSignal) {
-        requestOptions.abortSignal.addEventListener(
-          'abort',
-          () => {
-            controller.abort();
-          },
-          {
-            once: true,
-          }
-        );
-      }
+      currentController = controller;
 
-      // 1. Build base SDK options
+      // 1. Build SDK options (env pre-computed above)
       const options = buildBaseClaudeOptions(
         cwd,
         requestOptions,
         assistantDefaults,
         controller,
         stderrLines,
-        toolResultQueue
+        toolResultQueue,
+        env
       );
 
-      // 2. Apply nodeConfig translation (workflow path)
-      const nodeConfigWarnings: ProviderWarning[] = [];
+      // 2. Apply nodeConfig translation (re-applied per attempt since options are fresh)
       if (requestOptions?.nodeConfig) {
-        const warns = await applyNodeConfig(options, requestOptions.nodeConfig, cwd);
-        nodeConfigWarnings.push(...warns);
+        await applyNodeConfig(options, requestOptions.nodeConfig, cwd);
       }
 
       // 3. Set session resume
@@ -881,12 +916,7 @@ export class ClaudeProvider implements IAgentProvider {
       }
 
       try {
-        // 4. Yield provider warnings as system chunks before streaming
-        for (const warning of nodeConfigWarnings) {
-          yield { type: 'system' as const, content: `⚠️ ${warning.message}` };
-        }
-
-        // 5. Run query with first-event timeout protection
+        // 4. Run query with first-event timeout protection
         const rawEvents = query({ prompt, options });
         const timeoutMs = getFirstEventTimeoutMs();
         const diagnostics = buildFirstEventHangDiagnostics(
@@ -895,7 +925,7 @@ export class ClaudeProvider implements IAgentProvider {
         );
         const events = withFirstMessageTimeout(rawEvents, controller, timeoutMs, diagnostics);
 
-        // 6. Stream normalized events
+        // 5. Stream normalized events
         yield* streamClaudeMessages(events, toolResultQueue);
         return;
       } catch (error) {
@@ -924,7 +954,7 @@ export class ClaudeProvider implements IAgentProvider {
         const delayMs = this.retryBaseDelayMs * Math.pow(2, attempt);
         getLog().info({ attempt, delayMs, errorClass }, 'retrying_subprocess');
         await new Promise(resolve => setTimeout(resolve, delayMs));
-        lastError = err;
+        lastError = enrichedError;
       }
     }
 
