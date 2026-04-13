@@ -28,6 +28,17 @@ archon workflow list --json
 If `archon` is unavailable, report that the Archon CLI is not installed or not on
 `PATH`. Do not perform setup unless the user explicitly asks.
 
+## Routing
+
+Choose the smallest surface that matches the user's need:
+
+| Intent | Action |
+| --- | --- |
+| pick or run a Codex-safe workflow | continue in this file |
+| monitor an active workflow | read `references/monitoring.md` |
+| debug a confusing, failed, or stalled run | read `references/log-debugging.md` |
+| relay an interactive workflow cleanly | read `references/interactive-workflows.md` |
+
 ## Codex Naming Convention
 
 Prefer Archon workflows ending in `-codex` when they exist. That suffix indicates
@@ -84,18 +95,49 @@ Rules:
    `piv/codex-auth-refactor`.
 3. For read-only questions or exploration, `--no-worktree` is acceptable.
 4. Prefer one Archon workflow per command rather than combining unrelated tasks.
+5. Treat Archon workflows as long-running jobs. Keep the run ID, working path,
+   and current status available for follow-up checks instead of assuming the
+   launch command alone is the full observability surface.
 
 ## Monitoring
 
-Use:
+Start with:
 
 ```bash
 archon workflow status --json
 ```
 
-When an interactive workflow pauses, relay the workflow's question clearly and
-pass the user's answer back through the Archon approval or reject command rather
-than trying to continue locally.
+Default live-monitoring cadence:
+
+- check once shortly after launch to confirm the run exists
+- if the user is actively waiting, re-check about every 30 seconds
+
+Rationale:
+
+- the web client already has a 15 second fallback poll, but CLI monitoring is
+  heavier because each check is a full Archon CLI invocation with database
+  access
+
+State handling:
+
+- `running`: keep monitoring, surface only meaningful progress
+- `paused`: read the latest workflow output and relay it transparently
+- `completed` or `failed`: report the terminal result and stop polling
+- `running` with unchanged `last_activity_at` plus no new JSONL activity for 5
+  minutes: report a possible stall, not a confirmed failure
+
+When an interactive workflow pauses, do not summarize the workflow's question.
+Read the latest output and pass the user's answer back through the Archon
+approval or reject command rather than trying to continue locally.
+
+If the user explicitly wants unattended follow-up and the current Codex surface
+supports thread heartbeat automations, attach one to the current thread and have
+it report only meaningful changes: approval gates, terminal state changes, or a
+possible stall. If automation is unavailable on the current surface, continue
+with in-session polling instead.
+
+Read `references/monitoring.md` for the detailed monitoring contract and
+`references/interactive-workflows.md` for the transparent-relay loop.
 
 ## Repo Guidance
 
