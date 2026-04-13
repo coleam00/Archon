@@ -338,7 +338,7 @@ export function buildSDKHooksFromYAML(
  * Structured provider warning. Providers collect these during translation;
  * callers convert them to system chunks before streaming starts.
  */
-export interface ProviderWarning {
+interface ProviderWarning {
   code: string;
   message: string;
 }
@@ -350,7 +350,7 @@ export interface ProviderWarning {
  * Called inside sendQuery when nodeConfig is present (workflow path).
  * Returns structured warnings that the caller should yield as system chunks.
  */
-export async function applyNodeConfig(
+async function applyNodeConfig(
   options: Options,
   nodeConfig: NodeConfig,
   cwd: string
@@ -492,7 +492,7 @@ export async function applyNodeConfig(
 // ─── Base Options Builder ────────────────────────────────────────────────
 
 /** Queued tool result from SDK hooks, consumed during stream normalization. */
-export interface ToolResultEntry {
+interface ToolResultEntry {
   toolName: string;
   toolOutput: string;
   toolCallId?: string;
@@ -502,7 +502,7 @@ export interface ToolResultEntry {
  * Build base Claude SDK options from cwd, request options, and assistant defaults.
  * Does not include nodeConfig translation — that is handled by applyNodeConfig.
  */
-export function buildBaseClaudeOptions(
+function buildBaseClaudeOptions(
   cwd: string,
   requestOptions: SendQueryOptions | undefined,
   assistantDefaults: ReturnType<typeof parseClaudeConfig>,
@@ -627,7 +627,7 @@ function buildToolCaptureHooks(toolResultQueue: ToolResultEntry[]): Options['hoo
  * Normalize raw Claude SDK events into Archon MessageChunks.
  * Drains the tool result queue between events (populated by SDK hooks).
  */
-export async function* streamClaudeMessages(
+async function* streamClaudeMessages(
   events: AsyncGenerator,
   toolResultQueue: ToolResultEntry[]
 ): AsyncGenerator<MessageChunk> {
@@ -740,7 +740,7 @@ export async function* streamClaudeMessages(
  * Classify a subprocess error and enrich with stderr context.
  * Returns null if the error should be retried (caller handles retry logic).
  */
-export function classifyAndEnrichError(
+function classifyAndEnrichError(
   error: Error,
   stderrLines: string[],
   controller: AbortController

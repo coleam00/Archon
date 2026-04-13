@@ -147,7 +147,7 @@ function extractUsageFromCodexEvent(event: TurnCompletedEvent): TokenUsage {
  * Build turn options for a single Codex turn.
  * Handles output schema from both requestOptions and nodeConfig (workflow path).
  */
-export function buildTurnOptions(requestOptions?: SendQueryOptions): {
+function buildTurnOptions(requestOptions?: SendQueryOptions): {
   turnOptions: TurnOptions;
   hasOutputFormat: boolean;
 } {
@@ -178,14 +178,13 @@ interface CodexStreamState {
  * Normalize raw Codex SDK events into Archon MessageChunks.
  * Handles structured output normalization (Codex returns JSON inline in text).
  */
-export async function* streamCodexEvents(
+async function* streamCodexEvents(
   events: AsyncIterable<Record<string, unknown>>,
   hasOutputFormat: boolean,
   threadId: string | null | undefined,
-  abortSignal?: AbortSignal,
-  streamState?: CodexStreamState
+  abortSignal?: AbortSignal
 ): AsyncGenerator<MessageChunk> {
-  const state: CodexStreamState = streamState ?? {};
+  const state: CodexStreamState = {};
   let accumulatedText = '';
 
   for await (const event of events) {
@@ -421,7 +420,7 @@ export async function* streamCodexEvents(
 /**
  * Classify a Codex error and determine retry eligibility.
  */
-export function classifyAndEnrichCodexError(
+function classifyAndEnrichCodexError(
   error: Error,
   model?: string
 ): { enrichedError: Error; errorClass: string; shouldRetry: boolean } {
@@ -544,7 +543,6 @@ export class CodexProvider implements IAgentProvider {
 
     // 3. Build turn options
     const { turnOptions, hasOutputFormat } = buildTurnOptions(requestOptions);
-    const streamState: CodexStreamState = {};
     let lastError: Error | undefined;
 
     for (let attempt = 0; attempt <= MAX_SUBPROCESS_RETRIES; attempt++) {
@@ -569,13 +567,12 @@ export class CodexProvider implements IAgentProvider {
         // 4. Run streamed turn
         const result = await thread.runStreamed(prompt, turnOptions);
 
-        // 5. Stream normalized events
+        // 5. Stream normalized events (fresh state per attempt to avoid dedup leaks)
         yield* streamCodexEvents(
           result.events as AsyncIterable<Record<string, unknown>>,
           hasOutputFormat,
           thread.id,
-          requestOptions?.abortSignal,
-          streamState
+          requestOptions?.abortSignal
         );
         return;
       } catch (error) {
