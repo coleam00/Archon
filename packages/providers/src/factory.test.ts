@@ -93,5 +93,13 @@ describe('factory', () => {
     test('throws UnknownProviderError for unknown type', () => {
       expect(() => getProviderCapabilities('unknown')).toThrow(UnknownProviderError);
     });
+
+    test('throws UnknownProviderError for empty string', () => {
+      expect(() => getProviderCapabilities('')).toThrow(UnknownProviderError);
+    });
+
+    test('is case sensitive - Claude throws', () => {
+      expect(() => getProviderCapabilities('Claude')).toThrow(UnknownProviderError);
+    });
   });
 });

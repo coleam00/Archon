@@ -14,10 +14,8 @@ export type {
 
 // Factory
 export { getAgentProvider, getProviderCapabilities } from './factory';
-
-// Static capability constants
-export { CLAUDE_CAPABILITIES } from './claude/capabilities';
-export { CODEX_CAPABILITIES } from './codex/capabilities';
+// Static capability constants are intentionally NOT re-exported here.
+// Use getProviderCapabilities() instead — it's the correct public seam.
 
 // Error
 export { UnknownProviderError } from './errors';

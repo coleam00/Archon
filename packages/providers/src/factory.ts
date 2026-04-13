@@ -1,7 +1,7 @@
 /**
  * Agent Provider Factory
  *
- * Dynamically instantiates the appropriate agent provider based on type string.
+ * Dynamic provider instantiation and static capability lookup.
  * Built-in providers only: Claude and Codex.
  */
 import type { IAgentProvider, ProviderCapabilities } from './types';

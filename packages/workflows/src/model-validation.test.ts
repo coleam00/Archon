@@ -73,6 +73,11 @@ describe('model-validation', () => {
       expect(inferProviderFromModel(undefined, 'codex')).toBe('codex');
     });
 
+    it('should return default when model is empty string', () => {
+      expect(inferProviderFromModel('', 'claude')).toBe('claude');
+      expect(inferProviderFromModel('', 'codex')).toBe('codex');
+    });
+
     it('should infer claude from Claude model names', () => {
       expect(inferProviderFromModel('sonnet', 'codex')).toBe('claude');
       expect(inferProviderFromModel('opus', 'codex')).toBe('claude');

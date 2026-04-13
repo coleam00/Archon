@@ -251,8 +251,7 @@ async function resolveNodeProviderAndModel(
   conversationId: string,
   workflowRunId: string,
   _cwd: string,
-  workflowLevelOptions: WorkflowLevelOptions,
-  _deps: WorkflowDeps
+  workflowLevelOptions: WorkflowLevelOptions
 ): Promise<{
   provider: 'claude' | 'codex';
   model: string | undefined;
@@ -2031,8 +2030,7 @@ async function executeApprovalNode(
       conversationId,
       workflowRun.id,
       cwd,
-      workflowLevelOptions,
-      deps
+      workflowLevelOptions
     );
 
     const output = await executeNodeInternal(
@@ -2477,8 +2475,7 @@ export async function executeDagWorkflow(
             conversationId,
             workflowRun.id,
             cwd,
-            workflowLevelOptions,
-            deps
+            workflowLevelOptions
           );
 
           // 5. Determine session — parallel or context:fresh → always fresh
