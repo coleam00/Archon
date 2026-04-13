@@ -87,10 +87,10 @@ describe('model-validation', () => {
       expect(inferProviderFromModel('claude-opus-4-6', 'codex')).toBe('claude');
     });
 
-    it('should infer codex from non-Claude model names', () => {
-      expect(inferProviderFromModel('gpt-5.3-codex', 'claude')).toBe('codex');
-      expect(inferProviderFromModel('gpt-4', 'claude')).toBe('codex');
-      expect(inferProviderFromModel('o1-mini', 'claude')).toBe('codex');
+    it('should return default provider for non-Claude model names', () => {
+      expect(inferProviderFromModel('gpt-5.3-codex', 'claude')).toBe('claude');
+      expect(inferProviderFromModel('gpt-4', 'copilot')).toBe('copilot');
+      expect(inferProviderFromModel('o1-mini', 'codex')).toBe('codex');
     });
   });
 });
