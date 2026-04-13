@@ -13,9 +13,9 @@ import type {
   HandleMessageContext,
   Conversation,
   Codebase,
-  AgentRequestOptions,
   AttachedFile,
 } from '../types';
+import type { SendQueryOptions } from '@archon/providers/types';
 import { ConversationNotFoundError } from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
@@ -24,7 +24,7 @@ import * as commandHandler from '../handlers/command-handler';
 import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
 import { classifyAndFormatError } from '../utils/error-formatter';
 import { toError } from '../utils/error';
-import { getAgentProvider } from '../providers/factory';
+import { getAgentProvider } from '@archon/providers';
 import { getArchonHome, getArchonWorkspacesPath } from '@archon/paths';
 import { syncArchonToWorktree } from '../utils/worktree-sync';
 import { syncWorkspace, toRepoPath } from '@archon/git';
@@ -758,10 +758,9 @@ export async function handleMessage(
     // Reuse the config already loaded during workflow discovery (avoids a second disk read).
     // Fall back to loadConfig only when no codebase is scoped (discoveredConfig is undefined).
     const config = discoveredConfig ?? (await loadConfig());
-    const requestOptions: AgentRequestOptions = {
-      ...(conversation.ai_assistant_type === 'claude' && config.assistants.claude.settingSources
-        ? { settingSources: config.assistants.claude.settingSources }
-        : {}),
+    const providerKey = conversation.ai_assistant_type as 'claude' | 'codex';
+    const requestOptions: SendQueryOptions = {
+      assistantConfig: (config.assistants[providerKey] ?? {}) as Record<string, unknown>,
     };
 
     const mode = platform.getStreamingMode();
@@ -831,7 +830,7 @@ async function handleStreamMode(
   isolationHints: HandleMessageContext['isolationHints'],
   conversation: Conversation,
   issueContext?: string,
-  requestOptions?: AgentRequestOptions
+  requestOptions?: SendQueryOptions
 ): Promise<void> {
   const allMessages: string[] = [];
   let newSessionId: string | undefined;
@@ -947,7 +946,7 @@ async function handleBatchMode(
   isolationHints: HandleMessageContext['isolationHints'],
   conversation: Conversation,
   issueContext?: string,
-  requestOptions?: AgentRequestOptions
+  requestOptions?: SendQueryOptions
 ): Promise<void> {
   const allChunks: { type: string; content: string }[] = [];
   const assistantMessages: string[] = [];

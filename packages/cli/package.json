@@ -17,6 +17,7 @@
     "@archon/git": "workspace:*",
     "@archon/isolation": "workspace:*",
     "@archon/paths": "workspace:*",
+    "@archon/providers": "workspace:*",
     "@archon/server": "workspace:*",
     "@archon/workflows": "workspace:*",
     "@clack/prompts": "^1.0.0",

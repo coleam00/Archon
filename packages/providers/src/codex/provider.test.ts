@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
+import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 
 const mockLogger = createMockLogger();
@@ -39,9 +39,7 @@ mock.module('@openai/codex-sdk', () => ({
   Codex: MockCodex,
 }));
 
-import { CodexProvider } from './codex';
-import * as codebaseDb from '../db/codebases';
-import * as envLeakScanner from '../utils/env-leak-scanner';
+import { CodexProvider } from './provider';
 
 describe('CodexProvider', () => {
   let client: CodexProvider;
@@ -64,6 +62,26 @@ describe('CodexProvider', () => {
   describe('getType', () => {
     test('returns codex', () => {
       expect(client.getType()).toBe('codex');
+    });
+  });
+
+  describe('getCapabilities', () => {
+    test('returns limited capability set for Codex provider', () => {
+      const caps = client.getCapabilities();
+      expect(caps).toEqual({
+        sessionResume: true,
+        mcp: false,
+        hooks: false,
+        skills: false,
+        toolRestrictions: false,
+        structuredOutput: true,
+        envInjection: false,
+        costControl: false,
+        effortControl: false,
+        thinkingControl: false,
+        fallbackModel: false,
+        sandbox: false,
+      });
     });
   });
 
@@ -114,8 +132,6 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
       }
 
-      // Codex item.completed fires once the command is fully done, so we emit
-      // start + result back-to-back to close the UI tool card immediately.
       expect(chunks[0]).toEqual({ type: 'tool', toolName: 'npm test' });
       expect(chunks[1]).toEqual({
         type: 'tool_result',
@@ -184,10 +200,10 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
       }
 
-      expect(chunks[0]).toEqual({ type: 'tool', toolName: '🔍 Searching: codex sdk' });
+      expect(chunks[0]).toEqual({ type: 'tool', toolName: '\u{1F50D} Searching: codex sdk' });
       expect(chunks[1]).toEqual({
         type: 'tool_result',
-        toolName: '🔍 Searching: codex sdk',
+        toolName: '\u{1F50D} Searching: codex sdk',
         toolOutput: '',
       });
     });
@@ -216,7 +232,7 @@ describe('CodexProvider', () => {
 
       expect(chunks[0]).toEqual({
         type: 'system',
-        content: '📋 Tasks:\n✅ Scan repo\n⬜ Add tests',
+        content: '\u{1F4CB} Tasks:\n\u2705 Scan repo\n\u2B1C Add tests',
       });
       expect(chunks).toHaveLength(2);
     });
@@ -253,11 +269,11 @@ describe('CodexProvider', () => {
       expect(chunks).toHaveLength(3); // todoV1 + todoV2 + result
       expect(chunks[0]).toEqual({
         type: 'system',
-        content: '📋 Tasks:\n⬜ Scan repo\n⬜ Add tests',
+        content: '\u{1F4CB} Tasks:\n\u2B1C Scan repo\n\u2B1C Add tests',
       });
       expect(chunks[1]).toEqual({
         type: 'system',
-        content: '📋 Tasks:\n✅ Scan repo\n⬜ Add tests',
+        content: '\u{1F4CB} Tasks:\n\u2705 Scan repo\n\u2B1C Add tests',
       });
     });
 
@@ -287,7 +303,7 @@ describe('CodexProvider', () => {
 
       expect(chunks[0]).toEqual({
         type: 'system',
-        content: '✅ File changes:\n➕ src/new.ts\n📝 src/app.ts\n➖ src/old.ts',
+        content: '\u2705 File changes:\n\u2795 src/new.ts\n\u{1F4DD} src/app.ts\n\u2796 src/old.ts',
       });
     });
 
@@ -314,7 +330,7 @@ describe('CodexProvider', () => {
 
       expect(chunks[0]).toEqual({
         type: 'system',
-        content: '❌ File changes:\n📝 src/locked.ts\nPermission denied',
+        content: '\u274C File changes:\n\u{1F4DD} src/locked.ts\nPermission denied',
       });
     });
 
@@ -340,7 +356,7 @@ describe('CodexProvider', () => {
 
       expect(chunks[0]).toEqual({
         type: 'system',
-        content: '❌ File change failed: Disk full',
+        content: '\u274C File change failed: Disk full',
       });
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.objectContaining({ status: 'failed' }),
@@ -366,7 +382,7 @@ describe('CodexProvider', () => {
 
       expect(chunks[0]).toEqual({
         type: 'system',
-        content: '❌ File change failed',
+        content: '\u274C File change failed',
       });
     });
 
@@ -397,18 +413,18 @@ describe('CodexProvider', () => {
       }
 
       // First mcp call (in_progress on item.completed): start + empty result
-      expect(chunks[0]).toEqual({ type: 'tool', toolName: '🔌 MCP: fs/readFile' });
+      expect(chunks[0]).toEqual({ type: 'tool', toolName: '\u{1F50C} MCP: fs/readFile' });
       expect(chunks[1]).toEqual({
         type: 'tool_result',
-        toolName: '🔌 MCP: fs/readFile',
+        toolName: '\u{1F50C} MCP: fs/readFile',
         toolOutput: '',
       });
       // Second mcp call (failed): start + error result so the UI card closes
-      expect(chunks[2]).toEqual({ type: 'tool', toolName: '🔌 MCP: fs/readFile' });
+      expect(chunks[2]).toEqual({ type: 'tool', toolName: '\u{1F50C} MCP: fs/readFile' });
       expect(chunks[3]).toEqual({
         type: 'tool_result',
-        toolName: '🔌 MCP: fs/readFile',
-        toolOutput: '❌ Error: Permission denied',
+        toolName: '\u{1F50C} MCP: fs/readFile',
+        toolOutput: '\u274C Error: Permission denied',
       });
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.objectContaining({ server: 'fs', tool: 'readFile' }),
@@ -440,19 +456,22 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
       }
 
-      // Each item now emits start + empty result so the UI cards always close.
-      expect(chunks[0]).toEqual({ type: 'tool', toolName: '🔌 MCP: readFile' });
+      expect(chunks[0]).toEqual({ type: 'tool', toolName: '\u{1F50C} MCP: readFile' });
       expect(chunks[1]).toEqual({
         type: 'tool_result',
-        toolName: '🔌 MCP: readFile',
+        toolName: '\u{1F50C} MCP: readFile',
         toolOutput: '',
       });
-      expect(chunks[2]).toEqual({ type: 'tool', toolName: '🔌 MCP: fs' });
-      expect(chunks[3]).toEqual({ type: 'tool_result', toolName: '🔌 MCP: fs', toolOutput: '' });
-      expect(chunks[4]).toEqual({ type: 'tool', toolName: '🔌 MCP: MCP tool' });
+      expect(chunks[2]).toEqual({ type: 'tool', toolName: '\u{1F50C} MCP: fs' });
+      expect(chunks[3]).toEqual({
+        type: 'tool_result',
+        toolName: '\u{1F50C} MCP: fs',
+        toolOutput: '',
+      });
+      expect(chunks[4]).toEqual({ type: 'tool', toolName: '\u{1F50C} MCP: MCP tool' });
       expect(chunks[5]).toEqual({
         type: 'tool_result',
-        toolName: '🔌 MCP: MCP tool',
+        toolName: '\u{1F50C} MCP: MCP tool',
         toolOutput: '',
       });
     });
@@ -473,11 +492,11 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
       }
 
-      expect(chunks[0]).toEqual({ type: 'tool', toolName: '🔌 MCP: db/query' });
+      expect(chunks[0]).toEqual({ type: 'tool', toolName: '\u{1F50C} MCP: db/query' });
       expect(chunks[1]).toEqual({
         type: 'tool_result',
-        toolName: '🔌 MCP: db/query',
-        toolOutput: '❌ Error: MCP tool failed',
+        toolName: '\u{1F50C} MCP: db/query',
+        toolOutput: '\u274C Error: MCP tool failed',
       });
     });
 
@@ -503,12 +522,11 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
       }
 
-      // Completed MCP calls now emit tool + tool_result so the UI card closes.
       expect(chunks).toHaveLength(3);
-      expect(chunks[0]).toEqual({ type: 'tool', toolName: '🔌 MCP: fs/readFile' });
+      expect(chunks[0]).toEqual({ type: 'tool', toolName: '\u{1F50C} MCP: fs/readFile' });
       expect(chunks[1]).toEqual({
         type: 'tool_result',
-        toolName: '🔌 MCP: fs/readFile',
+        toolName: '\u{1F50C} MCP: fs/readFile',
         toolOutput: JSON.stringify([{ type: 'text', text: 'file contents' }]),
       });
       expect(chunks[2]).toEqual({
@@ -525,7 +543,6 @@ describe('CodexProvider', () => {
         })(),
       });
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _ of client.sendQuery('test prompt', '/my/workspace')) {
         // consume
       }
@@ -548,7 +565,6 @@ describe('CodexProvider', () => {
         })(),
       });
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _ of client.sendQuery('test prompt', '/workspace', 'existing-thread')) {
         // consume
       }
@@ -585,7 +601,6 @@ describe('CodexProvider', () => {
       }
 
       expect(mockResumeThread).toHaveBeenCalled();
-      // Verify fallback startThread is called with correct config options
       expect(mockStartThread).toHaveBeenCalledWith(
         expect.objectContaining({
           workingDirectory: '/workspace',
@@ -595,7 +610,6 @@ describe('CodexProvider', () => {
           approvalPolicy: 'never',
         })
       );
-      // Verify error was logged
       expect(mockLogger.error).toHaveBeenCalledWith(
         { err: resumeError, sessionId: 'bad-thread-id' },
         'resume_thread_failed'
@@ -612,19 +626,20 @@ describe('CodexProvider', () => {
       });
     });
 
-    test('passes model and codex options to thread options', async () => {
+    test('passes model and codex options via assistantConfig to thread options', async () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
           yield { type: 'turn.completed', usage: defaultUsage };
         })(),
       });
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
         model: 'gpt-5.2-codex',
-        modelReasoningEffort: 'medium',
-        webSearchMode: 'live',
-        additionalDirectories: ['/other/repo'],
+        assistantConfig: {
+          modelReasoningEffort: 'medium',
+          webSearchMode: 'live',
+          additionalDirectories: ['/other/repo'],
+        },
       })) {
         // consume
       }
@@ -740,13 +755,11 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
       }
 
-      // Verify item.started logging with correct format
       expect(mockLogger.debug).toHaveBeenCalledWith(
         { eventType: 'item.started', itemType: 'command_execution', itemId: 'item-1' },
         'item_started'
       );
 
-      // Verify item.completed logging includes command context
       expect(mockLogger.debug).toHaveBeenCalledWith(
         {
           eventType: 'item.completed',
@@ -771,7 +784,7 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
       }
 
-      expect(chunks[0]).toEqual({ type: 'system', content: '⚠️ Something went wrong' });
+      expect(chunks[0]).toEqual({ type: 'system', content: '\u26A0\uFE0F Something went wrong' });
       expect(mockLogger.error).toHaveBeenCalledWith(
         { message: 'Something went wrong' },
         'stream_error'
@@ -818,7 +831,10 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
       }
 
-      expect(chunks[0]).toEqual({ type: 'system', content: '❌ Turn failed: Rate limit exceeded' });
+      expect(chunks[0]).toEqual({
+        type: 'system',
+        content: '\u274C Turn failed: Rate limit exceeded',
+      });
       expect(mockLogger.error).toHaveBeenCalledWith(
         { errorMessage: 'Rate limit exceeded' },
         'turn_failed'
@@ -837,7 +853,10 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
       }
 
-      expect(chunks[0]).toEqual({ type: 'system', content: '❌ Turn failed: Unknown error' });
+      expect(chunks[0]).toEqual({
+        type: 'system',
+        content: '\u274C Turn failed: Unknown error',
+      });
       expect(mockLogger.error).toHaveBeenCalledWith(
         { errorMessage: 'Unknown error' },
         'turn_failed'
@@ -1001,109 +1020,109 @@ describe('CodexProvider', () => {
         expect(mockRunStreamed).toHaveBeenCalledTimes(1);
       });
     });
-  });
 
-  describe('pre-spawn env leak gate', () => {
-    let spyFindByDefaultCwd: ReturnType<typeof spyOn>;
-    let spyFindByPathPrefix: ReturnType<typeof spyOn>;
-    let spyScan: ReturnType<typeof spyOn>;
+    describe('structured output normalization', () => {
+      test('populates structuredOutput on result when outputFormat is set and text is valid JSON', async () => {
+        const jsonPayload = { status: 'ok', count: 42 };
+        mockRunStreamed.mockResolvedValueOnce({
+          events: (async function* () {
+            yield {
+              type: 'item.completed',
+              item: { type: 'agent_message', id: 'msg-1', text: JSON.stringify(jsonPayload) },
+            };
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
 
-    beforeEach(() => {
-      // Restore a working runStreamed default so retry-test bleed doesn't break gate tests
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-      spyFindByDefaultCwd = spyOn(codebaseDb, 'findCodebaseByDefaultCwd').mockResolvedValue(null);
-      spyFindByPathPrefix = spyOn(codebaseDb, 'findCodebaseByPathPrefix').mockResolvedValue(null);
-      spyScan = spyOn(envLeakScanner, 'scanPathForSensitiveKeys').mockReturnValue({
-        path: '/workspace',
-        findings: [],
-      });
-    });
-
-    afterEach(() => {
-      spyFindByDefaultCwd.mockRestore();
-      spyFindByPathPrefix.mockRestore();
-      spyScan.mockRestore();
-    });
-
-    test('throws EnvLeakError when .env contains sensitive keys and registered codebase has no consent', async () => {
-      spyFindByDefaultCwd.mockResolvedValueOnce({
-        id: 'codebase-1',
-        allow_env_keys: false,
-        default_cwd: '/workspace',
-      });
-      spyScan.mockReturnValueOnce({
-        path: '/workspace',
-        findings: [{ file: '.env', keys: ['ANTHROPIC_API_KEY'] }],
-      });
-
-      const consumeGenerator = async (): Promise<void> => {
-        for await (const _ of client.sendQuery('test', '/workspace')) {
-          // consume
+        const chunks = [];
+        for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
+          outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+        })) {
+          chunks.push(chunk);
         }
-      };
 
-      await expect(consumeGenerator()).rejects.toThrow('Cannot run workflow');
-    });
-
-    test('skips scan entirely when cwd is not a registered codebase', async () => {
-      // Both lookups return null (default from beforeEach). Pre-spawn safety net
-      // is only for registered codebases; unregistered paths go through registerRepoAtPath.
-      spyScan.mockReturnValue({
-        path: '/workspace',
-        findings: [{ file: '.env', keys: ['ANTHROPIC_API_KEY'] }],
+        const resultChunk = chunks.find(c => c.type === 'result');
+        expect(resultChunk).toBeDefined();
+        expect(resultChunk!.type === 'result' && resultChunk!.structuredOutput).toEqual(
+          jsonPayload
+        );
       });
 
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
+      test('yields system warning when outputFormat is set but text is not valid JSON', async () => {
+        mockRunStreamed.mockResolvedValueOnce({
+          events: (async function* () {
+            yield {
+              type: 'item.completed',
+              item: { type: 'agent_message', id: 'msg-1', text: 'not json at all' },
+            };
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
 
-      expect(spyScan).not.toHaveBeenCalled();
-    });
+        const chunks = [];
+        for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
+          outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+        })) {
+          chunks.push(chunk);
+        }
 
-    test('skips scan when codebase has allow_env_keys: true', async () => {
-      spyFindByDefaultCwd.mockResolvedValueOnce({
-        id: 'codebase-1',
-        allow_env_keys: true,
-        default_cwd: '/workspace',
+        const systemChunk = chunks.find(c => c.type === 'system');
+        expect(systemChunk).toBeDefined();
+        expect(systemChunk!.type === 'system' && systemChunk!.content).toContain(
+          'Structured output requested but Codex returned non-JSON'
+        );
+
+        const resultChunk = chunks.find(c => c.type === 'result');
+        expect(resultChunk).toBeDefined();
+        expect(resultChunk!.type === 'result' && resultChunk!.structuredOutput).toBeUndefined();
       });
 
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
+      test('does not populate structuredOutput when outputFormat is not set', async () => {
+        mockRunStreamed.mockResolvedValueOnce({
+          events: (async function* () {
+            yield {
+              type: 'item.completed',
+              item: { type: 'agent_message', id: 'msg-1', text: '{"valid":"json"}' },
+            };
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
 
-      expect(spyScan).not.toHaveBeenCalled();
-    });
+        const chunks = [];
+        for await (const chunk of client.sendQuery('test', '/tmp')) {
+          chunks.push(chunk);
+        }
 
-    test('proceeds without scanning when cwd has no registered codebase', async () => {
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(spyScan).not.toHaveBeenCalled();
-    });
-
-    test('uses prefix lookup for worktree paths when exact match returns null', async () => {
-      spyFindByDefaultCwd.mockResolvedValueOnce(null);
-      spyFindByPathPrefix.mockResolvedValueOnce({
-        id: 'codebase-1',
-        allow_env_keys: true,
-        default_cwd: '/workspace/source',
+        const resultChunk = chunks.find(c => c.type === 'result');
+        expect(resultChunk).toBeDefined();
+        expect(resultChunk!.type === 'result' && resultChunk!.structuredOutput).toBeUndefined();
       });
 
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace/worktrees/feature')) {
-        chunks.push(chunk);
-      }
+      test('handles nodeConfig.output_format path', async () => {
+        const jsonPayload = { key: 'value' };
+        mockRunStreamed.mockResolvedValueOnce({
+          events: (async function* () {
+            yield {
+              type: 'item.completed',
+              item: { type: 'agent_message', id: 'msg-1', text: JSON.stringify(jsonPayload) },
+            };
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
 
-      expect(spyFindByPathPrefix).toHaveBeenCalledWith('/workspace/worktrees/feature');
-      expect(spyScan).not.toHaveBeenCalled();
+        const chunks = [];
+        for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
+          nodeConfig: { output_format: { type: 'object' } },
+        })) {
+          chunks.push(chunk);
+        }
+
+        const resultChunk = chunks.find(c => c.type === 'result');
+        expect(resultChunk).toBeDefined();
+        expect(resultChunk!.type === 'result' && resultChunk!.structuredOutput).toEqual(
+          jsonPayload
+        );
+      });
     });
   });
 });

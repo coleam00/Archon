@@ -24,6 +24,7 @@ COPY packages/docs-web/package.json ./packages/docs-web/
 COPY packages/git/package.json ./packages/git/
 COPY packages/isolation/package.json ./packages/isolation/
 COPY packages/paths/package.json ./packages/paths/
+COPY packages/providers/package.json ./packages/providers/
 COPY packages/server/package.json ./packages/server/
 COPY packages/web/package.json ./packages/web/
 COPY packages/workflows/package.json ./packages/workflows/
@@ -130,6 +131,7 @@ COPY packages/docs-web/package.json ./packages/docs-web/
 COPY packages/git/package.json ./packages/git/
 COPY packages/isolation/package.json ./packages/isolation/
 COPY packages/paths/package.json ./packages/paths/
+COPY packages/providers/package.json ./packages/providers/
 COPY packages/server/package.json ./packages/server/
 COPY packages/web/package.json ./packages/web/
 COPY packages/workflows/package.json ./packages/workflows/
@@ -144,6 +146,7 @@ COPY packages/core/ ./packages/core/
 COPY packages/git/ ./packages/git/
 COPY packages/isolation/ ./packages/isolation/
 COPY packages/paths/ ./packages/paths/
+COPY packages/providers/ ./packages/providers/
 COPY packages/server/ ./packages/server/
 COPY packages/workflows/ ./packages/workflows/
 

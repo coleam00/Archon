@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { parseNodeHooks } from './loader';
-import { buildSDKHooksFromYAML } from './dag-executor';
+import { buildSDKHooksFromYAML } from '@archon/providers/claude/provider';
 import type { WorkflowNodeHooks } from './schemas';
 import { parseWorkflow } from './loader';
 

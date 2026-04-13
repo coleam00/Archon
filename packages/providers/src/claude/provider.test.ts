@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 
 const mockLogger = createMockLogger();
@@ -16,11 +16,8 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => ({
   query: mockQuery,
 }));
 
-import { ClaudeProvider } from './claude';
-import * as claudeModule from './claude';
-import * as codebaseDb from '../db/codebases';
-import * as envLeakScanner from '../utils/env-leak-scanner';
-import * as configLoader from '../config/config-loader';
+import { ClaudeProvider } from './provider';
+import * as claudeModule from './provider';
 
 describe('ClaudeProvider', () => {
   let client: ClaudeProvider;
@@ -59,6 +56,26 @@ describe('ClaudeProvider', () => {
   describe('getType', () => {
     test('returns claude', () => {
       expect(client.getType()).toBe('claude');
+    });
+  });
+
+  describe('getCapabilities', () => {
+    test('returns full capability set for Claude provider', () => {
+      const caps = client.getCapabilities();
+      expect(caps).toEqual({
+        sessionResume: true,
+        mcp: true,
+        hooks: true,
+        skills: true,
+        toolRestrictions: true,
+        structuredOutput: true,
+        envInjection: true,
+        costControl: true,
+        effortControl: true,
+        thinkingControl: true,
+        fallbackModel: true,
+        sandbox: true,
+      });
     });
   });
 
@@ -306,7 +323,6 @@ describe('ClaudeProvider', () => {
       });
 
       // Consume the generator
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _ of client.sendQuery('my prompt', '/my/workspace', undefined, {
         model: 'sonnet',
       })) {
@@ -328,7 +344,6 @@ describe('ClaudeProvider', () => {
         // Empty generator
       });
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _ of client.sendQuery('test', '/workspace')) {
         // consume
       }
@@ -343,7 +358,6 @@ describe('ClaudeProvider', () => {
         // Empty generator
       });
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _ of client.sendQuery('test', '/workspace', undefined, {
         persistSession: true,
       })) {
@@ -363,7 +377,6 @@ describe('ClaudeProvider', () => {
         // Empty generator
       });
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _ of client.sendQuery('prompt', '/workspace', 'session-to-resume')) {
         // consume
       }
@@ -447,9 +460,6 @@ describe('ClaudeProvider', () => {
     });
 
     test('subprocess env passes through all process.env keys (no allowlist filtering)', async () => {
-      // With the allowlist removed, buildSubprocessEnv returns { ...process.env }.
-      // CWD .env leakage and CLAUDECODE markers are handled at entry point by
-      // stripCwdEnv(), not by buildSubprocessEnv(). See #1067, #1097.
       const originalKey = process.env.CUSTOM_USER_KEY;
       process.env.CUSTOM_USER_KEY = 'user-trusted-value';
 
@@ -457,7 +467,6 @@ describe('ClaudeProvider', () => {
         // Empty generator
       });
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _ of client.sendQuery('test', '/workspace')) {
         // consume
       }
@@ -549,35 +558,29 @@ describe('ClaudeProvider', () => {
     });
 
     test('classifies "Operation aborted" errors as crash and retries', async () => {
-      // Simulates the SDK cleanup race: PostToolUse hook writes to a closed pipe
-      // after a DAG node abort. Should be classified as 'crash' (not 'unknown')
-      // so the retry path is taken.
       const error = new Error('Operation aborted');
       mockQuery.mockImplementation(async function* () {
         throw error;
       });
 
       const consumeGenerator = async (): Promise<void> => {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         for await (const _ of client.sendQuery('test', '/workspace')) {
           // consume
         }
       };
 
-      // crash classification = retried up to 3 times → 4 total calls
+      // crash classification = retried up to 3 times -> 4 total calls
       await expect(consumeGenerator()).rejects.toThrow(/Claude Code crash/);
       expect(mockQuery).toHaveBeenCalledTimes(4);
     }, 5_000);
 
     test('classifies mixed-case "OPERATION ABORTED" errors as crash', async () => {
-      // Pattern matching uses .toLowerCase() — case must not matter
       const error = new Error('OPERATION ABORTED');
       mockQuery.mockImplementation(async function* () {
         throw error;
       });
 
       const consumeGenerator = async (): Promise<void> => {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         for await (const _ of client.sendQuery('test', '/workspace')) {
           // consume
         }
@@ -588,8 +591,6 @@ describe('ClaudeProvider', () => {
     }, 5_000);
 
     test('captures all stderr output for diagnostics', async () => {
-      // When the subprocess crashes, the enriched error should include all stderr,
-      // not just lines matching error keywords
       mockQuery.mockImplementation(async function* (args: {
         options: { stderr?: (data: string) => void };
       }) {
@@ -608,7 +609,7 @@ describe('ClaudeProvider', () => {
         }
       };
 
-      // Use rejects so assertions always execute — prevents vacuous pass when mock doesn't throw
+      // Use rejects so assertions always execute
       const err = await consumeGenerator().catch((e: unknown) => e as Error);
       expect(err).toBeInstanceOf(Error);
       // The error should contain stderr context from ALL captured lines
@@ -617,14 +618,13 @@ describe('ClaudeProvider', () => {
       expect(err.message).toContain('startup diagnostic');
     }, 5_000);
 
-    test('passes settingSources from request options', async () => {
+    test('passes settingSources from assistantConfig', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'test-session' };
       });
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _ of client.sendQuery('test', '/tmp', undefined, {
-        settingSources: ['project', 'user'],
+        assistantConfig: { settingSources: ['project', 'user'] },
       })) {
         // consume
       }
@@ -639,7 +639,6 @@ describe('ClaudeProvider', () => {
         yield { type: 'result', session_id: 'test-session' };
       });
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _ of client.sendQuery('test', '/tmp')) {
         // consume
       }
@@ -654,7 +653,6 @@ describe('ClaudeProvider', () => {
         yield { type: 'result', session_id: 'sid' };
       });
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _ of client.sendQuery('test', '/tmp', undefined, {
         env: { MY_SECRET: 'abc123' },
       })) {
@@ -675,8 +673,7 @@ describe('ClaudeProvider', () => {
         yield { type: 'result', session_id: 'sid' };
       });
 
-      // HOME is always in process.env — override it to verify priority
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      // HOME is always in process.env -- override it to verify priority
       for await (const _ of client.sendQuery('test', '/tmp', undefined, {
         env: { HOME: '/custom/home' },
       })) {
@@ -689,13 +686,14 @@ describe('ClaudeProvider', () => {
       expect(env.HOME).toBe('/custom/home');
     });
 
-    test('passes effort to SDK when provided', async () => {
+    test('passes effort to SDK via nodeConfig', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'sid' };
       });
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      for await (const _ of client.sendQuery('test', '/tmp', undefined, { effort: 'high' })) {
+      for await (const _ of client.sendQuery('test', '/tmp', undefined, {
+        nodeConfig: { effort: 'high' },
+      })) {
         // consume
       }
 
@@ -704,12 +702,11 @@ describe('ClaudeProvider', () => {
       expect(callArgs.options.effort).toBe('high');
     });
 
-    test('omits effort from SDK when not provided', async () => {
+    test('omits effort from SDK when not provided in nodeConfig', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'sid' };
       });
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _ of client.sendQuery('test', '/tmp')) {
         // consume
       }
@@ -719,14 +716,13 @@ describe('ClaudeProvider', () => {
       expect(callArgs.options).not.toHaveProperty('effort');
     });
 
-    test('passes thinking object to SDK', async () => {
+    test('passes thinking object to SDK via nodeConfig', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'sid' };
       });
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _ of client.sendQuery('test', '/tmp', undefined, {
-        thinking: { type: 'enabled', budgetTokens: 8000 },
+        nodeConfig: { thinking: { type: 'enabled', budgetTokens: 8000 } },
       })) {
         // consume
       }
@@ -741,7 +737,6 @@ describe('ClaudeProvider', () => {
         yield { type: 'result', session_id: 'sid' };
       });
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _ of client.sendQuery('test', '/tmp', undefined, { maxBudgetUsd: 5.0 })) {
         // consume
       }
@@ -756,7 +751,6 @@ describe('ClaudeProvider', () => {
         yield { type: 'result', session_id: 'sid' };
       });
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _ of client.sendQuery('test', '/tmp', undefined, {
         systemPrompt: 'You are a security reviewer',
       })) {
@@ -773,7 +767,6 @@ describe('ClaudeProvider', () => {
         yield { type: 'result', session_id: 'sid' };
       });
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _ of client.sendQuery('test', '/tmp')) {
         // consume
       }
@@ -788,7 +781,6 @@ describe('ClaudeProvider', () => {
         yield { type: 'result', session_id: 'sid' };
       });
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _ of client.sendQuery('test', '/tmp', undefined, {
         fallbackModel: 'claude-haiku-4-5',
       })) {
@@ -800,14 +792,13 @@ describe('ClaudeProvider', () => {
       expect(callArgs.options.fallbackModel).toBe('claude-haiku-4-5');
     });
 
-    test('passes betas array to SDK', async () => {
+    test('passes betas array to SDK via nodeConfig', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'sid' };
       });
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       for await (const _ of client.sendQuery('test', '/tmp', undefined, {
-        betas: ['context-1m-2025-08-07'],
+        nodeConfig: { betas: ['context-1m-2025-08-07'] },
       })) {
         // consume
       }
@@ -817,15 +808,16 @@ describe('ClaudeProvider', () => {
       expect(callArgs.options.betas).toEqual(['context-1m-2025-08-07']);
     });
 
-    test('passes sandbox object to SDK', async () => {
+    test('passes sandbox object to SDK via nodeConfig', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'sid' };
       });
 
       const sandbox = { enabled: true, network: { allowedDomains: [] } };
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      for await (const _ of client.sendQuery('test', '/tmp', undefined, { sandbox })) {
+      for await (const _ of client.sendQuery('test', '/tmp', undefined, {
+        nodeConfig: { sandbox },
+      })) {
         // consume
       }
 
@@ -855,157 +847,6 @@ describe('ClaudeProvider', () => {
       // Empty text should be filtered out
       expect(chunks).toHaveLength(1);
       expect(chunks[0]).toEqual({ type: 'assistant', content: 'Real content' });
-    });
-  });
-
-  describe('pre-spawn env leak gate', () => {
-    let spyFindByDefaultCwd: ReturnType<typeof spyOn>;
-    let spyFindByPathPrefix: ReturnType<typeof spyOn>;
-    let spyScan: ReturnType<typeof spyOn>;
-
-    beforeEach(() => {
-      spyFindByDefaultCwd = spyOn(codebaseDb, 'findCodebaseByDefaultCwd').mockResolvedValue(null);
-      spyFindByPathPrefix = spyOn(codebaseDb, 'findCodebaseByPathPrefix').mockResolvedValue(null);
-      spyScan = spyOn(envLeakScanner, 'scanPathForSensitiveKeys').mockReturnValue({
-        path: '/workspace',
-        findings: [],
-      });
-      mockQuery.mockImplementation(async function* () {
-        yield { type: 'result', session_id: 'sid-gate' };
-      });
-    });
-
-    afterEach(() => {
-      spyFindByDefaultCwd.mockRestore();
-      spyFindByPathPrefix.mockRestore();
-      spyScan.mockRestore();
-    });
-
-    test('throws EnvLeakError when .env contains sensitive keys and registered codebase has no consent', async () => {
-      spyFindByDefaultCwd.mockResolvedValueOnce({
-        id: 'codebase-1',
-        allow_env_keys: false,
-        default_cwd: '/workspace',
-      });
-      spyScan.mockReturnValueOnce({
-        path: '/workspace',
-        findings: [{ file: '.env', keys: ['ANTHROPIC_API_KEY'] }],
-      });
-
-      await expect(async () => {
-        for await (const _ of client.sendQuery('test', '/workspace')) {
-          // consume
-        }
-      }).toThrow('Cannot run workflow');
-    });
-
-    test('skips scan entirely when cwd is not a registered codebase', async () => {
-      // Both lookups return null (default from beforeEach) → unregistered cwd.
-      // Even if sensitive keys would be present, the pre-spawn check must not run
-      // because the canonical gate is registerRepoAtPath, not sendQuery.
-      spyScan.mockReturnValue({
-        path: '/workspace',
-        findings: [{ file: '.env', keys: ['ANTHROPIC_API_KEY'] }],
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(spyScan).not.toHaveBeenCalled();
-      expect(chunks).toHaveLength(1);
-    });
-
-    test('skips scan when codebase has allow_env_keys: true', async () => {
-      spyFindByDefaultCwd.mockResolvedValueOnce({
-        id: 'codebase-1',
-        allow_env_keys: true,
-        default_cwd: '/workspace',
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(spyScan).not.toHaveBeenCalled();
-      expect(chunks).toHaveLength(1);
-    });
-
-    test('proceeds without scanning when cwd has no registered codebase', async () => {
-      // Unregistered cwd — the pre-spawn safety net is out of scope.
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(spyScan).not.toHaveBeenCalled();
-      expect(chunks).toHaveLength(1);
-    });
-
-    test('skips scan when allowTargetRepoKeys is true in merged config', async () => {
-      spyFindByDefaultCwd.mockResolvedValueOnce({
-        id: 'codebase-1',
-        allow_env_keys: false,
-        default_cwd: '/workspace',
-      });
-      const spyLoadConfig = spyOn(configLoader, 'loadConfig').mockResolvedValueOnce({
-        allowTargetRepoKeys: true,
-      } as Awaited<ReturnType<typeof configLoader.loadConfig>>);
-      // Even though scanner would return a finding, the config bypass must short-circuit
-      spyScan.mockReturnValueOnce({
-        path: '/workspace',
-        findings: [{ file: '.env', keys: ['ANTHROPIC_API_KEY'] }],
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(spyScan).not.toHaveBeenCalled();
-      expect(chunks).toHaveLength(1);
-      spyLoadConfig.mockRestore();
-    });
-
-    test('falls back to scanner when loadConfig throws (fail-closed)', async () => {
-      spyFindByDefaultCwd.mockResolvedValueOnce({
-        id: 'codebase-1',
-        allow_env_keys: false,
-        default_cwd: '/workspace',
-      });
-      const spyLoadConfig = spyOn(configLoader, 'loadConfig').mockRejectedValueOnce(
-        new Error('YAML parse error')
-      );
-      spyScan.mockReturnValueOnce({
-        path: '/workspace',
-        findings: [{ file: '.env', keys: ['ANTHROPIC_API_KEY'] }],
-      });
-
-      await expect(async () => {
-        for await (const _ of client.sendQuery('test', '/workspace')) {
-          // consume
-        }
-      }).toThrow('Cannot run workflow');
-      expect(spyScan).toHaveBeenCalled();
-      spyLoadConfig.mockRestore();
-    });
-
-    test('uses prefix lookup for worktree paths when exact match returns null', async () => {
-      spyFindByPathPrefix.mockResolvedValueOnce({
-        id: 'codebase-1',
-        allow_env_keys: true,
-        default_cwd: '/workspace/source',
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace/worktrees/feature')) {
-        chunks.push(chunk);
-      }
-
-      expect(spyFindByPathPrefix).toHaveBeenCalledWith('/workspace/worktrees/feature');
-      expect(spyScan).not.toHaveBeenCalled();
     });
   });
 });

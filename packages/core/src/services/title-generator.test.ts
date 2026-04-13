@@ -36,7 +36,7 @@ const mockGetAgentProvider = mock(() => ({
   getType: () => 'claude',
 }));
 
-mock.module('../providers/factory', () => ({
+mock.module('@archon/providers', () => ({
   getAgentProvider: mockGetAgentProvider,
 }));
 
@@ -167,11 +167,14 @@ describe('title-generator', () => {
     expect(optionsArg.model).toBeUndefined();
   });
 
-  test('passes tools: [] to disable tool access', async () => {
+  test('passes nodeConfig with allowed_tools: [] to disable tool access', async () => {
     await generateAndSetTitle('conv-11', 'Some message', 'claude', '/tmp');
 
-    const optionsArg = mockSendQuery.mock.calls[0][3] as { model?: string; tools?: string[] };
-    expect(optionsArg.tools).toEqual([]);
+    const optionsArg = mockSendQuery.mock.calls[0][3] as {
+      model?: string;
+      nodeConfig?: { allowed_tools?: string[] };
+    };
+    expect(optionsArg.nodeConfig?.allowed_tools).toEqual([]);
   });
 
   test('handles double failure gracefully (AI fails + fallback DB write fails)', async () => {

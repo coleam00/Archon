@@ -4,8 +4,7 @@
  *
  * Type Safety Pattern:
  * - Uses `Options` type from SDK for query configuration
- * - SDK message types (SDKMessage, SDKAssistantMessage, etc.) have strict
- *   type checking that requires explicit type handling for content blocks
+ * - SDK message types have strict type checking for content blocks
  * - Content blocks are typed via inline assertions for clarity
  *
  * Authentication:
@@ -19,29 +18,19 @@ import {
   type HookCallback,
   type HookCallbackMatcher,
 } from '@anthropic-ai/claude-agent-sdk';
-// The `/embed` entry point uses `import ... with { type: 'file' }` to embed
-// the SDK's `cli.js` into the compiled binary's $bunfs virtual filesystem,
-// then extracts it to a temp path at runtime so the subprocess can exec it.
-// Without this, the SDK falls back to resolving `cli.js` from
-// `import.meta.url` of its own module — which bun freezes at build time to
-// the build host's absolute node_modules path, producing a "Module not found
-// /Users/runner/..." error on any machine other than the CI runner.
-// Safe in dev too: resolves to the real on-disk cli.js.
 import cliPath from '@anthropic-ai/claude-agent-sdk/embed';
-import {
-  type AgentRequestOptions,
-  type IAgentProvider,
-  type MessageChunk,
-  type TokenUsage,
+import type {
+  IAgentProvider,
+  SendQueryOptions,
+  MessageChunk,
+  TokenUsage,
+  ProviderCapabilities,
+  NodeConfig,
 } from '../types';
+import { parseClaudeConfig } from './config';
 import { createLogger } from '@archon/paths';
-// No env filtering here — process.env is already clean:
-// stripCwdEnv() at entry point stripped CWD .env keys + CLAUDECODE markers,
-// then ~/.archon/.env was loaded as the trusted source. All keys the user sets
-// in ~/.archon/.env are intentional and pass through to the subprocess.
-import { scanPathForSensitiveKeys, EnvLeakError } from '../utils/env-leak-scanner';
-import * as codebaseDb from '../db/codebases';
-import { loadConfig } from '../config/config-loader';
+import { readFile } from 'fs/promises';
+import { resolve, isAbsolute } from 'path';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -52,14 +41,12 @@ function getLog(): ReturnType<typeof createLogger> {
 
 /**
  * Content block type for assistant messages
- * Represents text or tool_use blocks from Claude API responses
  */
 interface ContentBlock {
   type: 'text' | 'tool_use';
   text?: string;
   name?: string;
   input?: Record<string, unknown>;
-  /** Stable Anthropic `tool_use_id` — used to pair `tool_call`/`tool_result` events. */
   id?: string;
 }
 
@@ -73,7 +60,6 @@ function normalizeClaudeUsage(usage?: {
   const output = usage.output_tokens;
   if (typeof input !== 'number' || typeof output !== 'number') return undefined;
   const total = usage.total_tokens;
-
   return {
     input,
     output,
@@ -87,14 +73,6 @@ function normalizeClaudeUsage(usage?: {
  * process.env is already clean at this point:
  * - stripCwdEnv() at entry point removed CWD .env keys + CLAUDECODE markers
  * - ~/.archon/.env loaded with override:true as the trusted source
- *
- * Auth mode is determined by the SDK based on what tokens are present:
- * - Tokens in env → SDK uses them (explicit auth)
- * - No tokens → SDK uses `claude /login` credentials (global auth)
- * - User controls this by what they put in ~/.archon/.env
- *
- * We log the detected mode for diagnostics but don't filter — the user's
- * config is trusted. See coleam00/Archon#1067 for design rationale.
  */
 function buildSubprocessEnv(): NodeJS.ProcessEnv {
   const hasExplicitTokens = Boolean(
@@ -105,23 +83,14 @@ function buildSubprocessEnv(): NodeJS.ProcessEnv {
     { authMode },
     authMode === 'global' ? 'using_global_auth' : 'using_explicit_tokens'
   );
-
   return { ...process.env };
 }
 
-/** Max retries for transient subprocess failures (3 = 4 total attempts).
- *  SDK subprocess crashes (exit code 1) are often intermittent — AJV schema validation
- *  regressions, stale HTTP/2 connections, and other transient SDK issues typically
- *  succeed on retry 3 or 4. See: anthropics/claude-code#22973, claude-code-action#853 */
+/** Max retries for transient subprocess failures */
 const MAX_SUBPROCESS_RETRIES = 3;
-
-/** Delay between retries in milliseconds */
 const RETRY_BASE_DELAY_MS = 2000;
 
-/** Patterns indicating rate limiting in stderr/error messages */
 const RATE_LIMIT_PATTERNS = ['rate limit', 'too many requests', '429', 'overloaded'];
-
-/** Patterns indicating auth issues in stderr/error messages */
 const AUTH_PATTERNS = [
   'credit balance',
   'unauthorized',
@@ -130,17 +99,7 @@ const AUTH_PATTERNS = [
   '401',
   '403',
 ];
-
-/** Patterns indicating the subprocess crashed (transient, worth retrying) */
-const SUBPROCESS_CRASH_PATTERNS = [
-  'exited with code',
-  'killed',
-  'signal',
-  // "Operation aborted" can appear when the SDK's PostToolUse hook tries to write()
-  // back to a subprocess pipe that was closed by an abort signal. This is a race
-  // condition in SDK cleanup — safe to classify as a crash and retry.
-  'operation aborted',
-];
+const SUBPROCESS_CRASH_PATTERNS = ['exited with code', 'killed', 'signal', 'operation aborted'];
 
 function classifySubprocessError(
   errorMessage: string,
@@ -153,7 +112,6 @@ function classifySubprocessError(
   return 'unknown';
 }
 
-/** Default timeout for first SDK message (ms). Configurable via env var. */
 function getFirstEventTimeoutMs(): number {
   const raw = process.env.ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS;
   if (raw) {
@@ -163,7 +121,6 @@ function getFirstEventTimeoutMs(): number {
   return 60_000;
 }
 
-/** Build a diagnostic payload for claude.first_event_timeout log */
 function buildFirstEventHangDiagnostics(
   subprocessEnv: Record<string, string>,
   model: string | undefined
@@ -182,16 +139,11 @@ function buildFirstEventHangDiagnostics(
   };
 }
 
-/** Sentinel error class to identify timeout rejections in withFirstMessageTimeout. */
 class FirstEventTimeoutError extends Error {}
 
 /**
  * Wraps an async generator so that the first call to .next() must resolve
- * within `timeoutMs`. If it doesn't, aborts the controller and throws a
- * descriptive error. Subsequent .next() calls are forwarded directly.
- *
- * Uses Promise.race() — not just AbortController — because the pathological
- * case is "SDK ignores abort", so we need an independent unblocking mechanism.
+ * within `timeoutMs`. If it doesn't, aborts the controller and throws.
  */
 export async function* withFirstMessageTimeout<T>(
   gen: AsyncGenerator<T>,
@@ -199,7 +151,6 @@ export async function* withFirstMessageTimeout<T>(
   timeoutMs: number,
   diagnostics: Record<string, unknown>
 ): AsyncGenerator<T> {
-  // Race first event against timeout
   let timerId: ReturnType<typeof setTimeout> | undefined;
   let firstValue: IteratorResult<T>;
   try {
@@ -230,31 +181,310 @@ export async function* withFirstMessageTimeout<T>(
 
   if (firstValue.done) return;
   yield firstValue.value;
-
-  // Forward remaining events directly
   yield* gen;
 }
 
 /**
- * Returns the current process UID, or undefined on platforms that don't support it (e.g. Windows).
- * Exported for testing — spyOn(claudeModule, 'getProcessUid') works cross-platform.
+ * Returns the current process UID, or undefined on platforms that don't support it.
  */
 export function getProcessUid(): number | undefined {
   return typeof process.getuid === 'function' ? process.getuid() : undefined;
 }
 
+// ─── MCP Config Loading (absorbed from dag-executor) ───────────────────────
+
 /**
- * Claude AI agent provider
- * Implements generic IAgentProvider interface
+ * Expand $VAR_NAME references in string-valued records from process.env.
+ */
+function expandEnvVarsInRecord(
+  record: Record<string, unknown>,
+  missingVars: string[]
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [key, val] of Object.entries(record)) {
+    if (typeof val !== 'string') {
+      getLog().warn({ key, valueType: typeof val }, 'mcp_env_value_coerced_to_string');
+      result[key] = String(val);
+      continue;
+    }
+    result[key] = val.replace(/\$([A-Z_][A-Z0-9_]*)/g, (_, varName: string) => {
+      const envVal = process.env[varName];
+      if (envVal === undefined) {
+        missingVars.push(varName);
+      }
+      return envVal ?? '';
+    });
+  }
+  return result;
+}
+
+function expandEnvVars(config: Record<string, unknown>): {
+  expanded: Record<string, unknown>;
+  missingVars: string[];
+} {
+  const result: Record<string, unknown> = {};
+  const missingVars: string[] = [];
+  for (const [serverName, serverConfig] of Object.entries(config)) {
+    if (typeof serverConfig !== 'object' || serverConfig === null) {
+      getLog().warn({ serverName, valueType: typeof serverConfig }, 'mcp_server_config_not_object');
+      continue;
+    }
+    const server = { ...(serverConfig as Record<string, unknown>) };
+    if (server.env && typeof server.env === 'object') {
+      server.env = expandEnvVarsInRecord(server.env as Record<string, unknown>, missingVars);
+    }
+    if (server.headers && typeof server.headers === 'object') {
+      server.headers = expandEnvVarsInRecord(
+        server.headers as Record<string, unknown>,
+        missingVars
+      );
+    }
+    result[serverName] = server;
+  }
+  return { expanded: result, missingVars };
+}
+
+/**
+ * Load MCP server config from a JSON file and expand environment variables.
+ */
+export async function loadMcpConfig(
+  mcpPath: string,
+  cwd: string
+): Promise<{ servers: Record<string, unknown>; serverNames: string[]; missingVars: string[] }> {
+  const fullPath = isAbsolute(mcpPath) ? mcpPath : resolve(cwd, mcpPath);
+
+  let raw: string;
+  try {
+    raw = await readFile(fullPath, 'utf-8');
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === 'ENOENT') {
+      throw new Error(`MCP config file not found: ${mcpPath} (resolved to ${fullPath})`);
+    }
+    throw new Error(`Failed to read MCP config file: ${mcpPath} — ${e.message}`);
+  }
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch (parseErr) {
+    const detail = (parseErr as SyntaxError).message;
+    throw new Error(`MCP config file is not valid JSON: ${mcpPath} — ${detail}`);
+  }
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`MCP config must be a JSON object (Record<string, ServerConfig>): ${mcpPath}`);
+  }
+
+  const { expanded, missingVars } = expandEnvVars(parsed);
+  const serverNames = Object.keys(expanded);
+  return { servers: expanded, serverNames, missingVars };
+}
+
+// ─── SDK Hooks Building (absorbed from dag-executor) ───────────────────────
+
+/** YAML hook matcher shape (matches @archon/workflows/schemas/dag-node WorkflowNodeHooks) */
+interface YAMLHookMatcher {
+  matcher?: string;
+  response: unknown;
+  timeout?: number;
+}
+
+type SDKHooksMap = Partial<
+  Record<
+    string,
+    {
+      matcher?: string;
+      hooks: ((
+        input: unknown,
+        toolUseID: string | undefined,
+        options: { signal: AbortSignal }
+      ) => Promise<unknown>)[];
+      timeout?: number;
+    }[]
+  >
+>;
+
+/**
+ * Convert declarative YAML hook definitions to SDK HookCallbackMatcher arrays.
+ */
+export function buildSDKHooksFromYAML(
+  nodeHooks: Record<string, YAMLHookMatcher[] | undefined>
+): SDKHooksMap {
+  const sdkHooks: SDKHooksMap = {};
+
+  for (const [event, matchers] of Object.entries(nodeHooks)) {
+    if (!matchers) continue;
+    sdkHooks[event] = matchers.map(m => ({
+      ...(m.matcher ? { matcher: m.matcher } : {}),
+      hooks: [async (): Promise<unknown> => m.response],
+      ...(m.timeout ? { timeout: m.timeout } : {}),
+    }));
+  }
+
+  if (Object.keys(sdkHooks).length === 0) {
+    getLog().warn(
+      { nodeHooksKeys: Object.keys(nodeHooks) },
+      'claude.hooks_build_produced_empty_map'
+    );
+  }
+
+  return sdkHooks;
+}
+
+// ─── NodeConfig → SDK Options Translation ──────────────────────────────────
+
+/**
+ * Translate nodeConfig into Claude SDK-specific options.
+ * Called inside sendQuery when nodeConfig is present (workflow path).
+ * Returns user-facing warnings that the caller should yield as system chunks.
+ */
+async function applyNodeConfig(
+  options: Options,
+  nodeConfig: NodeConfig,
+  cwd: string
+): Promise<string[]> {
+  const warnings: string[] = [];
+  // allowed_tools → tools
+  if (nodeConfig.allowed_tools !== undefined) {
+    options.tools = nodeConfig.allowed_tools;
+  }
+
+  // denied_tools → disallowedTools
+  if (nodeConfig.denied_tools !== undefined) {
+    options.disallowedTools = nodeConfig.denied_tools;
+  }
+
+  // hooks → build SDK hooks
+  if (nodeConfig.hooks) {
+    const builtHooks = buildSDKHooksFromYAML(
+      nodeConfig.hooks as Record<string, YAMLHookMatcher[] | undefined>
+    );
+    if (Object.keys(builtHooks).length > 0) {
+      // Merge with existing hooks (PostToolUse capture hook)
+      const existingHooks = options.hooks as SDKHooksMap | undefined;
+      for (const [event, matchers] of Object.entries(builtHooks)) {
+        if (!matchers) continue;
+        const existing = existingHooks?.[event] as HookCallbackMatcher[] | undefined;
+        if (existing) {
+          (options.hooks as Record<string, HookCallbackMatcher[]>)[event] = [
+            ...(matchers as HookCallbackMatcher[]),
+            ...existing,
+          ];
+        } else {
+          (options.hooks as Record<string, HookCallbackMatcher[]>)[event] =
+            matchers as HookCallbackMatcher[];
+        }
+      }
+    }
+  }
+
+  // mcp → load config and set mcpServers + allowedTools wildcards
+  if (nodeConfig.mcp) {
+    const mcpPath = nodeConfig.mcp;
+    const { servers, serverNames, missingVars } = await loadMcpConfig(mcpPath, cwd);
+    options.mcpServers = servers as Options['mcpServers'];
+    const mcpWildcards = serverNames.map(name => `mcp__${name}__*`);
+    options.allowedTools = [...(options.allowedTools ?? []), ...mcpWildcards];
+    getLog().info({ serverNames, mcpPath }, 'claude.mcp_config_loaded');
+    if (missingVars.length > 0) {
+      const uniqueVars = [...new Set(missingVars)];
+      getLog().warn({ missingVars: uniqueVars }, 'claude.mcp_env_vars_missing');
+      warnings.push(
+        `MCP config references undefined env vars: ${uniqueVars.join(', ')}. These will be empty strings — MCP servers may fail to authenticate.`
+      );
+    }
+    // Haiku models don't support tool search (lazy loading for many tools)
+    if (options.model?.toLowerCase().includes('haiku')) {
+      getLog().warn({ model: options.model }, 'claude.mcp_haiku_tool_search_unsupported');
+      warnings.push(
+        'Using Haiku model with MCP servers — tool search (lazy loading for many tools) is not supported on Haiku. Consider using Sonnet or Opus.'
+      );
+    }
+  }
+
+  // skills → AgentDefinition wrapping
+  if (nodeConfig.skills) {
+    const skills = nodeConfig.skills;
+    const agentId = 'dag-node-skills';
+    const agentTools = options.tools ? [...(options.tools as string[]), 'Skill'] : ['Skill'];
+    const agentDef: {
+      description: string;
+      prompt: string;
+      skills: string[];
+      tools: string[];
+      model?: string;
+    } = {
+      description: 'DAG node with skills',
+      prompt: `You have preloaded skills: ${skills.join(', ')}. Use them when relevant.`,
+      skills,
+      tools: agentTools,
+    };
+    if (options.model) agentDef.model = options.model;
+    options.agents = { [agentId]: agentDef };
+    options.agent = agentId;
+    if (!options.allowedTools?.includes('Skill')) {
+      options.allowedTools = [...(options.allowedTools ?? []), 'Skill'];
+    }
+    getLog().info({ skills, agentId }, 'claude.skills_agent_created');
+  }
+
+  // effort
+  if (nodeConfig.effort !== undefined) {
+    options.effort = nodeConfig.effort as Options['effort'];
+  }
+
+  // thinking
+  if (nodeConfig.thinking !== undefined) {
+    options.thinking = nodeConfig.thinking as Options['thinking'];
+  }
+
+  // sandbox
+  if (nodeConfig.sandbox !== undefined) {
+    options.sandbox = nodeConfig.sandbox as Options['sandbox'];
+  }
+
+  // betas
+  if (nodeConfig.betas !== undefined) {
+    options.betas = nodeConfig.betas as Options['betas'];
+  }
+
+  // output_format (from nodeConfig, overrides base outputFormat if present)
+  if (nodeConfig.output_format) {
+    options.outputFormat = {
+      type: 'json_schema',
+      schema: nodeConfig.output_format,
+    } as Options['outputFormat'];
+  }
+
+  // maxBudgetUsd from nodeConfig
+  if (nodeConfig.maxBudgetUsd !== undefined) {
+    options.maxBudgetUsd = nodeConfig.maxBudgetUsd;
+  }
+
+  // systemPrompt from nodeConfig
+  if (nodeConfig.systemPrompt !== undefined) {
+    options.systemPrompt = nodeConfig.systemPrompt;
+  }
+
+  // fallbackModel from nodeConfig
+  if (nodeConfig.fallbackModel !== undefined) {
+    options.fallbackModel = nodeConfig.fallbackModel;
+  }
+
+  return warnings;
+}
+
+// ─── Claude Provider ───────────────────────────────────────────────────────
+
+/**
+ * Claude AI agent provider.
+ * Implements IAgentProvider with full SDK integration.
  */
 export class ClaudeProvider implements IAgentProvider {
   private readonly retryBaseDelayMs: number;
 
   constructor(options?: { retryBaseDelayMs?: number }) {
-    // Claude Code SDK silently rejects bypassPermissions when running as root (UID 0).
-    // Check once at construction time so the error surfaces early, not on first query.
-    // IS_SANDBOX=1 bypasses this check — the SDK itself honours this env var in sandboxed
-    // environments (Docker, VPS, CI) where running as root is expected.
     if (getProcessUid() === 0 && process.env.IS_SANDBOX !== '1') {
       throw new Error(
         'Claude Code SDK does not support bypassPermissions when running as root (UID 0). ' +
@@ -264,50 +494,40 @@ export class ClaudeProvider implements IAgentProvider {
     this.retryBaseDelayMs = options?.retryBaseDelayMs ?? RETRY_BASE_DELAY_MS;
   }
 
+  getCapabilities(): ProviderCapabilities {
+    return {
+      sessionResume: true,
+      mcp: true,
+      hooks: true,
+      skills: true,
+      toolRestrictions: true,
+      structuredOutput: true,
+      envInjection: true,
+      costControl: true,
+      effortControl: true,
+      thinkingControl: true,
+      fallbackModel: true,
+      sandbox: true,
+    };
+  }
+
   /**
    * Send a query to Claude and stream responses.
    * Includes retry logic for transient failures (up to 3 retries with exponential backoff).
-   * Enriches errors with stderr context and classification.
    */
+  // TODO(#1135): Pre-spawn env-leak gate was removed during provider extraction.
+  // Caller-side enforcement (orchestrator, dag-executor) is tracked in #1135.
+  // Providers must NOT implement security gates — the platform guarantees safety
+  // before a provider runs.
   async *sendQuery(
     prompt: string,
     cwd: string,
     resumeSessionId?: string,
-    requestOptions?: AgentRequestOptions
+    requestOptions?: SendQueryOptions
   ): AsyncGenerator<MessageChunk> {
-    // Pre-spawn: check for env key leak if codebase is not explicitly consented.
-    // Use prefix lookup so worktree paths (e.g. .../worktrees/feature-branch) still
-    // match the registered source cwd (e.g. .../source).
-    const codebase =
-      (await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
-      (await codebaseDb.findCodebaseByPathPrefix(cwd));
-    if (codebase && !codebase.allow_env_keys) {
-      // Fail-closed: a config load failure (corrupt YAML, permission denied)
-      // must NOT silently bypass the gate. Catch, log, and treat as
-      // `allowTargetRepoKeys = false` so the scanner still runs.
-      let allowTargetRepoKeys = false;
-      try {
-        const merged = await loadConfig(cwd);
-        allowTargetRepoKeys = merged.allowTargetRepoKeys;
-      } catch (configErr) {
-        getLog().warn({ err: configErr, cwd }, 'env_leak_gate.config_load_failed_gate_enforced');
-      }
-      if (!allowTargetRepoKeys) {
-        const report = scanPathForSensitiveKeys(cwd);
-        if (report.findings.length > 0) {
-          throw new EnvLeakError(report, 'spawn-existing');
-        }
-      }
-    }
-
-    // Note: If subprocess crashes mid-stream after yielding chunks, those chunks
-    // are already consumed by the caller. Retry starts a fresh subprocess, so the
-    // caller may receive partial output from the failed attempt followed by full
-    // output from the retry. This is a known limitation of async generator retries.
     let lastError: Error | undefined;
 
     for (let attempt = 0; attempt <= MAX_SUBPROCESS_RETRIES; attempt++) {
-      // Check if already aborted before starting attempt
       if (requestOptions?.abortSignal?.aborted) {
         throw new Error('Query aborted');
       }
@@ -315,7 +535,6 @@ export class ClaudeProvider implements IAgentProvider {
       const stderrLines: string[] = [];
       const toolResultQueue: { toolName: string; toolOutput: string; toolCallId?: string }[] = [];
 
-      // Create per-attempt abort controller and wire to caller's signal
       const controller = new AbortController();
       if (requestOptions?.abortSignal) {
         requestOptions.abortSignal.addEventListener(
@@ -327,69 +546,38 @@ export class ClaudeProvider implements IAgentProvider {
         );
       }
 
+      // Parse assistantConfig for typed defaults
+      const assistantDefaults = parseClaudeConfig(requestOptions?.assistantConfig ?? {});
+
       const options: Options = {
         cwd,
         pathToClaudeCodeExecutable: cliPath,
         env: requestOptions?.env
           ? { ...buildSubprocessEnv(), ...requestOptions.env }
           : buildSubprocessEnv(),
-        model: requestOptions?.model,
+        model: requestOptions?.model ?? assistantDefaults.model,
         abortController: controller,
-        ...(requestOptions?.tools !== undefined ? { tools: requestOptions.tools } : {}),
-        ...(requestOptions?.disallowedTools !== undefined
-          ? { disallowedTools: requestOptions.disallowedTools }
-          : {}),
-        // Pass outputFormat for json_schema structured output (Claude Agent SDK v0.2.45+)
         ...(requestOptions?.outputFormat !== undefined
           ? { outputFormat: requestOptions.outputFormat }
           : {}),
-        // Note: hooks are merged below (line with `hooks: { ... }`) — not spread here
-        // Pass MCP servers for per-node MCP support (Claude Agent SDK v0.2.74+)
-        ...(requestOptions?.mcpServers !== undefined
-          ? { mcpServers: requestOptions.mcpServers }
-          : {}),
-        // Pass allowedTools for MCP tool wildcards (e.g., 'mcp__github__*')
-        ...(requestOptions?.allowedTools !== undefined
-          ? { allowedTools: requestOptions.allowedTools }
-          : {}),
-        // Pass agents/agent for per-node skill scoping via AgentDefinition wrapping
-        ...(requestOptions?.agents !== undefined ? { agents: requestOptions.agents } : {}),
-        ...(requestOptions?.agent !== undefined ? { agent: requestOptions.agent } : {}),
-        // Skip writing session transcripts to ~/.claude/projects/ — Archon manages its own
-        // session persistence. persistSession: false reduces disk I/O and keeps the session
-        // directory clean. Claude Agent SDK v0.2.74+.
-        ...(requestOptions?.persistSession !== undefined
-          ? { persistSession: requestOptions.persistSession }
-          : {}),
-        // When forkSession is true, the SDK copies the prior session's history into a new
-        // session file, leaving the original untouched — safe to use on retries.
-        ...(requestOptions?.forkSession !== undefined
-          ? { forkSession: requestOptions.forkSession }
-          : {}),
-        // Forward Claude-only SDK options (effort, thinking, maxBudgetUsd, fallbackModel, betas, sandbox)
-        ...(requestOptions?.effort !== undefined ? { effort: requestOptions.effort } : {}),
-        ...(requestOptions?.thinking !== undefined ? { thinking: requestOptions.thinking } : {}),
         ...(requestOptions?.maxBudgetUsd !== undefined
           ? { maxBudgetUsd: requestOptions.maxBudgetUsd }
           : {}),
         ...(requestOptions?.fallbackModel !== undefined
           ? { fallbackModel: requestOptions.fallbackModel }
           : {}),
-        // betas: string[] from user config; SDK expects SdkBeta[] (string literal union).
-        // User-provided values are validated upstream — cast is safe.
-        ...(requestOptions?.betas !== undefined
-          ? { betas: requestOptions.betas as Options['betas'] }
+        ...(requestOptions?.persistSession !== undefined
+          ? { persistSession: requestOptions.persistSession }
           : {}),
-        ...(requestOptions?.sandbox !== undefined ? { sandbox: requestOptions.sandbox } : {}),
+        ...(requestOptions?.forkSession !== undefined
+          ? { forkSession: requestOptions.forkSession }
+          : {}),
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
         systemPrompt: requestOptions?.systemPrompt ?? { type: 'preset', preset: 'claude_code' },
-        settingSources: requestOptions?.settingSources ?? ['project'],
-        // Merge user-provided hooks with our PostToolUse capture hook
+        settingSources: assistantDefaults.settingSources ?? ['project'],
         hooks: {
-          ...(requestOptions?.hooks ?? {}),
           PostToolUse: [
-            ...((requestOptions?.hooks?.PostToolUse ?? []) as HookCallbackMatcher[]),
             {
               hooks: [
                 (async (input: Record<string, unknown>): Promise<{ continue: true }> => {
@@ -400,7 +588,6 @@ export class ClaudeProvider implements IAgentProvider {
                     typeof toolResponse === 'string'
                       ? toolResponse
                       : JSON.stringify(toolResponse ?? '');
-                  // Truncate large outputs (e.g., file reads) to prevent DB bloat
                   const maxLen = 10_000;
                   toolResultQueue.push({
                     toolName,
@@ -412,16 +599,10 @@ export class ClaudeProvider implements IAgentProvider {
               ],
             },
           ],
-          // Without this, errored / interrupted / permission-denied tools never produce
-          // a paired tool_result chunk and the corresponding UI card spins forever.
-          // SDK type: PostToolUseFailureHookInput { tool_name, tool_use_id, error, is_interrupt? }
           PostToolUseFailure: [
-            ...((requestOptions?.hooks?.PostToolUseFailure ?? []) as HookCallbackMatcher[]),
             {
               hooks: [
                 (async (input: Record<string, unknown>): Promise<{ continue: true }> => {
-                  // Always return { continue: true } even on internal errors so a
-                  // malformed SDK payload can never crash the hook dispatch silently.
                   try {
                     const toolName = (input as { tool_name?: string }).tool_name ?? 'unknown';
                     const toolUseId = (input as { tool_use_id?: string }).tool_use_id;
@@ -449,9 +630,6 @@ export class ClaudeProvider implements IAgentProvider {
         stderr: (data: string) => {
           const output = data.trim();
           if (!output) return;
-
-          // Always capture stderr for diagnostics — previous filtering discarded
-          // useful SDK startup output, leaving stderrContext empty on crashes.
           stderrLines.push(output);
 
           const isError =
@@ -473,6 +651,13 @@ export class ClaudeProvider implements IAgentProvider {
         },
       };
 
+      // Apply nodeConfig if present (workflow path) — translates YAML to SDK options
+      const nodeConfigWarnings: string[] = [];
+      if (requestOptions?.nodeConfig) {
+        const warns = await applyNodeConfig(options, requestOptions.nodeConfig, cwd);
+        nodeConfigWarnings.push(...warns);
+      }
+
       if (resumeSessionId) {
         options.resume = resumeSessionId;
         getLog().debug(
@@ -484,6 +669,11 @@ export class ClaudeProvider implements IAgentProvider {
       }
 
       try {
+        // Yield nodeConfig warnings before starting the query
+        for (const warning of nodeConfigWarnings) {
+          yield { type: 'system' as const, content: `⚠️ ${warning}` };
+        }
+
         const rawEvents = query({ prompt, options });
         const timeoutMs = getFirstEventTimeoutMs();
         const diagnostics = buildFirstEventHangDiagnostics(
@@ -492,7 +682,6 @@ export class ClaudeProvider implements IAgentProvider {
         );
         const events = withFirstMessageTimeout(rawEvents, controller, timeoutMs, diagnostics);
         for await (const msg of events) {
-          // Drain tool results captured by PostToolUse hook before processing the next message
           while (toolResultQueue.length > 0) {
             const tr = toolResultQueue.shift();
             if (tr) {
@@ -522,7 +711,6 @@ export class ClaudeProvider implements IAgentProvider {
               }
             }
           } else if (msg.type === 'system') {
-            // Check MCP server connection status from system/init
             const sysMsg = msg as {
               subtype?: string;
               mcp_servers?: { name: string; status: string }[];
@@ -581,10 +769,6 @@ export class ClaudeProvider implements IAgentProvider {
             };
           }
         }
-        // Drain any remaining tool results from the hook queue.
-        // Must mirror the in-loop drain — PostToolUseFailure results commonly land
-        // here (they fire just before the SDK's terminal `result` message), so
-        // dropping toolCallId here would defeat the stable-pairing fix.
         while (toolResultQueue.length > 0) {
           const tr = toolResultQueue.shift();
           if (tr) {
@@ -596,11 +780,10 @@ export class ClaudeProvider implements IAgentProvider {
             };
           }
         }
-        return; // Success - exit retry loop
+        return;
       } catch (error) {
         const err = error as Error;
 
-        // Don't retry aborted queries
         if (controller.signal.aborted) {
           throw new Error('Query aborted');
         }
@@ -613,7 +796,6 @@ export class ClaudeProvider implements IAgentProvider {
           'query_error'
         );
 
-        // Don't retry auth errors - they won't resolve
         if (errorClass === 'auth') {
           const enrichedError = new Error(
             `Claude Code auth error: ${err.message}${stderrContext ? ` (${stderrContext})` : ''}`
@@ -622,7 +804,6 @@ export class ClaudeProvider implements IAgentProvider {
           throw enrichedError;
         }
 
-        // Retry transient failures (rate limit, crash)
         if (
           attempt < MAX_SUBPROCESS_RETRIES &&
           (errorClass === 'rate_limit' || errorClass === 'crash')
@@ -634,7 +815,6 @@ export class ClaudeProvider implements IAgentProvider {
           continue;
         }
 
-        // Final failure - enrich and throw
         const enrichedMessage = stderrContext
           ? `Claude Code ${errorClass}: ${err.message} (stderr: ${stderrContext})`
           : `Claude Code ${errorClass}: ${err.message}`;
@@ -644,13 +824,9 @@ export class ClaudeProvider implements IAgentProvider {
       }
     }
 
-    // Should not reach here, but handle defensively
     throw lastError ?? new Error('Claude Code query failed after retries');
   }
 
-  /**
-   * Get the assistant type identifier
-   */
   getType(): string {
     return 'claude';
   }

@@ -11,7 +11,7 @@ mock.module('@archon/paths', () => ({
   getArchonHome: mock(() => '/tmp/test-archon-home'),
 }));
 
-import { resolveCodexBinaryPath } from './codex-binary-resolver';
+import { resolveCodexBinaryPath } from './binary-resolver';
 
 describe('resolveCodexBinaryPath (dev mode)', () => {
   test('returns undefined when BUNDLED_IS_BINARY is false', async () => {
