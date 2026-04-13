@@ -564,6 +564,11 @@ export class WorktreeProvider implements IIsolationProvider {
       await this.createNewBranch(request, repoPath, worktreePath, branchName, baseBranch);
     }
 
+    // Initialize submodules if configured and .gitmodules exists
+    if (worktreeConfig?.initSubmodules) {
+      await this.initSubmodules(worktreePath);
+    }
+
     // Copy git-ignored files based on repo config
     const { configLoadFailed } = await this.copyConfiguredFiles(
       repoPath,
@@ -916,6 +921,34 @@ export class WorktreeProvider implements IIsolationProvider {
       } else {
         throw error;
       }
+    }
+  }
+
+  /**
+   * Initialize git submodules in a worktree.
+   *
+   * Only runs when the worktree contains a .gitmodules file (i.e., the repo
+   * actually uses submodules). Skips silently otherwise.
+   */
+  private async initSubmodules(worktreePath: string): Promise<void> {
+    // Check if .gitmodules exists before running submodule commands
+    const hasSubmodules = await this.directoryExists(join(worktreePath, '.gitmodules'));
+    if (!hasSubmodules) {
+      return;
+    }
+
+    try {
+      await execFileAsync(
+        'git',
+        ['-C', worktreePath, 'submodule', 'update', '--init', '--recursive'],
+        { timeout: 120000 }
+      );
+      getLog().info({ worktreePath }, 'worktree.submodules_initialized');
+    } catch (error) {
+      const err = error as Error;
+      // Non-fatal: the worktree is still usable without submodules.
+      // Log a warning so the user can diagnose if workflows fail.
+      getLog().warn({ err, worktreePath }, 'worktree.submodule_init_failed');
     }
   }
 

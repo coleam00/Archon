@@ -242,6 +242,7 @@ export interface IsolationEnvironmentRow {
 export interface WorktreeCreateConfig {
   baseBranch?: string;
   copyFiles?: string[];
+  initSubmodules?: boolean;
 }
 
 export type RepoConfigLoader = (repoPath: string) => Promise<WorktreeCreateConfig | null>;

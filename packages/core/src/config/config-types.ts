@@ -128,6 +128,14 @@ export interface RepoConfig {
      * @example [".env", ".archon", "data/fixtures/"]
      */
     copyFiles?: string[];
+
+    /**
+     * Initialize git submodules in new worktrees.
+     * Runs `git submodule update --init --recursive` after worktree creation.
+     * Only has effect when the repo contains a .gitmodules file.
+     * @default false
+     */
+    initSubmodules?: boolean;
   };
 
   /**

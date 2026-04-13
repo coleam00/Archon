@@ -816,6 +816,106 @@ describe('WorktreeProvider', () => {
         { recursive: true }
       );
     });
+
+    test('initializes submodules when initSubmodules is true and .gitmodules exists', async () => {
+      const configLoader: RepoConfigLoader = async () => ({
+        baseBranch: 'main',
+        initSubmodules: true,
+      });
+      const submoduleProvider = new WorktreeProvider(configLoader);
+      // mockAccess resolves by default (file exists)
+
+      await submoduleProvider.create(baseRequest);
+
+      // Verify git submodule update --init --recursive was called on the worktree path
+      const submoduleCalls = execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('submodule') && args.includes('update');
+      });
+      expect(submoduleCalls).toHaveLength(1);
+      expect(submoduleCalls[0][1]).toEqual(
+        expect.arrayContaining([
+          '-C',
+          expect.any(String),
+          'submodule',
+          'update',
+          '--init',
+          '--recursive',
+        ])
+      );
+    });
+
+    test('skips submodule init when initSubmodules is false', async () => {
+      const configLoader: RepoConfigLoader = async () => ({
+        baseBranch: 'main',
+        initSubmodules: false,
+      });
+      const noSubmoduleProvider = new WorktreeProvider(configLoader);
+
+      await noSubmoduleProvider.create(baseRequest);
+
+      const submoduleCalls = execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('submodule');
+      });
+      expect(submoduleCalls).toHaveLength(0);
+    });
+
+    test('skips submodule init when initSubmodules is not configured', async () => {
+      // Default provider has no initSubmodules in config
+      await provider.create(baseRequest);
+
+      const submoduleCalls = execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('submodule');
+      });
+      expect(submoduleCalls).toHaveLength(0);
+    });
+
+    test('skips submodule init when .gitmodules does not exist', async () => {
+      const configLoader: RepoConfigLoader = async () => ({
+        baseBranch: 'main',
+        initSubmodules: true,
+      });
+      const submoduleProvider = new WorktreeProvider(configLoader);
+
+      // .gitmodules does not exist — access throws ENOENT
+      mockAccess.mockImplementation(async (path: unknown) => {
+        if (typeof path === 'string' && path.endsWith('.gitmodules')) {
+          const err = new Error('ENOENT') as NodeJS.ErrnoException;
+          err.code = 'ENOENT';
+          throw err;
+        }
+      });
+
+      await submoduleProvider.create(baseRequest);
+
+      const submoduleCalls = execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('submodule');
+      });
+      expect(submoduleCalls).toHaveLength(0);
+    });
+
+    test('worktree creation succeeds even when submodule init fails', async () => {
+      const configLoader: RepoConfigLoader = async () => ({
+        baseBranch: 'main',
+        initSubmodules: true,
+      });
+      const submoduleProvider = new WorktreeProvider(configLoader);
+
+      // Make submodule command fail
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('submodule')) {
+          throw new Error('submodule update failed: network unreachable');
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      // Should not throw — submodule failure is non-fatal
+      const env = await submoduleProvider.create(baseRequest);
+      expect(env.status).toBe('active');
+    });
   });
 
   describe('destroy', () => {
