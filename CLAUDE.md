@@ -180,7 +180,7 @@ psql $DATABASE_URL < migrations/000_combined.sql
 
 ### CLI (Command Line)
 
-Run workflows directly from the command line without needing the server. Workflow and isolation commands require running from within a git repository (subdirectories work - resolves to repo root).
+> Full CLI reference: `.claude/rules/cli.md`
 
 ```bash
 # List available workflows (requires git repo)
@@ -504,41 +504,9 @@ assistants:
 
 ### Running the App in Worktrees
 
-Agents working in worktrees can run the app for self-testing (make changes → run app → test via curl → fix). Ports are automatically allocated to avoid conflicts:
+> Port allocation and worktree dev details: `.claude/rules/server-api.md` and `.claude/rules/dx-quirks.md`
 
-```bash
-# Run in worktree (port auto-allocated based on path)
-bun dev &
-# [Hono] Worktree detected (/path/to/worktree)
-# [Hono] Auto-allocated port: 3637 (base: 3090, offset: +547)
-
-# Test via web API (production path)
-# 1) Create a conversation
-curl -X POST http://localhost:3637/api/conversations \
-  -H "Content-Type: application/json" \
-  -d '{}'
-
-# 2) Send a message
-curl -X POST http://localhost:3637/api/conversations/<conversationId>/message \
-  -H "Content-Type: application/json" \
-  -d '{"message":"/status"}'
-
-# 3) Fetch messages (polling)
-curl http://localhost:3637/api/conversations/<conversationId>/messages
-
-# Note: SSE streaming is available at /api/stream/<conversationId>
-```
-
-**Port Allocation:**
-- Worktrees: Automatic unique port (3190-4089 range, hash-based on path)
-- Main repo: Default 3090
-- Override: `PORT=4000 bun dev` (works in both contexts)
-- Same worktree always gets same port (deterministic)
-
-**Important:**
-- Use the web API routes for manual validation (avoid running multiple platform adapters)
-- Database is shared (same conversations/codebases available)
-- Kill the server when done: `pkill -f "bun.*dev"` or use the specific port
+Worktrees auto-allocate ports (3190-4089 range, deterministic per path). Main repo: 3090. Override: `PORT=4000 bun dev`.
 
 ### Archon Directory Structure
 
@@ -613,81 +581,17 @@ This ensures type compatibility with SDK updates and eliminates `as any` casts.
 
 ### Testing
 
-**Unit Tests:**
-- Test pure functions (variable substitution, command parsing)
-- Mock external dependencies (database, AI SDKs, platform APIs)
-
-**Integration Tests:**
-- Test database operations with test database
-- Test end-to-end flows (mock platforms/AI but use real orchestrator)
-- Clean up test data after each test
-
-**Mock isolation rules (IMPORTANT):**
-- Bun's `mock.module()` is process-global and irreversible — `mock.restore()` does NOT undo it
-- Do NOT add `afterAll(() => mock.restore())` for `mock.module()` cleanup — it has no effect
-- Use `spyOn()` for internal modules that other test files import directly (e.g., `spyOn(git, 'checkout')`) — `spy.mockRestore()` DOES work for spies
-- Never `mock.module()` a module path that another test file also `mock.module()`s with a different implementation
-- When adding a new test file with `mock.module()`, ensure its package.json test script runs it in a separate `bun test` invocation from any conflicting files
-
-**Manual Validation:** Use the web API (`curl`) or CLI commands directly for end-to-end testing of new features.
+> Full testing conventions, mock patterns, and batch tables: `.claude/rules/testing.md`
 
 ### Logging
 
-**Structured logging with Pino** (`packages/paths/src/logger.ts`):
-
-```typescript
-import { createLogger } from '@archon/paths';
-
-const log = createLogger('orchestrator');
-
-// Event naming: {domain}.{action}_{state}
-// Standard states: _started, _completed, _failed, _validated, _rejected
-async function createSession(conversationId: string, codebaseId: string) {
-  log.info({ conversationId, codebaseId }, 'session.create_started');
-
-  try {
-    const session = await doCreate();
-    log.info({ conversationId, codebaseId, sessionId: session.id }, 'session.create_completed');
-    return session;
-  } catch (e) {
-    const err = e as Error;
-    log.error(
-      { conversationId, error: err.message, errorType: err.constructor.name, err },
-      'session.create_failed',
-    );
-    throw err;
-  }
-}
-```
-
-**Event naming rules:**
-- Format: `{domain}.{action}_{state}` — e.g. `workflow.step_started`, `isolation.create_failed`
-- Avoid generic events like `processing` or `handling`
-- Always pair `_started` with `_completed` or `_failed`
-- Include context: IDs, durations, error details
-
-**Log Levels:** `fatal` > `error` > `warn` > `info` (default) > `debug` > `trace`
-
-**Verbosity:**
-- CLI: `archon --quiet` (errors only) — suppresses Pino logs and workflow progress output
-- CLI: `archon --verbose` (debug) — enables debug Pino logs and tool-level workflow progress events
-- Server: `LOG_LEVEL=debug bun run start`
-
-**Never log:** API keys or tokens (mask: `token.slice(0, 8) + '...'`), user message content, PII.
+> Pino patterns, event naming, log levels: `.claude/rules/logging.md`
 
 ### Command System
 
-**Variable Substitution:**
-- `$1`, `$2`, `$3` - Positional arguments
-- `$ARGUMENTS` - All arguments as single string
-- `$ARTIFACTS_DIR` - External artifacts directory for the current workflow run (pre-created by executor)
-- `$WORKFLOW_ID` - The workflow run ID
-- `$BASE_BRANCH` - Base branch; auto-detected from git when `worktree.baseBranch` is not set; fails only if referenced in a prompt and auto-detection also fails
-- `$DOCS_DIR` - Documentation directory path; configured via `docs.path` in `.archon/config.yaml`. Defaults to `docs/`. Never throws.
-- `$LOOP_USER_INPUT` - User feedback provided via `/workflow approve <id> <text>` at an interactive loop gate. Only populated on the first iteration of a resumed interactive loop; empty string on all other iterations.
-- `$REJECTION_REASON` - Reviewer feedback provided via `/workflow reject <id> <reason>` at an approval gate. Only populated in `on_reject` prompts; empty string elsewhere.
+> Variable substitution table, DAG node types, workflow format: `.claude/rules/workflows.md`
 
-**Command Types:**
+**Command Types:** Codebase commands (`.archon/commands/`), Workflows (`.archon/workflows/`, YAML DAG format).
 
 1. **Codebase Commands** (per-repo):
    - Stored in `.archon/commands/` (plain text/markdown)
@@ -722,44 +626,13 @@ async function createSession(conversationId: string, codebaseId: string) {
 
 ### Error Handling
 
-**Database Errors:**
-```typescript
-// INSERT operations
-try {
-  await db.query('INSERT INTO conversations ...', params);
-} catch (error) {
-  log.error({ err: error, params }, 'db_insert_failed');
-  throw new Error('Failed to create conversation');
-}
+> DB error patterns: `.claude/rules/database.md`. Git/isolation errors: `.claude/rules/isolation.md`
 
-// UPDATE operations - verify rowCount to catch missing records
-try {
-  await db.updateConversation(conversationId, { codebase_id: codebaseId });
-} catch (error) {
-  // updateConversation throws if no rows matched (conversation not found)
-  log.error({ err: error, conversationId }, 'db_update_failed');
-  throw error; // Re-throw to surface the issue
-}
-```
-
-**Git Operation Errors (don't fail silently):**
-```typescript
-// When isolation environment creation fails:
-try {
-  // ... isolation creation logic ...
-} catch (error) {
-  const err = error as Error;
-  const userMessage = classifyIsolationError(err);
-  log.error({ err, codebaseId, codebaseName }, 'isolation_creation_failed');
-  await platform.sendMessage(conversationId, userMessage);
-}
-```
-
-Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git errors (permission denied, timeout, no space, not a git repo) to user-friendly messages. Always log the raw error for debugging and send a classified message to the user.
+Key pattern: Use `classifyIsolationError()` from `@archon/isolation` for user-friendly git error messages. Always log raw errors and throw early — never swallow silently.
 
 ### API Endpoints
 
-**Web UI REST API** (`packages/server/src/routes/api.ts`):
+> Full route table, SSE patterns, webhook verification: `.claude/rules/server-api.md`
 
 **Workflow Management:**
 - `GET /api/workflows` - List available workflows; optional `?cwd=`; returns `{ workflows: [...], errors?: [...] }`
