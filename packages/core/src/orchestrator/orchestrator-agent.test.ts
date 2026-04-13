@@ -1001,6 +1001,37 @@ describe('discoverAllWorkflows — remote sync', () => {
       DB_SECRET: 'db-value',
     });
   });
+
+  test('does not load codebase env vars when conversation has no codebase_id', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeConversation()));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    expect(mockGetCodebaseEnvVars).not.toHaveBeenCalled();
+  });
+
+  test('falls back to config env when codebase env loading fails', async () => {
+    const conversation = makeConversation({ codebase_id: 'codebase-1' });
+    const codebase = makeCodebaseForSync();
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockGetCodebaseEnvVars.mockRejectedValueOnce(new Error('db unavailable'));
+    mockLoadConfig.mockResolvedValueOnce({
+      assistants: { claude: {}, codex: {} },
+      envVars: { FILE_SECRET: 'file-value' },
+    });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'What is the latest commit?');
+
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ codebaseId: 'codebase-1' }),
+      'codebase_env_vars_load_failed'
+    );
+    const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+    expect(requestOptions.env).toEqual({ FILE_SECRET: 'file-value' });
+  });
 });
 
 // ─── Workflow dispatch routing — interactive flag ─────────────────────────────

@@ -82,6 +82,7 @@ function buildCodexEnv(requestEnv: Record<string, string>): Record<string, strin
   const baseEnv = Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
   );
+  // Managed project env intentionally overrides inherited process env for project-scoped execution.
   return { ...baseEnv, ...requestEnv };
 }
 
@@ -472,6 +473,28 @@ export class CodexProvider implements IAgentProvider {
     this.retryBaseDelayMs = options?.retryBaseDelayMs ?? RETRY_BASE_DELAY_MS;
   }
 
+  private async createCodexClient(
+    configCodexBinaryPath: string | undefined,
+    requestEnv?: Record<string, string>
+  ): Promise<Codex> {
+    if (!requestEnv || Object.keys(requestEnv).length === 0) {
+      return getCodex(configCodexBinaryPath);
+    }
+
+    try {
+      return new Codex({
+        codexPathOverride: await resolveCodexBinaryPath(configCodexBinaryPath),
+        env: buildCodexEnv(requestEnv),
+      });
+    } catch (error) {
+      const err = error as Error;
+      if (isModelAccessError(err.message)) {
+        throw new Error(buildModelAccessMessage());
+      }
+      throw new Error(`Codex query failed: ${err.message}`);
+    }
+  }
+
   getCapabilities(): ProviderCapabilities {
     return {
       sessionResume: true,
@@ -497,16 +520,9 @@ export class CodexProvider implements IAgentProvider {
   ): AsyncGenerator<MessageChunk> {
     const assistantConfig = requestOptions?.assistantConfig ?? {};
     const codexConfig = parseCodexConfig(assistantConfig);
-    const requestEnv = requestOptions?.env;
-    const hasRequestEnv = !!(requestEnv && Object.keys(requestEnv).length > 0);
 
     // 1. Initialize SDK and build thread options
-    const codex = hasRequestEnv
-      ? new Codex({
-          codexPathOverride: await resolveCodexBinaryPath(codexConfig.codexBinaryPath),
-          env: buildCodexEnv(requestEnv),
-        })
-      : await getCodex(codexConfig.codexBinaryPath);
+    const codex = await this.createCodexClient(codexConfig.codexBinaryPath, requestOptions?.env);
     const threadOptions = buildThreadOptions(cwd, requestOptions?.model, assistantConfig);
 
     if (requestOptions?.abortSignal?.aborted) {

@@ -117,7 +117,7 @@ const mockCodexCapabilities = () => ({
   skills: false,
   toolRestrictions: false,
   structuredOutput: true,
-  envInjection: false,
+  envInjection: true,
   costControl: false,
   effortControl: false,
   thinkingControl: false,
@@ -4481,43 +4481,6 @@ describe('executeDagWorkflow -- env var injection', () => {
     expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
     const optionsArg = mockSendQueryDag.mock.calls[0]?.[3] as Record<string, unknown> | undefined;
     expect(optionsArg?.env).toBeUndefined();
-  });
-
-  it('warns when env vars are configured for a provider without env injection support', async () => {
-    mockGetAgentProviderDag.mockImplementation(() => ({
-      sendQuery: mockSendQueryDag,
-      getType: () => 'codex',
-      getCapabilities: mockCodexCapabilities,
-    }));
-
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun();
-
-    await executeDagWorkflow(
-      mockDeps,
-      platform,
-      'conv-dag',
-      testDir,
-      {
-        name: 'dag-env-warning-test',
-        nodes: [{ id: 'task', command: 'my-cmd', provider: 'codex' }],
-      },
-      workflowRun,
-      'codex',
-      undefined,
-      join(testDir, 'artifacts'),
-      join(testDir, 'logs'),
-      'main',
-      'docs/',
-      { ...minimalConfig, envVars: { MY_SECRET: 'abc123' } }
-    );
-
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const warning = sendMessage.mock.calls
-      .map((call: unknown[]) => call[1] as string)
-      .find((message: string) => message.includes('env') && message.includes('codex'));
-    expect(warning).toBeDefined();
   });
 });
 

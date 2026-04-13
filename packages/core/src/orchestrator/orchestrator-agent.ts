@@ -760,13 +760,21 @@ export async function handleMessage(
     // Fall back to loadConfig only when no codebase is scoped (discoveredConfig is undefined).
     const config = discoveredConfig ?? (await loadConfig());
     const providerKey = conversation.ai_assistant_type as 'claude' | 'codex';
-    const dbEnvVars = conversation.codebase_id
-      ? await getCodebaseEnvVars(conversation.codebase_id)
-      : {};
+    let dbEnvVars: Record<string, string> = {};
+    if (conversation.codebase_id) {
+      try {
+        dbEnvVars = await getCodebaseEnvVars(conversation.codebase_id);
+      } catch (error) {
+        getLog().warn(
+          { err: error as Error, codebaseId: conversation.codebase_id },
+          'codebase_env_vars_load_failed'
+        );
+      }
+    }
     const effectiveEnv = { ...(config.envVars ?? {}), ...dbEnvVars };
     const requestOptions: SendQueryOptions = {
       assistantConfig: (config.assistants[providerKey] ?? {}) as Record<string, unknown>,
-      ...(Object.keys(effectiveEnv).length > 0 ? { env: effectiveEnv } : {}),
+      env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
     };
 
     const mode = platform.getStreamingMode();
