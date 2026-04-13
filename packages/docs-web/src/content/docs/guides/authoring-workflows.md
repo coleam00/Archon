@@ -542,7 +542,7 @@ Model and options are resolved in this order:
 
 ```yaml
 name: my-workflow
-provider: claude     # 'claude' or 'codex' (default: from config)
+provider: claude     # Any registered provider (default: from config)
 model: sonnet        # Model override (default: from config assistants.claude.model)
 ```
 
