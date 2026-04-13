@@ -113,16 +113,21 @@ export async function initLangfuse(): Promise<boolean> {
   } catch (error) {
     const err = error as Error;
     getLog().warn({ error: err.message, errorType: err.constructor.name }, 'langfuse.init_failed');
+    // Reset partial state so getQuery() falls back to the original SDK
+    otelSdk = null;
+    initialized = false;
+    instrumentedQueryFn = null;
     return false;
   }
 }
 
 /** Flush pending spans and shut down the OTel SDK */
 export async function shutdownLangfuse(): Promise<void> {
-  if (!otelSdk) return;
   try {
-    await otelSdk.shutdown();
-    getLog().debug('langfuse.shutdown_completed');
+    if (otelSdk) {
+      await otelSdk.shutdown();
+      getLog().debug('langfuse.shutdown_completed');
+    }
   } catch (error) {
     const err = error as Error;
     getLog().warn({ error: err.message }, 'langfuse.shutdown_failed');

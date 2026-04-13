@@ -623,14 +623,12 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     stopCleanupScheduler();
     persistence.stopPeriodicFlush();
 
-    // Flush Langfuse spans before stopping adapters
-    shutdownLangfuse().catch((e: unknown) => {
-      getLog().error({ err: e }, 'langfuse.shutdown_failed');
-    });
-
-    // Flush all buffered messages before stopping adapters
-    persistence
-      .flushAll()
+    // Flush Langfuse spans, then buffered messages before stopping adapters
+    shutdownLangfuse()
+      .catch((e: unknown) => {
+        getLog().error({ err: e }, 'langfuse.shutdown_failed');
+      })
+      .then(() => persistence.flushAll())
       .catch((e: unknown) => {
         getLog().error({ err: e }, 'shutdown_flush_failed');
       })
