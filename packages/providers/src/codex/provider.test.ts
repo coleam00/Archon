@@ -39,13 +39,15 @@ mock.module('@openai/codex-sdk', () => ({
   Codex: MockCodex,
 }));
 
-import { CodexProvider } from './provider';
+import { CodexProvider, resetCodexSingleton } from './provider';
 
 describe('CodexProvider', () => {
   let client: CodexProvider;
 
   beforeEach(() => {
+    resetCodexSingleton();
     client = new CodexProvider({ retryBaseDelayMs: 1 });
+    MockCodex.mockClear();
     mockStartThread.mockClear();
     mockResumeThread.mockClear();
     mockRunStreamed.mockClear();
@@ -75,7 +77,7 @@ describe('CodexProvider', () => {
         skills: false,
         toolRestrictions: false,
         structuredOutput: true,
-        envInjection: false,
+        envInjection: true,
         costControl: false,
         effortControl: false,
         thinkingControl: false,
@@ -715,6 +717,27 @@ describe('CodexProvider', () => {
       }
 
       expect(mockRunStreamed).toHaveBeenCalledWith('test prompt', {});
+    });
+
+    test('creates a per-call Codex instance when env is provided', async () => {
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+
+      for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
+        env: { MY_SECRET: 'abc123' },
+      })) {
+        // consume
+      }
+
+      expect(MockCodex).toHaveBeenCalledWith(
+        expect.objectContaining({
+          env: expect.objectContaining({ MY_SECRET: 'abc123' }),
+        })
+      );
+      expect(mockStartThread).toHaveBeenCalledTimes(1);
     });
 
     test('breaks on turn.completed event', async () => {

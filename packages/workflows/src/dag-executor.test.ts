@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach, mock, type Mock } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, mock, spyOn, type Mock } from 'bun:test';
 import { mkdir, writeFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import * as git from '@archon/git';
 
 // --- Mock logger (MUST come before imports of modules under test) ---
 
@@ -1201,6 +1202,38 @@ describe('executeDagWorkflow -- bash nodes', () => {
 
     // AI client called only for the AI node, not the bash node
     expect(mockSendQueryDag.mock.calls.length).toBe(1);
+  });
+
+  it('passes config.envVars to bash subprocesses', async () => {
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('bash-env-run-id');
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-bash-env',
+      testDir,
+      { name: 'bash-env-test', nodes: [{ id: 'stats', bash: 'echo ok' }] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, envVars: { MY_SECRET: 'abc123' } }
+    );
+
+    expect(execSpy).toHaveBeenCalledWith(
+      'bash',
+      ['-c', 'echo ok'],
+      expect.objectContaining({
+        env: expect.objectContaining({ MY_SECRET: 'abc123' }),
+      })
+    );
+    execSpy.mockRestore();
   });
 
   it('bash node output with shell metacharacters does not inject into downstream bash script', async () => {
@@ -4449,6 +4482,43 @@ describe('executeDagWorkflow -- env var injection', () => {
     const optionsArg = mockSendQueryDag.mock.calls[0]?.[3] as Record<string, unknown> | undefined;
     expect(optionsArg?.env).toBeUndefined();
   });
+
+  it('warns when env vars are configured for a provider without env injection support', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'dag-env-warning-test',
+        nodes: [{ id: 'task', command: 'my-cmd', provider: 'codex' }],
+      },
+      workflowRun,
+      'codex',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, envVars: { MY_SECRET: 'abc123' } }
+    );
+
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const warning = sendMessage.mock.calls
+      .map((call: unknown[]) => call[1] as string)
+      .find((message: string) => message.includes('env') && message.includes('codex'));
+    expect(warning).toBeDefined();
+  });
 });
 
 describe('executeDagWorkflow -- Claude SDK advanced options', () => {
@@ -5310,5 +5380,40 @@ describe('executeDagWorkflow -- script nodes', () => {
     expect((completedEvent![0] as { data: { node_output: string } }).data.node_output).toBe(
       'CLEAN'
     );
+  });
+
+  it('passes config.envVars to script subprocesses', async () => {
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('script-env-run-id');
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-script-env',
+      testDir,
+      {
+        name: 'script-env-test',
+        nodes: [{ id: 'inline-bun', script: 'console.log("ok")', runtime: 'bun' }],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, envVars: { MY_SECRET: 'abc123' } }
+    );
+
+    expect(execSpy).toHaveBeenCalledWith(
+      'bun',
+      ['--no-env-file', '-e', 'console.log("ok")'],
+      expect.objectContaining({
+        env: expect.objectContaining({ MY_SECRET: 'abc123' }),
+      })
+    );
+    execSpy.mockRestore();
   });
 });

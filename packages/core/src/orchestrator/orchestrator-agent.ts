@@ -46,6 +46,7 @@ import { IsolationBlockedError } from '@archon/isolation';
 import { buildOrchestratorPrompt, buildProjectScopedPrompt } from './prompt-builder';
 import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
+import { getCodebaseEnvVars } from '../db/env-vars';
 import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -759,8 +760,13 @@ export async function handleMessage(
     // Fall back to loadConfig only when no codebase is scoped (discoveredConfig is undefined).
     const config = discoveredConfig ?? (await loadConfig());
     const providerKey = conversation.ai_assistant_type as 'claude' | 'codex';
+    const dbEnvVars = conversation.codebase_id
+      ? await getCodebaseEnvVars(conversation.codebase_id)
+      : {};
+    const effectiveEnv = { ...(config.envVars ?? {}), ...dbEnvVars };
     const requestOptions: SendQueryOptions = {
       assistantConfig: (config.assistants[providerKey] ?? {}) as Record<string, unknown>,
+      ...(Object.keys(effectiveEnv).length > 0 ? { env: effectiveEnv } : {}),
     };
 
     const mode = platform.getStreamingMode();

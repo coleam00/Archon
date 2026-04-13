@@ -302,6 +302,7 @@ async function resolveNodeProviderAndModel(
       (node.fallbackModel ?? workflowLevelOptions.fallbackModel) !== undefined,
     ],
     ['sandbox', 'sandbox', (node.sandbox ?? workflowLevelOptions.sandbox) !== undefined],
+    ['env', 'envInjection', (config.envVars && Object.keys(config.envVars).length > 0) === true],
   ];
 
   const unsupported: string[] = [];
@@ -1051,7 +1052,8 @@ async function executeBashNode(
   baseBranch: string,
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
-  issueContext?: string
+  issueContext?: string,
+  envVars?: Record<string, string>
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -1094,11 +1096,14 @@ async function executeBashNode(
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
+  const subprocessEnv =
+    envVars && Object.keys(envVars).length > 0 ? { ...process.env, ...envVars } : undefined;
 
   try {
     const { stdout, stderr } = await execFileAsync('bash', ['-c', finalScript], {
       cwd,
       timeout,
+      env: subprocessEnv,
     });
 
     // Trim trailing newline from stdout (common shell behavior)
@@ -1201,7 +1206,8 @@ async function executeScriptNode(
   baseBranch: string,
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
-  issueContext?: string
+  issueContext?: string,
+  envVars?: Record<string, string>
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -1244,6 +1250,8 @@ async function executeScriptNode(
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, false);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
+  const subprocessEnv =
+    envVars && Object.keys(envVars).length > 0 ? { ...process.env, ...envVars } : undefined;
 
   // Build the command and args based on runtime and inline vs named
   let cmd = '';
@@ -1316,6 +1324,7 @@ async function executeScriptNode(
     const { stdout, stderr } = await execFileAsync(cmd, args, {
       cwd,
       timeout,
+      env: subprocessEnv,
     });
 
     // Trim trailing newline from stdout (common shell behavior)
@@ -2342,7 +2351,8 @@ export async function executeDagWorkflow(
               baseBranch,
               docsDir,
               nodeOutputs,
-              issueContext
+              issueContext,
+              config.envVars
             );
             return { nodeId: node.id, output };
           }
@@ -2468,7 +2478,8 @@ export async function executeDagWorkflow(
               baseBranch,
               docsDir,
               nodeOutputs,
-              issueContext
+              issueContext,
+              config.envVars
             );
             return { nodeId: node.id, output };
           }
