@@ -93,19 +93,38 @@ Provide a valid plan path or GitHub issue containing the plan.
 ### 2.1 Check Current State
 
 ```bash
+# What branch are we on?
 git branch --show-current
-git status --porcelain
+
+# Are we in a worktree?
+git rev-parse --show-toplevel
 git worktree list
+
+# Is working directory clean?
+git status --porcelain
 ```
 
 ### 2.2 Branch Decision
 
-| Current State     | Action                                               |
-| ----------------- | ---------------------------------------------------- |
-| In worktree       | Use it (log: "Using worktree")                       |
-| On base branch, clean    | Create branch: `git checkout -b feature/{plan-slug}` |
-| On base branch, dirty    | STOP: "Stash or commit changes first"                |
-| On feature branch | Use it (log: "Using existing branch")                |
+**IMPORTANT: Never switch branches or create new branches. The isolation system has already set up the correct branch for this worktree. Work on whatever branch you are currently on.**
+
+```
+┌─ IN WORKTREE?
+│  └─ YES → Use current branch as-is
+│           Log: "Using worktree at {path} on branch {branch}"
+│
+├─ ON $BASE_BRANCH? (main, master, or configured base branch)
+│  └─ Q: Working directory clean?
+│     ├─ YES → Create branch: git checkout -b feature/{plan-slug}
+│     └─ NO  → STOP: "Stash or commit changes first"
+│
+├─ ON OTHER BRANCH?
+│  └─ Use it (assume it was set up for this work)
+│     Log: "Using existing branch {name}"
+│
+└─ DIRTY STATE?
+   └─ STOP: "Stash or commit changes first"
+```
 
 ### 2.3 Sync with Remote
 
@@ -116,7 +135,7 @@ git pull --rebase origin $BASE_BRANCH 2>/dev/null || true
 
 **PHASE_2_CHECKPOINT:**
 
-- [ ] On correct branch (not base branch with uncommitted work)
+- [ ] On correct branch (not $BASE_BRANCH with uncommitted work)
 - [ ] Working directory ready
 - [ ] Up to date with remote
 

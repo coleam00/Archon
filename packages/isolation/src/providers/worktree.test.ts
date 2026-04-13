@@ -34,8 +34,12 @@ let syncWorkspaceSpy: Mock<typeof git.syncWorkspace>;
 
 // Mock fs.promises.access for destroy() existence check
 const mockAccess = mock(() => Promise.resolve());
+const mockReadFile = mock(() => Promise.reject(new Error('ENOENT')));
+const mockRm = mock(() => Promise.resolve());
 mock.module('node:fs/promises', () => ({
   access: mockAccess,
+  readFile: mockReadFile,
+  rm: mockRm,
 }));
 
 import { WorktreeProvider } from './worktree';
@@ -70,6 +74,8 @@ describe('WorktreeProvider', () => {
     findWorktreeByBranchSpy.mockResolvedValue(null);
     getCanonicalRepoPathSpy.mockImplementation(async path => path);
     mockAccess.mockResolvedValue(undefined); // Path exists by default
+    mockReadFile.mockRejectedValue(new Error('ENOENT')); // .git file not readable by default
+    mockRm.mockResolvedValue(undefined);
 
     // Default mocks for workspace sync
     getDefaultBranchSpy.mockResolvedValue('main');
@@ -297,15 +303,16 @@ describe('WorktreeProvider', () => {
       );
     });
 
-    test('reuses existing branch when it already exists and no fromBranch', async () => {
+    test('resets and reuses existing branch when it already exists and no fromBranch', async () => {
       const alreadyExistsError = new Error('fatal: branch already exists') as Error & {
         stderr: string;
       };
       alreadyExistsError.stderr =
         "fatal: a branch named 'archon/task-test-adapters' already exists";
 
-      // First call fails, second succeeds (fallback)
+      // First call fails (worktree add -b), second succeeds (branch -f), third succeeds (worktree add)
       execSpy.mockRejectedValueOnce(alreadyExistsError);
+      execSpy.mockResolvedValueOnce({ stdout: '', stderr: '' });
       execSpy.mockResolvedValueOnce({ stdout: '', stderr: '' });
 
       const request: IsolationRequest = {
@@ -315,6 +322,13 @@ describe('WorktreeProvider', () => {
       };
 
       await provider.create(request);
+
+      // Verify branch was reset to start-point
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', '/workspace/repo', 'branch', '-f', 'archon/task-test-adapters', 'origin/main'],
+        expect.any(Object)
+      );
 
       // Fallback call should not include a start-point
       expect(execSpy).toHaveBeenCalledWith(
@@ -508,6 +522,46 @@ describe('WorktreeProvider', () => {
       expect(addCalls).toHaveLength(0);
     });
 
+    test('skips adoption when worktree belongs to different repo root', async () => {
+      worktreeExistsSpy.mockResolvedValueOnce(true); // worktree exists at expected path
+
+      // .git file points to a different repo root
+      mockReadFile.mockResolvedValueOnce(
+        'gitdir: /different/repo/.git/worktrees/archon/issue-42\n'
+      );
+
+      const env = await provider.create(baseRequest);
+
+      // Should NOT adopt — should create a new worktree instead
+      expect(env.metadata).toHaveProperty('adopted', false);
+    });
+
+    test('adopts worktree when repo root matches', async () => {
+      worktreeExistsSpy.mockResolvedValueOnce(true); // worktree exists at expected path
+
+      // .git file points to the same repo root as the request
+      mockReadFile.mockResolvedValueOnce(
+        'gitdir: /workspace/repo/.git/worktrees/archon/issue-42\n'
+      );
+
+      const env = await provider.create(baseRequest);
+
+      expect(env.metadata).toHaveProperty('adopted', true);
+      expect(env.workingPath).toContain('issue-42');
+    });
+
+    test('adopts worktree when .git file unreadable (backward compat)', async () => {
+      worktreeExistsSpy.mockResolvedValueOnce(true); // worktree exists at expected path
+
+      // .git file read fails (e.g., not a worktree, corrupt, missing)
+      mockReadFile.mockRejectedValueOnce(new Error('ENOENT: no such file'));
+
+      const env = await provider.create(baseRequest);
+
+      // Should still adopt — backward compat when we can't determine repo root
+      expect(env.metadata).toHaveProperty('adopted', true);
+    });
+
     test('adopts worktree by PR branch name (skill symbiosis)', async () => {
       const request: PRIsolationRequest = {
         codebaseId: 'cb-123',
@@ -537,7 +591,7 @@ describe('WorktreeProvider', () => {
       expect(addCalls).toHaveLength(0);
     });
 
-    test('reuses existing branch if it already exists', async () => {
+    test('resets stale branch to start-point when it already exists', async () => {
       let callCount = 0;
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
         callCount++;
@@ -571,7 +625,14 @@ describe('WorktreeProvider', () => {
         expect.any(Object)
       );
 
-      // Verify second call used existing branch
+      // Verify branch was reset to start-point before checkout
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', '/workspace/repo', 'branch', '-f', 'archon/issue-42', 'origin/main'],
+        expect.any(Object)
+      );
+
+      // Verify final call used existing (reset) branch
       expect(execSpy).toHaveBeenCalledWith(
         'git',
         expect.arrayContaining([

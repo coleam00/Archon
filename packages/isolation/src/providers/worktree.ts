@@ -5,7 +5,7 @@
  */
 
 import { createHash } from 'crypto';
-import { access, rm } from 'fs/promises';
+import { access, readFile, rm } from 'fs/promises';
 import { join } from 'path';
 
 import { createLogger } from '@archon/paths';
@@ -484,6 +484,24 @@ export class WorktreeProvider implements IIsolationProvider {
   ): Promise<WorktreeEnvironment | null> {
     // Check if worktree already exists at expected path
     if (await worktreeExists(toWorktreePath(worktreePath))) {
+      // Verify the existing worktree belongs to the same repo root.
+      // Two clones of the same remote resolve to the same worktree base dir,
+      // so a worktree created from clone A is visible from clone B. Without
+      // this check, clone B would silently adopt clone A's environment.
+      const existingRepo = await this.getWorktreeSourceRepo(worktreePath);
+      if (existingRepo && existingRepo !== request.canonicalRepoPath) {
+        getLog().warn(
+          {
+            worktreePath,
+            branchName,
+            existingRepo,
+            requestRepo: request.canonicalRepoPath,
+          },
+          'worktree_adoption_skipped_cross_checkout'
+        );
+        return null;
+      }
+
       getLog().info({ worktreePath, branchName }, 'worktree_adopted');
       return this.buildAdoptedEnvironment(worktreePath, branchName, request);
     }
@@ -504,6 +522,21 @@ export class WorktreeProvider implements IIsolationProvider {
     }
 
     return null;
+  }
+
+  /**
+   * Read the source repo root from a worktree's .git file.
+   * Returns null if the worktree .git file can't be read (non-fatal).
+   */
+  private async getWorktreeSourceRepo(worktreePath: string): Promise<string | null> {
+    try {
+      const gitContent = await readFile(join(worktreePath, '.git'), 'utf-8');
+      // gitdir: /path/to/repo/.git/worktrees/branch-name
+      const match = /gitdir: (.+)\/\.git\/worktrees\//.exec(gitContent);
+      return match ? match[1] : null;
+    } catch {
+      return null;
+    }
   }
 
   private buildAdoptedEnvironment(
@@ -899,7 +932,7 @@ export class WorktreeProvider implements IIsolationProvider {
       );
     } catch (error) {
       const err = error as Error & { stderr?: string };
-      // Branch already exists - use existing branch
+      // Branch already exists - reset to intended start-point and use it
       if (err.stderr?.includes('already exists')) {
         const taskFromBranch = request.workflowType === 'task' ? request.fromBranch : undefined;
         if (taskFromBranch) {
@@ -910,6 +943,17 @@ export class WorktreeProvider implements IIsolationProvider {
               'Either choose a different --branch name or omit --from.'
           );
         }
+
+        // Branch exists but no explicit start-point override — reset it to the
+        // intended start-point before checking out, so we don't inherit stale
+        // commits from a previous run or external tool.
+        getLog().warn(
+          { branchName, startPoint, repoPath },
+          'worktree.branch_exists_resetting_to_start_point'
+        );
+        await execFileAsync('git', ['-C', repoPath, 'branch', '-f', branchName, startPoint], {
+          timeout: 10000,
+        });
         await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, branchName], {
           timeout: 30000,
         });
