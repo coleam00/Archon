@@ -384,6 +384,13 @@ export function detectCompletionSignal(output: string, signal: string): boolean 
   if (promisePattern.test(output)) {
     return true;
   }
+  // Check for any XML-like tag wrapping: <tag>SIGNAL</tag>
+  // Catches <COMPLETE>ALL_CLEAN</COMPLETE>, <done>COMPLETE</done>, and similar patterns
+  // where the AI uses a different tag name than <promise>
+  const xmlWrappedPattern = new RegExp(`<[^>/][^>]*>\\s*${escapeRegExp(signal)}\\s*</[^>]+>`, 'im');
+  if (xmlWrappedPattern.test(output)) {
+    return true;
+  }
   // Plain signal detection - restrictive to prevent false positives like "not COMPLETE yet"
   // Only matches if signal is:
   // 1. At the very end of output (with optional trailing whitespace/punctuation)
@@ -394,8 +401,14 @@ export function detectCompletionSignal(output: string, signal: string): boolean 
 }
 
 /** Strip internal completion signal tags before sending to user-facing output. */
-export function stripCompletionTags(content: string): string {
-  return content.replace(/<promise>[\s\S]*?<\/promise>/gi, '').trim();
+export function stripCompletionTags(content: string, until?: string): string {
+  let result = content.replace(/<promise>[\s\S]*?<\/promise>/gi, '');
+  if (until) {
+    // Also strip XML-tagged completion signals (e.g., <COMPLETE>ALL_CLEAN</COMPLETE>)
+    const escapedSignal = escapeRegExp(until);
+    result = result.replace(new RegExp(`<[^>/][^>]*>\\s*${escapedSignal}\\s*</[^>]+>`, 'gi'), '');
+  }
+  return result.trim();
 }
 
 /**

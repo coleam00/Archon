@@ -22,6 +22,8 @@ import {
   substituteWorkflowVariables,
   buildPromptWithContext,
   detectCreditExhaustion,
+  detectCompletionSignal,
+  stripCompletionTags,
   isInlineScript,
 } from './executor-shared';
 
@@ -328,5 +330,51 @@ describe('isInlineScript', () => {
   // Edge cases
   it('empty string is not inline', () => {
     expect(isInlineScript('')).toBe(false);
+  });
+});
+
+describe('detectCompletionSignal', () => {
+  it('detects <promise>SIGNAL</promise> format', () => {
+    expect(detectCompletionSignal('<promise>COMPLETE</promise>', 'COMPLETE')).toBe(true);
+  });
+
+  it('detects signal in custom XML tags: <COMPLETE>SIGNAL</COMPLETE>', () => {
+    expect(detectCompletionSignal('<COMPLETE>ALL_CLEAN</COMPLETE>', 'ALL_CLEAN')).toBe(true);
+  });
+
+  it('detects signal in other XML tag names', () => {
+    expect(detectCompletionSignal('<done>COMPLETE</done>', 'COMPLETE')).toBe(true);
+    expect(detectCompletionSignal('<status>DONE</status>', 'DONE')).toBe(true);
+  });
+
+  it('detects plain signal at end of output', () => {
+    expect(detectCompletionSignal('Work done. COMPLETE', 'COMPLETE')).toBe(true);
+  });
+
+  it('detects plain signal on its own line', () => {
+    expect(detectCompletionSignal('Work done.\nCOMPLETE\nExtra text', 'COMPLETE')).toBe(true);
+  });
+
+  it('does not detect signal embedded in prose', () => {
+    expect(detectCompletionSignal('The status is not COMPLETE yet.', 'COMPLETE')).toBe(false);
+  });
+
+  it('does not detect signal when wrong value is in tags', () => {
+    expect(detectCompletionSignal('<COMPLETE>WRONG</COMPLETE>', 'ALL_CLEAN')).toBe(false);
+  });
+});
+
+describe('stripCompletionTags', () => {
+  it('strips <promise> tags', () => {
+    expect(stripCompletionTags('Done. <promise>COMPLETE</promise>')).toBe('Done.');
+  });
+
+  it('strips XML-wrapped signal when until is provided', () => {
+    expect(stripCompletionTags('Done. <COMPLETE>ALL_CLEAN</COMPLETE>', 'ALL_CLEAN')).toBe('Done.');
+  });
+
+  it('does not strip XML tags when until is not provided', () => {
+    const input = 'Done. <COMPLETE>ALL_CLEAN</COMPLETE>';
+    expect(stripCompletionTags(input)).toBe(input.trim());
   });
 });
