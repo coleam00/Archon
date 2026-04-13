@@ -25,6 +25,11 @@ export interface CodexProviderDefaults {
   codexBinaryPath?: string;
 }
 
+export interface PiProviderDefaults {
+  /** Pi model in pi:<provider>/<modelId> format (e.g. pi:google/gemini-2.5-pro) */
+  model?: string;
+}
+
 /**
  * Token usage statistics from AI provider responses.
  */

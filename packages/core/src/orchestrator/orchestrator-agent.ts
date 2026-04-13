@@ -759,7 +759,7 @@ export async function handleMessage(
     // Reuse the config already loaded during workflow discovery (avoids a second disk read).
     // Fall back to loadConfig only when no codebase is scoped (discoveredConfig is undefined).
     const config = discoveredConfig ?? (await loadConfig());
-    const providerKey = conversation.ai_assistant_type as 'claude' | 'codex';
+    const providerKey = conversation.ai_assistant_type as 'claude' | 'codex' | 'pi';
     let dbEnvVars: Record<string, string> = {};
     if (conversation.codebase_id) {
       try {

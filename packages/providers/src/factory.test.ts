@@ -20,10 +20,18 @@ describe('factory', () => {
       expect(typeof provider.sendQuery).toBe('function');
     });
 
+    test('returns PiProvider for pi type', () => {
+      const provider = getAgentProvider('pi');
+
+      expect(provider).toBeDefined();
+      expect(provider.getType()).toBe('pi');
+      expect(typeof provider.sendQuery).toBe('function');
+    });
+
     test('throws UnknownProviderError for unknown type', () => {
       expect(() => getAgentProvider('unknown')).toThrow(UnknownProviderError);
       expect(() => getAgentProvider('unknown')).toThrow(
-        "Unknown provider: 'unknown'. Available: claude, codex"
+        "Unknown provider: 'unknown'. Available: claude, codex, pi"
       );
     });
 
@@ -78,6 +86,14 @@ describe('factory', () => {
       expect(caps.envInjection).toBe(true);
     });
 
+    test('returns Pi capabilities without instantiation', () => {
+      const caps = getProviderCapabilities('pi');
+      expect(caps.mcp).toBe(false);
+      expect(caps.hooks).toBe(false);
+      expect(caps.envInjection).toBe(false);
+      expect(caps.sessionResume).toBe(false);
+    });
+
     test('matches runtime getCapabilities for Claude', () => {
       const staticCaps = getProviderCapabilities('claude');
       const runtimeCaps = getAgentProvider('claude').getCapabilities();
@@ -87,6 +103,12 @@ describe('factory', () => {
     test('matches runtime getCapabilities for Codex', () => {
       const staticCaps = getProviderCapabilities('codex');
       const runtimeCaps = getAgentProvider('codex').getCapabilities();
+      expect(staticCaps).toEqual(runtimeCaps);
+    });
+
+    test('matches runtime getCapabilities for Pi', () => {
+      const staticCaps = getProviderCapabilities('pi');
+      const runtimeCaps = getAgentProvider('pi').getCapabilities();
       expect(staticCaps).toEqual(runtimeCaps);
     });
 

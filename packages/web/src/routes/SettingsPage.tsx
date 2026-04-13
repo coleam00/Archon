@@ -449,12 +449,13 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
               id="default-assistant"
               value={assistant}
               onChange={e => {
-                setAssistant(e.target.value as 'claude' | 'codex');
+                setAssistant(e.target.value as 'claude' | 'codex' | 'pi');
               }}
               className={selectClass}
             >
               <option value="claude">Claude</option>
               <option value="codex">Codex</option>
+              <option value="pi">Pi</option>
             </select>
 
             <label htmlFor="claude-model">Claude Model</label>

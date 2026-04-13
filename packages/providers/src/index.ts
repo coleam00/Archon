@@ -7,6 +7,7 @@ export type {
   ProviderCapabilities,
   MessageChunk,
   TokenUsage,
+  PiProviderDefaults,
 } from './types';
 
 // Provider config types (canonical definitions in ./types, re-exported via config modules)
@@ -23,10 +24,12 @@ export { UnknownProviderError } from './errors';
 // Provider classes
 export { ClaudeProvider } from './claude/provider';
 export { CodexProvider } from './codex/provider';
+export { PiProvider } from './pi/provider';
 
 // Config parsers
 export { parseClaudeConfig, type ClaudeProviderDefaults } from './claude/config';
 export { parseCodexConfig, type CodexProviderDefaults } from './codex/config';
+export { parsePiConfig } from './pi/config';
 
 // Utilities (needed by consumers)
 export { resetCodexSingleton } from './codex/provider';
