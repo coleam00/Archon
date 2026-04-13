@@ -501,7 +501,7 @@ async function resolveNodeProviderAndModel(
       options.outputFormat = { type: 'json_schema', schema: node.output_format };
     }
   } else if (provider === 'ollama') {
-    // Ollama only needs the model name; all Claude/Codex-specific options are ignored
+    // Ollama: pass model name; provider-specific options built per-SDK above
     options = model ? { model } : undefined;
   } else {
     const claudeOptions: WorkflowAssistantOptions = {};

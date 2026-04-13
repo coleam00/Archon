@@ -8,6 +8,10 @@
  *
  * Of the AssistantRequestOptions fields, `model`, `systemPrompt`, and
  * `abortSignal` are forwarded to the /api/chat payload.
+ *
+ * Extending Ollama's agentic footprint — running local models as domain-expert
+ * nodes in multi-step workflows, cross-domain consults, and offline-capable
+ * pipeline steps — is a natural next direction for this integration.
  */
 import type { IAssistantClient, AssistantRequestOptions, MessageChunk } from '../types';
 import { createLogger } from '@archon/paths';
