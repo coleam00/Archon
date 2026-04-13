@@ -2641,7 +2641,9 @@ export function registerApiRoutes(
   });
 
   registerOpenApiRoute(getOllamaModelsRoute, async c => {
-    const baseUrl = process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
+    const config = await loadConfig();
+    const baseUrl =
+      config.assistants.ollama.baseUrl ?? process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
     try {
       const response = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(3000) });
       if (!response.ok) {
