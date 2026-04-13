@@ -1,9 +1,10 @@
-import { NavLink, Link } from 'react-router';
+﻿import { NavLink, Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { LayoutDashboard, MessageSquare, Workflow, Settings, Menu, Sun, Moon } from 'lucide-react';
 import { listWorkflowRuns, getUpdateCheck } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useMobileNav } from '@/contexts/MobileNavContext';
+import { TunnelPopover } from './TunnelPopover';
 import { useTheme } from '@/contexts/ThemeContext';
 
 const tabs = [
@@ -95,6 +96,9 @@ export function TopNav(): React.ReactElement {
           </a>
         )}
       </span>
+
+      {/* ── Tunnel popover ── */}
+      <TunnelPopover />
 
       {/* ── Theme toggle ── */}
       <button
