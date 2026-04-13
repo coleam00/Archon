@@ -494,17 +494,15 @@ describe('orchestrator-agent handleMessage', () => {
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Help text');
     });
 
-    test('delegates /reset to command handler', async () => {
-      mockHandleCommand.mockResolvedValue({
-        message: 'Session cleared',
-        modified: false,
-        success: true,
-      });
+    test('handles /reset with session log preservation', async () => {
+      // /reset is now intercepted by handleResetWithSessionLog before reaching handleCommand.
+      // With no active session, it sends a "no active session" message.
+      mockGetActiveSession.mockResolvedValueOnce(null);
 
       await handleMessage(platform, 'chat-456', '/reset');
 
-      expect(mockHandleCommand).toHaveBeenCalled();
-      expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Session cleared');
+      expect(mockHandleCommand).not.toHaveBeenCalled();
+      expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'No active session to reset.');
     });
 
     test('uses CommandResult workflow definition without rediscovery for /workflow run', async () => {
