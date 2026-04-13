@@ -216,7 +216,6 @@ const mockCodebase: Codebase = {
   repository_url: 'https://github.com/user/repo',
   default_cwd: '/workspace/test-project',
   ai_assistant_type: 'claude',
-  allow_env_keys: false,
   commands: {},
   created_at: new Date(),
   updated_at: new Date(),

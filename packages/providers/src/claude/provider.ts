@@ -514,6 +514,9 @@ function buildBaseClaudeOptions(
   return {
     cwd,
     pathToClaudeCodeExecutable: cliPath,
+    // Prevent Bun from auto-loading .env from the target repo cwd.
+    // Without this, the Claude Code subprocess inherits repo secrets.
+    executableArgs: ['--no-env-file'],
     env,
     model: requestOptions?.model ?? assistantDefaults.model,
     abortController: controller,

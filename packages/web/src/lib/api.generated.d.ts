@@ -549,51 +549,7 @@ export interface paths {
     };
     options?: never;
     head?: never;
-    /** Update codebase consent flags (e.g. allow_env_keys) */
-    patch: {
-      parameters: {
-        query?: never;
-        header?: never;
-        path: {
-          id: string;
-        };
-        cookie?: never;
-      };
-      requestBody: {
-        content: {
-          'application/json': components['schemas']['UpdateCodebaseBody'];
-        };
-      };
-      responses: {
-        /** @description Updated codebase */
-        200: {
-          headers: {
-            [name: string]: unknown;
-          };
-          content: {
-            'application/json': components['schemas']['Codebase'];
-          };
-        };
-        /** @description Not found */
-        404: {
-          headers: {
-            [name: string]: unknown;
-          };
-          content: {
-            'application/json': components['schemas']['Error'];
-          };
-        };
-        /** @description Server error */
-        500: {
-          headers: {
-            [name: string]: unknown;
-          };
-          content: {
-            'application/json': components['schemas']['Error'];
-          };
-        };
-      };
-    };
+    patch?: never;
     trace?: never;
   };
   '/api/codebases/{id}/env': {
@@ -2010,7 +1966,6 @@ export interface components {
       repository_url: string | null;
       default_cwd: string;
       ai_assistant_type: string;
-      allow_env_keys: boolean;
       commands: {
         [key: string]: components['schemas']['CodebaseCommand'];
       };
@@ -2021,10 +1976,6 @@ export interface components {
     AddCodebaseBody: {
       url?: string;
       path?: string;
-      allowEnvKeys?: boolean;
-    };
-    UpdateCodebaseBody: {
-      allowEnvKeys: boolean;
     };
     DeleteCodebaseResponse: {
       success: boolean;

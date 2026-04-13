@@ -59,7 +59,6 @@ export interface Codebase {
   repository_url: string | null;
   default_cwd: string;
   ai_assistant_type: string;
-  allow_env_keys: boolean;
   commands: Record<string, { path: string; description: string }>;
   created_at: Date;
   updated_at: Date;
