@@ -20,7 +20,9 @@ Set these in your shell or `.env` file:
 | `CODEX_ACCESS_TOKEN` | Yes (for Codex) | Codex access token (see [AI Assistants](/getting-started/ai-assistants/)) |
 | `DATABASE_URL` | No | PostgreSQL connection string (default: SQLite) |
 | `LOG_LEVEL` | No | `debug`, `info` (default), `warn`, `error` |
-| `PORT` | No | Server port (default: 3090, Docker: 3000) |
+| `ARCHON_PORT` | No | Backend server port — takes priority over `PORT` (default: 3090) |
+| `ARCHON_VITE_PORT` | No | Vite dev server port; sets `strictPort: true` when used (default: 5173) |
+| `PORT` | No | Server port fallback when `ARCHON_PORT` is not set (default: 3090, Docker: 3000) |
 
 ## Project Configuration
 

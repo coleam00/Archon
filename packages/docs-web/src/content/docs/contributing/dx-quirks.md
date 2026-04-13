@@ -49,7 +49,7 @@ Bun's `mock.module()` is process-global and irreversible — `mock.restore()` do
 Worktrees auto-allocate ports (3190–4089 range, hash-based on path). Same worktree always gets same port.
 
 - Main repo defaults to 3090
-- Override: `PORT=4000 bun dev`
+- Override: `ARCHON_PORT=4000 bun dev` (or `PORT=4000` — both work)
 - Same worktree always gets same port (deterministic)
 
 ## `bun run test` vs `bun test`

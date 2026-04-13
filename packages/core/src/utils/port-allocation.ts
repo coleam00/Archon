@@ -36,12 +36,17 @@ export function calculatePortOffset(path: string): number {
  * Note: Exits process with code 1 if port env var is set but invalid (not 1-65535)
  */
 export async function getPort(): Promise<number> {
-  const envPort = process.env.ARCHON_PORT ?? process.env.PORT;
+  const archonPort = process.env.ARCHON_PORT;
+  const genericPort = process.env.PORT;
+  const envPort = archonPort ?? genericPort;
 
   if (envPort) {
     const parsedPort = Number(envPort);
     if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
-      getLog().fatal({ envPort }, 'invalid_port_env_var');
+      getLog().fatal(
+        { envPort, envVarName: archonPort !== undefined ? 'ARCHON_PORT' : 'PORT' },
+        'invalid_port_env_var'
+      );
       process.exit(1);
     }
     return parsedPort;

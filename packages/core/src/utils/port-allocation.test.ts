@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'bun:test';
+import { describe, it, expect, afterEach, beforeEach, spyOn } from 'bun:test';
 import { calculatePortOffset, getPort } from './port-allocation';
 
 // Test the exported hash calculation function directly
@@ -89,9 +89,48 @@ describe('getPort', () => {
   });
 });
 
+describe('getPort - invalid port env vars', () => {
+  const originalPort = process.env.PORT;
+  const originalArchonPort = process.env.ARCHON_PORT;
+  let exitSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    exitSpy = spyOn(process, 'exit').mockImplementation((() => {}) as never);
+  });
+
+  afterEach(() => {
+    if (originalPort === undefined) {
+      delete process.env.PORT;
+    } else {
+      process.env.PORT = originalPort;
+    }
+    if (originalArchonPort === undefined) {
+      delete process.env.ARCHON_PORT;
+    } else {
+      process.env.ARCHON_PORT = originalArchonPort;
+    }
+    exitSpy.mockRestore();
+  });
+
+  it('should exit with code 1 when ARCHON_PORT is not a valid port number', async () => {
+    process.env.ARCHON_PORT = 'abc';
+    delete process.env.PORT;
+    await getPort();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('should exit with code 1 when PORT is not a valid port number and ARCHON_PORT is unset', async () => {
+    delete process.env.ARCHON_PORT;
+    process.env.PORT = 'not-a-port';
+    await getPort();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+});
+
 // Integration test notes (manual verification):
-// 1. Run in main repo: `bun dev` → should use port 3000 with log "Using default port"
-// 2. Run in worktree: `bun dev` → should auto-allocate port 3XXX with "Worktree detected" log
+// 1. Run in main repo: `bun dev` → should use port 3090 with log {"port":3090} "default_port_selected"
+// 2. Run in worktree: `bun dev` → should auto-allocate port 3XXX with "worktree_port_allocated" log
 // 3. Override: `PORT=4000 bun dev` → should use 4000 (both contexts)
-// 4. Multiple worktrees: Start in 2+ worktrees → different ports
-// 5. Invalid PORT: `PORT=abc bun dev` → should exit with error message
+// 4. Override: `ARCHON_PORT=4500 PORT=4000 bun dev` → should use 4500 (ARCHON_PORT takes priority)
+// 5. Multiple worktrees: Start in 2+ worktrees → different ports
+// 6. Invalid port: `ARCHON_PORT=abc bun dev` → should exit with fatal log and code 1

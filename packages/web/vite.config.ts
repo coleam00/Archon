@@ -6,10 +6,21 @@ import react from '@vitejs/plugin-react';
 import { defineConfig, loadEnv } from 'vite';
 
 export default defineConfig(({ mode }) => {
-  // Load env from repo root so ARCHON_PORT / PORT from .env is available
+  // Load env from repo root so ARCHON_PORT / ARCHON_VITE_PORT / PORT from .env is available
   const env = loadEnv(mode, path.resolve(__dirname, '../..'), '');
   const apiPort = env.ARCHON_PORT ?? env.PORT ?? '3090';
-  const viteDevPort = env.ARCHON_VITE_PORT ? Number(env.ARCHON_VITE_PORT) : 5173;
+  const rawVitePort = env.ARCHON_VITE_PORT;
+  let viteDevPort = 5173;
+  if (rawVitePort) {
+    const parsed = Number(rawVitePort);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+      console.error(
+        `[archon] ARCHON_VITE_PORT="${rawVitePort}" is invalid — must be an integer 1-65535`
+      );
+      process.exit(1);
+    }
+    viteDevPort = parsed;
+  }
 
   // Read version from root package.json
   const rootPkgPath = path.resolve(__dirname, '../../package.json');
@@ -47,7 +58,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       port: viteDevPort,
-      ...(env.ARCHON_VITE_PORT ? { strictPort: true } : {}),
+      ...(rawVitePort ? { strictPort: true } : {}),
       proxy: {
         '/api': {
           target: `http://localhost:${apiPort}`,

@@ -509,7 +509,8 @@ Install Claude Code CLI: see [docs.claude.com/claude-code/installation](https://
 Something else is using the port. Either stop it or override:
 
 ```bash
-PORT=4000 bun run dev
+ARCHON_PORT=4000 bun run dev   # namespaced override (preferred)
+# or: PORT=4000 bun run dev    # generic fallback also works
 ```
 
 ### Web UI shows "disconnected"
