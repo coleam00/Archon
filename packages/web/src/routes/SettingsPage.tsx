@@ -490,6 +490,13 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
   });
   const ollamaModels = ollamaData?.models ?? [];
 
+  /** Fall back to Claude if Ollama was the saved provider but is not reachable. */
+  useEffect(() => {
+    if (ollamaData && !ollamaData.available && ollamaModels.length === 0) {
+      setAssistant('claude');
+    }
+  }, [ollamaData]);
+
   const hasChanges =
     assistant !== config.assistant ||
     claudeModel !== (config.assistants.claude.model ?? 'sonnet') ||
