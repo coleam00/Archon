@@ -139,11 +139,22 @@
   }
 }
 
+/* Prevent horizontal scroll on mobile (fixed drawers, transforms) */
+html {
+  overflow-x: hidden;
+}
+
+#root {
+  overflow-x: hidden;
+  width: 100%;
+}
+
 /* Base body styling */
 body {
   background-color: var(--background);
   color: var(--text-primary);
   font-family: var(--font-sans);
+  overflow-x: hidden;
 }
 
 /* Scrollbar styling for dark theme */
