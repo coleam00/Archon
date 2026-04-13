@@ -7,6 +7,7 @@ import type { CommandEntry } from '@/lib/api';
 interface NodeLibraryProps {
   commands: CommandEntry[];
   isLoading: boolean;
+  onNodeAdd?: (type: 'command' | 'prompt' | 'bash', name: string) => void;
 }
 
 const NODE_TYPE_COLORS: Record<string, string> = {
@@ -35,10 +36,12 @@ function DraggableItem({
   type,
   name,
   displayName,
+  onNodeAdd,
 }: {
   type: 'command' | 'prompt' | 'bash';
   name: string;
   displayName: string;
+  onNodeAdd?: (type: 'command' | 'prompt' | 'bash', name: string) => void;
 }): React.ReactElement {
   return (
     <div
@@ -46,6 +49,18 @@ function DraggableItem({
       onDragStart={(e): void => {
         onDragStart(e, type, name);
       }}
+      onClick={(): void => {
+        onNodeAdd?.(type, name);
+      }}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e): void => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onNodeAdd?.(type, name);
+        }
+      }}
+      aria-label={`Add ${displayName} node`}
       className="flex items-center gap-2 px-2 py-1.5 rounded-md border border-dashed border-border hover:border-accent hover:bg-accent/5 cursor-grab text-xs text-text-primary"
     >
       <span className={cn('w-2 h-2 rounded-full shrink-0', NODE_TYPE_COLORS[type])} />
@@ -85,7 +100,11 @@ function CollapsibleSection({
   );
 }
 
-export function NodeLibrary({ commands, isLoading }: NodeLibraryProps): React.ReactElement {
+export function NodeLibrary({
+  commands,
+  isLoading,
+  onNodeAdd,
+}: NodeLibraryProps): React.ReactElement {
   const [search, setSearch] = useState('');
 
   const categories = useMemo(() => categorizeCommands(commands), [commands]);
@@ -132,8 +151,13 @@ export function NodeLibrary({ commands, isLoading }: NodeLibraryProps): React.Re
             {/* Quick Nodes */}
             {showQuickNodes && (
               <CollapsibleSection title="Quick Nodes" count={2} defaultOpen>
-                <DraggableItem type="prompt" name="Prompt" displayName="Prompt" />
-                <DraggableItem type="bash" name="Shell" displayName="Bash" />
+                <DraggableItem
+                  type="prompt"
+                  name="Prompt"
+                  displayName="Prompt"
+                  onNodeAdd={onNodeAdd}
+                />
+                <DraggableItem type="bash" name="Shell" displayName="Bash" onNodeAdd={onNodeAdd} />
               </CollapsibleSection>
             )}
 
@@ -151,6 +175,7 @@ export function NodeLibrary({ commands, isLoading }: NodeLibraryProps): React.Re
                     type="command"
                     name={cmd.name}
                     displayName={cmd.name}
+                    onNodeAdd={onNodeAdd}
                   />
                 ))}
               </CollapsibleSection>

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+﻿import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { ReactFlowProvider, useNodesState, useEdgesState, useViewport } from '@xyflow/react';
@@ -6,6 +6,7 @@ import type { Edge } from '@xyflow/react';
 import type { WorkflowDefinition } from '@/lib/api';
 
 import { useProject } from '@/contexts/ProjectContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import {
   getWorkflow,
   listCommands,
@@ -38,9 +39,14 @@ const NODE_LIBRARY_DEFAULT_WIDTH = 208; // w-52
 function NodeLibraryPanel({
   commands,
   isLoading,
+  forceWidth,
+  onNodeAdd,
 }: {
   commands: CommandEntry[];
   isLoading: boolean;
+  /** When set, overrides the resizable width (used for mobile overlay mode). */
+  forceWidth?: number;
+  onNodeAdd?: (type: 'command' | 'prompt' | 'bash', name: string) => void;
 }): React.ReactElement {
   const [width, setWidth] = useState(() => {
     try {
@@ -97,19 +103,24 @@ function NodeLibraryPanel({
   }, []);
 
   return (
-    <div className="relative shrink-0 h-full overflow-hidden flex" style={{ width }}>
+    <div
+      className="relative shrink-0 h-full overflow-hidden flex"
+      style={{ width: forceWidth ?? width }}
+    >
       <div className="flex-1 overflow-hidden">
-        <NodeLibrary commands={commands} isLoading={isLoading} />
+        <NodeLibrary commands={commands} isLoading={isLoading} onNodeAdd={onNodeAdd} />
       </div>
-      {/* Drag handle */}
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize node library panel"
-        onMouseDown={onMouseDown}
-        className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-accent/40 transition-colors z-10"
-        title="Drag to resize"
-      />
+      {/* Drag handle — hidden in overlay/forced-width mode */}
+      {!forceWidth && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize node library panel"
+          onMouseDown={onMouseDown}
+          className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-accent/40 transition-colors z-10"
+          title="Drag to resize"
+        />
+      )}
     </div>
   );
 }
@@ -120,9 +131,23 @@ function WorkflowBuilderInner(): React.ReactElement {
   const navigate = useNavigate();
 
   const { codebases, selectedProjectId } = useProject();
+  const { compactLayout } = useTheme();
   const cwd = selectedProjectId
     ? codebases?.find(cb => cb.id === selectedProjectId)?.default_cwd
     : undefined;
+
+  // Mobile detection: compactLayout from ThemeContext OR narrow viewport (<768px)
+  const [windowNarrow, setWindowNarrow] = useState(() => window.innerWidth < 768);
+  useEffect(() => {
+    const check = (): void => {
+      setWindowNarrow(window.innerWidth < 768);
+    };
+    window.addEventListener('resize', check);
+    return (): void => {
+      window.removeEventListener('resize', check);
+    };
+  }, []);
+  const isMobile = compactLayout || windowNarrow;
 
   // Core state
   const [workflowName, setWorkflowName] = useState('');
@@ -134,7 +159,15 @@ function WorkflowBuilderInner(): React.ReactElement {
 
   const [yamlViewMode, setYamlViewMode] = useState<ViewMode>('hidden');
   const [validationPanelOpen, setValidationPanelOpen] = useState(false);
-  const [showLibrary, setShowLibrary] = useState(true);
+  // Hide library by default on narrow viewports to avoid blocking the canvas
+  const [showLibrary, setShowLibrary] = useState(() => window.innerWidth >= 768);
+
+  // Auto-close library when entering mobile/compact mode
+  useEffect(() => {
+    if (isMobile) {
+      setShowLibrary(false);
+    }
+  }, [isMobile]);
 
   // DAG state
   const [nodes, setNodes, onNodesChange] = useNodesState<DagFlowNode>([]);
@@ -171,6 +204,26 @@ function WorkflowBuilderInner(): React.ReactElement {
   const markDirty = useCallback((): void => {
     setHasUnsavedChanges(true);
   }, []);
+
+  const handleNodeAdd = useCallback(
+    (type: 'command' | 'prompt' | 'bash', name: string): void => {
+      const id = `node-${crypto.randomUUID()}`;
+      const label = type === 'command' ? name : type === 'bash' ? 'Shell' : 'Prompt';
+      const newNode: DagFlowNode = {
+        id,
+        type: 'dagNode',
+        position: {
+          x: 200 + Math.round(Math.random() * 80),
+          y: 200 + Math.round(Math.random() * 80),
+        },
+        data: { id, label, nodeType: type },
+      };
+      pushSnapshot({ nodes, edges });
+      setNodes(nds => [...nds, newNode]);
+      markDirty();
+    },
+    [pushSnapshot, nodes, edges, setNodes, markDirty]
+  );
 
   const buildDefinition = useCallback((): WorkflowDefinition => {
     const name = workflowName.trim() || 'untitled';
@@ -457,9 +510,16 @@ function WorkflowBuilderInner(): React.ReactElement {
         </div>
       )}
 
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left panel: Node Library */}
-        {showLibrary && <NodeLibraryPanel commands={commandList} isLoading={commandsLoading} />}
+      {/* Main content area — `relative` enables absolute positioning of mobile overlays */}
+      <div className="flex flex-1 overflow-hidden relative">
+        {/* Left panel: Node Library — desktop inline */}
+        {showLibrary && !isMobile && (
+          <NodeLibraryPanel
+            commands={commandList}
+            isLoading={commandsLoading}
+            onNodeAdd={handleNodeAdd}
+          />
+        )}
 
         {/* Center area */}
         <div className="flex-1 relative overflow-hidden flex">
@@ -506,6 +566,49 @@ function WorkflowBuilderInner(): React.ReactElement {
               }}
             />
           </div>
+        )}
+
+        {/* Mobile: Library overlay — slides in over the canvas */}
+        {isMobile && showLibrary && (
+          <>
+            {/* Backdrop */}
+            <div
+              className="absolute inset-0 z-20 bg-black/40"
+              role="button"
+              tabIndex={-1}
+              aria-label="Close library"
+              onClick={(): void => {
+                setShowLibrary(false);
+              }}
+              onKeyDown={(e): void => {
+                if (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') {
+                  setShowLibrary(false);
+                }
+              }}
+            />
+            {/* Panel */}
+            <div className="absolute left-0 top-0 h-full z-30">
+              <NodeLibraryPanel
+                commands={commandList}
+                isLoading={commandsLoading}
+                forceWidth={256}
+                onNodeAdd={handleNodeAdd}
+              />
+            </div>
+          </>
+        )}
+
+        {/* Mobile: Library toggle button — shown when library is closed */}
+        {isMobile && !showLibrary && (
+          <button
+            type="button"
+            onClick={(): void => {
+              setShowLibrary(true);
+            }}
+            className="absolute top-2 left-2 z-10 bg-surface-elevated border border-border rounded-md px-2 py-1 text-xs text-text-secondary shadow-sm hover:bg-surface-hover"
+          >
+            Library
+          </button>
         )}
       </div>
 

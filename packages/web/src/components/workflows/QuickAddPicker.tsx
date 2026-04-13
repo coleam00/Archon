@@ -64,12 +64,19 @@ export function QuickAddPicker({
     onAddNode('command', { commandName });
   }
 
+  /*
+   * All picker containers use `max-w-[calc(100vw-1rem)]` as a CSS safety-net.
+   * The primary overflow prevention is handled upstream in WorkflowCanvas where
+   * `position` is already clamped to the canvas bounds before being passed here.
+   */
+
   // Command sub-picker
   if (subView === 'command') {
     return (
       <div
         ref={containerRef}
         style={{ position: 'absolute', left: position.x, top: position.y, zIndex: 50 }}
+        className="max-w-[calc(100vw-1rem)]"
       >
         <CommandPicker commands={commands} onSelect={handleCommandSelect} onClose={onClose} />
       </div>
@@ -83,7 +90,7 @@ export function QuickAddPicker({
       <div
         ref={containerRef}
         style={{ position: 'absolute', left: position.x, top: position.y, zIndex: 50 }}
-        className="w-64 bg-surface-elevated border border-border rounded-lg shadow-lg overflow-hidden"
+        className="w-64 max-w-[calc(100vw-1rem)] bg-surface-elevated border border-border rounded-lg shadow-lg overflow-hidden"
       >
         <div className="px-3 py-2 border-b border-border flex items-center gap-2">
           <button
@@ -138,7 +145,7 @@ export function QuickAddPicker({
     <div
       ref={containerRef}
       style={{ position: 'absolute', left: position.x, top: position.y, zIndex: 50 }}
-      className="w-56 bg-surface-elevated border border-border rounded-lg shadow-lg overflow-hidden"
+      className="w-56 max-w-[calc(100vw-1rem)] bg-surface-elevated border border-border rounded-lg shadow-lg overflow-hidden"
     >
       <div className="px-3 py-2 border-b border-border">
         <span className="text-xs font-medium text-text-secondary">Add Node</span>
