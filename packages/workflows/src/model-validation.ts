@@ -27,7 +27,7 @@ export function isClaudeModel(model: string): boolean {
  * Rules:
  * - If `model` is undefined, any provider accepts it (inherit from config defaults).
  * - Claude provider: accepts only Claude aliases/prefixes (see `isClaudeModel`).
- * - Ollama provider: accepts any model string (Ollama model names are arbitrary).
+ * - Ollama provider: accepts any model string except `'inherit'`, which is a Claude-only sentinel.
  * - Codex provider: accepts any model that is NOT a Claude alias/prefix.
  */
 export function isModelCompatible(
@@ -36,7 +36,7 @@ export function isModelCompatible(
 ): boolean {
   if (!model) return true;
   if (provider === 'claude') return isClaudeModel(model);
-  if (provider === 'ollama') return true; // Any model string is valid for Ollama
+  if (provider === 'ollama') return model !== 'inherit'; // 'inherit' is a Claude-only sentinel
   // Codex: accept most models, but reject obvious Claude aliases/prefixes
   return !isClaudeModel(model);
 }
