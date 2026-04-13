@@ -92,11 +92,7 @@ export class TelegramAdapter implements IPlatformAdapter {
    * Send a single chunk with MarkdownV2 formatting, with fallback to plain text.
    * If threadId is provided, sends to that forum topic.
    */
-  private async sendFormattedChunk(
-    id: number,
-    chunk: string,
-    threadId?: number
-  ): Promise<void> {
+  private async sendFormattedChunk(id: number, chunk: string, threadId?: number): Promise<void> {
     // Build options: include thread ID only when targeting a forum topic
     const threadExtra = threadId ? { message_thread_id: threadId } : undefined;
 
@@ -240,8 +236,14 @@ export class TelegramAdapter implements IPlatformAdapter {
         const conversationId = this.getConversationId(ctx);
         // Debug: log forum topic detection
         const msg = ctx.message;
-        const threadId = 'message_thread_id' in msg ? (msg as { message_thread_id?: number }).message_thread_id : undefined;
-        getLog().info({ chatId: ctx.chat?.id, threadId, conversationId, chatType: ctx.chat?.type }, 'telegram.message_received');
+        const threadId =
+          'message_thread_id' in msg
+            ? (msg as { message_thread_id?: number }).message_thread_id
+            : undefined;
+        getLog().info(
+          { chatId: ctx.chat?.id, threadId, conversationId, chatType: ctx.chat?.type },
+          'telegram.message_received'
+        );
         // Fire-and-forget - errors handled by caller
         void this.messageHandler({ conversationId, message, userId });
       }
