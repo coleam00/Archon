@@ -80,6 +80,10 @@ export interface WorkflowConfig {
     loadDefaultWorkflows?: boolean;
     loadDefaultCommands?: boolean;
   };
+  // Intersection: generic map for community providers + typed built-in entries.
+  // Built-ins are typed so executor/dag-executor get type-safe config access for
+  // Claude settingSources, Codex reasoningEffort, etc. without casts.
+  // Community providers use the generic [string] index signature.
   assistants: ProviderDefaultsMap & {
     claude: {
       model?: string;
