@@ -1,15 +1,13 @@
 /**
  * Ollama local LLM client
  *
- * Calls the Ollama /api/chat endpoint for streaming chat completion.
- * Uses the same direct-HTTP pattern as rubot's generation/ollama.py:
- * POST to /api/chat with NDJSON streaming response.
+ * POSTs to the Ollama /api/chat endpoint with `stream: true` and reads
+ * the response as newline-delimited JSON. Each line is parsed as an
+ * OllamaChatChunk; content deltas are yielded as MessageChunks until
+ * the server sends `done: true` with final token counts.
  *
- * Limitations vs Claude/Codex:
- * - No filesystem access or tool use (pure chat completion)
- * - No session resumption (Ollama is stateless)
- * - Only `model`, `systemPrompt`, and `abortSignal` from AssistantRequestOptions are used
- * - `cwd` is ignored
+ * Of the AssistantRequestOptions fields, `model`, `systemPrompt`, and
+ * `abortSignal` are forwarded to the /api/chat payload.
  */
 import type { IAssistantClient, AssistantRequestOptions, MessageChunk } from '../types';
 import { createLogger } from '@archon/paths';
