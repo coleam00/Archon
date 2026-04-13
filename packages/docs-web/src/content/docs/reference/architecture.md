@@ -10,7 +10,7 @@ sidebar:
 
 Comprehensive guide to understanding and extending Archon.
 
-**Navigation:** [Overview](#system-overview) | [Platforms](#adding-platform-adapters) | [AI Assistants](#adding-ai-assistant-clients) | [Isolation](#isolation-providers) | [Commands](#command-system) | [Streaming](#streaming-modes) | [Database](#database-schema)
+**Navigation:** [Overview](#system-overview) | [Platforms](#adding-platform-adapters) | [AI Providers](#adding-ai-agent-providers) | [Isolation](#isolation-providers) | [Commands](#command-system) | [Streaming](#streaming-modes) | [Database](#database-schema)
 
 ---
 
@@ -43,11 +43,11 @@ Archon is a **platform-agnostic AI coding assistant orchestrator** that connects
        │       │        │
        ▼       ▼        ▼
 ┌───────────┐ ┌───────────────┐ ┌───────────────────┐
-│ Command   │ │ AI Assistant  │ │ Isolation         │
-│ Handler   │ │ Clients       │ │ Providers         │
+│ Command   │ │ AI Agent      │ │ Isolation         │
+│ Handler   │ │ Providers     │ │ Providers         │
 │           │ │               │ │                   │
-│ (Slash    │ │ IAssistant-   │ │ IIsolationProvider│
-│ commands) │ │ Client        │ │ (worktree, etc.)  │
+│ (Slash    │ │ IAgent-       │ │ IIsolationProvider│
+│ commands) │ │ Provider      │ │ (worktree, etc.)  │
 └─────┬─────┘ └───────┬───────┘ └─────────┬─────────┘
       │               │                   │
       └───────────────┼───────────────────┘
@@ -62,7 +62,7 @@ Archon is a **platform-agnostic AI coding assistant orchestrator** that connects
 
 ### Key Design Principles
 
-1. **Interface-driven**: Both platform adapters and AI clients implement strict interfaces for swappability
+1. **Interface-driven**: Both platform adapters and AI providers implement strict interfaces for swappability
 2. **Streaming-first**: All AI responses stream through async generators for real-time delivery
 3. **Session persistence**: AI sessions survive container restarts via database storage
 4. **Generic commands**: Users define commands in Git-versioned markdown files, not hardcoded
@@ -296,16 +296,16 @@ async handleWebhook(payload: any, signature: string): Promise<void> {
 
 ---
 
-## Adding AI Assistant Clients
+## Adding AI Agent Providers
 
-AI assistant clients wrap AI SDKs and provide a unified streaming interface. Implement the `IAssistantClient` interface to add new assistants.
+AI agent providers wrap AI SDKs and provide a unified streaming interface. Implement the `IAgentProvider` interface to add new providers.
 
-### IAssistantClient Interface
+### IAgentProvider Interface
 
 **Location:** `packages/core/src/types/index.ts`
 
 ```typescript
-export interface IAssistantClient {
+export interface IAgentProvider {
   // Send a query and get streaming response
   sendQuery(prompt: string, cwd: string, resumeSessionId?: string): AsyncGenerator<MessageChunk>;
 
@@ -328,14 +328,14 @@ interface MessageChunk {
 
 ### Implementation Guide
 
-**1. Create client file:** `packages/core/src/clients/your-assistant.ts`
+**1. Create provider file:** `packages/providers/src/your-assistant/provider.ts`
 
 **2. Implement the interface:**
 
 ```typescript
-import { IAssistantClient, MessageChunk } from '../types';
+import { IAgentProvider, MessageChunk } from '../types';
 
-export class YourAssistantClient implements IAssistantClient {
+export class YourAssistantProvider implements IAgentProvider {
   async *sendQuery(
     prompt: string,
     cwd: string,
@@ -377,21 +377,21 @@ export class YourAssistantClient implements IAssistantClient {
 }
 ```
 
-**3. Register in factory:** `packages/core/src/clients/factory.ts`
+**3. Register in factory:** `packages/providers/src/factory.ts`
 
 ```typescript
-import { YourAssistantClient } from './your-assistant';
+import { YourAssistantProvider } from './your-assistant';
 
-export function getAssistantClient(type: string): IAssistantClient {
+export function getAgentProvider(type: string): IAgentProvider {
   switch (type) {
     case 'claude':
-      return new ClaudeClient();
+      return new ClaudeProvider();
     case 'codex':
-      return new CodexClient();
+      return new CodexProvider();
     case 'your-assistant':
-      return new YourAssistantClient();
+      return new YourAssistantProvider();
     default:
-      throw new Error(`Unknown assistant type: ${type}`);
+      throw new Error(`Unknown provider type: ${type}`);
   }
 }
 ```
@@ -440,7 +440,7 @@ if (trigger && shouldCreateNewSession(trigger)) {
 
 Different SDKs use different event types. Map them to MessageChunk types:
 
-**Claude Code SDK** (`packages/core/src/clients/claude.ts`):
+**Claude Code SDK** (`packages/providers/src/claude/provider.ts`):
 
 ```typescript
 for await (const msg of query({ prompt, options })) {
@@ -462,7 +462,7 @@ for await (const msg of query({ prompt, options })) {
 }
 ```
 
-**Codex SDK** (`packages/core/src/clients/codex.ts`):
+**Codex SDK** (`packages/providers/src/codex/provider.ts`):
 
 ```typescript
 for await (const event of result.events) {
@@ -1180,7 +1180,7 @@ Variable substitution (no args in this case)
          |
 Get or create session
          |
-ClaudeClient.sendQuery(prompt, cwd, sessionId)
+ClaudeProvider.sendQuery(prompt, cwd, sessionId)
          |
 Stream mode: Send each chunk immediately
          |
@@ -1212,7 +1212,7 @@ Load command file, substitute variables
          |
 Get or create session
          |
-CodexClient.sendQuery(prompt, cwd, sessionId)
+CodexProvider.sendQuery(prompt, cwd, sessionId)
          |
 Batch mode: Accumulate all chunks
          |
@@ -1236,14 +1236,14 @@ Post single comment on issue with summary
 - [ ] Add environment variables to `.env.example`
 - [ ] Test with both stream and batch modes
 
-### Adding a New AI Assistant Client
+### Adding a New AI Agent Provider
 
-- [ ] Create `packages/core/src/clients/your-assistant.ts`
-- [ ] Implement `IAssistantClient` interface
+- [ ] Create `packages/providers/src/your-assistant/provider.ts`
+- [ ] Implement `IAgentProvider` interface
 - [ ] Map SDK events to `MessageChunk` types
 - [ ] Handle session creation and resumption
 - [ ] Implement error handling and recovery
-- [ ] Add to `packages/core/src/clients/factory.ts`
+- [ ] Add to `packages/providers/src/factory.ts`
 - [ ] Add environment variables to `.env.example`
 - [ ] Test session persistence across restarts
 - [ ] Test plan-to-execute transition (new session)
@@ -1341,9 +1341,9 @@ Context is passed as a dedicated `issueContext` parameter to `handleMessage()`, 
 
 ## Key Takeaways
 
-1. **Interfaces enable extensibility**: `IPlatformAdapter`, `IAssistantClient`, and `IIsolationProvider` allow adding platforms, AI assistants, and isolation strategies without modifying core logic
+1. **Interfaces enable extensibility**: `IPlatformAdapter`, `IAgentProvider`, and `IIsolationProvider` allow adding platforms, AI providers, and isolation strategies without modifying core logic
 
-2. **Async generators for streaming**: All AI clients return `AsyncGenerator<MessageChunk>` for unified streaming across different SDKs
+2. **Async generators for streaming**: All AI providers return `AsyncGenerator<MessageChunk>` for unified streaming across different SDKs
 
 3. **Session persistence is critical**: Store `assistant_session_id` in database to maintain context across restarts
 
@@ -1353,7 +1353,7 @@ Context is passed as a dedicated `issueContext` parameter to `handleMessage()`, 
 
 6. **Plan-to-execute is special**: Only transition requiring new session (prevents token bloat during implementation)
 
-7. **Factory pattern**: `getAssistantClient()` and `getIsolationProvider()` instantiate correct implementations based on configuration
+7. **Factory pattern**: `getAgentProvider()` and `getIsolationProvider()` instantiate correct implementations based on configuration
 
 8. **Error recovery**: Always provide `/reset` escape hatch for users when sessions get stuck
 
@@ -1364,7 +1364,7 @@ Context is passed as a dedicated `issueContext` parameter to `handleMessage()`, 
 **For detailed implementation examples, see:**
 
 - Platform adapter: `packages/adapters/src/chat/telegram/adapter.ts`, `packages/adapters/src/forge/github/adapter.ts`
-- AI client: `packages/core/src/clients/claude.ts`, `packages/core/src/clients/codex.ts`
+- AI provider: `packages/providers/src/claude/provider.ts`, `packages/providers/src/codex/provider.ts`
 - Isolation provider: `packages/isolation/src/providers/worktree.ts`
 - Isolation resolver: `packages/isolation/src/resolver.ts`
 - Isolation factory: `packages/isolation/src/factory.ts`

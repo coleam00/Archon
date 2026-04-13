@@ -11,6 +11,8 @@ export interface ExecutionNodeData extends DagNodeData {
   duration?: number;
   error?: string;
   selected?: boolean;
+  currentIteration?: number;
+  maxIterations?: number;
 }
 
 export type ExecutionFlowNode = Node<ExecutionNodeData>;
@@ -27,12 +29,14 @@ const TYPE_COLORS: Record<string, string> = {
   command: 'text-purple-400',
   prompt: 'text-accent-bright',
   bash: 'text-amber-400',
+  loop: 'text-orange-400',
 };
 
 const TYPE_LABELS: Record<string, string> = {
   command: 'CMD',
   bash: 'BASH',
   prompt: 'PROMPT',
+  loop: 'LOOP',
 };
 
 function ExecutionDagNodeRender({ data }: NodeProps<ExecutionFlowNode>): React.ReactElement {
@@ -60,6 +64,11 @@ function ExecutionDagNodeRender({ data }: NodeProps<ExecutionFlowNode>): React.R
           </span>
         )}
       </div>
+      {data.currentIteration !== undefined && data.maxIterations !== undefined && (
+        <div className="text-[10px] text-text-tertiary mt-0.5">
+          {data.currentIteration}/{data.maxIterations} iterations
+        </div>
+      )}
       {data.error && (
         <div className="text-[10px] text-error mt-1 truncate" title={data.error}>
           {data.error.slice(0, 60)}

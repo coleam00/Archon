@@ -27,8 +27,6 @@ import {
   registerRepository,
   ConversationNotFoundError,
   generateAndSetTitle,
-  EnvLeakError,
-  scanPathForSensitiveKeys,
 } from '@archon/core';
 import { removeWorktree, toRepoPath, toWorktreePath } from '@archon/git';
 import {
@@ -41,6 +39,9 @@ import {
   getRunArtifactsPath,
   getArchonHome,
   isDocker,
+  checkForUpdate,
+  BUNDLED_IS_BINARY,
+  BUNDLED_VERSION,
 } from '@archon/paths';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { parseWorkflow } from '@archon/workflows/loader';
@@ -67,6 +68,7 @@ import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventDb from '@archon/core/db/workflow-events';
 import * as messageDb from '@archon/core/db/messages';
 import { errorSchema } from './schemas/common.schemas';
+import { updateCheckResponseSchema } from './schemas/system.schemas';
 import {
   workflowListResponseSchema,
   validateWorkflowBodySchema,
@@ -105,7 +107,6 @@ import {
   codebaseSchema,
   codebaseIdParamsSchema,
   addCodebaseBodySchema,
-  updateCodebaseBodySchema,
   deleteCodebaseResponseSchema,
   codebaseEnvVarsResponseSchema,
   setEnvVarBodySchema,
@@ -119,18 +120,21 @@ import {
   codebaseEnvironmentsResponseSchema,
 } from './schemas/config.schemas';
 
-// Read app version once at module load (root package.json is 4 levels up from src/routes/)
+// Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
-try {
-  const pkgContent = readFileSync(join(import.meta.dir, '../../../../package.json'), 'utf-8');
-  const pkg = JSON.parse(pkgContent) as { version?: string };
-  appVersion = pkg.version ?? 'unknown';
-} catch (err) {
-  // package.json not found (binary build or unusual install)
-  getLog().debug(
-    { err, path: join(import.meta.dir, '../../../../package.json') },
-    'api.version_read_failed'
-  );
+if (BUNDLED_IS_BINARY) {
+  appVersion = BUNDLED_VERSION;
+} else {
+  try {
+    const pkgContent = readFileSync(join(import.meta.dir, '../../../../package.json'), 'utf-8');
+    const pkg = JSON.parse(pkgContent) as { version?: string };
+    appVersion = pkg.version ?? 'unknown';
+  } catch (err) {
+    getLog().debug(
+      { err, path: join(import.meta.dir, '../../../../package.json') },
+      'api.version_read_failed'
+    );
+  }
 }
 
 type WorkflowSource = 'project' | 'bundled';
@@ -456,28 +460,6 @@ const addCodebaseRoute = createRoute({
       description: 'Codebase created',
     },
     400: jsonError('Bad request'),
-    500: jsonError('Server error'),
-  },
-});
-
-const updateCodebaseRoute = createRoute({
-  method: 'patch',
-  path: '/api/codebases/{id}',
-  tags: ['Codebases'],
-  summary: 'Update codebase consent flags (e.g. allow_env_keys)',
-  request: {
-    params: codebaseIdParamsSchema,
-    body: {
-      content: { 'application/json': { schema: updateCodebaseBodySchema } },
-      required: true,
-    },
-  },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: codebaseSchema } },
-      description: 'Updated codebase',
-    },
-    404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
 });
@@ -839,6 +821,23 @@ const getHealthRoute = createRoute({
         },
       },
       description: 'Health status',
+    },
+  },
+});
+
+const getUpdateCheckRoute = createRoute({
+  method: 'get',
+  path: '/api/update-check',
+  tags: ['System'],
+  summary: 'Check for available updates',
+  responses: {
+    200: {
+      content: {
+        'application/json': {
+          schema: updateCheckResponseSchema,
+        },
+      },
+      description: 'Update check result',
     },
   },
 });
@@ -1537,8 +1536,8 @@ export function registerApiRoutes(
     try {
       // .refine() guarantees exactly one of url/path is present
       const result = body.url
-        ? await cloneRepository(body.url, body.allowEnvKeys)
-        : await registerRepository(body.path ?? '', body.allowEnvKeys);
+        ? await cloneRepository(body.url)
+        : await registerRepository(body.path ?? '');
 
       // Fetch the full codebase record for a consistent response
       const codebase = await codebaseDb.getCodebase(result.codebaseId);
@@ -1548,83 +1547,12 @@ export function registerApiRoutes(
 
       return c.json(codebase, result.alreadyExisted ? 200 : 201);
     } catch (error) {
-      if (error instanceof EnvLeakError) {
-        const path = body.url ?? body.path ?? '';
-        const files = error.report.findings.map(f => f.file);
-        getLog().warn({ path, files }, 'add_codebase_env_leak_refused');
-        return apiError(c, 422, error.message);
-      }
       getLog().error({ err: error }, 'add_codebase_failed');
       return apiError(
         c,
         500,
         `Failed to add codebase: ${(error as Error).message ?? 'unknown error'}`
       );
-    }
-  });
-
-  // PATCH /api/codebases/:id - Update consent flags
-  registerOpenApiRoute(updateCodebaseRoute, async c => {
-    const id = c.req.param('id') ?? '';
-    const body = getValidatedBody(c, updateCodebaseBodySchema);
-    try {
-      const codebase = await codebaseDb.getCodebase(id);
-      if (!codebase) {
-        return apiError(c, 404, 'Codebase not found');
-      }
-
-      // Capture scanner findings for the audit log (best-effort — path may be gone)
-      let files: string[] = [];
-      let keys: string[] = [];
-      let scanStatus: 'ok' | 'skipped' = 'ok';
-      try {
-        const report = scanPathForSensitiveKeys(codebase.default_cwd);
-        files = report.findings.map(f => f.file);
-        keys = Array.from(new Set(report.findings.flatMap(f => f.keys)));
-      } catch (scanErr) {
-        scanStatus = 'skipped';
-        getLog().warn(
-          { err: scanErr, codebaseId: id, path: codebase.default_cwd },
-          'env_leak_consent_scan_skipped'
-        );
-      }
-
-      await codebaseDb.updateCodebaseAllowEnvKeys(id, body.allowEnvKeys);
-
-      // Audit log: emitted unconditionally on every grant/revoke. `scanStatus`
-      // distinguishes "scanned and these are the findings" from "could not
-      // scan, files/keys are empty for that reason" — important for later
-      // security review of the audit trail.
-      getLog().warn(
-        {
-          codebaseId: id,
-          name: codebase.name,
-          path: codebase.default_cwd,
-          files,
-          keys,
-          scanStatus,
-          actor: 'user-ui',
-        },
-        body.allowEnvKeys ? 'env_leak_consent_granted' : 'env_leak_consent_revoked'
-      );
-
-      const updated = await codebaseDb.getCodebase(id);
-      if (!updated) {
-        return apiError(c, 500, 'Codebase updated but not found');
-      }
-      let commands = updated.commands;
-      if (typeof commands === 'string') {
-        try {
-          commands = JSON.parse(commands);
-        } catch (parseErr) {
-          getLog().error({ err: parseErr, codebaseId: id }, 'corrupted_commands_json');
-          commands = {};
-        }
-      }
-      return c.json({ ...updated, commands });
-    } catch (error) {
-      getLog().error({ err: error, codebaseId: id }, 'update_codebase_failed');
-      return apiError(c, 500, 'Failed to update codebase');
     }
   });
 
@@ -2479,27 +2407,22 @@ export function registerApiRoutes(
       return apiError(c, 500, 'Failed to look up workflow run');
     }
 
-    if (!run?.working_path) {
+    if (!run) {
       return apiError(c, 404, 'Workflow run not found');
     }
 
-    // Derive owner/repo from working_path (must be under ~/.archon/workspaces/owner/repo/...)
-    const normalizedWorkspacesPath = normalize(getArchonWorkspacesPath());
-    const normalizedWorkingPath = normalize(run.working_path);
-    if (!normalizedWorkingPath.startsWith(normalizedWorkspacesPath + sep)) {
-      getLog().error(
-        { runId, workingPath: run.working_path },
-        'artifacts.working_path_outside_workspaces'
-      );
-      return apiError(c, 404, 'Artifact not available: working path not in workspaces');
+    // Derive owner/repo from codebase name (format: "owner/repo")
+    const codebase = run.codebase_id ? await codebaseDb.getCodebase(run.codebase_id) : null;
+    if (!codebase?.name) {
+      getLog().error({ runId, codebaseId: run.codebase_id }, 'artifacts.codebase_lookup_failed');
+      return apiError(c, 404, 'Artifact not available: codebase not found');
     }
-    const relative = normalizedWorkingPath.substring(normalizedWorkspacesPath.length + 1);
-    const parts = relative.split(sep).filter(p => p.length > 0);
-    if (parts.length < 2) {
-      getLog().error({ runId, workingPath: run.working_path }, 'artifacts.owner_repo_parse_failed');
+    const nameParts = codebase.name.split('/');
+    if (nameParts.length < 2) {
+      getLog().error({ runId, codebaseName: codebase.name }, 'artifacts.owner_repo_parse_failed');
       return apiError(c, 404, 'Artifact not available: could not determine owner/repo');
     }
-    const [owner, repo] = parts;
+    const [owner, repo] = nameParts;
 
     const artifactDir = getRunArtifactsPath(owner, repo, runId);
     const filePath = join(artifactDir, filename);
@@ -2619,5 +2542,17 @@ export function registerApiRoutes(
       version: appVersion,
       is_docker: isDocker(),
     });
+  });
+
+  registerOpenApiRoute(getUpdateCheckRoute, async c => {
+    const noUpdate = {
+      updateAvailable: false,
+      currentVersion: appVersion,
+      latestVersion: appVersion,
+      releaseUrl: '',
+    };
+    if (!BUNDLED_IS_BINARY) return c.json(noUpdate);
+    const result = await checkForUpdate(appVersion);
+    return c.json(result ?? noUpdate);
   });
 }

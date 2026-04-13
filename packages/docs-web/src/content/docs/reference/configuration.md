@@ -83,11 +83,6 @@ paths:
 concurrency:
   maxConversations: 10
 
-# Env-leak gate bypass (last resort — weakens a security control)
-# allow_target_repo_keys: false  # Set true to skip the env-leak-gate
-                                 # globally for all codebases on this machine.
-                                 # `env_leak_gate_disabled` is logged once per
-                                 # process per source. See security.md.
 ```
 
 ## Repository Configuration
@@ -135,11 +130,6 @@ defaults:
 #   MY_API_KEY: value
 #   CUSTOM_ENDPOINT: https://...
 
-# Per-repo override for the env-leak-gate bypass.
-# Set to `false` to re-enable the gate for THIS repo even when the global
-# config has `allow_target_repo_keys: true`. Set to `true` to grant the
-# bypass for THIS repo only. Wins over the global flag in either direction.
-# allow_target_repo_keys: false
 ```
 
 ### Claude settingSources
@@ -190,6 +180,7 @@ Environment variables override all other configuration. They are organized by ca
 | `DEFAULT_AI_ASSISTANT` | Default AI assistant (`claude` or `codex`) | `claude` |
 | `MAX_CONCURRENT_CONVERSATIONS` | Maximum concurrent AI conversations | `10` |
 | `SESSION_RETENTION_DAYS` | Delete inactive sessions older than N days | `30` |
+| `ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING` | When set to `1`, suppresses the stderr warning emitted when `archon` is run inside a Claude Code session | -- |
 
 ### AI Providers -- Claude
 
@@ -199,6 +190,7 @@ Environment variables override all other configuration. They are organized by ca
 | `CLAUDE_CODE_OAUTH_TOKEN` | Explicit OAuth token (alternative to global auth) | -- |
 | `CLAUDE_API_KEY` | Explicit API key (alternative to global auth) | -- |
 | `TITLE_GENERATION_MODEL` | Lightweight model for generating conversation titles | SDK default |
+| `ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS` | Timeout (ms) before Claude subprocess is considered hung (throws with diagnostic log) | `60000` |
 
 When `CLAUDE_USE_GLOBAL_AUTH` is unset, Archon auto-detects: it uses explicit tokens if present, otherwise falls back to global auth.
 
@@ -296,21 +288,19 @@ Infrastructure configuration (database URL, platform tokens) is stored in `.env`
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| **CLI** | `~/.archon/.env` | Global infrastructure config (only source loaded) |
-| **Server** | `<archon-repo>/.env` | Platform tokens, database |
+| **CLI** | `~/.archon/.env` | Global infrastructure config; CWD .env keys stripped first, then loaded with `override: true` (Archon config wins over shell-inherited vars) |
+| **Server (dev)** | `<archon-repo>/.env` + `~/.archon/.env` | Repo `.env` for platform tokens; `~/.archon/.env` loaded with `override: true` |
+| **Server (binary)** | `~/.archon/.env` | Single source of truth (repo `.env` path is not available in compiled binaries) |
 
-**Important**: The CLI loads `.env` **only** from `~/.archon/.env`. On startup, it explicitly deletes any `DATABASE_URL` that Bun may have auto-loaded from the current working directory's `.env`, then loads `~/.archon/.env` with `override: true`. This prevents conflicts when running Archon from target projects that have their own database configurations.
+**How it works**: At startup, the CLI and server strip all keys that Bun auto-loaded from the current working directory (`.env`, `.env.local`, `.env.development`, `.env.production`) and any nested Claude Code session markers (`CLAUDECODE`, `CLAUDE_CODE_*` except auth vars) before loading `~/.archon/.env`. This ensures target repo keys and nested-session guards are fully removed from `process.env` before any application code runs.
 
-**Best practice**: Use `~/.archon/.env` as the single source of truth. If running the server, symlink or copy to the archon repo:
+**Best practice**: Use `~/.archon/.env` as the single source of truth:
 
 ```bash
 # Create global config
 mkdir -p ~/.archon
 cp .env.example ~/.archon/.env
 # Edit with your values
-
-# For server, symlink to repo
-ln -s ~/.archon/.env .env
 ```
 
 ## Docker Configuration

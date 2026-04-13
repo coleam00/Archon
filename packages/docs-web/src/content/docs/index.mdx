@@ -1,0 +1,66 @@
+---
+title: Archon
+description: AI workflow engine — package your coding workflows as YAML, run them anywhere.
+template: splash
+hero:
+  title: Archon
+  image:
+    file: ../../assets/logo.png
+    alt: Archon Logo
+  tagline: Package your AI coding workflows as YAML. Run them anywhere — CLI, Web, Slack, Telegram, GitHub, Discord.
+  actions:
+    - text: Get Started
+      link: /getting-started/installation/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/coleam00/Archon
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Install in seconds
+
+:::code-group
+
+```bash [macOS / Linux]
+curl -fsSL https://archon.diy/install | bash
+```
+
+```powershell [Windows]
+irm https://archon.diy/install.ps1 | iex
+```
+
+```bash [Homebrew]
+brew install coleam00/archon/archon
+```
+
+```bash [Docker]
+docker run --rm -v "$PWD:/workspace" ghcr.io/coleam00/archon:latest workflow list
+```
+
+:::
+
+## What is Archon?
+
+Archon is a **workflow engine for AI coding agents**. Define multi-step development workflows in YAML — code review, bug fixes, feature implementation, testing — and run them with a single command.
+
+<CardGrid>
+  <Card title="Repeatable" icon="document">
+    Package your best AI coding patterns as shareable YAML workflows
+  </Card>
+  <Card title="Isolated" icon="laptop">
+    Each workflow runs in its own git worktree — no conflicts, no mess
+  </Card>
+  <Card title="Portable" icon="puzzle">
+    Run from CLI, Web UI, Slack, Telegram, GitHub, or Discord
+  </Card>
+  <Card title="Composable" icon="setting">
+    Chain nodes into DAGs with dependencies, loops, and conditional logic
+  </Card>
+  <Card title="Multi-provider" icon="rocket">
+    Works with Claude Code SDK and Codex SDK
+  </Card>
+</CardGrid>

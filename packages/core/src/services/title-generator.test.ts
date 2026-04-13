@@ -31,13 +31,13 @@ const mockSendQuery = mock(async function* (): AsyncGenerator<MessageChunk> {
   ) => AsyncGenerator<MessageChunk>
 >;
 
-const mockGetAssistantClient = mock(() => ({
+const mockGetAgentProvider = mock(() => ({
   sendQuery: mockSendQuery,
   getType: () => 'claude',
 }));
 
-mock.module('../clients/factory', () => ({
-  getAssistantClient: mockGetAssistantClient,
+mock.module('@archon/providers', () => ({
+  getAgentProvider: mockGetAgentProvider,
 }));
 
 // ─── Import module under test (AFTER all mocks) ─────────────────────────────
@@ -50,7 +50,7 @@ describe('title-generator', () => {
   beforeEach(() => {
     mockUpdateConversationTitle.mockClear();
     mockSendQuery.mockClear();
-    mockGetAssistantClient.mockClear();
+    mockGetAgentProvider.mockClear();
 
     // Reset to default happy-path behavior
     mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
@@ -58,7 +58,7 @@ describe('title-generator', () => {
       yield { type: 'result' };
     });
 
-    mockGetAssistantClient.mockImplementation(() => ({
+    mockGetAgentProvider.mockImplementation(() => ({
       sendQuery: mockSendQuery,
       getType: () => 'claude',
     }));
@@ -167,11 +167,14 @@ describe('title-generator', () => {
     expect(optionsArg.model).toBeUndefined();
   });
 
-  test('passes tools: [] to disable tool access', async () => {
+  test('passes nodeConfig with allowed_tools: [] to disable tool access', async () => {
     await generateAndSetTitle('conv-11', 'Some message', 'claude', '/tmp');
 
-    const optionsArg = mockSendQuery.mock.calls[0][3] as { model?: string; tools?: string[] };
-    expect(optionsArg.tools).toEqual([]);
+    const optionsArg = mockSendQuery.mock.calls[0][3] as {
+      model?: string;
+      nodeConfig?: { allowed_tools?: string[] };
+    };
+    expect(optionsArg.nodeConfig?.allowed_tools).toEqual([]);
   });
 
   test('handles double failure gracefully (AI fails + fallback DB write fails)', async () => {

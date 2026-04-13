@@ -38,7 +38,6 @@ export interface CodebaseResponse {
   repository_url: string | null;
   default_cwd: string;
   ai_assistant_type: string;
-  allow_env_keys: boolean;
   commands: Record<string, { path: string; description: string }>;
   created_at: string;
   updated_at: string;
@@ -166,21 +165,10 @@ export async function getCodebase(id: string): Promise<CodebaseResponse> {
 }
 
 export async function addCodebase(
-  input: { url: string; allowEnvKeys?: boolean } | { path: string; allowEnvKeys?: boolean }
+  input: { url: string } | { path: string }
 ): Promise<CodebaseResponse> {
   return fetchJSON<CodebaseResponse>('/api/codebases', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(input),
-  });
-}
-
-export async function updateCodebase(
-  id: string,
-  input: { allowEnvKeys: boolean }
-): Promise<CodebaseResponse> {
-  return fetchJSON<CodebaseResponse>(`/api/codebases/${id}`, {
-    method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
   });
@@ -502,4 +490,10 @@ export async function deleteCodebaseEnvVar(
 // System
 export async function getHealth(): Promise<HealthResponse> {
   return fetchJSON<HealthResponse>('/api/health');
+}
+
+export type UpdateCheckResult = components['schemas']['UpdateCheckResponse'];
+
+export async function getUpdateCheck(): Promise<UpdateCheckResult> {
+  return fetchJSON<UpdateCheckResult>('/api/update-check');
 }

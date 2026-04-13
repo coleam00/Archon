@@ -44,8 +44,8 @@ mock.module('../db/codebases', () => ({
   getCodebase: mockGetCodebase,
 }));
 
-mock.module('../clients/factory', () => ({
-  getAssistantClient: mock(() => ({})),
+mock.module('@archon/providers', () => ({
+  getAgentProvider: mock(() => ({})),
 }));
 
 mock.module('../config/config-loader', () => ({
@@ -145,10 +145,10 @@ describe('createWorkflowStore', () => {
 });
 
 describe('createWorkflowDeps', () => {
-  test('returns WorkflowDeps with store, getAssistantClient, and loadConfig', () => {
+  test('returns WorkflowDeps with store, getAgentProvider, and loadConfig', () => {
     const deps = createWorkflowDeps();
     expect(deps.store).toBeDefined();
-    expect(typeof deps.getAssistantClient).toBe('function');
+    expect(typeof deps.getAgentProvider).toBe('function');
     expect(typeof deps.loadConfig).toBe('function');
   });
 

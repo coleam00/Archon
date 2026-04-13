@@ -4,6 +4,7 @@ import type {
   WorkflowStatusEvent,
   WorkflowArtifactEvent,
   DagNodeEvent,
+  LoopIterationEvent,
   WorkflowState,
 } from '@/lib/types';
 
@@ -322,5 +323,188 @@ describe('selectActiveWorkflow / activeWorkflowId', () => {
       .getState()
       .handleWorkflowStatus(statusEvent({ runId: 'b', status: 'completed', timestamp: 3000 }));
     expect(useWorkflowStore.getState().activeWorkflowId).toBe('a');
+  });
+});
+
+function loopIterationEvent(
+  overrides: Partial<LoopIterationEvent> & { runId: string; iteration: number }
+): LoopIterationEvent {
+  return {
+    type: 'workflow_step',
+    nodeId: 'loop-node',
+    step: overrides.iteration - 1,
+    total: 5,
+    name: `iteration-${String(overrides.iteration)}`,
+    status: 'running',
+    timestamp: 1000,
+    ...overrides,
+  };
+}
+
+describe('handleLoopIteration', () => {
+  test('no-ops when event has no nodeId (non-DAG loop)', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-li0' }));
+    const before = useWorkflowStore.getState().workflows;
+    useWorkflowStore
+      .getState()
+      .handleLoopIteration(
+        loopIterationEvent({ runId: 'run-li0', iteration: 1, nodeId: undefined })
+      );
+    // Map reference must not change — no mutation
+    expect(useWorkflowStore.getState().workflows).toBe(before);
+  });
+
+  test('no-ops when nodeId not yet in dagNodes', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-li1' }));
+    useWorkflowStore
+      .getState()
+      .handleLoopIteration(
+        loopIterationEvent({ runId: 'run-li1', iteration: 1, nodeId: 'ghost-node' })
+      );
+    // Node was not registered — dagNodes must remain empty
+    const wf = useWorkflowStore.getState().workflows.get('run-li1')!;
+    expect(wf.dagNodes).toHaveLength(0);
+  });
+
+  test('appends first iteration to existing node', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-li2' }));
+    useWorkflowStore
+      .getState()
+      .handleDagNode(dagNodeEvent({ runId: 'run-li2', nodeId: 'loop-node', name: 'My Loop' }));
+    useWorkflowStore.getState().handleLoopIteration(
+      loopIterationEvent({
+        runId: 'run-li2',
+        nodeId: 'loop-node',
+        iteration: 1,
+        total: 3,
+        status: 'running',
+      })
+    );
+    const wf = useWorkflowStore.getState().workflows.get('run-li2')!;
+    const node = wf.dagNodes.find(n => n.nodeId === 'loop-node')!;
+    expect(node.iterations).toHaveLength(1);
+    expect(node.iterations![0]).toEqual({ iteration: 1, status: 'running', duration: undefined });
+    expect(node.currentIteration).toBe(1);
+    expect(node.maxIterations).toBe(3);
+  });
+
+  test('updates existing iteration entry (upsert by iteration number)', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-li3' }));
+    useWorkflowStore
+      .getState()
+      .handleDagNode(dagNodeEvent({ runId: 'run-li3', nodeId: 'loop-node', name: 'My Loop' }));
+    // First: started
+    useWorkflowStore.getState().handleLoopIteration(
+      loopIterationEvent({
+        runId: 'run-li3',
+        nodeId: 'loop-node',
+        iteration: 1,
+        status: 'running',
+      })
+    );
+    // Then: completed with duration
+    useWorkflowStore.getState().handleLoopIteration(
+      loopIterationEvent({
+        runId: 'run-li3',
+        nodeId: 'loop-node',
+        iteration: 1,
+        status: 'completed',
+        total: 0,
+        duration: 1500,
+      })
+    );
+    const wf = useWorkflowStore.getState().workflows.get('run-li3')!;
+    const node = wf.dagNodes.find(n => n.nodeId === 'loop-node')!;
+    expect(node.iterations).toHaveLength(1); // no duplicate
+    expect(node.iterations![0].status).toBe('completed');
+    expect(node.iterations![0].duration).toBe(1500);
+  });
+
+  test('preserves prior maxIterations when total: 0 (completed/failed events)', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-li4' }));
+    useWorkflowStore
+      .getState()
+      .handleDagNode(dagNodeEvent({ runId: 'run-li4', nodeId: 'loop-node', name: 'My Loop' }));
+    // started with known total
+    useWorkflowStore.getState().handleLoopIteration(
+      loopIterationEvent({
+        runId: 'run-li4',
+        nodeId: 'loop-node',
+        iteration: 1,
+        total: 4,
+        status: 'running',
+      })
+    );
+    // completed with total: 0 (intentional bridge omission)
+    useWorkflowStore.getState().handleLoopIteration(
+      loopIterationEvent({
+        runId: 'run-li4',
+        nodeId: 'loop-node',
+        iteration: 1,
+        total: 0,
+        status: 'completed',
+      })
+    );
+    const node = useWorkflowStore
+      .getState()
+      .workflows.get('run-li4')!
+      .dagNodes.find(n => n.nodeId === 'loop-node')!;
+    expect(node.maxIterations).toBe(4); // preserved, not overwritten to 0
+  });
+
+  test('accumulates multiple distinct iterations', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-li5' }));
+    useWorkflowStore
+      .getState()
+      .handleDagNode(dagNodeEvent({ runId: 'run-li5', nodeId: 'loop-node', name: 'My Loop' }));
+    for (let i = 1; i <= 3; i++) {
+      useWorkflowStore.getState().handleLoopIteration(
+        loopIterationEvent({
+          runId: 'run-li5',
+          nodeId: 'loop-node',
+          iteration: i,
+          status: 'completed',
+        })
+      );
+    }
+    const node = useWorkflowStore
+      .getState()
+      .workflows.get('run-li5')!
+      .dagNodes.find(n => n.nodeId === 'loop-node')!;
+    expect(node.iterations).toHaveLength(3);
+    expect(node.currentIteration).toBe(3);
+  });
+
+  test('preserves iteration data after node_completed dag event overwrites node', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-li6' }));
+    useWorkflowStore
+      .getState()
+      .handleDagNode(dagNodeEvent({ runId: 'run-li6', nodeId: 'loop-node', name: 'My Loop' }));
+    useWorkflowStore.getState().handleLoopIteration(
+      loopIterationEvent({
+        runId: 'run-li6',
+        nodeId: 'loop-node',
+        iteration: 1,
+        total: 2,
+        status: 'completed',
+      })
+    );
+    // Simulate the loop node completing — handleDagNode must preserve the iteration data
+    useWorkflowStore.getState().handleDagNode(
+      dagNodeEvent({
+        runId: 'run-li6',
+        nodeId: 'loop-node',
+        name: 'My Loop',
+        status: 'completed',
+        duration: 5000,
+      })
+    );
+    const node = useWorkflowStore
+      .getState()
+      .workflows.get('run-li6')!
+      .dagNodes.find(n => n.nodeId === 'loop-node')!;
+    expect(node.status).toBe('completed');
+    expect(node.iterations).toHaveLength(1); // iteration data preserved after node completion
+    expect(node.maxIterations).toBe(2);
   });
 });

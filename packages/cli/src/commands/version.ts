@@ -30,7 +30,8 @@ interface PackageJson {
  * Get version for development mode (reads package.json)
  */
 async function getDevVersion(): Promise<{ name: string; version: string }> {
-  const pkgPath = join(SCRIPT_DIR, '../../package.json');
+  // Read root package.json (monorepo version), not the CLI package's own
+  const pkgPath = join(SCRIPT_DIR, '../../../../package.json');
 
   let content: string;
   try {

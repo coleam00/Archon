@@ -279,3 +279,23 @@ docker compose exec app ls -la /.archon/workspaces
 ```bash
 docker compose exec app git clone https://github.com/user/repo /.archon/workspaces/test-repo
 ```
+
+## Workflows Hang Silently When Run Inside Claude Code
+
+**Symptom:** Workflows started from within a Claude Code session (e.g., via the Terminal tool) produce no output, or the CLI emits a warning about `CLAUDECODE=1` before the workflow hangs.
+
+**Cause:** Nested Claude Code sessions can deadlock — the outer session waits for tool results that the inner session never delivers.
+
+**Fix:** Run `archon serve` from a regular shell outside Claude Code and use the Web UI or HTTP API instead.
+
+**Suppress the warning:** If you have a non-deadlocking setup and want to silence the warning:
+
+```bash
+ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING=1 archon workflow run ...
+```
+
+**Adjust the timeout:** If your environment is slow and hitting the 60-second first-event timeout:
+
+```bash
+ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS=120000 archon workflow run ...
+```

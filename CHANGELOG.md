@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-04-12
+
+Web UI workflow experience improvements, CWD environment leak protection, and bug fixes.
+
+### Added
+
+- Workflow result card now shows status, duration, node count, and artifact links in chat (#1015)
+- Loop iteration progress display in the workflow execution view (#1014)
+- Artifact file paths in chat messages are now clickable (#1023)
+
+### Changed
+
+- CWD `.env` variables are now stripped from AI subprocess environments at the `@archon/paths` layer, replacing the old `SUBPROCESS_ENV_ALLOWLIST` approach. Prevents accidental credential leaks from target repo `.env` files (#1067, #1030, #1098, #1070)
+- Update check cache TTL reduced from 24 hours to 1 hour
+
+### Fixed
+
+- Duplicate text and tool calls appearing in workflow execution view
+- `workflow_step` SSE events not handled correctly, causing missing progress updates
+- Nested interactive elements in workflow UI causing React warnings
+- Workflow status messages not splitting correctly in WorkflowLogs
+- Incorrect `remainingMessage` suppression in stream mode causing lost output
+- Binary builds now use `BUNDLED_VERSION` for the app version instead of reading `package.json`
+
+## [0.3.5] - 2026-04-10
+
+Fixes for `archon serve` process lifecycle and static file serving.
+
+### Fixed
+
+- **`archon serve` process exits immediately**: the CLI called `process.exit(0)` after `startServer()` returned, killing the server. Now blocks on SIGINT/SIGTERM so the server stays running (#1047)
+- **Web dist path existence check**: server logs a warning at startup if the web dist directory is missing, instead of silently serving 404s
+- **Favicon route**: added explicit `/favicon.png` route for the web UI
+
+## [0.3.4] - 2026-04-10
+
+Binary env loading fix and release infrastructure improvements.
+
+### Added
+
+- **Docs site redesign**: logo, dark theme, feature cards, and enhanced CSS (#1022)
+
+### Changed
+
+- **Server env loading for binary support**: removed redundant CWD `.env` stripping — `SUBPROCESS_ENV_ALLOWLIST` and the env-leak gate already prevent target repo credentials from reaching AI subprocesses. Server now loads `~/.archon/.env` with `override: true` for all keys (not just `DATABASE_URL`), skips the `import.meta.dir` `.env` path in binary mode, and defaults `CLAUDE_USE_GLOBAL_AUTH=true` when no explicit credentials are set (#1045)
+- **Workspace version sync**: all `packages/*/package.json` versions now sync from the root `package.json` during releases via `scripts/sync-versions.sh`
+
+### Fixed
+
+- **`archon serve` crash in compiled binaries**: the CWD env stripping + baked `import.meta.dir` path caused all credentials to be lost, triggering `no_ai_credentials` exit on every startup
+- **CLI `version` command reading stale version**: dev mode now reads from the monorepo root `package.json` instead of the CLI package's own version field
+- **Release CI web build**: fixed `bun --filter` syntax and added missing `remark-gfm` transitive dependencies for Bun hoisting
+
+## [0.3.3] - 2026-04-10
+
+Binary distribution improvements, new workflow node type, and a batch of bug fixes.
+
+### Added
+
+- **`archon serve` command**: one-command way for compiled binary users to start the web UI server. Downloads a pre-built web UI tarball from GitHub releases on first run, verifies SHA-256 checksum, caches locally, then starts the full server (#1011)
+- **Automatic update check**: binary users see a notification when a newer version is available on GitHub. Non-blocking, cached for 24 hours (#1039)
+- **Script node type for DAG workflows**: `script:` nodes run inline TypeScript/Python or named scripts from `.archon/scripts/` via `bun` or `uv` runtimes. Supports `deps:` for dependency installation and `timeout:` in milliseconds (#999)
+- **Codex native binary auto-resolution**: compiled builds now locate the Codex CLI binary automatically instead of requiring a manual `CODEX_CLI_PATH` override (#995, #1012)
+
+### Fixed
+
+- **Workflow reject ignores positional reason**: `archon workflow reject <id> <reason>` now correctly passes the reason argument to the rejection handler
+- **Windows script path separators**: normalize backslashes to forward slashes in script node paths for cross-platform compatibility
+- **PowerShell `Add-ToUserPath` corruption**: installer no longer corrupts `PATH` when only a single entry exists (#1000)
+- **Validator `Promise.any` race condition**: script runtime checks no longer fail intermittently due to a `Promise.any` edge case (#1007, #1010)
+- **Interactive-prd workflow bugs**: fixes to loop gate handling, variable substitution, and node ordering (#1001, #1002, #1003, #1005)
+- **Community forge adapter exports**: added explicit export entries for Gitea and GitLab adapters so they resolve correctly in compiled builds (#1041)
+- **Workflow graph view without codebase**: the web UI workflow graph now loads correctly even when no codebase is selected (#958)
+
 ## [0.3.2] - 2026-04-08
 
 Critical hotfix: compiled binaries could not spawn Claude. Also fixes an env-leak gate false-positive for unregistered working directories.
@@ -105,7 +179,7 @@ Chat-first navigation redesign, DAG graph viewer, per-node MCP and skills, and e
 - Idle timeout not detecting stuck tool calls during execution (#649)
 - `commitAllChanges` failing on empty commits (#745)
 - Explicit base branch config now required for worktree creation (#686)
-- Subprocess-level retry added to CodexClient (#641)
+- Subprocess-level retry added to CodexProvider (#641)
 - Validate `cwd` query param against registered codebases (#630)
 - Server-internal paths redacted from `/api/config` response (#632)
 - SQLite conversations index missing `WHERE deleted_at IS NULL` (#629)
@@ -157,7 +231,7 @@ DAG hardening, security fixes, validate-pr workflow, and worktree lifecycle mana
 - **`--json` flag for `workflow list`** — machine-readable workflow output (#594)
 - **`archon-validate-pr` workflow** with per-node idle timeout support (#635)
 - **Typed SessionMetadata** with Zod validation for safer metadata handling (#600)
-- **`persistSession: false`** in ClaudeClient to avoid disk pollution from session transcripts (#626)
+- **`persistSession: false`** in ClaudeProvider to avoid disk pollution from session transcripts (#626)
 - **DAG workflow for GitHub issue resolution** with structured node pipeline
 
 ### Changed

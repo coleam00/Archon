@@ -89,6 +89,26 @@ export interface WorkflowStatusEvent extends BaseSSEEvent {
   approval?: { nodeId: string; message: string };
 }
 
+// Loop iteration info (per-iteration state stored in DagNodeState)
+export interface LoopIterationInfo {
+  iteration: number;
+  status: 'running' | 'completed' | 'failed';
+  duration?: number;
+}
+
+// Loop iteration SSE event (emitted as 'workflow_step' by the bridge)
+export interface LoopIterationEvent extends BaseSSEEvent {
+  type: 'workflow_step';
+  runId: string;
+  nodeId?: string;
+  step: number;
+  total: number;
+  name: string;
+  status: 'running' | 'completed' | 'failed';
+  iteration: number;
+  duration?: number;
+}
+
 // DAG node status (emitted during DAG workflow execution)
 export interface DagNodeEvent extends BaseSSEEvent {
   type: 'dag_node';
@@ -161,6 +181,7 @@ export type SSEEvent =
   | HeartbeatEvent
   | WorkflowStatusEvent
   | DagNodeEvent
+  | LoopIterationEvent
   | WorkflowToolActivityEvent
   | WorkflowArtifactEvent
   | WorkflowDispatchEvent
@@ -226,6 +247,9 @@ export interface DagNodeState {
   duration?: number;
   error?: string;
   reason?: 'when_condition' | 'trigger_rule';
+  currentIteration?: number;
+  maxIterations?: number;
+  iterations?: LoopIterationInfo[];
 }
 
 export interface WorkflowArtifact {

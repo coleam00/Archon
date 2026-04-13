@@ -8,6 +8,11 @@ import { readdir, stat } from 'fs/promises';
 import { join, basename, extname } from 'path';
 import { createLogger } from '@archon/paths';
 
+/** Normalize path separators to forward slashes for cross-platform consistency */
+function normalizeSep(p: string): string {
+  return p.replaceAll('\\', '/');
+}
+
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -96,7 +101,7 @@ async function scanScriptDir(
       );
     }
 
-    scripts.set(name, { name, path: entryPath, runtime });
+    scripts.set(name, { name, path: normalizeSep(entryPath), runtime });
     getLog().debug({ name, runtime, entryPath }, 'script_loaded');
   }
 }

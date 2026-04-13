@@ -1,6 +1,6 @@
 {
   "name": "@archon/cli",
-  "version": "0.2.13",
+  "version": "0.3.6",
   "type": "module",
   "main": "./src/cli.ts",
   "bin": {
@@ -8,14 +8,17 @@
   },
   "scripts": {
     "cli": "bun src/cli.ts",
-    "test": "bun test src/commands/version.test.ts src/commands/setup.test.ts && bun test src/commands/workflow.test.ts && bun test src/commands/isolation.test.ts && bun test src/commands/chat.test.ts",
+    "test": "bun test src/commands/version.test.ts src/commands/setup.test.ts && bun test src/commands/workflow.test.ts && bun test src/commands/isolation.test.ts && bun test src/commands/chat.test.ts && bun test src/commands/serve.test.ts",
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
+    "@archon/adapters": "workspace:*",
     "@archon/core": "workspace:*",
     "@archon/git": "workspace:*",
     "@archon/isolation": "workspace:*",
     "@archon/paths": "workspace:*",
+    "@archon/providers": "workspace:*",
+    "@archon/server": "workspace:*",
     "@archon/workflows": "workspace:*",
     "@clack/prompts": "^1.0.0",
     "dotenv": "^17.2.3"

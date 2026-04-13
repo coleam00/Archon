@@ -1,0 +1,21 @@
+# E2E smoke test — Codex provider
+# Verifies: provider selection, sendQuery, structured output
+name: e2e-codex-smoke
+description: "E2E smoke test for Codex provider. Runs a simple prompt + structured output node."
+provider: codex
+
+nodes:
+  - id: simple
+    prompt: "What is 2+2? Answer with just the number, nothing else."
+
+  - id: structured
+    prompt: "Classify this input as 'math' or 'text': '2+2=4'. Return JSON only."
+    output_format:
+      type: object
+      properties:
+        category:
+          type: string
+          enum: ["math", "text"]
+      required: ["category"]
+      additionalProperties: false
+    depends_on: [simple]

@@ -1,12 +1,14 @@
 {
   "name": "@archon/adapters",
-  "version": "0.1.0",
+  "version": "0.3.6",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./*": "./src/*"
+    "./*": "./src/*",
+    "./community/forge/gitea": "./src/community/forge/gitea/index.ts",
+    "./community/forge/gitlab": "./src/community/forge/gitlab/index.ts"
   },
   "scripts": {
     "test": "bun test src/chat/ src/community/chat/ src/community/forge/gitlab/auth.test.ts src/forge/github/auth.test.ts src/utils/ && bun test src/forge/github/adapter.test.ts && bun test src/forge/github/context.test.ts && bun test src/community/forge/gitea/adapter.test.ts && bun test src/community/forge/gitlab/adapter.test.ts",

@@ -1,6 +1,6 @@
 {
   "name": "@archon/workflows",
-  "version": "0.1.0",
+  "version": "0.3.6",
   "type": "module",
   "exports": {
     "./schemas/*": "./src/schemas/*.ts",
@@ -25,6 +25,7 @@
   "dependencies": {
     "@archon/git": "workspace:*",
     "@archon/paths": "workspace:*",
+    "@archon/providers": "workspace:*",
     "@hono/zod-openapi": "^0.19.6",
     "zod": "^3.25.28"
   },

@@ -1,0 +1,23 @@
+# E2E smoke test — Claude provider
+# Verifies: provider selection, sendQuery, structured output, tool use
+name: e2e-claude-smoke
+description: "E2E smoke test for Claude provider. Runs a simple prompt + structured output node."
+provider: claude
+
+nodes:
+  - id: simple
+    prompt: "What is 2+2? Answer with just the number, nothing else."
+
+  - id: structured
+    prompt: "Classify this input as 'math' or 'text': '2+2=4'"
+    output_format:
+      type: object
+      properties:
+        category:
+          type: string
+          enum: ["math", "text"]
+    depends_on: [simple]
+
+  - id: tool-use
+    prompt: "Read the file packages/providers/package.json and tell me the package name. Answer with just the name."
+    depends_on: [simple]

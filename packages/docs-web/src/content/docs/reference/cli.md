@@ -50,7 +50,7 @@ archon workflow run plan --cwd /path/to/repo --branch feature-auth "Add OAuth su
 archon workflow run assist --cwd /path/to/repo --no-worktree "Quick question"
 ```
 
-**Note:** Workflow and isolation commands require running from within a git repository. Running from subdirectories automatically resolves to the repo root. The `version`, `help`, `chat`, and `setup` commands work anywhere.
+**Note:** Workflow and isolation commands require running from within a git repository. Running from subdirectories automatically resolves to the repo root. The `version`, `help`, `chat`, `setup`, and `serve` commands work anywhere.
 
 ## Commands
 
@@ -122,7 +122,6 @@ Progress events (node start/complete/fail/skip, approval gates) are written to s
 | `--from <branch>`, `--from-branch <branch>` | Override base branch (start-point for worktree) |
 | `--no-worktree` | Opt out of isolation -- run directly in live checkout |
 | `--resume` | Resume from last failed run at the working path (skips completed nodes) |
-| `--allow-env-keys` | Grant env-leak-gate consent during auto-registration (bypasses the gate for this codebase). Audit-logged as `env_leak_consent_granted` with `actor: 'user-cli'`. See [security.md](/reference/security/#env-leak-gate-target-repo-env-keys). |
 | `--quiet`, `-q` | Suppress all progress output to stderr |
 | `--verbose`, `-v` | Also show tool-level events (tool name and duration) |
 
@@ -303,6 +302,32 @@ archon complete feature-auth --force  # bypass uncommitted-changes check
 
 Use this after a PR is merged and you no longer need the worktree or branches. Accepts multiple branch names in one call.
 
+### `serve`
+
+Start the web UI server. On first run, downloads a pre-built web UI tarball from the matching GitHub release, verifies the SHA-256 checksum, and extracts it. Subsequent runs use the cached copy.
+
+**Binary installs only** — in development, use `bun run dev` instead.
+
+```bash
+# Start web UI server (downloads on first run)
+archon serve
+
+# Override the default port
+archon serve --port 4000
+
+# Download the web UI without starting the server
+archon serve --download-only
+```
+
+**Flags:**
+
+| Flag | Effect |
+|------|--------|
+| `--port <port>` | Override server port (default: 3090, range: 1–65535) |
+| `--download-only` | Download and cache the web UI, then exit without starting the server |
+
+The cached web UI is stored at `~/.archon/web-dist/<version>/`. Each version is cached independently, so upgrading the binary automatically downloads the matching web UI.
+
 ### `version`
 
 Show version, build type, and database info.
@@ -336,11 +361,11 @@ When using `--branch`, workflows run inside the worktree directory.
 
 ## Environment
 
-The CLI loads environment variables exclusively from `~/.archon/.env`. It does **not** load `.env` from the current working directory. This prevents conflicts when running Archon from target projects that have their own database configurations.
+At startup, the CLI strips all Bun-auto-loaded CWD `.env` keys and nested Claude Code session markers from `process.env`, then loads `~/.archon/.env` as the sole trusted source. All keys you set in `~/.archon/.env` pass through to AI subprocesses — no allowlist filtering.
 
 On startup, the CLI:
-1. Deletes any `DATABASE_URL` that Bun may have auto-loaded from the target repo's `.env`
-2. Loads `~/.archon/.env` with `override: true`
+1. Strips CWD `.env` keys + `CLAUDECODE` markers from `process.env` (via `stripCwdEnv`)
+2. Loads `~/.archon/.env` (all keys trusted)
 3. Auto-enables global Claude auth if no explicit tokens are set
 
 ## Database

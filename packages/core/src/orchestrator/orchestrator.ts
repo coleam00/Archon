@@ -377,7 +377,9 @@ export async function dispatchBackgroundWorkflow(
           preCreatedRun
         );
         // Surface workflow output to parent conversation as a result card
-        if (result.success && !('paused' in result) && result.summary) {
+        if ('paused' in result) {
+          // Paused workflows (approval gates) — no result card yet
+        } else if (result.success && result.summary) {
           try {
             await ctx.platform.sendMessage(ctx.conversationId, result.summary, {
               category: 'workflow_result',
@@ -387,6 +389,27 @@ export async function dispatchBackgroundWorkflow(
                 runId: result.workflowRunId,
               },
             });
+          } catch (surfaceError) {
+            getLog().warn(
+              { err: toError(surfaceError), conversationId: ctx.conversationId },
+              'workflow_output_surface_failed'
+            );
+          }
+        } else if (!result.success && result.workflowRunId) {
+          // Surface failure as a result card so the chat shows status + "View full logs"
+          try {
+            await ctx.platform.sendMessage(
+              ctx.conversationId,
+              `Workflow **${workflow.name}** failed: ${result.error}`,
+              {
+                category: 'workflow_result',
+                segment: 'new',
+                workflowResult: {
+                  workflowName: workflow.name,
+                  runId: result.workflowRunId,
+                },
+              }
+            );
           } catch (surfaceError) {
             getLog().warn(
               { err: toError(surfaceError), conversationId: ctx.conversationId },
@@ -404,9 +427,22 @@ export async function dispatchBackgroundWorkflow(
           },
           'background_workflow_failed'
         );
-        // Surface error to parent conversation so the user knows
+        // Surface error to parent conversation — include workflowResult metadata when
+        // we have a pre-created run ID so the chat renders a result card with "View full logs"
+        const failureRunId = preCreatedRun?.id;
+        const failureMessage = `Workflow **${workflow.name}** failed: ${err.message}`;
         await ctx.platform
-          .sendMessage(ctx.conversationId, `Workflow **${workflow.name}** failed: ${err.message}`)
+          .sendMessage(
+            ctx.conversationId,
+            failureMessage,
+            failureRunId
+              ? {
+                  category: 'workflow_result',
+                  segment: 'new',
+                  workflowResult: { workflowName: workflow.name, runId: failureRunId },
+                }
+              : undefined
+          )
           .catch((sendErr: unknown) => {
             getLog().error({ err: toError(sendErr) }, 'background_workflow_notify_failed');
           });

@@ -3,50 +3,53 @@
  * Multi-platform AI coding assistant (Telegram, Discord, Slack, GitHub, Gitea)
  */
 
-// Load environment variables FIRST — resolve to monorepo root .env
-// Uses dotenv with explicit path so it works from any CWD (worktrees, packages/server/, etc.)
+// Strip CWD .env keys FIRST — before any application imports read process.env.
+// Bun auto-loads .env/.env.local/.env.development/.env.production from CWD;
+// when `bun run dev:server` is run from inside a target repo those keys leak
+// into the server process. stripCwdEnv() removes them before ~/.archon/.env loads.
+import '@archon/paths/strip-cwd-env-boot';
+
+// Load environment variables — after CWD stripping, before application imports.
 import { config } from 'dotenv';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
+import { BUNDLED_IS_BINARY } from '@archon/paths';
 
-// Strip all vars that Bun may have auto-loaded from CWD's .env.
-// When the server is started from inside a target repo, Bun auto-loads that
-// repo's .env (containing e.g. ANTHROPIC_API_KEY for the target app) before
-// any user code runs. Strip those vars now so they don't bleed into server env
-// or subprocess spawns.
-const cwdEnvPath = resolve(process.cwd(), '.env');
-if (existsSync(cwdEnvPath)) {
-  const cwdEnvResult = config({ path: cwdEnvPath, processEnv: {} });
-  // If parse fails, cwdEnvResult.parsed is undefined — safe to skip:
-  // Bun uses the same RFC-style parser, so a file dotenv cannot parse
-  // was also unparseable by Bun and contributed no keys to process.env.
-  if (cwdEnvResult.parsed) {
-    for (const key of Object.keys(cwdEnvResult.parsed)) {
-      Reflect.deleteProperty(process.env, key);
-    }
+// In dev/source mode, load the repo root .env (platform tokens, API keys, etc.)
+// import.meta.dir is frozen at build time, so skip in compiled binaries.
+const envPath = BUNDLED_IS_BINARY ? undefined : resolve(import.meta.dir, '..', '..', '..', '.env');
+
+if (envPath) {
+  const dotenvResult = config({ path: envPath });
+  if (dotenvResult.error) {
+    // Use console.error since logger depends on env vars (LOG_LEVEL)
+    console.error(`Failed to load .env from ${envPath}: ${dotenvResult.error.message}`);
+    console.error('Hint: Copy .env.example to .env and configure your credentials.');
   }
 }
 
-// Resolve from this file's location: packages/server/src/ → ../../.. → repo root
-const envPath = resolve(import.meta.dir, '..', '..', '..', '.env');
-const dotenvResult = config({ path: envPath });
-
-if (dotenvResult.error) {
-  // Use console.error since logger depends on env vars (LOG_LEVEL)
-  console.error(`Failed to load .env from ${envPath}: ${dotenvResult.error.message}`);
-  console.error('Hint: Copy .env.example to .env and configure your credentials.');
-}
-
-// Load ~/.archon/.env for infrastructure config (DATABASE_URL).
-// The CLI loads this file with override: true, so both CLI and server
-// resolve DATABASE_URL from the same source. We only override DATABASE_URL
-// (not PORT, LOG_LEVEL, etc.) to avoid stomping on server-specific config.
+// Load ~/.archon/.env with override — Archon's config always wins over any
+// Bun-auto-loaded CWD vars. In binary mode this is the single source of truth.
+// In dev mode it overrides CWD vars for keys like DATABASE_URL.
 const globalEnvPath = resolve(process.env.HOME ?? '~', '.archon', '.env');
 if (existsSync(globalEnvPath)) {
-  const globalResult = config({ path: globalEnvPath, processEnv: {} });
-  if (globalResult.parsed?.DATABASE_URL) {
-    process.env.DATABASE_URL = globalResult.parsed.DATABASE_URL;
+  const globalResult = config({ path: globalEnvPath, override: true });
+  if (globalResult.error) {
+    console.error(`Failed to load .env from ${globalEnvPath}: ${globalResult.error.message}`);
+    console.error('Hint: Check for syntax errors in your ~/.archon/.env file.');
   }
+}
+
+// CLAUDECODE=1 warning is emitted inside stripCwdEnv() (boot import above)
+// BEFORE the marker is deleted from process.env. No duplicate warning here.
+
+// Smart default: use Claude Code's built-in OAuth if no explicit credentials
+if (
+  !process.env.CLAUDE_API_KEY &&
+  !process.env.CLAUDE_CODE_OAUTH_TOKEN &&
+  process.env.CLAUDE_USE_GLOBAL_AUTH === undefined
+) {
+  process.env.CLAUDE_USE_GLOBAL_AUTH = 'true';
 }
 
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -70,9 +73,7 @@ import {
   logConfig,
   getPort,
   createWorkflowStore,
-  scanPathForSensitiveKeys,
 } from '@archon/core';
-import * as codebaseDb from '@archon/core/db/codebases';
 import type { IPlatformAdapter } from '@archon/core';
 import { createLogger, logArchonPaths, validateAppDefaultsPaths } from '@archon/paths';
 
@@ -126,7 +127,19 @@ export function handleUnhandledRejection(reason: unknown): void {
   process.exit(1);
 }
 
-async function main(): Promise<void> {
+export interface ServerOptions {
+  /**
+   * Override the web dist path (for CLI binary with downloaded web-dist).
+   * Only effective in production mode (NODE_ENV=production or WEB_UI_DEV unset).
+   */
+  webDistPath?: string;
+  /** Override the port. Range: 1–65535. */
+  port?: number;
+  /** Run in standalone web-only mode (no Telegram/Slack/GitHub/Discord adapters). */
+  skipPlatformAdapters?: boolean;
+}
+
+export async function startServer(opts: ServerOptions = {}): Promise<void> {
   getLog().info('server_starting');
 
   // Database auto-detected: SQLite (default) or PostgreSQL (if DATABASE_URL set)
@@ -155,7 +168,7 @@ async function main(): Promise<void> {
           'Or set CODEX_ID_TOKEN + CODEX_ACCESS_TOKEN in .env',
           'See .env.example for all options',
         ],
-        envFile: envPath,
+        envFile: BUNDLED_IS_BINARY ? globalEnvPath : envPath,
       },
       'no_ai_credentials'
     );
@@ -184,57 +197,8 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Load configuration early so the startup env-leak scan can honor the
-  // global bypass. Without this, users who set `allow_target_repo_keys: true`
-  // would get a per-codebase warn spam on every boot even though the gate
-  // is intentionally disabled.
   const config = await loadConfig();
   logConfig(config);
-
-  // Startup env-leak scan: warn for codebases that would be blocked at next
-  // spawn by the env-leak-gate. Skipped entirely when the global bypass is
-  // active. Best-effort — failures are surfaced but never block startup.
-  if (config.allowTargetRepoKeys) {
-    getLog().info('startup_env_leak_scan_skipped — allow_target_repo_keys is true');
-  } else {
-    try {
-      const codebases = await codebaseDb.listCodebases();
-      for (const cb of codebases) {
-        if (cb.allow_env_keys) continue;
-        try {
-          const report = scanPathForSensitiveKeys(cb.default_cwd);
-          if (report.findings.length > 0) {
-            const files = report.findings.map(f => f.file);
-            const keys = Array.from(new Set(report.findings.flatMap(f => f.keys)));
-            getLog().warn(
-              {
-                codebaseId: cb.id,
-                name: cb.name,
-                path: cb.default_cwd,
-                files,
-                keys,
-              },
-              'startup_env_leak_gate_will_block'
-            );
-          }
-        } catch (scanErr) {
-          // Path may no longer exist (codebase moved/deleted on disk) —
-          // log at debug, do not abort the loop. This is the only quiet path.
-          getLog().debug(
-            { err: scanErr, codebaseId: cb.id, path: cb.default_cwd },
-            'startup_env_leak_scan_path_unavailable'
-          );
-        }
-      }
-    } catch (error) {
-      // listCodebases() failed — the entire startup safety net is silently
-      // absent. Surface at error level so operators see it.
-      getLog().error(
-        { err: error },
-        'startup_env_leak_scan_failed — startup migration warnings suppressed'
-      );
-    }
-  }
 
   // Start cleanup scheduler
   startCleanupScheduler();
@@ -278,189 +242,197 @@ async function main(): Promise<void> {
   await webAdapter.start();
   persistence.startPeriodicFlush();
 
-  // Check that at least one platform is configured
-  const hasTelegram = Boolean(process.env.TELEGRAM_BOT_TOKEN);
-  const hasDiscord = Boolean(process.env.DISCORD_BOT_TOKEN);
-  const hasGitHub = Boolean(process.env.GITHUB_TOKEN && process.env.WEBHOOK_SECRET);
-  const hasGitea = Boolean(
-    process.env.GITEA_URL && process.env.GITEA_TOKEN && process.env.GITEA_WEBHOOK_SECRET
-  );
-  const hasGitLab = Boolean(process.env.GITLAB_TOKEN && process.env.GITLAB_WEBHOOK_SECRET);
-
-  if (!hasTelegram && !hasDiscord && !hasGitHub && !hasGitea && !hasGitLab) {
-    getLog().warn('no_platform_adapters_configured');
-  }
-
-  // Initialize GitHub adapter (conditional)
+  // Platform adapters (skipped in CLI serve mode or when not configured)
   let github: GitHubAdapter | null = null;
-  if (process.env.GITHUB_TOKEN && process.env.WEBHOOK_SECRET) {
-    const botMention =
-      process.env.GITHUB_BOT_MENTION || process.env.BOT_DISPLAY_NAME || config.botName;
-    github = new GitHubAdapter(
-      process.env.GITHUB_TOKEN,
-      process.env.WEBHOOK_SECRET,
-      lockManager,
-      botMention
-    );
-    await github.start();
-  } else {
-    getLog().info('github_adapter_skipped');
-  }
-
-  // Initialize Gitea adapter (conditional)
   let gitea: GiteaAdapter | null = null;
-  if (process.env.GITEA_URL && process.env.GITEA_TOKEN && process.env.GITEA_WEBHOOK_SECRET) {
-    const giteaBotMention =
-      process.env.GITEA_BOT_MENTION || process.env.BOT_DISPLAY_NAME || config.botName;
-    gitea = new GiteaAdapter(
-      process.env.GITEA_URL,
-      process.env.GITEA_TOKEN,
-      process.env.GITEA_WEBHOOK_SECRET,
-      lockManager,
-      giteaBotMention
-    );
-    await gitea.start();
-  } else {
-    getLog().info('gitea_adapter_skipped');
-  }
-
-  // Initialize GitLab adapter (conditional)
   let gitlab: GitLabAdapter | null = null;
-  if (process.env.GITLAB_TOKEN && process.env.GITLAB_WEBHOOK_SECRET) {
-    const gitlabBotMention =
-      process.env.GITLAB_BOT_MENTION || process.env.BOT_DISPLAY_NAME || config.botName;
-    gitlab = new GitLabAdapter(
-      process.env.GITLAB_TOKEN,
-      process.env.GITLAB_WEBHOOK_SECRET,
-      lockManager,
-      process.env.GITLAB_URL || undefined,
-      gitlabBotMention
-    );
-    await gitlab.start();
-  } else {
-    getLog().info('gitlab_adapter_skipped');
-  }
-
-  // Initialize Discord adapter (conditional)
   let discord: DiscordAdapter | null = null;
-  if (process.env.DISCORD_BOT_TOKEN) {
-    const discordStreamingMode = (process.env.DISCORD_STREAMING_MODE ?? 'batch') as
-      | 'stream'
-      | 'batch';
-    discord = new DiscordAdapter(process.env.DISCORD_BOT_TOKEN, discordStreamingMode);
-    const discordAdapter = discord; // Capture for use in callback
-
-    // Register message handler
-    discordAdapter.onMessage(async message => {
-      // Get initial conversation ID
-      let conversationId = discordAdapter.getConversationId(message);
-
-      // Skip if no content
-      if (!message.content) return;
-
-      // Check if bot was mentioned (required for activation)
-      // Exception: DMs don't require mention
-      const isDM = !message.guild;
-      if (!isDM && !discordAdapter.isBotMentioned(message)) {
-        return; // Ignore messages that don't mention the bot
-      }
-
-      // Strip the bot mention from the message
-      const content = discordAdapter.stripBotMention(message);
-      if (!content) return; // Message was only a mention with no content
-
-      // Ensure we're responding in a thread - creates one if needed
-      conversationId = await discordAdapter.ensureThread(conversationId, message);
-
-      // Check for thread context (now we're guaranteed to be in a thread if applicable)
-      let threadContext: string | undefined;
-      let parentConversationId: string | undefined;
-
-      if (discordAdapter.isThread(message)) {
-        // Fetch thread history for context (exclude current message)
-        const history = await discordAdapter.fetchThreadHistory(message);
-        if (history.length > 1) {
-          threadContext = history.slice(0, -1).join('\n');
-        }
-
-        // Get parent channel ID for context inheritance
-        parentConversationId = discordAdapter.getParentChannelId(message) ?? undefined;
-      }
-
-      // Fire-and-forget: handler returns immediately, processing happens async
-      lockManager
-        .acquireLock(conversationId, async () => {
-          await handleMessage(discordAdapter, conversationId, content, {
-            threadContext,
-            parentConversationId,
-            isolationHints: { workflowType: 'thread', workflowId: conversationId },
-          });
-        })
-        .catch(createMessageErrorHandler('Discord', discordAdapter, conversationId));
-    });
-
-    await discord.start();
-  } else {
-    getLog().info('discord_adapter_skipped');
-  }
-
-  // Initialize Slack adapter (conditional)
   let slack: SlackAdapter | null = null;
-  if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN) {
-    const slackStreamingMode = (process.env.SLACK_STREAMING_MODE ?? 'batch') as 'stream' | 'batch';
-    slack = new SlackAdapter(
-      process.env.SLACK_BOT_TOKEN,
-      process.env.SLACK_APP_TOKEN,
-      slackStreamingMode
+
+  if (!opts.skipPlatformAdapters) {
+    // Check that at least one platform is configured
+    const hasTelegram = Boolean(process.env.TELEGRAM_BOT_TOKEN);
+    const hasDiscord = Boolean(process.env.DISCORD_BOT_TOKEN);
+    const hasGitHub = Boolean(process.env.GITHUB_TOKEN && process.env.WEBHOOK_SECRET);
+    const hasGitea = Boolean(
+      process.env.GITEA_URL && process.env.GITEA_TOKEN && process.env.GITEA_WEBHOOK_SECRET
     );
-    const slackAdapter = slack; // Capture for use in callback
+    const hasGitLab = Boolean(process.env.GITLAB_TOKEN && process.env.GITLAB_WEBHOOK_SECRET);
 
-    // Register message handler
-    slackAdapter.onMessage(async event => {
-      const conversationId = slackAdapter.getConversationId(event);
+    if (!hasTelegram && !hasDiscord && !hasGitHub && !hasGitea && !hasGitLab) {
+      getLog().warn('no_platform_adapters_configured');
+    }
 
-      // Skip if no text
-      if (!event.text) return;
+    // Initialize GitHub adapter (conditional)
+    if (process.env.GITHUB_TOKEN && process.env.WEBHOOK_SECRET) {
+      const botMention =
+        process.env.GITHUB_BOT_MENTION || process.env.BOT_DISPLAY_NAME || config.botName;
+      github = new GitHubAdapter(
+        process.env.GITHUB_TOKEN,
+        process.env.WEBHOOK_SECRET,
+        lockManager,
+        botMention
+      );
+      await github.start();
+    } else {
+      getLog().info('github_adapter_skipped');
+    }
 
-      // Strip the bot mention from the message
-      const content = slackAdapter.stripBotMention(event.text);
-      if (!content) return; // Message was only a mention with no content
+    // Initialize Gitea adapter (conditional)
+    if (process.env.GITEA_URL && process.env.GITEA_TOKEN && process.env.GITEA_WEBHOOK_SECRET) {
+      const giteaBotMention =
+        process.env.GITEA_BOT_MENTION || process.env.BOT_DISPLAY_NAME || config.botName;
+      gitea = new GiteaAdapter(
+        process.env.GITEA_URL,
+        process.env.GITEA_TOKEN,
+        process.env.GITEA_WEBHOOK_SECRET,
+        lockManager,
+        giteaBotMention
+      );
+      await gitea.start();
+    } else {
+      getLog().info('gitea_adapter_skipped');
+    }
 
-      // Check for thread context
-      let threadContext: string | undefined;
-      let parentConversationId: string | undefined;
+    // Initialize GitLab adapter (conditional)
+    if (process.env.GITLAB_TOKEN && process.env.GITLAB_WEBHOOK_SECRET) {
+      const gitlabBotMention =
+        process.env.GITLAB_BOT_MENTION || process.env.BOT_DISPLAY_NAME || config.botName;
+      gitlab = new GitLabAdapter(
+        process.env.GITLAB_TOKEN,
+        process.env.GITLAB_WEBHOOK_SECRET,
+        lockManager,
+        process.env.GITLAB_URL || undefined,
+        gitlabBotMention
+      );
+      await gitlab.start();
+    } else {
+      getLog().info('gitlab_adapter_skipped');
+    }
 
-      if (slackAdapter.isThread(event)) {
-        // Fetch thread history for context (exclude current message)
-        const history = await slackAdapter.fetchThreadHistory(event);
-        if (history.length > 1) {
-          threadContext = history.slice(0, -1).join('\n');
+    // Initialize Discord adapter (conditional)
+    if (process.env.DISCORD_BOT_TOKEN) {
+      const discordStreamingMode = (process.env.DISCORD_STREAMING_MODE ?? 'batch') as
+        | 'stream'
+        | 'batch';
+      discord = new DiscordAdapter(process.env.DISCORD_BOT_TOKEN, discordStreamingMode);
+      const discordAdapter = discord; // Capture for use in callback
+
+      // Register message handler
+      discordAdapter.onMessage(async message => {
+        // Get initial conversation ID
+        let conversationId = discordAdapter.getConversationId(message);
+
+        // Skip if no content
+        if (!message.content) return;
+
+        // Check if bot was mentioned (required for activation)
+        // Exception: DMs don't require mention
+        const isDM = !message.guild;
+        if (!isDM && !discordAdapter.isBotMentioned(message)) {
+          return; // Ignore messages that don't mention the bot
         }
 
-        // Get parent conversation ID for context inheritance
-        parentConversationId = slackAdapter.getParentConversationId(event) ?? undefined;
-      }
+        // Strip the bot mention from the message
+        const content = discordAdapter.stripBotMention(message);
+        if (!content) return; // Message was only a mention with no content
 
-      // Fire-and-forget: handler returns immediately, processing happens async
-      lockManager
-        .acquireLock(conversationId, async () => {
-          await handleMessage(slackAdapter, conversationId, content, {
-            threadContext,
-            parentConversationId,
-            isolationHints: { workflowType: 'thread', workflowId: conversationId },
-          });
-        })
-        .catch(createMessageErrorHandler('Slack', slackAdapter, conversationId));
-    });
+        // Ensure we're responding in a thread - creates one if needed
+        conversationId = await discordAdapter.ensureThread(conversationId, message);
 
-    await slack.start();
+        // Check for thread context (now we're guaranteed to be in a thread if applicable)
+        let threadContext: string | undefined;
+        let parentConversationId: string | undefined;
+
+        if (discordAdapter.isThread(message)) {
+          // Fetch thread history for context (exclude current message)
+          const history = await discordAdapter.fetchThreadHistory(message);
+          if (history.length > 1) {
+            threadContext = history.slice(0, -1).join('\n');
+          }
+
+          // Get parent channel ID for context inheritance
+          parentConversationId = discordAdapter.getParentChannelId(message) ?? undefined;
+        }
+
+        // Fire-and-forget: handler returns immediately, processing happens async
+        lockManager
+          .acquireLock(conversationId, async () => {
+            await handleMessage(discordAdapter, conversationId, content, {
+              threadContext,
+              parentConversationId,
+              isolationHints: { workflowType: 'thread', workflowId: conversationId },
+            });
+          })
+          .catch(createMessageErrorHandler('Discord', discordAdapter, conversationId));
+      });
+
+      await discord.start();
+    } else {
+      getLog().info('discord_adapter_skipped');
+    }
+
+    // Initialize Slack adapter (conditional)
+    if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN) {
+      const slackStreamingMode = (process.env.SLACK_STREAMING_MODE ?? 'batch') as
+        | 'stream'
+        | 'batch';
+      slack = new SlackAdapter(
+        process.env.SLACK_BOT_TOKEN,
+        process.env.SLACK_APP_TOKEN,
+        slackStreamingMode
+      );
+      const slackAdapter = slack; // Capture for use in callback
+
+      // Register message handler
+      slackAdapter.onMessage(async event => {
+        const conversationId = slackAdapter.getConversationId(event);
+
+        // Skip if no text
+        if (!event.text) return;
+
+        // Strip the bot mention from the message
+        const content = slackAdapter.stripBotMention(event.text);
+        if (!content) return; // Message was only a mention with no content
+
+        // Check for thread context
+        let threadContext: string | undefined;
+        let parentConversationId: string | undefined;
+
+        if (slackAdapter.isThread(event)) {
+          // Fetch thread history for context (exclude current message)
+          const history = await slackAdapter.fetchThreadHistory(event);
+          if (history.length > 1) {
+            threadContext = history.slice(0, -1).join('\n');
+          }
+
+          // Get parent conversation ID for context inheritance
+          parentConversationId = slackAdapter.getParentConversationId(event) ?? undefined;
+        }
+
+        // Fire-and-forget: handler returns immediately, processing happens async
+        lockManager
+          .acquireLock(conversationId, async () => {
+            await handleMessage(slackAdapter, conversationId, content, {
+              threadContext,
+              parentConversationId,
+              isolationHints: { workflowType: 'thread', workflowId: conversationId },
+            });
+          })
+          .catch(createMessageErrorHandler('Slack', slackAdapter, conversationId));
+      });
+
+      await slack.start();
+    } else {
+      getLog().info('slack_adapter_skipped');
+    }
   } else {
-    getLog().info('slack_adapter_skipped');
+    getLog().info('platform_adapters_skipped');
   }
 
   // Setup Hono server
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
-  const port = await getPort();
+  const port = opts.port ?? (await getPort());
 
   // Global error handler for unhandled exceptions
   app.onError((err, c) => {
@@ -589,13 +561,16 @@ async function main(): Promise<void> {
   if (process.env.NODE_ENV === 'production' || !process.env.WEB_UI_DEV) {
     const { serveStatic } = await import('hono/bun');
     const pathModule = await import('path');
-    const webDistPath = pathModule.join(
-      pathModule.dirname(pathModule.dirname(import.meta.dir)),
-      'web',
-      'dist'
-    );
+    const webDistPath =
+      opts.webDistPath ??
+      pathModule.join(pathModule.dirname(pathModule.dirname(import.meta.dir)), 'web', 'dist');
+
+    if (!existsSync(webDistPath)) {
+      getLog().warn({ webDistPath }, 'web_dist_not_found');
+    }
 
     app.use('/assets/*', serveStatic({ root: webDistPath }));
+    app.use('/favicon.png', serveStatic({ root: webDistPath, path: 'favicon.png' }));
     // SPA fallback - serve index.html for unmatched routes (after all API routes)
     app.get('*', serveStatic({ root: webDistPath, path: 'index.html' }));
   }
@@ -609,9 +584,9 @@ async function main(): Promise<void> {
   });
   getLog().info({ port: server.port, hostname }, 'server_listening');
 
-  // Initialize Telegram adapter (conditional)
+  // Initialize Telegram adapter (conditional, skipped in CLI serve mode)
   let telegram: TelegramAdapter | null = null;
-  if (process.env.TELEGRAM_BOT_TOKEN) {
+  if (!opts.skipPlatformAdapters && process.env.TELEGRAM_BOT_TOKEN) {
     const streamingMode = (process.env.TELEGRAM_STREAMING_MODE ?? 'stream') as 'stream' | 'batch';
     telegram = new TelegramAdapter(process.env.TELEGRAM_BOT_TOKEN, streamingMode);
     const telegramAdapter = telegram; // Capture for use in callback
@@ -635,7 +610,7 @@ async function main(): Promise<void> {
       getLog().error({ err: error, errorType: error.constructor.name }, 'telegram.start_failed');
       telegram = null; // Don't include in active platforms or shutdown
     }
-  } else {
+  } else if (!opts.skipPlatformAdapters) {
     getLog().info('telegram_adapter_skipped');
   }
 
@@ -722,8 +697,10 @@ async function checkGhAuth(): Promise<void> {
   }
 }
 
-// Run the application
-main().catch(error => {
-  getLog().fatal({ err: error }, 'startup_failed');
-  process.exit(1);
-});
+// Run the application when executed directly (not imported as a library)
+if (import.meta.main) {
+  startServer().catch(error => {
+    getLog().fatal({ err: error }, 'startup_failed');
+    process.exit(1);
+  });
+}

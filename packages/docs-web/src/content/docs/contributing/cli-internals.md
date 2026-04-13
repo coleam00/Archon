@@ -38,8 +38,8 @@ packages/cli/
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ cli.ts:15-31  Load environment                                  │
-│               Suppresses cwd .env → loads ~/.archon/.env only   │
+│ cli.ts  Load environment                                        │
+│         Loads ~/.archon/.env with override: true                │
 └─────────────────────────────────┬───────────────────────────────┘
                                   │
                                   ▼

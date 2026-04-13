@@ -5,7 +5,7 @@
  * Optionally uses TITLE_GENERATION_MODEL env var for a cheaper/faster model.
  * Designed to be fire-and-forget — never throws, all errors logged internally.
  */
-import { getAssistantClient } from '../clients/factory';
+import { getAgentProvider } from '@archon/providers';
 import * as conversationDb from '../db/conversations';
 import { createLogger } from '@archon/paths';
 
@@ -47,12 +47,12 @@ export async function generateAndSetTitle(
     const titlePrompt = buildTitlePrompt(userMessage, workflowName);
 
     // Use the configured AI client with no tools (pure text generation)
-    const client = getAssistantClient(assistantType);
+    const client = getAgentProvider(assistantType);
     let generatedTitle = '';
 
     for await (const chunk of client.sendQuery(titlePrompt, cwd, undefined, {
       model: titleModel,
-      tools: [], // No tool access — pure text generation
+      nodeConfig: { allowed_tools: [] }, // No tool access — pure text generation
     })) {
       if (chunk.type === 'assistant') {
         generatedTitle += chunk.content;

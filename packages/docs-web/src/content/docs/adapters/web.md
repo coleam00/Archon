@@ -140,6 +140,18 @@ While a workflow runs, a progress card appears in the conversation showing:
 
 For paused workflows (approval gates), the progress card shows **Approve** and **Reject** buttons so you can control the workflow directly from the chat.
 
+### Workflow Result Card
+
+When a workflow reaches a terminal state (completed, failed, or cancelled), the progress card is replaced by a result card in the conversation. The result card shows:
+
+- **Status icon** -- Visual indicator for completed, failed, or cancelled
+- **Header** -- "Workflow complete", "Workflow failed", or "Workflow cancelled" depending on outcome
+- **Node count** -- How many nodes completed out of the total nodes that reached a terminal state (e.g., `3/4 nodes`)
+- **Duration** -- Total elapsed time for the run
+- **Artifacts** -- Any files or outputs produced by the workflow, with direct links
+
+Click the arrow button in the result card header to open the full execution detail page.
+
 ### Execution Detail Page
 
 Click on a workflow run (from the dashboard or progress card) to open the execution detail page at `/workflows/runs/:runId`. This shows:

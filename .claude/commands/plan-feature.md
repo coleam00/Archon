@@ -23,7 +23,7 @@ Restate the feature request in your own words. Identify:
 3. **Scope boundaries** — What is explicitly in scope vs. out of scope?
 4. **Package impact** — Which of the 8 packages are affected? (`paths`, `git`, `isolation`,
    `workflows`, `core`, `adapters`, `server`, `web`)
-5. **Interface changes** — Does this touch `IPlatformAdapter`, `IAssistantClient`,
+5. **Interface changes** — Does this touch `IPlatformAdapter`, `IAgentProvider`,
    `IDatabase`, or `IWorkflowStore`? New interfaces needed?
 
 ---
@@ -85,7 +85,7 @@ Before writing tasks, reason through:
 **Interface design:**
 - Prefer extending existing narrow interfaces over creating fat ones.
 - New interface methods only if they have a concrete current caller.
-- Avoid adding methods to `IPlatformAdapter` or `IAssistantClient` unless essential.
+- Avoid adding methods to `IPlatformAdapter` or `IAgentProvider` unless essential.
 
 **Test isolation strategy:**
 - `mock.module()` is process-global and permanent in Bun — plan test file placement carefully.

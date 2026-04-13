@@ -7,31 +7,18 @@
  *   archon workflow run <name> [msg]  Run a workflow
  *   archon version                    Show version info
  */
+// Must be the very first import — strips Bun-auto-loaded CWD .env keys before
+// any module reads process.env at init time (e.g. @archon/paths/logger reads LOG_LEVEL).
+import '@archon/paths/strip-cwd-env-boot';
 import { parseArgs } from 'util';
 import { config } from 'dotenv';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 
-// Strip all vars that Bun may have auto-loaded from CWD's .env.
-// Bun auto-loads .env relative to CWD before any user code runs. The CLI
-// runs from target repos whose .env contains keys for that app (ANTHROPIC_API_KEY,
-// DATABASE_URL, OPENAI_API_KEY, etc.) — none of which should affect Archon.
-// Strategy: parse the CWD .env without applying it, then delete those keys.
-const cwdEnvPath = resolve(process.cwd(), '.env');
-if (existsSync(cwdEnvPath)) {
-  const cwdEnvResult = config({ path: cwdEnvPath, processEnv: {} });
-  // If parse fails, cwdEnvResult.parsed is undefined — safe to skip:
-  // Bun uses the same RFC-style parser, so a file dotenv cannot parse
-  // was also unparseable by Bun and contributed no keys to process.env.
-  if (cwdEnvResult.parsed) {
-    for (const key of Object.keys(cwdEnvResult.parsed)) {
-      Reflect.deleteProperty(process.env, key);
-    }
-  }
-}
-
-// Load .env from global Archon config only (override: true so ~/.archon/.env
-// always wins over any remaining Bun-auto-loaded vars)
+// Load ~/.archon/.env with override: true — Archon-specific config must win
+// over shell-inherited env vars (e.g. PORT, LOG_LEVEL from shell profile).
+// CWD .env keys are already gone (stripCwdEnv above), so override only
+// affects shell-inherited values, which is the intended behavior.
 const globalEnvPath = resolve(process.env.HOME ?? '~', '.archon', '.env');
 if (existsSync(globalEnvPath)) {
   const result = config({ path: globalEnvPath, override: true });
@@ -42,6 +29,9 @@ if (existsSync(globalEnvPath)) {
     process.exit(1);
   }
 }
+
+// CLAUDECODE=1 warning is emitted inside stripCwdEnv() (boot import above)
+// BEFORE the marker is deleted from process.env. No duplicate warning here.
 
 // Smart defaults for Claude auth
 // If no explicit tokens, default to global auth from `claude /login`
@@ -78,8 +68,15 @@ import { continueCommand } from './commands/continue';
 import { chatCommand } from './commands/chat';
 import { setupCommand } from './commands/setup';
 import { validateWorkflowsCommand, validateCommandsCommand } from './commands/validate';
+import { serveCommand } from './commands/serve';
 import { closeDatabase } from '@archon/core';
-import { setLogLevel, createLogger } from '@archon/paths';
+import {
+  setLogLevel,
+  createLogger,
+  checkForUpdate,
+  BUNDLED_IS_BINARY,
+  BUNDLED_VERSION,
+} from '@archon/paths';
 import * as git from '@archon/git';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -110,6 +107,7 @@ Commands:
   isolation cleanup --merged Remove environments with branches merged into main
   continue <branch> [msg]    Continue work on an existing worktree with prior context
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
+  serve                      Start the web UI server (downloads web UI on first run)
   validate workflows [name]  Validate workflow definitions and their references
   validate commands [name]   Validate command files
   version                    Show version info
@@ -127,9 +125,8 @@ Options:
   --json                     Output machine-readable JSON (for workflow list)
   --workflow <name>          Workflow to run for 'continue' (default: archon-assist)
   --no-context               Skip context injection for 'continue'
-  --allow-env-keys           Grant env-key consent during auto-registration
-                             (bypasses the env-leak gate for this codebase;
-                             logs an audit entry)
+  --port <port>              Override server port for 'serve' (default: 3090)
+  --download-only            Download web UI without starting the server
 
 Examples:
   archon chat "What does the orchestrator do?"
@@ -152,6 +149,20 @@ async function closeDb(): Promise<void> {
     const err = error as Error;
     // Log with details but don't throw - we want the original error to be visible
     getLog().warn({ err }, 'db_close_failed');
+  }
+}
+
+async function printUpdateNotice(quiet: boolean | undefined): Promise<void> {
+  if (quiet || !BUNDLED_IS_BINARY) return;
+  try {
+    const result = await checkForUpdate(BUNDLED_VERSION);
+    if (result?.updateAvailable) {
+      process.stderr.write(
+        `Update available: v${result.currentVersion} → v${result.latestVersion} — ${result.releaseUrl}\n`
+      );
+    }
+  } catch (err) {
+    getLog().debug({ err }, 'update_check.notice_failed');
   }
 }
 
@@ -193,7 +204,8 @@ async function main(): Promise<number> {
         reason: { type: 'string' },
         workflow: { type: 'string' },
         'no-context': { type: 'boolean' },
-        'allow-env-keys': { type: 'boolean' },
+        port: { type: 'string' },
+        'download-only': { type: 'boolean' },
       },
       allowPositionals: true,
       strict: false, // Allow unknown flags to pass through
@@ -215,8 +227,6 @@ async function main(): Promise<number> {
   const resumeFlag = values.resume as boolean | undefined;
   const spawnFlag = values.spawn as boolean | undefined;
   const jsonFlag = values.json as boolean | undefined;
-  const allowEnvKeysFlag = values['allow-env-keys'] as boolean | undefined;
-
   // Handle help flag
   if (values.help) {
     printUsage();
@@ -228,7 +238,7 @@ async function main(): Promise<number> {
   const subcommand = positionals[1];
 
   // Commands that don't require git repo validation
-  const noGitCommands = ['version', 'help', 'setup', 'chat', 'continue'];
+  const noGitCommands = ['version', 'help', 'setup', 'chat', 'continue', 'serve'];
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
 
   try {
@@ -328,7 +338,6 @@ async function main(): Promise<number> {
               fromBranch,
               noWorktree,
               resume: resumeFlag,
-              allowEnvKeys: allowEnvKeysFlag,
               quiet: values.quiet as boolean | undefined,
               verbose: values.verbose as boolean | undefined,
             };
@@ -376,10 +385,11 @@ async function main(): Promise<number> {
           case 'reject': {
             const rejectRunId = positionals[2];
             if (!rejectRunId) {
-              console.error('Usage: archon workflow reject <run-id> [--reason "..."]');
+              console.error('Usage: archon workflow reject <run-id> [reason]');
               return 1;
             }
-            const rejectReason = values.reason as string | undefined;
+            const rejectReason =
+              (values.reason as string | undefined) || positionals.slice(3).join(' ') || undefined;
             await workflowRejectCommand(rejectRunId, rejectReason);
             break;
           }
@@ -534,6 +544,12 @@ async function main(): Promise<number> {
         break;
       }
 
+      case 'serve': {
+        const servePort = values.port !== undefined ? Number(values.port) : undefined;
+        const downloadOnly = Boolean(values['download-only']);
+        return await serveCommand({ port: servePort, downloadOnly });
+      }
+
       default:
         if (command === undefined) {
           console.error('Missing command');
@@ -543,6 +559,7 @@ async function main(): Promise<number> {
         printUsage();
         return 1;
     }
+    await printUpdateNotice(values.quiet as boolean | undefined);
     return 0;
   } catch (error) {
     const err = error as Error;

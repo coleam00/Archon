@@ -1,0 +1,27 @@
+# E2E smoke test — mixed providers (Claude + Codex in same workflow)
+# Verifies: per-node provider override, cross-provider $nodeId.output refs
+name: e2e-mixed-providers
+description: "Tests Claude and Codex providers in the same workflow with cross-provider output refs."
+
+# Default provider is claude
+provider: claude
+
+nodes:
+  # 1. Claude node — default provider
+  - id: claude-node
+    prompt: "Say 'claude-ok' and nothing else."
+
+  # 2. Codex node — provider override
+  - id: codex-node
+    prompt: "Say 'codex-ok' and nothing else."
+    provider: codex
+
+  # 3. Claude node reads Codex output — cross-provider ref
+  - id: claude-reads-codex
+    prompt: "The codex node said: '$codex-node.output'. Confirm you received it by saying 'cross-provider-ok'. Say nothing else."
+    depends_on: [codex-node]
+
+  # 4. Bash node verifies both outputs
+  - id: verify
+    bash: "echo 'claude=$claude-node.output codex=$codex-node.output cross=$claude-reads-codex.output'"
+    depends_on: [claude-node, codex-node, claude-reads-codex]

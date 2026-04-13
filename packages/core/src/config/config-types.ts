@@ -10,22 +10,12 @@
  * Global configuration (non-secret user preferences)
  * Located at ~/.archon/config.yaml
  */
-import type { ModelReasoningEffort, WebSearchMode } from '../types';
 
-export interface AssistantDefaults {
-  model?: string;
-  modelReasoningEffort?: ModelReasoningEffort;
-  webSearchMode?: WebSearchMode;
-  additionalDirectories?: string[];
-}
+// Provider config defaults — canonical definitions live in @archon/providers/types.
+// Imported and re-exported here so existing consumers don't break.
+import type { ClaudeProviderDefaults, CodexProviderDefaults } from '@archon/providers/types';
 
-export interface ClaudeAssistantDefaults {
-  model?: string;
-  /** Claude Code settingSources — controls which CLAUDE.md files are loaded.
-   *  @default ['project']
-   *  @see https://github.com/anthropics/claude-agent-sdk */
-  settingSources?: ('project' | 'user')[];
-}
+export type { ClaudeProviderDefaults, CodexProviderDefaults };
 
 export interface GlobalConfig {
   /**
@@ -44,8 +34,8 @@ export interface GlobalConfig {
    * Assistant-specific defaults (model, reasoning effort, etc.)
    */
   assistants?: {
-    claude?: ClaudeAssistantDefaults;
-    codex?: AssistantDefaults;
+    claude?: ClaudeProviderDefaults;
+    codex?: CodexProviderDefaults;
   };
 
   /**
@@ -84,20 +74,6 @@ export interface GlobalConfig {
      */
     maxConversations?: number;
   };
-
-  /**
-   * Bypass the env-leak gate globally. When true, Archon will not refuse to
-   * register or spawn subprocesses for codebases whose auto-loaded .env files
-   * contain sensitive keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc).
-   *
-   * WARNING: Weakens the env-leak gate. Keys in the target repo's .env will
-   * be auto-loaded by Bun subprocesses (Claude/Codex) and bypass Archon's
-   * env allowlist. Use only on trusted machines.
-   *
-   * YAML key: `allow_target_repo_keys`
-   * @default false
-   */
-  allow_target_repo_keys?: boolean;
 }
 
 /**
@@ -115,8 +91,8 @@ export interface RepoConfig {
    * Assistant-specific defaults for this repository
    */
   assistants?: {
-    claude?: ClaudeAssistantDefaults;
-    codex?: AssistantDefaults;
+    claude?: ClaudeProviderDefaults;
+    codex?: CodexProviderDefaults;
   };
 
   /**
@@ -173,12 +149,6 @@ export interface RepoConfig {
   env?: Record<string, string>;
 
   /**
-   * Per-repo override for the env-leak gate bypass. Repo value wins over global.
-   * YAML key: `allow_target_repo_keys`
-   */
-  allow_target_repo_keys?: boolean;
-
-  /**
    * Default commands/workflows configuration
    */
   defaults?: {
@@ -214,8 +184,8 @@ export interface MergedConfig {
   botName: string;
   assistant: 'claude' | 'codex';
   assistants: {
-    claude: ClaudeAssistantDefaults;
-    codex: AssistantDefaults;
+    claude: ClaudeProviderDefaults;
+    codex: CodexProviderDefaults;
   };
   streaming: {
     telegram: 'stream' | 'batch';
@@ -260,14 +230,6 @@ export interface MergedConfig {
    * Undefined when no env vars are configured.
    */
   envVars?: Record<string, string>;
-
-  /**
-   * Effective value of the env-leak gate bypass. When true, the env scanner
-   * is skipped during registration and pre-spawn. Repo-level override wins
-   * over global (explicit `false` at repo level re-enables the gate).
-   * @default false
-   */
-  allowTargetRepoKeys: boolean;
 }
 
 /**
@@ -278,8 +240,8 @@ export interface SafeConfig {
   botName: string;
   assistant: 'claude' | 'codex';
   assistants: {
-    claude: Pick<ClaudeAssistantDefaults, 'model'>;
-    codex: Pick<AssistantDefaults, 'model' | 'modelReasoningEffort' | 'webSearchMode'>;
+    claude: Pick<ClaudeProviderDefaults, 'model'>;
+    codex: Pick<CodexProviderDefaults, 'model' | 'modelReasoningEffort' | 'webSearchMode'>;
   };
   streaming: {
     telegram: 'stream' | 'batch';

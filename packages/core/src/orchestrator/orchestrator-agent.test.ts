@@ -93,10 +93,11 @@ mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
 }));
 
-mock.module('../clients/factory', () => ({
-  getAssistantClient: mock(() => ({
+mock.module('@archon/providers', () => ({
+  getAgentProvider: mock(() => ({
     sendQuery: mock(async function* () {}),
     getType: mock(() => 'claude'),
+    getCapabilities: mock(() => ({})),
   })),
 }));
 
@@ -181,7 +182,6 @@ function makeCodebase(name: string, id = `id-${name}`): Codebase {
     repository_url: null,
     default_cwd: `/repos/${name}`,
     ai_assistant_type: 'claude',
-    allow_env_keys: false,
     commands: {},
     created_at: new Date(),
     updated_at: new Date(),
@@ -805,7 +805,6 @@ function makeCodebaseForSync() {
     repository_url: 'https://github.com/test/repo',
     default_cwd: '/repos/test-repo',
     ai_assistant_type: 'claude',
-    allow_env_keys: false,
     commands: {},
     created_at: new Date(),
     updated_at: new Date(),
@@ -971,7 +970,6 @@ describe('workflow dispatch routing — interactive flag', () => {
       repository_url: null,
       default_cwd: '/repos/test-repo',
       ai_assistant_type: 'claude' as const,
-      allow_env_keys: false,
       commands: {},
       created_at: new Date(),
       updated_at: new Date(),
@@ -1072,7 +1070,6 @@ describe('natural-language approval routing', () => {
       repository_url: null,
       default_cwd: '/repos/test-repo',
       ai_assistant_type: 'claude' as const,
-      allow_env_keys: false,
       commands: {},
       created_at: new Date(),
       updated_at: new Date(),
