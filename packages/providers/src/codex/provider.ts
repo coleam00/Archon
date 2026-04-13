@@ -16,6 +16,7 @@ import type {
   ProviderCapabilities,
 } from '../types';
 import { parseCodexConfig } from './config';
+import { CODEX_CAPABILITIES } from './capabilities';
 import { resolveCodexBinaryPath } from './binary-resolver';
 import { createLogger } from '@archon/paths';
 
@@ -496,20 +497,7 @@ export class CodexProvider implements IAgentProvider {
   }
 
   getCapabilities(): ProviderCapabilities {
-    return {
-      sessionResume: true,
-      mcp: false,
-      hooks: false,
-      skills: false,
-      toolRestrictions: false,
-      structuredOutput: true,
-      envInjection: true,
-      costControl: false,
-      effortControl: false,
-      thinkingControl: false,
-      fallbackModel: false,
-      sandbox: false,
-    };
+    return CODEX_CAPABILITIES;
   }
 
   async *sendQuery(

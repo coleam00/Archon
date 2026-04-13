@@ -110,6 +110,7 @@ mock.module('@archon/providers', () => ({
     getType: mock(() => 'claude'),
     getCapabilities: mock(() => ({})),
   })),
+  getProviderCapabilities: mock(() => ({ envInjection: true })),
 }));
 
 mock.module('../db/env-vars', () => ({

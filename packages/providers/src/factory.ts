@@ -4,9 +4,11 @@
  * Dynamically instantiates the appropriate agent provider based on type string.
  * Built-in providers only: Claude and Codex.
  */
-import type { IAgentProvider } from './types';
+import type { IAgentProvider, ProviderCapabilities } from './types';
 import { ClaudeProvider } from './claude/provider';
 import { CodexProvider } from './codex/provider';
+import { CLAUDE_CAPABILITIES } from './claude/capabilities';
+import { CODEX_CAPABILITIES } from './codex/capabilities';
 import { UnknownProviderError } from './errors';
 import { createLogger } from '@archon/paths';
 
@@ -35,6 +37,21 @@ export function getAgentProvider(type: string): IAgentProvider {
     case 'codex':
       getLog().debug({ provider: 'codex' }, 'provider_selected');
       return new CodexProvider();
+    default:
+      throw new UnknownProviderError(type, [...REGISTERED_PROVIDERS]);
+  }
+}
+
+/**
+ * Get provider capabilities without instantiating a provider.
+ * Used by dag-executor and orchestrator for capability warnings.
+ */
+export function getProviderCapabilities(type: string): ProviderCapabilities {
+  switch (type) {
+    case 'claude':
+      return CLAUDE_CAPABILITIES;
+    case 'codex':
+      return CODEX_CAPABILITIES;
     default:
       throw new UnknownProviderError(type, [...REGISTERED_PROVIDERS]);
   }

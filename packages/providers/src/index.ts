@@ -13,7 +13,11 @@ export type {
 // Import from ./types directly or from the config modules — both work.
 
 // Factory
-export { getAgentProvider } from './factory';
+export { getAgentProvider, getProviderCapabilities } from './factory';
+
+// Static capability constants
+export { CLAUDE_CAPABILITIES } from './claude/capabilities';
+export { CODEX_CAPABILITIES } from './codex/capabilities';
 
 // Error
 export { UnknownProviderError } from './errors';
