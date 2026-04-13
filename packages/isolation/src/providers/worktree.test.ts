@@ -916,6 +916,34 @@ describe('WorktreeProvider', () => {
       const env = await submoduleProvider.create(baseRequest);
       expect(env.status).toBe('active');
     });
+
+    test('worktree creation succeeds when .gitmodules has permission error (EACCES)', async () => {
+      const configLoader: RepoConfigLoader = async () => ({
+        baseBranch: 'main',
+        initSubmodules: true,
+      });
+      const submoduleProvider = new WorktreeProvider(configLoader);
+
+      // .gitmodules exists but permission denied
+      mockAccess.mockImplementation(async (path: unknown) => {
+        if (typeof path === 'string' && path.endsWith('.gitmodules')) {
+          const err = new Error('EACCES') as NodeJS.ErrnoException;
+          err.code = 'EACCES';
+          throw err;
+        }
+      });
+
+      // Should not throw — permission error on .gitmodules is non-fatal
+      const env = await submoduleProvider.create(baseRequest);
+      expect(env.status).toBe('active');
+
+      // Submodule update should NOT have been called (skipped due to access error)
+      const submoduleCalls = execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('submodule');
+      });
+      expect(submoduleCalls).toHaveLength(0);
+    });
   });
 
   describe('destroy', () => {

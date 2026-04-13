@@ -931,9 +931,17 @@ export class WorktreeProvider implements IIsolationProvider {
    * actually uses submodules). Skips silently otherwise.
    */
   private async initSubmodules(worktreePath: string): Promise<void> {
-    // Check if .gitmodules exists before running submodule commands
-    const hasSubmodules = await this.directoryExists(join(worktreePath, '.gitmodules'));
-    if (!hasSubmodules) {
+    // Check if .gitmodules exists before running submodule commands.
+    // Both the access check and the git command are wrapped in non-fatal
+    // try/catch blocks — submodule init failure must never block worktree creation.
+    try {
+      await access(join(worktreePath, '.gitmodules'));
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code !== 'ENOENT') {
+        // Non-ENOENT (e.g., EACCES) — log but don't block worktree creation
+        getLog().warn({ err, worktreePath }, 'worktree.submodule_check_failed');
+      }
       return;
     }
 
