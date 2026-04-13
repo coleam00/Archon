@@ -12,7 +12,7 @@ interface WorkflowRunGroupProps {
   onAbandon?: (runId: string) => void;
   onDelete?: (runId: string) => void;
   onApprove?: (runId: string) => void;
-  onReject?: (runId: string) => void;
+  onReject?: (runId: string, reason?: string) => void;
 }
 
 export function WorkflowRunGroup({
