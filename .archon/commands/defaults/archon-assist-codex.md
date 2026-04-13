@@ -16,6 +16,9 @@ workflow.
 
 1. **Understand the request** - Identify whether this is a question, debugging
    task, repo exploration, a one-off change, or a CI/problem investigation.
+   - If the request is substantial multi-file implementation work that should
+     end in a PR, stop and route to `archon-piv-loop-codex` instead of
+     continuing in assist mode.
 2. **Ground yourself in the repo** - Search the codebase, read the relevant
    files, and understand the current implementation before acting.
 3. **Read repo guidance explicitly when needed**
@@ -25,6 +28,13 @@ workflow.
    - Do not assume `CLAUDE.md` was automatically loaded by Codex.
 4. **Use Codex capabilities directly** - Read and edit files, run commands,
    inspect git state, and validate relevant changes.
+   - If you are going to write files in assist mode, prove the assigned
+     worktree first with `pwd`, `git rev-parse --show-toplevel`, and
+     `git branch --show-current`.
+   - If you claim file changes, prove they landed in the current worktree with
+     `git status --short` or `git diff --name-only` before closing out.
+   - If the repo is clean after claimed edits, treat that as a workflow/path
+     mismatch and report it explicitly instead of claiming success.
 5. **Call out routing gaps** - If this should have been a narrower Codex
    workflow, mention:
    "Note: Using archon-assist-codex. Consider creating or using a more specific

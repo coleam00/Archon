@@ -93,9 +93,11 @@ Rules:
 1. Use `--branch` unless the user explicitly wants `--no-worktree`.
 2. Use descriptive branch names, for example `assist/codex-readme` or
    `piv/codex-auth-refactor`.
-3. For read-only questions or exploration, `--no-worktree` is acceptable.
-4. Prefer one Archon workflow per command rather than combining unrelated tasks.
-5. Treat Archon workflows as long-running jobs. Keep the run ID, working path,
+3. For substantial implementation work, prefer `archon-piv-loop-codex`
+   over `archon-assist-codex`.
+4. For read-only questions or exploration, `--no-worktree` is acceptable.
+5. Prefer one Archon workflow per command rather than combining unrelated tasks.
+6. Treat Archon workflows as long-running jobs. Keep the run ID, working path,
    and current status available for follow-up checks instead of assuming the
    launch command alone is the full observability surface.
 
