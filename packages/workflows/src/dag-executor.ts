@@ -243,7 +243,7 @@ export function substituteNodeOutputRefs(
  */
 async function resolveNodeProviderAndModel(
   node: DagNode,
-  workflowProvider: 'claude' | 'codex',
+  workflowProvider: 'claude' | 'codex' | 'copilot',
   workflowModel: string | undefined,
   config: WorkflowConfig,
   platform: IWorkflowPlatform,
@@ -253,11 +253,11 @@ async function resolveNodeProviderAndModel(
   workflowLevelOptions: WorkflowLevelOptions,
   deps: WorkflowDeps
 ): Promise<{
-  provider: 'claude' | 'codex';
+  provider: 'claude' | 'codex' | 'copilot';
   model: string | undefined;
   options: SendQueryOptions | undefined;
 }> {
-  let provider: 'claude' | 'codex';
+  let provider: 'claude' | 'codex' | 'copilot';
 
   if (node.provider) {
     provider = node.provider;
@@ -464,7 +464,7 @@ async function executeNodeInternal(
   cwd: string,
   workflowRun: WorkflowRun,
   node: CommandNode | PromptNode,
-  provider: 'claude' | 'codex',
+  provider: 'claude' | 'codex' | 'copilot',
   nodeOptions: SendQueryOptions | undefined,
   artifactsDir: string,
   logDir: string,
@@ -1416,7 +1416,7 @@ async function executeScriptNode(
  * Uses the same nodeConfig + assistantConfig pattern as resolveNodeProviderAndModel.
  */
 function buildLoopNodeOptions(
-  provider: 'claude' | 'codex',
+  provider: 'claude' | 'codex' | 'copilot',
   model: string | undefined,
   config: WorkflowConfig,
   workflowLevelOptions?: WorkflowLevelOptions
@@ -1455,7 +1455,7 @@ async function executeLoopNode(
   cwd: string,
   workflowRun: WorkflowRun,
   node: LoopNode,
-  workflowProvider: 'claude' | 'codex',
+  workflowProvider: 'claude' | 'codex' | 'copilot',
   workflowModel: string | undefined,
   artifactsDir: string,
   logDir: string,
@@ -1951,7 +1951,7 @@ async function executeApprovalNode(
   deps: WorkflowDeps,
   platform: IWorkflowPlatform,
   conversationId: string,
-  workflowProvider: 'claude' | 'codex',
+  workflowProvider: 'claude' | 'codex' | 'copilot',
   workflowModel: string | undefined,
   cwd: string,
   artifactsDir: string,
@@ -2122,7 +2122,7 @@ export async function executeDagWorkflow(
   cwd: string,
   workflow: { name: string; nodes: readonly DagNode[] } & WorkflowLevelOptions,
   workflowRun: WorkflowRun,
-  workflowProvider: 'claude' | 'codex',
+  workflowProvider: 'claude' | 'codex' | 'copilot',
   workflowModel: string | undefined,
   artifactsDir: string,
   logDir: string,
@@ -2360,7 +2360,7 @@ export async function executeDagWorkflow(
           // 3b. Loop node dispatch — manages its own AI sessions and iteration
           if (isLoopNode(node)) {
             // Resolve per-node provider/model overrides (same logic as other node types)
-            let loopProvider: 'claude' | 'codex';
+            let loopProvider: 'claude' | 'codex' | 'copilot';
             if (node.provider) {
               loopProvider = node.provider;
             } else if (node.model && isClaudeModel(node.model)) {

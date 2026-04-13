@@ -278,7 +278,7 @@ export async function executeWorkflow(
   // Resolve provider and model once (used by all nodes)
   // When workflow sets a model but not a provider, infer provider from the model.
   // e.g. model: sonnet → provider: claude, even if config.assistant is codex.
-  let resolvedProvider: 'claude' | 'codex';
+  let resolvedProvider: 'claude' | 'codex' | 'copilot';
   let providerSource: string;
   if (workflow.provider) {
     resolvedProvider = workflow.provider;

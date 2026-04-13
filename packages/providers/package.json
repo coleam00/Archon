@@ -12,6 +12,8 @@
     "./codex/provider": "./src/codex/provider.ts",
     "./codex/config": "./src/codex/config.ts",
     "./codex/binary-resolver": "./src/codex/binary-resolver.ts",
+    "./copilot/provider": "./src/copilot/provider.ts",
+    "./copilot/config": "./src/copilot/config.ts",
     "./errors": "./src/errors.ts",
     "./factory": "./src/factory.ts"
   },
@@ -22,6 +24,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.89",
     "@archon/paths": "workspace:*",
+    "@github/copilot-sdk": "^0.2.2",
     "@openai/codex-sdk": "^0.116.0"
   },
   "devDependencies": {
