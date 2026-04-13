@@ -492,7 +492,7 @@ export async function applyNodeConfig(
 // ─── Base Options Builder ────────────────────────────────────────────────
 
 /** Queued tool result from SDK hooks, consumed during stream normalization. */
-interface ToolResultEntry {
+export interface ToolResultEntry {
   toolName: string;
   toolOutput: string;
   toolCallId?: string;
