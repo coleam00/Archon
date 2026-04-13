@@ -73,6 +73,10 @@ function normalizeClaudeUsage(usage?: {
  * process.env is already clean at this point:
  * - stripCwdEnv() at entry point removed CWD .env keys + CLAUDECODE markers
  * - ~/.archon/.env loaded with override:true as the trusted source
+ *
+ * Double-filter here to be extra safe — ensures no CLAUDE_CODE_* markers leak
+ * to the subprocess, even if stripCwdEnv() was bypassed or if platform-specific
+ * env inheritance adds them back.
  */
 function buildSubprocessEnv(): NodeJS.ProcessEnv {
   const hasExplicitTokens = Boolean(
@@ -83,7 +87,29 @@ function buildSubprocessEnv(): NodeJS.ProcessEnv {
     { authMode },
     authMode === 'global' ? 'using_global_auth' : 'using_explicit_tokens'
   );
-  return { ...process.env };
+  
+  // Create a clean copy of process.env
+  const env = { ...process.env };
+  
+  // Filter out CLAUDE_CODE_* markers (keep only auth-related ones)
+  const CLAUDE_CODE_AUTH_VARS = new Set([
+    'CLAUDE_CODE_OAUTH_TOKEN',
+    'CLAUDE_CODE_USE_BEDROCK',
+    'CLAUDE_CODE_USE_VERTEX',
+  ]);
+  
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('CLAUDE_CODE_') && !CLAUDE_CODE_AUTH_VARS.has(key)) {
+      delete env[key];
+    }
+  }
+  
+  // Also remove CLAUDECODE marker if present
+  if (env.CLAUDECODE) {
+    delete env.CLAUDECODE;
+  }
+  
+  return env;
 }
 
 /** Max retries for transient subprocess failures */
