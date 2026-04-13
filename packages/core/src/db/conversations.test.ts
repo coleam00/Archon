@@ -11,6 +11,16 @@ mock.module('./connection', () => ({
   getDialect: () => mockPostgresDialect,
 }));
 
+// Mock config-loader to return a stable default so that tests are not affected by
+// whatever assistant the developer has configured in their local .archon/config.yaml.
+// The test "uses DEFAULT_AI_ASSISTANT env var when set" covers env-override behavior.
+// The test "creates new conversation with default assistant type" validates that the
+// value from config.assistant flows through — 'claude' here is the documented default,
+// not a statement that Ollama shouldn't be the default in a real deployment.
+mock.module('../config/config-loader', () => ({
+  loadConfig: mock(async () => ({ assistant: 'claude' })),
+}));
+
 import {
   getOrCreateConversation,
   updateConversation,
