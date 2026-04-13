@@ -21,6 +21,7 @@ import {
 } from '@archon/workflows/event-emitter';
 import type { WorkflowLoadResult } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { join } from 'node:path';
 import {
   approveWorkflow,
   rejectWorkflow,
@@ -75,6 +76,31 @@ function generateConversationId(): string {
   const timestamp = Date.now();
   const random = Math.random().toString(36).substring(2, 8);
   return `cli-${String(timestamp)}-${random}`;
+}
+
+function extractStaleWorkspaceEntry(message: string): string | null {
+  const prefix = 'Source symlink at ';
+  const delimiter = ' already points to ';
+  if (!message.startsWith(prefix)) return null;
+
+  const remainder = message.slice(prefix.length);
+  const delimiterIndex = remainder.indexOf(delimiter);
+  if (delimiterIndex === -1) return null;
+
+  const sourcePath = remainder.slice(0, delimiterIndex).trim();
+  const lastSeparator = Math.max(sourcePath.lastIndexOf('/'), sourcePath.lastIndexOf('\\'));
+  return lastSeparator === -1 ? null : sourcePath.slice(0, lastSeparator);
+}
+
+function buildRegistrationFailureError(action: string, error: Error): Error {
+  const staleWorkspaceEntry = extractStaleWorkspaceEntry(error.message);
+  const hint = staleWorkspaceEntry
+    ? `Hint: Remove the stale workspace entry at ${staleWorkspaceEntry} and retry, or use --no-worktree to skip isolation.`
+    : `Hint: Check your Archon workspace registration under ${join(getArchonHome(), 'workspaces')} and retry, or use --no-worktree to skip isolation.`;
+
+  return new Error(
+    `Cannot ${action}: repository registration failed.\n` + `Error: ${error.message}\n` + hint
+  );
 }
 
 /** Render a workflow event to stderr as a progress line. Called only when --quiet is not set. */
@@ -285,6 +311,7 @@ export async function workflowRunCommand(
   // Try to find a codebase for this directory
   let codebase = null;
   let codebaseLookupError: Error | null = null;
+  let codebaseRegistrationError: Error | null = null;
   try {
     codebase = await codebaseDb.findCodebaseByDefaultCwd(cwd);
   } catch (error) {
@@ -330,6 +357,7 @@ export async function workflowRunCommand(
         }
       } catch (error) {
         const err = error as Error;
+        codebaseRegistrationError = err;
         getLog().warn(
           { err, errorType: err.constructor.name, repoRoot },
           'cli.codebase_auto_registration_failed'
@@ -353,6 +381,9 @@ export async function workflowRunCommand(
             `Error: ${codebaseLookupError.message}\n` +
             'Hint: Check your database connection before using --resume.'
         );
+      }
+      if (codebaseRegistrationError) {
+        throw buildRegistrationFailureError('resume', codebaseRegistrationError);
       }
       throw new Error(
         'Cannot resume: Not in a git repository.\n' +
@@ -506,6 +537,9 @@ export async function workflowRunCommand(
           `Error: ${codebaseLookupError.message}\n` +
           'Hint: Check your database connection, or use --no-worktree to skip isolation.'
       );
+    }
+    if (codebaseRegistrationError) {
+      throw buildRegistrationFailureError('create worktree', codebaseRegistrationError);
     }
     throw new Error(
       'Cannot create worktree: not in a git repository.\n' +
