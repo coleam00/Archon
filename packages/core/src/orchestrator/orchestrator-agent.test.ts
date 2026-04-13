@@ -37,6 +37,17 @@ const mockExecuteWorkflow = mock(() => Promise.resolve());
 const mockHandleCommand = mock(() =>
   Promise.resolve({ success: true, message: 'ok', workflow: undefined })
 );
+const mockSendQuery = mock(async function* () {
+  yield { type: 'assistant', content: 'test response' };
+  yield { type: 'result', sessionId: 'session-1' };
+});
+const mockGetCodebaseEnvVars = mock(() => Promise.resolve({}));
+const mockLoadConfig = mock(() =>
+  Promise.resolve({
+    assistants: { claude: {}, codex: {} },
+    envVars: {},
+  })
+);
 
 const mockLogger = createMockLogger();
 
@@ -95,10 +106,14 @@ mock.module('@archon/workflows/executor', () => ({
 
 mock.module('@archon/providers', () => ({
   getAgentProvider: mock(() => ({
-    sendQuery: mock(async function* () {}),
+    sendQuery: mockSendQuery,
     getType: mock(() => 'claude'),
     getCapabilities: mock(() => ({})),
   })),
+}));
+
+mock.module('../db/env-vars', () => ({
+  getCodebaseEnvVars: mockGetCodebaseEnvVars,
 }));
 
 mock.module('../utils/error-formatter', () => ({
@@ -127,7 +142,7 @@ mock.module('../db/workflow-events', () => ({
 }));
 
 mock.module('../config/config-loader', () => ({
-  loadConfig: mock(() => Promise.resolve({})),
+  loadConfig: mockLoadConfig,
 }));
 
 mock.module('../services/title-generator', () => ({
@@ -873,9 +888,19 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockToRepoPath.mockClear();
     mockGetOrCreateConversation.mockReset();
     mockGetCodebase.mockReset();
+    mockSendQuery.mockClear();
+    mockGetCodebaseEnvVars.mockReset();
+    mockLoadConfig.mockReset();
     // Reset mocks between tests in this suite and restore safe defaults
     mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null));
     mockGetCodebase.mockImplementation(() => Promise.resolve(null));
+    mockGetCodebaseEnvVars.mockImplementation(() => Promise.resolve({}));
+    mockLoadConfig.mockImplementation(() =>
+      Promise.resolve({
+        assistants: { claude: {}, codex: {} },
+        envVars: {},
+      })
+    );
   });
 
   test('calls syncWorkspace with codebase.default_cwd when conversation has codebase_id', async () => {
@@ -953,6 +978,59 @@ describe('discoverAllWorkflows — remote sync', () => {
       expect.objectContaining({ codebaseId: 'codebase-1' }),
       'workspace.sync_failed'
     );
+  });
+
+  test('passes merged repo and DB env vars to provider for codebase-scoped chat', async () => {
+    const conversation = makeConversation({ codebase_id: 'codebase-1' });
+    const codebase = makeCodebaseForSync();
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockGetCodebaseEnvVars.mockResolvedValueOnce({ DB_SECRET: 'db-value' });
+    mockLoadConfig.mockResolvedValueOnce({
+      assistants: { claude: {}, codex: {} },
+      envVars: { FILE_SECRET: 'file-value' },
+    });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'What is the latest commit?');
+
+    expect(mockSendQuery).toHaveBeenCalled();
+    const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+    expect(requestOptions.env).toEqual({
+      FILE_SECRET: 'file-value',
+      DB_SECRET: 'db-value',
+    });
+  });
+
+  test('does not load codebase env vars when conversation has no codebase_id', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeConversation()));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    expect(mockGetCodebaseEnvVars).not.toHaveBeenCalled();
+  });
+
+  test('falls back to config env when codebase env loading fails', async () => {
+    const conversation = makeConversation({ codebase_id: 'codebase-1' });
+    const codebase = makeCodebaseForSync();
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockGetCodebaseEnvVars.mockRejectedValueOnce(new Error('db unavailable'));
+    mockLoadConfig.mockResolvedValueOnce({
+      assistants: { claude: {}, codex: {} },
+      envVars: { FILE_SECRET: 'file-value' },
+    });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'What is the latest commit?');
+
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ codebaseId: 'codebase-1' }),
+      'codebase_env_vars_load_failed'
+    );
+    const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+    expect(requestOptions.env).toEqual({ FILE_SECRET: 'file-value' });
   });
 });
 

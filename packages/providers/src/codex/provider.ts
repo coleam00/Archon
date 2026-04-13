@@ -78,6 +78,14 @@ function buildThreadOptions(
   };
 }
 
+function buildCodexEnv(requestEnv: Record<string, string>): Record<string, string> {
+  const baseEnv = Object.fromEntries(
+    Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
+  );
+  // Managed project env intentionally overrides inherited process env for project-scoped execution.
+  return { ...baseEnv, ...requestEnv };
+}
+
 const CODEX_MODEL_FALLBACKS: Record<string, string> = {
   'gpt-5.3-codex': 'gpt-5.2-codex',
 };
@@ -465,6 +473,28 @@ export class CodexProvider implements IAgentProvider {
     this.retryBaseDelayMs = options?.retryBaseDelayMs ?? RETRY_BASE_DELAY_MS;
   }
 
+  private async createCodexClient(
+    configCodexBinaryPath: string | undefined,
+    requestEnv?: Record<string, string>
+  ): Promise<Codex> {
+    if (!requestEnv || Object.keys(requestEnv).length === 0) {
+      return getCodex(configCodexBinaryPath);
+    }
+
+    try {
+      return new Codex({
+        codexPathOverride: await resolveCodexBinaryPath(configCodexBinaryPath),
+        env: buildCodexEnv(requestEnv),
+      });
+    } catch (error) {
+      const err = error as Error;
+      if (isModelAccessError(err.message)) {
+        throw new Error(buildModelAccessMessage());
+      }
+      throw new Error(`Codex query failed: ${err.message}`);
+    }
+  }
+
   getCapabilities(): ProviderCapabilities {
     return {
       sessionResume: true,
@@ -473,7 +503,7 @@ export class CodexProvider implements IAgentProvider {
       skills: false,
       toolRestrictions: false,
       structuredOutput: true,
-      envInjection: false,
+      envInjection: true,
       costControl: false,
       effortControl: false,
       thinkingControl: false,
@@ -482,9 +512,6 @@ export class CodexProvider implements IAgentProvider {
     };
   }
 
-  // Env safety: Codex inherits cleaned parent env (stripCwdEnv at boot).
-  // Codex native binary does not auto-load .env from CWD (E2E verified).
-  // Managed env injection tracked in #1161.
   async *sendQuery(
     prompt: string,
     cwd: string,
@@ -495,7 +522,7 @@ export class CodexProvider implements IAgentProvider {
     const codexConfig = parseCodexConfig(assistantConfig);
 
     // 1. Initialize SDK and build thread options
-    const codex = await getCodex(codexConfig.codexBinaryPath);
+    const codex = await this.createCodexClient(codexConfig.codexBinaryPath, requestOptions?.env);
     const threadOptions = buildThreadOptions(cwd, requestOptions?.model, assistantConfig);
 
     if (requestOptions?.abortSignal?.aborted) {

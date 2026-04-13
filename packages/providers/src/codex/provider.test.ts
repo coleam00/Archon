@@ -39,13 +39,15 @@ mock.module('@openai/codex-sdk', () => ({
   Codex: MockCodex,
 }));
 
-import { CodexProvider } from './provider';
+import { CodexProvider, resetCodexSingleton } from './provider';
 
 describe('CodexProvider', () => {
   let client: CodexProvider;
 
   beforeEach(() => {
+    resetCodexSingleton();
     client = new CodexProvider({ retryBaseDelayMs: 1 });
+    MockCodex.mockClear();
     mockStartThread.mockClear();
     mockResumeThread.mockClear();
     mockRunStreamed.mockClear();
@@ -75,7 +77,7 @@ describe('CodexProvider', () => {
         skills: false,
         toolRestrictions: false,
         structuredOutput: true,
-        envInjection: false,
+        envInjection: true,
         costControl: false,
         effortControl: false,
         thinkingControl: false,
@@ -715,6 +717,102 @@ describe('CodexProvider', () => {
       }
 
       expect(mockRunStreamed).toHaveBeenCalledWith('test prompt', {});
+    });
+
+    test('creates a per-call Codex instance when env is provided', async () => {
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+
+      for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
+        env: { MY_SECRET: 'abc123' },
+      })) {
+        // consume
+      }
+
+      expect(MockCodex).toHaveBeenCalledWith(
+        expect.objectContaining({
+          env: expect.objectContaining({ MY_SECRET: 'abc123' }),
+        })
+      );
+      expect(mockStartThread).toHaveBeenCalledTimes(1);
+    });
+
+    test('builds env by preserving process vars and letting request env win on collisions', async () => {
+      const originalPath = process.env.PATH;
+      const originalArchonEnv = process.env.ARCHON_CODEX_TEST_ENV;
+      process.env.PATH = 'from-process';
+      process.env.ARCHON_CODEX_TEST_ENV = 'kept-from-process';
+
+      try {
+        mockRunStreamed.mockResolvedValue({
+          events: (async function* () {
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+
+        for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
+          env: { PATH: 'from-request', MY_SECRET: 'abc123' },
+        })) {
+          // consume
+        }
+
+        expect(MockCodex).toHaveBeenCalledWith(
+          expect.objectContaining({
+            env: expect.objectContaining({
+              PATH: 'from-request',
+              ARCHON_CODEX_TEST_ENV: 'kept-from-process',
+              MY_SECRET: 'abc123',
+            }),
+          })
+        );
+      } finally {
+        if (originalPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = originalPath;
+        }
+        if (originalArchonEnv === undefined) {
+          delete process.env.ARCHON_CODEX_TEST_ENV;
+        } else {
+          process.env.ARCHON_CODEX_TEST_ENV = originalArchonEnv;
+        }
+      }
+    });
+
+    test('reuses the singleton Codex instance across sequential calls without env', async () => {
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+
+      for await (const _ of client.sendQuery('first prompt', '/workspace')) {
+        // consume
+      }
+      for await (const _ of client.sendQuery('second prompt', '/workspace')) {
+        // consume
+      }
+
+      expect(MockCodex).toHaveBeenCalledTimes(1);
+    });
+
+    test('wraps per-call Codex constructor failures with provider error context', async () => {
+      MockCodex.mockImplementationOnce(() => {
+        throw new Error('constructor failed');
+      });
+
+      const consumeGenerator = async (): Promise<void> => {
+        for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
+          env: { MY_SECRET: 'abc123' },
+        })) {
+          // consume
+        }
+      };
+
+      await expect(consumeGenerator()).rejects.toThrow('Codex query failed: constructor failed');
     });
 
     test('breaks on turn.completed event', async () => {
