@@ -3,6 +3,7 @@ import { Outlet, NavLink } from 'react-router';
 import { MessageSquare, LayoutDashboard, Workflow, Settings, X } from 'lucide-react';
 import { TopNav } from './TopNav';
 import { MobileNavContext } from '@/contexts/MobileNavContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import { useVisualViewport } from '@/lib/useVisualViewport';
 import { cn } from '@/lib/utils';
 
@@ -14,6 +15,7 @@ const navItems = [
 
 export function Layout(): React.ReactElement {
   const [open, setOpen] = useState(false);
+  const { compactLayout } = useTheme();
 
   // Use the visual viewport height instead of h-dvh / h-screen so the layout
   // correctly shrinks when the soft keyboard appears on mobile (iOS Safari and
@@ -33,7 +35,10 @@ export function Layout(): React.ReactElement {
         {/* ── Mobile nav overlay backdrop ── */}
         {open && (
           <div
-            className="fixed inset-x-0 top-12 bottom-0 z-40 bg-black/60 md:hidden"
+            className={cn(
+              'fixed inset-x-0 top-12 bottom-0 z-40 bg-black/60',
+              compactLayout ? '' : 'md:hidden'
+            )}
             onClick={() => {
               setOpen(false);
             }}
@@ -46,7 +51,7 @@ export function Layout(): React.ReactElement {
           className={cn(
             'fixed top-12 bottom-0 left-0 z-50 flex w-72 flex-col border-r border-border shadow-2xl',
             'transition-transform duration-300 ease-in-out',
-            'md:hidden',
+            compactLayout ? '' : 'md:hidden',
             open ? 'translate-x-0' : '-translate-x-full'
           )}
           style={{ backgroundColor: 'var(--surface)' }}

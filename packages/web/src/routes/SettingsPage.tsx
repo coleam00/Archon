@@ -1,10 +1,12 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
+import { Sun, Moon } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { useTheme } from '@/contexts/ThemeContext';
 import {
   getConfig,
   getHealth,
@@ -20,6 +22,61 @@ import type { SafeConfigResponse, CodebaseResponse } from '@/lib/api';
 
 const selectClass =
   'h-9 rounded-md border border-border bg-surface-elevated text-text-primary px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring [&>option]:bg-surface-elevated [&>option]:text-text-primary';
+
+function AppearanceSection(): React.ReactElement {
+  const { theme, toggleTheme, compactLayout, toggleCompactLayout } = useTheme();
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Appearance</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-6">
+          {/* Theme toggle */}
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-medium text-sm">Theme</p>
+              <p className="text-sm text-muted-foreground">Switch between light and dark mode</p>
+            </div>
+            <button
+              onClick={toggleTheme}
+              className="flex items-center gap-2 px-3 py-2 rounded-md border hover:bg-accent transition-colors"
+              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            >
+              {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              <span className="text-sm capitalize">{theme}</span>
+            </button>
+          </div>
+
+          {/* Compact layout toggle */}
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-medium text-sm">Always use responsive layout</p>
+              <p className="text-sm text-muted-foreground">
+                Use the mobile-friendly compact layout on all screen sizes
+              </p>
+            </div>
+            <button
+              role="switch"
+              aria-checked={compactLayout}
+              onClick={toggleCompactLayout}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                compactLayout ? 'bg-primary' : 'bg-input'
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  compactLayout ? 'translate-x-6' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 function SystemHealthSection({
   health,
@@ -633,6 +690,8 @@ export function SettingsPage(): React.ReactElement {
           )}
 
           {isLoading && <div className="text-sm text-muted-foreground">Loading settings...</div>}
+
+          <AppearanceSection />
 
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <SystemHealthSection health={health} database={configData?.database} />
