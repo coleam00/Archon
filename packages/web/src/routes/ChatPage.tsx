@@ -364,8 +364,11 @@ export function ChatPage(): React.ReactElement {
       {/* ── Right panel — chat interface, full width on mobile ── */}
       <div className="flex flex-1 flex-col overflow-hidden min-w-0">
 
-        {/* Mobile-only topbar: conversations toggle + new chat shortcut */}
-        <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-surface md:hidden shrink-0">
+        {/* Mobile-only topbar: conversations toggle + new chat shortcut.
+            sticky top-0 z-50 keeps the hamburger ☰ and "New" button always visible
+            at the top while messages scroll below.
+            bg-surface is opaque (no alpha) so content behind it is fully masked. */}
+        <div className="sticky top-0 z-50 flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-2 md:hidden">
           <button
             onClick={() => { setMobileConvOpen(true); }}
             className="flex items-center gap-2 rounded-md px-2 py-1.5 text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
