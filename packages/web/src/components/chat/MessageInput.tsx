@@ -241,8 +241,12 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
   };
 
   return (
+    // flex-shrink-0 prevents this bar from being compressed inside the flex-col ChatInterface.
+    // The inline paddingBottom uses env(safe-area-inset-bottom) so it clears the iOS home
+    // indicator / Android gesture bar — max() ensures we keep at least 1rem of breathing room.
     <div
-      className={`border-t border-border bg-surface p-4 transition-colors${dragging ? ' bg-primary/5' : ''}`}
+      className={`flex-shrink-0 border-t border-border bg-surface px-4 pt-4 transition-colors${dragging ? ' bg-primary/5' : ''}`}
+      style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
       title={disabledReason}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
