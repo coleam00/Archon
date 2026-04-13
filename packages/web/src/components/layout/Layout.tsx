@@ -3,6 +3,7 @@ import { Outlet, NavLink } from 'react-router';
 import { MessageSquare, LayoutDashboard, Workflow, Settings, X } from 'lucide-react';
 import { TopNav } from './TopNav';
 import { MobileNavContext } from '@/contexts/MobileNavContext';
+import { useVisualViewport } from '@/lib/useVisualViewport';
 import { cn } from '@/lib/utils';
 
 const navItems = [
@@ -14,12 +15,19 @@ const navItems = [
 export function Layout(): React.ReactElement {
   const [open, setOpen] = useState(false);
 
+  // Use the visual viewport height instead of h-dvh / h-screen so the layout
+  // correctly shrinks when the soft keyboard appears on mobile (iOS Safari and
+  // Chrome Android). This prevents the chat input from being hidden behind the
+  // keyboard.
+  const vpHeight = useVisualViewport();
+
   return (
     <MobileNavContext.Provider value={{ open, setOpen }}>
-      {/* h-dvh (100dvh) instead of h-screen (100vh) so the layout height follows the
-          dynamic viewport on mobile — shrinks when the browser address bar is visible,
-          keeping the chat input always reachable without scrolling. */}
-      <div className="flex h-dvh flex-col bg-background">
+      {/* Height is driven by visualViewport so it follows the keyboard on mobile */}
+      <div
+        className="flex flex-col bg-background overflow-hidden"
+        style={{ height: `${vpHeight}px` }}
+      >
         <TopNav />
 
         {/* ── Mobile nav overlay backdrop ── */}
@@ -102,7 +110,7 @@ export function Layout(): React.ReactElement {
           </div>
         </aside>
 
-        <main className="flex flex-1 flex-col overflow-hidden">
+        <main className="flex flex-1 flex-col overflow-hidden min-h-0">
           <Outlet />
         </main>
       </div>

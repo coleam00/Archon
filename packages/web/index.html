@@ -2,7 +2,13 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      interactive-widget=resizes-content  → Chrome Android resizes the layout
+      viewport when the soft keyboard appears, instead of overlapping it.
+      This works in tandem with the useVisualViewport hook so the chat input
+      is always visible above the keyboard on all mobile browsers.
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <title>Archon</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />

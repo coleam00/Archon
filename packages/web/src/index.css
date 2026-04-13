@@ -139,41 +139,64 @@
   }
 }
 
-/* Prevent horizontal scroll on mobile (fixed drawers, transforms) */
+/* ── Mobile layout fixes ────────────────────────────────────────────────────
+   1. Prevent parasitic horizontal/vertical scrollbars caused by fixed-position
+      drawers, CSS transforms, or elements exceeding 100vw / 100dvh.
+   2. The layout root height is driven by useVisualViewport (JS) so these
+      elements must never scroll on their own.
+   ── */
 html {
-  overflow-x: hidden;
+  overflow: hidden;
+  /* Fallback height for browsers that don't expose visualViewport */
+  height: -webkit-fill-available;
+  height: 100%;
 }
 
-#root {
-  overflow-x: hidden;
-  width: 100%;
-}
-
-/* Base body styling */
 body {
+  overflow: hidden;
+  height: 100%;
   background-color: var(--background);
   color: var(--text-primary);
   font-family: var(--font-sans);
-  overflow-x: hidden;
 }
 
-/* Scrollbar styling for dark theme */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+#root {
+  overflow: hidden;
+  height: 100%;
+  width: 100%;
 }
 
-::-webkit-scrollbar-track {
-  background: var(--background);
+/* Hide native scrollbars on mobile — scrollable areas use their own
+   overflow-y: auto containers (ScrollArea, etc.) so this is safe.       */
+@media (max-width: 768px) {
+  * {
+    scrollbar-width: none; /* Firefox */
+  }
+
+  *::-webkit-scrollbar {
+    display: none; /* Chrome / Safari / WebKit */
+  }
 }
 
-::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 4px;
-}
+/* Scrollbar styling for dark theme (desktop only) */
+@media (min-width: 769px) {
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
 
-::-webkit-scrollbar-thumb:hover {
-  background: var(--border-bright);
+  ::-webkit-scrollbar-track {
+    background: var(--background);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--border-bright);
+  }
 }
 
 /* Highlight.js: override just the background to match our surface */
