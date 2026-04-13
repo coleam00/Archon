@@ -1,0 +1,51 @@
+# E2E smoke test — all node types
+# Verifies: bash, prompt, script, structured output, model override, $nodeId.output refs
+name: e2e-all-nodes
+description: "Comprehensive E2E test exercising bash, prompt, script, and structured output nodes."
+provider: claude
+
+nodes:
+  # 1. Bash node — no AI, runs shell, stdout captured as output
+  - id: bash-check
+    bash: "echo '{\"status\":\"ok\",\"cwd\":\"'$(pwd)'\"}'"
+
+  # 2. Prompt node — simple AI call, verifies sendQuery works
+  - id: prompt-simple
+    prompt: "The bash node returned: $bash-check.output — confirm you received it by saying 'received'. Say nothing else."
+    depends_on: [bash-check]
+
+  # 3. Prompt with model override — verifies model selection
+  - id: prompt-haiku
+    prompt: "Say 'haiku-ok' and nothing else."
+    model: haiku
+    depends_on: [bash-check]
+
+  # 4. Structured output node — verifies output_format translation
+  - id: structured
+    prompt: "Classify the text 'hello world' as either 'greeting' or 'math'."
+    output_format:
+      type: object
+      properties:
+        category:
+          type: string
+          enum: ["greeting", "math"]
+      required: ["category"]
+      additionalProperties: false
+    depends_on: [prompt-simple]
+
+  # 5. Bash node using $nodeId.output from structured node
+  - id: bash-read-output
+    bash: "echo 'Structured output category: $structured.output'"
+    depends_on: [structured]
+
+  # 6. Script node (bun runtime) — verifies script execution
+  - id: script-echo
+    script: echo-args
+    runtime: bun
+    depends_on: [bash-check]
+
+  # 7. Prompt with effort control — verifies effort passes through to SDK
+  - id: prompt-effort
+    prompt: "Say 'effort-ok' and nothing else."
+    effort: low
+    depends_on: [bash-check]
