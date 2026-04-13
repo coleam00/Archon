@@ -139,6 +139,12 @@ curl -fsSL https://claude.ai/install.sh | bash
 irm https://claude.ai/install.ps1 | iex
 ```
 
+**Windows Symbolic Link Prerequisite**
+
+Windows users: Archon creates symlinks under `~/.archon/workspaces/` for project registration. Windows requires either:
+- **Developer Mode enabled** (Settings → Privacy & Security → For developers → Developer Mode)
+- or running Archon with **administrator privileges**
+
 </details>
 
 ```bash
