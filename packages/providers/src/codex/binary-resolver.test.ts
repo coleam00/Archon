@@ -16,7 +16,7 @@ mock.module('@archon/paths', () => ({
   getArchonHome: mock(() => '/tmp/test-archon-home'),
 }));
 
-import * as resolver from './codex-binary-resolver';
+import * as resolver from './binary-resolver';
 
 describe('resolveCodexBinaryPath (binary mode)', () => {
   const originalEnv = process.env.CODEX_BIN_PATH;

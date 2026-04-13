@@ -328,7 +328,7 @@ interface MessageChunk {
 
 ### Implementation Guide
 
-**1. Create provider file:** `packages/core/src/providers/your-assistant.ts`
+**1. Create provider file:** `packages/providers/src/your-assistant/provider.ts`
 
 **2. Implement the interface:**
 
@@ -377,7 +377,7 @@ export class YourAssistantProvider implements IAgentProvider {
 }
 ```
 
-**3. Register in factory:** `packages/core/src/providers/factory.ts`
+**3. Register in factory:** `packages/providers/src/factory.ts`
 
 ```typescript
 import { YourAssistantProvider } from './your-assistant';
@@ -440,7 +440,7 @@ if (trigger && shouldCreateNewSession(trigger)) {
 
 Different SDKs use different event types. Map them to MessageChunk types:
 
-**Claude Code SDK** (`packages/core/src/providers/claude.ts`):
+**Claude Code SDK** (`packages/providers/src/claude/provider.ts`):
 
 ```typescript
 for await (const msg of query({ prompt, options })) {
@@ -462,7 +462,7 @@ for await (const msg of query({ prompt, options })) {
 }
 ```
 
-**Codex SDK** (`packages/core/src/providers/codex.ts`):
+**Codex SDK** (`packages/providers/src/codex/provider.ts`):
 
 ```typescript
 for await (const event of result.events) {
@@ -1238,12 +1238,12 @@ Post single comment on issue with summary
 
 ### Adding a New AI Agent Provider
 
-- [ ] Create `packages/core/src/providers/your-assistant.ts`
+- [ ] Create `packages/providers/src/your-assistant/provider.ts`
 - [ ] Implement `IAgentProvider` interface
 - [ ] Map SDK events to `MessageChunk` types
 - [ ] Handle session creation and resumption
 - [ ] Implement error handling and recovery
-- [ ] Add to `packages/core/src/providers/factory.ts`
+- [ ] Add to `packages/providers/src/factory.ts`
 - [ ] Add environment variables to `.env.example`
 - [ ] Test session persistence across restarts
 - [ ] Test plan-to-execute transition (new session)
@@ -1364,7 +1364,7 @@ Context is passed as a dedicated `issueContext` parameter to `handleMessage()`, 
 **For detailed implementation examples, see:**
 
 - Platform adapter: `packages/adapters/src/chat/telegram/adapter.ts`, `packages/adapters/src/forge/github/adapter.ts`
-- AI provider: `packages/core/src/providers/claude.ts`, `packages/core/src/providers/codex.ts`
+- AI provider: `packages/providers/src/claude/provider.ts`, `packages/providers/src/codex/provider.ts`
 - Isolation provider: `packages/isolation/src/providers/worktree.ts`
 - Isolation resolver: `packages/isolation/src/resolver.ts`
 - Isolation factory: `packages/isolation/src/factory.ts`

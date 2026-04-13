@@ -1,9 +1,6 @@
 /**
  * Codex SDK wrapper
  * Provides async generator interface for streaming Codex responses
- *
- * With Bun runtime, we can directly import ESM packages without the
- * dynamic import workaround that was needed for CommonJS/Node.js.
  */
 import {
   Codex,
@@ -11,17 +8,16 @@ import {
   type TurnOptions,
   type TurnCompletedEvent,
 } from '@openai/codex-sdk';
-import {
-  type AgentRequestOptions,
-  type IAgentProvider,
-  type MessageChunk,
-  type TokenUsage,
+import type {
+  IAgentProvider,
+  SendQueryOptions,
+  MessageChunk,
+  TokenUsage,
+  ProviderCapabilities,
 } from '../types';
+import { parseCodexConfig } from './config';
+import { resolveCodexBinaryPath } from './binary-resolver';
 import { createLogger } from '@archon/paths';
-import { scanPathForSensitiveKeys, EnvLeakError } from '../utils/env-leak-scanner';
-import * as codebaseDb from '../db/codebases';
-import { loadConfig } from '../config/config-loader';
-import { resolveCodexBinaryPath } from '../utils/codex-binary-resolver';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -42,13 +38,10 @@ export function resetCodexSingleton(): void {
 
 /**
  * Get or create Codex SDK instance.
- * Async because in compiled binary mode, binary path resolution is async.
- * Once initialized, the binary path is fixed for the process lifetime.
  */
 async function getCodex(configCodexBinaryPath?: string): Promise<Codex> {
   if (codexInstance) return codexInstance;
 
-  // Prevent concurrent initialization race
   if (!codexInitPromise) {
     codexInitPromise = (async (): Promise<Codex> => {
       const codexPathOverride = await resolveCodexBinaryPath(configCodexBinaryPath);
@@ -56,7 +49,6 @@ async function getCodex(configCodexBinaryPath?: string): Promise<Codex> {
       codexInstance = instance;
       return instance;
     })().catch(err => {
-      // Clear promise so next call can retry (e.g. after user installs Codex)
       codexInitPromise = null;
       throw err;
     });
@@ -66,19 +58,23 @@ async function getCodex(configCodexBinaryPath?: string): Promise<Codex> {
 
 /**
  * Build thread options for Codex SDK
- * Extracted to avoid duplication across thread creation paths
  */
-function buildThreadOptions(cwd: string, options?: AgentRequestOptions): ThreadOptions {
+function buildThreadOptions(
+  cwd: string,
+  model?: string,
+  assistantConfig?: Record<string, unknown>
+): ThreadOptions {
+  const config = parseCodexConfig(assistantConfig ?? {});
   return {
     workingDirectory: cwd,
     skipGitRepoCheck: true,
-    sandboxMode: 'danger-full-access', // Full filesystem access (needed for git worktree operations)
-    networkAccessEnabled: true, // Allow network calls (GitHub CLI, HTTP requests)
-    approvalPolicy: 'never', // Auto-approve all operations without user confirmation
-    model: options?.model,
-    modelReasoningEffort: options?.modelReasoningEffort,
-    webSearchMode: options?.webSearchMode,
-    additionalDirectories: options?.additionalDirectories,
+    sandboxMode: 'danger-full-access',
+    networkAccessEnabled: true,
+    approvalPolicy: 'never',
+    model: model ?? config.model,
+    modelReasoningEffort: config.modelReasoningEffort,
+    webSearchMode: config.webSearchMode,
+    additionalDirectories: config.additionalDirectories,
   };
 }
 
@@ -110,17 +106,9 @@ function buildModelAccessMessage(model?: string): string {
   return `❌ Model "${selectedModel}" is not available for your account.\n\n${fixLine}\n\n${workflowLine}`;
 }
 
-/** Max retries for transient failures (3 = 4 total attempts).
- *  Mirrors ClaudeProvider retry logic — Codex process crashes are similarly intermittent. */
 const MAX_SUBPROCESS_RETRIES = 3;
-
-/** Delay between retries in milliseconds */
 const RETRY_BASE_DELAY_MS = 2000;
-
-/** Patterns indicating rate limiting in error messages */
 const RATE_LIMIT_PATTERNS = ['rate limit', 'too many requests', '429', 'overloaded'];
-
-/** Patterns indicating auth issues in error messages */
 const AUTH_PATTERNS = [
   'credit balance',
   'unauthorized',
@@ -129,8 +117,6 @@ const AUTH_PATTERNS = [
   '401',
   '403',
 ];
-
-/** Patterns indicating a transient process crash (worth retrying) */
 const SUBPROCESS_CRASH_PATTERNS = ['exited with code', 'killed', 'signal', 'codex exec'];
 
 function classifyCodexError(
@@ -156,8 +142,8 @@ function extractUsageFromCodexEvent(event: TurnCompletedEvent): TokenUsage {
 }
 
 /**
- * Codex AI agent provider
- * Implements generic IAgentProvider interface
+ * Codex AI agent provider.
+ * Implements IAgentProvider with Codex SDK integration.
  */
 export class CodexProvider implements IAgentProvider {
   private readonly retryBaseDelayMs: number;
@@ -166,75 +152,56 @@ export class CodexProvider implements IAgentProvider {
     this.retryBaseDelayMs = options?.retryBaseDelayMs ?? RETRY_BASE_DELAY_MS;
   }
 
-  /**
-   * Send a query to Codex and stream responses
-   * @param prompt - User message or prompt
-   * @param cwd - Working directory for Codex
-   * @param resumeSessionId - Optional thread ID to resume
-   */
+  getCapabilities(): ProviderCapabilities {
+    return {
+      sessionResume: true,
+      mcp: false,
+      hooks: false,
+      skills: false,
+      toolRestrictions: false,
+      structuredOutput: true,
+      envInjection: false,
+      costControl: false,
+      effortControl: false,
+      thinkingControl: false,
+      fallbackModel: false,
+      sandbox: false,
+    };
+  }
+
+  // TODO(#1135): Pre-spawn env-leak gate was removed during provider extraction.
+  // Caller-side enforcement (orchestrator, dag-executor) is tracked in #1135.
   async *sendQuery(
     prompt: string,
     cwd: string,
     resumeSessionId?: string,
-    options?: AgentRequestOptions
+    requestOptions?: SendQueryOptions
   ): AsyncGenerator<MessageChunk> {
-    // Load config once — used for env-leak gate and (on first call) codexBinaryPath resolution.
-    let mergedConfig: Awaited<ReturnType<typeof loadConfig>> | undefined;
-    try {
-      mergedConfig = await loadConfig(cwd);
-    } catch (configErr) {
-      // Fail-closed: config load failure enforces the env-leak gate (allowTargetRepoKeys stays false)
-      getLog().warn({ err: configErr, cwd }, 'env_leak_gate.config_load_failed_gate_enforced');
-    }
+    const assistantConfig = requestOptions?.assistantConfig ?? {};
+    const codexConfig = parseCodexConfig(assistantConfig);
 
-    // Pre-spawn: check for env key leak if codebase is not explicitly consented.
-    // Use prefix lookup so worktree paths (e.g. .../worktrees/feature-branch) still
-    // match the registered source cwd (e.g. .../source).
-    const codebase =
-      (await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
-      (await codebaseDb.findCodebaseByPathPrefix(cwd));
-    if (codebase && !codebase.allow_env_keys) {
-      // Fail-closed: a config load failure must NOT silently bypass the gate.
-      const allowTargetRepoKeys = mergedConfig?.allowTargetRepoKeys ?? false;
-      if (!allowTargetRepoKeys) {
-        const report = scanPathForSensitiveKeys(cwd);
-        if (report.findings.length > 0) {
-          throw new EnvLeakError(report, 'spawn-existing');
-        }
-      }
-    }
+    // Initialize Codex SDK with binary path override
+    const codex = await getCodex(codexConfig.codexBinaryPath);
+    const threadOptions = buildThreadOptions(cwd, requestOptions?.model, assistantConfig);
 
-    // Initialize Codex SDK with binary path override (resolved from env/config/vendor).
-    // In dev mode, resolveCodexBinaryPath returns undefined and the SDK uses node_modules.
-    // In binary mode, it resolves from env/config/vendor or throws with install instructions.
-    const codex = await getCodex(mergedConfig?.assistants.codex.codexBinaryPath);
-    const threadOptions = buildThreadOptions(cwd, options);
-
-    // Check if already aborted before starting
-    if (options?.abortSignal?.aborted) {
+    if (requestOptions?.abortSignal?.aborted) {
       throw new Error('Query aborted');
     }
 
-    // Track if we fell back from a failed resume (to notify user)
     let sessionResumeFailed = false;
-
-    // Get or create thread (synchronous operations!)
     let thread;
     if (resumeSessionId) {
       getLog().debug({ sessionId: resumeSessionId }, 'resuming_thread');
       try {
-        // NOTE: resumeThread is synchronous, not async
-        // IMPORTANT: Must pass options when resuming!
         thread = codex.resumeThread(resumeSessionId, threadOptions);
       } catch (error) {
         getLog().error({ err: error, sessionId: resumeSessionId }, 'resume_thread_failed');
-        // Fall back to creating new thread
         try {
           thread = codex.startThread(threadOptions);
         } catch (startError) {
           const err = startError as Error;
           if (isModelAccessError(err.message)) {
-            throw new Error(buildModelAccessMessage(options?.model));
+            throw new Error(buildModelAccessMessage(requestOptions?.model));
           }
           throw new Error(`Codex query failed: ${err.message}`);
         }
@@ -242,19 +209,17 @@ export class CodexProvider implements IAgentProvider {
       }
     } else {
       getLog().debug({ cwd }, 'starting_new_thread');
-      // NOTE: startThread is synchronous, not async
       try {
         thread = codex.startThread(threadOptions);
       } catch (error) {
         const err = error as Error;
         if (isModelAccessError(err.message)) {
-          throw new Error(buildModelAccessMessage(options?.model));
+          throw new Error(buildModelAccessMessage(requestOptions?.model));
         }
         throw new Error(`Codex query failed: ${err.message}`);
       }
     }
 
-    // Notify user if session resume failed (don't silently lose context)
     if (sessionResumeFailed) {
       yield {
         type: 'system',
@@ -266,12 +231,10 @@ export class CodexProvider implements IAgentProvider {
     let lastError: Error | undefined;
 
     for (let attempt = 0; attempt <= MAX_SUBPROCESS_RETRIES; attempt++) {
-      // Check abort signal before each attempt
-      if (options?.abortSignal?.aborted) {
+      if (requestOptions?.abortSignal?.aborted) {
         throw new Error('Query aborted');
       }
 
-      // On retries, create a fresh thread (crashed thread is invalid)
       if (attempt > 0) {
         getLog().debug({ cwd, attempt }, 'starting_new_thread');
         try {
@@ -279,34 +242,38 @@ export class CodexProvider implements IAgentProvider {
         } catch (startError) {
           const err = startError as Error;
           if (isModelAccessError(err.message)) {
-            throw new Error(buildModelAccessMessage(options?.model));
+            throw new Error(buildModelAccessMessage(requestOptions?.model));
           }
           throw new Error(`Codex query failed: ${err.message}`);
         }
       }
 
       try {
-        // Build per-turn options (structured output schema, abort signal)
         const turnOptions: TurnOptions = {};
-        if (options?.outputFormat) {
-          turnOptions.outputSchema = options.outputFormat.schema;
+        const hasOutputFormat = !!(
+          requestOptions?.outputFormat ?? requestOptions?.nodeConfig?.output_format
+        );
+        if (requestOptions?.outputFormat) {
+          turnOptions.outputSchema = requestOptions.outputFormat.schema;
         }
-        if (options?.abortSignal) {
-          turnOptions.signal = options.abortSignal;
+        // Also check nodeConfig.output_format (workflow path)
+        if (requestOptions?.nodeConfig?.output_format && !requestOptions?.outputFormat) {
+          turnOptions.outputSchema = requestOptions.nodeConfig.output_format;
+        }
+        // Track accumulated text for structured output normalization
+        let accumulatedText = '';
+        if (requestOptions?.abortSignal) {
+          turnOptions.signal = requestOptions.abortSignal;
         }
 
-        // Run streamed query (this IS async)
         const result = await thread.runStreamed(prompt, turnOptions);
 
-        // Process streaming events
         for await (const event of result.events) {
-          // Check abort signal between events
-          if (options?.abortSignal?.aborted) {
+          if (requestOptions?.abortSignal?.aborted) {
             getLog().info('query_aborted_between_events');
             break;
           }
 
-          // Log progress for item.started (visibility fix for Codex appearing to hang)
           if (event.type === 'item.started') {
             const item = event.item;
             getLog().debug(
@@ -315,17 +282,14 @@ export class CodexProvider implements IAgentProvider {
             );
           }
 
-          // Handle error events
           if (event.type === 'error') {
             getLog().error({ message: event.message }, 'stream_error');
-            // Don't send MCP timeout errors (they're optional)
             if (!event.message.includes('MCP client')) {
               yield { type: 'system', content: `⚠️ ${event.message}` };
             }
             continue;
           }
 
-          // Handle turn failed events
           if (event.type === 'turn.failed') {
             const errorObj = event.error as { message?: string } | undefined;
             const errorMessage = errorObj?.message ?? 'Unknown error';
@@ -337,11 +301,9 @@ export class CodexProvider implements IAgentProvider {
             break;
           }
 
-          // Handle item.completed events - map to MessageChunk types
           if (event.type === 'item.completed') {
             const item = event.item;
 
-            // Log progress with context for debugging
             const logContext: Record<string, unknown> = {
               eventType: event.type,
               itemType: item.type,
@@ -354,17 +316,13 @@ export class CodexProvider implements IAgentProvider {
 
             switch (item.type) {
               case 'agent_message':
-                // Agent text response
                 if (item.text) {
+                  if (hasOutputFormat) accumulatedText += item.text;
                   yield { type: 'assistant', content: item.text };
                 }
                 break;
 
               case 'command_execution':
-                // Tool/command execution. The Codex SDK only emits item.completed
-                // once the command has fully run, so we emit the start + result
-                // back-to-back to close the UI's tool card immediately. Without
-                // the paired tool_result, the card spins forever until lock release.
                 if (item.command) {
                   yield { type: 'tool', toolName: item.command };
                   const exitSuffix =
@@ -382,7 +340,6 @@ export class CodexProvider implements IAgentProvider {
                 break;
 
               case 'reasoning':
-                // Agent reasoning/thinking
                 if (item.text) {
                   yield { type: 'thinking', content: item.text };
                 }
@@ -392,7 +349,6 @@ export class CodexProvider implements IAgentProvider {
                 if (item.query) {
                   const searchToolName = `🔍 Searching: ${item.query}`;
                   yield { type: 'tool', toolName: searchToolName };
-                  // Web search items only fire on completion, so close the card immediately.
                   yield { type: 'tool_result', toolName: searchToolName, toolOutput: '' };
                 } else {
                   getLog().debug({ itemId: item.id }, 'web_search_missing_query');
@@ -466,13 +422,16 @@ export class CodexProvider implements IAgentProvider {
                     : (item.tool ?? item.server ?? 'MCP tool');
                 const mcpToolName = `🔌 MCP: ${toolInfo}`;
 
-                // Always emit start+result so the UI card closes. item.completed
-                // fires once the call is final (completed or failed).
                 yield { type: 'tool', toolName: mcpToolName };
 
                 if (item.status === 'failed') {
                   getLog().warn(
-                    { server: item.server, tool: item.tool, error: item.error, itemId: item.id },
+                    {
+                      server: item.server,
+                      tool: item.tool,
+                      error: item.error,
+                      itemId: item.id,
+                    },
                     'mcp_tool_call_failed'
                   );
                   const errMsg = item.error?.message
@@ -480,8 +439,6 @@ export class CodexProvider implements IAgentProvider {
                     : '❌ Error: MCP tool failed';
                   yield { type: 'tool_result', toolName: mcpToolName, toolOutput: errMsg };
                 } else {
-                  // status === 'completed' (or 'in_progress', which shouldn't reach
-                  // item.completed but is closed defensively).
                   let toolOutput = '';
                   if (item.result?.content) {
                     if (Array.isArray(item.result.content)) {
@@ -502,32 +459,49 @@ export class CodexProvider implements IAgentProvider {
                 }
                 break;
               }
-
-              // Other item types are ignored (like file edits, etc.)
             }
           }
 
-          // Handle turn.completed event
           if (event.type === 'turn.completed') {
             getLog().debug('turn_completed');
-            // Yield result with thread ID for persistence
             const usage = extractUsageFromCodexEvent(event);
+
+            // Codex returns structured output inline in agent_message text.
+            // Normalize: parse as JSON and put on structuredOutput so the
+            // dag-executor can handle all providers uniformly.
+            let structuredOutput: unknown;
+            if (hasOutputFormat && accumulatedText) {
+              try {
+                structuredOutput = JSON.parse(accumulatedText);
+                getLog().debug('codex.structured_output_parsed');
+              } catch {
+                getLog().warn(
+                  { outputPreview: accumulatedText.slice(0, 200) },
+                  'codex.structured_output_not_json'
+                );
+                yield {
+                  type: 'system',
+                  content:
+                    '⚠️ Structured output requested but Codex returned non-JSON text. ' +
+                    'Downstream $nodeId.output.field references may not evaluate correctly.',
+                };
+              }
+            }
+
             yield {
               type: 'result',
               sessionId: thread.id ?? undefined,
               tokens: usage,
+              ...(structuredOutput !== undefined ? { structuredOutput } : {}),
             };
-            // CRITICAL: Break out of event loop - turn is complete!
-            // Without this, the loop waits for stream to end (causes 90s timeout)
             break;
           }
         }
-        return; // Success - exit retry loop
+        return;
       } catch (error) {
         const err = error as Error;
 
-        // Don't retry aborted queries
-        if (options?.abortSignal?.aborted) {
+        if (requestOptions?.abortSignal?.aborted) {
           throw new Error('Query aborted');
         }
 
@@ -537,19 +511,16 @@ export class CodexProvider implements IAgentProvider {
           'query_error'
         );
 
-        // Model access errors are never retryable
         if (errorClass === 'model_access') {
-          throw new Error(buildModelAccessMessage(options?.model));
+          throw new Error(buildModelAccessMessage(requestOptions?.model));
         }
 
-        // Auth errors won't resolve on retry
         if (errorClass === 'auth') {
           const enrichedError = new Error(`Codex auth error: ${err.message}`);
           enrichedError.cause = error;
           throw enrichedError;
         }
 
-        // Retry transient failures (rate limit, crash)
         if (
           attempt < MAX_SUBPROCESS_RETRIES &&
           (errorClass === 'rate_limit' || errorClass === 'crash')
@@ -561,20 +532,15 @@ export class CodexProvider implements IAgentProvider {
           continue;
         }
 
-        // Final failure - enrich and throw
         const enrichedError = new Error(`Codex ${errorClass}: ${err.message}`);
         enrichedError.cause = error;
         throw enrichedError;
       }
     }
 
-    // Should not reach here, but handle defensively
     throw lastError ?? new Error('Codex query failed after retries');
   }
 
-  /**
-   * Get the assistant type identifier
-   */
   getType(): string {
     return 'codex';
   }

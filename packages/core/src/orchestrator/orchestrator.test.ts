@@ -82,7 +82,7 @@ mock.module('../handlers/command-handler', () => ({
 // AI provider mock
 const mockGetAgentProvider = mock(() => null);
 
-mock.module('../providers/factory', () => ({
+mock.module('@archon/providers', () => ({
   getAgentProvider: mockGetAgentProvider,
 }));
 
@@ -699,8 +699,8 @@ describe('orchestrator-agent handleMessage', () => {
 
   // ─── settingSources forwarding ────────────────────────────────────────
 
-  describe('settingSources forwarding', () => {
-    test('passes settingSources from config to AI provider for claude', async () => {
+  describe('assistantConfig forwarding', () => {
+    test('passes assistantConfig with settingSources for claude', async () => {
       mockLoadConfig.mockResolvedValueOnce({
         botName: 'Archon',
         assistant: 'claude',
@@ -725,11 +725,13 @@ describe('orchestrator-agent handleMessage', () => {
         expect.any(String),
         expect.any(String),
         expect.anything(),
-        expect.objectContaining({ settingSources: ['project', 'user'] })
+        expect.objectContaining({
+          assistantConfig: expect.objectContaining({ settingSources: ['project', 'user'] }),
+        })
       );
     });
 
-    test('does not pass settingSources for non-claude assistant', async () => {
+    test('passes codex assistantConfig for codex assistant', async () => {
       const codexConversation: Conversation = {
         ...mockConversation,
         ai_assistant_type: 'codex',
@@ -758,11 +760,12 @@ describe('orchestrator-agent handleMessage', () => {
 
       await handleMessage(platform, 'chat-456', 'hello');
 
-      // settingSources should NOT be in requestOptions since assistant type is codex
+      // Should pass codex assistantConfig, not claude's
       const callArgs = codexClient.sendQuery.mock.calls[0];
       const requestOptions = callArgs?.[3] as Record<string, unknown> | undefined;
       expect(requestOptions).toBeDefined();
       expect(requestOptions).not.toHaveProperty('settingSources');
+      expect(requestOptions?.assistantConfig).toBeDefined();
     });
   });
 

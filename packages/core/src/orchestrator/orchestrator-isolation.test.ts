@@ -50,7 +50,7 @@ mock.module('../handlers/command-handler', () => ({
   })),
 }));
 
-mock.module('../providers/factory', () => ({
+mock.module('@archon/providers', () => ({
   getAgentProvider: mock(() => null),
 }));
 

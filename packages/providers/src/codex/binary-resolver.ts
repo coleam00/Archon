@@ -5,9 +5,6 @@
  * native Codex CLI binary, which breaks in compiled binaries where
  * `import.meta.url` is frozen to the build host's path.
  *
- * This module resolves an alternative path and passes it to the SDK's
- * `codexPathOverride` constructor option, bypassing the broken resolution.
- *
  * Resolution order:
  * 1. `CODEX_BIN_PATH` environment variable
  * 2. `assistants.codex.codexBinaryPath` in config

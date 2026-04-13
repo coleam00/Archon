@@ -266,9 +266,16 @@ packages/
 │       ├── adapters/         # CLI adapter (stdout output)
 │       ├── commands/         # CLI command implementations
 │       └── cli.ts            # CLI entry point
+├── providers/                # @archon/providers - AI agent providers (SDK deps live here)
+│   └── src/
+│       ├── types.ts          # Contract layer (IAgentProvider, SendQueryOptions, MessageChunk — ZERO SDK deps)
+│       ├── factory.ts        # getAgentProvider() switch (built-in: claude, codex)
+│       ├── errors.ts         # UnknownProviderError
+│       ├── claude/           # ClaudeProvider + parseClaudeConfig + MCP/hooks/skills translation
+│       ├── codex/            # CodexProvider + parseCodexConfig + binary-resolver
+│       └── index.ts          # Package exports
 ├── core/                     # @archon/core - Shared business logic
 │   └── src/
-│       ├── providers/         # AI SDK providers (Claude, Codex)
 │       ├── config/           # YAML config loading
 │       ├── db/               # Database connection, queries
 │       ├── handlers/         # Command handler (slash commands)
@@ -289,7 +296,7 @@ packages/
 │       ├── executor.ts       # Workflow execution orchestrator (executeWorkflow)
 │       ├── dag-executor.ts   # DAG-specific execution logic
 │       ├── store.ts          # IWorkflowStore interface (database abstraction)
-│       ├── deps.ts           # WorkflowDeps injection types (IWorkflowPlatform, IWorkflowAgentProvider)
+│       ├── deps.ts           # WorkflowDeps injection types (IWorkflowPlatform, imports from @archon/providers/types)
 │       ├── event-emitter.ts  # Workflow observability events
 │       ├── logger.ts         # JSONL file logger
 │       ├── validator.ts      # Resource validation (command files, MCP configs, skill dirs)
@@ -401,10 +408,11 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 **Package Split:**
 - **@archon/paths**: Path resolution utilities, Pino logger factory, web dist cache path (`getWebDistDir`), CWD env stripper (`stripCwdEnv`, `strip-cwd-env-boot`) (no @archon/* deps; `pino` and `dotenv` are allowed external deps)
 - **@archon/git**: Git operations - worktrees, branches, repos, exec wrappers (depends only on @archon/paths)
+- **@archon/providers**: AI agent providers (Claude, Codex) — owns SDK deps, `IAgentProvider` interface, `sendQuery()` contract, and provider-specific option translation. `@archon/providers/types` is the contract subpath (zero SDK deps, zero runtime side effects) that `@archon/workflows` imports from. Providers receive raw `nodeConfig` + `assistantConfig` and translate to SDK-specific options internally.
 - **@archon/isolation**: Worktree isolation types, providers, resolver, error classifiers (depends only on @archon/git + @archon/paths)
-- **@archon/workflows**: Workflow engine - loader, router, executor, DAG, logger, bundled defaults (depends only on @archon/git + @archon/paths + @hono/zod-openapi + zod; DB/AI/config injected via `WorkflowDeps`)
+- **@archon/workflows**: Workflow engine - loader, router, executor, DAG, logger, bundled defaults (depends only on @archon/git + @archon/paths + @archon/providers/types + @hono/zod-openapi + zod; DB/AI/config injected via `WorkflowDeps`)
 - **@archon/cli**: Command-line interface for running workflows and starting the web UI server (depends on @archon/server + @archon/adapters for the serve command)
-- **@archon/core**: Business logic, database, orchestration, AI providers (provides `createWorkflowStore()` adapter bridging core DB → `IWorkflowStore`)
+- **@archon/core**: Business logic, database, orchestration (depends on @archon/providers for AI; provides `createWorkflowStore()` adapter bridging core DB → `IWorkflowStore`)
 - **@archon/adapters**: Platform adapters for Slack, Telegram, GitHub, Discord (depends on @archon/core)
 - **@archon/server**: OpenAPIHono HTTP server (Zod + OpenAPI spec generation via `@hono/zod-openapi`), Web adapter (SSE), API routes, Web UI static serving (depends on @archon/adapters)
 - **@archon/web**: React frontend (Vite + Tailwind v4 + shadcn/ui + Zustand), SSE streaming to server. `WorkflowRunStatus`, `WorkflowDefinition`, and `DagNode` are all derived from `src/lib/api.generated.d.ts` (generated from the OpenAPI spec via `bun generate:types`; never import from `@archon/workflows`)
@@ -440,7 +448,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 - Session management: Create new or resume existing
 - Stream AI responses to platform
 
-**4. AI Agent Providers** (`packages/core/src/providers/`)
+**4. AI Agent Providers** (`packages/providers/src/`)
 - Implement `IAgentProvider` interface
 - **ClaudeProvider**: `@anthropic-ai/claude-agent-sdk`
 - **CodexProvider**: `@openai/codex-sdk`
