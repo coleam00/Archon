@@ -423,7 +423,24 @@ export async function workflowRunCommand(
       ? await isolationDb.findActiveByWorkflow(codebase.id, 'task', options.branchName)
       : undefined;
 
-    if (existingEnv && (await provider.healthCheck(existingEnv.working_path))) {
+    // Guard: skip reuse if the existing environment was created from a different
+    // local clone of the same remote (GH-1183). Two clones share one codebase_id
+    // (derived from the remote URL), so findActiveByWorkflow can return an
+    // environment that belongs to a sibling checkout. Compare the repo root that
+    // was recorded at creation time with the current working directory's repo root.
+    const currentRepoRoot = await git.findRepoRoot(cwd);
+    const envSourceRoot =
+      existingEnv && typeof existingEnv.metadata?.source_repo_root === 'string'
+        ? existingEnv.metadata.source_repo_root
+        : undefined;
+    const reuseSameCheckout =
+      !existingEnv || !envSourceRoot || !currentRepoRoot || envSourceRoot === currentRepoRoot;
+
+    if (
+      existingEnv &&
+      reuseSameCheckout &&
+      (await provider.healthCheck(existingEnv.working_path))
+    ) {
       if (options.fromBranch) {
         getLog().warn(
           { path: existingEnv.working_path, fromBranch: options.fromBranch },
@@ -463,6 +480,14 @@ export async function workflowRunCommand(
       workingCwd = existingEnv.working_path;
       isolationEnvId = existingEnv.id;
     } else {
+      // Log when skipping reuse due to cross-checkout mismatch (GH-1183)
+      if (existingEnv && !reuseSameCheckout) {
+        getLog().warn(
+          { path: existingEnv.working_path, envSourceRoot, currentRepoRoot },
+          'worktree.reuse_different_checkout'
+        );
+      }
+
       // Create new worktree
       getLog().info(
         { branch: branchIdentifier, fromBranch: options.fromBranch },
@@ -489,7 +514,7 @@ export async function workflowRunCommand(
         working_path: isolatedEnv.workingPath,
         branch_name: isolatedEnv.branchName,
         created_by_platform: 'cli',
-        metadata: {},
+        metadata: { ...(currentRepoRoot ? { source_repo_root: currentRepoRoot } : {}) },
       });
 
       workingCwd = isolatedEnv.workingPath;
