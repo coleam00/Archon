@@ -357,6 +357,7 @@ curl -X PATCH http://localhost:3090/api/config/assistants \
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/update-check` | Check for available updates (binary builds only) |
+| GET | `/api/ollama/models` | List locally installed Ollama models (3 s timeout; returns `{ models: string[], available: boolean }`) |
 
 Returns `{ updateAvailable, currentVersion, latestVersion, releaseUrl }`. For non-binary (source) builds, always returns `updateAvailable: false` without making external requests.
 
