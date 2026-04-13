@@ -4,6 +4,8 @@ export type {
   AgentRequestOptions,
   SendQueryOptions,
   NodeConfig,
+  ProviderDefaults,
+  ProviderDefaultsMap,
   ProviderCapabilities,
   ProviderRegistration,
   ProviderInfo,

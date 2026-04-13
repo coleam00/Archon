@@ -15,6 +15,7 @@ import type {
   TokenUsage,
   SendQueryOptions,
   NodeConfig,
+  ProviderDefaultsMap,
   ProviderCapabilities,
 } from '@archon/providers/types';
 
@@ -25,6 +26,7 @@ export type {
   TokenUsage,
   SendQueryOptions,
   NodeConfig,
+  ProviderDefaultsMap,
   ProviderCapabilities,
 };
 
@@ -78,7 +80,7 @@ export interface WorkflowConfig {
     loadDefaultWorkflows?: boolean;
     loadDefaultCommands?: boolean;
   };
-  assistants: {
+  assistants: ProviderDefaultsMap & {
     claude: {
       model?: string;
       settingSources?: ('project' | 'user')[];

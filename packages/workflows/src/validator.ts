@@ -21,6 +21,7 @@ import {
 import { execFileAsync } from '@archon/git';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { isValidCommandName } from './command-validation';
+import { getProviderCapabilities, isRegisteredProvider } from '@archon/providers';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -243,10 +244,11 @@ export async function checkRuntimeAvailable(runtime: ScriptRuntime): Promise<boo
 // Workflow resource validation (Level 3)
 // =============================================================================
 
-/** Get the resolved provider for a node (node-level > workflow-level) */
-function resolveProvider(node: DagNode, workflowProvider?: string): string {
+/** Get the resolved provider for a node (node-level > workflow-level).
+ *  Falls back to 'claude' only as a last resort when no workflow provider is set. */
+function resolveProvider(node: DagNode, workflowProvider?: string): string | undefined {
   if ('provider' in node && node.provider) return node.provider;
-  return workflowProvider ?? 'claude';
+  return workflowProvider;
 }
 
 /**
@@ -335,15 +337,18 @@ export async function validateWorkflowResources(
         }
       }
 
-      // Warn if using MCP with Codex
-      if (provider === 'codex') {
-        issues.push({
-          level: 'warning',
-          nodeId: node.id,
-          field: 'mcp',
-          message: 'MCP servers are Claude-only per-node — this will be ignored on Codex',
-          hint: 'For Codex, configure MCP servers globally in ~/.codex/config.toml instead',
-        });
+      // Warn if using MCP with a provider that doesn't support it
+      if (provider && isRegisteredProvider(provider)) {
+        const caps = getProviderCapabilities(provider);
+        if (!caps.mcp) {
+          issues.push({
+            level: 'warning',
+            nodeId: node.id,
+            field: 'mcp',
+            message: `MCP servers are not supported by provider '${provider}' — this will be ignored`,
+            hint: 'Remove the mcp field or switch to a provider that supports MCP',
+          });
+        }
       }
     }
 
@@ -367,42 +372,48 @@ export async function validateWorkflowResources(
         }
       }
 
-      // Warn if using skills with Codex
-      if (provider === 'codex') {
-        issues.push({
-          level: 'warning',
-          nodeId: node.id,
-          field: 'skills',
-          message: 'Skills are Claude-only per-node — this will be ignored on Codex',
-          hint: 'For Codex, place skills in ~/.agents/skills/ for global discovery instead',
-        });
+      // Warn if using skills with a provider that doesn't support them
+      if (provider && isRegisteredProvider(provider)) {
+        const caps = getProviderCapabilities(provider);
+        if (!caps.skills) {
+          issues.push({
+            level: 'warning',
+            nodeId: node.id,
+            field: 'skills',
+            message: `Skills are not supported by provider '${provider}' — this will be ignored`,
+            hint: 'Remove the skills field or switch to a provider that supports skills',
+          });
+        }
       }
     }
 
-    // --- Hooks with Codex warning ---
-    if ('hooks' in node && node.hooks && provider === 'codex') {
-      issues.push({
-        level: 'warning',
-        nodeId: node.id,
-        field: 'hooks',
-        message: 'Hooks are Claude-only — this will be ignored on Codex',
-        hint: 'Hooks have no Codex equivalent. Remove them or switch to provider: claude',
-      });
-    }
+    // --- Capability-driven warnings for hooks and tool restrictions ---
+    if (provider && isRegisteredProvider(provider)) {
+      const caps = getProviderCapabilities(provider);
 
-    // --- Tool restrictions with Codex warning ---
-    if (provider === 'codex') {
-      if (
-        ('allowed_tools' in node && node.allowed_tools !== undefined) ||
-        ('denied_tools' in node && node.denied_tools !== undefined)
-      ) {
+      if ('hooks' in node && node.hooks && !caps.hooks) {
         issues.push({
           level: 'warning',
           nodeId: node.id,
-          field: 'allowed_tools/denied_tools',
-          message: 'Tool restrictions are Claude-only — this will be ignored on Codex',
-          hint: 'For Codex, configure tool restrictions per MCP server in ~/.codex/config.toml',
+          field: 'hooks',
+          message: `Hooks are not supported by provider '${provider}' — this will be ignored`,
+          hint: 'Remove the hooks field or switch to a provider that supports hooks',
         });
+      }
+
+      if (!caps.toolRestrictions) {
+        if (
+          ('allowed_tools' in node && node.allowed_tools !== undefined) ||
+          ('denied_tools' in node && node.denied_tools !== undefined)
+        ) {
+          issues.push({
+            level: 'warning',
+            nodeId: node.id,
+            field: 'allowed_tools/denied_tools',
+            message: `Tool restrictions are not supported by provider '${provider}' — this will be ignored`,
+            hint: 'Remove tool restriction fields or switch to a provider that supports them',
+          });
+        }
       }
     }
 

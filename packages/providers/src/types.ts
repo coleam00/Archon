@@ -7,6 +7,7 @@
 // Single source of truth for provider-specific config shapes.
 
 export interface ClaudeProviderDefaults {
+  [key: string]: unknown;
   model?: string;
   /** Claude Code settingSources — controls which CLAUDE.md files are loaded.
    *  @default ['project']
@@ -15,6 +16,7 @@ export interface ClaudeProviderDefaults {
 }
 
 export interface CodexProviderDefaults {
+  [key: string]: unknown;
   model?: string;
   /** Structurally matches @archon/workflows ModelReasoningEffort */
   modelReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
@@ -24,6 +26,12 @@ export interface CodexProviderDefaults {
   /** Path to the Codex CLI binary. Overrides auto-detection in compiled Archon builds. */
   codexBinaryPath?: string;
 }
+
+/** Generic per-provider defaults bag used by config surfaces and UI. */
+export type ProviderDefaults = Record<string, unknown>;
+
+/** Provider-keyed defaults map. Built-ins may refine individual entries. */
+export type ProviderDefaultsMap = Record<string, ProviderDefaults>;
 
 /**
  * Token usage statistics from AI provider responses.

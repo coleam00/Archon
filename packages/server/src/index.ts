@@ -52,10 +52,10 @@ if (
   process.env.CLAUDE_USE_GLOBAL_AUTH = 'true';
 }
 
-import { registerBuiltinProviders } from '@archon/providers';
+import { bootstrapServerProviderRegistry } from './provider-bootstrap';
 
 // Bootstrap provider registry before any provider lookups
-registerBuiltinProviders();
+bootstrapServerProviderRegistry();
 
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { validationErrorHook } from './routes/openapi-defaults';

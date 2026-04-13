@@ -13,9 +13,23 @@
 
 // Provider config defaults — canonical definitions live in @archon/providers/types.
 // Imported and re-exported here so existing consumers don't break.
-import type { ClaudeProviderDefaults, CodexProviderDefaults } from '@archon/providers/types';
+import type {
+  ClaudeProviderDefaults,
+  CodexProviderDefaults,
+  ProviderDefaultsMap,
+} from '@archon/providers/types';
 
-export type { ClaudeProviderDefaults, CodexProviderDefaults };
+export type { ClaudeProviderDefaults, CodexProviderDefaults, ProviderDefaultsMap };
+
+export type AssistantDefaultsConfig = ProviderDefaultsMap & {
+  claude?: ClaudeProviderDefaults;
+  codex?: CodexProviderDefaults;
+};
+
+export type AssistantDefaults = ProviderDefaultsMap & {
+  claude: ClaudeProviderDefaults;
+  codex: CodexProviderDefaults;
+};
 
 export interface GlobalConfig {
   /**
@@ -33,10 +47,7 @@ export interface GlobalConfig {
   /**
    * Assistant-specific defaults (model, reasoning effort, etc.)
    */
-  assistants?: {
-    claude?: ClaudeProviderDefaults;
-    codex?: CodexProviderDefaults;
-  };
+  assistants?: AssistantDefaultsConfig;
 
   /**
    * Platform streaming preferences (can be overridden per conversation)
@@ -90,10 +101,7 @@ export interface RepoConfig {
   /**
    * Assistant-specific defaults for this repository
    */
-  assistants?: {
-    claude?: ClaudeProviderDefaults;
-    codex?: CodexProviderDefaults;
-  };
+  assistants?: AssistantDefaultsConfig;
 
   /**
    * Commands configuration
@@ -183,10 +191,7 @@ export interface RepoConfig {
 export interface MergedConfig {
   botName: string;
   assistant: string;
-  assistants: {
-    claude: ClaudeProviderDefaults;
-    codex: CodexProviderDefaults;
-  };
+  assistants: AssistantDefaults;
   streaming: {
     telegram: 'stream' | 'batch';
     discord: 'stream' | 'batch';
@@ -239,10 +244,7 @@ export interface MergedConfig {
 export interface SafeConfig {
   botName: string;
   assistant: string;
-  assistants: {
-    claude: Pick<ClaudeProviderDefaults, 'model'>;
-    codex: Pick<CodexProviderDefaults, 'model' | 'modelReasoningEffort' | 'webSearchMode'>;
-  };
+  assistants: ProviderDefaultsMap;
   streaming: {
     telegram: 'stream' | 'batch';
     discord: 'stream' | 'batch';

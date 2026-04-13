@@ -259,9 +259,7 @@ async function resolveNodeProviderAndModel(
 }> {
   const provider: string = node.provider ?? inferProviderFromModel(node.model, workflowProvider);
 
-  const providerAssistantConfig = (
-    config.assistants as Record<string, Record<string, unknown> | undefined>
-  )[provider];
+  const providerAssistantConfig = config.assistants[provider];
   const model: string | undefined =
     node.model ??
     (provider === workflowProvider
@@ -351,8 +349,7 @@ async function resolveNodeProviderAndModel(
   };
 
   // Pass assistantConfig from config — provider parses internally
-  const assistantConfig =
-    (config.assistants as Record<string, Record<string, unknown> | undefined>)[provider] ?? {};
+  const assistantConfig = config.assistants[provider] ?? {};
 
   const options: SendQueryOptions = {
     ...baseOptions,
@@ -1421,8 +1418,7 @@ function buildLoopNodeOptions(
   if (config.envVars && Object.keys(config.envVars).length > 0) {
     options.env = config.envVars;
   }
-  options.assistantConfig =
-    (config.assistants as Record<string, Record<string, unknown> | undefined>)[provider] ?? {};
+  options.assistantConfig = config.assistants[provider] ?? {};
   // Pass workflow-level options as nodeConfig so providers can apply them
   if (workflowLevelOptions) {
     options.nodeConfig = {
@@ -2357,9 +2353,7 @@ export async function executeDagWorkflow(
             // Resolve per-node provider/model overrides (same logic as other node types)
             const loopProvider: string =
               node.provider ?? inferProviderFromModel(node.model, workflowProvider);
-            const loopAssistantConfig = (
-              config.assistants as Record<string, Record<string, unknown> | undefined>
-            )[loopProvider];
+            const loopAssistantConfig = config.assistants[loopProvider];
             const loopModel: string | undefined =
               node.model ??
               (loopProvider === workflowProvider

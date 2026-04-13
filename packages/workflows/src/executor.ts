@@ -290,9 +290,7 @@ export async function executeWorkflow(
     resolvedProvider = config.assistant;
     providerSource = 'config';
   }
-  const assistantDefaults = (
-    config.assistants as Record<string, Record<string, unknown> | undefined>
-  )[resolvedProvider];
+  const assistantDefaults = config.assistants[resolvedProvider];
   const resolvedModel = workflow.model ?? (assistantDefaults?.model as string | undefined);
   if (!isModelCompatible(resolvedProvider, resolvedModel)) {
     throw new Error(

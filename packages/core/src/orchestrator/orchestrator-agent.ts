@@ -785,10 +785,7 @@ export async function handleMessage(
     }
 
     const requestOptions: SendQueryOptions = {
-      assistantConfig:
-        (config.assistants as unknown as Record<string, Record<string, unknown> | undefined>)[
-          providerKey
-        ] ?? {},
+      assistantConfig: config.assistants[providerKey] ?? {},
       env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
     };
 

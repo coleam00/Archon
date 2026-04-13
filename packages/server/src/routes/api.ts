@@ -120,7 +120,7 @@ import {
   codebaseEnvironmentsResponseSchema,
 } from './schemas/config.schemas';
 import { providerListResponseSchema } from './schemas/provider.schemas';
-import { getProviderInfoList } from '@archon/providers';
+import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
 
 // Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
@@ -2462,13 +2462,19 @@ export function registerApiRoutes(
 
       const updates: Partial<GlobalConfig> = {};
       if (body.assistant !== undefined) {
+        if (!isRegisteredProvider(body.assistant)) {
+          return apiError(
+            c,
+            400,
+            `Unknown provider '${body.assistant}'. Available: ${getProviderInfoList()
+              .map(p => p.id)
+              .join(', ')}`
+          );
+        }
         updates.defaultAssistant = body.assistant;
       }
-      if (body.claude !== undefined || body.codex !== undefined) {
-        updates.assistants = {
-          ...(body.claude ? { claude: body.claude } : {}),
-          ...(body.codex ? { codex: body.codex } : {}),
-        };
+      if (body.assistants !== undefined) {
+        updates.assistants = body.assistants;
       }
 
       await updateGlobalConfig(updates);

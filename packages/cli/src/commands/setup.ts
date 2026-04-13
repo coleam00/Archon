@@ -534,7 +534,8 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
  */
 async function collectAIConfig(): Promise<SetupConfig['ai']> {
   const assistants = await multiselect({
-    message: 'Which AI assistant(s) will you use? (↑↓ navigate, space select, enter confirm)',
+    message:
+      'Which built-in AI assistant(s) will you use? (↑↓ navigate, space select, enter confirm)',
     options: [
       { value: 'claude', label: 'Claude (Recommended)', hint: 'Anthropic Claude Code SDK' },
       { value: 'codex', label: 'Codex', hint: 'OpenAI Codex SDK' },
@@ -676,7 +677,7 @@ After upgrading, run 'archon setup' again.`,
     codexTokens = tokens ?? undefined;
   }
 
-  // Determine default assistant — use registry for dynamic provider list
+  // Determine default assistant — use the registry, but keep setup/auth flows built-in only.
   let defaultAssistant = 'claude';
 
   if (hasClaude && hasCodex) {
