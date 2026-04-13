@@ -141,9 +141,323 @@ function extractUsageFromCodexEvent(event: TurnCompletedEvent): TokenUsage {
   };
 }
 
+// ─── Turn Options Builder ────────────────────────────────────────────────
+
+/**
+ * Build turn options for a single Codex turn.
+ * Handles output schema from both requestOptions and nodeConfig (workflow path).
+ */
+export function buildTurnOptions(requestOptions?: SendQueryOptions): {
+  turnOptions: TurnOptions;
+  hasOutputFormat: boolean;
+} {
+  const turnOptions: TurnOptions = {};
+  const hasOutputFormat = !!(
+    requestOptions?.outputFormat ?? requestOptions?.nodeConfig?.output_format
+  );
+  if (requestOptions?.outputFormat) {
+    turnOptions.outputSchema = requestOptions.outputFormat.schema;
+  }
+  if (requestOptions?.nodeConfig?.output_format && !requestOptions?.outputFormat) {
+    turnOptions.outputSchema = requestOptions.nodeConfig.output_format;
+  }
+  if (requestOptions?.abortSignal) {
+    turnOptions.signal = requestOptions.abortSignal;
+  }
+  return { turnOptions, hasOutputFormat };
+}
+
+// ─── Stream Normalizer ───────────────────────────────────────────────────
+
+/** State maintained across Codex event stream normalization. */
+interface CodexStreamState {
+  lastTodoListSignature?: string;
+}
+
+/**
+ * Normalize raw Codex SDK events into Archon MessageChunks.
+ * Handles structured output normalization (Codex returns JSON inline in text).
+ */
+export async function* streamCodexEvents(
+  events: AsyncIterable<Record<string, unknown>>,
+  hasOutputFormat: boolean,
+  threadId: string | null | undefined,
+  abortSignal?: AbortSignal,
+  streamState?: CodexStreamState
+): AsyncGenerator<MessageChunk> {
+  const state: CodexStreamState = streamState ?? {};
+  let accumulatedText = '';
+
+  for await (const event of events) {
+    if (abortSignal?.aborted) {
+      getLog().info('query_aborted_between_events');
+      break;
+    }
+
+    if (event.type === 'item.started') {
+      const item = event.item as { type: string; id: string };
+      getLog().debug(
+        { eventType: event.type, itemType: item.type, itemId: item.id },
+        'item_started'
+      );
+    }
+
+    if (event.type === 'error') {
+      const errorEvent = event as { message: string };
+      getLog().error({ message: errorEvent.message }, 'stream_error');
+      if (!errorEvent.message.includes('MCP client')) {
+        yield { type: 'system', content: `⚠️ ${errorEvent.message}` };
+      }
+      continue;
+    }
+
+    if (event.type === 'turn.failed') {
+      const errorObj = (event as { error?: { message?: string } }).error;
+      const errorMessage = errorObj?.message ?? 'Unknown error';
+      getLog().error({ errorMessage }, 'turn_failed');
+      yield { type: 'system', content: `❌ Turn failed: ${errorMessage}` };
+      break;
+    }
+
+    if (event.type === 'item.completed') {
+      const item = event.item as Record<string, unknown>;
+      const itemType = item.type as string;
+
+      const logContext: Record<string, unknown> = {
+        eventType: event.type,
+        itemType,
+        itemId: item.id,
+      };
+      if (itemType === 'command_execution' && item.command) {
+        logContext.command = item.command;
+      }
+      getLog().debug(logContext, 'item_completed');
+
+      switch (itemType) {
+        case 'agent_message':
+          if (item.text) {
+            if (hasOutputFormat) accumulatedText += item.text as string;
+            yield { type: 'assistant', content: item.text as string };
+          }
+          break;
+
+        case 'command_execution':
+          if (item.command) {
+            const cmd = item.command as string;
+            yield { type: 'tool', toolName: cmd };
+            const exitCode = item.exit_code as number | null | undefined;
+            const exitSuffix =
+              exitCode != null && exitCode !== 0 ? `\n[exit code: ${String(exitCode)}]` : '';
+            yield {
+              type: 'tool_result',
+              toolName: cmd,
+              toolOutput: ((item.aggregated_output as string) ?? '') + exitSuffix,
+            };
+          } else {
+            getLog().warn({ itemId: item.id }, 'command_execution_missing_command');
+          }
+          break;
+
+        case 'reasoning':
+          if (item.text) {
+            yield { type: 'thinking', content: item.text as string };
+          }
+          break;
+
+        case 'web_search':
+          if (item.query) {
+            const searchToolName = `🔍 Searching: ${item.query as string}`;
+            yield { type: 'tool', toolName: searchToolName };
+            yield { type: 'tool_result', toolName: searchToolName, toolOutput: '' };
+          } else {
+            getLog().debug({ itemId: item.id }, 'web_search_missing_query');
+          }
+          break;
+
+        case 'todo_list': {
+          const items = item.items as { text?: string; completed?: boolean }[] | undefined;
+          if (Array.isArray(items) && items.length > 0) {
+            const normalizedItems = items.map(t => ({
+              text: typeof t.text === 'string' ? t.text : '(unnamed task)',
+              completed: t.completed ?? false,
+            }));
+            const signature = JSON.stringify(normalizedItems);
+            if (signature !== state.lastTodoListSignature) {
+              state.lastTodoListSignature = signature;
+              const taskList = normalizedItems
+                .map(t => `${t.completed ? '✅' : '⬜'} ${t.text}`)
+                .join('\n');
+              yield { type: 'system', content: `📋 Tasks:\n${taskList}` };
+            }
+          } else {
+            getLog().debug({ itemId: item.id }, 'todo_list_empty_or_invalid');
+          }
+          break;
+        }
+
+        case 'file_change': {
+          const statusIcon = (item.status as string) === 'failed' ? '❌' : '✅';
+          const rawError = 'error' in item ? (item as { error?: unknown }).error : undefined;
+          const fileErrorMessage =
+            typeof rawError === 'string'
+              ? rawError
+              : typeof rawError === 'object' && rawError !== null && 'message' in rawError
+                ? String((rawError as { message: unknown }).message)
+                : undefined;
+
+          const changes = item.changes as { kind: string; path?: string }[] | undefined;
+          if (Array.isArray(changes) && changes.length > 0) {
+            const changeList = changes
+              .map(c => {
+                const icon = c.kind === 'add' ? '➕' : c.kind === 'delete' ? '➖' : '📝';
+                return `${icon} ${c.path ?? '(unknown file)'}`;
+              })
+              .join('\n');
+            const errorSuffix =
+              (item.status as string) === 'failed' && fileErrorMessage
+                ? `\n${fileErrorMessage}`
+                : '';
+            yield {
+              type: 'system',
+              content: `${statusIcon} File changes:\n${changeList}${errorSuffix}`,
+            };
+          } else if ((item.status as string) === 'failed') {
+            getLog().warn(
+              { itemId: item.id, status: item.status },
+              'file_change_failed_no_changes'
+            );
+            const failMsg = fileErrorMessage
+              ? `❌ File change failed: ${fileErrorMessage}`
+              : '❌ File change failed';
+            yield { type: 'system', content: failMsg };
+          } else {
+            getLog().debug({ itemId: item.id, status: item.status }, 'file_change_no_changes');
+          }
+          break;
+        }
+
+        case 'mcp_tool_call': {
+          const server = item.server as string | undefined;
+          const tool = item.tool as string | undefined;
+          const toolInfo = server && tool ? `${server}/${tool}` : (tool ?? server ?? 'MCP tool');
+          const mcpToolName = `🔌 MCP: ${toolInfo}`;
+
+          yield { type: 'tool', toolName: mcpToolName };
+
+          if ((item.status as string) === 'failed') {
+            getLog().warn(
+              { server, tool, error: item.error, itemId: item.id },
+              'mcp_tool_call_failed'
+            );
+            const mcpError = item.error as { message?: string } | undefined;
+            const errMsg = mcpError?.message
+              ? `❌ Error: ${mcpError.message}`
+              : '❌ Error: MCP tool failed';
+            yield { type: 'tool_result', toolName: mcpToolName, toolOutput: errMsg };
+          } else {
+            let toolOutput = '';
+            const mcpResult = item.result as { content?: unknown } | undefined;
+            if (mcpResult?.content) {
+              if (Array.isArray(mcpResult.content)) {
+                toolOutput = JSON.stringify(mcpResult.content);
+              } else {
+                getLog().warn(
+                  {
+                    itemId: item.id,
+                    server,
+                    tool,
+                    resultType: typeof mcpResult.content,
+                  },
+                  'mcp_tool_call_unexpected_result_shape'
+                );
+              }
+            }
+            yield { type: 'tool_result', toolName: mcpToolName, toolOutput };
+          }
+          break;
+        }
+      }
+    }
+
+    if (event.type === 'turn.completed') {
+      getLog().debug('turn_completed');
+      const usage = extractUsageFromCodexEvent(event as TurnCompletedEvent);
+
+      // Codex returns structured output inline in agent_message text.
+      // Normalize: parse as JSON and put on structuredOutput so the
+      // dag-executor can handle all providers uniformly.
+      let structuredOutput: unknown;
+      if (hasOutputFormat && accumulatedText) {
+        try {
+          structuredOutput = JSON.parse(accumulatedText);
+          getLog().debug('codex.structured_output_parsed');
+        } catch {
+          getLog().warn(
+            { outputPreview: accumulatedText.slice(0, 200) },
+            'codex.structured_output_not_json'
+          );
+          yield {
+            type: 'system',
+            content:
+              '⚠️ Structured output requested but Codex returned non-JSON text. ' +
+              'Downstream $nodeId.output.field references may not evaluate correctly.',
+          };
+        }
+      }
+
+      yield {
+        type: 'result',
+        sessionId: threadId ?? undefined,
+        tokens: usage,
+        ...(structuredOutput !== undefined ? { structuredOutput } : {}),
+      };
+      break;
+    }
+  }
+}
+
+// ─── Error Classification & Retry ────────────────────────────────────────
+
+/**
+ * Classify a Codex error and determine retry eligibility.
+ */
+export function classifyAndEnrichCodexError(
+  error: Error,
+  model?: string
+): { enrichedError: Error; errorClass: string; shouldRetry: boolean } {
+  const errorClass = classifyCodexError(error.message);
+
+  if (errorClass === 'model_access') {
+    return {
+      enrichedError: new Error(buildModelAccessMessage(model)),
+      errorClass,
+      shouldRetry: false,
+    };
+  }
+
+  if (errorClass === 'auth') {
+    const enrichedError = new Error(`Codex auth error: ${error.message}`);
+    enrichedError.cause = error;
+    return { enrichedError, errorClass, shouldRetry: false };
+  }
+
+  const enrichedError = new Error(`Codex ${errorClass}: ${error.message}`);
+  enrichedError.cause = error;
+  const shouldRetry = errorClass === 'rate_limit' || errorClass === 'crash';
+  return { enrichedError, errorClass, shouldRetry };
+}
+
+// ─── Codex Provider ──────────────────────────────────────────────────────
+
 /**
  * Codex AI agent provider.
  * Implements IAgentProvider with Codex SDK integration.
+ *
+ * sendQuery orchestrates the following internal helpers:
+ * - buildThreadOptions: SDK thread configuration
+ * - buildTurnOptions: per-turn configuration (output schema, abort signal)
+ * - streamCodexEvents: raw SDK event normalization into MessageChunks
+ * - classifyAndEnrichCodexError: error classification for retry decisions
  */
 export class CodexProvider implements IAgentProvider {
   private readonly retryBaseDelayMs: number;
@@ -180,7 +494,7 @@ export class CodexProvider implements IAgentProvider {
     const assistantConfig = requestOptions?.assistantConfig ?? {};
     const codexConfig = parseCodexConfig(assistantConfig);
 
-    // Initialize Codex SDK with binary path override
+    // 1. Initialize SDK and build thread options
     const codex = await getCodex(codexConfig.codexBinaryPath);
     const threadOptions = buildThreadOptions(cwd, requestOptions?.model, assistantConfig);
 
@@ -188,6 +502,7 @@ export class CodexProvider implements IAgentProvider {
       throw new Error('Query aborted');
     }
 
+    // 2. Create or resume thread
     let sessionResumeFailed = false;
     let thread;
     if (resumeSessionId) {
@@ -227,7 +542,9 @@ export class CodexProvider implements IAgentProvider {
       };
     }
 
-    let lastTodoListSignature: string | undefined;
+    // 3. Build turn options
+    const { turnOptions, hasOutputFormat } = buildTurnOptions(requestOptions);
+    const streamState: CodexStreamState = {};
     let lastError: Error | undefined;
 
     for (let attempt = 0; attempt <= MAX_SUBPROCESS_RETRIES; attempt++) {
@@ -249,254 +566,17 @@ export class CodexProvider implements IAgentProvider {
       }
 
       try {
-        const turnOptions: TurnOptions = {};
-        const hasOutputFormat = !!(
-          requestOptions?.outputFormat ?? requestOptions?.nodeConfig?.output_format
-        );
-        if (requestOptions?.outputFormat) {
-          turnOptions.outputSchema = requestOptions.outputFormat.schema;
-        }
-        // Also check nodeConfig.output_format (workflow path)
-        if (requestOptions?.nodeConfig?.output_format && !requestOptions?.outputFormat) {
-          turnOptions.outputSchema = requestOptions.nodeConfig.output_format;
-        }
-        // Track accumulated text for structured output normalization
-        let accumulatedText = '';
-        if (requestOptions?.abortSignal) {
-          turnOptions.signal = requestOptions.abortSignal;
-        }
-
+        // 4. Run streamed turn
         const result = await thread.runStreamed(prompt, turnOptions);
 
-        for await (const event of result.events) {
-          if (requestOptions?.abortSignal?.aborted) {
-            getLog().info('query_aborted_between_events');
-            break;
-          }
-
-          if (event.type === 'item.started') {
-            const item = event.item;
-            getLog().debug(
-              { eventType: event.type, itemType: item.type, itemId: item.id },
-              'item_started'
-            );
-          }
-
-          if (event.type === 'error') {
-            getLog().error({ message: event.message }, 'stream_error');
-            if (!event.message.includes('MCP client')) {
-              yield { type: 'system', content: `⚠️ ${event.message}` };
-            }
-            continue;
-          }
-
-          if (event.type === 'turn.failed') {
-            const errorObj = event.error as { message?: string } | undefined;
-            const errorMessage = errorObj?.message ?? 'Unknown error';
-            getLog().error({ errorMessage }, 'turn_failed');
-            yield {
-              type: 'system',
-              content: `❌ Turn failed: ${errorMessage}`,
-            };
-            break;
-          }
-
-          if (event.type === 'item.completed') {
-            const item = event.item;
-
-            const logContext: Record<string, unknown> = {
-              eventType: event.type,
-              itemType: item.type,
-              itemId: item.id,
-            };
-            if (item.type === 'command_execution' && item.command) {
-              logContext.command = item.command;
-            }
-            getLog().debug(logContext, 'item_completed');
-
-            switch (item.type) {
-              case 'agent_message':
-                if (item.text) {
-                  if (hasOutputFormat) accumulatedText += item.text;
-                  yield { type: 'assistant', content: item.text };
-                }
-                break;
-
-              case 'command_execution':
-                if (item.command) {
-                  yield { type: 'tool', toolName: item.command };
-                  const exitSuffix =
-                    item.exit_code != null && item.exit_code !== 0
-                      ? `\n[exit code: ${item.exit_code}]`
-                      : '';
-                  yield {
-                    type: 'tool_result',
-                    toolName: item.command,
-                    toolOutput: (item.aggregated_output ?? '') + exitSuffix,
-                  };
-                } else {
-                  getLog().warn({ itemId: item.id }, 'command_execution_missing_command');
-                }
-                break;
-
-              case 'reasoning':
-                if (item.text) {
-                  yield { type: 'thinking', content: item.text };
-                }
-                break;
-
-              case 'web_search':
-                if (item.query) {
-                  const searchToolName = `🔍 Searching: ${item.query}`;
-                  yield { type: 'tool', toolName: searchToolName };
-                  yield { type: 'tool_result', toolName: searchToolName, toolOutput: '' };
-                } else {
-                  getLog().debug({ itemId: item.id }, 'web_search_missing_query');
-                }
-                break;
-
-              case 'todo_list':
-                if (Array.isArray(item.items) && item.items.length > 0) {
-                  const normalizedItems = item.items.map(t => ({
-                    text: typeof t.text === 'string' ? t.text : '(unnamed task)',
-                    completed: t.completed ?? false,
-                  }));
-                  const signature = JSON.stringify(normalizedItems);
-                  if (signature !== lastTodoListSignature) {
-                    lastTodoListSignature = signature;
-                    const taskList = normalizedItems
-                      .map(t => `${t.completed ? '✅' : '⬜'} ${t.text}`)
-                      .join('\n');
-                    yield { type: 'system', content: `📋 Tasks:\n${taskList}` };
-                  }
-                } else {
-                  getLog().debug({ itemId: item.id }, 'todo_list_empty_or_invalid');
-                }
-                break;
-
-              case 'file_change': {
-                const statusIcon = item.status === 'failed' ? '❌' : '✅';
-                const rawError = 'error' in item ? (item as { error?: unknown }).error : undefined;
-                const fileErrorMessage =
-                  typeof rawError === 'string'
-                    ? rawError
-                    : typeof rawError === 'object' && rawError !== null && 'message' in rawError
-                      ? String((rawError as { message: unknown }).message)
-                      : undefined;
-
-                if (Array.isArray(item.changes) && item.changes.length > 0) {
-                  const changeList = item.changes
-                    .map(c => {
-                      const icon = c.kind === 'add' ? '➕' : c.kind === 'delete' ? '➖' : '📝';
-                      return `${icon} ${c.path ?? '(unknown file)'}`;
-                    })
-                    .join('\n');
-                  const errorSuffix =
-                    item.status === 'failed' && fileErrorMessage ? `\n${fileErrorMessage}` : '';
-                  yield {
-                    type: 'system',
-                    content: `${statusIcon} File changes:\n${changeList}${errorSuffix}`,
-                  };
-                } else if (item.status === 'failed') {
-                  getLog().warn(
-                    { itemId: item.id, status: item.status },
-                    'file_change_failed_no_changes'
-                  );
-                  const failMsg = fileErrorMessage
-                    ? `❌ File change failed: ${fileErrorMessage}`
-                    : '❌ File change failed';
-                  yield { type: 'system', content: failMsg };
-                } else {
-                  getLog().debug(
-                    { itemId: item.id, status: item.status },
-                    'file_change_no_changes'
-                  );
-                }
-                break;
-              }
-
-              case 'mcp_tool_call': {
-                const toolInfo =
-                  item.server && item.tool
-                    ? `${item.server}/${item.tool}`
-                    : (item.tool ?? item.server ?? 'MCP tool');
-                const mcpToolName = `🔌 MCP: ${toolInfo}`;
-
-                yield { type: 'tool', toolName: mcpToolName };
-
-                if (item.status === 'failed') {
-                  getLog().warn(
-                    {
-                      server: item.server,
-                      tool: item.tool,
-                      error: item.error,
-                      itemId: item.id,
-                    },
-                    'mcp_tool_call_failed'
-                  );
-                  const errMsg = item.error?.message
-                    ? `❌ Error: ${item.error.message}`
-                    : '❌ Error: MCP tool failed';
-                  yield { type: 'tool_result', toolName: mcpToolName, toolOutput: errMsg };
-                } else {
-                  let toolOutput = '';
-                  if (item.result?.content) {
-                    if (Array.isArray(item.result.content)) {
-                      toolOutput = JSON.stringify(item.result.content);
-                    } else {
-                      getLog().warn(
-                        {
-                          itemId: item.id,
-                          server: item.server,
-                          tool: item.tool,
-                          resultType: typeof item.result.content,
-                        },
-                        'mcp_tool_call_unexpected_result_shape'
-                      );
-                    }
-                  }
-                  yield { type: 'tool_result', toolName: mcpToolName, toolOutput };
-                }
-                break;
-              }
-            }
-          }
-
-          if (event.type === 'turn.completed') {
-            getLog().debug('turn_completed');
-            const usage = extractUsageFromCodexEvent(event);
-
-            // Codex returns structured output inline in agent_message text.
-            // Normalize: parse as JSON and put on structuredOutput so the
-            // dag-executor can handle all providers uniformly.
-            let structuredOutput: unknown;
-            if (hasOutputFormat && accumulatedText) {
-              try {
-                structuredOutput = JSON.parse(accumulatedText);
-                getLog().debug('codex.structured_output_parsed');
-              } catch {
-                getLog().warn(
-                  { outputPreview: accumulatedText.slice(0, 200) },
-                  'codex.structured_output_not_json'
-                );
-                yield {
-                  type: 'system',
-                  content:
-                    '⚠️ Structured output requested but Codex returned non-JSON text. ' +
-                    'Downstream $nodeId.output.field references may not evaluate correctly.',
-                };
-              }
-            }
-
-            yield {
-              type: 'result',
-              sessionId: thread.id ?? undefined,
-              tokens: usage,
-              ...(structuredOutput !== undefined ? { structuredOutput } : {}),
-            };
-            break;
-          }
-        }
+        // 5. Stream normalized events
+        yield* streamCodexEvents(
+          result.events as AsyncIterable<Record<string, unknown>>,
+          hasOutputFormat,
+          thread.id,
+          requestOptions?.abortSignal,
+          streamState
+        );
         return;
       } catch (error) {
         const err = error as Error;
@@ -505,36 +585,24 @@ export class CodexProvider implements IAgentProvider {
           throw new Error('Query aborted');
         }
 
-        const errorClass = classifyCodexError(err.message);
+        const { enrichedError, errorClass, shouldRetry } = classifyAndEnrichCodexError(
+          err,
+          requestOptions?.model
+        );
+
         getLog().error(
           { err, errorClass, attempt, maxRetries: MAX_SUBPROCESS_RETRIES },
           'query_error'
         );
 
-        if (errorClass === 'model_access') {
-          throw new Error(buildModelAccessMessage(requestOptions?.model));
-        }
-
-        if (errorClass === 'auth') {
-          const enrichedError = new Error(`Codex auth error: ${err.message}`);
-          enrichedError.cause = error;
+        if (!shouldRetry || attempt >= MAX_SUBPROCESS_RETRIES) {
           throw enrichedError;
         }
 
-        if (
-          attempt < MAX_SUBPROCESS_RETRIES &&
-          (errorClass === 'rate_limit' || errorClass === 'crash')
-        ) {
-          const delayMs = this.retryBaseDelayMs * Math.pow(2, attempt);
-          getLog().info({ attempt, delayMs, errorClass }, 'retrying_query');
-          await new Promise(resolve => setTimeout(resolve, delayMs));
-          lastError = err;
-          continue;
-        }
-
-        const enrichedError = new Error(`Codex ${errorClass}: ${err.message}`);
-        enrichedError.cause = error;
-        throw enrichedError;
+        const delayMs = this.retryBaseDelayMs * Math.pow(2, attempt);
+        getLog().info({ attempt, delayMs, errorClass }, 'retrying_query');
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        lastError = err;
       }
     }
 

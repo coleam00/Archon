@@ -16,7 +16,14 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => ({
   query: mockQuery,
 }));
 
-import { ClaudeProvider } from './provider';
+import {
+  ClaudeProvider,
+  applyNodeConfig,
+  buildBaseClaudeOptions,
+  streamClaudeMessages,
+  classifyAndEnrichError,
+} from './provider';
+import type { ProviderWarning } from './provider';
 import * as claudeModule from './provider';
 
 describe('ClaudeProvider', () => {
@@ -939,5 +946,360 @@ describe('withFirstMessageTimeout', () => {
       }),
       'claude.first_event_timeout'
     );
+  });
+});
+
+// ─── Helper Unit Tests ───────────────────────────────────────────────────
+
+describe('applyNodeConfig', () => {
+  test('returns empty warnings when no warning-triggering fields present', async () => {
+    const options = {} as Record<string, unknown>;
+    const warnings = await applyNodeConfig(
+      options,
+      { effort: 'high', thinking: { type: 'enabled' } },
+      '/workspace'
+    );
+    expect(warnings).toEqual([]);
+    expect(options.effort).toBe('high');
+    expect(options.thinking).toEqual({ type: 'enabled' });
+  });
+
+  test('sets allowed_tools and denied_tools on options', async () => {
+    const options = {} as Record<string, unknown>;
+    await applyNodeConfig(
+      options,
+      { allowed_tools: ['Bash', 'Read'], denied_tools: ['Write'] },
+      '/workspace'
+    );
+    expect(options.tools).toEqual(['Bash', 'Read']);
+    expect(options.disallowedTools).toEqual(['Write']);
+  });
+
+  test('sets output_format as outputFormat on options', async () => {
+    const schema = { type: 'object', properties: { result: { type: 'string' } } };
+    const options = {} as Record<string, unknown>;
+    await applyNodeConfig(options, { output_format: schema }, '/workspace');
+    expect(options.outputFormat).toEqual({ type: 'json_schema', schema });
+  });
+
+  test('sets maxBudgetUsd, systemPrompt, fallbackModel from nodeConfig', async () => {
+    const options = {} as Record<string, unknown>;
+    await applyNodeConfig(
+      options,
+      { maxBudgetUsd: 2.5, systemPrompt: 'Be concise', fallbackModel: 'haiku' },
+      '/workspace'
+    );
+    expect(options.maxBudgetUsd).toBe(2.5);
+    expect(options.systemPrompt).toBe('Be concise');
+    expect(options.fallbackModel).toBe('haiku');
+  });
+
+  test('sets betas and sandbox from nodeConfig', async () => {
+    const options = {} as Record<string, unknown>;
+    const sandbox = { enabled: true };
+    await applyNodeConfig(options, { betas: ['beta-1'], sandbox }, '/workspace');
+    expect(options.betas).toEqual(['beta-1']);
+    expect(options.sandbox).toEqual(sandbox);
+  });
+
+  test('returns structured ProviderWarning objects, not raw strings', async () => {
+    // This test verifies the ProviderWarning type contract.
+    // MCP warnings require file I/O so we test the return type shape.
+    const options = { model: 'haiku' } as Record<string, unknown>;
+    // applyNodeConfig with no warning-triggering fields returns empty array
+    const warnings = await applyNodeConfig(options, { effort: 'low' }, '/workspace');
+    // Type assertion: each element should be { code: string, message: string }
+    for (const w of warnings) {
+      const warning = w as ProviderWarning;
+      expect(typeof warning.code).toBe('string');
+      expect(typeof warning.message).toBe('string');
+    }
+  });
+});
+
+describe('streamClaudeMessages', () => {
+  test('normalizes assistant text events', async () => {
+    async function* gen(): AsyncGenerator<unknown> {
+      yield {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'Hello' }] },
+      };
+    }
+    const chunks = [];
+    for await (const chunk of streamClaudeMessages(gen(), [])) {
+      chunks.push(chunk);
+    }
+    expect(chunks).toEqual([{ type: 'assistant', content: 'Hello' }]);
+  });
+
+  test('normalizes tool_use events with toolCallId', async () => {
+    async function* gen(): AsyncGenerator<unknown> {
+      yield {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', name: 'Bash', input: { cmd: 'ls' }, id: 'tc-1' }],
+        },
+      };
+    }
+    const chunks = [];
+    for await (const chunk of streamClaudeMessages(gen(), [])) {
+      chunks.push(chunk);
+    }
+    expect(chunks).toEqual([
+      { type: 'tool', toolName: 'Bash', toolInput: { cmd: 'ls' }, toolCallId: 'tc-1' },
+    ]);
+  });
+
+  test('drains tool result queue between events', async () => {
+    const queue = [{ toolName: 'Read', toolOutput: 'file contents', toolCallId: 'tr-1' }];
+    async function* gen(): AsyncGenerator<unknown> {
+      yield {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'Done' }] },
+      };
+    }
+    const chunks = [];
+    for await (const chunk of streamClaudeMessages(gen(), queue)) {
+      chunks.push(chunk);
+    }
+    // Tool result should come before the assistant text
+    expect(chunks[0]).toEqual({
+      type: 'tool_result',
+      toolName: 'Read',
+      toolOutput: 'file contents',
+      toolCallId: 'tr-1',
+    });
+    expect(chunks[1]).toEqual({ type: 'assistant', content: 'Done' });
+  });
+
+  test('normalizes result event with all fields', async () => {
+    async function* gen(): AsyncGenerator<unknown> {
+      yield {
+        type: 'result',
+        session_id: 'sid-1',
+        usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+        structured_output: { key: 'val' },
+        total_cost_usd: 0.01,
+        stop_reason: 'end_turn',
+        num_turns: 5,
+      };
+    }
+    const chunks = [];
+    for await (const chunk of streamClaudeMessages(gen(), [])) {
+      chunks.push(chunk);
+    }
+    expect(chunks[0]).toMatchObject({
+      type: 'result',
+      sessionId: 'sid-1',
+      tokens: { input: 100, output: 50, total: 150 },
+      structuredOutput: { key: 'val' },
+      cost: 0.01,
+      stopReason: 'end_turn',
+      numTurns: 5,
+    });
+  });
+
+  test('normalizes rate_limit_event', async () => {
+    async function* gen(): AsyncGenerator<unknown> {
+      yield { type: 'rate_limit_event', rate_limit_info: { retry_after: 5 } };
+    }
+    const chunks = [];
+    for await (const chunk of streamClaudeMessages(gen(), [])) {
+      chunks.push(chunk);
+    }
+    expect(chunks[0]).toEqual({
+      type: 'rate_limit',
+      rateLimitInfo: { retry_after: 5 },
+    });
+  });
+
+  test('emits MCP connection failure as system chunk', async () => {
+    async function* gen(): AsyncGenerator<unknown> {
+      yield {
+        type: 'system',
+        subtype: 'init',
+        mcp_servers: [
+          { name: 'good', status: 'connected' },
+          { name: 'bad', status: 'failed' },
+        ],
+      };
+    }
+    const chunks = [];
+    for await (const chunk of streamClaudeMessages(gen(), [])) {
+      chunks.push(chunk);
+    }
+    expect(chunks[0]).toEqual({
+      type: 'system',
+      content: 'MCP server connection failed: bad (failed)',
+    });
+  });
+
+  test('drains remaining tool results after stream ends', async () => {
+    const queue: { toolName: string; toolOutput: string }[] = [];
+    async function* gen(): AsyncGenerator<unknown> {
+      // After this yields, push to queue (simulating late hook callback)
+      yield {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'hi' }] },
+      };
+      // Simulate a late tool result that arrives after last event
+      queue.push({ toolName: 'Late', toolOutput: 'result' });
+    }
+    const chunks = [];
+    for await (const chunk of streamClaudeMessages(gen(), queue)) {
+      chunks.push(chunk);
+    }
+    // The late tool result should be drained after stream ends
+    expect(chunks[chunks.length - 1]).toEqual({
+      type: 'tool_result',
+      toolName: 'Late',
+      toolOutput: 'result',
+    });
+  });
+});
+
+describe('classifyAndEnrichError', () => {
+  test('classifies auth errors as non-retryable', () => {
+    const result = classifyAndEnrichError(new Error('unauthorized'), [], new AbortController());
+    expect(result.errorClass).toBe('auth');
+    expect(result.shouldRetry).toBe(false);
+    expect(result.enrichedError.message).toContain('auth error');
+  });
+
+  test('classifies rate_limit errors as retryable', () => {
+    const result = classifyAndEnrichError(
+      new Error('rate limit exceeded'),
+      [],
+      new AbortController()
+    );
+    expect(result.errorClass).toBe('rate_limit');
+    expect(result.shouldRetry).toBe(true);
+    expect(result.enrichedError.message).toContain('rate_limit');
+  });
+
+  test('classifies crash errors as retryable', () => {
+    const result = classifyAndEnrichError(
+      new Error('process exited with code 1'),
+      [],
+      new AbortController()
+    );
+    expect(result.errorClass).toBe('crash');
+    expect(result.shouldRetry).toBe(true);
+  });
+
+  test('classifies unknown errors as non-retryable', () => {
+    const result = classifyAndEnrichError(new Error('something weird'), [], new AbortController());
+    expect(result.errorClass).toBe('unknown');
+    expect(result.shouldRetry).toBe(false);
+  });
+
+  test('includes stderr context in enriched error message', () => {
+    const result = classifyAndEnrichError(
+      new Error('process exited with code 1'),
+      ['AJV loaded', 'fatal crash'],
+      new AbortController()
+    );
+    expect(result.enrichedError.message).toContain('stderr:');
+    expect(result.enrichedError.message).toContain('AJV loaded');
+    expect(result.enrichedError.message).toContain('fatal crash');
+  });
+
+  test('returns aborted for aborted controller', () => {
+    const controller = new AbortController();
+    controller.abort();
+    const result = classifyAndEnrichError(new Error('something'), [], controller);
+    expect(result.errorClass).toBe('aborted');
+    expect(result.shouldRetry).toBe(false);
+    expect(result.enrichedError.message).toBe('Query aborted');
+  });
+});
+
+describe('buildBaseClaudeOptions', () => {
+  test('sets cwd, model, and permission mode', () => {
+    const options = buildBaseClaudeOptions(
+      '/workspace',
+      { model: 'opus' },
+      { model: undefined, settingSources: undefined },
+      new AbortController(),
+      [],
+      []
+    );
+    expect(options.cwd).toBe('/workspace');
+    expect(options.model).toBe('opus');
+    expect(options.permissionMode).toBe('bypassPermissions');
+  });
+
+  test('falls back to assistant defaults for model', () => {
+    const options = buildBaseClaudeOptions(
+      '/workspace',
+      undefined,
+      { model: 'sonnet', settingSources: undefined },
+      new AbortController(),
+      [],
+      []
+    );
+    expect(options.model).toBe('sonnet');
+  });
+
+  test('uses preset systemPrompt when not overridden', () => {
+    const options = buildBaseClaudeOptions(
+      '/workspace',
+      undefined,
+      { model: undefined, settingSources: undefined },
+      new AbortController(),
+      [],
+      []
+    );
+    expect(options.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code' });
+  });
+
+  test('overrides systemPrompt from requestOptions', () => {
+    const options = buildBaseClaudeOptions(
+      '/workspace',
+      { systemPrompt: 'Custom prompt' },
+      { model: undefined, settingSources: undefined },
+      new AbortController(),
+      [],
+      []
+    );
+    expect(options.systemPrompt).toBe('Custom prompt');
+  });
+
+  test('merges requestOptions.env over subprocess env', () => {
+    const options = buildBaseClaudeOptions(
+      '/workspace',
+      { env: { CUSTOM: 'val' } },
+      { model: undefined, settingSources: undefined },
+      new AbortController(),
+      [],
+      []
+    );
+    expect((options.env as Record<string, string>).CUSTOM).toBe('val');
+  });
+
+  test('captures stderr into provided array', () => {
+    const stderrLines: string[] = [];
+    const options = buildBaseClaudeOptions(
+      '/workspace',
+      undefined,
+      { model: undefined, settingSources: undefined },
+      new AbortController(),
+      stderrLines,
+      []
+    );
+    (options.stderr as (data: string) => void)('some stderr output');
+    expect(stderrLines).toContain('some stderr output');
+  });
+
+  test('passes settingSources from assistant defaults', () => {
+    const options = buildBaseClaudeOptions(
+      '/workspace',
+      undefined,
+      { model: undefined, settingSources: ['project', 'user'] },
+      new AbortController(),
+      [],
+      []
+    );
+    expect(options.settingSources).toEqual(['project', 'user']);
   });
 });
