@@ -332,19 +332,30 @@ export function buildSDKHooksFromYAML(
   return sdkHooks;
 }
 
+// ─── Provider Warning Type ───────────────────────────────────────────────
+
+/**
+ * Structured provider warning. Providers collect these during translation;
+ * callers convert them to system chunks before streaming starts.
+ */
+interface ProviderWarning {
+  code: string;
+  message: string;
+}
+
 // ─── NodeConfig → SDK Options Translation ──────────────────────────────────
 
 /**
  * Translate nodeConfig into Claude SDK-specific options.
  * Called inside sendQuery when nodeConfig is present (workflow path).
- * Returns user-facing warnings that the caller should yield as system chunks.
+ * Returns structured warnings that the caller should yield as system chunks.
  */
 async function applyNodeConfig(
   options: Options,
   nodeConfig: NodeConfig,
   cwd: string
-): Promise<string[]> {
-  const warnings: string[] = [];
+): Promise<ProviderWarning[]> {
+  const warnings: ProviderWarning[] = [];
   // allowed_tools → tools
   if (nodeConfig.allowed_tools !== undefined) {
     options.tools = nodeConfig.allowed_tools;
@@ -390,16 +401,19 @@ async function applyNodeConfig(
     if (missingVars.length > 0) {
       const uniqueVars = [...new Set(missingVars)];
       getLog().warn({ missingVars: uniqueVars }, 'claude.mcp_env_vars_missing');
-      warnings.push(
-        `MCP config references undefined env vars: ${uniqueVars.join(', ')}. These will be empty strings — MCP servers may fail to authenticate.`
-      );
+      warnings.push({
+        code: 'mcp_env_vars_missing',
+        message: `MCP config references undefined env vars: ${uniqueVars.join(', ')}. These will be empty strings — MCP servers may fail to authenticate.`,
+      });
     }
     // Haiku models don't support tool search (lazy loading for many tools)
     if (options.model?.toLowerCase().includes('haiku')) {
       getLog().warn({ model: options.model }, 'claude.mcp_haiku_tool_search_unsupported');
-      warnings.push(
-        'Using Haiku model with MCP servers — tool search (lazy loading for many tools) is not supported on Haiku. Consider using Sonnet or Opus.'
-      );
+      warnings.push({
+        code: 'mcp_haiku_tool_search',
+        message:
+          'Using Haiku model with MCP servers — tool search (lazy loading for many tools) is not supported on Haiku. Consider using Sonnet or Opus.',
+      });
     }
   }
 
@@ -475,11 +489,318 @@ async function applyNodeConfig(
   return warnings;
 }
 
+// ─── Base Options Builder ────────────────────────────────────────────────
+
+/** Queued tool result from SDK hooks, consumed during stream normalization. */
+interface ToolResultEntry {
+  toolName: string;
+  toolOutput: string;
+  toolCallId?: string;
+}
+
+/**
+ * Build base Claude SDK options from cwd, request options, and assistant defaults.
+ * Does not include nodeConfig translation — that is handled by applyNodeConfig.
+ */
+function buildBaseClaudeOptions(
+  cwd: string,
+  requestOptions: SendQueryOptions | undefined,
+  assistantDefaults: ReturnType<typeof parseClaudeConfig>,
+  controller: AbortController,
+  stderrLines: string[],
+  toolResultQueue: ToolResultEntry[],
+  env: NodeJS.ProcessEnv
+): Options {
+  return {
+    cwd,
+    pathToClaudeCodeExecutable: cliPath,
+    env,
+    model: requestOptions?.model ?? assistantDefaults.model,
+    abortController: controller,
+    ...(requestOptions?.outputFormat !== undefined
+      ? { outputFormat: requestOptions.outputFormat }
+      : {}),
+    ...(requestOptions?.maxBudgetUsd !== undefined
+      ? { maxBudgetUsd: requestOptions.maxBudgetUsd }
+      : {}),
+    ...(requestOptions?.fallbackModel !== undefined
+      ? { fallbackModel: requestOptions.fallbackModel }
+      : {}),
+    ...(requestOptions?.persistSession !== undefined
+      ? { persistSession: requestOptions.persistSession }
+      : {}),
+    ...(requestOptions?.forkSession !== undefined
+      ? { forkSession: requestOptions.forkSession }
+      : {}),
+    permissionMode: 'bypassPermissions',
+    allowDangerouslySkipPermissions: true,
+    systemPrompt: requestOptions?.systemPrompt ?? { type: 'preset', preset: 'claude_code' },
+    settingSources: assistantDefaults.settingSources ?? ['project'],
+    hooks: buildToolCaptureHooks(toolResultQueue),
+    stderr: (data: string): void => {
+      const output = data.trim();
+      if (!output) return;
+      stderrLines.push(output);
+
+      const isError =
+        output.toLowerCase().includes('error') ||
+        output.toLowerCase().includes('fatal') ||
+        output.toLowerCase().includes('failed') ||
+        output.toLowerCase().includes('exception') ||
+        output.includes('at ') ||
+        output.includes('Error:');
+
+      const isInfoMessage =
+        output.includes('Spawning Claude Code') ||
+        output.includes('--output-format') ||
+        output.includes('--permission-mode');
+
+      if (isError && !isInfoMessage) {
+        getLog().error({ stderr: output }, 'subprocess_error');
+      }
+    },
+  };
+}
+
+// ─── Tool Capture Hooks ──────────────────────────────────────────────────
+
+/**
+ * Build SDK hooks that capture tool use results into a shared queue.
+ * The queue is drained during stream normalization.
+ */
+function buildToolCaptureHooks(toolResultQueue: ToolResultEntry[]): Options['hooks'] {
+  return {
+    PostToolUse: [
+      {
+        hooks: [
+          (async (input: Record<string, unknown>): Promise<{ continue: true }> => {
+            try {
+              const toolName = (input as { tool_name?: string }).tool_name ?? 'unknown';
+              const toolUseId = (input as { tool_use_id?: string }).tool_use_id;
+              const toolResponse = (input as { tool_response?: unknown }).tool_response;
+              const output =
+                typeof toolResponse === 'string'
+                  ? toolResponse
+                  : JSON.stringify(toolResponse ?? '');
+              const maxLen = 10_000;
+              toolResultQueue.push({
+                toolName,
+                toolOutput: output.length > maxLen ? output.slice(0, maxLen) + '...' : output,
+                ...(toolUseId !== undefined ? { toolCallId: toolUseId } : {}),
+              });
+            } catch (e) {
+              getLog().error({ err: e, input }, 'claude.post_tool_use_hook_error');
+            }
+            return { continue: true };
+          }) as HookCallback,
+        ],
+      },
+    ],
+    PostToolUseFailure: [
+      {
+        hooks: [
+          (async (input: Record<string, unknown>): Promise<{ continue: true }> => {
+            try {
+              const toolName = (input as { tool_name?: string }).tool_name ?? 'unknown';
+              const toolUseId = (input as { tool_use_id?: string }).tool_use_id;
+              const rawError = (input as { error?: string }).error;
+              if (rawError === undefined) {
+                getLog().debug({ input }, 'claude.post_tool_use_failure_no_error_field');
+              }
+              const errorText = rawError ?? 'tool failed';
+              const isInterrupt = (input as { is_interrupt?: boolean }).is_interrupt === true;
+              const prefix = isInterrupt ? '⚠️ Interrupted' : '❌ Error';
+              toolResultQueue.push({
+                toolName,
+                toolOutput: `${prefix}: ${errorText}`,
+                ...(toolUseId !== undefined ? { toolCallId: toolUseId } : {}),
+              });
+            } catch (e) {
+              getLog().error({ err: e, input }, 'claude.post_tool_use_failure_hook_error');
+            }
+            return { continue: true };
+          }) as HookCallback,
+        ],
+      },
+    ],
+  };
+}
+
+// ─── Stream Normalizer ───────────────────────────────────────────────────
+
+/**
+ * Normalize raw Claude SDK events into Archon MessageChunks.
+ * Drains the tool result queue between events (populated by SDK hooks).
+ */
+async function* streamClaudeMessages(
+  events: AsyncGenerator,
+  toolResultQueue: ToolResultEntry[]
+): AsyncGenerator<MessageChunk> {
+  for await (const msg of events) {
+    // Drain tool results captured by hooks before processing the next event
+    while (toolResultQueue.length > 0) {
+      const tr = toolResultQueue.shift();
+      if (tr) {
+        yield {
+          type: 'tool_result',
+          toolName: tr.toolName,
+          toolOutput: tr.toolOutput,
+          ...(tr.toolCallId !== undefined ? { toolCallId: tr.toolCallId } : {}),
+        };
+      }
+    }
+
+    const event = msg as { type: string };
+
+    if (event.type === 'assistant') {
+      const message = msg as { message: { content: ContentBlock[] } };
+      const content = message.message.content;
+
+      for (const block of content) {
+        if (block.type === 'text' && block.text) {
+          yield { type: 'assistant', content: block.text };
+        } else if (block.type === 'tool_use' && block.name) {
+          yield {
+            type: 'tool',
+            toolName: block.name,
+            toolInput: block.input ?? {},
+            ...(block.id !== undefined ? { toolCallId: block.id } : {}),
+          };
+        }
+      }
+    } else if (event.type === 'system') {
+      const sysMsg = msg as {
+        subtype?: string;
+        mcp_servers?: { name: string; status: string }[];
+      };
+      if (sysMsg.subtype === 'init' && sysMsg.mcp_servers) {
+        const failed = sysMsg.mcp_servers.filter(s => s.status !== 'connected');
+        if (failed.length > 0) {
+          const names = failed.map(s => `${s.name} (${s.status})`).join(', ');
+          yield { type: 'system', content: `MCP server connection failed: ${names}` };
+        }
+      } else {
+        getLog().debug({ subtype: sysMsg.subtype }, 'claude.system_message_unhandled');
+      }
+    } else if (event.type === 'rate_limit_event') {
+      const rateLimitMsg = msg as { rate_limit_info?: Record<string, unknown> };
+      getLog().warn({ rateLimitInfo: rateLimitMsg.rate_limit_info }, 'claude.rate_limit_event');
+      yield { type: 'rate_limit', rateLimitInfo: rateLimitMsg.rate_limit_info ?? {} };
+    } else if (event.type === 'result') {
+      const resultMsg = msg as {
+        session_id?: string;
+        is_error?: boolean;
+        subtype?: string;
+        usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number };
+        structured_output?: unknown;
+        total_cost_usd?: number;
+        stop_reason?: string | null;
+        num_turns?: number;
+        model_usage?: Record<
+          string,
+          {
+            input_tokens: number;
+            output_tokens: number;
+            cache_read_input_tokens?: number;
+            cache_creation_input_tokens?: number;
+          }
+        >;
+      };
+      const tokens = normalizeClaudeUsage(resultMsg.usage);
+      if (resultMsg.is_error) {
+        getLog().error(
+          { sessionId: resultMsg.session_id, errorSubtype: resultMsg.subtype },
+          'claude.result_is_error'
+        );
+      }
+      yield {
+        type: 'result',
+        sessionId: resultMsg.session_id,
+        ...(tokens ? { tokens } : {}),
+        ...(resultMsg.structured_output !== undefined
+          ? { structuredOutput: resultMsg.structured_output }
+          : {}),
+        ...(resultMsg.is_error ? { isError: true, errorSubtype: resultMsg.subtype } : {}),
+        ...(resultMsg.total_cost_usd !== undefined ? { cost: resultMsg.total_cost_usd } : {}),
+        ...(resultMsg.stop_reason != null ? { stopReason: resultMsg.stop_reason } : {}),
+        ...(resultMsg.num_turns !== undefined ? { numTurns: resultMsg.num_turns } : {}),
+        ...(resultMsg.model_usage
+          ? { modelUsage: resultMsg.model_usage as Record<string, unknown> }
+          : {}),
+      };
+    }
+  }
+
+  // Drain any remaining tool results after the stream ends
+  while (toolResultQueue.length > 0) {
+    const tr = toolResultQueue.shift();
+    if (tr) {
+      yield {
+        type: 'tool_result',
+        toolName: tr.toolName,
+        toolOutput: tr.toolOutput,
+        ...(tr.toolCallId !== undefined ? { toolCallId: tr.toolCallId } : {}),
+      };
+    }
+  }
+}
+
+// ─── Error Classification & Retry ────────────────────────────────────────
+
+/**
+ * Classify a subprocess error and enrich with stderr context.
+ * Returns null if the error should be retried (caller handles retry logic).
+ */
+function classifyAndEnrichError(
+  error: Error,
+  stderrLines: string[],
+  controller: AbortController
+): { enrichedError: Error; errorClass: string; shouldRetry: boolean } {
+  // If the controller was aborted by withFirstMessageTimeout, the original
+  // timeout error carries the diagnostic message and #1067 breadcrumb.
+  // Preserve it instead of collapsing into a generic "Query aborted".
+  if (controller.signal.aborted) {
+    if (error.message.includes('produced no output within')) {
+      return { enrichedError: error, errorClass: 'timeout', shouldRetry: false };
+    }
+    return {
+      enrichedError: new Error('Query aborted'),
+      errorClass: 'aborted',
+      shouldRetry: false,
+    };
+  }
+
+  const stderrContext = stderrLines.join('\n');
+  const errorClass = classifySubprocessError(error.message, stderrContext);
+
+  if (errorClass === 'auth') {
+    const enrichedError = new Error(
+      `Claude Code auth error: ${error.message}${stderrContext ? ` (${stderrContext})` : ''}`
+    );
+    enrichedError.cause = error;
+    return { enrichedError, errorClass, shouldRetry: false };
+  }
+
+  const enrichedMessage = stderrContext
+    ? `Claude Code ${errorClass}: ${error.message} (stderr: ${stderrContext})`
+    : `Claude Code ${errorClass}: ${error.message}`;
+  const enrichedError = new Error(enrichedMessage);
+  enrichedError.cause = error;
+  const shouldRetry = errorClass === 'rate_limit' || errorClass === 'crash';
+  return { enrichedError, errorClass, shouldRetry };
+}
+
 // ─── Claude Provider ───────────────────────────────────────────────────────
 
 /**
  * Claude AI agent provider.
  * Implements IAgentProvider with full SDK integration.
+ *
+ * sendQuery orchestrates the following internal helpers:
+ * - buildBaseClaudeOptions: SDK option construction
+ * - applyNodeConfig: workflow nodeConfig → SDK option translation + warnings
+ * - streamClaudeMessages: raw SDK event normalization into MessageChunks
+ * - classifyAndEnrichError: error classification for retry decisions
  */
 export class ClaudeProvider implements IAgentProvider {
   private readonly retryBaseDelayMs: number;
@@ -513,7 +834,7 @@ export class ClaudeProvider implements IAgentProvider {
 
   /**
    * Send a query to Claude and stream responses.
-   * Includes retry logic for transient failures (up to 3 retries with exponential backoff).
+   * Orchestrates option building, nodeConfig translation, streaming, and retry.
    */
   // TODO(#1135): Pre-spawn env-leak gate was removed during provider extraction.
   // Caller-side enforcement (orchestrator, dag-executor) is tracked in #1135.
@@ -526,6 +847,36 @@ export class ClaudeProvider implements IAgentProvider {
     requestOptions?: SendQueryOptions
   ): AsyncGenerator<MessageChunk> {
     let lastError: Error | undefined;
+    const assistantDefaults = parseClaudeConfig(requestOptions?.assistantConfig ?? {});
+
+    // Build subprocess env once (avoids re-logging auth mode per retry)
+    const subprocessEnv = buildSubprocessEnv();
+    const env = requestOptions?.env ? { ...subprocessEnv, ...requestOptions.env } : subprocessEnv;
+
+    // Apply nodeConfig translation once (deterministic, not retry-dependent)
+    // We need a throwaway Options to extract warnings from applyNodeConfig,
+    // then re-apply per attempt. But nodeConfig warnings are deterministic,
+    // so we compute them once and yield them before the first attempt.
+    let nodeConfigWarnings: ProviderWarning[] = [];
+    if (requestOptions?.nodeConfig) {
+      const tempOptions: Options = {} as Options;
+      nodeConfigWarnings = await applyNodeConfig(tempOptions, requestOptions.nodeConfig, cwd);
+    }
+
+    // Yield provider warnings once before retries
+    for (const warning of nodeConfigWarnings) {
+      yield { type: 'system' as const, content: `⚠️ ${warning.message}` };
+    }
+
+    // Track the current attempt's controller so a single abort listener
+    // can forward cancellation without accumulating per-retry listeners.
+    let currentController: AbortController | undefined;
+    const onAbort = (): void => {
+      currentController?.abort();
+    };
+    if (requestOptions?.abortSignal) {
+      requestOptions.abortSignal.addEventListener('abort', onAbort, { once: true });
+    }
 
     for (let attempt = 0; attempt <= MAX_SUBPROCESS_RETRIES; attempt++) {
       if (requestOptions?.abortSignal?.aborted) {
@@ -533,131 +884,27 @@ export class ClaudeProvider implements IAgentProvider {
       }
 
       const stderrLines: string[] = [];
-      const toolResultQueue: { toolName: string; toolOutput: string; toolCallId?: string }[] = [];
-
+      const toolResultQueue: ToolResultEntry[] = [];
       const controller = new AbortController();
-      if (requestOptions?.abortSignal) {
-        requestOptions.abortSignal.addEventListener(
-          'abort',
-          () => {
-            controller.abort();
-          },
-          { once: true }
-        );
-      }
+      currentController = controller;
 
-      // Parse assistantConfig for typed defaults
-      const assistantDefaults = parseClaudeConfig(requestOptions?.assistantConfig ?? {});
-
-      const options: Options = {
+      // 1. Build SDK options (env pre-computed above)
+      const options = buildBaseClaudeOptions(
         cwd,
-        pathToClaudeCodeExecutable: cliPath,
-        env: requestOptions?.env
-          ? { ...buildSubprocessEnv(), ...requestOptions.env }
-          : buildSubprocessEnv(),
-        model: requestOptions?.model ?? assistantDefaults.model,
-        abortController: controller,
-        ...(requestOptions?.outputFormat !== undefined
-          ? { outputFormat: requestOptions.outputFormat }
-          : {}),
-        ...(requestOptions?.maxBudgetUsd !== undefined
-          ? { maxBudgetUsd: requestOptions.maxBudgetUsd }
-          : {}),
-        ...(requestOptions?.fallbackModel !== undefined
-          ? { fallbackModel: requestOptions.fallbackModel }
-          : {}),
-        ...(requestOptions?.persistSession !== undefined
-          ? { persistSession: requestOptions.persistSession }
-          : {}),
-        ...(requestOptions?.forkSession !== undefined
-          ? { forkSession: requestOptions.forkSession }
-          : {}),
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
-        systemPrompt: requestOptions?.systemPrompt ?? { type: 'preset', preset: 'claude_code' },
-        settingSources: assistantDefaults.settingSources ?? ['project'],
-        hooks: {
-          PostToolUse: [
-            {
-              hooks: [
-                (async (input: Record<string, unknown>): Promise<{ continue: true }> => {
-                  const toolName = (input as { tool_name?: string }).tool_name ?? 'unknown';
-                  const toolUseId = (input as { tool_use_id?: string }).tool_use_id;
-                  const toolResponse = (input as { tool_response?: unknown }).tool_response;
-                  const output =
-                    typeof toolResponse === 'string'
-                      ? toolResponse
-                      : JSON.stringify(toolResponse ?? '');
-                  const maxLen = 10_000;
-                  toolResultQueue.push({
-                    toolName,
-                    toolOutput: output.length > maxLen ? output.slice(0, maxLen) + '...' : output,
-                    ...(toolUseId !== undefined ? { toolCallId: toolUseId } : {}),
-                  });
-                  return { continue: true };
-                }) as HookCallback,
-              ],
-            },
-          ],
-          PostToolUseFailure: [
-            {
-              hooks: [
-                (async (input: Record<string, unknown>): Promise<{ continue: true }> => {
-                  try {
-                    const toolName = (input as { tool_name?: string }).tool_name ?? 'unknown';
-                    const toolUseId = (input as { tool_use_id?: string }).tool_use_id;
-                    const rawError = (input as { error?: string }).error;
-                    if (rawError === undefined) {
-                      getLog().debug({ input }, 'claude.post_tool_use_failure_no_error_field');
-                    }
-                    const errorText = rawError ?? 'tool failed';
-                    const isInterrupt = (input as { is_interrupt?: boolean }).is_interrupt === true;
-                    const prefix = isInterrupt ? '⚠️ Interrupted' : '❌ Error';
-                    toolResultQueue.push({
-                      toolName,
-                      toolOutput: `${prefix}: ${errorText}`,
-                      ...(toolUseId !== undefined ? { toolCallId: toolUseId } : {}),
-                    });
-                  } catch (e) {
-                    getLog().error({ err: e, input }, 'claude.post_tool_use_failure_hook_error');
-                  }
-                  return { continue: true };
-                }) as HookCallback,
-              ],
-            },
-          ],
-        },
-        stderr: (data: string) => {
-          const output = data.trim();
-          if (!output) return;
-          stderrLines.push(output);
+        requestOptions,
+        assistantDefaults,
+        controller,
+        stderrLines,
+        toolResultQueue,
+        env
+      );
 
-          const isError =
-            output.toLowerCase().includes('error') ||
-            output.toLowerCase().includes('fatal') ||
-            output.toLowerCase().includes('failed') ||
-            output.toLowerCase().includes('exception') ||
-            output.includes('at ') ||
-            output.includes('Error:');
-
-          const isInfoMessage =
-            output.includes('Spawning Claude Code') ||
-            output.includes('--output-format') ||
-            output.includes('--permission-mode');
-
-          if (isError && !isInfoMessage) {
-            getLog().error({ stderr: output }, 'subprocess_error');
-          }
-        },
-      };
-
-      // Apply nodeConfig if present (workflow path) — translates YAML to SDK options
-      const nodeConfigWarnings: string[] = [];
+      // 2. Apply nodeConfig translation (re-applied per attempt since options are fresh)
       if (requestOptions?.nodeConfig) {
-        const warns = await applyNodeConfig(options, requestOptions.nodeConfig, cwd);
-        nodeConfigWarnings.push(...warns);
+        await applyNodeConfig(options, requestOptions.nodeConfig, cwd);
       }
 
+      // 3. Set session resume
       if (resumeSessionId) {
         options.resume = resumeSessionId;
         getLog().debug(
@@ -669,11 +916,7 @@ export class ClaudeProvider implements IAgentProvider {
       }
 
       try {
-        // Yield nodeConfig warnings before starting the query
-        for (const warning of nodeConfigWarnings) {
-          yield { type: 'system' as const, content: `⚠️ ${warning}` };
-        }
-
+        // 4. Run query with first-event timeout protection
         const rawEvents = query({ prompt, options });
         const timeoutMs = getFirstEventTimeoutMs();
         const diagnostics = buildFirstEventHangDiagnostics(
@@ -681,146 +924,37 @@ export class ClaudeProvider implements IAgentProvider {
           options.model
         );
         const events = withFirstMessageTimeout(rawEvents, controller, timeoutMs, diagnostics);
-        for await (const msg of events) {
-          while (toolResultQueue.length > 0) {
-            const tr = toolResultQueue.shift();
-            if (tr) {
-              yield {
-                type: 'tool_result',
-                toolName: tr.toolName,
-                toolOutput: tr.toolOutput,
-                ...(tr.toolCallId !== undefined ? { toolCallId: tr.toolCallId } : {}),
-              };
-            }
-          }
 
-          if (msg.type === 'assistant') {
-            const message = msg as { message: { content: ContentBlock[] } };
-            const content = message.message.content;
-
-            for (const block of content) {
-              if (block.type === 'text' && block.text) {
-                yield { type: 'assistant', content: block.text };
-              } else if (block.type === 'tool_use' && block.name) {
-                yield {
-                  type: 'tool',
-                  toolName: block.name,
-                  toolInput: block.input ?? {},
-                  ...(block.id !== undefined ? { toolCallId: block.id } : {}),
-                };
-              }
-            }
-          } else if (msg.type === 'system') {
-            const sysMsg = msg as {
-              subtype?: string;
-              mcp_servers?: { name: string; status: string }[];
-            };
-            if (sysMsg.subtype === 'init' && sysMsg.mcp_servers) {
-              const failed = sysMsg.mcp_servers.filter(s => s.status !== 'connected');
-              if (failed.length > 0) {
-                const names = failed.map(s => `${s.name} (${s.status})`).join(', ');
-                yield { type: 'system', content: `MCP server connection failed: ${names}` };
-              }
-            } else {
-              getLog().debug({ subtype: sysMsg.subtype }, 'claude.system_message_unhandled');
-            }
-          } else if (msg.type === 'rate_limit_event') {
-            const rateLimitMsg = msg as { rate_limit_info?: Record<string, unknown> };
-            getLog().warn(
-              { rateLimitInfo: rateLimitMsg.rate_limit_info },
-              'claude.rate_limit_event'
-            );
-            yield { type: 'rate_limit', rateLimitInfo: rateLimitMsg.rate_limit_info ?? {} };
-          } else if (msg.type === 'result') {
-            const resultMsg = msg as {
-              session_id?: string;
-              is_error?: boolean;
-              subtype?: string;
-              usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number };
-              structured_output?: unknown;
-              total_cost_usd?: number;
-              stop_reason?: string | null;
-              num_turns?: number;
-              model_usage?: Record<
-                string,
-                {
-                  input_tokens: number;
-                  output_tokens: number;
-                  cache_read_input_tokens?: number;
-                  cache_creation_input_tokens?: number;
-                }
-              >;
-            };
-            const tokens = normalizeClaudeUsage(resultMsg.usage);
-            yield {
-              type: 'result',
-              sessionId: resultMsg.session_id,
-              ...(tokens ? { tokens } : {}),
-              ...(resultMsg.structured_output !== undefined
-                ? { structuredOutput: resultMsg.structured_output }
-                : {}),
-              ...(resultMsg.is_error ? { isError: true, errorSubtype: resultMsg.subtype } : {}),
-              ...(resultMsg.total_cost_usd !== undefined ? { cost: resultMsg.total_cost_usd } : {}),
-              ...(resultMsg.stop_reason != null ? { stopReason: resultMsg.stop_reason } : {}),
-              ...(resultMsg.num_turns !== undefined ? { numTurns: resultMsg.num_turns } : {}),
-              ...(resultMsg.model_usage
-                ? { modelUsage: resultMsg.model_usage as Record<string, unknown> }
-                : {}),
-            };
-          }
-        }
-        while (toolResultQueue.length > 0) {
-          const tr = toolResultQueue.shift();
-          if (tr) {
-            yield {
-              type: 'tool_result',
-              toolName: tr.toolName,
-              toolOutput: tr.toolOutput,
-              ...(tr.toolCallId !== undefined ? { toolCallId: tr.toolCallId } : {}),
-            };
-          }
-        }
+        // 5. Stream normalized events
+        yield* streamClaudeMessages(events, toolResultQueue);
         return;
       } catch (error) {
         const err = error as Error;
-
-        if (controller.signal.aborted) {
-          throw new Error('Query aborted');
-        }
-
-        const stderrContext = stderrLines.join('\n');
-        const errorClass = classifySubprocessError(err.message, stderrContext);
+        const { enrichedError, errorClass, shouldRetry } = classifyAndEnrichError(
+          err,
+          stderrLines,
+          controller
+        );
 
         getLog().error(
-          { err, stderrContext, errorClass, attempt, maxRetries: MAX_SUBPROCESS_RETRIES },
+          {
+            err,
+            stderrContext: stderrLines.join('\n'),
+            errorClass,
+            attempt,
+            maxRetries: MAX_SUBPROCESS_RETRIES,
+          },
           'query_error'
         );
 
-        if (errorClass === 'auth') {
-          const enrichedError = new Error(
-            `Claude Code auth error: ${err.message}${stderrContext ? ` (${stderrContext})` : ''}`
-          );
-          enrichedError.cause = error;
+        if (!shouldRetry || attempt >= MAX_SUBPROCESS_RETRIES) {
           throw enrichedError;
         }
 
-        if (
-          attempt < MAX_SUBPROCESS_RETRIES &&
-          (errorClass === 'rate_limit' || errorClass === 'crash')
-        ) {
-          const delayMs = this.retryBaseDelayMs * Math.pow(2, attempt);
-          getLog().info({ attempt, delayMs, errorClass }, 'retrying_subprocess');
-          await new Promise(resolve => setTimeout(resolve, delayMs));
-          lastError = err;
-          continue;
-        }
-
-        const enrichedMessage = stderrContext
-          ? `Claude Code ${errorClass}: ${err.message} (stderr: ${stderrContext})`
-          : `Claude Code ${errorClass}: ${err.message}`;
-        const enrichedError = new Error(enrichedMessage);
-        enrichedError.cause = error;
-        throw enrichedError;
+        const delayMs = this.retryBaseDelayMs * Math.pow(2, attempt);
+        getLog().info({ attempt, delayMs, errorClass }, 'retrying_subprocess');
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        lastError = enrichedError;
       }
     }
 
