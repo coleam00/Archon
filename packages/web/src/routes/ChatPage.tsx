@@ -103,8 +103,6 @@ export function ChatPage(): React.ReactElement {
     const map = new Map<string, 'running' | 'failed'>();
     if (!runs) return map;
     for (const run of runs) {
-      // For web runs, parent_conversation_id is the visible conversation in the sidebar.
-      // For CLI runs, conversation_id is the only conversation (no parent/worker split).
       const key = run.parent_conversation_id ?? run.conversation_id;
       if (run.status === 'running') {
         map.set(key, 'running');
@@ -181,9 +179,14 @@ export function ChatPage(): React.ReactElement {
 
   return (
     <div className="flex flex-1 overflow-hidden">
-      {/* Left panel */}
+
+      {/* ── Left panel — hidden on mobile, always visible on desktop ── */}
       <div
-        className="relative flex h-full flex-col border-r border-border bg-surface overflow-hidden"
+        className={cn(
+          'relative flex h-full flex-col border-r border-border bg-surface overflow-hidden',
+          // Hide entirely on mobile → chat takes full width
+          'hidden md:flex'
+        )}
         style={{ width: `${String(width)}px`, flexShrink: 0 }}
       >
         {/* New Chat button */}
@@ -300,12 +303,7 @@ export function ChatPage(): React.ReactElement {
             ) : (
               <div className="flex flex-col items-center justify-center gap-2 py-8 px-4">
                 <FolderGit2 className="h-8 w-8 text-text-tertiary" />
-                <span
-                  className={cn(
-                    'text-xs text-text-tertiary text-center',
-                    conversations && conversations.length > 0 ? '' : ''
-                  )}
-                >
+                <span className="text-xs text-text-tertiary text-center">
                   {conversations && conversations.length > 0
                     ? 'No matching conversations'
                     : 'No conversations yet — start a new chat!'}
@@ -322,8 +320,8 @@ export function ChatPage(): React.ReactElement {
         />
       </div>
 
-      {/* Right panel - chat interface */}
-      <div className="flex flex-1 flex-col overflow-hidden">
+      {/* ── Right panel — chat interface, full width on mobile ── */}
+      <div className="flex flex-1 flex-col overflow-hidden min-w-0">
         <ChatInterface key={conversationId ?? 'new'} conversationId={conversationId ?? 'new'} />
       </div>
     </div>
