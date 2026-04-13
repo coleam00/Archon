@@ -26,6 +26,11 @@ mock.module('@archon/paths', () => ({
   getDefaultCommandsPath: () => '/nonexistent/defaults',
 }));
 
+// --- Bootstrap provider registry (after path mocks, before dag-executor import) ---
+import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+clearRegistry();
+registerBuiltinProviders();
+
 // --- Imports (after mocks) ---
 import {
   buildTopologicalLayers,

@@ -119,6 +119,8 @@ import {
   configResponseSchema,
   codebaseEnvironmentsResponseSchema,
 } from './schemas/config.schemas';
+import { providerListResponseSchema } from './schemas/provider.schemas';
+import { getProviderInfoList } from '@archon/providers';
 
 // Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
@@ -768,6 +770,19 @@ const patchAssistantConfigRoute = createRoute({
     },
     400: jsonError('Invalid request body'),
     500: jsonError('Server error'),
+  },
+});
+
+const getProvidersRoute = createRoute({
+  method: 'get',
+  path: '/api/providers',
+  tags: ['System'],
+  summary: 'List registered AI providers',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: providerListResponseSchema } },
+      description: 'List of registered providers',
+    },
   },
 });
 
@@ -2467,6 +2482,11 @@ export function registerApiRoutes(
       getLog().error({ err: error }, 'config.assistants_update_failed');
       return apiError(c, 500, 'Failed to update assistant configuration');
     }
+  });
+
+  // GET /api/providers - List registered AI providers
+  registerOpenApiRoute(getProvidersRoute, c => {
+    return c.json({ providers: getProviderInfoList() });
   });
 
   // GET /api/codebases/:id/environments - List isolation environments for a codebase

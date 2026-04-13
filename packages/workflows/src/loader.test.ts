@@ -28,6 +28,11 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
+// Bootstrap provider registry (needed by isModelCompatible in dag-node schema)
+import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+clearRegistry();
+registerBuiltinProviders();
+
 import { discoverWorkflows } from './workflow-discovery';
 import { isBashNode, isCancelNode, isLoopNode } from './schemas';
 import * as bundledDefaults from './defaults/bundled-defaults';
@@ -206,9 +211,9 @@ nodes:
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       const workflows = result.workflows.map(ws => ws.workflow);
 
-      // Invalid provider treated as undefined - executor will fall back to config
+      // Unknown providers are accepted (validated against registry at execution time)
       expect(workflows).toHaveLength(1);
-      expect(workflows[0].provider).toBeUndefined();
+      expect(workflows[0].provider).toBe('invalid');
     });
 
     it('should reject claude model with codex provider at load time', async () => {

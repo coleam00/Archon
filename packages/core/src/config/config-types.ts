@@ -28,7 +28,7 @@ export interface GlobalConfig {
    * Default AI assistant when no codebase-specific preference
    * @default 'claude'
    */
-  defaultAssistant?: 'claude' | 'codex';
+  defaultAssistant?: string;
 
   /**
    * Assistant-specific defaults (model, reasoning effort, etc.)
@@ -85,7 +85,7 @@ export interface RepoConfig {
    * AI assistant preference for this repository
    * Overrides global default
    */
-  assistant?: 'claude' | 'codex';
+  assistant?: string;
 
   /**
    * Assistant-specific defaults for this repository
@@ -182,7 +182,7 @@ export interface RepoConfig {
  */
 export interface MergedConfig {
   botName: string;
-  assistant: 'claude' | 'codex';
+  assistant: string;
   assistants: {
     claude: ClaudeProviderDefaults;
     codex: CodexProviderDefaults;
@@ -238,7 +238,7 @@ export interface MergedConfig {
  */
 export interface SafeConfig {
   botName: string;
-  assistant: 'claude' | 'codex';
+  assistant: string;
   assistants: {
     claude: Pick<ClaudeProviderDefaults, 'model'>;
     codex: Pick<CodexProviderDefaults, 'model' | 'modelReasoningEffort' | 'webSearchMode'>;

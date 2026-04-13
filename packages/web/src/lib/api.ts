@@ -69,6 +69,19 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// Providers
+export interface ProviderInfo {
+  id: string;
+  displayName: string;
+  capabilities: Record<string, boolean>;
+  builtIn: boolean;
+}
+
+export async function listProviders(): Promise<ProviderInfo[]> {
+  const data = await fetchJSON<{ providers: ProviderInfo[] }>('/api/providers');
+  return data.providers;
+}
+
 // Conversations
 export async function listConversations(codebaseId?: string): Promise<ConversationResponse[]> {
   const params = new URLSearchParams();

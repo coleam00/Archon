@@ -45,7 +45,7 @@ interface SetupConfig {
     claudeOauthToken?: string;
     codex: boolean;
     codexTokens?: CodexTokens;
-    defaultAssistant: 'claude' | 'codex';
+    defaultAssistant: string;
   };
   platforms: {
     github: boolean;
@@ -676,16 +676,21 @@ After upgrading, run 'archon setup' again.`,
     codexTokens = tokens ?? undefined;
   }
 
-  // Determine default assistant
-  let defaultAssistant: 'claude' | 'codex' = 'claude';
+  // Determine default assistant — use registry for dynamic provider list
+  let defaultAssistant = 'claude';
 
   if (hasClaude && hasCodex) {
+    const { getRegisteredProviders } = await import('@archon/providers');
+    const providerChoices = getRegisteredProviders()
+      .filter(p => p.builtIn)
+      .map(p => ({
+        value: p.id,
+        label: p.id === 'claude' ? `${p.displayName} (Recommended)` : p.displayName,
+      }));
+
     const defaultChoice = await select({
       message: 'Which should be the default AI assistant?',
-      options: [
-        { value: 'claude', label: 'Claude (Recommended)' },
-        { value: 'codex', label: 'Codex' },
-      ],
+      options: providerChoices,
     });
 
     if (isCancel(defaultChoice)) {

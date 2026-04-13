@@ -9,6 +9,7 @@ import {
   getConfig,
   getHealth,
   listCodebases,
+  listProviders,
   addCodebase,
   deleteCodebase,
   updateAssistantConfig,
@@ -16,7 +17,7 @@ import {
   setCodebaseEnvVar,
   deleteCodebaseEnvVar,
 } from '@/lib/api';
-import type { SafeConfigResponse, CodebaseResponse } from '@/lib/api';
+import type { SafeConfigResponse, CodebaseResponse, UpdateAssistantConfigBody } from '@/lib/api';
 
 const selectClass =
   'h-9 rounded-md border border-border bg-surface-elevated text-text-primary px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring [&>option]:bg-surface-elevated [&>option]:text-text-primary';
@@ -382,7 +383,12 @@ function ProjectsSection(): React.ReactElement {
 
 function AssistantConfigSection({ config }: { config: SafeConfigResponse }): React.ReactElement {
   const queryClient = useQueryClient();
-  const [assistant, setAssistant] = useState(config.assistant);
+  const { data: providers } = useQuery({
+    queryKey: ['providers'],
+    queryFn: listProviders,
+    staleTime: 5 * 60 * 1000,
+  });
+  const [assistant, setAssistant] = useState<string>(config.assistant);
   const [claudeModel, setClaudeModel] = useState(config.assistants.claude.model ?? 'sonnet');
   const [codexModel, setCodexModel] = useState(config.assistants.codex.model ?? '');
   const [reasoning, setReasoning] = useState<'minimal' | 'low' | 'medium' | 'high' | 'xhigh'>(
@@ -424,7 +430,7 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
 
   function handleSave(): void {
     mutation.mutate({
-      assistant,
+      assistant: assistant as UpdateAssistantConfigBody['assistant'],
       claude: { model: claudeModel },
       // The generated type requires `model` when `codex` is present; omit the codex key
       // entirely when no model is set so the server treats it as "no codex changes".
@@ -449,12 +455,15 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
               id="default-assistant"
               value={assistant}
               onChange={e => {
-                setAssistant(e.target.value as 'claude' | 'codex');
+                setAssistant(e.target.value);
               }}
               className={selectClass}
             >
-              <option value="claude">Claude</option>
-              <option value="codex">Codex</option>
+              {(providers ?? []).map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.displayName}
+                </option>
+              ))}
             </select>
 
             <label htmlFor="claude-model">Claude Model</label>

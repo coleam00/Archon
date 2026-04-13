@@ -68,8 +68,8 @@ export interface IWorkflowPlatform {
 // ---------------------------------------------------------------------------
 
 export interface WorkflowConfig {
-  /** Default assistant provider ('claude' | 'codex') */
-  assistant: 'claude' | 'codex';
+  /** Default assistant provider (validated against provider registry at runtime) */
+  assistant: string;
   baseBranch?: string;
   docsPath?: string;
   envVars?: Record<string, string>;
@@ -96,7 +96,7 @@ export interface WorkflowConfig {
 // Agent provider factory type
 // ---------------------------------------------------------------------------
 
-export type AgentProviderFactory = (provider: 'claude' | 'codex') => IAgentProvider;
+export type AgentProviderFactory = (provider: string) => IAgentProvider;
 
 // ---------------------------------------------------------------------------
 // WorkflowDeps — the single injection point

@@ -147,6 +147,46 @@ export interface ProviderCapabilities {
 }
 
 /**
+ * Registration entry for a provider in the provider registry.
+ * Each entry carries metadata, a factory, and model-compatibility logic.
+ * The registry is the source of truth for provider identity, capabilities, and display.
+ */
+export interface ProviderRegistration {
+  /** Unique provider identifier — used in YAML, config, DB */
+  id: string;
+
+  /** Human-readable name for UI display */
+  displayName: string;
+
+  /** Instantiate a provider */
+  factory: () => IAgentProvider;
+
+  /** Static capability declaration — used for dag-executor warnings */
+  capabilities: ProviderCapabilities;
+
+  /**
+   * Model compatibility check. Returns true if the model string
+   * is valid for this provider. Used by workflow validation and
+   * provider inference from model names.
+   */
+  isModelCompatible: (model: string) => boolean;
+
+  /** Whether this is a built-in (maintained by core team) or community provider */
+  builtIn: boolean;
+}
+
+/**
+ * API-safe projection of ProviderRegistration (excludes non-serializable fields).
+ * Used by GET /api/providers and consumed by the Web UI.
+ */
+export interface ProviderInfo {
+  id: string;
+  displayName: string;
+  capabilities: ProviderCapabilities;
+  builtIn: boolean;
+}
+
+/**
  * Generic agent provider interface.
  * Allows supporting multiple agent providers (Claude, Codex, etc.)
  */

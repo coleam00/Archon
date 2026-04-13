@@ -211,9 +211,9 @@ function applyEnvOverrides(config: MergedConfig): MergedConfig {
     config.botName = envBotName;
   }
 
-  // Assistant override
+  // Assistant override — accept any non-empty string (validated against registry at runtime)
   const envAssistant = process.env.DEFAULT_AI_ASSISTANT;
-  if (envAssistant === 'claude' || envAssistant === 'codex') {
+  if (envAssistant && envAssistant.length > 0) {
     config.assistant = envAssistant;
   }
 
