@@ -230,11 +230,12 @@ export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
 function getDefaults(): MergedConfig {
   // Initialize assistant defaults from registered providers rather than hardcoding.
   // Built-in providers always exist (registerBuiltinProviders called before loadConfig).
+  const registeredProviders = getRegisteredProviders();
   const registeredAssistants: AssistantDefaults = {
     claude: {},
     codex: {},
   };
-  for (const provider of getRegisteredProviders()) {
+  for (const provider of registeredProviders) {
     if (!(provider.id in registeredAssistants)) {
       registeredAssistants[provider.id] = {};
     }
@@ -242,7 +243,7 @@ function getDefaults(): MergedConfig {
 
   return {
     botName: 'Archon',
-    assistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
+    assistant: registeredProviders.find(p => p.builtIn)?.id ?? 'claude',
     assistants: registeredAssistants,
     streaming: {
       telegram: 'stream',

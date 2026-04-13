@@ -9,7 +9,6 @@ import {
   getConfig,
   getHealth,
   listCodebases,
-  listProviders,
   addCodebase,
   deleteCodebase,
   updateAssistantConfig,
@@ -23,6 +22,7 @@ import type {
   ProviderDefaults,
   ProviderInfo,
 } from '@/lib/api';
+import { useProviders } from '@/hooks/useProviders';
 
 const selectClass =
   'h-9 rounded-md border border-border bg-surface-elevated text-text-primary px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring [&>option]:bg-surface-elevated [&>option]:text-text-primary';
@@ -388,11 +388,7 @@ function ProjectsSection(): React.ReactElement {
 
 function AssistantConfigSection({ config }: { config: SafeConfigResponse }): React.ReactElement {
   const queryClient = useQueryClient();
-  const { data: providers } = useQuery({
-    queryKey: ['providers'],
-    queryFn: listProviders,
-    staleTime: 5 * 60 * 1000,
-  });
+  const { providers } = useProviders();
   const [assistant, setAssistant] = useState<string>(config.assistant);
   const [assistantSettings, setAssistantSettings] = useState<Record<string, ProviderDefaults>>(
     config.assistants
@@ -424,9 +420,9 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
   }
 
   const allProviderEntries: ProviderInfo[] = [
-    ...(providers ?? []),
+    ...providers,
     ...Object.keys(config.assistants)
-      .filter(providerId => !(providers ?? []).some(provider => provider.id === providerId))
+      .filter(providerId => !providers.some(provider => provider.id === providerId))
       .map(
         providerId =>
           ({
