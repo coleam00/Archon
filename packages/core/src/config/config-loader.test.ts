@@ -245,6 +245,31 @@ streaming:
       expect(config.streaming.telegram).toBe('batch');
     });
 
+    test('throws on unknown DEFAULT_AI_ASSISTANT env var', async () => {
+      mockReadConfigFile.mockResolvedValue('');
+      process.env.DEFAULT_AI_ASSISTANT = 'nonexistent-provider';
+
+      await expect(loadConfig()).rejects.toThrow(/not a registered provider/);
+    });
+
+    test('throws on unknown defaultAssistant in global config', async () => {
+      mockReadConfigFile.mockResolvedValue('defaultAssistant: nonexistent-provider');
+
+      await expect(loadConfig()).rejects.toThrow(/not a registered provider/);
+    });
+
+    test('throws on unknown assistant in repo config', async () => {
+      mockReadConfigFile.mockImplementation(async (path: string) => {
+        const normalized = path.replace(/\\/g, '/');
+        if (normalized.includes('/tmp/test-repo/.archon/config.yaml')) {
+          return 'assistant: nonexistent-provider';
+        }
+        return '';
+      });
+
+      await expect(loadConfig('/tmp/test-repo')).rejects.toThrow(/not a registered provider/);
+    });
+
     test('repo config overrides global config', async () => {
       // Helper to check path in cross-platform way (handles both / and \ separators)
       const pathMatches = (path: string, pattern: string): boolean => {

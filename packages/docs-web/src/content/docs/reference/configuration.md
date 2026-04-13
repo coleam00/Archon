@@ -51,7 +51,11 @@ Create `~/.archon/config.yaml` for user-wide preferences:
 
 ```yaml
 # Default AI assistant
+<<<<<<< HEAD
 defaultAssistant: claude # or 'codex' or 'copilot'
+=======
+defaultAssistant: claude # must match a registered provider (e.g. claude, codex)
+>>>>>>> origin/dev
 
 # Assistant defaults
 assistants:
@@ -177,7 +181,11 @@ Environment variables override all other configuration. They are organized by ca
 | `PORT` | HTTP server listen port | `3090` (auto-allocated in worktrees) |
 | `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`) | `info` |
 | `BOT_DISPLAY_NAME` | Bot name shown in batch-mode "starting" messages | `Archon` |
+<<<<<<< HEAD
 | `DEFAULT_AI_ASSISTANT` | Default AI assistant (`claude`, `codex`, or `copilot`) | `claude` |
+=======
+| `DEFAULT_AI_ASSISTANT` | Default AI assistant (must match a registered provider) | `claude` |
+>>>>>>> origin/dev
 | `MAX_CONCURRENT_CONVERSATIONS` | Maximum concurrent AI conversations | `10` |
 | `SESSION_RETENTION_DAYS` | Delete inactive sessions older than N days | `30` |
 | `ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING` | When set to `1`, suppresses the stderr warning emitted when `archon` is run inside a Claude Code session | -- |

@@ -42,8 +42,12 @@ async function registerRepoAtPath(
   name: string,
   repositoryUrl: string | null
 ): Promise<RegisterResult> {
-  // Auto-detect assistant type based on folder structure
-  let suggestedAssistant = 'claude';
+  // Auto-detect assistant type based on SDK folder conventions.
+  // Built-in providers use well-known folders (.claude/, .codex/).
+  // Falls back to first registered built-in provider if no folder detected.
+  const { getRegisteredProviders } = await import('@archon/providers');
+  const defaultProvider = getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude';
+  let suggestedAssistant = defaultProvider;
   const codexFolder = join(targetPath, '.codex');
   const claudeFolder = join(targetPath, '.claude');
 
@@ -57,7 +61,7 @@ async function registerRepoAtPath(
       suggestedAssistant = 'claude';
       getLog().debug({ path: claudeFolder }, 'assistant_detected_claude');
     } catch {
-      getLog().debug('assistant_default_claude');
+      getLog().debug({ provider: defaultProvider }, 'assistant_default_from_registry');
     }
   }
 

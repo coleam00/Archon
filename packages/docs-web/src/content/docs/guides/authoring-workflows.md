@@ -188,7 +188,7 @@ nodes:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `provider` | `'claude'` \| `'codex'` | inherited | Per-node provider override |
+| `provider` | string | inherited | Per-node provider override (any registered provider, e.g. `'claude'`, `'codex'`) |
 | `model` | string | inherited | Per-node model override |
 | `output_format` | object | — | JSON Schema for structured output (Claude and Codex) |
 | `allowed_tools` | string[] | — | Whitelist of built-in tools. `[]` = no tools. Claude only |
@@ -542,8 +542,13 @@ Model and options are resolved in this order:
 
 ```yaml
 name: my-workflow
+<<<<<<< HEAD
 provider: claude     # 'claude', 'codex', or 'copilot' (default: from config)
 model: sonnet        # Model override (default: from config assistants.<provider>.model)
+=======
+provider: claude     # Any registered provider (default: from config)
+model: sonnet        # Model override (default: from config assistants.claude.model)
+>>>>>>> origin/dev
 ```
 
 **Claude models:**

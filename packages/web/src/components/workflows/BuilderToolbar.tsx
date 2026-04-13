@@ -5,20 +5,21 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { listWorkflows } from '@/lib/api';
 import { useProject } from '@/contexts/ProjectContext';
+import { useProviders } from '@/hooks/useProviders';
 
 export type ViewMode = 'hidden' | 'split' | 'full';
 
 export interface BuilderToolbarProps {
   workflowName: string;
   workflowDescription: string;
-  provider: 'claude' | 'codex' | undefined;
+  provider: string | undefined;
   model: string | undefined;
   hasUnsavedChanges: boolean;
   validationErrors: string[];
   viewMode: ViewMode;
   onNameChange: (name: string) => void;
   onDescriptionChange: (desc: string) => void;
-  onProviderChange: (p: 'claude' | 'codex' | undefined) => void;
+  onProviderChange: (p: string | undefined) => void;
   onModelChange: (m: string | undefined) => void;
   onViewModeChange: (mode: ViewMode) => void;
   onValidate: () => void;
@@ -57,6 +58,7 @@ export function BuilderToolbar({
     ? codebases?.find(cb => cb.id === selectedProjectId)?.default_cwd
     : undefined;
 
+  const { providers } = useProviders();
   const [showDescription, setShowDescription] = useState(false);
 
   const { data: workflows, isError: workflowsError } = useQuery({
@@ -158,13 +160,16 @@ export function BuilderToolbar({
           <select
             value={provider ?? ''}
             onChange={(e): void => {
-              onProviderChange((e.target.value || undefined) as 'claude' | 'codex' | undefined);
+              onProviderChange(e.target.value || undefined);
             }}
             className="rounded-md border border-border bg-surface px-1.5 py-1 text-xs text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
           >
             <option value="">Provider</option>
-            <option value="claude">Claude</option>
-            <option value="codex">Codex</option>
+            {providers.map(p => (
+              <option key={p.id} value={p.id}>
+                {p.displayName}
+              </option>
+            ))}
           </select>
 
           <input

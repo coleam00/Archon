@@ -28,6 +28,7 @@ import { BUNDLED_SKILL_FILES } from '../bundled-skill';
 import { homedir } from 'os';
 import { randomBytes } from 'crypto';
 import { spawn, execSync, type ChildProcess } from 'child_process';
+import { getRegisteredProviders } from '@archon/providers';
 
 // =============================================================================
 // Types
@@ -45,7 +46,7 @@ interface SetupConfig {
     claudeOauthToken?: string;
     codex: boolean;
     codexTokens?: CodexTokens;
-    defaultAssistant: 'claude' | 'codex';
+    defaultAssistant: string;
   };
   platforms: {
     github: boolean;
@@ -534,7 +535,8 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
  */
 async function collectAIConfig(): Promise<SetupConfig['ai']> {
   const assistants = await multiselect({
-    message: 'Which AI assistant(s) will you use? (↑↓ navigate, space select, enter confirm)',
+    message:
+      'Which built-in AI assistant(s) will you use? (↑↓ navigate, space select, enter confirm)',
     options: [
       { value: 'claude', label: 'Claude (Recommended)', hint: 'Anthropic Claude Code SDK' },
       { value: 'codex', label: 'Codex', hint: 'OpenAI Codex SDK' },
@@ -653,7 +655,7 @@ After upgrading, run 'archon setup' again.`,
     return {
       claude: false,
       codex: false,
-      defaultAssistant: 'claude',
+      defaultAssistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
     };
   }
 
@@ -676,16 +678,21 @@ After upgrading, run 'archon setup' again.`,
     codexTokens = tokens ?? undefined;
   }
 
-  // Determine default assistant
-  let defaultAssistant: 'claude' | 'codex' = 'claude';
+  // Determine default assistant — use the registry, but keep setup/auth flows built-in only.
+  // Default to first registered built-in provider rather than hardcoding 'claude'.
+  let defaultAssistant = getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude';
 
   if (hasClaude && hasCodex) {
+    const providerChoices = getRegisteredProviders()
+      .filter(p => p.builtIn)
+      .map(p => ({
+        value: p.id,
+        label: p.id === 'claude' ? `${p.displayName} (Recommended)` : p.displayName,
+      }));
+
     const defaultChoice = await select({
       message: 'Which should be the default AI assistant?',
-      options: [
-        { value: 'claude', label: 'Claude (Recommended)' },
-        { value: 'codex', label: 'Codex' },
-      ],
+      options: providerChoices,
     });
 
     if (isCancel(defaultChoice)) {
@@ -1420,7 +1427,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       ai: {
         claude: existing?.hasClaude ?? false,
         codex: existing?.hasCodex ?? false,
-        defaultAssistant: 'claude',
+        defaultAssistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
       },
       platforms: {
         github: existing?.platforms.github ?? false,

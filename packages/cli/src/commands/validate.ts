@@ -85,6 +85,8 @@ export async function validateWorkflowsCommand(
   json?: boolean
 ): Promise<number> {
   const config = await buildValidationConfig(cwd);
+  const mergedConfig = await loadConfig(cwd);
+  const defaultProvider = mergedConfig.assistant;
   const { workflows: workflowEntries, errors: loadErrors } = await discoverWorkflowsWithConfig(
     cwd,
     loadConfig
@@ -105,7 +107,7 @@ export async function validateWorkflowsCommand(
 
   // Validate successfully parsed workflows (Level 3)
   for (const { workflow } of workflowEntries) {
-    const issues = await validateWorkflowResources(workflow, cwd, config);
+    const issues = await validateWorkflowResources(workflow, cwd, config, defaultProvider);
     results.push(makeWorkflowResult(workflow.name, issues));
   }
 

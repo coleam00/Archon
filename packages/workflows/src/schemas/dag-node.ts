@@ -116,7 +116,7 @@ export const dagNodeBaseSchema = z.object({
   when: z.string().optional(),
   trigger_rule: triggerRuleSchema.optional(),
   model: z.string().optional(),
-  provider: z.enum(['claude', 'codex']).optional(),
+  provider: z.string().trim().min(1).optional(),
   context: z.enum(['fresh', 'shared']).optional(),
   output_format: z.record(z.unknown()).optional(),
   allowed_tools: z.array(z.string()).optional(),
@@ -488,10 +488,18 @@ export const dagNodeSchema = dagNodeBaseSchema
 
     // Provider/model compatibility (AI nodes only)
     if (!hasBash && !hasLoop && !hasScript && data.provider && data.model) {
-      if (!isModelCompatible(data.provider, data.model)) {
+      try {
+        if (!isModelCompatible(data.provider, data.model)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `model "${data.model}" is not compatible with provider "${data.provider}"`,
+          });
+        }
+      } catch (e) {
+        // isModelCompatible throws on unknown providers — surface as a validation issue
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `model "${data.model}" is not compatible with provider "${data.provider}"`,
+          message: (e as Error).message,
         });
       }
     }
