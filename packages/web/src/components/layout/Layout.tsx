@@ -25,7 +25,7 @@ export function Layout(): React.ReactElement {
         {/* ── Mobile nav overlay backdrop ── */}
         {open && (
           <div
-            className="fixed inset-x-0 top-12 bottom-0 z-40 bg-black/60 md:hidden"
+            className="fixed inset-x-0 top-24 bottom-0 z-40 bg-black/60 md:hidden"
             onClick={() => { setOpen(false); }}
             aria-hidden="true"
           />
@@ -34,7 +34,7 @@ export function Layout(): React.ReactElement {
         {/* ── Mobile nav drawer ── */}
         <aside
           className={cn(
-            'fixed top-12 bottom-0 left-0 z-40 flex w-72 flex-col bg-surface border-r border-border shadow-2xl',
+            'fixed top-24 bottom-0 left-0 z-40 flex w-72 flex-col bg-surface border-r border-border shadow-2xl',
             'transition-transform duration-300 ease-in-out',
             'md:hidden',
             open ? 'translate-x-0' : '-translate-x-full'
