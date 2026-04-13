@@ -580,6 +580,7 @@ async function main(): Promise<number> {
     return 1;
   } finally {
     await shutdownLangfuse();
+    // Always close database connection
     await closeDb();
   }
 }
