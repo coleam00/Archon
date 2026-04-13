@@ -1126,3 +1126,106 @@ describe('CodexProvider', () => {
     });
   });
 });
+
+// ─── Behavioral regression tests (black-box via sendQuery) ───────────────
+
+describe('sendQuery decomposition behaviors', () => {
+  let client: CodexProvider;
+
+  beforeEach(() => {
+    client = new CodexProvider({ retryBaseDelayMs: 1 });
+    mockStartThread.mockClear();
+    mockResumeThread.mockClear();
+    mockRunStreamed.mockClear();
+    mockLogger.info.mockClear();
+    mockLogger.warn.mockClear();
+    mockLogger.error.mockClear();
+    mockLogger.debug.mockClear();
+
+    mockStartThread.mockReturnValue(createMockThread('new-thread-id'));
+    mockResumeThread.mockReturnValue(createMockThread('resumed-thread-id'));
+  });
+
+  test('abort signal throws instead of silently truncating stream', async () => {
+    const abortController = new AbortController();
+
+    mockRunStreamed.mockResolvedValue({
+      events: (async function* () {
+        yield {
+          type: 'item.completed',
+          item: { type: 'agent_message', text: 'partial', id: '1' },
+        };
+        // Abort mid-stream
+        abortController.abort();
+        yield {
+          type: 'item.completed',
+          item: { type: 'agent_message', text: 'should not appear', id: '2' },
+        };
+        yield { type: 'turn.completed', usage: defaultUsage };
+      })(),
+    });
+
+    const consumeGenerator = async (): Promise<void> => {
+      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
+        abortSignal: abortController.signal,
+      })) {
+        // consume
+      }
+    };
+
+    await expect(consumeGenerator()).rejects.toThrow('Query aborted');
+  });
+
+  test('enriched error thrown at retry exhaustion, not raw error', async () => {
+    mockRunStreamed.mockRejectedValue(new Error('codex exec crashed'));
+
+    const consumeGenerator = async (): Promise<void> => {
+      for await (const _ of client.sendQuery('test', '/workspace')) {
+        // consume
+      }
+    };
+
+    const err = await consumeGenerator().catch((e: unknown) => e as Error);
+    expect(err).toBeInstanceOf(Error);
+    // Must contain the enriched classification prefix
+    expect(err.message).toContain('Codex crash');
+  }, 5_000);
+
+  test('todo_list dedup state resets between retry attempts', async () => {
+    const todoItem = {
+      type: 'todo_list',
+      items: [{ text: 'Task 1', completed: false }],
+      id: 'todo-1',
+    };
+
+    let callCount = 0;
+    mockRunStreamed.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        return Promise.resolve({
+          events: (async function* () {
+            yield { type: 'item.completed', item: todoItem };
+            throw new Error('codex exec crashed');
+          })(),
+        });
+      }
+      // On retry, same todo should appear again (fresh state)
+      return Promise.resolve({
+        events: (async function* () {
+          yield { type: 'item.completed', item: todoItem };
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+    });
+
+    const chunks = [];
+    for await (const chunk of client.sendQuery('test', '/workspace')) {
+      chunks.push(chunk);
+    }
+
+    // The todo should appear on the retry attempt (not suppressed by dedup from attempt 1)
+    const systemChunks = chunks.filter(c => c.type === 'system');
+    expect(systemChunks.length).toBeGreaterThanOrEqual(1);
+    expect(systemChunks.some(c => c.type === 'system' && c.content.includes('Task 1'))).toBe(true);
+  }, 5_000);
+});
