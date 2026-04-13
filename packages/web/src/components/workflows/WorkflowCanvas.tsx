@@ -22,6 +22,10 @@ import { QuickAddPicker } from './QuickAddPicker';
 
 export { dagNodesToReactFlow } from '@/lib/dag-layout';
 
+// Approximate dimensions of the QuickAddPicker panel (w-56 = 224px, max height ~320px)
+const PICKER_WIDTH = 240;
+const PICKER_HEIGHT = 340;
+
 function resolveNodeLabel(nodeType: 'command' | 'prompt' | 'bash', commandName: string): string {
   if (nodeType === 'command') return commandName;
   if (nodeType === 'bash') return 'Shell';
@@ -238,10 +242,22 @@ export function WorkflowCanvas({
           clickTimerRef.current = null;
         }
         const wrapperEl = (e.target as HTMLElement).closest('.react-flow');
-        const rect = wrapperEl?.getBoundingClientRect() ?? { left: 0, top: 0 };
+        const rect = wrapperEl?.getBoundingClientRect() ?? {
+          left: 0,
+          top: 0,
+          width: window.innerWidth,
+          height: window.innerHeight,
+        };
         const flowPos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+
+        // Clamp the picker position so it stays inside the canvas bounds
+        const rawX = e.clientX - rect.left;
+        const rawY = e.clientY - rect.top;
+        const safeX = Math.max(4, Math.min(rawX, rect.width - PICKER_WIDTH - 4));
+        const safeY = Math.max(4, Math.min(rawY, rect.height - PICKER_HEIGHT - 4));
+
         setQuickAddPosition({
-          screen: { x: e.clientX - rect.left, y: e.clientY - rect.top },
+          screen: { x: safeX, y: safeY },
           flow: flowPos,
         });
       } else {
