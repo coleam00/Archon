@@ -1,9 +1,10 @@
 import { NavLink, Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { LayoutDashboard, MessageSquare, Workflow, Settings, Menu } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Workflow, Settings, Menu, Sun, Moon } from 'lucide-react';
 import { listWorkflowRuns, getUpdateCheck } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useMobileNav } from '@/contexts/MobileNavContext';
+import { useTheme } from '@/contexts/ThemeContext';
 
 const tabs = [
   { to: '/chat', end: false, icon: MessageSquare, label: 'Chat' },
@@ -14,6 +15,7 @@ const tabs = [
 
 export function TopNav(): React.ReactElement {
   const { setOpen } = useMobileNav();
+  const { theme, toggleTheme } = useTheme();
 
   const { data: runningRuns } = useQuery({
     queryKey: ['workflowRuns', { status: 'running' }],
@@ -32,12 +34,13 @@ export function TopNav(): React.ReactElement {
 
   return (
     <nav className="flex items-center gap-1 border-b border-border bg-surface px-4">
-
       {/* ── Mobile: hamburger button (hidden on desktop) ── */}
       <button
-        onClick={() => { setOpen(true); }}
+        onClick={() => {
+          setOpen(true);
+        }}
         className="flex items-center justify-center rounded-md p-1.5 mr-2 text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors md:hidden"
-        aria-label="Ouvrir le menu"
+        aria-label="Open menu"
       >
         <Menu className="h-5 w-5" />
       </button>
@@ -92,6 +95,15 @@ export function TopNav(): React.ReactElement {
           </a>
         )}
       </span>
+
+      {/* ── Theme toggle ── */}
+      <button
+        onClick={toggleTheme}
+        aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+        className="ml-2 p-2 rounded-md text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
+      >
+        {theme === 'dark' ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+      </button>
     </nav>
   );
 }

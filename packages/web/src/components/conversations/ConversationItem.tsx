@@ -37,7 +37,9 @@ export function ConversationItem({
   const inputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const params = useParams<{ conversationId: string }>();
+  const params = useParams<{ '*': string }>();
+  // Route changed from /chat/:conversationId to /chat/* — extract and decode the wildcard segment
+  const currentConvId = params['*'] ? decodeURIComponent(params['*']) : undefined;
 
   const displayName = conversation.title
     ? conversation.title.length > 30
@@ -64,7 +66,7 @@ export function ConversationItem({
       .then(() => {
         setDeleteDialogOpen(false);
         void queryClient.invalidateQueries({ queryKey: ['conversations'] });
-        if (params.conversationId === conversation.platform_conversation_id) {
+        if (currentConvId === conversation.platform_conversation_id) {
           void navigate('/');
         }
       })
@@ -72,7 +74,7 @@ export function ConversationItem({
         setDeleteError(err instanceof Error ? err.message : 'Failed to delete conversation');
         setDeleteDialogOpen(true);
       });
-  }, [conversation.platform_conversation_id, queryClient, navigate, params.conversationId]);
+  }, [conversation.platform_conversation_id, queryClient, navigate, currentConvId]);
 
   const handleRenameSubmit = useCallback((): void => {
     const trimmed = editValue.trim();

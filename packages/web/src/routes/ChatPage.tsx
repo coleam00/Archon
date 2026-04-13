@@ -62,7 +62,9 @@ export function ChatPage(): React.ReactElement {
       if (window.innerWidth >= 768) setMobileConvOpen(false);
     };
     window.addEventListener('resize', onResize);
-    return () => { window.removeEventListener('resize', onResize); };
+    return (): void => {
+      window.removeEventListener('resize', onResize);
+    };
   }, []);
 
   const handleMouseDown = useCallback(
@@ -189,12 +191,13 @@ export function ChatPage(): React.ReactElement {
 
   return (
     <div className="flex flex-1 overflow-hidden">
-
       {/* ── Mobile overlay backdrop ── */}
       {mobileConvOpen && (
         <div
           className="fixed inset-x-0 top-12 bottom-0 z-40 bg-black/60 md:hidden"
-          onClick={() => { setMobileConvOpen(false); }}
+          onClick={() => {
+            setMobileConvOpen(false);
+          }}
           aria-hidden="true"
         />
       )}
@@ -229,9 +232,11 @@ export function ChatPage(): React.ReactElement {
           </button>
           {/* Close button — mobile only */}
           <button
-            onClick={() => { setMobileConvOpen(false); }}
+            onClick={() => {
+              setMobileConvOpen(false);
+            }}
             className="md:hidden flex items-center justify-center rounded-md p-1.5 text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
-            aria-label="Fermer le panneau conversations"
+            aria-label="Close conversations panel"
           >
             <X className="h-4 w-4" />
           </button>
@@ -325,10 +330,11 @@ export function ChatPage(): React.ReactElement {
 
         {/* Conversation list — clicking any item closes the mobile drawer */}
         <ScrollArea className="flex-1 min-h-0 px-2 pb-2">
-          {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
           <div
             className="flex flex-col gap-0.5"
-            onClick={() => { setMobileConvOpen(false); }}
+            onClick={() => {
+              setMobileConvOpen(false);
+            }}
           >
             {filtered && filtered.length > 0 ? (
               filtered.map(conv => (
@@ -363,16 +369,17 @@ export function ChatPage(): React.ReactElement {
 
       {/* ── Right panel — chat interface, full width on mobile ── */}
       <div className="flex flex-1 flex-col overflow-hidden min-w-0">
-
         {/* Mobile-only topbar: conversations toggle + new chat shortcut.
             z-30 keeps it below the drawer overlay (z-50) so the drawer fully
             covers this bar when it slides in from the left.
             bg-surface is opaque so content behind it is fully masked. */}
         <div className="sticky top-0 z-30 flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-2 md:hidden">
           <button
-            onClick={() => { setMobileConvOpen(true); }}
+            onClick={() => {
+              setMobileConvOpen(true);
+            }}
             className="flex items-center gap-2 rounded-md px-2 py-1.5 text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
-            aria-label="Ouvrir l'historique des conversations"
+            aria-label="Open conversations history"
           >
             <PanelLeft className="h-4 w-4 shrink-0" />
             <span className="text-xs font-medium">Conversations</span>

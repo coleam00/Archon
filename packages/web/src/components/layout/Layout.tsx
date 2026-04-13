@@ -19,26 +19,14 @@ export function Layout(): React.ReactElement {
   // correctly shrinks when the soft keyboard appears on mobile (iOS Safari and
   // Chrome Android). This prevents the chat input from being hidden behind the
   // keyboard.
-  //
-  // position:fixed is critical on iOS Safari: without it, the browser scrolls
-  // the layout viewport instead of resizing it when the keyboard opens, which
-  // means the input stays hidden even though visualViewport.height decreased.
-  // With position:fixed + height:vpHeight the container is pinned to the
-  // visible area above the keyboard at all times.
   const vpHeight = useVisualViewport();
 
   return (
     <MobileNavContext.Provider value={{ open, setOpen }}>
-      {/* Height driven by visualViewport; position:fixed prevents iOS scroll-under-keyboard */}
+      {/* Height is driven by visualViewport so it follows the keyboard on mobile */}
       <div
         className="flex flex-col bg-background overflow-hidden"
-        style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          height: `${vpHeight}px`,
-        }}
+        style={{ height: `${vpHeight}px` }}
       >
         <TopNav />
 
@@ -46,7 +34,9 @@ export function Layout(): React.ReactElement {
         {open && (
           <div
             className="fixed inset-x-0 top-12 bottom-0 z-40 bg-black/60 md:hidden"
-            onClick={() => { setOpen(false); }}
+            onClick={() => {
+              setOpen(false);
+            }}
             aria-hidden="true"
           />
         )}
@@ -60,7 +50,7 @@ export function Layout(): React.ReactElement {
             open ? 'translate-x-0' : '-translate-x-full'
           )}
           style={{ backgroundColor: 'var(--surface)' }}
-          aria-label="Navigation mobile"
+          aria-label="Mobile navigation"
         >
           {/* Drawer header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-border">
@@ -71,9 +61,11 @@ export function Layout(): React.ReactElement {
               <span className="text-sm font-semibold text-text-primary">Archon</span>
             </div>
             <button
-              onClick={() => { setOpen(false); }}
+              onClick={() => {
+                setOpen(false);
+              }}
               className="flex items-center justify-center rounded-md p-1.5 text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
-              aria-label="Fermer le menu"
+              aria-label="Close menu"
             >
               <X className="h-4 w-4" />
             </button>
@@ -86,7 +78,9 @@ export function Layout(): React.ReactElement {
                 key={to}
                 to={to}
                 end={end}
-                onClick={() => { setOpen(false); }}
+                onClick={() => {
+                  setOpen(false);
+                }}
                 className={({ isActive }: { isActive: boolean }): string =>
                   cn(
                     'flex items-center gap-3 w-full rounded-md px-3 py-2.5 text-sm font-medium transition-colors mb-0.5',
@@ -106,7 +100,9 @@ export function Layout(): React.ReactElement {
           <div className="p-2 border-t border-border">
             <NavLink
               to="/settings"
-              onClick={() => { setOpen(false); }}
+              onClick={() => {
+                setOpen(false);
+              }}
               className={({ isActive }: { isActive: boolean }): string =>
                 cn(
                   'flex items-center gap-3 w-full rounded-md px-3 py-2.5 text-sm font-medium transition-colors',
