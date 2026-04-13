@@ -19,14 +19,26 @@ export function Layout(): React.ReactElement {
   // correctly shrinks when the soft keyboard appears on mobile (iOS Safari and
   // Chrome Android). This prevents the chat input from being hidden behind the
   // keyboard.
+  //
+  // position:fixed is critical on iOS Safari: without it, the browser scrolls
+  // the layout viewport instead of resizing it when the keyboard opens, which
+  // means the input stays hidden even though visualViewport.height decreased.
+  // With position:fixed + height:vpHeight the container is pinned to the
+  // visible area above the keyboard at all times.
   const vpHeight = useVisualViewport();
 
   return (
     <MobileNavContext.Provider value={{ open, setOpen }}>
-      {/* Height is driven by visualViewport so it follows the keyboard on mobile */}
+      {/* Height driven by visualViewport; position:fixed prevents iOS scroll-under-keyboard */}
       <div
         className="flex flex-col bg-background overflow-hidden"
-        style={{ height: `${vpHeight}px` }}
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: `${vpHeight}px`,
+        }}
       >
         <TopNav />
 
