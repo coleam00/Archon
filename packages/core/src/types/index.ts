@@ -355,6 +355,12 @@ export interface AgentRequestOptions {
    * Claude only — ignored for Codex.
    */
   sandbox?: SandboxSettings;
+  /**
+   * Base URL for the Ollama REST API.
+   * Overrides OLLAMA_BASE_URL env var and the compiled-in default.
+   * Ollama only — ignored for Claude and Codex.
+   */
+  baseUrl?: string;
 }
 
 /**

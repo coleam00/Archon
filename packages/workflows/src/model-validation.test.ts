@@ -65,5 +65,17 @@ describe('model-validation', () => {
       expect(isModelCompatible('claude', '')).toBe(true);
       expect(isModelCompatible('codex', '')).toBe(true);
     });
+
+    it('should accept arbitrary model names with ollama provider', () => {
+      expect(isModelCompatible('ollama', 'gemma4:latest')).toBe(true);
+      expect(isModelCompatible('ollama', 'llama3:8b')).toBe(true);
+      expect(isModelCompatible('ollama', 'mistral')).toBe(true);
+    });
+
+    it('should reject the inherit sentinel with ollama provider', () => {
+      // 'inherit' is Claude-only; passing it to Ollama would send the literal
+      // string "inherit" to /api/chat and fail at runtime
+      expect(isModelCompatible('ollama', 'inherit')).toBe(false);
+    });
   });
 });

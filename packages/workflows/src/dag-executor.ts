@@ -362,7 +362,7 @@ function expandEnvVars(config: Record<string, unknown>): {
  */
 async function resolveNodeProviderAndModel(
   node: DagNode,
-  workflowProvider: 'claude' | 'codex',
+  workflowProvider: 'claude' | 'codex' | 'ollama',
   workflowModel: string | undefined,
   config: WorkflowConfig,
   platform: IWorkflowPlatform,
@@ -371,18 +371,19 @@ async function resolveNodeProviderAndModel(
   cwd: string,
   workflowLevelOptions: WorkflowLevelOptions
 ): Promise<{
-  provider: 'claude' | 'codex';
+  provider: 'claude' | 'codex' | 'ollama';
   model: string | undefined;
   options: WorkflowAgentOptions | undefined;
 }> {
-  let provider: 'claude' | 'codex';
+  let provider: 'claude' | 'codex' | 'ollama';
 
   if (node.provider) {
     provider = node.provider;
   } else if (node.model && isClaudeModel(node.model)) {
     provider = 'claude';
   } else if (node.model) {
-    provider = 'codex';
+    // Non-Claude model: inherit workflowProvider so Ollama users aren't silently rerouted to Codex
+    provider = workflowProvider === 'ollama' ? 'ollama' : 'codex';
   } else {
     provider = workflowProvider;
   }
@@ -397,30 +398,33 @@ async function resolveNodeProviderAndModel(
     );
   }
 
-  // Warn if Codex node has allowed_tools or denied_tools (unsupported per-call)
+  // Warn if non-Claude node has allowed_tools or denied_tools (Claude-only feature)
   if (
-    provider === 'codex' &&
+    provider !== 'claude' &&
     (node.allowed_tools !== undefined || node.denied_tools !== undefined)
   ) {
-    getLog().warn({ nodeId: node.id }, 'dag_node_tool_restrictions_ignored_codex');
+    getLog().warn({ nodeId: node.id, provider }, 'dag_node_tool_restrictions_ignored');
     const delivered = await safeSendMessage(
       platform,
       conversationId,
-      `Warning: Node '${node.id}' has allowed_tools/denied_tools set but uses Codex — per-node tool restrictions are not supported for Codex. Configure MCP servers globally in the Codex CLI config instead.`,
+      `Warning: Node '${node.id}' has allowed_tools/denied_tools set but uses ${provider} — per-node tool restrictions are Claude-only and will be ignored.`,
       { workflowId: workflowRunId, nodeName: node.id }
     );
     if (!delivered) {
-      getLog().error({ nodeId: node.id, workflowRunId }, 'dag_node_codex_warning_delivery_failed');
+      getLog().error(
+        { nodeId: node.id, workflowRunId },
+        'dag_node_tool_restrictions_warning_delivery_failed'
+      );
     }
   }
 
-  // Warn if Codex node has hooks (unsupported)
-  if (provider === 'codex' && node.hooks) {
-    getLog().warn({ nodeId: node.id }, 'dag_node_hooks_ignored_codex');
+  // Warn if non-Claude node has hooks (Claude-only)
+  if (provider !== 'claude' && node.hooks) {
+    getLog().warn({ nodeId: node.id, provider }, 'dag_node_hooks_ignored');
     const delivered = await safeSendMessage(
       platform,
       conversationId,
-      `Warning: Node '${node.id}' has hooks set but uses Codex provider — hooks are Claude-only and will be ignored.`,
+      `Warning: Node '${node.id}' has hooks set but uses ${provider} — hooks are Claude-only and will be ignored.`,
       { workflowId: workflowRunId, nodeName: node.id }
     );
     if (!delivered) {
@@ -428,13 +432,13 @@ async function resolveNodeProviderAndModel(
     }
   }
 
-  // Warn if Codex node has mcp (unsupported per-call)
-  if (provider === 'codex' && node.mcp) {
-    getLog().warn({ nodeId: node.id }, 'dag.mcp_ignored_codex');
+  // Warn if non-Claude node has mcp (Claude-only)
+  if (provider !== 'claude' && node.mcp) {
+    getLog().warn({ nodeId: node.id, provider }, 'dag.mcp_ignored');
     const delivered = await safeSendMessage(
       platform,
       conversationId,
-      `Warning: Node '${node.id}' has mcp config but uses Codex — per-node MCP servers are not supported for Codex. Configure MCP servers globally in the Codex CLI config instead.`,
+      `Warning: Node '${node.id}' has mcp config but uses ${provider} — per-node MCP servers are Claude-only and will be ignored.`,
       { workflowId: workflowRunId, nodeName: node.id }
     );
     if (!delivered) {
@@ -442,13 +446,13 @@ async function resolveNodeProviderAndModel(
     }
   }
 
-  // Warn if Codex node has skills (unsupported)
-  if (provider === 'codex' && node.skills) {
-    getLog().warn({ nodeId: node.id }, 'dag.skills_ignored_codex');
+  // Warn if non-Claude node has skills (Claude-only)
+  if (provider !== 'claude' && node.skills) {
+    getLog().warn({ nodeId: node.id, provider }, 'dag.skills_ignored');
     const delivered = await safeSendMessage(
       platform,
       conversationId,
-      `Warning: Node '${node.id}' has skills set but uses Codex — per-node skills are not supported for Codex.`,
+      `Warning: Node '${node.id}' has skills set but uses ${provider} — per-node skills are Claude-only and will be ignored.`,
       { workflowId: workflowRunId, nodeName: node.id }
     );
     if (!delivered) {
@@ -456,8 +460,8 @@ async function resolveNodeProviderAndModel(
     }
   }
 
-  // Warn if Codex node has Claude-only SDK options (effort, thinking, maxBudgetUsd, systemPrompt, fallbackModel, betas, sandbox)
-  if (provider === 'codex') {
+  // Warn if non-Claude node has Claude-only SDK options (effort, thinking, maxBudgetUsd, systemPrompt, fallbackModel, betas, sandbox)
+  if (provider !== 'claude') {
     const claudeOnlyFields = [
       ['effort', node.effort ?? workflowLevelOptions.effort],
       ['thinking', node.thinking ?? workflowLevelOptions.thinking],
@@ -469,11 +473,11 @@ async function resolveNodeProviderAndModel(
     ] as const;
     const present = claudeOnlyFields.filter(([, val]) => val !== undefined).map(([name]) => name);
     if (present.length > 0) {
-      getLog().warn({ nodeId: node.id, fields: present }, 'dag.claude_options_ignored_codex');
+      getLog().warn({ nodeId: node.id, fields: present, provider }, 'dag.claude_options_ignored');
       const delivered = await safeSendMessage(
         platform,
         conversationId,
-        `Warning: Node '${node.id}' has Claude-only options (${present.join(', ')}) but uses Codex — these will be ignored.`,
+        `Warning: Node '${node.id}' has Claude-only options (${present.join(', ')}) but uses ${provider} — these will be ignored.`,
         { workflowId: workflowRunId, nodeName: node.id }
       );
       if (!delivered) {
@@ -496,6 +500,9 @@ async function resolveNodeProviderAndModel(
     if (node.output_format) {
       options.outputFormat = { type: 'json_schema', schema: node.output_format };
     }
+  } else if (provider === 'ollama') {
+    // Ollama: pass model name; provider-specific options built per-SDK above
+    options = model ? { model } : undefined;
   } else {
     const claudeOptions: WorkflowAgentOptions = {};
     if (model) claudeOptions.model = model;
@@ -716,7 +723,7 @@ async function executeNodeInternal(
   cwd: string,
   workflowRun: WorkflowRun,
   node: CommandNode | PromptNode,
-  provider: 'claude' | 'codex',
+  provider: 'claude' | 'codex' | 'ollama',
   nodeOptions: WorkflowAgentOptions | undefined,
   artifactsDir: string,
   logDir: string,
@@ -1667,26 +1674,30 @@ async function executeScriptNode(
  * Caller is responsible for resolving per-node overrides before passing model.
  */
 function buildLoopNodeOptions(
-  provider: 'claude' | 'codex',
+  provider: 'claude' | 'codex' | 'ollama',
   model: string | undefined,
   config: WorkflowConfig
 ): WorkflowAgentOptions | undefined {
-  const codexOptions =
-    provider === 'codex'
-      ? {
-          modelReasoningEffort: config.assistants.codex.modelReasoningEffort,
-          webSearchMode: config.assistants.codex.webSearchMode,
-          additionalDirectories: config.assistants.codex.additionalDirectories,
-        }
-      : undefined;
+  if (provider === 'codex') {
+    const codexOptions = {
+      modelReasoningEffort: config.assistants.codex.modelReasoningEffort,
+      webSearchMode: config.assistants.codex.webSearchMode,
+      additionalDirectories: config.assistants.codex.additionalDirectories,
+    };
+    return { ...(model ? { model } : {}), ...codexOptions };
+  }
 
-  const claudeOptions =
-    provider === 'claude' && config.assistants.claude.settingSources
-      ? { settingSources: config.assistants.claude.settingSources }
-      : undefined;
+  if (provider === 'ollama') {
+    // Ollama only needs the model name
+    return model ? { model } : undefined;
+  }
 
-  if (!model && !codexOptions && !claudeOptions) return undefined;
-  return { ...(model ? { model } : {}), ...codexOptions, ...claudeOptions };
+  // Claude
+  const claudeOptions = config.assistants.claude.settingSources
+    ? { settingSources: config.assistants.claude.settingSources }
+    : undefined;
+  if (!model && !claudeOptions) return undefined;
+  return { ...(model ? { model } : {}), ...claudeOptions };
 }
 
 /**
@@ -1704,7 +1715,7 @@ async function executeLoopNode(
   cwd: string,
   workflowRun: WorkflowRun,
   node: LoopNode,
-  workflowProvider: 'claude' | 'codex',
+  workflowProvider: 'claude' | 'codex' | 'ollama',
   workflowModel: string | undefined,
   artifactsDir: string,
   logDir: string,
@@ -2194,7 +2205,7 @@ async function executeApprovalNode(
   deps: WorkflowDeps,
   platform: IWorkflowPlatform,
   conversationId: string,
-  workflowProvider: 'claude' | 'codex',
+  workflowProvider: 'claude' | 'codex' | 'ollama',
   workflowModel: string | undefined,
   cwd: string,
   artifactsDir: string,
@@ -2364,7 +2375,7 @@ export async function executeDagWorkflow(
   cwd: string,
   workflow: { name: string; nodes: readonly DagNode[] } & WorkflowLevelOptions,
   workflowRun: WorkflowRun,
-  workflowProvider: 'claude' | 'codex',
+  workflowProvider: 'claude' | 'codex' | 'ollama',
   workflowModel: string | undefined,
   artifactsDir: string,
   logDir: string,
@@ -2601,13 +2612,14 @@ export async function executeDagWorkflow(
           // 3b. Loop node dispatch — manages its own AI sessions and iteration
           if (isLoopNode(node)) {
             // Resolve per-node provider/model overrides (same logic as other node types)
-            let loopProvider: 'claude' | 'codex';
+            let loopProvider: 'claude' | 'codex' | 'ollama';
             if (node.provider) {
               loopProvider = node.provider;
             } else if (node.model && isClaudeModel(node.model)) {
               loopProvider = 'claude';
             } else if (node.model) {
-              loopProvider = 'codex';
+              // Non-Claude model: inherit workflowProvider so Ollama users aren't rerouted to Codex
+              loopProvider = workflowProvider === 'ollama' ? 'ollama' : 'codex';
             } else {
               loopProvider = workflowProvider;
             }

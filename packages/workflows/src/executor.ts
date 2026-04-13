@@ -277,8 +277,8 @@ export async function executeWorkflow(
 
   // Resolve provider and model once (used by all nodes)
   // When workflow sets a model but not a provider, infer provider from the model.
-  // e.g. model: sonnet → provider: claude, even if config.assistant is codex.
-  let resolvedProvider: 'claude' | 'codex';
+  // e.g. model: sonnet → provider: claude, even if config.assistant is ollama.
+  let resolvedProvider: 'claude' | 'codex' | 'ollama';
   let providerSource: string;
   if (workflow.provider) {
     resolvedProvider = workflow.provider;
@@ -287,7 +287,8 @@ export async function executeWorkflow(
     resolvedProvider = 'claude';
     providerSource = 'inferred from workflow model';
   } else if (workflow.model) {
-    resolvedProvider = 'codex';
+    // Non-Claude model: inherit config.assistant so Ollama users aren't silently rerouted to Codex
+    resolvedProvider = config.assistant === 'ollama' ? 'ollama' : 'codex';
     providerSource = 'inferred from workflow model';
   } else {
     resolvedProvider = config.assistant;

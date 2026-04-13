@@ -127,7 +127,7 @@ function WorkflowBuilderInner(): React.ReactElement {
   // Core state
   const [workflowName, setWorkflowName] = useState('');
   const [workflowDescription, setWorkflowDescription] = useState('');
-  const [provider, setProvider] = useState<'claude' | 'codex' | undefined>(undefined);
+  const [provider, setProvider] = useState<'claude' | 'codex' | 'ollama' | undefined>(undefined);
   const [model, setModel] = useState<string | undefined>(undefined);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);

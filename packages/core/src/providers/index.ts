@@ -10,6 +10,7 @@
 
 export { ClaudeProvider } from './claude';
 export { CodexProvider } from './codex';
+export { OllamaProvider } from './ollama';
 export { getAgentProvider } from './factory';
 
 // Re-export types for consumers importing from this submodule directly

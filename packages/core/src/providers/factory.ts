@@ -7,6 +7,7 @@
 import type { IAgentProvider } from '../types';
 import { ClaudeProvider } from './claude';
 import { CodexProvider } from './codex';
+import { OllamaProvider } from './ollama';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -31,7 +32,12 @@ export function getAgentProvider(type: string): IAgentProvider {
     case 'codex':
       getLog().debug({ provider: 'codex' }, 'provider_selected');
       return new CodexProvider();
+    case 'ollama':
+      getLog().debug({ provider: 'ollama' }, 'provider_selected');
+      return new OllamaProvider();
     default:
-      throw new Error(`Unknown provider type: ${type}. Supported types: 'claude', 'codex'`);
+      throw new Error(
+        `Unknown provider type: ${type}. Supported types: 'claude', 'codex', 'ollama'`
+      );
   }
 }

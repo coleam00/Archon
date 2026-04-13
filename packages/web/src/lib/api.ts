@@ -453,6 +453,11 @@ export async function updateAssistantConfig(
   });
 }
 
+/** Fetch locally installed Ollama models. Returns empty list if Ollama is unreachable. */
+export async function getOllamaModels(): Promise<{ models: string[]; available: boolean }> {
+  return fetchJSON('/api/ollama/models');
+}
+
 export type IsolationEnvironment = components['schemas']['IsolationEnvironment'];
 
 export async function getCodebaseEnvironments(codebaseId: string): Promise<IsolationEnvironment[]> {

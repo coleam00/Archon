@@ -7,13 +7,18 @@ import { z } from '@hono/zod-openapi';
 export const safeConfigSchema = z
   .object({
     botName: z.string(),
-    assistant: z.enum(['claude', 'codex']),
+    assistant: z.enum(['claude', 'codex', 'ollama']),
+    availableAssistants: z.array(z.enum(['claude', 'codex', 'ollama'])),
     assistants: z.object({
       claude: z.object({ model: z.string().optional() }),
       codex: z.object({
         model: z.string().optional(),
         modelReasoningEffort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
         webSearchMode: z.enum(['disabled', 'cached', 'live']).optional(),
+      }),
+      ollama: z.object({
+        model: z.string().optional(),
+        baseUrl: z.string().optional(),
       }),
     }),
     streaming: z.object({
@@ -34,7 +39,7 @@ export const safeConfigSchema = z
 /** Body for PATCH /api/config/assistants — all fields optional (partial update). */
 export const updateAssistantConfigBodySchema = z
   .object({
-    assistant: z.enum(['claude', 'codex']).optional(),
+    assistant: z.enum(['claude', 'codex', 'ollama']).optional(),
     claude: z
       .object({
         model: z.string(),
@@ -45,6 +50,12 @@ export const updateAssistantConfigBodySchema = z
         model: z.string(),
         modelReasoningEffort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
         webSearchMode: z.enum(['disabled', 'cached', 'live']).optional(),
+      })
+      .optional(),
+    ollama: z
+      .object({
+        model: z.string().optional(),
+        baseUrl: z.string().optional(),
       })
       .optional(),
   })
@@ -60,6 +71,14 @@ export const configResponseSchema = z
 
 /** @deprecated Use configResponseSchema instead. */
 export const updateAssistantConfigResponseSchema = configResponseSchema;
+
+/** Response for GET /api/ollama/models — list of locally installed model names. */
+export const ollamaModelsResponseSchema = z
+  .object({
+    models: z.array(z.string()),
+    available: z.boolean(),
+  })
+  .openapi('OllamaModelsResponse');
 
 /** A single isolation environment record. */
 export const isolationEnvironmentSchema = z

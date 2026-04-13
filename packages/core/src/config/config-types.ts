@@ -30,6 +30,17 @@ export interface ClaudeCodexProviderDefaults {
   settingSources?: ('project' | 'user')[];
 }
 
+/**
+ * Defaults for the Ollama assistant provider.
+ * Configured under `assistants.ollama` in `.archon/config.yaml`.
+ */
+export interface OllamaAssistantDefaults {
+  model?: string;
+  /** Ollama server base URL. Overrides OLLAMA_BASE_URL env var.
+   *  @default 'http://localhost:11434' */
+  baseUrl?: string;
+}
+
 export interface GlobalConfig {
   /**
    * Bot display name (shown in messages)
@@ -41,7 +52,7 @@ export interface GlobalConfig {
    * Default AI assistant when no codebase-specific preference
    * @default 'claude'
    */
-  defaultAssistant?: 'claude' | 'codex';
+  defaultAssistant?: 'claude' | 'codex' | 'ollama';
 
   /**
    * Assistant-specific defaults (model, reasoning effort, etc.)
@@ -49,6 +60,7 @@ export interface GlobalConfig {
   assistants?: {
     claude?: ClaudeCodexProviderDefaults;
     codex?: CodexProviderDefaults;
+    ollama?: OllamaAssistantDefaults;
   };
 
   /**
@@ -112,7 +124,7 @@ export interface RepoConfig {
    * AI assistant preference for this repository
    * Overrides global default
    */
-  assistant?: 'claude' | 'codex';
+  assistant?: 'claude' | 'codex' | 'ollama';
 
   /**
    * Assistant-specific defaults for this repository
@@ -120,6 +132,7 @@ export interface RepoConfig {
   assistants?: {
     claude?: ClaudeCodexProviderDefaults;
     codex?: CodexProviderDefaults;
+    ollama?: OllamaAssistantDefaults;
   };
 
   /**
@@ -215,10 +228,11 @@ export interface RepoConfig {
  */
 export interface MergedConfig {
   botName: string;
-  assistant: 'claude' | 'codex';
+  assistant: 'claude' | 'codex' | 'ollama';
   assistants: {
     claude: ClaudeCodexProviderDefaults;
     codex: CodexProviderDefaults;
+    ollama: OllamaAssistantDefaults;
   };
   streaming: {
     telegram: 'stream' | 'batch';
@@ -279,10 +293,13 @@ export interface MergedConfig {
  */
 export interface SafeConfig {
   botName: string;
-  assistant: 'claude' | 'codex';
+  assistant: 'claude' | 'codex' | 'ollama';
+  /** Providers that are configured and available on this server. */
+  availableAssistants: ('claude' | 'codex' | 'ollama')[];
   assistants: {
     claude: Pick<ClaudeCodexProviderDefaults, 'model'>;
     codex: Pick<CodexProviderDefaults, 'model' | 'modelReasoningEffort' | 'webSearchMode'>;
+    ollama: Pick<OllamaAssistantDefaults, 'model' | 'baseUrl'>;
   };
   streaming: {
     telegram: 'stream' | 'batch';

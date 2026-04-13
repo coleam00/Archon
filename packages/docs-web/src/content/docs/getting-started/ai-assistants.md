@@ -1,6 +1,6 @@
 ---
 title: AI Assistants
-description: Configure Claude Code and Codex as AI assistants for Archon.
+description: Configure Claude Code, Codex, or Ollama as AI assistants for Archon.
 category: getting-started
 area: clients
 audience: [user]
@@ -9,7 +9,7 @@ sidebar:
   order: 4
 ---
 
-You must configure **at least one** AI assistant. Both can be configured if desired.
+You must configure **at least one** AI assistant. Multiple can be configured and switched between.
 
 ## Claude Code
 
@@ -130,6 +130,43 @@ If you want Codex to be the default AI assistant for new conversations without c
 DEFAULT_AI_ASSISTANT=codex
 ```
 
+## Ollama
+
+**Best for local/offline use or private models.**
+
+Ollama runs models locally on your machine — no API key or account required.
+
+### Prerequisites
+
+1. [Install Ollama](https://ollama.com/download)
+2. Start the server: `ollama serve`
+3. Pull a model: `ollama pull gemma4:latest` (or any model from [ollama.com/library](https://ollama.com/library))
+
+### No Authentication Needed
+
+Ollama requires no credentials. Archon connects to it over HTTP.
+
+### Ollama Configuration Options
+
+Configure Ollama in `.archon/config.yaml`:
+
+```yaml
+assistants:
+  ollama:
+    model: gemma4:latest  # A model is required — Ollama has no built-in default
+    baseUrl: http://localhost:11434  # Optional, this is the default
+```
+
+The `model` field is required — unlike Claude and Codex, there is no fallback. Archon will error at query time if none is set.
+
+`baseUrl` can also be set via the `OLLAMA_BASE_URL` environment variable, which takes precedence over the config file.
+
+### Set as Default (Optional)
+
+```ini
+DEFAULT_AI_ASSISTANT=ollama
+```
+
 ## How Assistant Selection Works
 
 - Assistant type is set per codebase via the `assistant` field in `.archon/config.yaml` or the `DEFAULT_AI_ASSISTANT` env var
@@ -137,3 +174,4 @@ DEFAULT_AI_ASSISTANT=codex
 - `DEFAULT_AI_ASSISTANT` (optional) is used only for new conversations without codebase context
 - Workflows can override the assistant on a per-node basis with `provider` and `model` fields
 - Configuration priority: workflow-level options > config file defaults > SDK defaults
+- In the Web UI Settings, if the saved default is `ollama` but Ollama is unreachable when the page loads, the UI falls back to Claude until Ollama becomes available again

@@ -121,6 +121,7 @@ import {
   updateAssistantConfigResponseSchema,
   configResponseSchema,
   codebaseEnvironmentsResponseSchema,
+  ollamaModelsResponseSchema,
 } from './schemas/config.schemas';
 
 // Read app version: use build-time constant in binary, package.json in dev
@@ -834,6 +835,23 @@ const getHealthRoute = createRoute({
         },
       },
       description: 'Health status',
+    },
+  },
+});
+
+const getOllamaModelsRoute = createRoute({
+  method: 'get',
+  path: '/api/ollama/models',
+  tags: ['System'],
+  summary: 'List locally installed Ollama models',
+  responses: {
+    200: {
+      content: {
+        'application/json': {
+          schema: ollamaModelsResponseSchema,
+        },
+      },
+      description: 'Ollama model list',
     },
   },
 });
@@ -2545,10 +2563,11 @@ export function registerApiRoutes(
       if (body.assistant !== undefined) {
         updates.defaultAssistant = body.assistant;
       }
-      if (body.claude !== undefined || body.codex !== undefined) {
+      if (body.claude !== undefined || body.codex !== undefined || body.ollama !== undefined) {
         updates.assistants = {
           ...(body.claude ? { claude: body.claude } : {}),
           ...(body.codex ? { codex: body.codex } : {}),
+          ...(body.ollama ? { ollama: body.ollama } : {}),
         };
       }
 
@@ -2619,5 +2638,26 @@ export function registerApiRoutes(
     if (!BUNDLED_IS_BINARY) return c.json(noUpdate);
     const result = await checkForUpdate(appVersion);
     return c.json(result ?? noUpdate);
+  });
+
+  registerOpenApiRoute(getOllamaModelsRoute, async c => {
+    const config = await loadConfig();
+    const baseUrl =
+      config.assistants.ollama.baseUrl ?? process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
+    getLog().info({ baseUrl }, 'ollama.discovery_started');
+    try {
+      const response = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(3000) });
+      if (!response.ok) {
+        getLog().warn({ baseUrl, status: response.status }, 'ollama.discovery_failed');
+        return c.json({ models: [], available: false });
+      }
+      const data = (await response.json()) as { models?: { name: string }[] };
+      const models = (data.models ?? []).map(m => m.name);
+      getLog().info({ baseUrl, modelCount: models.length }, 'ollama.discovery_completed');
+      return c.json({ models, available: true });
+    } catch (err) {
+      getLog().warn({ baseUrl, err }, 'ollama.discovery_failed');
+      return c.json({ models: [], available: false });
+    }
   });
 }

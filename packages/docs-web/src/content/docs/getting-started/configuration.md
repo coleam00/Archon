@@ -35,6 +35,9 @@ assistants:
   codex:
     model: gpt-5.3-codex
     modelReasoningEffort: medium
+  ollama:
+    model: gemma4:latest  # A model is required — Ollama has no built-in default
+    # baseUrl: http://localhost:11434  # Optional
 
 # docs:
 #   path: packages/docs-web/src/content/docs  # Optional: default is docs/
