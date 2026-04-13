@@ -431,9 +431,15 @@ export async function workflowRunCommand(
     // current working directory's canonical path.
     let currentRepoRoot: string | null = null;
     try {
-      currentRepoRoot = await git.getCanonicalRepoPath(cwd);
-    } catch {
-      // Non-fatal: cwd may not be a git repo (handled later) or git unavailable
+      // Resolve subdirectory to repo top-level first, then canonicalize to handle
+      // linked worktrees (getCanonicalRepoPath doesn't resolve subdirs itself).
+      const repoRoot = await git.findRepoRoot(cwd);
+      currentRepoRoot = repoRoot ? await git.getCanonicalRepoPath(repoRoot) : null;
+    } catch (error) {
+      // findRepoRoot returns null for non-git dirs (expected), but both functions
+      // throw on unexpected errors (permissions, I/O). Log and fall through —
+      // the guard will allow reuse when currentRepoRoot is null.
+      getLog().debug({ err: error, cwd }, 'worktree.reuse_root_detection_failed');
     }
     const envSourceRoot =
       existingEnv && typeof existingEnv.metadata?.source_repo_root === 'string'
