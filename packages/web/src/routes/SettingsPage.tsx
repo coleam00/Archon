@@ -539,14 +539,10 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
             codex: { model: codexModel, modelReasoningEffort: reasoning, webSearchMode: webSearch },
           }
         : {}),
-      ...(ollamaModel || ollamaBaseUrl
-        ? {
-            ollama: {
-              ...(ollamaModel ? { model: ollamaModel } : {}),
-              ...(ollamaBaseUrl ? { baseUrl: ollamaBaseUrl } : {}),
-            },
-          }
-        : {}),
+      ollama: {
+        ...(ollamaModel ? { model: ollamaModel } : {}),
+        ...(ollamaBaseUrl ? { baseUrl: ollamaBaseUrl } : {}),
+      },
     });
   }
 
