@@ -43,6 +43,7 @@ import type { MergedConfig } from '../config/config-types';
 import { generateAndSetTitle } from '../services/title-generator';
 import { validateAndResolveIsolation, dispatchBackgroundWorkflow } from './orchestrator';
 import { IsolationBlockedError } from '@archon/isolation';
+import { withObservabilityContext } from '@archon/providers/observability';
 import { buildOrchestratorPrompt, buildProjectScopedPrompt } from './prompt-builder';
 import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
@@ -496,6 +497,18 @@ function buildFullPrompt(
  * and workflows upfront.
  */
 export async function handleMessage(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  message: string,
+  context?: HandleMessageContext
+): Promise<void> {
+  return withObservabilityContext(
+    { conversationId, platformType: platform.getPlatformType() },
+    () => handleMessageInner(platform, conversationId, message, context)
+  );
+}
+
+async function handleMessageInner(
   platform: IPlatformAdapter,
   conversationId: string,
   message: string,

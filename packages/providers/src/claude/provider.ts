@@ -13,11 +13,11 @@
  * - Not set: Auto-detect - use tokens if present in env, otherwise global auth
  */
 import {
-  query,
   type Options,
   type HookCallback,
   type HookCallbackMatcher,
 } from '@anthropic-ai/claude-agent-sdk';
+import { getQuery } from '../observability';
 import cliPath from '@anthropic-ai/claude-agent-sdk/embed';
 import type {
   IAgentProvider,
@@ -147,16 +147,17 @@ class FirstEventTimeoutError extends Error {}
  * within `timeoutMs`. If it doesn't, aborts the controller and throws.
  */
 export async function* withFirstMessageTimeout<T>(
-  gen: AsyncGenerator<T>,
+  iterable: AsyncIterable<T>,
   controller: AbortController,
   timeoutMs: number,
   diagnostics: Record<string, unknown>
 ): AsyncGenerator<T> {
+  const iter = iterable[Symbol.asyncIterator]();
   let timerId: ReturnType<typeof setTimeout> | undefined;
   let firstValue: IteratorResult<T>;
   try {
     firstValue = await Promise.race([
-      gen.next(),
+      iter.next(),
       new Promise<never>((_, reject) => {
         timerId = setTimeout(() => {
           reject(new FirstEventTimeoutError());
@@ -182,7 +183,10 @@ export async function* withFirstMessageTimeout<T>(
 
   if (firstValue.done) return;
   yield firstValue.value;
-  yield* gen;
+  // Continue yielding remaining items from the iterator
+  for await (const item of { [Symbol.asyncIterator]: () => iter }) {
+    yield item;
+  }
 }
 
 /**
@@ -908,7 +912,7 @@ export class ClaudeProvider implements IAgentProvider {
 
       try {
         // 4. Run query with first-event timeout protection
-        const rawEvents = query({ prompt, options });
+        const rawEvents = getQuery()({ prompt, options });
         const timeoutMs = getFirstEventTimeoutMs();
         const diagnostics = buildFirstEventHangDiagnostics(
           options.env as Record<string, string>,

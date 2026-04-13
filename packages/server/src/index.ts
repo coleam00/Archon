@@ -67,6 +67,7 @@ import { MessagePersistence } from './adapters/web/persistence';
 import { SSETransport } from './adapters/web/transport';
 import { WorkflowEventBridge } from './adapters/web/workflow-bridge';
 import { registerApiRoutes } from './routes/api';
+import { initLangfuse, shutdownLangfuse, isLangfuseEnabled } from '@archon/providers';
 import {
   handleMessage,
   pool,
@@ -204,6 +205,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   const config = await loadConfig();
   logConfig(config);
+
+  // Initialize Langfuse observability (no-op when env vars not set)
+  if (isLangfuseEnabled()) {
+    await initLangfuse();
+  }
 
   // Start cleanup scheduler
   startCleanupScheduler();
@@ -616,6 +622,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     getLog().info('server_shutting_down');
     stopCleanupScheduler();
     persistence.stopPeriodicFlush();
+
+    // Flush Langfuse spans before stopping adapters
+    shutdownLangfuse().catch((e: unknown) => {
+      getLog().error({ err: e }, 'langfuse.shutdown_failed');
+    });
 
     // Flush all buffered messages before stopping adapters
     persistence

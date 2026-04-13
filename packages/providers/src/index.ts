@@ -43,3 +43,12 @@ export { parseCodexConfig, type CodexProviderDefaults } from './codex/config';
 // Utilities (needed by consumers)
 export { resetCodexSingleton } from './codex/provider';
 export { resolveCodexBinaryPath, fileExists } from './codex/binary-resolver';
+
+// Observability (optional Langfuse integration)
+export {
+  initLangfuse,
+  shutdownLangfuse,
+  isLangfuseEnabled,
+  withObservabilityContext,
+  type ObservabilityAttrs,
+} from './observability';

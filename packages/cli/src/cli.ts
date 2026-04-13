@@ -82,6 +82,7 @@ import {
   BUNDLED_VERSION,
 } from '@archon/paths';
 import * as git from '@archon/git';
+import { initLangfuse, shutdownLangfuse, isLangfuseEnabled } from '@archon/providers';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -251,6 +252,11 @@ async function main(): Promise<number> {
       setLogLevel('warn');
     } else if (values.verbose) {
       setLogLevel('debug');
+    }
+
+    // Initialize Langfuse observability (no-op when env vars not set)
+    if (isLangfuseEnabled()) {
+      await initLangfuse();
     }
 
     // Note: orphaned run cleanup moved to `workflow cleanup` command only.
@@ -573,7 +579,7 @@ async function main(): Promise<number> {
     }
     return 1;
   } finally {
-    // Always close database connection
+    await shutdownLangfuse();
     await closeDb();
   }
 }

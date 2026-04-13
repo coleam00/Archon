@@ -21,6 +21,7 @@ import type {
   TokenUsage,
 } from '@archon/providers/types';
 import { getProviderCapabilities } from '@archon/providers';
+import { withObservabilityContext } from '@archon/providers/observability';
 import type {
   DagNode,
   ApprovalNode,
@@ -2114,6 +2115,46 @@ export async function executeDagWorkflow(
   workflow: { name: string; nodes: readonly DagNode[] } & WorkflowLevelOptions,
   workflowRun: WorkflowRun,
   workflowProvider: string,
+  workflowModel: string | undefined,
+  artifactsDir: string,
+  logDir: string,
+  baseBranch: string,
+  docsDir: string,
+  config: WorkflowConfig,
+  configuredCommandFolder?: string,
+  issueContext?: string,
+  priorCompletedNodes?: Map<string, string>
+): Promise<string | undefined> {
+  return withObservabilityContext({ workflowName: workflow.name, conversationId }, () =>
+    executeDagWorkflowInner(
+      deps,
+      platform,
+      conversationId,
+      cwd,
+      workflow,
+      workflowRun,
+      workflowProvider,
+      workflowModel,
+      artifactsDir,
+      logDir,
+      baseBranch,
+      docsDir,
+      config,
+      configuredCommandFolder,
+      issueContext,
+      priorCompletedNodes
+    )
+  );
+}
+
+async function executeDagWorkflowInner(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  cwd: string,
+  workflow: { name: string; nodes: readonly DagNode[] } & WorkflowLevelOptions,
+  workflowRun: WorkflowRun,
+  workflowProvider: 'claude' | 'codex',
   workflowModel: string | undefined,
   artifactsDir: string,
   logDir: string,
