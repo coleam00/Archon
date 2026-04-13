@@ -472,7 +472,8 @@ async function buildFullPrompt(
 
   const memorySuffix = memoryContent
     ? '\n\n---\n\n## Project Memory\n\nLoaded from MEMORY.md (shared with CLI). Topic files can be read on demand via the Read tool at: `' +
-      computeMemoryPath(conversation.cwd ?? '') + '/`\n' +
+      computeMemoryPath(conversation.cwd ?? '') +
+      '/`\n' +
       'For session history, check Obsidian vault at `Claude/Session-Logs/` via Obsidian MCP or filesystem.\n\n' +
       memoryContent
     : '';
@@ -500,7 +501,14 @@ async function buildFullPrompt(
     );
   }
 
-  return systemPrompt + memorySuffix + '\n\n---\n\n## User Message\n\n' + message + contextSuffix + fileSuffix;
+  return (
+    systemPrompt +
+    memorySuffix +
+    '\n\n---\n\n## User Message\n\n' +
+    message +
+    contextSuffix +
+    fileSuffix
+  );
 }
 
 // ─── Main Handler ───────────────────────────────────────────────────────────
@@ -871,11 +879,16 @@ export async function handleMessage(
         );
 
         // Retry once (guard against infinite recursion)
-        const retryDepth = ((context as Record<string, unknown> | undefined)?._retryDepth as number | undefined) ?? 0;
+        const retryDepth =
+          ((context as Record<string, unknown> | undefined)?._retryDepth as number | undefined) ??
+          0;
         if (retryDepth > 0) {
           getLog().error({ conversationId, retryDepth }, 'session.auto_compact_retry_limit');
         } else {
-          await handleMessage(platform, conversationId, message, { ...context, _retryDepth: retryDepth + 1 } as HandleMessageContext);
+          await handleMessage(platform, conversationId, message, {
+            ...context,
+            _retryDepth: retryDepth + 1,
+          } as HandleMessageContext);
           return;
         }
       } catch (compactError) {
@@ -1457,7 +1470,10 @@ async function persistConversationMessages(
 ): Promise<void> {
   try {
     // Skip responses containing orchestrator commands (not user-facing content)
-    if (/^\/invoke-workflow\s/m.test(assistantResponse) || /^\/register-project\s/m.test(assistantResponse)) {
+    if (
+      /^\/invoke-workflow\s/m.test(assistantResponse) ||
+      /^\/register-project\s/m.test(assistantResponse)
+    ) {
       return;
     }
     await messageDb.addMessage(conversationDbId, 'user', userMessage);
@@ -1481,11 +1497,9 @@ async function saveSessionToObsidian(conversation: Conversation): Promise<string
     : null;
   if (!codebase) return null;
 
-  const transcript = messages
-    .map(m => `[${m.role}]: ${m.content.slice(0, 500)}`)
-    .join('\n\n');
+  const transcript = messages.map(m => `[${m.role}]: ${m.content.slice(0, 500)}`).join('\n\n');
 
-  const aiClient = getAssistantClient(conversation.ai_assistant_type);
+  const aiClient = getAgentProvider(conversation.ai_assistant_type);
   const cwd = conversation.cwd ?? getArchonWorkspacesPath();
   let summary = '';
 
@@ -1494,7 +1508,7 @@ async function saveSessionToObsidian(conversation: Conversation): Promise<string
       `Summarize this conversation transcript concisely. Include: key decisions, current state of work, important context, and pending items. Output ONLY the summary, no preamble.\n\n---\n\n${transcript}`,
       cwd,
       undefined,
-      { tools: [] }
+      { nodeConfig: { allowed_tools: [] } }
     )) {
       if (chunk.type === 'assistant') summary += chunk.content;
     }
@@ -1557,7 +1571,7 @@ async function handleCompact(
 
   await platform.sendMessage(conversationId, 'Compacting session...');
 
-  const aiClient = getAssistantClient(conversation.ai_assistant_type);
+  const aiClient = getAgentProvider(conversation.ai_assistant_type);
   const cwd = conversation.cwd ?? getArchonWorkspacesPath();
   let summary = '';
 
@@ -1569,7 +1583,7 @@ async function handleCompact(
 
   try {
     for await (const chunk of aiClient.sendQuery(summarizePrompt, cwd, resumeId, {
-      tools: [],
+      nodeConfig: { allowed_tools: [] },
     })) {
       if (chunk.type === 'assistant') {
         summary += chunk.content;
@@ -1584,14 +1598,12 @@ async function handleCompact(
       return;
     }
 
-    const transcript = messages
-      .map(m => `[${m.role}]: ${m.content.slice(0, 500)}`)
-      .join('\n\n');
+    const transcript = messages.map(m => `[${m.role}]: ${m.content.slice(0, 500)}`).join('\n\n');
 
     const fallbackPrompt = `Summarize this conversation transcript. Include: key decisions, current state of work, important context, and pending items. Be concise but complete. Output ONLY the summary.\n\n---\n\n${transcript}`;
 
     for await (const chunk of aiClient.sendQuery(fallbackPrompt, cwd, undefined, {
-      tools: [],
+      nodeConfig: { allowed_tools: [] },
     })) {
       if (chunk.type === 'assistant') {
         summary += chunk.content;
@@ -1653,9 +1665,8 @@ async function handleResume(
     return;
   }
 
-  const preview = memoryContent.length > 1000
-    ? memoryContent.slice(0, 1000) + '\n...(truncated)'
-    : memoryContent;
+  const preview =
+    memoryContent.length > 1000 ? memoryContent.slice(0, 1000) + '\n...(truncated)' : memoryContent;
 
   const memoryPath = computeMemoryPath(conversation.cwd ?? '');
   await platform.sendMessage(
