@@ -161,7 +161,7 @@ export async function* traceQuery(
   const propagateAttributes = tracingPropagateAttributes;
   const ctx = getObservabilityContext();
 
-  // Collect output data as we stream
+  // Collect metadata as we stream (chunks are yielded immediately)
   const textParts: string[] = [];
   const toolCalls: { name: string; input?: unknown; output?: string; durationMs?: number }[] = [];
   let usage: TokenUsage | undefined;
@@ -169,63 +169,70 @@ export async function* traceQuery(
   let numTurns: number | undefined;
   let sessionId: string | undefined;
   let traceError: Error | undefined;
-  let activeToolCall: { name: string; input?: unknown; startTime: number } | null = null;
 
-  const chunks: MessageChunk[] = [];
+  // Track active tool calls by ID for correct pairing (tools can overlap)
+  const activeToolCalls = new Map<string, { name: string; input?: unknown; startTime: number }>();
+  const unnamedToolQueue: { name: string; input?: unknown; startTime: number }[] = [];
+
   let streamError: Error | undefined;
 
-  // Consume the generator and collect chunks
+  // Stream chunks through — yield immediately, collect metadata for trace
   try {
     for await (const chunk of generator) {
-      chunks.push(chunk);
-
       if (chunk.type === 'assistant') {
         textParts.push(chunk.content);
       } else if (chunk.type === 'tool') {
-        // New tool call starting — close any previous one
-        if (activeToolCall) {
-          toolCalls.push({
-            name: activeToolCall.name,
-            input: activeToolCall.input,
-            durationMs: Date.now() - activeToolCall.startTime,
-          });
-        }
-        activeToolCall = { name: chunk.toolName, input: chunk.toolInput, startTime: Date.now() };
+        const call = { name: chunk.toolName, input: chunk.toolInput, startTime: Date.now() };
+        if (chunk.toolCallId) activeToolCalls.set(chunk.toolCallId, call);
+        else unnamedToolQueue.push(call);
       } else if (chunk.type === 'tool_result') {
-        if (activeToolCall) {
+        const matched = chunk.toolCallId
+          ? activeToolCalls.get(chunk.toolCallId)
+          : unnamedToolQueue.shift();
+        if (matched) {
           toolCalls.push({
-            name: activeToolCall.name,
-            input: activeToolCall.input,
+            name: matched.name,
+            input: matched.input,
             output:
               typeof chunk.toolOutput === 'string'
                 ? chunk.toolOutput.slice(0, 1000)
                 : JSON.stringify(chunk.toolOutput).slice(0, 1000),
-            durationMs: Date.now() - activeToolCall.startTime,
+            durationMs: Date.now() - matched.startTime,
           });
-          activeToolCall = null;
+          if (chunk.toolCallId) activeToolCalls.delete(chunk.toolCallId);
         }
       } else if (chunk.type === 'result') {
-        // Close any remaining open tool call
-        if (activeToolCall) {
+        // Flush remaining unmatched tool calls
+        for (const pending of activeToolCalls.values()) {
           toolCalls.push({
-            name: activeToolCall.name,
-            input: activeToolCall.input,
-            durationMs: Date.now() - activeToolCall.startTime,
+            name: pending.name,
+            input: pending.input,
+            durationMs: Date.now() - pending.startTime,
           });
-          activeToolCall = null;
+        }
+        activeToolCalls.clear();
+        for (let pending = unnamedToolQueue.shift(); pending; pending = unnamedToolQueue.shift()) {
+          toolCalls.push({
+            name: pending.name,
+            input: pending.input,
+            durationMs: Date.now() - pending.startTime,
+          });
         }
         if (chunk.tokens) usage = chunk.tokens;
         if (chunk.cost !== undefined) cost = chunk.cost;
         if (chunk.numTurns !== undefined) numTurns = chunk.numTurns;
         if (chunk.sessionId) sessionId = chunk.sessionId;
       }
+
+      // Yield immediately to preserve streaming semantics
+      yield chunk;
     }
   } catch (err) {
     streamError = err as Error;
     traceError = streamError;
   }
 
-  // Create the trace with the collected data
+  // Create the trace after stream completes
   try {
     await propagateAttributes(
       {
@@ -237,16 +244,12 @@ export async function* traceQuery(
       },
       async () => {
         await startActiveObservation(
-          'claude-agent-query',
+          'agent-query',
           async obs => {
-            // Create child spans for tool calls
             for (const tool of toolCalls) {
               const toolObs = obs.startObservation(
                 tool.name,
-                {
-                  input: tool.input,
-                  output: tool.output,
-                },
+                { input: tool.input, output: tool.output },
                 { asType: 'tool' }
               );
               toolObs.end();
@@ -262,12 +265,12 @@ export async function* traceQuery(
             obs.update({
               input: prompt,
               output: textParts.join(''),
-              model: model ?? 'claude-sonnet-4-20250514',
+              ...(model ? { model } : {}),
               usageDetails: Object.keys(usageDetails).length > 0 ? usageDetails : undefined,
               metadata: {
                 ...(cost !== undefined ? { totalCostUsd: cost } : {}),
                 ...(numTurns !== undefined ? { numTurns } : {}),
-                ...(sessionId ? { claudeSessionId: sessionId } : {}),
+                ...(sessionId ? { sessionId } : {}),
                 ...(toolCalls.length > 0 ? { toolCallCount: toolCalls.length } : {}),
                 ...(traceError ? { error: traceError.message } : {}),
               },
@@ -282,12 +285,6 @@ export async function* traceQuery(
     getLog().debug({ error: (traceErr as Error).message }, 'langfuse.trace_failed');
   }
 
-  // Yield all collected chunks to the consumer
-  for (const chunk of chunks) {
-    yield chunk;
-  }
-
-  // Re-throw the stream error if one occurred
   if (streamError) {
     throw streamError;
   }

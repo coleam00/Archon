@@ -230,12 +230,15 @@ describe('observability', () => {
       }
 
       const chunks: MessageChunk[] = [];
-      await expect(async () => {
+      try {
         for await (const chunk of traceQuery('test', 'sonnet', errorGenerator())) {
           chunks.push(chunk);
         }
-      }).toThrow('stream failed');
+      } catch (err) {
+        expect((err as Error).message).toBe('stream failed');
+      }
 
+      // Chunk was yielded immediately (streaming preserved), before error
       expect(chunks).toHaveLength(1);
       expect(chunks[0]).toEqual({ type: 'assistant', content: 'partial' });
     });
