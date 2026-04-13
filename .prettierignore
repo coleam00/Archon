@@ -41,3 +41,7 @@ CHANGELOG.md
 CONTRIBUTING.md
 *.yml
 *.yaml
+
+# Pre-existing intentional formatting exceptions (do not reformat)
+packages/web/index.html
+packages/web/src/lib/useVisualViewport.ts

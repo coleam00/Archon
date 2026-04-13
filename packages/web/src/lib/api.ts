@@ -18,9 +18,10 @@ export type DagNode = components['schemas']['DagNode'];
  *   This is required because the backend port is not directly accessible remotely.
  */
 const apiPort = (import.meta.env.VITE_API_PORT as string | undefined) ?? '3090';
-export const SSE_BASE_URL = import.meta.env.DEV && window.location.hostname === 'localhost'
-  ? `http://localhost:${apiPort}`
-  : '';
+export const SSE_BASE_URL =
+  import.meta.env.DEV && window.location.hostname === 'localhost'
+    ? `http://localhost:${apiPort}`
+    : '';
 
 export interface ConversationResponse {
   id: string;

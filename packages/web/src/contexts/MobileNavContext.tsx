@@ -5,8 +5,10 @@ export interface MobileNavContextValue {
   setOpen: (open: boolean) => void;
 }
 
+// eslint-disable-next-line @typescript-eslint/naming-convention
 export const MobileNavContext = createContext<MobileNavContextValue>({
   open: false,
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
   setOpen: () => {},
 });
 

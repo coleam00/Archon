@@ -27,6 +27,7 @@ export default tseslint.config(
       'packages/web/components.json',
       'packages/web/src/components/ui/**', // shadcn/ui auto-generated components
       'packages/web/src/lib/utils.ts', // shadcn/ui utility file
+      'packages/web/src/lib/useVisualViewport.ts', // pre-existing no-semicolon style — do not reformat
     ],
   },
 
