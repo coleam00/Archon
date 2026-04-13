@@ -90,7 +90,7 @@ export interface RepoConfig {
    * AI assistant preference for this repository
    * Overrides global default
    */
-  assistant?: 'claude' | 'codex';
+  assistant?: 'claude' | 'codex' | 'copilot';
 
   /**
    * Assistant-specific defaults for this repository
@@ -98,6 +98,7 @@ export interface RepoConfig {
   assistants?: {
     claude?: ClaudeProviderDefaults;
     codex?: CodexProviderDefaults;
+    copilot?: CopilotProviderDefaults;
   };
 
   /**

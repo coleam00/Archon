@@ -1,6 +1,12 @@
 /**
  * GitHub Copilot SDK wrapper
  * Provides async generator interface for streaming Copilot responses
+ *
+ * The Copilot SDK delivers response content via sendAndWait()'s return value
+ * (AssistantMessageEvent), NOT through streaming delta events. Metadata events
+ * (usage, session state) ARE delivered via the event handler during sendAndWait.
+ * This provider subscribes to events for metadata, then yields the final content
+ * from sendAndWait's result.
  */
 import { CopilotClient, approveAll } from '@github/copilot-sdk';
 import type { CopilotSession, SessionEvent } from '@github/copilot-sdk';
@@ -29,192 +35,6 @@ function getCopilotClient(): CopilotClient {
     copilotClient = new CopilotClient();
   }
   return copilotClient;
-}
-
-interface CopilotStreamState {
-  toolCallIdToName: Map<string, string>;
-  accumulatedAssistantContent: string;
-  accumulatedThinkingContent: string;
-}
-
-async function* streamCopilotEvents(
-  session: CopilotSession,
-  state: CopilotStreamState
-): AsyncGenerator<MessageChunk> {
-  const eventQueue: SessionEvent[] = [];
-  let resolveNext: (() => void) | null = null;
-  let hasError = false;
-  let errorMessage = '';
-
-  const handleEvent = (event: SessionEvent): void => {
-    if (event.type === 'session.error') {
-      hasError = true;
-      errorMessage = (event as { data: { message: string } }).data.message;
-    }
-    eventQueue.push(event);
-    if (resolveNext) {
-      resolveNext();
-      resolveNext = null;
-    }
-  };
-
-  const unsubscribe = session.on(handleEvent);
-
-  try {
-    while (true) {
-      if (hasError) {
-        yield { type: 'system', content: `⚠️ ${errorMessage}` };
-        break;
-      }
-
-      if (eventQueue.length === 0) {
-        await new Promise<void>(resolve => {
-          resolveNext = resolve;
-        });
-        continue;
-      }
-
-      const event = eventQueue.shift();
-      if (!event) continue;
-
-      switch (event.type) {
-        case 'assistant.message': {
-          const msgEvent = event as {
-            data: {
-              content: string;
-              toolRequests?: {
-                toolCallId: string;
-                name: string;
-                arguments?: Record<string, unknown>;
-              }[];
-            };
-          };
-          if (msgEvent.data.content) {
-            state.accumulatedAssistantContent += msgEvent.data.content;
-          }
-          if (msgEvent.data.toolRequests) {
-            for (const tool of msgEvent.data.toolRequests) {
-              state.toolCallIdToName.set(tool.toolCallId, tool.name);
-              yield {
-                type: 'tool',
-                toolName: tool.name,
-                toolInput: tool.arguments ?? {},
-                toolCallId: tool.toolCallId,
-              };
-            }
-          }
-          break;
-        }
-
-        case 'assistant.reasoning': {
-          const reasoningEvent = event as { data: { content: string } };
-          if (reasoningEvent.data.content) {
-            state.accumulatedThinkingContent += reasoningEvent.data.content;
-            yield { type: 'thinking', content: reasoningEvent.data.content };
-          }
-          break;
-        }
-
-        case 'assistant.reasoning_delta': {
-          const deltaEvent = event as { data: { deltaContent: string } };
-          if (deltaEvent.data.deltaContent) {
-            state.accumulatedThinkingContent += deltaEvent.data.deltaContent;
-            yield { type: 'thinking', content: deltaEvent.data.deltaContent };
-          }
-          break;
-        }
-
-        case 'assistant.message_delta': {
-          const deltaEvent = event as { data: { deltaContent: string } };
-          if (deltaEvent.data.deltaContent) {
-            state.accumulatedAssistantContent += deltaEvent.data.deltaContent;
-            yield { type: 'assistant', content: deltaEvent.data.deltaContent };
-          }
-          break;
-        }
-
-        case 'tool.execution_start': {
-          const startEvent = event as { data: { toolCallId: string; toolName: string } };
-          state.toolCallIdToName.set(startEvent.data.toolCallId, startEvent.data.toolName);
-          break;
-        }
-
-        case 'tool.execution_complete': {
-          const completeEvent = event as {
-            data: {
-              toolCallId: string;
-              success: boolean;
-              result?: { content: string; detailedContent?: string };
-            };
-          };
-          const toolName = state.toolCallIdToName.get(completeEvent.data.toolCallId) ?? 'unknown';
-          let output = '';
-          if (completeEvent.data.result) {
-            output = completeEvent.data.result.detailedContent ?? completeEvent.data.result.content;
-          }
-          if (!completeEvent.data.success) {
-            output = `❌ ${output}`;
-          }
-          yield {
-            type: 'tool_result',
-            toolName,
-            toolOutput: output,
-            toolCallId: completeEvent.data.toolCallId,
-          };
-          break;
-        }
-
-        case 'tool.execution_partial_result': {
-          const partialEvent = event as { data: { toolCallId: string; partialOutput: string } };
-          const toolName = state.toolCallIdToName.get(partialEvent.data.toolCallId) ?? 'unknown';
-          yield {
-            type: 'tool_result',
-            toolName,
-            toolOutput: partialEvent.data.partialOutput,
-            toolCallId: partialEvent.data.toolCallId,
-          };
-          break;
-        }
-
-        case 'session.idle': {
-          const idleEvent = event as { data: { aborted?: boolean } };
-          if (idleEvent.data.aborted) {
-            getLog().info('session_idle_aborted');
-          }
-          break;
-        }
-
-        case 'session.start':
-        case 'session.resume':
-          break;
-
-        case 'assistant.usage': {
-          const usageEvent = event as { data?: { inputTokens?: number; outputTokens?: number } };
-          if (usageEvent.data) {
-            const usage = normalizeCopilotUsage(usageEvent.data);
-            if (usage) {
-              yield {
-                type: 'result',
-                sessionId: session.sessionId,
-                tokens: usage,
-              };
-            }
-          }
-          break;
-        }
-
-        default:
-          getLog().debug({ eventType: event.type }, 'copilot.unhandled_event_type');
-          break;
-      }
-
-      if (event.type === 'session.idle') {
-        break;
-      }
-    }
-  } finally {
-    unsubscribe();
-  }
 }
 
 function normalizeCopilotUsage(usage?: {
@@ -337,16 +157,155 @@ export class CopilotProvider implements IAgentProvider {
       });
     }
 
-    const state: CopilotStreamState = {
-      toolCallIdToName: new Map(),
-      accumulatedAssistantContent: '',
-      accumulatedThinkingContent: '',
-    };
+    getLog().info({ sessionId: session.sessionId }, 'copilot.session_created');
 
     try {
-      await session.sendAndWait({ prompt });
+      // The Copilot SDK delivers response content via sendAndWait's return value
+      // rather than through streaming delta events. We subscribe to events for
+      // metadata (usage, errors) but yield content from the sendAndWait result.
+      const metadataEvents: SessionEvent[] = [];
+      const unsubscribe = session.on((event: SessionEvent) => {
+        metadataEvents.push(event);
+      });
 
-      yield* streamCopilotEvents(session, state);
+      let sendAndWaitResult;
+      try {
+        sendAndWaitResult = await session.sendAndWait({ prompt });
+      } finally {
+        unsubscribe();
+      }
+
+      getLog().info(
+        { sessionId: session.sessionId, hasResult: !!sendAndWaitResult },
+        'copilot.sendAndWait_completed'
+      );
+
+      // Yield any usage events collected during the session
+      const toolCallIdToName = new Map<string, string>();
+      let usageTokens: TokenUsage | undefined;
+      for (const event of metadataEvents) {
+        switch (event.type) {
+          case 'assistant.reasoning': {
+            const reasoningEvent = event as { data: { content: string } };
+            if (reasoningEvent.data.content) {
+              yield { type: 'thinking', content: reasoningEvent.data.content };
+            }
+            break;
+          }
+          case 'assistant.reasoning_delta': {
+            const deltaEvent = event as { data: { deltaContent: string } };
+            if (deltaEvent.data.deltaContent) {
+              yield { type: 'thinking', content: deltaEvent.data.deltaContent };
+            }
+            break;
+          }
+          case 'assistant.message_delta': {
+            const deltaEvent = event as { data: { deltaContent: string } };
+            if (deltaEvent.data.deltaContent) {
+              yield { type: 'assistant', content: deltaEvent.data.deltaContent };
+            }
+            break;
+          }
+          case 'assistant.usage': {
+            const usageEvent = event as {
+              data?: { inputTokens?: number; outputTokens?: number };
+            };
+            if (usageEvent.data) {
+              const usage = normalizeCopilotUsage(usageEvent.data);
+              if (usage) {
+                // Defer result yield until after content — dag-executor breaks on result
+                usageTokens = usage;
+              }
+            }
+            break;
+          }
+          case 'tool.execution_start': {
+            const startEvent = event as { data: { toolCallId: string; toolName: string } };
+            toolCallIdToName.set(startEvent.data.toolCallId, startEvent.data.toolName);
+            break;
+          }
+          case 'tool.execution_complete': {
+            const completeEvent = event as {
+              data: {
+                toolCallId: string;
+                success: boolean;
+                result?: { content: string; detailedContent?: string };
+              };
+            };
+            const toolName = toolCallIdToName.get(completeEvent.data.toolCallId) ?? 'unknown';
+            let output = '';
+            if (completeEvent.data.result) {
+              output =
+                completeEvent.data.result.detailedContent ?? completeEvent.data.result.content;
+            }
+            if (!completeEvent.data.success) {
+              output = `❌ ${output}`;
+            }
+            yield {
+              type: 'tool_result',
+              toolName,
+              toolOutput: output,
+              toolCallId: completeEvent.data.toolCallId,
+            };
+            break;
+          }
+          case 'session.error': {
+            const errorEvent = event as { data: { message: string } };
+            getLog().error(
+              { sessionId: session.sessionId, error: errorEvent.data.message },
+              'copilot.session_error'
+            );
+            break;
+          }
+          default:
+            getLog().debug(
+              { sessionId: session.sessionId, eventType: event.type },
+              'copilot.unhandled_event_type'
+            );
+            break;
+        }
+      }
+
+      // Yield content from sendAndWait result if we didn't get it from streaming deltas
+      if (sendAndWaitResult?.data?.content) {
+        const hadStreamingContent = metadataEvents.some(
+          e =>
+            e.type === 'assistant.message_delta' &&
+            (e as { data: { deltaContent: string } }).data?.deltaContent
+        );
+        if (!hadStreamingContent) {
+          yield { type: 'assistant', content: sendAndWaitResult.data.content };
+        }
+      }
+
+      // Yield tool requests from sendAndWait result
+      if (sendAndWaitResult?.data?.toolRequests && sendAndWaitResult.data.toolRequests.length > 0) {
+        for (const tool of sendAndWaitResult.data.toolRequests) {
+          yield {
+            type: 'tool',
+            toolName: tool.name,
+            toolInput: tool.arguments ?? {},
+            toolCallId: tool.toolCallId,
+          };
+        }
+      }
+
+      // Yield result LAST — dag-executor breaks on result type
+      if (usageTokens) {
+        yield {
+          type: 'result',
+          sessionId: session.sessionId,
+          tokens: usageTokens,
+        };
+      }
+
+      // If we got no content at all, log a warning
+      if (
+        !sendAndWaitResult?.data?.content &&
+        !metadataEvents.some(e => e.type === 'assistant.message_delta')
+      ) {
+        getLog().warn({ sessionId: session.sessionId }, 'copilot.no_content_received');
+      }
     } finally {
       await session.disconnect();
     }

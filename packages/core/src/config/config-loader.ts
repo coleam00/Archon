@@ -339,6 +339,12 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
       ...repo.assistants.codex,
     };
   }
+  if (repo.assistants?.copilot) {
+    result.assistants.copilot = {
+      ...result.assistants.copilot,
+      ...repo.assistants.copilot,
+    };
+  }
 
   // Commands config
   if (repo.commands) {
