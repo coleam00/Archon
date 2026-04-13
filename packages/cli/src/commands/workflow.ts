@@ -62,8 +62,6 @@ export interface WorkflowRunOptions {
   noWorktree?: boolean;
   resume?: boolean;
   codebaseId?: string; // Passed by resume/approve to skip path-based lookup
-  /** When true, skip the env-leak-gate during auto-registration. */
-  allowEnvKeys?: boolean;
   quiet?: boolean;
   verbose?: boolean;
   /** Platform conversation ID (e.g. `cli-{ts}-{rand}`), NOT a DB UUID. */
@@ -325,7 +323,7 @@ export async function workflowRunCommand(
     const repoRoot = await git.findRepoRoot(cwd);
     if (repoRoot) {
       try {
-        const result = await registerRepository(repoRoot, options.allowEnvKeys, 'register-cli');
+        const result = await registerRepository(repoRoot);
         codebase = await codebaseDb.getCodebase(result.codebaseId);
         if (!result.alreadyExisted) {
           getLog().info({ name: result.name }, 'cli.codebase_auto_registered');

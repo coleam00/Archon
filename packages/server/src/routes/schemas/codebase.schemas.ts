@@ -16,7 +16,6 @@ export const codebaseSchema = z
     repository_url: z.string().nullable(),
     default_cwd: z.string(),
     ai_assistant_type: z.string(),
-    allow_env_keys: z.boolean(),
     commands: z.record(codebaseCommandSchema),
     created_at: z.string(),
     updated_at: z.string(),
@@ -34,19 +33,11 @@ export const addCodebaseBodySchema = z
   .object({
     url: z.string().min(1).optional(),
     path: z.string().min(1).optional(),
-    allowEnvKeys: z.boolean().optional(),
   })
   .refine(b => (b.url !== undefined) !== (b.path !== undefined), {
     message: 'Provide either "url" or "path", not both and not neither',
   })
   .openapi('AddCodebaseBody');
-
-/** PATCH /api/codebases/:id request body. */
-export const updateCodebaseBodySchema = z
-  .object({
-    allowEnvKeys: z.boolean(),
-  })
-  .openapi('UpdateCodebaseBody');
 
 /** DELETE /api/codebases/:id response. */
 export const deleteCodebaseResponseSchema = z

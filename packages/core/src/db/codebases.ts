@@ -17,13 +17,11 @@ export async function createCodebase(data: {
   repository_url?: string;
   default_cwd: string;
   ai_assistant_type?: string;
-  allow_env_keys?: boolean;
 }): Promise<Codebase> {
   const assistantType = data.ai_assistant_type ?? 'claude';
-  const allowEnvKeys = data.allow_env_keys ?? false;
   const result = await pool.query<Codebase>(
-    'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, ai_assistant_type, allow_env_keys) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-    [data.name, data.repository_url ?? null, data.default_cwd, assistantType, allowEnvKeys]
+    'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, ai_assistant_type) VALUES ($1, $2, $3, $4) RETURNING *',
+    [data.name, data.repository_url ?? null, data.default_cwd, assistantType]
   );
   if (!result.rows[0]) {
     throw new Error('Failed to create codebase: INSERT succeeded but no row returned');
@@ -152,21 +150,6 @@ export async function updateCodebase(
   const result = await pool.query(
     `UPDATE remote_agent_codebases SET ${updates.join(', ')} WHERE id = $${paramIndex}`,
     values
-  );
-  if ((result.rowCount ?? 0) === 0) {
-    throw new Error(`Codebase ${id} not found`);
-  }
-}
-
-/**
- * Flip the `allow_env_keys` consent bit for an existing codebase.
- * Throws when the codebase does not exist.
- */
-export async function updateCodebaseAllowEnvKeys(id: string, allowEnvKeys: boolean): Promise<void> {
-  const dialect = getDialect();
-  const result = await pool.query(
-    `UPDATE remote_agent_codebases SET allow_env_keys = $1, updated_at = ${dialect.now()} WHERE id = $2`,
-    [allowEnvKeys, id]
   );
   if ((result.rowCount ?? 0) === 0) {
     throw new Error(`Codebase ${id} not found`);

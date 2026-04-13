@@ -10,7 +10,6 @@ import {
   getHealth,
   listCodebases,
   addCodebase,
-  updateCodebase,
   deleteCodebase,
   updateAssistantConfig,
   getCodebaseEnvVars,
@@ -251,22 +250,11 @@ function EnvVarsPanel({ codebaseId }: { codebaseId: string }): React.ReactElemen
   );
 }
 
-function isEnvLeakError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    'status' in error &&
-    (error as Error & { status: number }).status === 422 &&
-    error.message.startsWith('Cannot add codebase')
-  );
-}
-
 function ProjectsSection(): React.ReactElement {
   const queryClient = useQueryClient();
   const [addPath, setAddPath] = useState('');
   const [showAdd, setShowAdd] = useState(false);
-  const [allowEnvKeys, setAllowEnvKeys] = useState(false);
   const [expandedEnvVars, setExpandedEnvVars] = useState<string | null>(null);
-  const [toggleError, setToggleError] = useState<string | null>(null);
 
   const { data: codebases } = useQuery({
     queryKey: ['codebases'],
@@ -274,13 +262,11 @@ function ProjectsSection(): React.ReactElement {
   });
 
   const addMutation = useMutation({
-    mutationFn: ({ path, allowEnvKeys }: { path: string; allowEnvKeys?: boolean }) =>
-      addCodebase({ path, allowEnvKeys }),
+    mutationFn: ({ path }: { path: string }) => addCodebase({ path }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['codebases'] });
       setAddPath('');
       setShowAdd(false);
-      setAllowEnvKeys(false);
     },
   });
 
@@ -291,24 +277,10 @@ function ProjectsSection(): React.ReactElement {
     },
   });
 
-  const toggleEnvKeysMutation = useMutation({
-    mutationFn: ({ id, allowEnvKeys }: { id: string; allowEnvKeys: boolean }) =>
-      updateCodebase(id, { allowEnvKeys }),
-    onSuccess: () => {
-      setToggleError(null);
-      void queryClient.invalidateQueries({ queryKey: ['codebases'] });
-    },
-    onError: (err: Error) => {
-      // Without this the user clicks "Revoke env keys", confirms the
-      // destructive dialog, and gets no feedback if the PATCH fails.
-      setToggleError(err.message);
-    },
-  });
-
   function handleAddSubmit(e: React.FormEvent): void {
     e.preventDefault();
     if (addPath.trim()) {
-      addMutation.mutate({ path: addPath.trim(), allowEnvKeys: allowEnvKeys || undefined });
+      addMutation.mutate({ path: addPath.trim() });
     }
   }
 
@@ -318,11 +290,6 @@ function ProjectsSection(): React.ReactElement {
         <CardTitle>Projects</CardTitle>
       </CardHeader>
       <CardContent>
-        {toggleError && (
-          <div className="mb-2 rounded-md border border-error/50 bg-error/10 p-2 text-sm text-error">
-            Failed to update env-key consent: {toggleError}
-          </div>
-        )}
         {!codebases || codebases.length === 0 ? (
           <div className="text-sm text-muted-foreground">No projects registered.</div>
         ) : (
@@ -331,40 +298,10 @@ function ProjectsSection(): React.ReactElement {
               <div key={cb.id} className="rounded-md border border-border p-2 text-sm">
                 <div className="flex items-center justify-between">
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <div className="font-medium truncate">{cb.name}</div>
-                      {cb.allow_env_keys && (
-                        <Badge variant="destructive" className="text-[10px]">
-                          env keys allowed
-                        </Badge>
-                      )}
-                    </div>
+                    <div className="font-medium truncate">{cb.name}</div>
                     <div className="text-xs text-muted-foreground truncate">{cb.default_cwd}</div>
                   </div>
                   <div className="flex gap-1">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-xs"
-                      onClick={() => {
-                        if (cb.allow_env_keys) {
-                          if (
-                            !window.confirm(
-                              `Revoke env-key consent for "${cb.name}"? Future workflow runs will be blocked if .env contains sensitive keys.`
-                            )
-                          ) {
-                            return;
-                          }
-                        }
-                        toggleEnvKeysMutation.mutate({
-                          id: cb.id,
-                          allowEnvKeys: !cb.allow_env_keys,
-                        });
-                      }}
-                      disabled={toggleEnvKeysMutation.isPending}
-                    >
-                      {cb.allow_env_keys ? 'Revoke env keys' : 'Allow env keys'}
-                    </Button>
                     <Button
                       variant="ghost"
                       size="sm"
@@ -436,18 +373,6 @@ function ProjectsSection(): React.ReactElement {
             {addMutation.error instanceof Error
               ? addMutation.error.message
               : 'Failed to add project'}
-            {isEnvLeakError(addMutation.error) && (
-              <label className="mt-2 flex items-center gap-2 text-text-secondary">
-                <input
-                  type="checkbox"
-                  checked={allowEnvKeys}
-                  onChange={e => {
-                    setAllowEnvKeys(e.target.checked);
-                  }}
-                />
-                Allow env keys (I understand the risk)
-              </label>
-            )}
           </div>
         )}
       </CardContent>

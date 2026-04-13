@@ -5262,4 +5262,53 @@ describe('executeDagWorkflow -- script nodes', () => {
     const notFoundMsg = messages.find((m: string) => m.includes('not found in .archon/scripts/'));
     expect(notFoundMsg).toBeDefined();
   });
+
+  it('bun script node does not leak repo .env from execution cwd (#1135)', async () => {
+    // Regression test: place a .env with a marker in the execution cwd.
+    // The bun script must NOT see it because --no-env-file is passed.
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('env-leak-run-id', {
+      workflow_name: 'env-leak-test',
+      conversation_id: 'conv-env-leak',
+      user_message: 'env leak test',
+    });
+
+    // Write a .env with a marker in the script execution cwd
+    await writeFile(join(testDir, '.env'), 'LEAKED_REPO_SECRET=should_not_appear\n');
+
+    const scriptNode: ScriptNode = {
+      id: 'env-check',
+      script: 'console.log(process.env.LEAKED_REPO_SECRET ?? "CLEAN")',
+      runtime: 'bun',
+    };
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-env-leak',
+      testDir,
+      { name: 'env-leak-test', nodes: [scriptNode] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // The node output should be "CLEAN" — the repo .env was not loaded
+    const eventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const completedEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_completed' &&
+        (call[0] as { step_name: string }).step_name === 'env-check'
+    );
+    expect(completedEvent).toBeDefined();
+    expect((completedEvent![0] as { data: { node_output: string } }).data.node_output).toBe(
+      'CLEAN'
+    );
+  });
 });

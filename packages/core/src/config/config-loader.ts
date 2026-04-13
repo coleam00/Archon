@@ -39,24 +39,6 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 /**
- * Tracks which env-leak-gate-disabled sources have already warned in this
- * process. `loadConfig()` is called once per pre-spawn check (per workflow
- * step), so without this guard the warn would flood logs and break alert
- * rate-limiting downstream.
- */
-const envLeakGateDisabledWarnedSources = new Set<'global_config' | 'repo_config'>();
-function warnEnvLeakGateDisabledOnce(source: 'global_config' | 'repo_config'): void {
-  if (envLeakGateDisabledWarnedSources.has(source)) return;
-  envLeakGateDisabledWarnedSources.add(source);
-  getLog().warn({ source }, 'env_leak_gate_disabled');
-}
-
-// Test-only: reset the warn-once state so unit tests can re-trigger the log.
-export function resetEnvLeakGateWarnedSourcesForTests(): void {
-  envLeakGateDisabledWarnedSources.clear();
-}
-
-/**
  * Parse YAML using Bun's native YAML parser
  */
 function parseYaml(content: string): unknown {
@@ -216,7 +198,6 @@ function getDefaults(): MergedConfig {
       loadDefaultCommands: true,
       loadDefaultWorkflows: true,
     },
-    allowTargetRepoKeys: false,
   };
 }
 
@@ -321,12 +302,6 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
     result.concurrency.maxConversations = global.concurrency.maxConversations;
   }
 
-  // Env-leak gate bypass (global)
-  if (global.allow_target_repo_keys === true) {
-    result.allowTargetRepoKeys = true;
-    warnEnvLeakGateDisabledOnce('global_config');
-  }
-
   return result;
 }
 
@@ -398,14 +373,6 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
   // Propagate per-project env vars from repo config
   if (repo.env) {
     result.envVars = { ...result.envVars, ...repo.env };
-  }
-
-  // Repo-level env-leak gate override (wins over global)
-  if (repo.allow_target_repo_keys !== undefined) {
-    result.allowTargetRepoKeys = repo.allow_target_repo_keys;
-    if (repo.allow_target_repo_keys) {
-      warnEnvLeakGateDisabledOnce('repo_config');
-    }
   }
 
   return result;
