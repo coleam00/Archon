@@ -1,4 +1,4 @@
-﻿import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
+import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { MessageSquarePlus, Search, Plus, Loader2, FolderGit2, PanelLeft, X } from 'lucide-react';
@@ -193,7 +193,7 @@ export function ChatPage(): React.ReactElement {
       {/* ── Mobile overlay backdrop ── */}
       {mobileConvOpen && (
         <div
-          className="fixed inset-0 z-40 bg-black/60 md:hidden"
+          className="fixed inset-x-0 top-24 bottom-0 z-40 bg-black/60 md:hidden"
           onClick={() => { setMobileConvOpen(false); }}
           aria-hidden="true"
         />
@@ -206,7 +206,7 @@ export function ChatPage(): React.ReactElement {
         className={cn(
           'flex flex-col border-r border-border bg-surface overflow-hidden',
           // Mobile: fixed overlay starting below the sticky topbar (~48 px)
-          'fixed top-12 bottom-0 left-0 z-40',
+          'fixed top-24 bottom-0 left-0 z-40',
           // Desktop: back to normal inline flow
           'md:relative md:inset-auto md:z-auto md:h-full',
           // Slide animation — mobile toggles, desktop always shown
