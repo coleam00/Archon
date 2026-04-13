@@ -362,6 +362,11 @@ describe('detectCompletionSignal', () => {
   it('does not detect signal when wrong value is in tags', () => {
     expect(detectCompletionSignal('<COMPLETE>WRONG</COMPLETE>', 'ALL_CLEAN')).toBe(false);
   });
+
+  it('detects signal in mismatched XML tags (permissive)', () => {
+    // Opening and closing tag names are matched independently by design
+    expect(detectCompletionSignal('<COMPLETE>ALL_CLEAN</done>', 'ALL_CLEAN')).toBe(true);
+  });
 });
 
 describe('stripCompletionTags', () => {
@@ -376,5 +381,10 @@ describe('stripCompletionTags', () => {
   it('does not strip XML tags when until is not provided', () => {
     const input = 'Done. <COMPLETE>ALL_CLEAN</COMPLETE>';
     expect(stripCompletionTags(input)).toBe(input.trim());
+  });
+
+  it('strips both <promise> and XML-tagged signal when until is provided', () => {
+    const input = 'Done. <promise>ALL_CLEAN</promise> <COMPLETE>ALL_CLEAN</COMPLETE>';
+    expect(stripCompletionTags(input, 'ALL_CLEAN')).toBe('Done.');
   });
 });

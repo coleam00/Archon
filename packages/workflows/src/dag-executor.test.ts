@@ -2989,6 +2989,14 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         (mockDeps.store.failWorkflowRun as Mock<(id: string, error: string) => Promise<void>>).mock
           .calls.length
       ).toBe(0);
+      // Verify stripping: raw XML completion tags must not appear in user-visible output
+      const allSentMessages = (
+        platform.sendMessage as Mock<(...args: unknown[]) => Promise<void>>
+      ).mock.calls
+        .map((call: unknown[]) => call[1] as string)
+        .join('');
+      expect(allSentMessages).not.toContain('<COMPLETE>');
+      expect(allSentMessages).not.toContain('</COMPLETE>');
     });
 
     it('loop node output available to downstream nodes via $nodeId.output', async () => {
