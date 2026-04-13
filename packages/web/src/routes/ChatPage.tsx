@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { MessageSquarePlus, Search, Plus, Loader2, FolderGit2 } from 'lucide-react';
+import { MessageSquarePlus, Search, Plus, Loader2, FolderGit2, PanelLeft, X } from 'lucide-react';
 import { ChatInterface } from '@/components/chat/ChatInterface';
 import { ConversationItem } from '@/components/conversations/ConversationItem';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -35,6 +35,7 @@ export function ChatPage(): React.ReactElement {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [width, setWidth] = useState(getInitialWidth);
+  const [mobileConvOpen, setMobileConvOpen] = useState(false);
   const isResizing = useRef(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -54,6 +55,15 @@ export function ChatPage(): React.ReactElement {
       addInputRef.current?.focus();
     }
   }, [showAddInput]);
+
+  // Close mobile drawer on desktop resize
+  useEffect(() => {
+    const onResize = (): void => {
+      if (window.innerWidth >= 768) setMobileConvOpen(false);
+    };
+    window.addEventListener('resize', onResize);
+    return () => { window.removeEventListener('resize', onResize); };
+  }, []);
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent): void => {
@@ -180,23 +190,50 @@ export function ChatPage(): React.ReactElement {
   return (
     <div className="flex flex-1 overflow-hidden">
 
-      {/* ── Left panel — hidden on mobile, always visible on desktop ── */}
+      {/* ── Mobile overlay backdrop ── */}
+      {mobileConvOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/60 md:hidden"
+          onClick={() => { setMobileConvOpen(false); }}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* ── Conversations panel ──
+           Desktop : sidebar inline (relative, h-full)
+           Mobile  : fixed overlay drawer, slides from left via transform  ── */}
       <div
         className={cn(
-          'relative flex h-full flex-col border-r border-border bg-surface overflow-hidden',
-          // Hide entirely on mobile → chat takes full width
-          'hidden md:flex'
+          'flex flex-col border-r border-border bg-surface overflow-hidden',
+          // Mobile: fixed full-height overlay
+          'fixed inset-y-0 left-0 z-50',
+          // Desktop: back to normal inline flow
+          'md:relative md:inset-auto md:z-auto md:h-full',
+          // Slide animation — mobile toggles, desktop always shown
+          'transition-transform duration-300 ease-in-out',
+          mobileConvOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
         )}
         style={{ width: `${String(width)}px`, flexShrink: 0 }}
       >
-        {/* New Chat button */}
-        <div className="px-3 pt-3 pb-2">
+        {/* New Chat button + mobile close */}
+        <div className="px-3 pt-3 pb-2 flex items-center gap-2">
           <button
-            onClick={handleNewChat}
-            className="flex w-full items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-accent-hover transition-colors"
+            onClick={() => {
+              handleNewChat();
+              setMobileConvOpen(false);
+            }}
+            className="flex flex-1 items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-accent-hover transition-colors"
           >
             <MessageSquarePlus className="h-4 w-4 shrink-0" />
             New Chat
+          </button>
+          {/* Close button — mobile only */}
+          <button
+            onClick={() => { setMobileConvOpen(false); }}
+            className="md:hidden flex items-center justify-center rounded-md p-1.5 text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
+            aria-label="Fermer le panneau conversations"
+          >
+            <X className="h-4 w-4" />
           </button>
         </div>
 
@@ -286,9 +323,13 @@ export function ChatPage(): React.ReactElement {
           </div>
         </div>
 
-        {/* Conversation list */}
+        {/* Conversation list — clicking any item closes the mobile drawer */}
         <ScrollArea className="flex-1 min-h-0 px-2 pb-2">
-          <div className="flex flex-col gap-0.5">
+          {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
+          <div
+            className="flex flex-col gap-0.5"
+            onClick={() => { setMobileConvOpen(false); }}
+          >
             {filtered && filtered.length > 0 ? (
               filtered.map(conv => (
                 <ConversationItem
@@ -313,15 +354,35 @@ export function ChatPage(): React.ReactElement {
           </div>
         </ScrollArea>
 
-        {/* Resize handle */}
+        {/* Resize handle — desktop only */}
         <div
           onMouseDown={handleMouseDown}
-          className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize bg-border/50 hover:bg-primary/40 transition-colors"
+          className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize bg-border/50 hover:bg-primary/40 transition-colors hidden md:block"
         />
       </div>
 
       {/* ── Right panel — chat interface, full width on mobile ── */}
       <div className="flex flex-1 flex-col overflow-hidden min-w-0">
+
+        {/* Mobile-only topbar: conversations toggle + new chat shortcut */}
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-surface md:hidden shrink-0">
+          <button
+            onClick={() => { setMobileConvOpen(true); }}
+            className="flex items-center gap-2 rounded-md px-2 py-1.5 text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
+            aria-label="Ouvrir l'historique des conversations"
+          >
+            <PanelLeft className="h-4 w-4 shrink-0" />
+            <span className="text-xs font-medium">Conversations</span>
+          </button>
+          <button
+            onClick={handleNewChat}
+            className="ml-auto flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground hover:bg-accent-hover transition-colors"
+          >
+            <MessageSquarePlus className="h-3.5 w-3.5 shrink-0" />
+            New
+          </button>
+        </div>
+
         <ChatInterface key={conversationId ?? 'new'} conversationId={conversationId ?? 'new'} />
       </div>
     </div>
