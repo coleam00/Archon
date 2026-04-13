@@ -108,7 +108,7 @@ archon workflow run my-workflow "auth refresh-tokens"
 | `name` | Yes | string | Identifies the workflow in `archon workflow list` |
 | `description` | Yes | string | Shown in listings and used by the router |
 | `nodes` | Yes | array | DAG nodes (see Node Options below) |
-| `provider` | No | `claude` \| `codex` | AI provider for all nodes (default: `claude`) |
+| `provider` | No | string | Registered provider identifier (e.g. `claude`, `codex`). Default: `claude` |
 | `model` | No | string | Model for all nodes (`sonnet`, `opus`, `haiku`, or full model ID) |
 | `modelReasoningEffort` | No | string | Codex only: `minimal` \| `low` \| `medium` \| `high` \| `xhigh` |
 | `webSearchMode` | No | string | Codex only: `disabled` \| `cached` \| `live` |
