@@ -265,7 +265,7 @@ packages/
 ├── providers/                # @archon/providers - AI agent providers (SDK deps live here)
 │   └── src/
 │       ├── types.ts          # Contract layer (IAgentProvider, SendQueryOptions, MessageChunk — ZERO SDK deps)
-│       ├── factory.ts        # getAgentProvider() switch (built-in: claude, codex)
+│       ├── registry.ts       # Typed provider registry (ProviderRegistration records)
 │       ├── errors.ts         # UnknownProviderError
 │       ├── claude/           # ClaudeProvider + parseClaudeConfig + MCP/hooks/skills translation
 │       ├── codex/            # CodexProvider + parseCodexConfig + binary-resolver
@@ -775,6 +775,9 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 
 **Command Listing:**
 - `GET /api/commands` - List available command names (bundled + project-defined); optional `?cwd=`; returns `{ commands: [{ name, source: 'bundled' | 'project' }] }`
+
+**Providers:**
+- `GET /api/providers` - List registered AI providers; returns `{ providers: [{ id, displayName, capabilities, builtIn }] }`
 
 **System:**
 - `GET /api/health` - Health check with adapter/system status

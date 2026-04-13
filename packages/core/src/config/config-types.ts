@@ -13,9 +13,30 @@
 
 // Provider config defaults — canonical definitions live in @archon/providers/types.
 // Imported and re-exported here so existing consumers don't break.
-import type { ClaudeProviderDefaults, CodexProviderDefaults } from '@archon/providers/types';
+import type {
+  ClaudeProviderDefaults,
+  CodexProviderDefaults,
+  ProviderDefaultsMap,
+} from '@archon/providers/types';
 
-export type { ClaudeProviderDefaults, CodexProviderDefaults };
+export type { ClaudeProviderDefaults, CodexProviderDefaults, ProviderDefaultsMap };
+
+/**
+ * Intersection type: generic ProviderDefaultsMap (any string key) with typed built-in entries.
+ * Built-in keys are typed so parseClaudeConfig/parseCodexConfig get type safety without casts.
+ * Community providers use the generic [string] index. This is intentional — removing the
+ * built-in intersection would force `as` casts everywhere built-in config is accessed.
+ */
+export type AssistantDefaultsConfig = ProviderDefaultsMap & {
+  claude?: ClaudeProviderDefaults;
+  codex?: CodexProviderDefaults;
+};
+
+/** Required variant — built-ins always present after config merge (registerBuiltinProviders guarantees it). */
+export type AssistantDefaults = ProviderDefaultsMap & {
+  claude: ClaudeProviderDefaults;
+  codex: CodexProviderDefaults;
+};
 
 export interface GlobalConfig {
   /**
@@ -28,15 +49,12 @@ export interface GlobalConfig {
    * Default AI assistant when no codebase-specific preference
    * @default 'claude'
    */
-  defaultAssistant?: 'claude' | 'codex';
+  defaultAssistant?: string;
 
   /**
    * Assistant-specific defaults (model, reasoning effort, etc.)
    */
-  assistants?: {
-    claude?: ClaudeProviderDefaults;
-    codex?: CodexProviderDefaults;
-  };
+  assistants?: AssistantDefaultsConfig;
 
   /**
    * Platform streaming preferences (can be overridden per conversation)
@@ -85,15 +103,12 @@ export interface RepoConfig {
    * AI assistant preference for this repository
    * Overrides global default
    */
-  assistant?: 'claude' | 'codex';
+  assistant?: string;
 
   /**
    * Assistant-specific defaults for this repository
    */
-  assistants?: {
-    claude?: ClaudeProviderDefaults;
-    codex?: CodexProviderDefaults;
-  };
+  assistants?: AssistantDefaultsConfig;
 
   /**
    * Commands configuration
@@ -182,11 +197,8 @@ export interface RepoConfig {
  */
 export interface MergedConfig {
   botName: string;
-  assistant: 'claude' | 'codex';
-  assistants: {
-    claude: ClaudeProviderDefaults;
-    codex: CodexProviderDefaults;
-  };
+  assistant: string;
+  assistants: AssistantDefaults;
   streaming: {
     telegram: 'stream' | 'batch';
     discord: 'stream' | 'batch';
@@ -238,11 +250,8 @@ export interface MergedConfig {
  */
 export interface SafeConfig {
   botName: string;
-  assistant: 'claude' | 'codex';
-  assistants: {
-    claude: Pick<ClaudeProviderDefaults, 'model'>;
-    codex: Pick<CodexProviderDefaults, 'model' | 'modelReasoningEffort' | 'webSearchMode'>;
-  };
+  assistant: string;
+  assistants: ProviderDefaultsMap;
   streaming: {
     telegram: 'stream' | 'batch';
     discord: 'stream' | 'batch';

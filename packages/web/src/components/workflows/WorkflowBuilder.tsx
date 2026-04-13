@@ -127,7 +127,7 @@ function WorkflowBuilderInner(): React.ReactElement {
   // Core state
   const [workflowName, setWorkflowName] = useState('');
   const [workflowDescription, setWorkflowDescription] = useState('');
-  const [provider, setProvider] = useState<'claude' | 'codex' | undefined>(undefined);
+  const [provider, setProvider] = useState<string | undefined>(undefined);
   const [model, setModel] = useState<string | undefined>(undefined);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
@@ -176,7 +176,13 @@ function WorkflowBuilderInner(): React.ReactElement {
     const name = workflowName.trim() || 'untitled';
     const description = workflowDescription;
     const dagNodes = reactFlowToDagNodes(nodes, edges);
-    return { name, description, provider, model, nodes: dagNodes };
+    return {
+      name,
+      description,
+      provider,
+      model,
+      nodes: dagNodes,
+    };
   }, [workflowName, workflowDescription, provider, model, nodes, edges]);
 
   const loadWorkflow = useCallback(

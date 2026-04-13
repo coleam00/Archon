@@ -759,7 +759,7 @@ export async function handleMessage(
     // Reuse the config already loaded during workflow discovery (avoids a second disk read).
     // Fall back to loadConfig only when no codebase is scoped (discoveredConfig is undefined).
     const config = discoveredConfig ?? (await loadConfig());
-    const providerKey = conversation.ai_assistant_type as 'claude' | 'codex';
+    const providerKey = conversation.ai_assistant_type;
     let dbEnvVars: Record<string, string> = {};
     if (conversation.codebase_id) {
       try {
@@ -785,7 +785,7 @@ export async function handleMessage(
     }
 
     const requestOptions: SendQueryOptions = {
-      assistantConfig: (config.assistants[providerKey] ?? {}) as Record<string, unknown>,
+      assistantConfig: config.assistants[providerKey] ?? {},
       env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
     };
 
@@ -1214,11 +1214,12 @@ async function handleRegisterProject(
     return `Project "${projectName}" is already registered (path: ${alreadyExists.default_cwd}).`;
   }
 
-  // Create codebase record
+  // Use config default provider instead of hardcoding 'claude'
+  const config = await loadConfig();
   const codebase = await codebaseDb.createCodebase({
     name: projectName,
     default_cwd: projectPath,
-    ai_assistant_type: 'claude',
+    ai_assistant_type: config.assistant,
   });
 
   getLog().info(

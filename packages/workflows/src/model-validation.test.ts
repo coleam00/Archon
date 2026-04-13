@@ -1,33 +1,14 @@
-import { describe, it, expect } from 'bun:test';
-import { isClaudeModel, isModelCompatible, inferProviderFromModel } from './model-validation';
+import { describe, it, expect, beforeAll } from 'bun:test';
+import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+import { isModelCompatible, inferProviderFromModel } from './model-validation';
 
-describe('model-validation', () => {
-  describe('isClaudeModel', () => {
-    it('should recognize Claude aliases', () => {
-      expect(isClaudeModel('sonnet')).toBe(true);
-      expect(isClaudeModel('opus')).toBe(true);
-      expect(isClaudeModel('haiku')).toBe(true);
-      expect(isClaudeModel('inherit')).toBe(true);
-    });
+// Bootstrap registry once for all tests (idempotent)
+beforeAll(() => {
+  clearRegistry();
+  registerBuiltinProviders();
+});
 
-    it('should recognize claude- prefixed models', () => {
-      expect(isClaudeModel('claude-sonnet-4-5-20250929')).toBe(true);
-      expect(isClaudeModel('claude-opus-4-6')).toBe(true);
-      expect(isClaudeModel('claude-3-5-sonnet-20241022')).toBe(true);
-    });
-
-    it('should reject non-Claude models', () => {
-      expect(isClaudeModel('gpt-5.3-codex')).toBe(false);
-      expect(isClaudeModel('gpt-5.2-codex')).toBe(false);
-      expect(isClaudeModel('gpt-4')).toBe(false);
-      expect(isClaudeModel('o1-mini')).toBe(false);
-    });
-
-    it('should reject empty string', () => {
-      expect(isClaudeModel('')).toBe(false);
-    });
-  });
-
+describe('model-validation (registry-driven)', () => {
   describe('isModelCompatible', () => {
     it('should accept any model when model is undefined', () => {
       expect(isModelCompatible('claude')).toBe(true);
@@ -64,6 +45,10 @@ describe('model-validation', () => {
       // Empty string is falsy, so treated as "no model specified"
       expect(isModelCompatible('claude', '')).toBe(true);
       expect(isModelCompatible('codex', '')).toBe(true);
+    });
+
+    it('should throw on unknown providers (fail-fast)', () => {
+      expect(() => isModelCompatible('my-llm', 'any-model')).toThrow(/Unknown provider 'my-llm'/);
     });
   });
 

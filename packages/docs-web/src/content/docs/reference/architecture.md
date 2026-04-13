@@ -1003,7 +1003,7 @@ remote_agent_codebases
 ├── name (VARCHAR)
 ├── repository_url (VARCHAR)
 ├── default_cwd (VARCHAR)
-├── ai_assistant_type (VARCHAR) -- 'claude' | 'codex'
+├── ai_assistant_type (VARCHAR) -- registered provider identifier (e.g. 'claude', 'codex')
 └── commands (JSONB) -- {command_name: {path, description}}
 
 remote_agent_conversations

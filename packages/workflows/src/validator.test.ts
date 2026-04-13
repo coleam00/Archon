@@ -2,6 +2,12 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+
+// Bootstrap provider registry (needed by capability-driven warnings in validator)
+clearRegistry();
+registerBuiltinProviders();
+
 import {
   levenshtein,
   findSimilar,
@@ -25,11 +31,7 @@ afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true });
 });
 
-function makeWorkflow(
-  name: string,
-  nodes: DagNode[],
-  provider?: 'claude' | 'codex'
-): WorkflowDefinition {
+function makeWorkflow(name: string, nodes: DagNode[], provider?: string): WorkflowDefinition {
   return {
     name,
     description: 'test workflow',
@@ -221,7 +223,7 @@ describe('validateWorkflowResources — MCP validation', () => {
     const issues = await validateWorkflowResources(workflow, tmpDir);
     const mcpWarnings = issues.filter(i => i.field === 'mcp' && i.level === 'warning');
     expect(mcpWarnings).toHaveLength(1);
-    expect(mcpWarnings[0].message).toContain('Claude-only');
+    expect(mcpWarnings[0].message).toContain('not supported by provider');
   });
 });
 

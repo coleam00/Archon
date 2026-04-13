@@ -15,6 +15,7 @@ import type {
   TokenUsage,
   SendQueryOptions,
   NodeConfig,
+  ProviderDefaultsMap,
   ProviderCapabilities,
 } from '@archon/providers/types';
 
@@ -25,6 +26,7 @@ export type {
   TokenUsage,
   SendQueryOptions,
   NodeConfig,
+  ProviderDefaultsMap,
   ProviderCapabilities,
 };
 
@@ -68,8 +70,8 @@ export interface IWorkflowPlatform {
 // ---------------------------------------------------------------------------
 
 export interface WorkflowConfig {
-  /** Default assistant provider ('claude' | 'codex') */
-  assistant: 'claude' | 'codex';
+  /** Default assistant provider (validated against provider registry at runtime) */
+  assistant: string;
   baseBranch?: string;
   docsPath?: string;
   envVars?: Record<string, string>;
@@ -78,7 +80,11 @@ export interface WorkflowConfig {
     loadDefaultWorkflows?: boolean;
     loadDefaultCommands?: boolean;
   };
-  assistants: {
+  // Intersection: generic map for community providers + typed built-in entries.
+  // Built-ins are typed so executor/dag-executor get type-safe config access for
+  // Claude settingSources, Codex reasoningEffort, etc. without casts.
+  // Community providers use the generic [string] index signature.
+  assistants: ProviderDefaultsMap & {
     claude: {
       model?: string;
       settingSources?: ('project' | 'user')[];
@@ -96,7 +102,7 @@ export interface WorkflowConfig {
 // Agent provider factory type
 // ---------------------------------------------------------------------------
 
-export type AgentProviderFactory = (provider: 'claude' | 'codex') => IAgentProvider;
+export type AgentProviderFactory = (provider: string) => IAgentProvider;
 
 // ---------------------------------------------------------------------------
 // WorkflowDeps — the single injection point
