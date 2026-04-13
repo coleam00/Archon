@@ -132,6 +132,18 @@ export function formatLeakError(
 
   const consent = consentCopy(context);
 
+  // Collect all unique keys from findings
+  const allKeys = new Set<string>();
+  report.findings.forEach(finding => {
+    finding.keys.forEach(key => allKeys.add(key));
+  });
+  const keysArray = Array.from(allKeys);
+
+  // Generate grep command that excludes all detected keys
+  const grepCommand = keysArray
+    .map(key => `grep -v '^${key}='`)
+    .join(' | ') + ' .env > .env.tmp && mv .env.tmp .env';
+
   return `${header}
 
   Found:
@@ -145,7 +157,7 @@ ${fileList}
 
   Choose one:
     1. Remove the key from this repo's .env (recommended):
-         grep -v '^ANTHROPIC_API_KEY=' .env > .env.tmp && mv .env.tmp .env
+         ${grepCommand}
 
     2. Rename to a non-auto-loaded file:
          mv .env .env.secrets
