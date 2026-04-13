@@ -1,7 +1,7 @@
 import { NavLink, Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { LayoutDashboard, MessageSquare, Workflow, Settings } from 'lucide-react';
-import { listWorkflowRuns, getUpdateCheck } from '@/lib/api';
+import { listWorkflowRuns, getUpdateCheck, getConfig } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 const tabs = [
@@ -26,6 +26,20 @@ export function TopNav(): React.ReactElement {
     refetchInterval: 60 * 60 * 1000,
     retry: false,
   });
+
+  const { data: configData } = useQuery({
+    queryKey: ['config'],
+    queryFn: getConfig,
+    staleTime: 60 * 1000,
+    refetchInterval: 60 * 1000,
+  });
+
+  const modelLabel = ((): string | null => {
+    if (!configData) return null;
+    const { assistant, assistants } = configData.config;
+    const model = assistants[assistant]?.model;
+    return model ? `${assistant} · ${model}` : assistant;
+  })();
 
   return (
     <nav className="flex items-center gap-1 border-b border-border bg-surface px-4">
@@ -58,7 +72,17 @@ export function TopNav(): React.ReactElement {
           )}
         </NavLink>
       ))}
-      <span className="ml-auto text-xs text-text-secondary">
+      {modelLabel && (
+        <Link
+          to="/settings"
+          className="ml-auto flex items-center gap-1 rounded-full border border-border bg-surface px-2.5 py-0.5 text-xs text-text-secondary hover:text-text-primary hover:border-primary transition-colors"
+          title="Active model — click to change"
+        >
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary" />
+          {modelLabel}
+        </Link>
+      )}
+      <span className={cn('text-xs text-text-secondary', !modelLabel && 'ml-auto')}>
         v{import.meta.env.VITE_APP_VERSION as string}
         {updateCheck?.updateAvailable && updateCheck.releaseUrl && (
           <a
