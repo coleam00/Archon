@@ -332,6 +332,22 @@ describe('workflows database', () => {
       expect(params).toContain(JSON.stringify({ error: 'Timeout exceeded' }));
     });
 
+    test('merges optional metadata into failure payload', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await failWorkflowRun('workflow-run-123', 'Timeout exceeded', {
+        node_counts: { completed: 1, failed: 1, skipped: 0, total: 2 },
+      });
+
+      const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(params).toContain(
+        JSON.stringify({
+          error: 'Timeout exceeded',
+          node_counts: { completed: 1, failed: 1, skipped: 0, total: 2 },
+        })
+      );
+    });
+
     test('throws when rowCount is 0', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
 

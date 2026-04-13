@@ -199,6 +199,13 @@ export function getDefaultWorkflowsPath(): string {
 }
 
 /**
+ * Get the path to the app's bundled default scripts directory
+ */
+export function getDefaultScriptsPath(): string {
+  return join(getAppArchonBasePath(), 'scripts');
+}
+
+/**
  * Returns the path to the cached web UI distribution for a given version.
  * Example: ~/.archon/web-dist/v0.3.2/
  */

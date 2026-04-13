@@ -25,6 +25,12 @@ const mockLogger = {
   child: mock(() => mockLogger),
 };
 
+const mockFsAccess = mock(() => Promise.resolve());
+
+mock.module('fs/promises', () => ({
+  access: mockFsAccess,
+}));
+
 // Mock @archon/paths (createLogger moved here from @archon/core)
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
@@ -345,6 +351,8 @@ describe('workflowRunCommand', () => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     mockLogger.warn.mockClear();
     mockLogger.info.mockClear();
+    mockFsAccess.mockClear();
+    mockFsAccess.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -360,6 +368,16 @@ describe('workflowRunCommand', () => {
 
     await expect(workflowRunCommand('/test/path', 'assist', 'hello')).rejects.toThrow(
       'No workflows found in .archon/workflows/'
+    );
+  });
+
+  it('fails early when Archon home is not writable for workflow state', async () => {
+    mockFsAccess.mockRejectedValueOnce(
+      Object.assign(new Error('Operation not permitted'), { code: 'EPERM' })
+    );
+
+    await expect(workflowRunCommand('/test/path', 'assist', 'hello')).rejects.toThrow(
+      "requires write access to '/home/test/.archon'"
     );
   });
 

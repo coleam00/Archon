@@ -54,7 +54,7 @@ export interface IWorkflowStore {
   updateWorkflowActivity(id: string): Promise<void>;
   getWorkflowRunStatus(id: string): Promise<WorkflowRunStatus | null>;
   completeWorkflowRun(id: string, metadata?: Record<string, unknown>): Promise<void>;
-  failWorkflowRun(id: string, error: string): Promise<void>;
+  failWorkflowRun(id: string, error: string, metadata?: Record<string, unknown>): Promise<void>;
   pauseWorkflowRun(id: string, approvalContext: ApprovalContext): Promise<void>;
   cancelWorkflowRun(id: string): Promise<void>;
 

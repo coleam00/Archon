@@ -1,6 +1,9 @@
 /**
  * Workflow command - list and run workflows
  */
+import { constants as fsConstants } from 'fs';
+import { access } from 'fs/promises';
+import { dirname, join } from 'path';
 import {
   registerRepository,
   loadConfig,
@@ -77,6 +80,56 @@ function generateConversationId(): string {
   const timestamp = Date.now();
   const random = Math.random().toString(36).substring(2, 8);
   return `cli-${String(timestamp)}-${random}`;
+}
+
+async function assertArchonStateWritable(commandName: string): Promise<void> {
+  if (process.env.DATABASE_URL) {
+    return;
+  }
+
+  const archonHome = getArchonHome();
+  const dbPath = join(archonHome, 'archon.db');
+  const homeAccessTarget = dirname(archonHome);
+
+  try {
+    await access(archonHome, fsConstants.W_OK);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') {
+      try {
+        await access(homeAccessTarget, fsConstants.W_OK);
+        return;
+      } catch (parentError) {
+        const parentErr = parentError as NodeJS.ErrnoException;
+        throw new Error(
+          `Archon CLI '${commandName}' requires write access to '${homeAccessTarget}' ` +
+            `so it can create '${archonHome}' and its SQLite state.\n` +
+            `Current failure: ${parentErr.message}\n` +
+            `Fix: rerun outside the outer workspace sandbox or grant write access to '${homeAccessTarget}'.`
+        );
+      }
+    }
+    throw new Error(
+      `Archon CLI '${commandName}' requires write access to '${archonHome}' ` +
+        `because local workflow state uses SQLite at '${dbPath}' when DATABASE_URL is unset.\n` +
+        `Current failure: ${err.message}\n` +
+        `Fix: rerun outside the outer workspace sandbox or grant write access to '${archonHome}'.`
+    );
+  }
+
+  try {
+    await access(dbPath, fsConstants.W_OK);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') {
+      return;
+    }
+    throw new Error(
+      `Archon CLI '${commandName}' requires write access to '${dbPath}'.\n` +
+        `Current failure: ${err.message}\n` +
+        `Fix: rerun outside the outer workspace sandbox or grant write access to '${archonHome}'.`
+    );
+  }
 }
 
 /** Render a workflow event to stderr as a progress line. Called only when --quiet is not set. */
@@ -210,6 +263,8 @@ export async function workflowRunCommand(
   userMessage: string,
   options: WorkflowRunOptions = {}
 ): Promise<void> {
+  await assertArchonStateWritable('workflow run');
+
   const { workflows: workflowEntries, errors } = await loadWorkflows(cwd);
 
   if (workflowEntries.length === 0 && errors.length === 0) {
@@ -279,9 +334,10 @@ export async function workflowRunCommand(
     conversation = await conversationDb.getOrCreateConversation('cli', conversationId);
   } catch (error) {
     const err = error as Error;
-    throw new Error(
-      `Failed to access database: ${err.message}\nHint: Check that DATABASE_URL is set and the database is running.`
-    );
+    const readOnlyHint = err.message.toLowerCase().includes('readonly')
+      ? `\nHint: Archon needs write access to '${getArchonHome()}' (SQLite state lives there when DATABASE_URL is unset).`
+      : '\nHint: Check that DATABASE_URL is set and the database is running.';
+    throw new Error(`Failed to access database: ${err.message}${readOnlyHint}`);
   }
 
   // Try to find a codebase for this directory
@@ -806,6 +862,7 @@ export async function workflowStatusCommand(json?: boolean, verbose?: boolean): 
  * findResumableRun picks up the prior failed run and skips completed nodes.
  */
 export async function workflowResumeCommand(runId: string): Promise<void> {
+  await assertArchonStateWritable('workflow resume');
   const run = await resumeWorkflowOp(runId);
   if (!run.working_path) {
     throw new Error(
@@ -839,6 +896,7 @@ export async function workflowResumeCommand(runId: string): Promise<void> {
  * Abandon a workflow run by ID (marks it as cancelled).
  */
 export async function workflowAbandonCommand(runId: string): Promise<void> {
+  await assertArchonStateWritable('workflow abandon');
   const run = await abandonWorkflow(runId);
   console.log(`Abandoned workflow run: ${runId}`);
   console.log(`Workflow: ${run.workflow_name}`);
@@ -849,6 +907,7 @@ export async function workflowAbandonCommand(runId: string): Promise<void> {
  * Writes the approval events and transitions to 'failed' for auto-resume.
  */
 export async function workflowApproveCommand(runId: string, comment?: string): Promise<void> {
+  await assertArchonStateWritable('workflow approve');
   const result = await approveWorkflow(runId, comment);
 
   // CLI auto-resumes after approval (unlike chat, which defers to next user message)
@@ -905,6 +964,7 @@ export async function workflowApproveCommand(runId: string, comment?: string): P
  * Reject a paused workflow run by ID (marks it as cancelled).
  */
 export async function workflowRejectCommand(runId: string, reason?: string): Promise<void> {
+  await assertArchonStateWritable('workflow reject');
   const result = await rejectWorkflow(runId, reason);
 
   if (result.cancelled) {
@@ -965,6 +1025,7 @@ export async function workflowRejectCommand(runId: string, reason?: string): Pro
  * Delete terminal workflow runs older than the given number of days.
  */
 export async function workflowCleanupCommand(days: number): Promise<void> {
+  await assertArchonStateWritable('workflow cleanup');
   try {
     const { count } = await workflowDb.deleteOldWorkflowRuns(days);
     if (count === 0) {

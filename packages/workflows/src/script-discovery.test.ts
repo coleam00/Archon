@@ -18,7 +18,11 @@ const mockLogger = {
   debug: mock(() => undefined),
   trace: mock(() => undefined),
 };
-mock.module('@archon/paths', () => ({ createLogger: mock(() => mockLogger) }));
+mock.module('@archon/paths', () => ({
+  createLogger: mock(() => mockLogger),
+  getDefaultScriptsPath: () => '/app/.archon/scripts',
+  BUNDLED_IS_BINARY: false,
+}));
 
 import { discoverScripts, getDefaultScripts } from './script-discovery';
 
@@ -160,10 +164,15 @@ describe('discoverScripts', () => {
 });
 
 describe('getDefaultScripts', () => {
-  test('returns an empty Map', () => {
+  test('returns the bundled detect-project script', () => {
     const defaults = getDefaultScripts();
     expect(defaults).toBeInstanceOf(Map);
-    expect(defaults.size).toBe(0);
+    expect(defaults.size).toBeGreaterThan(0);
+    const detectProject = defaults.get('detect-project');
+    expect(detectProject).toBeDefined();
+    expect(detectProject?.runtime).toBe('bun');
+    expect(detectProject?.path).toBe('[bundled:detect-project]');
+    expect(detectProject?.content).toContain('function detectProject()');
   });
 
   test('returns a new Map each call', () => {

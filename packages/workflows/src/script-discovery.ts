@@ -5,8 +5,9 @@
  * from the file extension: .ts/.js -> bun, .py -> uv.
  */
 import { readdir, stat } from 'fs/promises';
-import { join, basename, extname } from 'path';
-import { createLogger } from '@archon/paths';
+import { resolve, join, basename, extname } from 'path';
+import { createLogger, getDefaultScriptsPath } from '@archon/paths';
+import { BUNDLED_SCRIPTS, isBinaryBuild } from './defaults/bundled-defaults';
 
 /** Normalize path separators to forward slashes for cross-platform consistency */
 function normalizeSep(p: string): string {
@@ -29,6 +30,15 @@ export interface ScriptDefinition {
   path: string;
   runtime: ScriptRuntime;
 }
+
+/** A bundled script that exists only as embedded content. */
+export interface BundledScriptDefinition extends ScriptDefinition {
+  content: string;
+  bundled: true;
+}
+
+/** A resolved script can come from the repo or from bundled defaults. */
+export type ResolvedScriptDefinition = ScriptDefinition | BundledScriptDefinition;
 
 /** Supported file extensions and their runtimes */
 const EXTENSION_RUNTIME_MAP: Record<string, ScriptRuntime> = {
@@ -120,9 +130,52 @@ export async function discoverScripts(dir: string): Promise<Map<string, ScriptDe
 }
 
 /**
- * Returns bundled default scripts (empty — no bundled scripts for now).
- * Follows the bundled-defaults.ts pattern for future extensibility.
+ * Returns bundled default scripts embedded in the binary/build.
  */
-export function getDefaultScripts(): Map<string, ScriptDefinition> {
-  return new Map();
+export function getDefaultScripts(): Map<string, BundledScriptDefinition> {
+  const defaults = new Map<string, BundledScriptDefinition>();
+
+  for (const [name, asset] of Object.entries(BUNDLED_SCRIPTS)) {
+    defaults.set(name, {
+      name,
+      path: `[bundled:${name}]`,
+      runtime: asset.runtime,
+      content: asset.content,
+      bundled: true,
+    });
+  }
+
+  return defaults;
+}
+
+/**
+ * Discover default scripts shipped with Archon.
+ *
+ * In binary mode, scripts come from the embedded bundle. In dev mode, scripts are
+ * read from the app's own `.archon/scripts/` directory so default workflows can
+ * reference default scripts without each target repo copying them in.
+ */
+export async function discoverDefaultScripts(): Promise<Map<string, ResolvedScriptDefinition>> {
+  if (isBinaryBuild()) {
+    return getDefaultScripts();
+  }
+
+  return discoverScripts(getDefaultScriptsPath());
+}
+
+/**
+ * Resolve a named script using repo-local scripts first, then Archon defaults.
+ */
+export async function resolveNamedScript(
+  cwd: string,
+  scriptName: string
+): Promise<ResolvedScriptDefinition | null> {
+  const repoScripts = await discoverScripts(resolve(cwd, '.archon', 'scripts'));
+  const repoScript = repoScripts.get(scriptName);
+  if (repoScript) {
+    return repoScript;
+  }
+
+  const defaultScripts = await discoverDefaultScripts();
+  return defaultScripts.get(scriptName) ?? null;
 }

@@ -23,6 +23,8 @@ mock.module('@archon/paths', () => ({
     return paths;
   },
   getDefaultCommandsPath: () => '/nonexistent/defaults',
+  getDefaultScriptsPath: () => '/Users/mase/Codebase/Personal-Projects/Archon/.archon/scripts',
+  BUNDLED_IS_BINARY: false,
 }));
 
 // --- Imports (after mocks) ---
@@ -2860,6 +2862,138 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       ).toBe(1);
     });
 
+    it('fails early when no durable progress is made across consecutive iterations', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'Still working...' };
+        yield { type: 'result', sessionId: 'loop-session' };
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-stuck',
+          nodes: [
+            {
+              id: 'my-loop',
+              loop: {
+                prompt: 'Do task.',
+                until: 'COMPLETE',
+                max_iterations: 10,
+                progress_file: '$ARTIFACTS_DIR/progress.txt',
+                stuck_after_no_progress_iterations: 2,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(mockSendQueryDag.mock.calls.length).toBe(3);
+      const failCalls = (
+        mockDeps.store.failWorkflowRun as Mock<(id: string, error: string) => Promise<void>>
+      ).mock.calls;
+      expect(failCalls.length).toBe(1);
+      const platformMessages = (
+        platform.sendMessage as Mock<
+          (
+            conversationId: string,
+            content: string,
+            metadata?: Record<string, unknown>
+          ) => Promise<void>
+        >
+      ).mock.calls.map(call => String(call[1]));
+      expect(platformMessages.some(message => message.includes('no durable progress'))).toBe(true);
+    });
+
+    it('resets the no-progress streak when the progress file advances', async () => {
+      let callCount = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        callCount++;
+        const artifactsDir = join(testDir, 'artifacts');
+        await mkdir(artifactsDir, { recursive: true });
+        if (callCount === 1) {
+          await writeFile(
+            join(artifactsDir, 'progress.txt'),
+            '## Task 1: First task — COMPLETED\nDate: 2026-04-13\n---\n',
+            'utf8'
+          );
+          yield { type: 'assistant', content: 'Completed the first task.' };
+        } else if (callCount === 2) {
+          await writeFile(
+            join(artifactsDir, 'progress.txt'),
+            '## Task 1: First task — COMPLETED\nDate: 2026-04-13\n---\n' +
+              '## Task 2: Second task — COMPLETED\nDate: 2026-04-13\n---\n',
+            'utf8'
+          );
+          yield { type: 'assistant', content: 'Completed the second task.' };
+        } else {
+          yield { type: 'assistant', content: 'All done! <promise>COMPLETE</promise>' };
+        }
+        yield { type: 'result', sessionId: `loop-session-${String(callCount)}` };
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-progress',
+          nodes: [
+            {
+              id: 'my-loop',
+              loop: {
+                prompt: 'Do task.',
+                until: 'COMPLETE',
+                max_iterations: 5,
+                progress_file: '$ARTIFACTS_DIR/progress.txt',
+                stuck_after_no_progress_iterations: 2,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(mockSendQueryDag.mock.calls.length).toBe(3);
+      expect(
+        (mockDeps.store.failWorkflowRun as Mock<(id: string, error: string) => Promise<void>>).mock
+          .calls.length
+      ).toBe(0);
+      expect(
+        (
+          mockDeps.store.completeWorkflowRun as Mock<
+            (id: string, metadata?: Record<string, unknown>) => Promise<void>
+          >
+        ).mock.calls.length
+      ).toBe(1);
+    });
+
     it('loop node output available to downstream nodes via $nodeId.output', async () => {
       let loopCallCount = 0;
       mockSendQueryDag.mockImplementation(function* (prompt: string) {
@@ -5006,6 +5140,48 @@ describe('executeDagWorkflow -- script nodes', () => {
     expect(mockSendQueryDag.mock.calls.length).toBe(0);
   });
 
+  it('named bun script executes from Archon default scripts when repo script is absent', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('script-default-run-id', {
+      workflow_name: 'script-default-test',
+      conversation_id: 'conv-default-script',
+      user_message: 'default script test',
+    });
+
+    await writeFile(join(testDir, 'package.json'), JSON.stringify({ name: 'default-script-test' }));
+
+    const commandsDir = join(testDir, '.archon', 'commands');
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(join(commandsDir, 'report-detect.md'), 'Detection output:\n$detect.output');
+
+    const nodes: DagNode[] = [
+      { id: 'detect', script: 'detect-project', runtime: 'bun' },
+      { id: 'report', command: 'report-detect', depends_on: ['detect'] },
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-default-script',
+      testDir,
+      { name: 'default-script-test', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    const prompt = mockSendQueryDag.mock.calls[0][0] as string;
+    expect(prompt).toContain('PROJECT_TYPE=node');
+    expect(prompt).toContain('INSTALL_CMD=npm ci');
+  });
+
   it('non-zero exit code results in failed state', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
@@ -5041,6 +5217,54 @@ describe('executeDagWorkflow -- script nodes', () => {
     const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
     const failMsg = messages.find((m: string) => m.includes('no successful nodes'));
     expect(failMsg).toBeDefined();
+  });
+
+  it('marks workflow failed when some nodes succeed and a later node fails', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('script-partial-fail-run-id', {
+      workflow_name: 'script-partial-fail-test',
+      conversation_id: 'conv-partial-fail',
+      user_message: 'partial fail test',
+    });
+
+    const nodes: DagNode[] = [
+      { id: 'ok', script: 'console.log("ok")', runtime: 'bun' },
+      { id: 'boom', script: 'process.exit(1)', runtime: 'bun', depends_on: ['ok'] },
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-partial-fail',
+      testDir,
+      { name: 'script-partial-fail-test', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(mockDeps.store.completeWorkflowRun as ReturnType<typeof mock>).not.toHaveBeenCalled();
+    const failCalls = (
+      mockDeps.store.failWorkflowRun as Mock<
+        (id: string, error: string, metadata?: Record<string, unknown>) => Promise<void>
+      >
+    ).mock.calls;
+    expect(failCalls.length).toBe(1);
+    expect(failCalls[0][1]).toContain('failed after partial execution');
+    expect(failCalls[0][2]).toEqual(
+      expect.objectContaining({
+        node_counts: { completed: 1, failed: 1, skipped: 0, total: 2 },
+      })
+    );
+    expect((failCalls[0][2] as Record<string, unknown>).failed_nodes).toEqual(
+      expect.stringContaining("'boom':")
+    );
   });
 
   it('timeout kills subprocess', async () => {

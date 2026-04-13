@@ -15,6 +15,10 @@ export const loopNodeConfigSchema = z
     fresh_context: z.boolean().default(false),
     /** Optional bash script run after each iteration; exit 0 = complete. */
     until_bash: z.string().optional(),
+    /** Optional progress file used to detect durable task completion across iterations. */
+    progress_file: z.string().optional(),
+    /** Fail early when this many consecutive iterations make no durable progress. */
+    stuck_after_no_progress_iterations: z.number().int().min(2).optional(),
     /** When true, pause between iterations for user input via /workflow approve. */
     interactive: z.boolean().optional(),
     /** Message shown to user when paused (required when interactive is true). */

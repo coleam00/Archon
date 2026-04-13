@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'bun:test';
-import { isBinaryBuild, BUNDLED_COMMANDS, BUNDLED_WORKFLOWS } from './bundled-defaults';
+import {
+  isBinaryBuild,
+  BUNDLED_COMMANDS,
+  BUNDLED_WORKFLOWS,
+  BUNDLED_SCRIPTS,
+} from './bundled-defaults';
 
 describe('bundled-defaults', () => {
   describe('isBinaryBuild', () => {
@@ -133,6 +138,15 @@ describe('bundled-defaults', () => {
         const hasNodes = content.includes('nodes:');
         expect(hasNodes).toBe(true);
       }
+    });
+  });
+
+  describe('BUNDLED_SCRIPTS', () => {
+    it('should include the detect-project helper used by default workflows', () => {
+      expect(BUNDLED_SCRIPTS).toHaveProperty('detect-project');
+      expect(BUNDLED_SCRIPTS['detect-project'].runtime).toBe('bun');
+      expect(BUNDLED_SCRIPTS['detect-project'].extension).toBe('.ts');
+      expect(BUNDLED_SCRIPTS['detect-project'].content).toContain('PROJECT_TYPE=');
     });
   });
 });

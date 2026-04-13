@@ -5,10 +5,11 @@
  * Independent nodes within the same layer run concurrently via Promise.allSettled.
  * Captures all assistant output regardless of streaming mode for $node_id.output substitution.
  */
-import { readFile } from 'fs/promises';
-import { resolve, isAbsolute } from 'path';
+import { readFile, mkdtemp, writeFile, rm } from 'fs/promises';
+import { resolve, isAbsolute, join } from 'path';
+import { tmpdir } from 'os';
 import { execFileAsync } from '@archon/git';
-import { discoverScripts } from './script-discovery';
+import { resolveNamedScript } from './script-discovery';
 import type {
   WorkflowAssistantOptions,
   IWorkflowPlatform,
@@ -101,9 +102,42 @@ interface SendMessageContext {
   nodeName?: string;
 }
 
+interface BundledScriptExecution {
+  cmd: string;
+  args: string[];
+  cleanup?: () => Promise<void>;
+}
+
 /** Default DAG node retry for TRANSIENT errors */
 const DEFAULT_NODE_MAX_RETRIES = 2;
 const DEFAULT_NODE_RETRY_DELAY_MS = 3000;
+
+async function buildBundledScriptExecution(
+  scriptName: string,
+  runtime: 'bun' | 'uv',
+  content: string,
+  nodeDeps: string[]
+): Promise<BundledScriptExecution> {
+  if (runtime === 'uv') {
+    const withFlags = nodeDeps.flatMap(dep => ['--with', dep]);
+    return {
+      cmd: 'uv',
+      args: ['run', ...withFlags, 'python', '-c', content],
+    };
+  }
+
+  const tempDir = await mkdtemp(join(tmpdir(), `archon-bundled-script-${scriptName}-`));
+  const scriptPath = join(tempDir, `${scriptName}.ts`);
+  await writeFile(scriptPath, content, 'utf8');
+
+  return {
+    cmd: 'bun',
+    args: ['run', scriptPath],
+    cleanup: async (): Promise<void> => {
+      await rm(tempDir, { recursive: true, force: true });
+    },
+  };
+}
 
 /**
  * Get effective retry config for a DAG node.
@@ -1511,6 +1545,7 @@ async function executeScriptNode(
   // Build the command and args based on runtime and inline vs named
   let cmd = '';
   let args: string[] = [];
+  let cleanupBundledScript: (() => Promise<void>) | undefined;
 
   const nodeDeps = node.deps ?? [];
 
@@ -1527,13 +1562,11 @@ async function executeScriptNode(
         args = ['run', ...withFlags, 'python', '-c', finalScript];
       }
     } else {
-      // Named script — look up in .archon/scripts/ directory
-      const scriptsDir = resolve(cwd, '.archon', 'scripts');
-      const scripts = await discoverScripts(scriptsDir);
-      const scriptDef = scripts.get(finalScript);
+      // Named script — look up in repo scripts first, then Archon defaults
+      const scriptDef = await resolveNamedScript(cwd, finalScript);
 
       if (!scriptDef) {
-        const errorMsg = `Script node '${node.id}': named script '${finalScript}' not found in .archon/scripts/`;
+        const errorMsg = `Script node '${node.id}': named script '${finalScript}' not found in .archon/scripts/ or Archon defaults`;
         getLog().error({ nodeId: node.id, scriptName: finalScript }, 'script_not_found');
         await safeSendMessage(platform, conversationId, errorMsg, nodeContext);
         await logNodeError(logDir, workflowRun.id, node.id, errorMsg);
@@ -1562,21 +1595,48 @@ async function executeScriptNode(
         return { state: 'failed', output: '', error: errorMsg };
       }
 
-      // Use scriptDef.runtime (canonical source) instead of re-deriving from extension
-      if (scriptDef.runtime === 'uv') {
-        cmd = 'uv';
-        const withFlags = nodeDeps.flatMap(dep => ['--with', dep]);
-        args = ['run', ...withFlags, scriptDef.path];
+      if ('bundled' in scriptDef && scriptDef.bundled) {
+        const bundledExecution = await buildBundledScriptExecution(
+          scriptDef.name,
+          scriptDef.runtime,
+          scriptDef.content,
+          nodeDeps
+        );
+        cmd = bundledExecution.cmd;
+        args = bundledExecution.args;
+        cleanupBundledScript = bundledExecution.cleanup;
       } else {
-        cmd = 'bun';
-        args = ['run', scriptDef.path];
+        // Use scriptDef.runtime (canonical source) instead of re-deriving from extension
+        if (scriptDef.runtime === 'uv') {
+          cmd = 'uv';
+          const withFlags = nodeDeps.flatMap(dep => ['--with', dep]);
+          args = ['run', ...withFlags, scriptDef.path];
+        } else {
+          cmd = 'bun';
+          args = ['run', scriptDef.path];
+        }
       }
     }
 
-    const { stdout, stderr } = await execFileAsync(cmd, args, {
-      cwd,
-      timeout,
-    });
+    let stdout = '';
+    let stderr = '';
+    try {
+      const result = await execFileAsync(cmd, args, {
+        cwd,
+        timeout,
+      });
+      stdout = result.stdout;
+      stderr = result.stderr;
+    } finally {
+      if (cleanupBundledScript) {
+        await cleanupBundledScript().catch((error: Error) => {
+          getLog().warn(
+            { err: error, nodeId: node.id, scriptName: finalScript },
+            'bundled_script_cleanup_failed'
+          );
+        });
+      }
+    }
 
     // Trim trailing newline from stdout (common shell behavior)
     const output = stdout.replace(/\n$/, '');
@@ -1689,6 +1749,103 @@ function buildLoopNodeOptions(
   return { ...(model ? { model } : {}), ...codexOptions, ...claudeOptions };
 }
 
+interface LoopProgressSnapshot {
+  gitHead?: string;
+  completedTaskCount?: number;
+}
+
+async function resolveLoopProgressFile(
+  progressFile: string,
+  workflowRun: WorkflowRun,
+  artifactsDir: string,
+  baseBranch: string,
+  docsDir: string,
+  issueContext: string | undefined
+): Promise<string> {
+  const { prompt: substitutedPath } = substituteWorkflowVariables(
+    progressFile,
+    workflowRun.id,
+    workflowRun.user_message,
+    artifactsDir,
+    baseBranch,
+    docsDir,
+    issueContext
+  );
+  return substitutedPath;
+}
+
+function countCompletedTasks(progressText: string): number {
+  const matches = progressText.match(/^## Task \d+: .* — COMPLETED$/gm);
+  return matches?.length ?? 0;
+}
+
+async function captureLoopProgressSnapshot(
+  cwd: string,
+  workflowRun: WorkflowRun,
+  loop: LoopNode['loop'],
+  artifactsDir: string,
+  baseBranch: string,
+  docsDir: string,
+  issueContext: string | undefined
+): Promise<LoopProgressSnapshot> {
+  let gitHead: string | undefined;
+  try {
+    const result = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd });
+    gitHead = result.stdout.trim() || undefined;
+  } catch {
+    gitHead = undefined;
+  }
+
+  let completedTaskCount: number | undefined;
+  if (loop.progress_file) {
+    try {
+      const resolvedPath = await resolveLoopProgressFile(
+        loop.progress_file,
+        workflowRun,
+        artifactsDir,
+        baseBranch,
+        docsDir,
+        issueContext
+      );
+      const progressPath = isAbsolute(resolvedPath) ? resolvedPath : resolve(cwd, resolvedPath);
+      const progressText = await readFile(progressPath, 'utf8').catch(
+        (error: Error & { code?: string }) => {
+          if (error.code === 'ENOENT') return '';
+          throw error;
+        }
+      );
+      completedTaskCount = countCompletedTasks(progressText);
+    } catch {
+      completedTaskCount = undefined;
+    }
+  }
+
+  return { gitHead, completedTaskCount };
+}
+
+function didLoopProgressAdvance(
+  previous: LoopProgressSnapshot,
+  current: LoopProgressSnapshot
+): boolean {
+  if (
+    previous.gitHead !== undefined &&
+    current.gitHead !== undefined &&
+    previous.gitHead !== current.gitHead
+  ) {
+    return true;
+  }
+
+  if (
+    previous.completedTaskCount !== undefined &&
+    current.completedTaskCount !== undefined &&
+    current.completedTaskCount > previous.completedTaskCount
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 /**
  * Execute a loop node — runs prompt repeatedly until completion signal or max iterations.
  *
@@ -1745,6 +1902,8 @@ async function executeLoopNode(
   let loopTotalCostUsd: number | undefined;
   let loopFinalStopReason: string | undefined;
   let loopTotalNumTurns: number | undefined;
+  let previousProgressSnapshot: LoopProgressSnapshot | undefined;
+  let noProgressStreak = 0;
   const resolvedOptions = buildLoopNodeOptions(workflowProvider, workflowModel, config);
 
   // Helper to log event store errors consistently
@@ -2110,6 +2269,57 @@ async function executeLoopNode(
         sessionId: currentSessionId,
         costUsd: loopTotalCostUsd,
       };
+    }
+
+    if (loop.stuck_after_no_progress_iterations !== undefined) {
+      const currentProgressSnapshot = await captureLoopProgressSnapshot(
+        cwd,
+        workflowRun,
+        loop,
+        artifactsDir,
+        baseBranch,
+        docsDir,
+        issueContext
+      );
+
+      if (
+        previousProgressSnapshot &&
+        !didLoopProgressAdvance(previousProgressSnapshot, currentProgressSnapshot)
+      ) {
+        noProgressStreak += 1;
+      } else {
+        noProgressStreak = 0;
+      }
+      previousProgressSnapshot = currentProgressSnapshot;
+
+      if (noProgressStreak >= loop.stuck_after_no_progress_iterations) {
+        const progressSummary = [
+          currentProgressSnapshot.gitHead
+            ? `HEAD=${currentProgressSnapshot.gitHead.slice(0, 7)}`
+            : null,
+          currentProgressSnapshot.completedTaskCount !== undefined
+            ? `completed_tasks=${String(currentProgressSnapshot.completedTaskCount)}`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(', ');
+        const errorMsg =
+          `Loop node '${node.id}' made no durable progress for ${String(noProgressStreak)} consecutive iteration` +
+          `${noProgressStreak === 1 ? '' : 's'}. ` +
+          'Stop and inspect the current task before retrying.' +
+          (progressSummary ? ` Snapshot: ${progressSummary}` : '');
+        getLog().warn(
+          { nodeId: node.id, iteration: i, noProgressStreak, progressSummary },
+          'loop_node.no_progress_streak_reached'
+        );
+        await safeSendMessage(platform, conversationId, errorMsg, msgContext);
+        return {
+          state: 'failed',
+          output: lastIterationOutput,
+          error: errorMsg,
+          costUsd: loopTotalCostUsd,
+        };
+      }
     }
 
     // Interactive loop gate — pause after every iteration where the AI did NOT emit the
@@ -2939,11 +3149,11 @@ export async function executeDagWorkflow(
     const failMsg =
       `DAG workflow '${workflow.name}' completed with no successful nodes. ` +
       'Check node conditions, trigger rules, and upstream failures.';
-    // Note: nodeCounts not stored for failed runs — failWorkflowRun only stores { error }.
-    // Frontend guards with isValidNodeCounts so missing node_counts is safe.
-    await deps.store.failWorkflowRun(workflowRun.id, failMsg).catch((dbErr: Error) => {
-      getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag_db_fail_failed');
-    });
+    await deps.store
+      .failWorkflowRun(workflowRun.id, failMsg, { node_counts: nodeCounts })
+      .catch((dbErr: Error) => {
+        getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag_db_fail_failed');
+      });
     await logWorkflowError(logDir, workflowRun.id, failMsg).catch((logErr: Error) => {
       getLog().error(
         { err: logErr, workflowRunId: workflowRun.id },
@@ -2957,6 +3167,18 @@ export async function executeDagWorkflow(
       workflowName: workflow.name,
       error: failMsg,
     });
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'workflow_failed',
+        data: { error: failMsg, node_counts: nodeCounts },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: workflowRun.id, eventType: 'workflow_failed' },
+          'workflow_event_persist_failed'
+        );
+      });
     emitterForFail.unregisterRun(workflowRun.id);
     await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
       workflowId: workflowRun.id,
@@ -2970,12 +3192,48 @@ export async function executeDagWorkflow(
       .filter(([, o]) => o.state === 'failed')
       .map(([id, o]) => `'${id}': ${o.state === 'failed' ? o.error : 'unknown'}`)
       .join('; ');
-    await safeSendMessage(
-      platform,
-      conversationId,
-      `\u26a0\ufe0f Some DAG nodes failed: ${failedNodes}\nSuccessful nodes completed normally.`,
-      { workflowId: workflowRun.id }
-    );
+    if (await skipIfStatusChanged('dag.skip_partial_fail_status_changed')) return;
+    const failMsg =
+      `DAG workflow '${workflow.name}' failed after partial execution. ` +
+      `Failed nodes: ${failedNodes}`;
+    await deps.store
+      .failWorkflowRun(workflowRun.id, failMsg, {
+        node_counts: nodeCounts,
+        failed_nodes: failedNodes,
+      })
+      .catch((dbErr: Error) => {
+        getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag_db_partial_fail_failed');
+      });
+    await logWorkflowError(logDir, workflowRun.id, failMsg).catch((logErr: Error) => {
+      getLog().error(
+        { err: logErr, workflowRunId: workflowRun.id },
+        'dag.workflow_error_log_write_failed'
+      );
+    });
+    const emitterForFail = getWorkflowEventEmitter();
+    emitterForFail.emit({
+      type: 'workflow_failed',
+      runId: workflowRun.id,
+      workflowName: workflow.name,
+      error: failMsg,
+    });
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'workflow_failed',
+        data: { error: failMsg, node_counts: nodeCounts, failed_nodes: failedNodes },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: workflowRun.id, eventType: 'workflow_failed' },
+          'workflow_event_persist_failed'
+        );
+      });
+    emitterForFail.unregisterRun(workflowRun.id);
+    await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
+      workflowId: workflowRun.id,
+    });
+    return;
   }
 
   // Check if status was changed externally (e.g. cancelled) before marking complete.

@@ -70,6 +70,9 @@ the executor checks for workflow cancellation.
     max_iterations: 10      # Required. Hard limit — node fails if exceeded.
     fresh_context: true     # Optional. Default: false.
     until_bash: "..."       # Optional. Bash script checked after each iteration.
+    progress_file: "..."    # Optional. Progress tracker used for durable-progress checks.
+    stuck_after_no_progress_iterations: 3  # Optional. Fail early after repeated
+                                           # iterations with no new durable progress.
     interactive: true       # Optional. Default: false. Pause after each non-completing
                             # iteration for user input via /workflow approve.
     gate_message: "..."     # Required when interactive: true. Message shown to the
@@ -148,6 +151,21 @@ This is useful for deterministic completion criteria: test suites, lint checks,
 build success. The bash script supports the same variable substitution as
 `prompt` (`$ARTIFACTS_DIR`, `$nodeId.output`, etc.). Note: `$nodeId.output`
 values are shell-escaped when substituted into `until_bash`.
+
+### `progress_file` and `stuck_after_no_progress_iterations`
+
+Use these together when a loop should stop early if iterations are spinning
+without durable state changes.
+
+- `progress_file` points at the task tracker the loop updates as work completes
+- `stuck_after_no_progress_iterations` sets how many consecutive non-completing
+  iterations Archon tolerates when neither of these changed:
+  - the current git `HEAD`
+  - the completed-task count in `progress_file`
+
+This is useful for stateless implementation loops that re-read work from disk on
+each iteration. Instead of burning all `max_iterations`, the loop fails early and
+surfaces a stuck-task condition for human review.
 
 ## Patterns
 

@@ -1622,6 +1622,8 @@ nodes:
       max_iterations: 10
       fresh_context: true
       until_bash: "test -f done.txt"
+      progress_file: "$ARTIFACTS_DIR/progress.txt"
+      stuck_after_no_progress_iterations: 3
     idle_timeout: 300000
 `
       );
@@ -1641,6 +1643,8 @@ nodes:
         expect(wf.nodes[0].loop.max_iterations).toBe(10);
         expect(wf.nodes[0].loop.fresh_context).toBe(true);
         expect(wf.nodes[0].loop.until_bash).toBe('test -f done.txt');
+        expect(wf.nodes[0].loop.progress_file).toBe('$ARTIFACTS_DIR/progress.txt');
+        expect(wf.nodes[0].loop.stuck_after_no_progress_iterations).toBe(3);
         expect(wf.nodes[0].idle_timeout).toBe(300000);
       }
     });
@@ -1671,6 +1675,8 @@ nodes:
       if (isLoopNode(wf.nodes[0])) {
         expect(wf.nodes[0].loop.fresh_context).toBe(false);
         expect(wf.nodes[0].loop.until_bash).toBeUndefined();
+        expect(wf.nodes[0].loop.progress_file).toBeUndefined();
+        expect(wf.nodes[0].loop.stuck_after_no_progress_iterations).toBeUndefined();
       }
     });
 

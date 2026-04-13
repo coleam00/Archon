@@ -520,6 +520,11 @@ nodes:
         ---
         ```
 
+        Archon monitors durable progress across iterations using the current git HEAD
+        plus `.claude/archon/plans/progress.txt`. If multiple iterations finish
+        without a new commit or a new completed-task entry, the loop will stop as
+        stuck so a human can inspect the blocked task directly.
+
         ---
 
         ## Phase 5: COMPLETE — Check All Tasks
@@ -533,6 +538,8 @@ nodes:
       until: COMPLETE
       max_iterations: 15
       fresh_context: true
+      progress_file: ".claude/archon/plans/progress.txt"
+      stuck_after_no_progress_iterations: 3
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 4: VALIDATE — Automated code review

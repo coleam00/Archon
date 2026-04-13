@@ -695,6 +695,11 @@ nodes:
            Phase 4.5 status block below. Do NOT read, edit, stage, or validate files
            for any other task in this iteration.
 
+        Archon monitors durable progress across iterations using the current git HEAD
+        plus `$ARTIFACTS_DIR/progress.txt`. If multiple iterations finish without a
+        new commit or a new completed-task entry, the loop will stop as stuck so a
+        human can inspect the blocked task directly.
+
         If tasks remain, end the iteration by reporting status in this exact format:
 
         ```
@@ -735,6 +740,8 @@ nodes:
       until: COMPLETE
       max_iterations: 15
       fresh_context: true
+      progress_file: "$ARTIFACTS_DIR/progress.txt"
+      stuck_after_no_progress_iterations: 3
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 4: VALIDATE — Automated code review

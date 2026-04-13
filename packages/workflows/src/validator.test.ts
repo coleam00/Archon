@@ -329,6 +329,15 @@ describe('validateWorkflowResources — script nodes', () => {
     expect(scriptErrors).toHaveLength(0);
   });
 
+  test('no error when named bun script exists in Archon defaults', async () => {
+    const workflow = makeWorkflow('test', [
+      { id: 'step1', script: 'detect-project', runtime: 'bun' } as unknown as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const scriptErrors = issues.filter(i => i.level === 'error' && i.field === 'script');
+    expect(scriptErrors).toHaveLength(0);
+  });
+
   test('no error for inline bun script (no file lookup needed)', async () => {
     const workflow = makeWorkflow('test', [
       {

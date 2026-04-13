@@ -63,6 +63,12 @@ curl http://localhost:3090/health/db
 
 SQLite requires no setup. The database is created automatically at `~/.archon/archon.db`. If you see errors, check that the `~/.archon/` directory exists and is writable.
 
+For workflow-mutating CLI commands (`workflow run`, `workflow resume`, `workflow approve`,
+`workflow reject`, `workflow cleanup`), Archon must be able to write the SQLite
+state under `~/.archon/`. If you run Archon from an outer workspace sandbox, grant
+write access to `~/.archon/` or rerun the CLI outside that sandbox. Changing the
+inner Codex sandbox settings does not fix a parent-process write restriction.
+
 **For remote PostgreSQL:**
 ```bash
 # Verify DATABASE_URL

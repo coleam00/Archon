@@ -31,7 +31,7 @@ function getLog(): ReturnType<typeof createLogger> {
 import { isScriptNode } from './schemas';
 import type { WorkflowDefinition, DagNode } from './schemas';
 import type { ScriptRuntime } from './script-discovery';
-import { discoverScripts } from './script-discovery';
+import { discoverDefaultScripts, discoverScripts, resolveNamedScript } from './script-discovery';
 import { isInlineScript } from './executor-shared';
 
 // =============================================================================
@@ -410,22 +410,25 @@ export async function validateWorkflowResources(
     if (isScriptNode(node)) {
       const script = node.script;
 
-      // Named script: validate file exists in .archon/scripts/
+      // Named script: validate file exists in repo scripts or Archon defaults
       if (!isInlineScript(script)) {
-        const scriptsDir = resolve(cwd, '.archon', 'scripts');
-        const extensions = node.runtime === 'uv' ? ['.py'] : ['.ts', '.js'];
-        const existsResults = await Promise.all(
-          extensions.map(ext => fileExists(join(scriptsDir, `${script}${ext}`)))
-        );
-        const scriptExists = existsResults.some(Boolean);
+        const resolvedScript = await resolveNamedScript(cwd, script);
 
-        if (!scriptExists) {
+        if (!resolvedScript) {
           issues.push({
             level: 'error',
             nodeId: node.id,
             field: 'script',
-            message: `Named script '${script}' not found in .archon/scripts/`,
+            message: `Named script '${script}' not found in .archon/scripts/ or Archon defaults`,
             hint: `Create .archon/scripts/${script}.${node.runtime === 'uv' ? 'py' : 'ts'} with your script code`,
+          });
+        } else if (resolvedScript.runtime !== node.runtime) {
+          issues.push({
+            level: 'error',
+            nodeId: node.id,
+            field: 'runtime',
+            message: `Script '${script}' resolves to runtime '${resolvedScript.runtime}', but node requests '${node.runtime}'`,
+            hint: `Update the node runtime or use a ${node.runtime === 'uv' ? '.py' : '.ts'} implementation of '${script}'`,
           });
         }
       }
@@ -548,13 +551,22 @@ export interface ScriptValidationResult {
 export async function discoverAvailableScripts(
   cwd: string
 ): Promise<{ name: string; path: string; runtime: ScriptRuntime }[]> {
-  const scriptsDir = resolve(cwd, '.archon', 'scripts');
   try {
-    const scripts = await discoverScripts(scriptsDir);
-    return [...scripts.values()].map(s => ({ name: s.name, path: s.path, runtime: s.runtime }));
+    const scripts = new Map<string, { name: string; path: string; runtime: ScriptRuntime }>();
+
+    for (const script of (await discoverDefaultScripts()).values()) {
+      scripts.set(script.name, { name: script.name, path: script.path, runtime: script.runtime });
+    }
+
+    const repoScripts = await discoverScripts(resolve(cwd, '.archon', 'scripts'));
+    for (const script of repoScripts.values()) {
+      scripts.set(script.name, { name: script.name, path: script.path, runtime: script.runtime });
+    }
+
+    return [...scripts.values()];
   } catch (error) {
     const err = error as Error;
-    getLog().warn({ err, scriptsDir }, 'script_discovery_failed');
+    getLog().warn({ err, cwd }, 'script_discovery_failed');
     return [];
   }
 }
@@ -567,40 +579,26 @@ export async function validateScript(
   cwd: string
 ): Promise<ScriptValidationResult> {
   const issues: ValidationIssue[] = [];
-  const scriptsDir = resolve(cwd, '.archon', 'scripts');
+  const resolvedScript = await resolveNamedScript(cwd, scriptName);
 
-  // Find the script file (any supported extension)
-  const allExtensions = ['.ts', '.js', '.py'];
-  let foundPath: string | null = null;
-  let detectedRuntime: ScriptRuntime | null = null;
-
-  for (const ext of allExtensions) {
-    const candidate = join(scriptsDir, `${scriptName}${ext}`);
-    if (await fileExists(candidate)) {
-      foundPath = candidate;
-      detectedRuntime = ext === '.py' ? 'uv' : 'bun';
-      break;
-    }
-  }
-
-  if (!foundPath || !detectedRuntime) {
+  if (!resolvedScript) {
     issues.push({
       level: 'error',
       field: 'file',
-      message: `Script '${scriptName}' not found in .archon/scripts/`,
+      message: `Script '${scriptName}' not found in .archon/scripts/ or Archon defaults`,
       hint: `Create .archon/scripts/${scriptName}.ts (bun) or .archon/scripts/${scriptName}.py (uv)`,
     });
     return { scriptName, valid: false, issues };
   }
 
   // Check runtime availability
-  const runtimeAvailable = await checkRuntimeAvailable(detectedRuntime);
+  const runtimeAvailable = await checkRuntimeAvailable(resolvedScript.runtime);
   if (!runtimeAvailable) {
     issues.push({
       level: 'warning',
       field: 'runtime',
-      message: `Runtime '${detectedRuntime}' is not available on PATH`,
-      hint: RUNTIME_INSTALL_HINTS[detectedRuntime],
+      message: `Runtime '${resolvedScript.runtime}' is not available on PATH`,
+      hint: RUNTIME_INSTALL_HINTS[resolvedScript.runtime],
     });
   }
 

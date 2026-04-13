@@ -11,6 +11,7 @@ export {
   getAppArchonBasePath,
   getDefaultCommandsPath,
   getDefaultWorkflowsPath,
+  getDefaultScriptsPath,
   logArchonPaths,
   validateAppDefaultsPaths,
   parseOwnerRepo,

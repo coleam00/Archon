@@ -38,6 +38,14 @@ import archonValidatePrE2eMainCmd from '../../../../.archon/commands/defaults/ar
 import archonValidatePrReportCmd from '../../../../.archon/commands/defaults/archon-validate-pr-report.md' with { type: 'text' };
 
 // =============================================================================
+// Default Scripts
+// =============================================================================
+
+// @ts-expect-error Bun text import of a TypeScript source asset is valid at runtime,
+// but TypeScript rejects the .ts extension in import-attribute mode.
+import detectProjectScript from '../../../../.archon/scripts/detect-project.ts' with { type: 'text' };
+
+// =============================================================================
 // Default Workflows (15 total)
 // =============================================================================
 
@@ -87,6 +95,23 @@ export const BUNDLED_COMMANDS: Record<string, string> = {
   'archon-validate-pr-e2e-feature': archonValidatePrE2eFeatureCmd,
   'archon-validate-pr-e2e-main': archonValidatePrE2eMainCmd,
   'archon-validate-pr-report': archonValidatePrReportCmd,
+};
+
+export interface BundledScriptAsset {
+  content: string;
+  runtime: 'bun' | 'uv';
+  extension: '.ts' | '.js' | '.py';
+}
+
+/**
+ * Bundled default scripts - filename (without extension) -> runtime + content
+ */
+export const BUNDLED_SCRIPTS: Record<string, BundledScriptAsset> = {
+  'detect-project': {
+    content: detectProjectScript,
+    runtime: 'bun',
+    extension: '.ts',
+  },
 };
 
 /**

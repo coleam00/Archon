@@ -471,7 +471,11 @@ export async function completeWorkflowRun(
   }
 }
 
-export async function failWorkflowRun(id: string, error: string): Promise<void> {
+export async function failWorkflowRun(
+  id: string,
+  error: string,
+  metadata?: Record<string, unknown>
+): Promise<void> {
   const dialect = getDialect();
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
@@ -479,7 +483,7 @@ export async function failWorkflowRun(id: string, error: string): Promise<void> 
       `UPDATE remote_agent_workflow_runs
        SET status = 'failed', completed_at = ${dialect.now()}, metadata = ${dialect.jsonMerge('metadata', 2)}
        WHERE id = $1 AND status = 'running'`,
-      [id, JSON.stringify({ error })]
+      [id, JSON.stringify({ error, ...(metadata ?? {}) })]
     );
   } catch (dbError) {
     const err = dbError as Error;
