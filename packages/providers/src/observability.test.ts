@@ -223,6 +223,46 @@ describe('observability', () => {
       });
     });
 
+    test('delivers all chunks when consumed via yield* delegation chain', async () => {
+      // Regression test: traceQuery must deliver all chunks even when consumed
+      // through multiple layers of yield* delegation (as in sendQuery → DAG executor).
+      // A previous streaming implementation lost traces because post-yield code
+      // in async generators is not reliably executed through yield* chains in Bun.
+      async function* innerGenerator(): AsyncGenerator<MessageChunk> {
+        yield { type: 'tool', toolName: 'Read', toolInput: { path: '/a.ts' } };
+        yield { type: 'tool_result', toolName: 'Read', toolOutput: 'content-a' };
+        yield { type: 'assistant', content: 'Analysis: ' };
+        yield { type: 'tool', toolName: 'Bash', toolInput: { command: 'ls' } };
+        yield { type: 'tool_result', toolName: 'Bash', toolOutput: 'file1\nfile2' };
+        yield { type: 'assistant', content: 'done.' };
+        yield { type: 'result', sessionId: 'sess-chain', tokens: { input: 200, output: 80 } };
+      }
+
+      // Simulate yield* delegation chain (sendQuery pattern)
+      async function* middleLayer(): AsyncGenerator<MessageChunk> {
+        yield* traceQuery('analyze code', 'sonnet', innerGenerator());
+      }
+
+      async function* outerLayer(): AsyncGenerator<MessageChunk> {
+        yield* middleLayer();
+      }
+
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of outerLayer()) {
+        chunks.push(chunk);
+      }
+
+      // All 7 chunks must arrive — none lost in the delegation chain
+      expect(chunks).toHaveLength(7);
+      expect(chunks[0]).toMatchObject({ type: 'tool', toolName: 'Read' });
+      expect(chunks[1]).toMatchObject({ type: 'tool_result', toolName: 'Read' });
+      expect(chunks[2]).toEqual({ type: 'assistant', content: 'Analysis: ' });
+      expect(chunks[3]).toMatchObject({ type: 'tool', toolName: 'Bash' });
+      expect(chunks[4]).toMatchObject({ type: 'tool_result', toolName: 'Bash' });
+      expect(chunks[5]).toEqual({ type: 'assistant', content: 'done.' });
+      expect(chunks[6]).toMatchObject({ type: 'result', sessionId: 'sess-chain' });
+    });
+
     test('preserves generator error propagation', async () => {
       async function* errorGenerator(): AsyncGenerator<MessageChunk> {
         yield { type: 'assistant', content: 'partial' };

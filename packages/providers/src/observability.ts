@@ -48,8 +48,9 @@ export function getObservabilityContext(): ObservabilityAttrs | undefined {
 
 let initialized = false;
 
-// Hold a reference to the OTel SDK for clean shutdown
+// Hold references for clean shutdown
 let otelSdk: { shutdown: () => Promise<void> } | null = null;
+let spanProcessor: { forceFlush: () => Promise<void> } | null = null;
 
 // Lazily-loaded tracing functions (populated by initLangfuse)
 let tracingStartActiveObservation:
@@ -86,17 +87,18 @@ export async function initLangfuse(): Promise<boolean> {
 
     const publicKey = process.env.LANGFUSE_PUBLIC_KEY ?? '';
     const secretKey = process.env.LANGFUSE_SECRET_KEY ?? '';
-    const spanProcessor = new langfuseOtel.LangfuseSpanProcessor({
+    const processor = new langfuseOtel.LangfuseSpanProcessor({
       publicKey,
       secretKey,
       baseUrl: process.env.LANGFUSE_BASE_URL ?? 'https://cloud.langfuse.com',
     });
 
     const sdk = new otelSdkMod.NodeSDK({
-      spanProcessors: [spanProcessor],
+      spanProcessors: [processor],
     });
     sdk.start();
     otelSdk = sdk;
+    spanProcessor = processor;
 
     initialized = true;
     getLog().info(
@@ -115,6 +117,10 @@ export async function initLangfuse(): Promise<boolean> {
 /** Flush pending spans and shut down the OTel SDK */
 export async function shutdownLangfuse(): Promise<void> {
   try {
+    // Explicit flush before shutdown to ensure all spans are exported
+    if (spanProcessor) {
+      await spanProcessor.forceFlush();
+    }
     if (otelSdk) {
       await otelSdk.shutdown();
       getLog().debug('langfuse.shutdown_completed');
@@ -129,6 +135,7 @@ export async function shutdownLangfuse(): Promise<void> {
 
 function resetState(): void {
   otelSdk = null;
+  spanProcessor = null;
   initialized = false;
   tracingStartActiveObservation = null;
   tracingPropagateAttributes = null;
@@ -161,7 +168,9 @@ export async function* traceQuery(
   const propagateAttributes = tracingPropagateAttributes;
   const ctx = getObservabilityContext();
 
-  // Collect metadata as we stream (chunks are yielded immediately)
+  // Collect all chunks first, then create trace, then yield.
+  // We buffer because post-yield code in async generators is not reliably
+  // executed when delegated through multiple yield* layers in Bun.
   const textParts: string[] = [];
   const toolCalls: { name: string; input?: unknown; output?: string; durationMs?: number }[] = [];
   let usage: TokenUsage | undefined;
@@ -174,11 +183,14 @@ export async function* traceQuery(
   const activeToolCalls = new Map<string, { name: string; input?: unknown; startTime: number }>();
   const unnamedToolQueue: { name: string; input?: unknown; startTime: number }[] = [];
 
+  const chunks: MessageChunk[] = [];
   let streamError: Error | undefined;
 
-  // Stream chunks through — yield immediately, collect metadata for trace
+  // Consume the stream and collect metadata
   try {
     for await (const chunk of generator) {
+      chunks.push(chunk);
+
       if (chunk.type === 'assistant') {
         textParts.push(chunk.content);
       } else if (chunk.type === 'tool') {
@@ -223,9 +235,6 @@ export async function* traceQuery(
         if (chunk.numTurns !== undefined) numTurns = chunk.numTurns;
         if (chunk.sessionId) sessionId = chunk.sessionId;
       }
-
-      // Yield immediately to preserve streaming semantics
-      yield chunk;
     }
   } catch (err) {
     streamError = err as Error;
@@ -282,7 +291,15 @@ export async function* traceQuery(
       }
     );
   } catch (traceErr) {
-    getLog().debug({ error: (traceErr as Error).message }, 'langfuse.trace_failed');
+    getLog().warn(
+      { error: (traceErr as Error).message, errorType: (traceErr as Error).constructor.name },
+      'langfuse.trace_failed'
+    );
+  }
+
+  // Yield all collected chunks to the consumer
+  for (const chunk of chunks) {
+    yield chunk;
   }
 
   if (streamError) {
