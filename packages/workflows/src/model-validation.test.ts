@@ -47,8 +47,8 @@ describe('model-validation (registry-driven)', () => {
       expect(isModelCompatible('codex', '')).toBe(true);
     });
 
-    it('should accept unknown providers (validated at execution time)', () => {
-      expect(isModelCompatible('my-llm', 'any-model')).toBe(true);
+    it('should throw on unknown providers (fail-fast)', () => {
+      expect(() => isModelCompatible('my-llm', 'any-model')).toThrow(/Unknown provider 'my-llm'/);
     });
   });
 

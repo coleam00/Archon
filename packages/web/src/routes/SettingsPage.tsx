@@ -424,7 +424,7 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
   }
 
   const allProviderEntries: ProviderInfo[] = [
-    ...(providers ?? []).map(provider => provider),
+    ...(providers ?? []),
     ...Object.keys(config.assistants)
       .filter(providerId => !(providers ?? []).some(provider => provider.id === providerId))
       .map(
@@ -476,7 +476,7 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
               }}
               className={selectClass}
             >
-              {(providers ?? []).map(p => (
+              {allProviderEntries.map(p => (
                 <option key={p.id} value={p.id}>
                   {p.displayName}
                 </option>

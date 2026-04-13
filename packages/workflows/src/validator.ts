@@ -244,11 +244,15 @@ export async function checkRuntimeAvailable(runtime: ScriptRuntime): Promise<boo
 // Workflow resource validation (Level 3)
 // =============================================================================
 
-/** Get the resolved provider for a node (node-level > workflow-level).
- *  Falls back to 'claude' only as a last resort when no workflow provider is set. */
-function resolveProvider(node: DagNode, workflowProvider?: string): string | undefined {
+/** Get the resolved provider for a node (node-level > workflow-level > config default).
+ *  Returns undefined only when no provider is set at any level. */
+function resolveProvider(
+  node: DagNode,
+  workflowProvider?: string,
+  defaultProvider?: string
+): string | undefined {
   if ('provider' in node && node.provider) return node.provider;
-  return workflowProvider;
+  return workflowProvider ?? defaultProvider;
 }
 
 /**
@@ -260,13 +264,14 @@ function resolveProvider(node: DagNode, workflowProvider?: string): string | und
 export async function validateWorkflowResources(
   workflow: WorkflowDefinition,
   cwd: string,
-  config?: ValidationConfig
+  config?: ValidationConfig,
+  defaultProvider?: string
 ): Promise<ValidationIssue[]> {
   const issues: ValidationIssue[] = [];
   const availableCommands = await discoverAvailableCommands(cwd, config);
 
   for (const node of workflow.nodes) {
-    const provider = resolveProvider(node, workflow.provider);
+    const provider = resolveProvider(node, workflow.provider, defaultProvider);
 
     // --- Command nodes: check file exists ---
     if ('command' in node && typeof node.command === 'string') {

@@ -26,10 +26,16 @@ export function inferProviderFromModel(model: string | undefined, defaultProvide
 /**
  * Check if a model is compatible with a provider using the registry.
  * Returns true if no model is specified (any provider accepts no-model).
- * Returns true if the provider is not registered (validation deferred to execution time).
+ * Throws on unknown providers (fail-fast — matches getProviderCapabilities behavior).
  */
 export function isModelCompatible(provider: string, model?: string): boolean {
   if (!model) return true;
-  if (!isRegisteredProvider(provider)) return true; // unknown providers validated at execution time
+  if (!isRegisteredProvider(provider)) {
+    throw new Error(
+      `Unknown provider '${provider}'. Registered providers: ${getRegisteredProviders()
+        .map(p => p.id)
+        .join(', ')}`
+    );
+  }
   return getRegistration(provider).isModelCompatible(model);
 }

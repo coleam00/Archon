@@ -2474,6 +2474,18 @@ export function registerApiRoutes(
         updates.defaultAssistant = body.assistant;
       }
       if (body.assistants !== undefined) {
+        const unknownProviders = Object.keys(body.assistants).filter(
+          id => !isRegisteredProvider(id)
+        );
+        if (unknownProviders.length > 0) {
+          return apiError(
+            c,
+            400,
+            `Unknown provider(s) in assistants: ${unknownProviders.join(', ')}. Available: ${getProviderInfoList()
+              .map(p => p.id)
+              .join(', ')}`
+          );
+        }
         updates.assistants = body.assistants;
       }
 

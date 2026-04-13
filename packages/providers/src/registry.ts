@@ -140,9 +140,7 @@ export function registerBuiltinProviders(): void {
   }
 }
 
-/**
- * Clear the registry. For tests only — allows clean isolation between test suites.
- */
+/** @internal Test-only — clears the registry. Not for production use. */
 export function clearRegistry(): void {
   registry.clear();
 }
