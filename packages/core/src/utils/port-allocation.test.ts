@@ -46,23 +46,38 @@ describe('calculatePortOffset', () => {
 
 // Test getPort() behavior with mocked dependencies
 describe('getPort', () => {
-  const originalEnv = process.env.PORT;
+  const originalPort = process.env.PORT;
+  const originalArchonPort = process.env.ARCHON_PORT;
 
   afterEach(() => {
-    if (originalEnv === undefined) {
+    if (originalPort === undefined) {
       delete process.env.PORT;
     } else {
-      process.env.PORT = originalEnv;
+      process.env.PORT = originalPort;
+    }
+    if (originalArchonPort === undefined) {
+      delete process.env.ARCHON_PORT;
+    } else {
+      process.env.ARCHON_PORT = originalArchonPort;
     }
   });
 
-  it('should return PORT env var when explicitly set to valid number', async () => {
+  it('should return ARCHON_PORT when set (takes priority over PORT)', async () => {
+    process.env.ARCHON_PORT = '4500';
+    process.env.PORT = '4000';
+    const port = await getPort();
+    expect(port).toBe(4500);
+  });
+
+  it('should return PORT env var when ARCHON_PORT is not set', async () => {
+    delete process.env.ARCHON_PORT;
     process.env.PORT = '4000';
     const port = await getPort();
     expect(port).toBe(4000);
   });
 
-  it('should return a valid port when no PORT env is set', async () => {
+  it('should return a valid port when no port env vars are set', async () => {
+    delete process.env.ARCHON_PORT;
     delete process.env.PORT;
     // Note: If running in a worktree, port will be auto-allocated (base 3090 + offset 100-999)
     // If running in main repo, port will be 3090

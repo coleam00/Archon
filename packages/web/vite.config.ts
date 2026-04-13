@@ -6,9 +6,10 @@ import react from '@vitejs/plugin-react';
 import { defineConfig, loadEnv } from 'vite';
 
 export default defineConfig(({ mode }) => {
-  // Load env from repo root so PORT from .env is available
+  // Load env from repo root so ARCHON_PORT / PORT from .env is available
   const env = loadEnv(mode, path.resolve(__dirname, '../..'), '');
-  const apiPort = env.PORT ?? '3090';
+  const apiPort = env.ARCHON_PORT ?? env.PORT ?? '3090';
+  const viteDevPort = env.ARCHON_VITE_PORT ? Number(env.ARCHON_VITE_PORT) : 5173;
 
   // Read version from root package.json
   const rootPkgPath = path.resolve(__dirname, '../../package.json');
@@ -45,7 +46,8 @@ export default defineConfig(({ mode }) => {
       ],
     },
     server: {
-      port: 5173,
+      port: viteDevPort,
+      ...(env.ARCHON_VITE_PORT ? { strictPort: true } : {}),
       proxy: {
         '/api': {
           target: `http://localhost:${apiPort}`,

@@ -28,14 +28,15 @@ export function calculatePortOffset(path: string): number {
 
 /**
  * Get the port for the Hono server
- * - If PORT env var is set: use it (explicit override, validated)
+ * - If ARCHON_PORT env var is set: use it (namespaced override, validated)
+ * - If PORT env var is set: use it (generic fallback, validated)
  * - If running in worktree: auto-allocate deterministic port based on path hash
- * - Otherwise: use default 3000
+ * - Otherwise: use default 3090
  *
- * Note: Exits process with code 1 if PORT env var is set but invalid (not 1-65535)
+ * Note: Exits process with code 1 if port env var is set but invalid (not 1-65535)
  */
 export async function getPort(): Promise<number> {
-  const envPort = process.env.PORT;
+  const envPort = process.env.ARCHON_PORT ?? process.env.PORT;
 
   if (envPort) {
     const parsedPort = Number(envPort);
