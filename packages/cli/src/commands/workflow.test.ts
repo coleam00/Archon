@@ -94,6 +94,7 @@ mock.module('@archon/workflows/event-emitter', () => ({
 
 mock.module('@archon/git', () => ({
   findRepoRoot: mock(() => Promise.resolve(null)),
+  getCanonicalRepoPath: mock(() => Promise.reject(new Error('not a git repo'))),
   getRemoteUrl: mock(() => Promise.resolve(null)),
   checkout: mock(() => Promise.resolve()),
   toRepoPath: mock((path: string) => path),
@@ -1006,7 +1007,7 @@ describe('workflowRunCommand', () => {
       metadata: { source_repo_root: '/clone-a' },
     });
     // Current cwd resolves to /clone-b
-    (gitModule.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce('/clone-b');
+    (gitModule.getCanonicalRepoPath as ReturnType<typeof mock>).mockResolvedValueOnce('/clone-b');
     (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
     (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
       success: true,
@@ -1052,7 +1053,7 @@ describe('workflowRunCommand', () => {
       workflow_id: 'my-feature',
       metadata: {},
     });
-    (gitModule.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce('/clone-a');
+    (gitModule.getCanonicalRepoPath as ReturnType<typeof mock>).mockResolvedValueOnce('/clone-a');
     (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
     (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
       success: true,
@@ -1098,7 +1099,7 @@ describe('workflowRunCommand', () => {
       workflow_id: 'my-feature',
       metadata: { source_repo_root: '/clone-a' },
     });
-    (gitModule.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce('/clone-a');
+    (gitModule.getCanonicalRepoPath as ReturnType<typeof mock>).mockResolvedValueOnce('/clone-a');
     (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
     (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
       success: true,
@@ -1115,7 +1116,7 @@ describe('workflowRunCommand', () => {
     expect(provider.create).not.toHaveBeenCalled();
   });
 
-  it('allows reuse with warning when findRepoRoot returns null but env has source_repo_root', async () => {
+  it('allows reuse with warning when getCanonicalRepoPath fails but env has source_repo_root', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const { executeWorkflow } = await import('@archon/workflows/executor');
     const conversationDb = await import('@archon/core/db/conversations');
@@ -1144,8 +1145,7 @@ describe('workflowRunCommand', () => {
       workflow_id: 'my-feature',
       metadata: { source_repo_root: '/clone-a' },
     });
-    // findRepoRoot returns null (git unavailable or cwd changed)
-    (gitModule.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    // getCanonicalRepoPath throws (git unavailable) — default mock rejects, producing null
     (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
     (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
       success: true,

@@ -426,10 +426,15 @@ export async function workflowRunCommand(
     // Guard: skip reuse if the existing environment was created from a different
     // local clone of the same remote (GH-1183). Two clones share one codebase_id
     // (derived from the remote URL), so findActiveByWorkflow can return an
-    // environment that belongs to a sibling checkout. Compare the repo root that
-    // was recorded at creation time with the current working directory's repo root.
-    // Resolve repo root lazily: needed both for the reuse guard and for metadata storage
-    const currentRepoRoot = await git.findRepoRoot(cwd);
+    // environment that belongs to a sibling checkout. Compare the canonical repo
+    // path (stable across linked worktrees) recorded at creation time with the
+    // current working directory's canonical path.
+    let currentRepoRoot: string | null = null;
+    try {
+      currentRepoRoot = await git.getCanonicalRepoPath(cwd);
+    } catch {
+      // Non-fatal: cwd may not be a git repo (handled later) or git unavailable
+    }
     const envSourceRoot =
       existingEnv && typeof existingEnv.metadata?.source_repo_root === 'string'
         ? existingEnv.metadata.source_repo_root
