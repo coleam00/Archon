@@ -1,6 +1,6 @@
 ---
 title: AI Assistants
-description: Configure Claude Code and Codex as AI assistants for Archon.
+description: Configure Claude Code, Codex, or Pi as AI assistants for Archon.
 category: getting-started
 area: clients
 audience: [user]
@@ -9,7 +9,7 @@ sidebar:
   order: 4
 ---
 
-You must configure **at least one** AI assistant. Both can be configured if desired.
+You must configure **at least one** AI assistant. Multiple assistants can be configured and selected per project.
 
 ## Claude Code
 
@@ -129,6 +129,58 @@ If you want Codex to be the default AI assistant for new conversations without c
 ```ini
 DEFAULT_AI_ASSISTANT=codex
 ```
+
+## Pi
+
+Pi is a unified AI gateway that routes your prompts to 15+ model providers (Google, OpenAI, Groq, and more) through a single API. No separate account is required — Pi uses its own API key internally.
+
+### Model Format
+
+Pi models use the `pi:<provider>/<modelId>` format:
+
+```
+pi:google/gemini-2.5-pro
+pi:openai/gpt-4o
+pi:groq/llama-3.3-70b-versatile
+pi:anthropic/claude-3-5-sonnet-20241022
+```
+
+### Pi Configuration Options
+
+You can configure Pi's behavior in `.archon/config.yaml`:
+
+```yaml
+assistants:
+  pi:
+    model: pi:google/gemini-2.5-pro
+```
+
+There are no extra environment variables required for Pi — authentication is handled by the Pi SDK automatically.
+
+### Set as Default (Optional)
+
+```ini
+DEFAULT_AI_ASSISTANT=pi
+```
+
+### Phase 1 Limitations
+
+Pi support in Archon is in Phase 1. The following capabilities are **not yet supported** with Pi:
+
+| Feature | Status |
+|---------|--------|
+| Session resume | Not supported |
+| MCP servers | Not supported |
+| SDK hooks | Not supported |
+| Skills preloading | Not supported |
+| Per-node tool restrictions | Not supported |
+| Structured JSON output | Not supported |
+| Per-project env injection | Not supported |
+| Cost control (`maxBudgetUsd`) | Not supported |
+| Effort control | Not supported |
+| Thinking control | Not supported |
+| Fallback model | Not supported |
+| Sandbox mode | Not supported |
 
 ## How Assistant Selection Works
 

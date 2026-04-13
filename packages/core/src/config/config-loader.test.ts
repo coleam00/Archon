@@ -245,6 +245,15 @@ streaming:
       expect(config.streaming.telegram).toBe('batch');
     });
 
+    test('DEFAULT_AI_ASSISTANT=pi sets pi as default assistant', async () => {
+      mockReadConfigFile.mockResolvedValue('');
+      process.env.DEFAULT_AI_ASSISTANT = 'pi';
+
+      const config = await loadConfig();
+
+      expect(config.assistant).toBe('pi');
+    });
+
     test('repo config overrides global config', async () => {
       // Helper to check path in cross-platform way (handles both / and \ separators)
       const pathMatches = (path: string, pattern: string): boolean => {
@@ -298,6 +307,31 @@ streaming:
       expect(config.assistants.codex.modelReasoningEffort).toBe('medium');
       expect(config.assistants.codex.webSearchMode).toBe('live');
       expect(config.assistants.codex.additionalDirectories).toEqual(['/repo']);
+    });
+
+    test('merges assistants.pi config from global and repo config', async () => {
+      const pathMatches = (path: string, pattern: string): boolean => {
+        const normalizedPath = path.replace(/\\/g, '/');
+        return normalizedPath.includes(pattern);
+      };
+
+      let globalConfigRead = false;
+      mockReadConfigFile.mockImplementation(async (path: string) => {
+        if (pathMatches(path, '/repo/.archon/config.yaml')) {
+          return `assistants:\n  pi:\n    model: pi:openai/gpt-4o\n`;
+        }
+        if (pathMatches(path, '.archon/config.yaml') && !globalConfigRead) {
+          globalConfigRead = true;
+          return `assistants:\n  pi:\n    model: pi:google/gemini-2.5-pro\n`;
+        }
+        const error = new Error('ENOENT') as NodeJS.ErrnoException;
+        error.code = 'ENOENT';
+        throw error;
+      });
+
+      const config = await loadConfig('/test/repo');
+      // Repo config overrides global
+      expect(config.assistants.pi?.model).toBe('pi:openai/gpt-4o');
     });
 
     test('propagates baseBranch from repo worktree config', async () => {

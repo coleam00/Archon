@@ -2,7 +2,7 @@
  * Agent Provider Factory
  *
  * Dynamic provider instantiation and static capability lookup.
- * Built-in providers only: Claude and Codex.
+ * Built-in providers: Claude, Codex, and Pi.
  */
 import type { IAgentProvider, ProviderCapabilities } from './types';
 import { ClaudeProvider } from './claude/provider';
@@ -27,7 +27,7 @@ function getLog(): ReturnType<typeof createLogger> {
 /**
  * Get the appropriate agent provider based on type.
  *
- * @param type - Provider type identifier ('claude' or 'codex')
+ * @param type - Provider type identifier ('claude', 'codex', or 'pi')
  * @returns Instantiated agent provider
  * @throws UnknownProviderError if provider type is not registered
  */

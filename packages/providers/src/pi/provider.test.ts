@@ -214,11 +214,11 @@ describe('PiProvider', () => {
       });
     });
 
-    test('handles error events', async () => {
+    test('throws on error events and emits ⚠️ system chunk before throwing', async () => {
       const events = createEventStream([
         {
           type: 'error',
-          reason: 'error',
+          reason: 'rate_limit',
           error: {
             errorMessage: 'Rate limit exceeded',
             usage: defaultUsage,
@@ -228,21 +228,34 @@ describe('PiProvider', () => {
       mockStreamSimple.mockReturnValue(events);
 
       const chunks: unknown[] = [];
-      for await (const chunk of provider.sendQuery('test', '/tmp', undefined, {
+      const gen = provider.sendQuery('test', '/tmp', undefined, {
         model: 'pi:google/gemini-2.5-pro',
-      })) {
-        chunks.push(chunk);
-      }
+      });
 
-      expect(chunks[0]).toEqual({
+      // First chunk: ⚠️ system message
+      const first = await gen.next();
+      expect(first.value).toEqual({
         type: 'system',
-        content: '❌ Pi error: Rate limit exceeded',
+        content: '⚠️ Pi error: Rate limit exceeded',
       });
-      expect(chunks[1]).toMatchObject({
-        type: 'result',
-        isError: true,
-        stopReason: 'error',
+
+      // Second call: throws so the dag-executor marks the node as failed
+      await expect(gen.next()).rejects.toThrow(
+        'Pi provider error (rate_limit): Rate limit exceeded'
+      );
+      expect(chunks).toHaveLength(0); // nothing collected after throw
+    });
+
+    test('throws with helpful message when SDK getModel rejects', async () => {
+      mockGetModel.mockImplementation(() => {
+        throw new Error('Unknown model: googlel/gemini-xyz');
       });
+      const gen = provider.sendQuery('test', '/tmp', undefined, {
+        model: 'pi:googlel/gemini-xyz',
+      });
+      await expect(gen.next()).rejects.toThrow(
+        'Failed to resolve Pi model "pi:googlel/gemini-xyz"'
+      );
     });
 
     test('throws on missing model', async () => {

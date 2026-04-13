@@ -48,8 +48,8 @@ export function parsePiModelString(
 
 /**
  * Resolve a Pi model from the model string.
- * Supports both `pi:<provider>/<modelId>` format and raw model strings
- * (which fall back to assistantConfig model or a default).
+ * Supports `pi:<provider>/<modelId>` format (e.g. pi:google/gemini-2.5-pro).
+ * Throws if the model string is missing, malformed, or unrecognised by the Pi SDK.
  */
 function resolveModel(
   requestModel: string | undefined,
@@ -76,9 +76,9 @@ function resolveModel(
     // getModel is typed with KnownProvider/known model IDs, but accepts any string at runtime
     return getModel(parsed.provider as 'google', parsed.modelId as 'gemini-2.5-pro');
   } catch (error) {
-    const err = error as Error;
+    const message = error instanceof Error ? error.message : String(error);
     throw new Error(
-      `Failed to resolve Pi model "${modelString}": ${err.message}. ` +
+      `Failed to resolve Pi model "${modelString}": ${message}. ` +
         'Check that the provider and model ID are correct.'
     );
   }
@@ -139,23 +139,10 @@ async function* streamPiEvents(
         const errorMessage = event.error.errorMessage ?? 'Unknown Pi error';
         getLog().error({ errorMessage, reason: event.reason }, 'stream_error');
 
-        const usage = event.error.usage;
-        const tokens: TokenUsage = {
-          input: usage.input,
-          output: usage.output,
-          total: usage.totalTokens,
-          cost: usage.cost.total,
-        };
-
-        yield { type: 'system', content: `❌ Pi error: ${errorMessage}` };
-        yield {
-          type: 'result',
-          tokens,
-          isError: true,
-          stopReason: event.reason,
-          cost: usage.cost.total,
-        };
-        break;
+        // ⚠️ prefix required for dag-executor to forward message to the user
+        yield { type: 'system', content: `⚠️ Pi error: ${errorMessage}` };
+        // Throw so dag-executor marks the node as failed instead of completed
+        throw new Error(`Pi provider error (${event.reason}): ${errorMessage}`);
       }
 
       // start, text_start, text_end, thinking_start, thinking_end, toolcall_start, toolcall_delta
@@ -214,8 +201,14 @@ export class PiProvider implements IAgentProvider {
     }
 
     // 4. Stream response
-    const eventStream = streamSimple(model, context, streamOptions);
-    yield* streamPiEvents(eventStream, requestOptions?.abortSignal);
+    try {
+      const eventStream = streamSimple(model, context, streamOptions);
+      yield* streamPiEvents(eventStream, requestOptions?.abortSignal);
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error({ err, cwd, provider: model.provider, modelId: model.id }, 'query_failed');
+      throw err;
+    }
   }
 
   getType(): string {

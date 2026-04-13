@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'bun:test';
-import { isClaudeModel, isModelCompatible, inferProviderFromModel } from './model-validation';
+import {
+  isClaudeModel,
+  isPiModel,
+  isModelCompatible,
+  inferProviderFromModel,
+} from './model-validation';
 
 describe('model-validation', () => {
   describe('isClaudeModel', () => {
@@ -25,6 +30,19 @@ describe('model-validation', () => {
 
     it('should reject empty string', () => {
       expect(isClaudeModel('')).toBe(false);
+    });
+  });
+
+  describe('isPiModel', () => {
+    it('recognises pi: prefixed strings', () => {
+      expect(isPiModel('pi:google/gemini-2.5-pro')).toBe(true);
+      expect(isPiModel('pi:openai/gpt-4o')).toBe(true);
+    });
+
+    it('rejects non-pi strings', () => {
+      expect(isPiModel('sonnet')).toBe(false);
+      expect(isPiModel('gpt-4o')).toBe(false);
+      expect(isPiModel('')).toBe(false);
     });
   });
 
@@ -60,6 +78,24 @@ describe('model-validation', () => {
       expect(isModelCompatible('codex', 'claude-opus-4-6')).toBe(false);
     });
 
+    it('should accept pi: models with pi provider', () => {
+      expect(isModelCompatible('pi', 'pi:google/gemini-2.5-pro')).toBe(true);
+      expect(isModelCompatible('pi', 'pi:openai/gpt-4o')).toBe(true);
+    });
+
+    it('should reject non-pi models with pi provider', () => {
+      expect(isModelCompatible('pi', 'sonnet')).toBe(false);
+      expect(isModelCompatible('pi', 'gpt-4o')).toBe(false);
+    });
+
+    it('should reject pi: models with codex provider', () => {
+      expect(isModelCompatible('codex', 'pi:google/gemini-2.5-pro')).toBe(false);
+    });
+
+    it('should reject pi: models with claude provider', () => {
+      expect(isModelCompatible('claude', 'pi:google/gemini-2.5-pro')).toBe(false);
+    });
+
     it('should handle empty string model', () => {
       // Empty string is falsy, so treated as "no model specified"
       expect(isModelCompatible('claude', '')).toBe(true);
@@ -90,6 +126,11 @@ describe('model-validation', () => {
       expect(inferProviderFromModel('gpt-5.3-codex', 'claude')).toBe('codex');
       expect(inferProviderFromModel('gpt-4', 'claude')).toBe('codex');
       expect(inferProviderFromModel('o1-mini', 'claude')).toBe('codex');
+    });
+
+    it('should infer pi from pi: model strings', () => {
+      expect(inferProviderFromModel('pi:google/gemini-2.5-pro', 'claude')).toBe('pi');
+      expect(inferProviderFromModel('pi:openai/gpt-4o', 'codex')).toBe('pi');
     });
   });
 });
