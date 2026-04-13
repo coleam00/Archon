@@ -67,13 +67,8 @@ export function matchesPattern(message: string, patterns: string[]): boolean {
  * Classify an error to determine if it's transient (can retry) or fatal (should fail).
  * FATAL patterns take priority over TRANSIENT patterns to prevent an error message
  * containing both (e.g. "unauthorized: process exited with code 1") from being retried.
- *
- * First-party named error types are checked by name (immune to message rewording).
  */
 export function classifyError(error: Error): ErrorType {
-  // Named first-party errors checked by name — immune to message rewording
-  if (error.name === 'EnvLeakError') return 'FATAL';
-
   const message = error.message.toLowerCase();
 
   if (matchesPattern(message, FATAL_PATTERNS)) {

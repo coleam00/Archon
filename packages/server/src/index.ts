@@ -73,9 +73,7 @@ import {
   logConfig,
   getPort,
   createWorkflowStore,
-  scanPathForSensitiveKeys,
 } from '@archon/core';
-import * as codebaseDb from '@archon/core/db/codebases';
 import type { IPlatformAdapter } from '@archon/core';
 import { createLogger, logArchonPaths, validateAppDefaultsPaths } from '@archon/paths';
 
@@ -199,57 +197,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     process.exit(1);
   }
 
-  // Load configuration early so the startup env-leak scan can honor the
-  // global bypass. Without this, users who set `allow_target_repo_keys: true`
-  // would get a per-codebase warn spam on every boot even though the gate
-  // is intentionally disabled.
   const config = await loadConfig();
   logConfig(config);
-
-  // Startup env-leak scan: warn for codebases that would be blocked at next
-  // spawn by the env-leak-gate. Skipped entirely when the global bypass is
-  // active. Best-effort — failures are surfaced but never block startup.
-  if (config.allowTargetRepoKeys) {
-    getLog().info('startup_env_leak_scan_skipped — allow_target_repo_keys is true');
-  } else {
-    try {
-      const codebases = await codebaseDb.listCodebases();
-      for (const cb of codebases) {
-        if (cb.allow_env_keys) continue;
-        try {
-          const report = scanPathForSensitiveKeys(cb.default_cwd);
-          if (report.findings.length > 0) {
-            const files = report.findings.map(f => f.file);
-            const keys = Array.from(new Set(report.findings.flatMap(f => f.keys)));
-            getLog().warn(
-              {
-                codebaseId: cb.id,
-                name: cb.name,
-                path: cb.default_cwd,
-                files,
-                keys,
-              },
-              'startup_env_leak_gate_will_block'
-            );
-          }
-        } catch (scanErr) {
-          // Path may no longer exist (codebase moved/deleted on disk) —
-          // log at debug, do not abort the loop. This is the only quiet path.
-          getLog().debug(
-            { err: scanErr, codebaseId: cb.id, path: cb.default_cwd },
-            'startup_env_leak_scan_path_unavailable'
-          );
-        }
-      }
-    } catch (error) {
-      // listCodebases() failed — the entire startup safety net is silently
-      // absent. Surface at error level so operators see it.
-      getLog().error(
-        { err: error },
-        'startup_env_leak_scan_failed — startup migration warnings suppressed'
-      );
-    }
-  }
 
   // Start cleanup scheduler
   startCleanupScheduler();

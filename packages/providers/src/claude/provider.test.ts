@@ -471,7 +471,11 @@ describe('ClaudeProvider', () => {
         // consume
       }
 
-      const callArgs = mockQuery.mock.calls[0][0] as { options: { env: NodeJS.ProcessEnv } };
+      const callArgs = mockQuery.mock.calls[0][0] as {
+        options: { env: NodeJS.ProcessEnv; executableArgs?: string[] };
+      };
+      // --no-env-file prevents Bun from auto-loading .env in subprocess CWD
+      expect(callArgs.options.executableArgs).toEqual(['--no-env-file']);
       expect(callArgs.options.env.CUSTOM_USER_KEY).toBe('user-trusted-value');
       // Windows uses "Path" casing in spread objects and USERPROFILE instead of HOME
       const envPath = callArgs.options.env.PATH ?? callArgs.options.env.Path;

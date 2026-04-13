@@ -83,11 +83,6 @@ paths:
 concurrency:
   maxConversations: 10
 
-# Env-leak gate bypass (last resort — weakens a security control)
-# allow_target_repo_keys: false  # Set true to skip the env-leak-gate
-                                 # globally for all codebases on this machine.
-                                 # `env_leak_gate_disabled` is logged once per
-                                 # process per source. See security.md.
 ```
 
 ## Repository Configuration
@@ -135,11 +130,6 @@ defaults:
 #   MY_API_KEY: value
 #   CUSTOM_ENDPOINT: https://...
 
-# Per-repo override for the env-leak-gate bypass.
-# Set to `false` to re-enable the gate for THIS repo even when the global
-# config has `allow_target_repo_keys: true`. Set to `true` to grant the
-# bypass for THIS repo only. Wins over the global flag in either direction.
-# allow_target_repo_keys: false
 ```
 
 ### Claude settingSources

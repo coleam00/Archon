@@ -176,7 +176,6 @@ function makeCodebase(overrides?: Partial<Codebase>): Codebase {
     id: 'cb-1',
     name: 'test-repo',
     default_cwd: '/workspace/test-repo',
-    allow_env_keys: false,
     commands: {},
     created_at: new Date(),
     updated_at: new Date(),
