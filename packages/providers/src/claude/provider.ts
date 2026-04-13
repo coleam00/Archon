@@ -13,11 +13,12 @@
  * - Not set: Auto-detect - use tokens if present in env, otherwise global auth
  */
 import {
+  query,
   type Options,
   type HookCallback,
   type HookCallbackMatcher,
 } from '@anthropic-ai/claude-agent-sdk';
-import { getQuery } from '../observability';
+import { traceQuery } from '../observability';
 import cliPath from '@anthropic-ai/claude-agent-sdk/embed';
 import type {
   IAgentProvider,
@@ -912,7 +913,7 @@ export class ClaudeProvider implements IAgentProvider {
 
       try {
         // 4. Run query with first-event timeout protection
-        const rawEvents = getQuery()({ prompt, options });
+        const rawEvents = query({ prompt, options });
         const timeoutMs = getFirstEventTimeoutMs();
         const diagnostics = buildFirstEventHangDiagnostics(
           options.env as Record<string, string>,
@@ -920,8 +921,8 @@ export class ClaudeProvider implements IAgentProvider {
         );
         const events = withFirstMessageTimeout(rawEvents, controller, timeoutMs, diagnostics);
 
-        // 5. Stream normalized events
-        yield* streamClaudeMessages(events, toolResultQueue);
+        // 5. Stream normalized events (with optional Langfuse tracing)
+        yield* traceQuery(prompt, options.model, streamClaudeMessages(events, toolResultQueue));
         return;
       } catch (error) {
         const err = error as Error;

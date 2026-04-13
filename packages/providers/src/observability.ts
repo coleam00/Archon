@@ -3,12 +3,13 @@
  *
  * When LANGFUSE_PUBLIC_KEY + LANGFUSE_SECRET_KEY are set, initializes:
  * - OTel NodeSDK with LangfuseSpanProcessor
- * - Auto-instrumentation for @anthropic-ai/claude-agent-sdk
+ * - Manual tracing of Claude Agent SDK calls with input/output/usage/tool calls
  *
  * When not configured, all exports are safe no-ops with zero overhead.
  */
 import { AsyncLocalStorage } from 'async_hooks';
 import { createLogger } from '@archon/paths';
+import type { MessageChunk, TokenUsage } from './types';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -47,11 +48,15 @@ export function getObservabilityContext(): ObservabilityAttrs | undefined {
 
 let initialized = false;
 
-type QueryFn = typeof import('@anthropic-ai/claude-agent-sdk').query;
-let instrumentedQueryFn: QueryFn | null = null;
-
 // Hold a reference to the OTel SDK for clean shutdown
 let otelSdk: { shutdown: () => Promise<void> } | null = null;
+
+// Lazily-loaded tracing functions (populated by initLangfuse)
+let tracingStartActiveObservation:
+  | typeof import('@langfuse/tracing').startActiveObservation
+  | null = null;
+let tracingPropagateAttributes: typeof import('@langfuse/tracing').propagateAttributes | null =
+  null;
 
 /** Check whether Langfuse env vars are present */
 export function isLangfuseEnabled(): boolean {
@@ -70,21 +75,14 @@ export async function initLangfuse(): Promise<boolean> {
   if (!isLangfuseEnabled()) return false;
 
   try {
-    const [otelSdkMod, langfuseOtel, claudeInstr, claudeSdk] = await Promise.all([
+    const [otelSdkMod, langfuseOtel, langfuseTracing] = await Promise.all([
       import('@opentelemetry/sdk-node'),
       import('@langfuse/otel'),
-      import('@arizeai/openinference-instrumentation-claude-agent-sdk'),
-      import('@anthropic-ai/claude-agent-sdk'),
+      import('@langfuse/tracing'),
     ]);
 
-    // Create a mutable copy of the SDK module for instrumentation.
-    // Type assertion needed: the instrumentation expects its own peer dep type,
-    // which may differ from our pinned SDK version at the type level.
-    const sdkCopy = { ...claudeSdk };
-    const instrumentation = new claudeInstr.ClaudeAgentSDKInstrumentation();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- bridging SDK version types for auto-instrumentation
-    instrumentation.manuallyInstrument(sdkCopy as any);
-    instrumentedQueryFn = sdkCopy.query;
+    tracingStartActiveObservation = langfuseTracing.startActiveObservation;
+    tracingPropagateAttributes = langfuseTracing.propagateAttributes;
 
     const publicKey = process.env.LANGFUSE_PUBLIC_KEY ?? '';
     const secretKey = process.env.LANGFUSE_SECRET_KEY ?? '';
@@ -92,14 +90,10 @@ export async function initLangfuse(): Promise<boolean> {
       publicKey,
       secretKey,
       baseUrl: process.env.LANGFUSE_BASE_URL ?? 'https://cloud.langfuse.com',
-      // Export all spans — the default filter (isDefaultExportSpan) may not
-      // recognize the Arize Claude Agent SDK instrumentation spans.
-      shouldExportSpan: (): boolean => true,
     });
 
     const sdk = new otelSdkMod.NodeSDK({
       spanProcessors: [spanProcessor],
-      instrumentations: [instrumentation],
     });
     sdk.start();
     otelSdk = sdk;
@@ -113,10 +107,7 @@ export async function initLangfuse(): Promise<boolean> {
   } catch (error) {
     const err = error as Error;
     getLog().warn({ error: err.message, errorType: err.constructor.name }, 'langfuse.init_failed');
-    // Reset partial state so getQuery() falls back to the original SDK
-    otelSdk = null;
-    initialized = false;
-    instrumentedQueryFn = null;
+    resetState();
     return false;
   }
 }
@@ -132,24 +123,172 @@ export async function shutdownLangfuse(): Promise<void> {
     const err = error as Error;
     getLog().warn({ error: err.message }, 'langfuse.shutdown_failed');
   } finally {
-    otelSdk = null;
-    initialized = false;
-    instrumentedQueryFn = null;
+    resetState();
   }
 }
 
-// ─── Instrumented Query ─────────────────────────────────────────────────────
+function resetState(): void {
+  otelSdk = null;
+  initialized = false;
+  tracingStartActiveObservation = null;
+  tracingPropagateAttributes = null;
+}
+
+// ─── Query Tracing ──────────────────────────────────────────────────────────
 
 /**
- * Return the instrumented `query` function when Langfuse is active,
- * otherwise fall back to the original SDK export.
+ * Wrap a MessageChunk async generator with Langfuse tracing.
+ *
+ * Creates a parent "generation" observation with:
+ * - Input: the prompt sent to Claude
+ * - Output: collected assistant text
+ * - Usage: token counts and cost from the result event
+ * - Children: one "tool" span per tool call with name and input/output
+ *
+ * When Langfuse is not initialized, returns the generator unchanged (zero overhead).
  */
-export function getQuery(): QueryFn {
-  if (instrumentedQueryFn) return instrumentedQueryFn;
+export async function* traceQuery(
+  prompt: string,
+  model: string | undefined,
+  generator: AsyncIterable<MessageChunk>
+): AsyncGenerator<MessageChunk> {
+  if (!initialized || !tracingStartActiveObservation || !tracingPropagateAttributes) {
+    yield* generator as AsyncGenerator<MessageChunk>;
+    return;
+  }
 
-  // Fallback: return the original, un-instrumented query
-  // This import is resolved at module load time by Bun (static reference)
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { query } = require('@anthropic-ai/claude-agent-sdk') as { query: QueryFn };
-  return query;
+  const startActiveObservation = tracingStartActiveObservation;
+  const propagateAttributes = tracingPropagateAttributes;
+  const ctx = getObservabilityContext();
+
+  // Collect output data as we stream
+  const textParts: string[] = [];
+  const toolCalls: { name: string; input?: unknown; output?: string; durationMs?: number }[] = [];
+  let usage: TokenUsage | undefined;
+  let cost: number | undefined;
+  let numTurns: number | undefined;
+  let sessionId: string | undefined;
+  let traceError: Error | undefined;
+  let activeToolCall: { name: string; input?: unknown; startTime: number } | null = null;
+
+  const chunks: MessageChunk[] = [];
+  let streamError: Error | undefined;
+
+  // Consume the generator and collect chunks
+  try {
+    for await (const chunk of generator) {
+      chunks.push(chunk);
+
+      if (chunk.type === 'assistant') {
+        textParts.push(chunk.content);
+      } else if (chunk.type === 'tool') {
+        // New tool call starting — close any previous one
+        if (activeToolCall) {
+          toolCalls.push({
+            name: activeToolCall.name,
+            input: activeToolCall.input,
+            durationMs: Date.now() - activeToolCall.startTime,
+          });
+        }
+        activeToolCall = { name: chunk.toolName, input: chunk.toolInput, startTime: Date.now() };
+      } else if (chunk.type === 'tool_result') {
+        if (activeToolCall) {
+          toolCalls.push({
+            name: activeToolCall.name,
+            input: activeToolCall.input,
+            output:
+              typeof chunk.toolOutput === 'string'
+                ? chunk.toolOutput.slice(0, 1000)
+                : JSON.stringify(chunk.toolOutput).slice(0, 1000),
+            durationMs: Date.now() - activeToolCall.startTime,
+          });
+          activeToolCall = null;
+        }
+      } else if (chunk.type === 'result') {
+        // Close any remaining open tool call
+        if (activeToolCall) {
+          toolCalls.push({
+            name: activeToolCall.name,
+            input: activeToolCall.input,
+            durationMs: Date.now() - activeToolCall.startTime,
+          });
+          activeToolCall = null;
+        }
+        if (chunk.tokens) usage = chunk.tokens;
+        if (chunk.cost !== undefined) cost = chunk.cost;
+        if (chunk.numTurns !== undefined) numTurns = chunk.numTurns;
+        if (chunk.sessionId) sessionId = chunk.sessionId;
+      }
+    }
+  } catch (err) {
+    streamError = err as Error;
+    traceError = streamError;
+  }
+
+  // Create the trace with the collected data
+  try {
+    await propagateAttributes(
+      {
+        ...(ctx?.conversationId ? { sessionId: ctx.conversationId } : {}),
+        tags: [
+          ...(ctx?.platformType ? [ctx.platformType] : []),
+          ...(ctx?.workflowName ? [ctx.workflowName] : []),
+        ],
+      },
+      async () => {
+        await startActiveObservation(
+          'claude-agent-query',
+          async obs => {
+            // Create child spans for tool calls
+            for (const tool of toolCalls) {
+              const toolObs = obs.startObservation(
+                tool.name,
+                {
+                  input: tool.input,
+                  output: tool.output,
+                },
+                { asType: 'tool' }
+              );
+              toolObs.end();
+            }
+
+            const usageDetails: Record<string, number> = {};
+            if (usage) {
+              if (usage.input) usageDetails.input = usage.input;
+              if (usage.output) usageDetails.output = usage.output;
+              if (usage.total) usageDetails.total = usage.total;
+            }
+
+            obs.update({
+              input: prompt,
+              output: textParts.join(''),
+              model: model ?? 'claude-sonnet-4-20250514',
+              usageDetails: Object.keys(usageDetails).length > 0 ? usageDetails : undefined,
+              metadata: {
+                ...(cost !== undefined ? { totalCostUsd: cost } : {}),
+                ...(numTurns !== undefined ? { numTurns } : {}),
+                ...(sessionId ? { claudeSessionId: sessionId } : {}),
+                ...(toolCalls.length > 0 ? { toolCallCount: toolCalls.length } : {}),
+                ...(traceError ? { error: traceError.message } : {}),
+              },
+              level: traceError ? 'ERROR' : undefined,
+            });
+          },
+          { asType: 'generation' }
+        );
+      }
+    );
+  } catch (traceErr) {
+    getLog().debug({ error: (traceErr as Error).message }, 'langfuse.trace_failed');
+  }
+
+  // Yield all collected chunks to the consumer
+  for (const chunk of chunks) {
+    yield chunk;
+  }
+
+  // Re-throw the stream error if one occurred
+  if (streamError) {
+    throw streamError;
+  }
 }

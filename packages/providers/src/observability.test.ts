@@ -3,10 +3,11 @@ import {
   withObservabilityContext,
   getObservabilityContext,
   isLangfuseEnabled,
-  getQuery,
   initLangfuse,
   shutdownLangfuse,
+  traceQuery,
 } from './observability';
+import type { MessageChunk } from './types';
 
 describe('observability', () => {
   // ─── Context Propagation ────────────────────────────────────────────────
@@ -142,20 +143,101 @@ describe('observability', () => {
     });
   });
 
-  // ─── getQuery ──────────────────────────────────────────────────────────
+  // ─── traceQuery ─────────────────────────────────────────────────────────
 
-  describe('getQuery', () => {
-    test('returns a function', () => {
-      const queryFn = getQuery();
-      expect(typeof queryFn).toBe('function');
+  describe('traceQuery', () => {
+    async function* fakeGenerator(): AsyncGenerator<MessageChunk> {
+      yield { type: 'assistant', content: 'Hello ' };
+      yield { type: 'assistant', content: 'world' };
+      yield { type: 'result', sessionId: 'sess-1', tokens: { input: 10, output: 5 } };
+    }
+
+    test('passes through all chunks when Langfuse not initialized', async () => {
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of traceQuery('test prompt', 'sonnet', fakeGenerator())) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toHaveLength(3);
+      expect(chunks[0]).toEqual({ type: 'assistant', content: 'Hello ' });
+      expect(chunks[1]).toEqual({ type: 'assistant', content: 'world' });
+      expect(chunks[2]).toMatchObject({ type: 'result', sessionId: 'sess-1' });
     });
 
-    test('returns the SDK query function when Langfuse not initialized', () => {
-      const queryFn = getQuery();
-      // Should be a callable function (original SDK query)
-      expect(typeof queryFn).toBe('function');
-      // Should NOT be the instrumented wrapper
-      expect(queryFn.name).not.toBe('wrappedQuery');
+    test('passes through tool call and tool result chunks', async () => {
+      async function* toolGenerator(): AsyncGenerator<MessageChunk> {
+        yield { type: 'tool', toolName: 'Read', toolInput: { path: '/file.ts' } };
+        yield { type: 'tool_result', toolName: 'Read', toolOutput: 'file content here' };
+        yield { type: 'assistant', content: 'I read the file.' };
+        yield { type: 'result', sessionId: 'sess-2', tokens: { input: 50, output: 20 } };
+      }
+
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of traceQuery('read a file', 'sonnet', toolGenerator())) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toHaveLength(4);
+      expect(chunks[0]).toMatchObject({ type: 'tool', toolName: 'Read' });
+      expect(chunks[1]).toMatchObject({ type: 'tool_result', toolName: 'Read' });
+      expect(chunks[2]).toEqual({ type: 'assistant', content: 'I read the file.' });
+      expect(chunks[3]).toMatchObject({ type: 'result', sessionId: 'sess-2' });
+    });
+
+    test('handles empty generator', async () => {
+      async function* emptyGenerator(): AsyncGenerator<MessageChunk> {
+        // yields nothing
+      }
+
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of traceQuery('empty', 'sonnet', emptyGenerator())) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toHaveLength(0);
+    });
+
+    test('passes through cost and numTurns from result', async () => {
+      async function* costGenerator(): AsyncGenerator<MessageChunk> {
+        yield { type: 'assistant', content: 'done' };
+        yield {
+          type: 'result',
+          sessionId: 'sess-3',
+          tokens: { input: 100, output: 50, total: 150 },
+          cost: 0.0042,
+          numTurns: 3,
+        };
+      }
+
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of traceQuery('test', 'opus', costGenerator())) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toHaveLength(2);
+      const result = chunks[1];
+      expect(result).toMatchObject({
+        type: 'result',
+        cost: 0.0042,
+        numTurns: 3,
+      });
+    });
+
+    test('preserves generator error propagation', async () => {
+      async function* errorGenerator(): AsyncGenerator<MessageChunk> {
+        yield { type: 'assistant', content: 'partial' };
+        throw new Error('stream failed');
+      }
+
+      const chunks: MessageChunk[] = [];
+      await expect(async () => {
+        for await (const chunk of traceQuery('test', 'sonnet', errorGenerator())) {
+          chunks.push(chunk);
+        }
+      }).toThrow('stream failed');
+
+      expect(chunks).toHaveLength(1);
+      expect(chunks[0]).toEqual({ type: 'assistant', content: 'partial' });
     });
   });
 

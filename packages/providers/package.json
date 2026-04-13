@@ -23,7 +23,6 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.89",
     "@archon/paths": "workspace:*",
-    "@arizeai/openinference-instrumentation-claude-agent-sdk": "^0.2.2",
     "@langfuse/otel": "^5.1.0",
     "@langfuse/tracing": "^5.1.0",
     "@openai/codex-sdk": "^0.116.0",

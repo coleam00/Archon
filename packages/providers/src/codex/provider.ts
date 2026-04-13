@@ -16,6 +16,7 @@ import type {
   ProviderCapabilities,
 } from '../types';
 import { parseCodexConfig } from './config';
+import { traceQuery } from '../observability';
 import { CODEX_CAPABILITIES } from './capabilities';
 import { resolveCodexBinaryPath } from './binary-resolver';
 import { createLogger } from '@archon/paths';
@@ -584,11 +585,15 @@ export class CodexProvider implements IAgentProvider {
         const result = await thread.runStreamed(prompt, turnOptions);
 
         // 5. Stream normalized events (fresh state per attempt to avoid dedup leaks)
-        yield* streamCodexEvents(
-          result.events as AsyncIterable<Record<string, unknown>>,
-          hasOutputFormat,
-          thread.id,
-          requestOptions?.abortSignal
+        yield* traceQuery(
+          prompt,
+          requestOptions?.model,
+          streamCodexEvents(
+            result.events as AsyncIterable<Record<string, unknown>>,
+            hasOutputFormat,
+            thread.id,
+            requestOptions?.abortSignal
+          )
         );
         return;
       } catch (error) {
