@@ -179,7 +179,7 @@ function WorkflowBuilderInner(): React.ReactElement {
     return {
       name,
       description,
-      provider: provider as WorkflowDefinition['provider'],
+      provider,
       model,
       nodes: dagNodes,
     };

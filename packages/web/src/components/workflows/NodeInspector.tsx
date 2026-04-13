@@ -75,7 +75,7 @@ function ProviderField({
       <select
         value={node.provider ?? ''}
         onChange={(e): void => {
-          onUpdate({ provider: (e.target.value || undefined) as DagNodeData['provider'] });
+          onUpdate({ provider: e.target.value || undefined });
         }}
         className={cls}
       >

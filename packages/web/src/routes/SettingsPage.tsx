@@ -20,7 +20,6 @@ import {
 import type {
   SafeConfigResponse,
   CodebaseResponse,
-  UpdateAssistantConfigBody,
   ProviderDefaults,
   ProviderInfo,
 } from '@/lib/api';
@@ -455,7 +454,7 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
 
   function handleSave(): void {
     mutation.mutate({
-      assistant: assistant as UpdateAssistantConfigBody['assistant'],
+      assistant,
       assistants: assistantSettings,
     });
   }

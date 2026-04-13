@@ -31,11 +31,7 @@ afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true });
 });
 
-function makeWorkflow(
-  name: string,
-  nodes: DagNode[],
-  provider?: 'claude' | 'codex'
-): WorkflowDefinition {
+function makeWorkflow(name: string, nodes: DagNode[], provider?: string): WorkflowDefinition {
   return {
     name,
     description: 'test workflow',

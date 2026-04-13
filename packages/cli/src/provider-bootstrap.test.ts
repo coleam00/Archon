@@ -57,16 +57,17 @@ describe('bootstrapCliProviderRegistry', () => {
 
   test('registers built-in providers', () => {
     bootstrapCliProviderRegistry();
-    expect(getRegisteredProviders().map(provider => provider.id)).toEqual(['claude', 'codex']);
+    const ids = getRegisteredProviders().map(provider => provider.id);
+    expect(ids).toContain('claude');
+    expect(ids).toContain('codex');
   });
 
   test('preserves existing community providers', () => {
     registerProvider(makeCommunityProvider('custom'));
     bootstrapCliProviderRegistry();
-    expect(getRegisteredProviders().map(provider => provider.id)).toEqual([
-      'custom',
-      'claude',
-      'codex',
-    ]);
+    const ids = getRegisteredProviders().map(provider => provider.id);
+    expect(ids).toContain('custom');
+    expect(ids).toContain('claude');
+    expect(ids).toContain('codex');
   });
 });

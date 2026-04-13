@@ -28,6 +28,7 @@ import { BUNDLED_SKILL_FILES } from '../bundled-skill';
 import { homedir } from 'os';
 import { randomBytes } from 'crypto';
 import { spawn, execSync, type ChildProcess } from 'child_process';
+import { getRegisteredProviders } from '@archon/providers';
 
 // =============================================================================
 // Types
@@ -654,7 +655,7 @@ After upgrading, run 'archon setup' again.`,
     return {
       claude: false,
       codex: false,
-      defaultAssistant: 'claude',
+      defaultAssistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
     };
   }
 
@@ -678,10 +679,10 @@ After upgrading, run 'archon setup' again.`,
   }
 
   // Determine default assistant — use the registry, but keep setup/auth flows built-in only.
-  let defaultAssistant = 'claude';
+  // Default to first registered built-in provider rather than hardcoding 'claude'.
+  let defaultAssistant = getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude';
 
   if (hasClaude && hasCodex) {
-    const { getRegisteredProviders } = await import('@archon/providers');
     const providerChoices = getRegisteredProviders()
       .filter(p => p.builtIn)
       .map(p => ({
@@ -1426,7 +1427,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       ai: {
         claude: existing?.hasClaude ?? false,
         codex: existing?.hasCodex ?? false,
-        defaultAssistant: 'claude',
+        defaultAssistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
       },
       platforms: {
         github: existing?.platforms.github ?? false,

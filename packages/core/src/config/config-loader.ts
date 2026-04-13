@@ -115,7 +115,7 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 # Bot display name (shown in messages)
 # botName: Archon
 
-# Default AI assistant (claude or codex)
+# Default AI assistant (must match a registered provider, e.g. claude, codex)
 # defaultAssistant: claude
 
 # Assistant defaults
