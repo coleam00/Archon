@@ -193,7 +193,7 @@ export function ChatPage(): React.ReactElement {
       {/* ── Mobile overlay backdrop ── */}
       {mobileConvOpen && (
         <div
-          className="fixed inset-x-0 top-24 bottom-0 z-40 bg-black/60 md:hidden"
+          className="fixed inset-x-0 top-12 bottom-0 z-40 bg-black/60 md:hidden"
           onClick={() => { setMobileConvOpen(false); }}
           aria-hidden="true"
         />
@@ -204,16 +204,16 @@ export function ChatPage(): React.ReactElement {
            Mobile  : fixed overlay drawer, slides from left via transform  ── */}
       <div
         className={cn(
-          'flex flex-col border-r border-border bg-surface overflow-hidden',
-          // Mobile: fixed overlay starting below the sticky topbar (~48 px)
-          'fixed top-24 bottom-0 left-0 z-40',
+          'flex flex-col border-r border-border overflow-hidden',
+          // Mobile: fixed overlay starting below the sticky topbar
+          'fixed top-12 bottom-0 left-0 z-50',
           // Desktop: back to normal inline flow
           'md:relative md:inset-auto md:z-auto md:h-full',
           // Slide animation — mobile toggles, desktop always shown
           'transition-transform duration-300 ease-in-out',
           mobileConvOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
         )}
-        style={{ width: `${String(width)}px`, flexShrink: 0 }}
+        style={{ width: `${String(width)}px`, flexShrink: 0, backgroundColor: 'var(--surface)' }}
       >
         {/* New Chat button + mobile close */}
         <div className="px-3 pt-3 pb-2 flex items-center gap-2">
@@ -365,10 +365,10 @@ export function ChatPage(): React.ReactElement {
       <div className="flex flex-1 flex-col overflow-hidden min-w-0">
 
         {/* Mobile-only topbar: conversations toggle + new chat shortcut.
-            sticky top-0 z-50 keeps the hamburger ☰ and "New" button always visible
-            at the top while messages scroll below.
-            bg-surface is opaque (no alpha) so content behind it is fully masked. */}
-        <div className="sticky top-0 z-50 flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-2 md:hidden">
+            z-30 keeps it below the drawer overlay (z-50) so the drawer fully
+            covers this bar when it slides in from the left.
+            bg-surface is opaque so content behind it is fully masked. */}
+        <div className="sticky top-0 z-30 flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-2 md:hidden">
           <button
             onClick={() => { setMobileConvOpen(true); }}
             className="flex items-center gap-2 rounded-md px-2 py-1.5 text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
