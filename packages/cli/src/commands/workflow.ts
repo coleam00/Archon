@@ -428,13 +428,26 @@ export async function workflowRunCommand(
     // (derived from the remote URL), so findActiveByWorkflow can return an
     // environment that belongs to a sibling checkout. Compare the repo root that
     // was recorded at creation time with the current working directory's repo root.
+    // Resolve repo root lazily: needed both for the reuse guard and for metadata storage
     const currentRepoRoot = await git.findRepoRoot(cwd);
     const envSourceRoot =
       existingEnv && typeof existingEnv.metadata?.source_repo_root === 'string'
         ? existingEnv.metadata.source_repo_root
         : undefined;
+
+    // Intentional: when currentRepoRoot or envSourceRoot is unavailable, fall back
+    // to allowing reuse. This preserves backward compat for pre-existing envs and
+    // avoids blocking workflows when git is temporarily unavailable. Risk: could
+    // allow cross-checkout reuse in edge cases — logged as a warning below.
     const reuseSameCheckout =
       !existingEnv || !envSourceRoot || !currentRepoRoot || envSourceRoot === currentRepoRoot;
+
+    if (existingEnv && envSourceRoot && !currentRepoRoot) {
+      getLog().warn(
+        { path: existingEnv.working_path, envSourceRoot },
+        'worktree.reuse_root_undetectable'
+      );
+    }
 
     if (
       existingEnv &&

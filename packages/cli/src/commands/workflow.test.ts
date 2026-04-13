@@ -975,6 +975,145 @@ describe('workflowRunCommand', () => {
       consoleWarnSpy.mockRestore();
     }
   });
+
+  it('skips reuse when existing env has different source_repo_root (GH-1183)', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const isolationDb = await import('@archon/core/db/isolation-environments');
+    const gitModule = await import('@archon/git');
+    const isolation = await import('@archon/isolation');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-123',
+      default_cwd: '/clone-b',
+    });
+    // Existing env was created from /clone-a
+    (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'env-1',
+      working_path: '/worktrees/feat',
+      branch_name: 'my-feature',
+      workflow_type: 'task',
+      workflow_id: 'my-feature',
+      metadata: { source_repo_root: '/clone-a' },
+    });
+    // Current cwd resolves to /clone-b
+    (gitModule.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce('/clone-b');
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-123',
+    });
+
+    await workflowRunCommand('/clone-b', 'assist', 'hello', { branchName: 'my-feature' });
+
+    // Should have created a new worktree instead of reusing
+    const getIsolationProviderMock = isolation.getIsolationProvider as ReturnType<typeof mock>;
+    const provider = getIsolationProviderMock.mock.results.at(-1)?.value as {
+      create: ReturnType<typeof mock>;
+    };
+    expect(provider.create).toHaveBeenCalled();
+  });
+
+  it('reuses existing env when source_repo_root is absent (backward compat)', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const isolationDb = await import('@archon/core/db/isolation-environments');
+    const gitModule = await import('@archon/git');
+    const isolation = await import('@archon/isolation');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-123',
+      default_cwd: '/clone-a',
+    });
+    // Existing env has no source_repo_root (pre-existing)
+    (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'env-1',
+      working_path: '/worktrees/feat',
+      branch_name: 'my-feature',
+      workflow_type: 'task',
+      workflow_id: 'my-feature',
+      metadata: {},
+    });
+    (gitModule.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce('/clone-a');
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-123',
+    });
+
+    await workflowRunCommand('/clone-a', 'assist', 'hello', { branchName: 'my-feature' });
+
+    // Should NOT have created a new worktree — reuse path taken
+    const getIsolationProviderMock = isolation.getIsolationProvider as ReturnType<typeof mock>;
+    const provider = getIsolationProviderMock.mock.results.at(-1)?.value as {
+      create: ReturnType<typeof mock>;
+    };
+    expect(provider.create).not.toHaveBeenCalled();
+  });
+
+  it('reuses existing env when source_repo_root matches current root', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const isolationDb = await import('@archon/core/db/isolation-environments');
+    const gitModule = await import('@archon/git');
+    const isolation = await import('@archon/isolation');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-123',
+      default_cwd: '/clone-a',
+    });
+    // Existing env was created from same checkout
+    (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'env-1',
+      working_path: '/worktrees/feat',
+      branch_name: 'my-feature',
+      workflow_type: 'task',
+      workflow_id: 'my-feature',
+      metadata: { source_repo_root: '/clone-a' },
+    });
+    (gitModule.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce('/clone-a');
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-123',
+    });
+
+    await workflowRunCommand('/clone-a', 'assist', 'hello', { branchName: 'my-feature' });
+
+    // Should NOT have created a new worktree — same checkout, reuse is safe
+    const getIsolationProviderMock = isolation.getIsolationProvider as ReturnType<typeof mock>;
+    const provider = getIsolationProviderMock.mock.results.at(-1)?.value as {
+      create: ReturnType<typeof mock>;
+    };
+    expect(provider.create).not.toHaveBeenCalled();
+  });
 });
 
 describe('workflowStatusCommand', () => {
