@@ -951,7 +951,7 @@ export class WorktreeProvider implements IIsolationProvider {
         ['-C', worktreePath, 'submodule', 'update', '--init', '--recursive'],
         { timeout: 120000 }
       );
-      getLog().info({ worktreePath }, 'worktree.submodules_initialized');
+      getLog().info({ worktreePath }, 'worktree.submodule_init_completed');
     } catch (error) {
       const err = error as Error;
       // Non-fatal: the worktree is still usable without submodules.
