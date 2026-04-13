@@ -7,6 +7,7 @@
 import type { IAssistantClient } from '../types';
 import { ClaudeClient } from './claude';
 import { CodexClient } from './codex';
+import { OllamaClient } from './ollama';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -31,7 +32,12 @@ export function getAssistantClient(type: string): IAssistantClient {
     case 'codex':
       getLog().debug({ provider: 'codex' }, 'client_selected');
       return new CodexClient();
+    case 'ollama':
+      getLog().debug({ provider: 'ollama' }, 'client_selected');
+      return new OllamaClient();
     default:
-      throw new Error(`Unknown assistant type: ${type}. Supported types: 'claude', 'codex'`);
+      throw new Error(
+        `Unknown assistant type: ${type}. Supported types: 'claude', 'codex', 'ollama'`
+      );
   }
 }

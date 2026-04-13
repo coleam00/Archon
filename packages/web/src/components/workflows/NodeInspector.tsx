@@ -321,7 +321,11 @@ function ExecutionTab({
               value={node.provider ?? ''}
               onChange={(e): void => {
                 onUpdate({
-                  provider: (e.target.value || undefined) as 'claude' | 'codex' | undefined,
+                  provider: (e.target.value || undefined) as
+                    | 'claude'
+                    | 'codex'
+                    | 'ollama'
+                    | undefined,
                 });
               }}
               className={selectClass}
@@ -329,6 +333,7 @@ function ExecutionTab({
               <option value="">Inherit</option>
               <option value="claude">Claude</option>
               <option value="codex">Codex</option>
+              <option value="ollama">Ollama</option>
             </select>
           </Field>
 

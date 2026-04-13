@@ -762,6 +762,9 @@ export async function handleMessage(
       ...(conversation.ai_assistant_type === 'claude' && config.assistants.claude.settingSources
         ? { settingSources: config.assistants.claude.settingSources }
         : {}),
+      ...(conversation.ai_assistant_type === 'ollama' && config.assistants.ollama.model
+        ? { model: config.assistants.ollama.model }
+        : {}),
     };
 
     const mode = platform.getStreamingMode();

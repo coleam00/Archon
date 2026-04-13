@@ -832,7 +832,9 @@ describe('executeDagWorkflow -- tool restrictions', () => {
 
     const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
     const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const warning = messages.find(m => m.includes('denied_tools') && m.includes('Codex'));
+    const warning = messages.find(
+      m => m.includes('denied_tools') && m.toLowerCase().includes('codex')
+    );
     expect(warning).toBeDefined();
   });
 
@@ -941,7 +943,7 @@ describe('executeDagWorkflow -- tool restrictions', () => {
 
     const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
     const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const warning = messages.find(m => m.includes('hooks') && m.includes('Codex'));
+    const warning = messages.find(m => m.includes('hooks') && m.toLowerCase().includes('codex'));
     expect(warning).toBeDefined();
   });
 });
@@ -2343,7 +2345,7 @@ describe('executeDagWorkflow -- skills options', () => {
     // Warning sent to user
     const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
     const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const warning = messages.find(m => m.includes('skills') && m.includes('Codex'));
+    const warning = messages.find(m => m.includes('skills') && m.toLowerCase().includes('codex'));
     expect(warning).toBeDefined();
 
     // No agents/agent passed to Codex sendQuery

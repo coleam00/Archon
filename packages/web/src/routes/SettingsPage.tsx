@@ -13,6 +13,7 @@ import {
   updateCodebase,
   deleteCodebase,
   updateAssistantConfig,
+  getOllamaModels,
   getCodebaseEnvVars,
   setCodebaseEnvVar,
   deleteCodebaseEnvVar,
@@ -455,6 +456,16 @@ function ProjectsSection(): React.ReactElement {
   );
 }
 
+/** Provider labels shown in the assistant dropdown. */
+const ASSISTANT_LABELS: Record<'claude' | 'codex' | 'ollama', string> = {
+  claude: 'Claude',
+  codex: 'Codex',
+  ollama: 'Ollama',
+};
+
+/** Claude model options. */
+const CLAUDE_MODELS = ['sonnet', 'opus', 'haiku'] as const;
+
 function AssistantConfigSection({ config }: { config: SafeConfigResponse }): React.ReactElement {
   const queryClient = useQueryClient();
   const [assistant, setAssistant] = useState(config.assistant);
@@ -466,14 +477,27 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
   const [webSearch, setWebSearch] = useState<'disabled' | 'cached' | 'live'>(
     config.assistants.codex.webSearchMode ?? 'disabled'
   );
+  const [ollamaModel, setOllamaModel] = useState(config.assistants.ollama.model ?? '');
+  const [ollamaBaseUrl, setOllamaBaseUrl] = useState(config.assistants.ollama.baseUrl ?? '');
   const [saveMsg, setSaveMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  /** Fetch installed Ollama models — only when Ollama is selected or available. */
+  const { data: ollamaData } = useQuery({
+    queryKey: ['ollamaModels'],
+    queryFn: getOllamaModels,
+    staleTime: 30_000,
+    enabled: assistant === 'ollama',
+  });
+  const ollamaModels = ollamaData?.models ?? [];
 
   const hasChanges =
     assistant !== config.assistant ||
     claudeModel !== (config.assistants.claude.model ?? 'sonnet') ||
     codexModel !== (config.assistants.codex.model ?? '') ||
     reasoning !== (config.assistants.codex.modelReasoningEffort ?? 'medium') ||
-    webSearch !== (config.assistants.codex.webSearchMode ?? 'disabled');
+    webSearch !== (config.assistants.codex.webSearchMode ?? 'disabled') ||
+    ollamaModel !== (config.assistants.ollama.model ?? '') ||
+    ollamaBaseUrl !== (config.assistants.ollama.baseUrl ?? '');
 
   useEffect(() => {
     setAssistant(config.assistant);
@@ -481,6 +505,8 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
     setCodexModel(config.assistants.codex.model ?? '');
     setReasoning(config.assistants.codex.modelReasoningEffort ?? 'medium');
     setWebSearch(config.assistants.codex.webSearchMode ?? 'disabled');
+    setOllamaModel(config.assistants.ollama.model ?? '');
+    setOllamaBaseUrl(config.assistants.ollama.baseUrl ?? '');
   }, [config]);
 
   const mutation = useMutation({
@@ -501,15 +527,23 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
     mutation.mutate({
       assistant,
       claude: { model: claudeModel },
-      // The generated type requires `model` when `codex` is present; omit the codex key
-      // entirely when no model is set so the server treats it as "no codex changes".
       ...(codexModel
         ? {
             codex: { model: codexModel, modelReasoningEffort: reasoning, webSearchMode: webSearch },
           }
         : {}),
+      ...(ollamaModel || ollamaBaseUrl
+        ? {
+            ollama: {
+              ...(ollamaModel ? { model: ollamaModel } : {}),
+              ...(ollamaBaseUrl ? { baseUrl: ollamaBaseUrl } : {}),
+            },
+          }
+        : {}),
     });
   }
+
+  const available = config.availableAssistants;
 
   return (
     <Card>
@@ -519,72 +553,133 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
       <CardContent>
         <div className="space-y-4">
           <div className="grid grid-cols-[140px_1fr] items-center gap-2 text-sm">
+            {/* Default assistant — only show configured providers */}
             <label htmlFor="default-assistant">Default Assistant</label>
             <select
               id="default-assistant"
               value={assistant}
               onChange={e => {
-                setAssistant(e.target.value as 'claude' | 'codex');
+                setAssistant(e.target.value as 'claude' | 'codex' | 'ollama');
               }}
               className={selectClass}
             >
-              <option value="claude">Claude</option>
-              <option value="codex">Codex</option>
+              {available.map(a => (
+                <option key={a} value={a}>
+                  {ASSISTANT_LABELS[a]}
+                </option>
+              ))}
             </select>
 
-            <label htmlFor="claude-model">Claude Model</label>
-            <select
-              id="claude-model"
-              value={claudeModel}
-              onChange={e => {
-                setClaudeModel(e.target.value);
-              }}
-              className={selectClass}
-            >
-              <option value="sonnet">sonnet</option>
-              <option value="opus">opus</option>
-              <option value="haiku">haiku</option>
-            </select>
+            {/* Claude options */}
+            {assistant === 'claude' && (
+              <>
+                <label htmlFor="claude-model">Model</label>
+                <select
+                  id="claude-model"
+                  value={claudeModel}
+                  onChange={e => {
+                    setClaudeModel(e.target.value);
+                  }}
+                  className={selectClass}
+                >
+                  {CLAUDE_MODELS.map(m => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </>
+            )}
 
-            <label htmlFor="codex-model">Codex Model</label>
-            <Input
-              id="codex-model"
-              value={codexModel}
-              onChange={e => {
-                setCodexModel(e.target.value);
-              }}
-              placeholder="gpt-5.3-codex"
-            />
+            {/* Codex options */}
+            {assistant === 'codex' && (
+              <>
+                <label htmlFor="codex-model">Model</label>
+                <Input
+                  id="codex-model"
+                  value={codexModel}
+                  onChange={e => {
+                    setCodexModel(e.target.value);
+                  }}
+                  placeholder="gpt-5.3-codex"
+                />
 
-            <label htmlFor="reasoning">Reasoning Effort</label>
-            <select
-              id="reasoning"
-              value={reasoning}
-              onChange={e => {
-                setReasoning(e.target.value as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh');
-              }}
-              className={selectClass}
-            >
-              <option value="minimal">minimal</option>
-              <option value="low">low</option>
-              <option value="medium">medium</option>
-              <option value="high">high</option>
-              <option value="xhigh">xhigh</option>
-            </select>
+                <label htmlFor="reasoning">Reasoning Effort</label>
+                <select
+                  id="reasoning"
+                  value={reasoning}
+                  onChange={e => {
+                    setReasoning(e.target.value as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh');
+                  }}
+                  className={selectClass}
+                >
+                  <option value="minimal">minimal</option>
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high">high</option>
+                  <option value="xhigh">xhigh</option>
+                </select>
 
-            <label htmlFor="web-search">Web Search</label>
-            <select
-              id="web-search"
-              value={webSearch}
-              onChange={e => {
-                setWebSearch(e.target.value as 'disabled' | 'cached' | 'live');
-              }}
-              className={selectClass}
-            >
-              <option value="disabled">disabled</option>
-              <option value="cached">cached</option>
-              <option value="live">live</option>
-            </select>
+                <label htmlFor="web-search">Web Search</label>
+                <select
+                  id="web-search"
+                  value={webSearch}
+                  onChange={e => {
+                    setWebSearch(e.target.value as 'disabled' | 'cached' | 'live');
+                  }}
+                  className={selectClass}
+                >
+                  <option value="disabled">disabled</option>
+                  <option value="cached">cached</option>
+                  <option value="live">live</option>
+                </select>
+              </>
+            )}
+
+            {/* Ollama options */}
+            {assistant === 'ollama' && (
+              <>
+                <label htmlFor="ollama-model">Model</label>
+                {ollamaModels.length > 0 ? (
+                  <select
+                    id="ollama-model"
+                    value={ollamaModel}
+                    onChange={e => {
+                      setOllamaModel(e.target.value);
+                    }}
+                    className={selectClass}
+                  >
+                    {ollamaModel && !ollamaModels.includes(ollamaModel) && (
+                      <option value={ollamaModel}>{ollamaModel}</option>
+                    )}
+                    {ollamaModels.map(m => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <Input
+                    id="ollama-model"
+                    value={ollamaModel}
+                    onChange={e => {
+                      setOllamaModel(e.target.value);
+                    }}
+                    placeholder={ollamaData ? 'No models found — type a name' : 'Loading...'}
+                  />
+                )}
+
+                <label htmlFor="ollama-base-url">Base URL</label>
+                <Input
+                  id="ollama-base-url"
+                  value={ollamaBaseUrl}
+                  onChange={e => {
+                    setOllamaBaseUrl(e.target.value);
+                  }}
+                  placeholder="http://localhost:11434"
+                />
+              </>
+            )}
           </div>
 
           <div className="flex items-center gap-3">

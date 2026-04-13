@@ -226,7 +226,9 @@ export interface IWorkflowAssistantClient {
   getType(): string;
 }
 
-export type AssistantClientFactory = (provider: 'claude' | 'codex') => IWorkflowAssistantClient;
+export type AssistantClientFactory = (
+  provider: 'claude' | 'codex' | 'ollama'
+) => IWorkflowAssistantClient;
 
 // ---------------------------------------------------------------------------
 // Narrow config interface (subset of MergedConfig)
@@ -237,8 +239,8 @@ export type AssistantClientFactory = (provider: 'claude' | 'codex') => IWorkflow
 // ---------------------------------------------------------------------------
 
 export interface WorkflowConfig {
-  /** Default assistant provider ('claude' | 'codex') */
-  assistant: 'claude' | 'codex';
+  /** Default assistant provider ('claude' | 'codex' | 'ollama') */
+  assistant: 'claude' | 'codex' | 'ollama';
   baseBranch?: string;
   docsPath?: string;
   /**
@@ -262,6 +264,11 @@ export interface WorkflowConfig {
       modelReasoningEffort?: ModelReasoningEffort;
       webSearchMode?: WebSearchMode;
       additionalDirectories?: string[];
+    };
+    ollama?: {
+      model?: string;
+      /** Ollama server base URL. Defaults to OLLAMA_BASE_URL env var or http://localhost:11434. */
+      baseUrl?: string;
     };
   };
 }

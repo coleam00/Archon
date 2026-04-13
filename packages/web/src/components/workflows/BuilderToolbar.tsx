@@ -11,14 +11,14 @@ export type ViewMode = 'hidden' | 'split' | 'full';
 export interface BuilderToolbarProps {
   workflowName: string;
   workflowDescription: string;
-  provider: 'claude' | 'codex' | undefined;
+  provider: 'claude' | 'codex' | 'ollama' | undefined;
   model: string | undefined;
   hasUnsavedChanges: boolean;
   validationErrors: string[];
   viewMode: ViewMode;
   onNameChange: (name: string) => void;
   onDescriptionChange: (desc: string) => void;
-  onProviderChange: (p: 'claude' | 'codex' | undefined) => void;
+  onProviderChange: (p: 'claude' | 'codex' | 'ollama' | undefined) => void;
   onModelChange: (m: string | undefined) => void;
   onViewModeChange: (mode: ViewMode) => void;
   onValidate: () => void;
@@ -158,13 +158,16 @@ export function BuilderToolbar({
           <select
             value={provider ?? ''}
             onChange={(e): void => {
-              onProviderChange((e.target.value || undefined) as 'claude' | 'codex' | undefined);
+              onProviderChange(
+                (e.target.value || undefined) as 'claude' | 'codex' | 'ollama' | undefined
+              );
             }}
             className="rounded-md border border-border bg-surface px-1.5 py-1 text-xs text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
           >
             <option value="">Provider</option>
             <option value="claude">Claude</option>
             <option value="codex">Codex</option>
+            <option value="ollama">Ollama</option>
           </select>
 
           <input

@@ -88,6 +88,9 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 #     webSearchMode: disabled
 #     additionalDirectories:
 #       - /absolute/path/to/other/repo
+#   ollama:
+#     model: llama3.2
+#     baseUrl: http://localhost:11434  # optional, default
 
 # Streaming mode per platform (stream or batch)
 # streaming:
@@ -194,6 +197,7 @@ function getDefaults(): MergedConfig {
     assistants: {
       claude: {},
       codex: {},
+      ollama: {},
     },
     streaming: {
       telegram: 'stream',
@@ -232,7 +236,7 @@ function applyEnvOverrides(config: MergedConfig): MergedConfig {
 
   // Assistant override
   const envAssistant = process.env.DEFAULT_AI_ASSISTANT;
-  if (envAssistant === 'claude' || envAssistant === 'codex') {
+  if (envAssistant === 'claude' || envAssistant === 'codex' || envAssistant === 'ollama') {
     config.assistant = envAssistant;
   }
 
@@ -277,6 +281,7 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
     assistants: {
       claude: { ...defaults.assistants.claude },
       codex: { ...defaults.assistants.codex },
+      ollama: { ...defaults.assistants.ollama },
     },
   };
 
@@ -300,6 +305,12 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
     result.assistants.codex = {
       ...result.assistants.codex,
       ...global.assistants.codex,
+    };
+  }
+  if (global.assistants?.ollama) {
+    result.assistants.ollama = {
+      ...result.assistants.ollama,
+      ...global.assistants.ollama,
     };
   }
 
@@ -339,6 +350,7 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
     assistants: {
       claude: { ...merged.assistants.claude },
       codex: { ...merged.assistants.codex },
+      ollama: { ...merged.assistants.ollama },
     },
   };
 
@@ -357,6 +369,12 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
     result.assistants.codex = {
       ...result.assistants.codex,
       ...repo.assistants.codex,
+    };
+  }
+  if (repo.assistants?.ollama) {
+    result.assistants.ollama = {
+      ...result.assistants.ollama,
+      ...repo.assistants.ollama,
     };
   }
 
@@ -479,6 +497,9 @@ export async function updateGlobalConfig(updates: Partial<GlobalConfig>): Promis
       merged.assistants = {
         claude: { ...current.assistants?.claude, ...updates.assistants.claude },
         codex: { ...current.assistants?.codex, ...updates.assistants.codex },
+        ...(updates.assistants.ollama !== undefined
+          ? { ollama: { ...current.assistants?.ollama, ...updates.assistants.ollama } }
+          : {}),
       };
     }
 
@@ -517,9 +538,15 @@ export async function updateGlobalConfig(updates: Partial<GlobalConfig>): Promis
  * Strips filesystem paths and any other server-internal fields.
  */
 export function toSafeConfig(config: MergedConfig): SafeConfig {
+  const availableAssistants: ('claude' | 'codex' | 'ollama')[] = ['claude', 'ollama'];
+  if (process.env.CODEX_ID_TOKEN && process.env.CODEX_ACCESS_TOKEN) {
+    availableAssistants.push('codex');
+  }
+
   return {
     botName: config.botName,
     assistant: config.assistant,
+    availableAssistants,
     assistants: {
       claude: {
         model: config.assistants.claude.model,
@@ -528,6 +555,10 @@ export function toSafeConfig(config: MergedConfig): SafeConfig {
         model: config.assistants.codex.model,
         modelReasoningEffort: config.assistants.codex.modelReasoningEffort,
         webSearchMode: config.assistants.codex.webSearchMode,
+      },
+      ollama: {
+        model: config.assistants.ollama.model,
+        baseUrl: config.assistants.ollama.baseUrl,
       },
     },
     streaming: {
