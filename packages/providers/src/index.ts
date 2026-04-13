@@ -25,6 +25,7 @@ export { CodexProvider } from './codex/provider';
 // Config parsers
 export { parseClaudeConfig, type ClaudeProviderDefaults } from './claude/config';
 export { parseCodexConfig, type CodexProviderDefaults } from './codex/config';
+export { parseCopilotConfig, type CopilotProviderDefaults } from './copilot/config';
 
 // Utilities (needed by consumers)
 export { resetCodexSingleton } from './codex/provider';

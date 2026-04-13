@@ -13,7 +13,7 @@ DAG workflow nodes support a `skills` field that preloads named skills into the
 node's agent context. Each node gets specialized procedural knowledge — code review
 patterns, Remotion best practices, testing conventions — without polluting other nodes.
 
-**Claude only** — Codex nodes will warn and ignore the `skills` field.
+**Claude only** — Codex and Copilot nodes will warn and ignore the `skills` field.
 
 ## Quick Start
 
@@ -202,9 +202,9 @@ Skills and MCP compose naturally on the same node:
 Skills teach the **process**. MCP provides the **capability**. Together they
 produce better results than either alone.
 
-## Codex Compatibility
+## Codex and Copilot Compatibility
 
-Codex nodes with `skills` log a warning and continue without the skills:
+Codex and Copilot nodes with `skills` log a warning and continue without the skills:
 
 ```
 Warning: Node 'review' has skills set but uses Codex — per-node skills
@@ -229,7 +229,7 @@ To use skills, ensure the node uses Claude (the default provider, or set
 | Problem | Cause | Fix |
 |---------|-------|-----|
 | Skill not found | Not installed | Run `npx skills add <source>` |
-| Skill ignored | Node uses Codex provider | Set `provider: claude` on the node |
+| Skill ignored | Node uses Codex or Copilot provider | Set `provider: claude` on the node |
 | Too many skills | Context budget exceeded | Reduce to 2-3 most relevant skills per node |
 | Skill has no effect | Description too vague | Rewrite SKILL.md with specific, actionable instructions |
 

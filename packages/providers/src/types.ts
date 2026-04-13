@@ -25,6 +25,10 @@ export interface CodexProviderDefaults {
   codexBinaryPath?: string;
 }
 
+export interface CopilotProviderDefaults {
+  model?: string;
+}
+
 /**
  * Token usage statistics from AI provider responses.
  */

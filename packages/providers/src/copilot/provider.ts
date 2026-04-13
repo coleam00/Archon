@@ -284,16 +284,16 @@ export class CopilotProvider implements IAgentProvider {
     }
 
     for (const opt of UNSUPPORTED_BOOLEAN_OPTIONS) {
-      if (nodeConfig?.[opt] != null) {
+      if (nodeConfig?.[opt] !== undefined) {
         getLog().warn({ option: opt, value: nodeConfig[opt] }, 'copilot.option_not_supported');
       }
     }
 
-    if ((options as Record<string, unknown>).forkSession === true) {
+    if (nodeConfig?.forkSession === true) {
       throw new Error('forkSession is not supported by Copilot provider');
     }
-    if ((options as Record<string, unknown>).persistSession === false) {
-      throw new Error('persistSession=false is not supported by Copilot provider');
+    if (nodeConfig?.persistSession === true) {
+      throw new Error('persistSession is not supported by Copilot provider');
     }
   }
 

@@ -29,7 +29,7 @@ export type WebSearchMode = z.infer<typeof webSearchModeSchema>;
 export const workflowBaseSchema = z.object({
   name: z.string().min(1),
   description: z.string().min(1),
-  provider: z.enum(['claude', 'codex']).optional(),
+  provider: z.enum(['claude', 'codex', 'copilot']).optional(),
   model: z.string().optional(),
   modelReasoningEffort: modelReasoningEffortSchema.optional(),
   webSearchMode: webSearchModeSchema.optional(),

@@ -402,7 +402,7 @@ nodes:
 - `allowed_tools: []` disables all built-in tools (useful for MCP-only nodes). Use the `mcp` field on a node to attach per-node MCP servers — see [Node Fields](#node-fields)
 - If both are set, `denied_tools` is applied after `allowed_tools`
 - `undefined` (field absent) and `[]` have different semantics — absent means use default tool set, `[]` means no tools
-- Claude only — Codex nodes/steps emit a warning and continue (Codex doesn't support per-call tool restrictions)
+- Claude only — Codex and Copilot nodes emit a warning and continue (they don't support per-call tool restrictions)
 
 ---
 
@@ -542,8 +542,8 @@ Model and options are resolved in this order:
 
 ```yaml
 name: my-workflow
-provider: claude     # 'claude' or 'codex' (default: from config)
-model: sonnet        # Model override (default: from config assistants.claude.model)
+provider: claude     # 'claude', 'codex', or 'copilot' (default: from config)
+model: sonnet        # Model override (default: from config assistants.<provider>.model)
 ```
 
 **Claude models:**

@@ -13,9 +13,13 @@
 
 // Provider config defaults — canonical definitions live in @archon/providers/types.
 // Imported and re-exported here so existing consumers don't break.
-import type { ClaudeProviderDefaults, CodexProviderDefaults } from '@archon/providers/types';
+import type {
+  ClaudeProviderDefaults,
+  CodexProviderDefaults,
+  CopilotProviderDefaults,
+} from '@archon/providers/types';
 
-export type { ClaudeProviderDefaults, CodexProviderDefaults };
+export type { ClaudeProviderDefaults, CodexProviderDefaults, CopilotProviderDefaults };
 
 export interface GlobalConfig {
   /**
@@ -28,7 +32,7 @@ export interface GlobalConfig {
    * Default AI assistant when no codebase-specific preference
    * @default 'claude'
    */
-  defaultAssistant?: 'claude' | 'codex';
+  defaultAssistant?: 'claude' | 'codex' | 'copilot';
 
   /**
    * Assistant-specific defaults (model, reasoning effort, etc.)
@@ -36,6 +40,7 @@ export interface GlobalConfig {
   assistants?: {
     claude?: ClaudeProviderDefaults;
     codex?: CodexProviderDefaults;
+    copilot?: CopilotProviderDefaults;
   };
 
   /**
@@ -182,10 +187,11 @@ export interface RepoConfig {
  */
 export interface MergedConfig {
   botName: string;
-  assistant: 'claude' | 'codex';
+  assistant: 'claude' | 'codex' | 'copilot';
   assistants: {
     claude: ClaudeProviderDefaults;
     codex: CodexProviderDefaults;
+    copilot: CopilotProviderDefaults;
   };
   streaming: {
     telegram: 'stream' | 'batch';
@@ -238,10 +244,11 @@ export interface MergedConfig {
  */
 export interface SafeConfig {
   botName: string;
-  assistant: 'claude' | 'codex';
+  assistant: 'claude' | 'codex' | 'copilot';
   assistants: {
     claude: Pick<ClaudeProviderDefaults, 'model'>;
     codex: Pick<CodexProviderDefaults, 'model' | 'modelReasoningEffort' | 'webSearchMode'>;
+    copilot: Pick<CopilotProviderDefaults, 'model'>;
   };
   streaming: {
     telegram: 'stream' | 'batch';

@@ -89,7 +89,7 @@ export interface WorkflowConfig {
       webSearchMode?: WebSearchMode;
       additionalDirectories?: string[];
     };
-    copilot?: {
+    copilot: {
       model?: string;
     };
   };

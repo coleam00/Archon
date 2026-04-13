@@ -108,7 +108,7 @@ archon workflow run my-workflow "auth refresh-tokens"
 | `name` | Yes | string | Identifies the workflow in `archon workflow list` |
 | `description` | Yes | string | Shown in listings and used by the router |
 | `nodes` | Yes | array | DAG nodes (see Node Options below) |
-| `provider` | No | `claude` \| `codex` | AI provider for all nodes (default: `claude`) |
+| `provider` | No | `claude` \| `codex` \| `copilot` | AI provider for all nodes (defaults to the configured default assistant) |
 | `model` | No | string | Model for all nodes (`sonnet`, `opus`, `haiku`, or full model ID) |
 | `modelReasoningEffort` | No | string | Codex only: `minimal` \| `low` \| `medium` \| `high` \| `xhigh` |
 | `webSearchMode` | No | string | Codex only: `disabled` \| `cached` \| `live` |
@@ -128,7 +128,7 @@ All nodes share these base fields:
 | `depends_on` | No | string[] | Node IDs that must complete before this node runs |
 | `when` | No | string | Condition expression; node is skipped if false |
 | `trigger_rule` | No | string | Join semantics when multiple upstreams exist (see Trigger Rules) |
-| `provider` | No | `claude` \| `codex` | Per-node provider override |
+| `provider` | No | `claude` \| `codex` \| `copilot` | Per-node provider override |
 | `model` | No | string | Per-node model override |
 | `context` | No | `fresh` \| `shared` | Session context — `fresh` starts a new conversation, `shared` inherits from prior node |
 | `output_format` | No | JSON Schema | Enforce structured JSON output from this node |

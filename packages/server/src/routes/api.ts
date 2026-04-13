@@ -2449,10 +2449,11 @@ export function registerApiRoutes(
       if (body.assistant !== undefined) {
         updates.defaultAssistant = body.assistant;
       }
-      if (body.claude !== undefined || body.codex !== undefined) {
+      if (body.claude !== undefined || body.codex !== undefined || body.copilot !== undefined) {
         updates.assistants = {
           ...(body.claude ? { claude: body.claude } : {}),
           ...(body.codex ? { codex: body.codex } : {}),
+          ...(body.copilot ? { copilot: body.copilot } : {}),
         };
       }
 

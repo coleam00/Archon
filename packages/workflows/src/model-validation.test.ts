@@ -64,6 +64,7 @@ describe('model-validation', () => {
       // Empty string is falsy, so treated as "no model specified"
       expect(isModelCompatible('claude', '')).toBe(true);
       expect(isModelCompatible('codex', '')).toBe(true);
+      expect(isModelCompatible('copilot', '')).toBe(true);
     });
   });
 });

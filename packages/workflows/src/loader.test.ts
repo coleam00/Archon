@@ -190,7 +190,7 @@ nodes:
       expect(workflows[0].provider).toBeUndefined();
     });
 
-    it('should treat invalid provider as undefined (executor handles fallback)', async () => {
+    it('should reject invalid provider at load time', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
 
@@ -205,10 +205,12 @@ nodes:
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       const workflows = result.workflows.map(ws => ws.workflow);
+      const errors = result.errors;
 
-      // Invalid provider treated as undefined - executor will fall back to config
-      expect(workflows).toHaveLength(1);
-      expect(workflows[0].provider).toBeUndefined();
+      // Invalid provider is rejected at load time with a validation error
+      expect(workflows).toHaveLength(0);
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors[0].error).toContain('is not supported');
     });
 
     it('should reject claude model with codex provider at load time', async () => {

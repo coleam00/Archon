@@ -57,7 +57,7 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 # Bot display name (shown in messages)
 # botName: Archon
 
-# Default AI assistant (claude or codex)
+# Default AI assistant (claude, codex, or copilot)
 # defaultAssistant: claude
 
 # Assistant defaults
@@ -70,6 +70,8 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 #     webSearchMode: disabled
 #     additionalDirectories:
 #       - /absolute/path/to/other/repo
+#   copilot:
+#     model: gpt-5-mini
 
 # Streaming mode per platform (stream or batch)
 # streaming:
@@ -176,6 +178,7 @@ function getDefaults(): MergedConfig {
     assistants: {
       claude: {},
       codex: {},
+      copilot: {},
     },
     streaming: {
       telegram: 'stream',
@@ -258,6 +261,7 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
     assistants: {
       claude: { ...defaults.assistants.claude },
       codex: { ...defaults.assistants.codex },
+      copilot: { ...defaults.assistants.copilot },
     },
   };
 
@@ -314,6 +318,7 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
     assistants: {
       claude: { ...merged.assistants.claude },
       codex: { ...merged.assistants.codex },
+      copilot: { ...merged.assistants.copilot },
     },
   };
 
@@ -495,6 +500,9 @@ export function toSafeConfig(config: MergedConfig): SafeConfig {
         model: config.assistants.codex.model,
         modelReasoningEffort: config.assistants.codex.modelReasoningEffort,
         webSearchMode: config.assistants.codex.webSearchMode,
+      },
+      copilot: {
+        model: config.assistants.copilot.model,
       },
     },
     streaming: {

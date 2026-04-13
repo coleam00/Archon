@@ -360,8 +360,8 @@ bun run cli workflow run archon-smart-pr-review "Review PR #123"
 
 ## Limitations
 
-- **Claude only** — Codex nodes warn and ignore the `mcp` field. Configure MCP
-  servers globally in the Codex CLI config instead.
+- **Claude only** — Codex and Copilot nodes warn and ignore the `mcp` field. Configure MCP
+  servers globally in the Codex or Copilot CLI config instead.
 - **Haiku model** — Tool search (lazy loading for many tools) is not supported on
   Haiku. You'll see a warning. Consider using Sonnet or Opus for MCP nodes.
 - **No load-time validation** — The MCP config file is read at execution time, not

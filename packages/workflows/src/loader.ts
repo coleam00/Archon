@@ -270,8 +270,25 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     // Parse workflow-level fields using WorkflowBaseSchema for validation
     // Note: modelReasoningEffort and webSearchMode use warn-and-ignore for invalid values
     // (consistent with original behavior) rather than schema-level rejection.
-    const provider =
-      raw.provider === 'claude' || raw.provider === 'codex' ? raw.provider : undefined;
+    const validProviders = ['claude', 'codex', 'copilot'] as const;
+    type ValidProvider = (typeof validProviders)[number];
+
+    // First validate: fail fast for unsupported providers
+    const rawProvider = raw.provider;
+    if (rawProvider !== undefined && !validProviders.includes(rawProvider as ValidProvider)) {
+      const providerVal = rawProvider as string;
+      return {
+        workflow: null,
+        error: {
+          filename,
+          error: `Provider "${providerVal}" is not supported. Use one of: ${validProviders.join(', ')}`,
+          errorType: 'validation_error',
+        },
+      };
+    }
+
+    // Now we know raw.provider is valid (or undefined)
+    const provider: ValidProvider | undefined = raw.provider as ValidProvider | undefined;
     const model = typeof raw.model === 'string' ? raw.model : undefined;
 
     // Validate model/provider compatibility at workflow level
