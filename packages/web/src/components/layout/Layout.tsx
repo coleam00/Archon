@@ -16,7 +16,10 @@ export function Layout(): React.ReactElement {
 
   return (
     <MobileNavContext.Provider value={{ open, setOpen }}>
-      <div className="flex h-screen flex-col bg-background">
+      {/* h-dvh (100dvh) instead of h-screen (100vh) so the layout height follows the
+          dynamic viewport on mobile — shrinks when the browser address bar is visible,
+          keeping the chat input always reachable without scrolling. */}
+      <div className="flex h-dvh flex-col bg-background">
         <TopNav />
 
         {/* ── Mobile nav overlay backdrop ── */}
