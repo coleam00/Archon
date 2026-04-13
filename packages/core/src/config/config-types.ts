@@ -30,6 +30,10 @@ export interface ClaudeAssistantDefaults {
   settingSources?: ('project' | 'user')[];
 }
 
+/**
+ * Defaults for the Ollama assistant provider.
+ * Configured under `assistants.ollama` in `.archon/config.yaml`.
+ */
 export interface OllamaAssistantDefaults {
   model?: string;
   /** Ollama server base URL. Overrides OLLAMA_BASE_URL env var.

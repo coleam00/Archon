@@ -226,6 +226,7 @@ export interface IWorkflowAssistantClient {
   getType(): string;
 }
 
+/** Factory that instantiates the correct assistant client for a given provider. */
 export type AssistantClientFactory = (
   provider: 'claude' | 'codex' | 'ollama'
 ) => IWorkflowAssistantClient;
