@@ -8,14 +8,30 @@ export function isClaudeModel(model: string): boolean {
   );
 }
 
+/**
+ * Infer provider from a model name. Returns 'claude' if the model matches
+ * Claude naming patterns, 'codex' otherwise.
+ *
+ * When no model is provided, returns the default provider.
+ *
+ * Phase 2 will replace this with a registry-driven lookup that iterates
+ * built-in provider registrations.
+ */
+export function inferProviderFromModel(
+  model: string | undefined,
+  defaultProvider: 'claude' | 'codex' | 'copilot'
+): 'claude' | 'codex' | 'copilot' {
+  if (!model) return defaultProvider;
+  if (isClaudeModel(model)) return 'claude';
+  return defaultProvider;
+}
+
 export function isModelCompatible(
   provider: 'claude' | 'codex' | 'copilot',
   model?: string
 ): boolean {
   if (!model) return true;
   if (provider === 'claude') return isClaudeModel(model);
-  // Copilot accepts most models
   if (provider === 'copilot') return true;
-  // Codex: accept most models, but reject obvious Claude aliases/prefixes
   return !isClaudeModel(model);
 }
