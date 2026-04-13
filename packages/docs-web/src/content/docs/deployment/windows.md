@@ -11,10 +11,12 @@ sidebar:
 
 Archon runs on Windows in two ways:
 
-- **Native Windows with Bun**: Works for basic usage (server, Web UI, simple workflows). No WSL2 required. Install [Bun for Windows](https://bun.sh), clone the repo, and run `bun install && bun run dev`.
+- **Native Windows with Bun**: Works for basic usage (server, Web UI, simple workflows). No WSL2 required. Install [Bun for Windows](https://bun.sh), clone the repo, and run `bun install && bun run dev`. Before your first workflow, enable Developer Mode or run your shell as Administrator so Archon can create the symlinks it uses under `~/.archon/workspaces/`. Developer Mode is the recommended one-time fix.
 - **WSL2 (recommended)**: Required for full compatibility, especially git worktree isolation, shell-based workflow steps, and CLI features that depend on Unix tooling.
 
 The rest of this guide covers the WSL2 setup for full compatibility.
+
+> **Native Windows prerequisite:** Archon registers projects and sets up isolated workspaces by creating symlinks under `~/.archon/workspaces/`. If Developer Mode is disabled and the shell is not elevated, those steps can fail with Windows permission errors.
 
 ## Why WSL2?
 

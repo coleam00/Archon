@@ -148,6 +148,8 @@ bun install
 claude
 ```
 
+> **Windows note:** Archon creates symlinks under `~/.archon/workspaces/` for project registration and worktree isolation. On native Windows, enable Developer Mode or run your shell as Administrator before your first workflow. Developer Mode is the recommended one-time fix.
+
 Then say: **"Set up Archon"**
 
 The setup wizard walks you through everything: CLI installation, authentication, platform selection, and copies the Archon skill to your target repo.

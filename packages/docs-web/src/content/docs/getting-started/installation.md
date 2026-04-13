@@ -47,6 +47,8 @@ bun install
 - [GitHub CLI](https://cli.github.com/) (`gh`)
 - [Claude Code](https://claude.ai/code) (`claude`)
 
+> **Windows note:** Native Windows source installs need symlink support before the first workflow run. Enable Developer Mode (recommended) or run your shell as Administrator because Archon creates symlinks under `~/.archon/workspaces/`. See [Windows Setup](/deployment/windows/) for the full Windows guidance.
+
 ## Verify Installation
 
 ```bash
