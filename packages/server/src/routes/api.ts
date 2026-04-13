@@ -2644,15 +2644,19 @@ export function registerApiRoutes(
     const config = await loadConfig();
     const baseUrl =
       config.assistants.ollama.baseUrl ?? process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
+    getLog().info({ baseUrl }, 'ollama.discovery_started');
     try {
       const response = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(3000) });
       if (!response.ok) {
+        getLog().warn({ baseUrl, status: response.status }, 'ollama.discovery_failed');
         return c.json({ models: [], available: false });
       }
       const data = (await response.json()) as { models?: { name: string }[] };
       const models = (data.models ?? []).map(m => m.name);
+      getLog().info({ baseUrl, modelCount: models.length }, 'ollama.discovery_completed');
       return c.json({ models, available: true });
-    } catch {
+    } catch (err) {
+      getLog().warn({ baseUrl, err }, 'ollama.discovery_failed');
       return c.json({ models: [], available: false });
     }
   });
