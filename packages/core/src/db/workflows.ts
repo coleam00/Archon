@@ -184,13 +184,65 @@ export async function getPausedWorkflowRun(conversationId: string): Promise<Work
   }
 }
 
-export async function getActiveWorkflowRunByPath(workingPath: string): Promise<WorkflowRun | null> {
+/**
+ * Find the workflow run currently holding the lock on `workingPath`.
+ *
+ * The lock is held by any row in `(running, paused)` or `pending` younger
+ * than `STALE_PENDING_AGE_MS` (orphaned pre-creates beyond that window are
+ * ignored — they're from crashed or resume-replaced dispatches).
+ *
+ * When called from a dispatch that already pre-created its own row, pass
+ * `excludeId` and `selfStartedAt` so:
+ *   1. Self is never returned.
+ *   2. If two dispatches both have rows, the deterministic older-wins
+ *      tiebreaker `(started_at, id)` ensures both agree on which is "first."
+ *      The newer dispatch sees the older row and aborts; the older dispatch
+ *      sees nothing.
+ *
+ * Returns the holding row, or null if the path is free.
+ */
+export const STALE_PENDING_AGE_MS = 5 * 60 * 1000; // 5 minutes
+
+export async function getActiveWorkflowRunByPath(
+  workingPath: string,
+  excludeId?: string,
+  selfStartedAt?: Date
+): Promise<WorkflowRun | null> {
+  const isPostgres = getDatabaseType() === 'postgresql';
+  const stalePendingCutoff = isPostgres
+    ? `NOW() - INTERVAL '${String(STALE_PENDING_AGE_MS)} milliseconds'`
+    : `datetime('now', '-${String(Math.floor(STALE_PENDING_AGE_MS / 1000))} seconds')`;
+
+  // Build params + clauses dynamically — null/undefined for $2/$3 doesn't
+  // play well with type inference across both dialects, so structure the
+  // WHERE so each optional param is always-positional when present.
+  const params: unknown[] = [workingPath];
+  const clauses: string[] = [
+    'working_path = $1',
+    `(status IN ('running', 'paused') OR (status = 'pending' AND started_at > ${stalePendingCutoff}))`,
+  ];
+  if (excludeId !== undefined) {
+    params.push(excludeId);
+    clauses.push(`id != $${String(params.length)}`);
+  }
+  if (selfStartedAt !== undefined && excludeId !== undefined) {
+    // Older-wins tiebreaker. (started_at, id) is a total order so both
+    // dispatches always agree on which is "first." Without this, two rows
+    // with similar timestamps could mutually see each other and both abort.
+    params.push(selfStartedAt);
+    const startedAtParam = `$${String(params.length)}`;
+    const idParam = `$${String(params.length - 1)}`;
+    clauses.push(
+      `(started_at < ${startedAtParam} OR (started_at = ${startedAtParam} AND id < ${idParam}))`
+    );
+  }
+
   try {
     const result = await pool.query<WorkflowRun>(
       `SELECT * FROM remote_agent_workflow_runs
-       WHERE working_path = $1 AND status IN ('running', 'paused')
-       ORDER BY started_at DESC LIMIT 1`,
-      [workingPath]
+       WHERE ${clauses.join(' AND ')}
+       ORDER BY started_at ASC, id ASC LIMIT 1`,
+      params
     );
     const row = result.rows[0];
     return row ? normalizeWorkflowRun(row) : null;

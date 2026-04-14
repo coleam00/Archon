@@ -185,6 +185,7 @@ describe('executeWorkflow', () => {
 
     it('blocks workflow when another is actively running', async () => {
       const activeRun = makeRun({
+        id: 'other-run-456',
         status: 'running',
         started_at: new Date().toISOString(), // Recent — not stale
       });
@@ -203,6 +204,176 @@ describe('executeWorkflow', () => {
       );
       expect(result.success).toBe(false);
       expect(result.error).toContain('already running');
+    });
+
+    it('passes self-id and started_at to the lock query so self is excluded', async () => {
+      // The guard runs AFTER workflowRun is finalized so we always have
+      // a self-ID. Without these args, the dispatch's own row would match
+      // and falsely trigger the guard.
+      const selfRun = makeRun({ id: 'self-run-789', started_at: '2026-04-14T10:00:00.000Z' });
+      const getActiveSpy = mock(async () => null);
+      const store = makeStore({
+        createWorkflowRun: mock(async () => selfRun),
+        getActiveWorkflowRunByPath: getActiveSpy,
+      });
+      const deps = makeDeps(store);
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+      );
+
+      expect(getActiveSpy).toHaveBeenCalledWith('/tmp', 'self-run-789', expect.any(Date));
+    });
+
+    it('marks self as cancelled when guard fires (no zombie pending row)', async () => {
+      const selfRun = makeRun({ id: 'self-run-789' });
+      const otherRun = makeRun({ id: 'other-run-456', status: 'running' });
+      const updateSpy = mock(async () => {});
+      const store = makeStore({
+        createWorkflowRun: mock(async () => selfRun),
+        getActiveWorkflowRunByPath: mock(async () => otherRun),
+        updateWorkflowRun: updateSpy,
+      });
+      const deps = makeDeps(store);
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+      );
+
+      // Without this, every guard-blocked dispatch would leak a `pending`
+      // row that briefly blocks future dispatches via the lock query.
+      expect(updateSpy).toHaveBeenCalledWith('self-run-789', { status: 'cancelled' });
+    });
+
+    it('uses the actionable "in use" message format with workflow name, duration, and short id', async () => {
+      const otherRun = makeRun({
+        id: 'abc12345-rest-of-uuid',
+        workflow_name: 'archon-implement',
+        status: 'running',
+        started_at: new Date(Date.now() - 125000).toISOString(), // 2m 5s ago
+      });
+      const sendMessageSpy = mock(async () => {});
+      const platform = {
+        sendMessage: sendMessageSpy,
+        getPlatformType: mock(() => 'test' as const),
+      } as unknown as IWorkflowPlatform;
+      const store = makeStore({
+        getActiveWorkflowRunByPath: mock(async () => otherRun),
+      });
+      const deps = makeDeps(store);
+
+      await executeWorkflow(
+        deps,
+        platform,
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+      );
+
+      expect(sendMessageSpy).toHaveBeenCalled();
+      const sentMessage = (sendMessageSpy.mock.calls[0] as [string, string])[1];
+      expect(sentMessage).toContain('archon-implement');
+      expect(sentMessage).toContain('abc12345');
+      expect(sentMessage).toContain('2m 5s');
+      // Concrete next actions — every line tells the user something to do.
+      expect(sentMessage).toContain('/workflow status');
+      expect(sentMessage).toContain('/workflow cancel abc12345');
+      expect(sentMessage).toContain('--branch');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Resume orphan cleanup
+  // -------------------------------------------------------------------------
+
+  describe('resume orphan cleanup', () => {
+    it('cancels orphaned pre-created row when resume activates', async () => {
+      // Orchestrator dispatched and pre-created this row before resume
+      // detection ran. Once resume takes over (using resumableRun instead),
+      // the pre-created row is a stale lock-token that would block the
+      // user's next back-to-back resume.
+      const preCreated = makeRun({ id: 'pre-created-orphan', status: 'pending' });
+      const resumable = makeRun({ id: 'failed-prior-run', status: 'failed' });
+      const updateSpy = mock(async () => {});
+      const store = makeStore({
+        findResumableRun: mock(async () => resumable),
+        getCompletedDagNodeOutputs: mock(async () => new Map([['node1', 'output1']])),
+        resumeWorkflowRun: mock(async () => makeRun({ id: 'failed-prior-run', status: 'running' })),
+        updateWorkflowRun: updateSpy,
+      });
+      const deps = makeDeps(store);
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        preCreated
+      );
+
+      // Find the orphan-cancellation call (there may be other updateWorkflowRun
+      // calls during normal execution flow, e.g., status transitions).
+      const orphanCancelCall = updateSpy.mock.calls.find(
+        (call: unknown[]) =>
+          call[0] === 'pre-created-orphan' &&
+          (call[1] as { status?: string })?.status === 'cancelled'
+      );
+      expect(orphanCancelCall).toBeDefined();
+    });
+
+    it('proceeds with resume even if orphan cancellation fails (best-effort)', async () => {
+      const preCreated = makeRun({ id: 'pre-created-orphan', status: 'pending' });
+      const resumable = makeRun({ id: 'failed-prior-run', status: 'failed' });
+      const updateSpy = mock(async (id: string) => {
+        if (id === 'pre-created-orphan') throw new Error('DB busy');
+      });
+      const store = makeStore({
+        findResumableRun: mock(async () => resumable),
+        getCompletedDagNodeOutputs: mock(async () => new Map([['node1', 'output1']])),
+        resumeWorkflowRun: mock(async () => makeRun({ id: 'failed-prior-run', status: 'running' })),
+        updateWorkflowRun: updateSpy,
+      });
+      const deps = makeDeps(store);
+
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        preCreated
+      );
+
+      // Resume must still complete — the 5-min stale-pending window is the
+      // safety net for cleanup failures here.
+      expect(result.workflowRunId).toBe('failed-prior-run');
     });
   });
 

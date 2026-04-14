@@ -11,6 +11,7 @@ import { getDefaultBranch, toRepoPath } from '@archon/git';
 import type { WorkflowDefinition, WorkflowRun, WorkflowExecutionResult } from './schemas';
 import { executeDagWorkflow } from './dag-executor';
 import { logWorkflowStart, logWorkflowError } from './logger';
+import { formatDuration } from './utils/duration';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { inferProviderFromModel, isModelCompatible } from './model-validation';
 import { classifyError } from './executor-shared';
@@ -317,29 +318,6 @@ export async function executeWorkflow(
   let dagPriorCompletedNodes: Map<string, string> | undefined;
   let workflowRun: WorkflowRun | undefined = preCreatedRun;
 
-  // Check for concurrent workflow execution on the same path
-  try {
-    const activeWorkflow = await deps.store.getActiveWorkflowRunByPath(cwd);
-    if (activeWorkflow) {
-      const startedAt = new Date(activeWorkflow.started_at).toLocaleString();
-      await sendCriticalMessage(
-        platform,
-        conversationId,
-        `❌ **Workflow already running**: \`${activeWorkflow.workflow_name}\` has been running since ${startedAt}. Please wait for it to complete or use \`/workflow cancel\` to stop it.`
-      );
-      return { success: false, error: `Workflow already running: ${activeWorkflow.workflow_name}` };
-    }
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, conversationId }, 'db_active_workflow_check_failed');
-    await sendCriticalMessage(
-      platform,
-      conversationId,
-      '❌ **Workflow blocked**: Unable to verify if another workflow is running (database error). Please try again in a moment.'
-    );
-    return { success: false, error: 'Database error checking for active workflow' };
-  }
-
   // Resume detection: check for prior failed run on same workflow + worktree
   {
     // Step 1: Find prior failed run — non-critical, fall through on DB error
@@ -394,8 +372,34 @@ export async function executeWorkflow(
         (resumableRun.metadata.approval as Record<string, unknown>).type === 'interactive_loop';
       if (priorNodes.size > 0 || hasInteractiveLoopState) {
         try {
+          // Capture the orphan BEFORE replacing workflowRun. The orchestrator's
+          // pre-created row was a lock-token claim on this path; once resume
+          // takes over, that claim is redundant. Without releasing it, a
+          // back-to-back resume would block on its own ghost lock until the
+          // 5-minute stale-pending window in getActiveWorkflowRunByPath.
+          const orphanPreCreated =
+            preCreatedRun && preCreatedRun.id !== resumableRun.id ? preCreatedRun : null;
+
           workflowRun = await deps.store.resumeWorkflowRun(resumableRun.id);
           dagPriorCompletedNodes = priorNodes;
+
+          if (orphanPreCreated) {
+            await deps.store
+              .updateWorkflowRun(orphanPreCreated.id, { status: 'cancelled' })
+              .catch((cleanupErr: Error) => {
+                // Best-effort: log and continue. The 5-min stale-pending
+                // window is the safety net if this fails.
+                getLog().warn(
+                  {
+                    err: cleanupErr,
+                    orphanId: orphanPreCreated.id,
+                    resumedRunId: workflowRun?.id,
+                  },
+                  'workflow.resume_orphan_cleanup_failed'
+                );
+              });
+          }
+
           getLog().info(
             {
               workflowRunId: workflowRun.id,
@@ -456,6 +460,59 @@ export async function executeWorkflow(
       );
       return { success: false, error: 'Database error creating workflow run' };
     }
+  }
+
+  // Path-lock guard: ensure no other workflow run holds this working_path.
+  //
+  // Runs after workflowRun is finalized (pre-created, resumed, or freshly
+  // created) so we always have self-ID + started_at for the deterministic
+  // older-wins tiebreaker. The query treats `pending` rows older than 5 min
+  // as orphaned, so leaks from crashed dispatches or resume orphans don't
+  // permanently block the path.
+  try {
+    const activeWorkflow = await deps.store.getActiveWorkflowRunByPath(
+      cwd,
+      workflowRun.id,
+      new Date(workflowRun.started_at)
+    );
+    if (activeWorkflow) {
+      // We acquired the lock via createWorkflowRun, but lost the older-wins
+      // tiebreaker. Release immediately so we don't sit as a zombie pending.
+      await deps.store
+        .updateWorkflowRun(workflowRun.id, { status: 'cancelled' })
+        .catch((cleanupErr: Error) => {
+          getLog().warn(
+            { err: cleanupErr, workflowRunId: workflowRun?.id },
+            'workflow.guard_self_cancel_failed'
+          );
+        });
+
+      const elapsedMs = Date.now() - new Date(activeWorkflow.started_at).getTime();
+      const duration = formatDuration(elapsedMs);
+      const shortId = activeWorkflow.id.slice(0, 8);
+      await sendCriticalMessage(
+        platform,
+        conversationId,
+        `❌ **This worktree is in use** by \`${activeWorkflow.workflow_name}\` ` +
+          `(running ${duration}, run \`${shortId}\`).\n` +
+          '• Wait for it to finish: `/workflow status`\n' +
+          `• Cancel it: \`/workflow cancel ${shortId}\`\n` +
+          '• Use a different branch: `--branch <other>`'
+      );
+      return {
+        success: false,
+        error: `Workflow already running on this path: ${activeWorkflow.workflow_name}`,
+      };
+    }
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, conversationId, cwd }, 'db_active_workflow_check_failed');
+    await sendCriticalMessage(
+      platform,
+      conversationId,
+      '❌ **Workflow blocked**: Unable to verify if another workflow is running (database error). Please try again in a moment.'
+    );
+    return { success: false, error: 'Database error checking for active workflow' };
   }
 
   // Resolve external artifact and log directories

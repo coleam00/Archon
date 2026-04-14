@@ -559,6 +559,67 @@ describe('workflows database', () => {
       expect(params).toEqual(['/repo/path']);
     });
 
+    test('includes pending rows within the stale-pending age window', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await getActiveWorkflowRunByPath('/repo/path');
+
+      const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
+      // Fresh `pending` counts as active so the lock is held immediately
+      // after pre-create — without this, two near-simultaneous dispatches
+      // both pass the guard.
+      expect(query).toContain("status = 'pending'");
+      // Age window cutoff prevents orphaned pending rows (from crashed
+      // dispatches) from permanently blocking a path.
+      expect(query).toMatch(/started_at >.*INTERVAL.*milliseconds/);
+    });
+
+    test('excludes self by id when excludeId is provided', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await getActiveWorkflowRunByPath('/repo/path', 'self-id');
+
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain('id != $2');
+      expect(params).toEqual(['/repo/path', 'self-id']);
+    });
+
+    test('applies older-wins tiebreaker when both excludeId and selfStartedAt are provided', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      const selfStartedAt = new Date('2026-04-14T10:00:00Z');
+
+      await getActiveWorkflowRunByPath('/repo/path', 'self-id', selfStartedAt);
+
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      // Total order on (started_at, id) — the newer dispatch sees the older
+      // row and aborts; the older sees nothing. Eliminates the both-abort
+      // race where two timestamps land in the same millisecond.
+      expect(query).toContain('started_at < $3');
+      expect(query).toContain('started_at = $3 AND id < $2');
+      expect(params).toEqual(['/repo/path', 'self-id', selfStartedAt]);
+    });
+
+    test('omits tiebreaker clause when selfStartedAt is provided without excludeId', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await getActiveWorkflowRunByPath('/repo/path', undefined, new Date('2026-04-14T10:00:00Z'));
+
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      // Tiebreaker requires both id and started_at to be meaningful; without
+      // an id to exclude, the started_at param would be dangling.
+      expect(query).not.toContain('started_at <');
+      expect(params).toEqual(['/repo/path']);
+    });
+
+    test('orders by (started_at ASC, id ASC) so older-wins is deterministic', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await getActiveWorkflowRunByPath('/repo/path');
+
+      const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain('ORDER BY started_at ASC, id ASC');
+    });
+
     test('returns null when no active run on path', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 

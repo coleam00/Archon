@@ -43,7 +43,23 @@ export interface IWorkflowStore {
     parent_conversation_id?: string;
   }): Promise<WorkflowRun>;
   getWorkflowRun(id: string): Promise<WorkflowRun | null>;
-  getActiveWorkflowRunByPath(workingPath: string): Promise<WorkflowRun | null>;
+  /**
+   * Find the workflow run currently holding the lock on `workingPath`.
+   *
+   * Pass `excludeId` and `selfStartedAt` from the calling dispatch so:
+   *   1. Self is never returned.
+   *   2. Two near-simultaneous dispatches deterministically agree on which
+   *      is "first" via the `(started_at, id)` tiebreaker — newer aborts.
+   *
+   * Stale `pending` rows (older than ~5 minutes) are treated as orphaned
+   * and ignored, so leaks from crashed dispatches don't permanently block
+   * a path.
+   */
+  getActiveWorkflowRunByPath(
+    workingPath: string,
+    excludeId?: string,
+    selfStartedAt?: Date
+  ): Promise<WorkflowRun | null>;
   findResumableRun(workflowName: string, workingPath: string): Promise<WorkflowRun | null>;
   failOrphanedRuns(): Promise<{ count: number }>;
   resumeWorkflowRun(id: string): Promise<WorkflowRun>;
