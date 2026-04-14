@@ -8,6 +8,16 @@ interface TunnelState {
   url: string | null;
 }
 
+function isTunnelState(data: unknown): data is TunnelState {
+  if (typeof data !== 'object' || data === null) return false;
+  const d = data as Record<string, unknown>;
+  return (
+    typeof d.status === 'string' &&
+    ['inactive', 'starting', 'active', 'error'].includes(d.status) &&
+    (d.url === null || typeof d.url === 'string')
+  );
+}
+
 /**
  * Cloudflare Quick Tunnel popover.
  * Returns null when the app is already accessed via a Cloudflare tunnel URL
@@ -37,8 +47,10 @@ function TunnelPopoverInner(): React.ReactElement {
     const interval = setInterval(async () => {
       const res = await fetch('/api/tunnel');
       if (res.ok) {
-        const data = (await res.json()) as TunnelState;
-        setTunnel(data);
+        const data: unknown = await res.json();
+        if (isTunnelState(data)) {
+          setTunnel(data);
+        }
       }
     }, 2000);
 
@@ -49,12 +61,17 @@ function TunnelPopoverInner(): React.ReactElement {
 
   const handleStart = async (): Promise<void> => {
     setTunnel(t => ({ ...t, status: 'starting' }));
-    await fetch('/api/tunnel/start', { method: 'POST' });
+    const res = await fetch('/api/tunnel/start', { method: 'POST' });
+    if (!res.ok) {
+      setTunnel(t => ({ ...t, status: 'error' }));
+    }
   };
 
   const handleStop = async (): Promise<void> => {
-    await fetch('/api/tunnel/stop', { method: 'DELETE' });
-    setTunnel({ status: 'inactive', url: null });
+    const res = await fetch('/api/tunnel/stop', { method: 'DELETE' });
+    if (res.ok) {
+      setTunnel({ status: 'inactive', url: null });
+    }
   };
 
   const handleCopy = async (): Promise<void> => {
@@ -205,8 +222,10 @@ function TunnelMenuItemInner(): React.ReactElement {
     const interval = setInterval(async () => {
       const res = await fetch('/api/tunnel');
       if (res.ok) {
-        const data = (await res.json()) as TunnelState;
-        setTunnel(data);
+        const data: unknown = await res.json();
+        if (isTunnelState(data)) {
+          setTunnel(data);
+        }
       }
     }, 2000);
     return (): void => {
@@ -216,12 +235,17 @@ function TunnelMenuItemInner(): React.ReactElement {
 
   const handleStart = async (): Promise<void> => {
     setTunnel(t => ({ ...t, status: 'starting' }));
-    await fetch('/api/tunnel/start', { method: 'POST' });
+    const res = await fetch('/api/tunnel/start', { method: 'POST' });
+    if (!res.ok) {
+      setTunnel(t => ({ ...t, status: 'error' }));
+    }
   };
 
   const handleStop = async (): Promise<void> => {
-    await fetch('/api/tunnel/stop', { method: 'DELETE' });
-    setTunnel({ status: 'inactive', url: null });
+    const res = await fetch('/api/tunnel/stop', { method: 'DELETE' });
+    if (res.ok) {
+      setTunnel({ status: 'inactive', url: null });
+    }
   };
 
   const handleCopy = async (): Promise<void> => {

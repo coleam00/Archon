@@ -22,8 +22,8 @@ import { QuickAddPicker } from './QuickAddPicker';
 
 export { dagNodesToReactFlow } from '@/lib/dag-layout';
 
-// Approximate dimensions of the QuickAddPicker panel (w-56 = 224px, max height ~320px)
-const PICKER_WIDTH = 240;
+// Approximate dimensions of the QuickAddPicker panel (w-64 = 256px, max height ~320px)
+const PICKER_WIDTH = 256;
 const PICKER_HEIGHT = 340;
 
 function resolveNodeLabel(nodeType: 'command' | 'prompt' | 'bash', commandName: string): string {

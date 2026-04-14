@@ -678,7 +678,7 @@ export function ChatPage(): React.ReactElement {
 
 1. **Créer le fichier de contexte** _(s'il a été supprimé par une mise à jour)_ :
 
-   ```
+   ```text
    packages/web/src/contexts/MobileNavContext.tsx
    ```
 
@@ -686,7 +686,7 @@ export function ChatPage(): React.ReactElement {
 
 2. **Remplacer `Layout.tsx`** :
 
-   ```
+   ```text
    packages/web/src/components/layout/Layout.tsx
    ```
 
@@ -694,7 +694,7 @@ export function ChatPage(): React.ReactElement {
 
 3. **Remplacer `TopNav.tsx`** :
 
-   ```
+   ```text
    packages/web/src/components/layout/TopNav.tsx
    ```
 
@@ -702,7 +702,7 @@ export function ChatPage(): React.ReactElement {
 
 4. **Remplacer `ChatPage.tsx`** :
 
-   ```
+   ```text
    packages/web/src/routes/ChatPage.tsx
    ```
 

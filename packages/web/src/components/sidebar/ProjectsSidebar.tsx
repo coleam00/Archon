@@ -72,8 +72,8 @@ export function ProjectsSidebar({
       trimmed.startsWith('/') || trimmed.startsWith('~') || /^[A-Za-z]:[/\\]/.test(trimmed);
     const input = isLocalPath ? { path: trimmed } : { url: trimmed };
     void addCodebase(input)
-      .then(codebase => {
-        void queryClient.invalidateQueries({ queryKey: ['codebases'] });
+      .then(async codebase => {
+        await queryClient.invalidateQueries({ queryKey: ['codebases'] });
         setSelectedProjectId(codebase.id);
         setShowAddInput(false);
         setAddValue('');

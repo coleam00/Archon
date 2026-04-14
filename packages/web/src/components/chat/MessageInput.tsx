@@ -222,12 +222,16 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
     const newHeight = Math.min(textarea.scrollHeight, 200);
     textarea.style.height = `${String(newHeight)}px`;
     textarea.style.overflowY = newHeight >= 200 ? 'auto' : 'hidden';
-    // Detect slash command pattern: / at start or after whitespace, followed by non-whitespace
+    // Detect slash command: '/' at position 0 or immediately after whitespace,
+    // followed by non-whitespace. Using lastIndexOf ensures we match the most-recently
+    // typed slash. The word-boundary check prevents false triggers inside URLs
+    // (e.g. "http://example.com/path") or alphanumeric sequences.
     const slashIdx = newValue.lastIndexOf('/');
     if (slashIdx !== -1) {
       const beforeSlash = newValue.slice(0, slashIdx);
       const afterSlash = newValue.slice(slashIdx + 1);
-      if ((slashIdx === 0 || /\s$/.test(beforeSlash)) && !/\s/.test(afterSlash)) {
+      const isWordBoundarySlash = slashIdx === 0 || /\s$/.test(beforeSlash);
+      if (isWordBoundarySlash && !/\s/.test(afterSlash)) {
         setSlashQuery(afterSlash);
         return;
       }

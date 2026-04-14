@@ -93,9 +93,9 @@ export function SlashCommandMenu({
 
   return (
     <div
+      id="slash-menu"
       className="absolute bottom-full left-0 right-0 z-50 mb-1 overflow-y-auto rounded-lg border border-border bg-surface shadow-lg"
       style={{ maxHeight: `${menuMaxHeight}px` }}
-      aria-activedescendant={`slash-option-${selectedIndex}`}
       role="listbox"
       aria-label="Workflow commands"
     >

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react';
 
 /**
  * Returns the current visual viewport height in pixels.
@@ -11,23 +11,33 @@ import { useEffect, useState } from 'react'
  */
 export function useVisualViewport(): number {
   const [height, setHeight] = useState<number>(
-    () => window.visualViewport?.height ?? window.innerHeight
-  )
+    () => (typeof window !== 'undefined' ? (window.visualViewport?.height ?? window.innerHeight) : 0)
+  );
 
   useEffect(() => {
-    const vv = window.visualViewport
-    if (!vv) return
+    const vv = window.visualViewport;
 
-    const handler = (): void => { setHeight(vv.height) }
-
-    vv.addEventListener('resize', handler)
-    vv.addEventListener('scroll', handler)
-
-    return () => {
-      vv.removeEventListener('resize', handler)
-      vv.removeEventListener('scroll', handler)
+    if (vv) {
+      const handler = (): void => {
+        setHeight(vv.height);
+      };
+      vv.addEventListener('resize', handler);
+      vv.addEventListener('scroll', handler);
+      return (): void => {
+        vv.removeEventListener('resize', handler);
+        vv.removeEventListener('scroll', handler);
+      };
     }
-  }, [])
 
-  return height
+    // Fallback: listen on window resize when visualViewport API is unavailable
+    const handler = (): void => {
+      setHeight(window.innerHeight);
+    };
+    window.addEventListener('resize', handler);
+    return (): void => {
+      window.removeEventListener('resize', handler);
+    };
+  }, []);
+
+  return height;
 }

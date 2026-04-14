@@ -8,15 +8,12 @@ export interface MobileNavContextValue {
 }
 
 // eslint-disable-next-line @typescript-eslint/naming-convention
-export const MobileNavContext = createContext<MobileNavContextValue>({
-  open: false,
-  // eslint-disable-next-line @typescript-eslint/no-empty-function
-  setOpen: () => {},
-  pinned: true,
-  // eslint-disable-next-line @typescript-eslint/no-empty-function
-  togglePin: () => {},
-});
+export const MobileNavContext = createContext<MobileNavContextValue | null>(null);
 
 export function useMobileNav(): MobileNavContextValue {
-  return useContext(MobileNavContext);
+  const ctx = useContext(MobileNavContext);
+  if (!ctx) {
+    throw new Error('useMobileNav must be used within a MobileNavContext.Provider');
+  }
+  return ctx;
 }

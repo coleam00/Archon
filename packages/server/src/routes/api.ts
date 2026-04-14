@@ -68,7 +68,12 @@ import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventDb from '@archon/core/db/workflow-events';
 import * as messageDb from '@archon/core/db/messages';
 import { errorSchema } from './schemas/common.schemas';
-import { updateCheckResponseSchema } from './schemas/system.schemas';
+import {
+  updateCheckResponseSchema,
+  tunnelStatusResponseSchema,
+  tunnelStartResponseSchema,
+  tunnelStopResponseSchema,
+} from './schemas/system.schemas';
 import {
   workflowListResponseSchema,
   validateWorkflowBodySchema,
@@ -840,12 +845,7 @@ const getTunnelRoute = createRoute({
     200: {
       content: {
         'application/json': {
-          schema: z
-            .object({
-              status: z.enum(['inactive', 'starting', 'active', 'error']),
-              url: z.string().nullable(),
-            })
-            .openapi('TunnelStatusResponse'),
+          schema: tunnelStatusResponseSchema,
         },
       },
       description: 'Tunnel status',
@@ -862,10 +862,18 @@ const postTunnelStartRoute = createRoute({
     200: {
       content: {
         'application/json': {
-          schema: z.object({ status: z.string() }).openapi('TunnelStartResponse'),
+          schema: tunnelStartResponseSchema,
         },
       },
       description: 'Tunnel start initiated',
+    },
+    403: {
+      content: {
+        'application/json': {
+          schema: errorSchema,
+        },
+      },
+      description: 'Only accessible from localhost',
     },
   },
 });
@@ -879,10 +887,18 @@ const deleteTunnelStopRoute = createRoute({
     200: {
       content: {
         'application/json': {
-          schema: z.object({ status: z.string() }).openapi('TunnelStopResponse'),
+          schema: tunnelStopResponseSchema,
         },
       },
       description: 'Tunnel stopped',
+    },
+    403: {
+      content: {
+        'application/json': {
+          schema: errorSchema,
+        },
+      },
+      description: 'Only accessible from localhost',
     },
   },
 });
@@ -2585,14 +2601,22 @@ export function registerApiRoutes(
     return c.json(getTunnelState());
   });
 
-  // POST /api/tunnel/start - Start tunnel
+  // POST /api/tunnel/start - Start tunnel (localhost only)
   registerOpenApiRoute(postTunnelStartRoute, async c => {
+    const { hostname } = new URL(c.req.url);
+    if (hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '::1') {
+      return c.json({ error: 'Tunnel management is only accessible from localhost' }, 403);
+    }
     await startTunnel(5173);
     return c.json({ status: getTunnelState().status });
   });
 
-  // DELETE /api/tunnel/stop - Stop tunnel
+  // DELETE /api/tunnel/stop - Stop tunnel (localhost only)
   registerOpenApiRoute(deleteTunnelStopRoute, c => {
+    const { hostname } = new URL(c.req.url);
+    if (hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '::1') {
+      return c.json({ error: 'Tunnel management is only accessible from localhost' }, 403);
+    }
     stopTunnel();
     return c.json({ status: 'inactive' });
   });

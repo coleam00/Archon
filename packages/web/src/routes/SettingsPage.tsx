@@ -60,6 +60,7 @@ function AppearanceSection(): React.ReactElement {
             <button
               role="switch"
               aria-checked={compactLayout}
+              aria-label="Always use responsive layout"
               onClick={toggleCompactLayout}
               className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                 compactLayout ? 'bg-primary' : 'bg-input'

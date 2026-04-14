@@ -60,6 +60,14 @@ export async function startTunnel(port = 5173): Promise<void> {
 
   state.process = proc;
 
+  // Abort and set error if no URL is detected within 30 seconds
+  const urlTimeout = setTimeout(() => {
+    if (!state.url) {
+      state.status = 'error';
+      proc.kill();
+    }
+  }, 30_000);
+
   // Accumulate output to handle multi-chunk delivery
   let stdoutBuffer = '';
   let stderrBuffer = '';
@@ -71,6 +79,7 @@ export async function startTunnel(port = 5173): Promise<void> {
       if (url) {
         state.url = url;
         state.status = 'active';
+        clearTimeout(urlTimeout);
       }
     }
     return buffer;
@@ -85,12 +94,14 @@ export async function startTunnel(port = 5173): Promise<void> {
   });
 
   proc.on('exit', () => {
+    clearTimeout(urlTimeout);
     state.process = null;
     state.url = null;
     state.status = 'inactive';
   });
 
   proc.on('error', () => {
+    clearTimeout(urlTimeout);
     state.process = null;
     state.url = null;
     state.status = 'error';

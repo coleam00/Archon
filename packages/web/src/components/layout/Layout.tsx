@@ -143,6 +143,7 @@ export function Layout(): React.ReactElement {
               )}
               style={{ backgroundColor: 'var(--surface)' }}
               aria-label="Projects sidebar"
+              role="dialog"
               aria-modal="true"
             >
               {/* Drawer header */}
