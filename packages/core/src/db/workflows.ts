@@ -229,7 +229,11 @@ export async function getActiveWorkflowRunByPath(
     // Older-wins tiebreaker. (started_at, id) is a total order so both
     // dispatches always agree on which is "first." Without this, two rows
     // with similar timestamps could mutually see each other and both abort.
-    params.push(selfStartedAt);
+    //
+    // Serialize Date to ISO string — bun:sqlite rejects Date bindings, and
+    // PostgreSQL accepts ISO timestamps for `< / =` comparison against
+    // TIMESTAMPTZ columns.
+    params.push(selfStartedAt.toISOString());
     const startedAtParam = `$${String(params.length)}`;
     const idParam = `$${String(params.length - 1)}`;
     clauses.push(

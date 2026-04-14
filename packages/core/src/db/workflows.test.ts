@@ -596,7 +596,8 @@ describe('workflows database', () => {
       // race where two timestamps land in the same millisecond.
       expect(query).toContain('started_at < $3');
       expect(query).toContain('started_at = $3 AND id < $2');
-      expect(params).toEqual(['/repo/path', 'self-id', selfStartedAt]);
+      // selfStartedAt serialized to ISO — bun:sqlite rejects Date bindings.
+      expect(params).toEqual(['/repo/path', 'self-id', selfStartedAt.toISOString()]);
     });
 
     test('omits tiebreaker clause when selfStartedAt is provided without excludeId', async () => {

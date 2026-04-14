@@ -11,7 +11,7 @@ import { getDefaultBranch, toRepoPath } from '@archon/git';
 import type { WorkflowDefinition, WorkflowRun, WorkflowExecutionResult } from './schemas';
 import { executeDagWorkflow } from './dag-executor';
 import { logWorkflowStart, logWorkflowError } from './logger';
-import { formatDuration } from './utils/duration';
+import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { inferProviderFromModel, isModelCompatible } from './model-validation';
 import { classifyError } from './executor-shared';
@@ -473,7 +473,7 @@ export async function executeWorkflow(
     const activeWorkflow = await deps.store.getActiveWorkflowRunByPath(
       cwd,
       workflowRun.id,
-      new Date(workflowRun.started_at)
+      new Date(parseDbTimestamp(workflowRun.started_at))
     );
     if (activeWorkflow) {
       // We acquired the lock via createWorkflowRun, but lost the older-wins
@@ -487,7 +487,7 @@ export async function executeWorkflow(
           );
         });
 
-      const elapsedMs = Date.now() - new Date(activeWorkflow.started_at).getTime();
+      const elapsedMs = Date.now() - parseDbTimestamp(activeWorkflow.started_at);
       const duration = formatDuration(elapsedMs);
       const shortId = activeWorkflow.id.slice(0, 8);
       await sendCriticalMessage(
