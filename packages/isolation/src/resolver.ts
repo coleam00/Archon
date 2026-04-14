@@ -108,13 +108,16 @@ export class IsolationResolver {
 
     // Compute canonical repo path once — paths 3-6 all need it either for
     // ownership verification (cross-clone guard) or for worktree creation.
-    // Wrap failures so they classify as known isolation errors with actionable
-    // messages instead of propagating as unclassified crashes.
+    // Mirror createNewEnvironment's contract: known infrastructure failures
+    // (permission denied, ENOENT, malformed worktree pointer, etc.) become
+    // a `blocked` result with an actionable user message; unknown failures
+    // propagate so they surface as crashes rather than silent isolation
+    // failures.
     let canonicalPath: RepoPath;
     try {
       canonicalPath = await getCanonicalRepoPath(codebase.defaultCwd);
     } catch (error) {
-      const err = error as Error;
+      const err = error instanceof Error ? error : new Error(String(error));
       getLog().error(
         {
           err,
@@ -124,10 +127,19 @@ export class IsolationResolver {
         },
         'isolation.canonical_repo_path_resolution_failed'
       );
-      throw new Error(
-        `Cannot determine canonical repo path for ${codebase.defaultCwd}: ${err.message}`,
-        { cause: err }
-      );
+
+      if (!isKnownIsolationError(err)) {
+        throw err;
+      }
+
+      const userMessage = classifyIsolationError(err);
+      return {
+        status: 'blocked',
+        reason: 'creation_failed',
+        userMessage:
+          userMessage +
+          ' Execution blocked to prevent changes to shared codebase. Please resolve the issue and try again.',
+      };
     }
 
     // 3. Check for existing environment with same workflow

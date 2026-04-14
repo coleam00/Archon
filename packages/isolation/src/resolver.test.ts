@@ -987,4 +987,50 @@ describe('IsolationResolver', () => {
       }
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Canonical path resolution failures
+  //
+  // getCanonicalRepoPath() runs early in resolve() (before any adoption path)
+  // because every downstream step needs the canonical repo root. Failures
+  // must mirror createNewEnvironment's contract: known infrastructure errors
+  // become a `blocked` result; unknown errors propagate as crashes.
+  // -------------------------------------------------------------------------
+  describe('canonical path resolution failure handling', () => {
+    test('known infrastructure error returns blocked with classified user message', async () => {
+      const eaccesError = new Error('EACCES: permission denied') as NodeJS.ErrnoException;
+      eaccesError.code = 'EACCES';
+      getCanonicalSpy.mockRejectedValue(eaccesError);
+
+      const resolver = createResolver();
+
+      const result = await resolver.resolve({
+        existingEnvId: null,
+        codebase: defaultCodebase,
+        platformType: 'web',
+      });
+
+      expect(result.status).toBe('blocked');
+      if (result.status === 'blocked') {
+        expect(result.reason).toBe('creation_failed');
+        expect(result.userMessage).toMatch(/Permission denied/);
+        expect(result.userMessage).toMatch(/Execution blocked/);
+      }
+    });
+
+    test('unknown error propagates as crash (programming bug visibility)', async () => {
+      // Deliberately not a known isolation pattern so isKnownIsolationError returns false
+      getCanonicalSpy.mockRejectedValue(new Error('Internal invariant violation: foo'));
+
+      const resolver = createResolver();
+
+      await expect(
+        resolver.resolve({
+          existingEnvId: null,
+          codebase: defaultCodebase,
+          platformType: 'web',
+        })
+      ).rejects.toThrow(/Internal invariant violation/);
+    });
+  });
 });
