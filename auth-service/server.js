@@ -143,7 +143,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
 
-    // GET /verify — Caddy forward_auth calls this for every protected request
+    // GET /verify — Caddy forward_auth / Traefik forwardAuth calls this for every protected request
     if (req.method === 'GET' && url.pathname === '/verify') {
       const cookies = parseCookies(req.headers['cookie']);
       const session = verifyCookie(cookies[COOKIE_NAME] ?? '');
@@ -153,7 +153,13 @@ const server = http.createServer(async (req, res) => {
       }
       const originalUri = req.headers['x-forwarded-uri'] ?? '/';
       const safeRd = isSafeRedirect(originalUri) ? originalUri : '/';
-      res.writeHead(302, { Location: `/login?rd=${encodeURIComponent(safeRd)}` });
+      // Build absolute redirect so it works behind both Caddy and Traefik.
+      // Traefik resolves relative Location against the auth-service origin,
+      // which is an internal Docker address the browser cannot reach.
+      const proto = req.headers['x-forwarded-proto'] ?? 'https';
+      const host = req.headers['x-forwarded-host'] ?? req.headers['host'] ?? '';
+      const base = host ? `${proto}://${host}` : '';
+      res.writeHead(302, { Location: `${base}/login?rd=${encodeURIComponent(safeRd)}` });
       return res.end();
     }
 

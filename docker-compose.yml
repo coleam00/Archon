@@ -6,7 +6,12 @@
 #   docker compose up -d                                  # App with SQLite (default)
 #   docker compose --profile with-db up -d                # App + local PostgreSQL
 #   docker compose --profile cloud up -d                  # App + Caddy HTTPS reverse proxy
-#   docker compose --profile with-db --profile cloud up -d  # All three
+#   docker compose --profile traefik up -d                # App + Traefik HTTPS reverse proxy
+#   docker compose --profile with-db --profile cloud up -d  # All three (with Caddy)
+#
+# Reverse Proxy (pick ONE — they both bind ports 80/443):
+#   --profile cloud    Caddy   — simple config, automatic HTTPS. Set DOMAIN in .env.
+#   --profile traefik  Traefik — Docker-native, label-based routing. Set DOMAIN + ACME_EMAIL.
 #
 # Database:
 #   SQLite is the default (zero config). For PostgreSQL, either:
@@ -22,7 +27,7 @@
 # Cloud (HTTPS):
 #   1. Set DOMAIN=archon.example.com in .env
 #   2. Point DNS A record to your server
-#   3. Add --profile cloud — Caddy handles TLS automatically via Let's Encrypt
+#   3. Add --profile cloud (Caddy) OR --profile traefik
 #
 
 services:
@@ -53,6 +58,16 @@ services:
       - 8.8.4.4
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=1
+    labels:
+      # -- Traefik labels (ignored unless the traefik container is running) ----
+      traefik.enable: "true"
+      traefik.http.routers.archon.rule: "Host(`${DOMAIN}`)"
+      traefik.http.routers.archon.entrypoints: "websecure"
+      traefik.http.routers.archon.tls.certresolver: "letsencrypt"
+      traefik.http.routers.archon.middlewares: "security-headers@file,compress@file"
+      traefik.http.services.archon.loadbalancer.server.port: "${PORT:-3000}"
+      # SSE: disable response buffering for streaming endpoints
+      traefik.http.services.archon.loadbalancer.responseForwarding.flushInterval: "-1"
 
   # -------------------------------------------------------------------------
   # PostgreSQL (optional: --profile with-db)
@@ -81,7 +96,7 @@ services:
 
   # -------------------------------------------------------------------------
   # Caddy reverse proxy with automatic HTTPS (optional: --profile cloud)
-  # Requires DOMAIN set in .env. See Caddyfile for configuration.
+  # Requires DOMAIN set in .env. See Caddyfile.example for configuration.
   # -------------------------------------------------------------------------
   caddy:
     image: caddy:2-alpine
@@ -103,8 +118,35 @@ services:
         condition: service_healthy
 
   # -------------------------------------------------------------------------
-  # Auth service — form-based login for Caddy forward_auth (optional: --profile auth)
-  # Use alongside --profile cloud: docker compose --profile cloud --profile auth up -d
+  # Traefik reverse proxy with automatic HTTPS (optional: --profile traefik)
+  # Requires DOMAIN and ACME_EMAIL set in .env. See traefik.yml for config.
+  # -------------------------------------------------------------------------
+  traefik:
+    image: traefik:v3
+    profiles: ["traefik"]
+    restart: unless-stopped
+    environment:
+      TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_EMAIL: "${ACME_EMAIL}"
+      TRAEFIK_BASIC_AUTH: "${TRAEFIK_BASIC_AUTH:-}"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik-dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - traefik_letsencrypt:/letsencrypt
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - archon-network
+    depends_on:
+      app:
+        condition: service_healthy
+
+  # -------------------------------------------------------------------------
+  # Auth service — form-based login via forward auth (optional: --profile auth)
+  # Works with both Caddy (forward_auth) and Traefik (forwardAuth middleware).
+  # Use alongside --profile cloud or --profile traefik:
+  #   docker compose --profile cloud --profile auth up -d
   # Requires AUTH_USERNAME, AUTH_PASSWORD_HASH, COOKIE_SECRET in .env.
   # See docs/docker.md for setup instructions.
   # -------------------------------------------------------------------------
@@ -119,12 +161,22 @@ services:
       - "${AUTH_SERVICE_PORT:-9000}"
     networks:
       - archon-network
+    labels:
+      # -- Traefik labels for /login and /logout routing (ignored without traefik) -
+      traefik.enable: "true"
+      traefik.http.routers.auth-login.rule: "Host(`${DOMAIN}`) && (Path(`/login`) || Path(`/logout`))"
+      traefik.http.routers.auth-login.entrypoints: "websecure"
+      traefik.http.routers.auth-login.tls.certresolver: "letsencrypt"
+      traefik.http.routers.auth-login.priority: "100"
+      traefik.http.routers.auth-login.middlewares: "security-headers@file,compress@file"
+      traefik.http.services.auth-login.loadbalancer.server.port: "${AUTH_SERVICE_PORT:-9000}"
 
 volumes:
   archon_data:
   postgres_data:
   caddy_data:
   caddy_config:
+  traefik_letsencrypt:
 
 networks:
   archon-network:

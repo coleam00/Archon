@@ -1,0 +1,41 @@
+# Traefik dynamic configuration for Archon.
+# Middlewares for security headers, compression, and authentication.
+
+http:
+  middlewares:
+    # -- Security Headers -------------------------------------------------------
+    security-headers:
+      headers:
+        customResponseHeaders:
+          X-Content-Type-Options: nosniff
+          X-Frame-Options: DENY
+          Referrer-Policy: strict-origin-when-cross-origin
+          Strict-Transport-Security: "max-age=31536000; includeSubDomains"
+          Server: ""
+
+    # -- Compression ------------------------------------------------------------
+    compress:
+      compress: {}
+
+    # -- Option A: Form-based auth (forward auth to auth-service) ---------------
+    # Requires: docker compose --profile traefik --profile auth up -d
+    # Setup:    Set AUTH_USERNAME, AUTH_PASSWORD_HASH, COOKIE_SECRET in .env
+    #           See docs/docker.md for hash generation instructions.
+    # To enable: uncomment this block AND add "form-auth@file" to the app
+    #            router middlewares label in docker-compose.yml.
+    #
+    # form-auth:
+    #   forwardAuth:
+    #     address: "http://auth-service:9000/verify"
+    #     authResponseHeaders:
+    #       - X-Auth-User
+
+    # -- Option B: Basic auth (browser popup, no extra container) ---------------
+    # Generate hash: htpasswd -nB admin
+    # Then set in .env: TRAEFIK_BASIC_AUTH=admin:$$2y$$...
+    # To enable: uncomment this block AND add "basic-auth@file" to the app
+    #            router middlewares label in docker-compose.yml.
+    # basic-auth:
+    #   basicAuth:
+    #     users:
+    #       - "{{ env "TRAEFIK_BASIC_AUTH" }}"
