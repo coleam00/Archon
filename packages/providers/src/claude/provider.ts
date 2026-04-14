@@ -519,14 +519,20 @@ function buildBaseClaudeOptions(
   env: NodeJS.ProcessEnv,
   cliPath: string | undefined
 ): Options {
+  // `--no-env-file` is a Bun flag that prevents auto-loading `.env` from the
+  // target repo cwd into the Claude Code subprocess. It only applies when the
+  // subprocess is spawned through Bun/Node (i.e. the executable is a `.js`
+  // file). For a native Claude Code binary (from the curl/PowerShell
+  // installer), the flag is passed directly to the binary, which rejects
+  // unknown options. We emit `executableArgs` only when targeting a JS file.
+  const isJsExecutable = cliPath === undefined || cliPath.endsWith('.js');
+
   return {
     cwd,
-    // In compiled binaries, the resolver supplies an absolute cli.js path;
+    // In compiled binaries, the resolver supplies an absolute executable path;
     // in dev mode it returns undefined and the SDK resolves from node_modules.
     ...(cliPath !== undefined ? { pathToClaudeCodeExecutable: cliPath } : {}),
-    // Prevent Bun from auto-loading .env from the target repo cwd.
-    // Without this, the Claude Code subprocess inherits repo secrets.
-    executableArgs: ['--no-env-file'],
+    ...(isJsExecutable ? { executableArgs: ['--no-env-file'] } : {}),
     env,
     model: requestOptions?.model ?? assistantDefaults.model,
     abortController: controller,
