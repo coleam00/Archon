@@ -68,12 +68,7 @@ import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventDb from '@archon/core/db/workflow-events';
 import * as messageDb from '@archon/core/db/messages';
 import { errorSchema } from './schemas/common.schemas';
-import {
-  updateCheckResponseSchema,
-  tunnelStatusResponseSchema,
-  tunnelStartResponseSchema,
-  tunnelStopResponseSchema,
-} from './schemas/system.schemas';
+import { updateCheckResponseSchema } from './schemas/system.schemas';
 import {
   workflowListResponseSchema,
   validateWorkflowBodySchema,
@@ -124,6 +119,11 @@ import {
   configResponseSchema,
   codebaseEnvironmentsResponseSchema,
 } from './schemas/config.schemas';
+import {
+  tunnelStatusResponseSchema,
+  tunnelStartResponseSchema,
+  tunnelStopResponseSchema,
+} from './schemas/system.schemas';
 import { getTunnelState, startTunnel, stopTunnel } from '../tunnel';
 
 // Read app version: use build-time constant in binary, package.json in dev
@@ -873,7 +873,7 @@ const postTunnelStartRoute = createRoute({
           schema: errorSchema,
         },
       },
-      description: 'Only accessible from localhost',
+      description: 'Forbidden — only accessible from localhost',
     },
   },
 });
@@ -898,7 +898,7 @@ const deleteTunnelStopRoute = createRoute({
           schema: errorSchema,
         },
       },
-      description: 'Only accessible from localhost',
+      description: 'Forbidden — only accessible from localhost',
     },
   },
 });
@@ -2603,9 +2603,9 @@ export function registerApiRoutes(
 
   // POST /api/tunnel/start - Start tunnel (localhost only)
   registerOpenApiRoute(postTunnelStartRoute, async c => {
-    const { hostname } = new URL(c.req.url);
-    if (hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '::1') {
-      return c.json({ error: 'Tunnel management is only accessible from localhost' }, 403);
+    const host = c.req.header('host')?.split(':')[0] ?? '';
+    if (host !== 'localhost' && host !== '127.0.0.1' && host !== '::1') {
+      return c.json({ error: 'Forbidden: tunnel control is only accessible from localhost' }, 403);
     }
     await startTunnel(5173);
     return c.json({ status: getTunnelState().status });
@@ -2613,9 +2613,9 @@ export function registerApiRoutes(
 
   // DELETE /api/tunnel/stop - Stop tunnel (localhost only)
   registerOpenApiRoute(deleteTunnelStopRoute, c => {
-    const { hostname } = new URL(c.req.url);
-    if (hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '::1') {
-      return c.json({ error: 'Tunnel management is only accessible from localhost' }, 403);
+    const host = c.req.header('host')?.split(':')[0] ?? '';
+    if (host !== 'localhost' && host !== '127.0.0.1' && host !== '::1') {
+      return c.json({ error: 'Forbidden: tunnel control is only accessible from localhost' }, 403);
     }
     stopTunnel();
     return c.json({ status: 'inactive' });

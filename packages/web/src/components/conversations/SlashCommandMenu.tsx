@@ -8,6 +8,7 @@ interface SlashCommandMenuProps {
   onSelect: (command: string) => void;
   onClose: () => void;
   anchorRef: RefObject<HTMLTextAreaElement | null>;
+  onActiveChange?: (activeId: string | null) => void;
 }
 
 export function SlashCommandMenu({
@@ -15,6 +16,7 @@ export function SlashCommandMenu({
   onSelect,
   onClose,
   anchorRef,
+  onActiveChange,
 }: SlashCommandMenuProps): React.ReactElement | null {
   const { selectedProjectId, codebases } = useProject();
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -42,6 +44,18 @@ export function SlashCommandMenu({
   useEffect(() => {
     setSelectedIndex(0);
   }, [query]);
+
+  // Notify parent of the active option ID so it can set aria-activedescendant on the focused input
+  useEffect(() => {
+    if (filtered.length > 0) {
+      onActiveChange?.(`slash-option-${selectedIndex}`);
+    } else {
+      onActiveChange?.(null);
+    }
+    return (): void => {
+      onActiveChange?.(null);
+    };
+  }, [filtered, selectedIndex, onActiveChange]);
 
   // Use anchorRef to compute available vertical space above the textarea
   useEffect(() => {
@@ -93,7 +107,7 @@ export function SlashCommandMenu({
 
   return (
     <div
-      id="slash-menu"
+      id="slash-command-menu"
       className="absolute bottom-full left-0 right-0 z-50 mb-1 overflow-y-auto rounded-lg border border-border bg-surface shadow-lg"
       style={{ maxHeight: `${menuMaxHeight}px` }}
       role="listbox"

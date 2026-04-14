@@ -130,6 +130,7 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
   const [dragging, setDragging] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [slashQuery, setSlashQuery] = useState<string | null>(null);
+  const [slashActiveId, setSlashActiveId] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
@@ -231,7 +232,9 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
       const beforeSlash = newValue.slice(0, slashIdx);
       const afterSlash = newValue.slice(slashIdx + 1);
       const isWordBoundarySlash = slashIdx === 0 || /\s$/.test(beforeSlash);
-      if (isWordBoundarySlash && !/\s/.test(afterSlash)) {
+      // Reject if the slash is immediately preceded by ':' or '/' (URL pattern like ://)
+      const isUrlSlash = /[:/]$/.test(beforeSlash);
+      if (isWordBoundarySlash && !isUrlSlash && !/\s/.test(afterSlash)) {
         setSlashQuery(afterSlash);
         return;
       }
@@ -354,6 +357,7 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
               onSelect={handleSlashSelect}
               onClose={handleSlashClose}
               anchorRef={textareaRef}
+              onActiveChange={setSlashActiveId}
             />
           )}
 
@@ -389,6 +393,9 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
             onPaste={handlePaste}
             disabled={disabled}
             aria-label="Message input"
+            aria-expanded={slashQuery !== null}
+            aria-controls={slashQuery !== null ? 'slash-command-menu' : undefined}
+            aria-activedescendant={slashActiveId ?? undefined}
             placeholder={dragging ? 'Drop files here...' : (disabledReason ?? 'Message Archon...')}
             rows={1}
             className="flex-1 resize-none overflow-hidden rounded-lg border border-border bg-background px-4 py-2 text-base leading-6 text-text-primary placeholder:text-text-tertiary focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"

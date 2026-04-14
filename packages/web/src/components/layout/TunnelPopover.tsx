@@ -1,5 +1,5 @@
 import { createElement, useState, useEffect } from 'react';
-import { Share2, Copy, Check, Loader2, Wifi, WifiOff, ChevronDown, ChevronUp } from 'lucide-react';
+import { Share2, Copy, Check, Loader2, Wifi, WifiOff } from 'lucide-react';
 
 type TunnelStatus = 'inactive' | 'starting' | 'active' | 'error';
 
@@ -8,13 +8,15 @@ interface TunnelState {
   url: string | null;
 }
 
-function isTunnelState(data: unknown): data is TunnelState {
-  if (typeof data !== 'object' || data === null) return false;
-  const d = data as Record<string, unknown>;
+/** Runtime guard: validates that an unknown value conforms to TunnelState */
+function isTunnelState(value: unknown): value is TunnelState {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  const validStatuses: TunnelStatus[] = ['inactive', 'starting', 'active', 'error'];
   return (
-    typeof d.status === 'string' &&
-    ['inactive', 'starting', 'active', 'error'].includes(d.status) &&
-    (d.url === null || typeof d.url === 'string')
+    typeof v.status === 'string' &&
+    validStatuses.includes(v.status as TunnelStatus) &&
+    (v.url === null || typeof v.url === 'string')
   );
 }
 
@@ -46,11 +48,10 @@ function TunnelPopoverInner(): React.ReactElement {
 
     const interval = setInterval(async () => {
       const res = await fetch('/api/tunnel');
-      if (res.ok) {
-        const data: unknown = await res.json();
-        if (isTunnelState(data)) {
-          setTunnel(data);
-        }
+      if (!res.ok) return;
+      const data: unknown = await res.json();
+      if (isTunnelState(data)) {
+        setTunnel(data);
       }
     }, 2000);
 
@@ -63,15 +64,18 @@ function TunnelPopoverInner(): React.ReactElement {
     setTunnel(t => ({ ...t, status: 'starting' }));
     const res = await fetch('/api/tunnel/start', { method: 'POST' });
     if (!res.ok) {
+      console.error('Failed to start tunnel:', res.status);
       setTunnel(t => ({ ...t, status: 'error' }));
     }
   };
 
   const handleStop = async (): Promise<void> => {
     const res = await fetch('/api/tunnel/stop', { method: 'DELETE' });
-    if (res.ok) {
-      setTunnel({ status: 'inactive', url: null });
+    if (!res.ok) {
+      console.error('Failed to stop tunnel:', res.status);
+      return;
     }
+    setTunnel({ status: 'inactive', url: null });
   };
 
   const handleCopy = async (): Promise<void> => {
@@ -192,138 +196,6 @@ function TunnelPopoverInner(): React.ReactElement {
             </p>
           </div>
         </>
-      )}
-    </div>
-  );
-}
-
-/**
- * Inline tunnel controls for use inside a dropdown menu (mobile).
- * Expands in-place instead of opening a floating popover.
- */
-export function TunnelMenuItem(): React.ReactElement | null {
-  const isAlreadyTunneled =
-    window.location.hostname.includes('trycloudflare.com') ||
-    window.location.hostname.includes('cloudflareaccess.com');
-
-  if (isAlreadyTunneled) return null;
-
-  return <TunnelMenuItemInner />;
-}
-
-function TunnelMenuItemInner(): React.ReactElement {
-  const [expanded, setExpanded] = useState(false);
-  const [tunnel, setTunnel] = useState<TunnelState>({ status: 'inactive', url: null });
-  const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    const shouldPoll = expanded || tunnel.status === 'starting';
-    if (!shouldPoll) return;
-    const interval = setInterval(async () => {
-      const res = await fetch('/api/tunnel');
-      if (res.ok) {
-        const data: unknown = await res.json();
-        if (isTunnelState(data)) {
-          setTunnel(data);
-        }
-      }
-    }, 2000);
-    return (): void => {
-      clearInterval(interval);
-    };
-  }, [expanded, tunnel.status]);
-
-  const handleStart = async (): Promise<void> => {
-    setTunnel(t => ({ ...t, status: 'starting' }));
-    const res = await fetch('/api/tunnel/start', { method: 'POST' });
-    if (!res.ok) {
-      setTunnel(t => ({ ...t, status: 'error' }));
-    }
-  };
-
-  const handleStop = async (): Promise<void> => {
-    const res = await fetch('/api/tunnel/stop', { method: 'DELETE' });
-    if (res.ok) {
-      setTunnel({ status: 'inactive', url: null });
-    }
-  };
-
-  const handleCopy = async (): Promise<void> => {
-    if (tunnel.url) {
-      await navigator.clipboard.writeText(tunnel.url);
-      setCopied(true);
-      setTimeout(() => {
-        setCopied(false);
-      }, 2000);
-    }
-  };
-
-  const statusIcon =
-    tunnel.status === 'active' ? Wifi : tunnel.status === 'starting' ? Loader2 : WifiOff;
-
-  return (
-    <div className="border-t border-border mt-1 pt-1">
-      {/* Row toggle */}
-      <button
-        onClick={() => {
-          setExpanded(e => !e);
-        }}
-        className="flex items-center gap-2 w-full px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-surface-elevated transition-colors"
-      >
-        {createElement(statusIcon, {
-          className: `h-4 w-4 shrink-0 ${tunnel.status === 'starting' ? 'animate-spin' : ''} ${tunnel.status === 'active' ? 'text-green-500' : ''}`,
-        })}
-        <span className="flex-1 text-left">Cloudflare Tunnel</span>
-        {tunnel.status === 'active' && <span className="text-xs text-green-500 mr-1">Active</span>}
-        {expanded ? (
-          <ChevronUp className="h-3.5 w-3.5 shrink-0" />
-        ) : (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-        )}
-      </button>
-
-      {/* Inline expanded panel */}
-      {expanded && (
-        <div className="mx-3 mb-2 space-y-2">
-          {tunnel.url && (
-            <div className="flex items-center gap-2 bg-surface-elevated rounded-md px-3 py-2">
-              <span className="text-xs truncate flex-1 font-mono text-text-primary">
-                {tunnel.url}
-              </span>
-              <button
-                onClick={() => void handleCopy()}
-                className="shrink-0 text-text-secondary hover:text-text-primary transition-colors"
-                title="Copy URL"
-              >
-                {copied ? (
-                  <Check className="h-4 w-4 text-green-500" />
-                ) : (
-                  <Copy className="h-4 w-4" />
-                )}
-              </button>
-            </div>
-          )}
-          {tunnel.status === 'inactive' || tunnel.status === 'error' ? (
-            <button
-              onClick={() => void handleStart()}
-              className="w-full py-1.5 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
-            >
-              Start tunnel
-            </button>
-          ) : tunnel.status === 'active' ? (
-            <button
-              onClick={() => void handleStop()}
-              className="w-full py-1.5 px-3 rounded-md border border-border text-xs font-medium hover:bg-surface-elevated transition-colors text-text-primary"
-            >
-              Stop tunnel
-            </button>
-          ) : (
-            <p className="text-xs text-center text-text-secondary py-1">Connecting...</p>
-          )}
-          <p className="text-xs text-text-secondary">
-            Requires <code className="font-mono">cloudflared</code> installed.
-          </p>
-        </div>
       )}
     </div>
   );

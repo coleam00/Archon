@@ -8,13 +8,19 @@ import { useEffect, useState } from 'react';
  * the main chat container never gets hidden behind the keyboard.
  *
  * On desktop (no keyboard) the value equals `window.innerHeight`.
+ *
+ * Falls back to `window.innerHeight` via a resize listener on browsers that
+ * do not support the `visualViewport` API (e.g. some older mobile browsers).
  */
 export function useVisualViewport(): number {
-  const [height, setHeight] = useState<number>(
-    () => (typeof window !== 'undefined' ? (window.visualViewport?.height ?? window.innerHeight) : 0)
-  );
+  const [height, setHeight] = useState<number>(() => {
+    if (typeof window === 'undefined') return 0;
+    return window.visualViewport?.height ?? window.innerHeight;
+  });
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+
     const vv = window.visualViewport;
 
     if (vv) {
@@ -29,7 +35,7 @@ export function useVisualViewport(): number {
       };
     }
 
-    // Fallback: listen on window resize when visualViewport API is unavailable
+    // Fallback for browsers without visualViewport support
     const handler = (): void => {
       setHeight(window.innerHeight);
     };
