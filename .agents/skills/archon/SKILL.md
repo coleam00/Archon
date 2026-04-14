@@ -1,14 +1,18 @@
 ---
 name: archon
 description: |
-  Use when the user wants Codex to run or monitor Archon workflows, or when a task
-  should be delegated from Codex into an Archon workflow instead of being handled
+  Use when the user wants Codex to run or monitor Archon workflows, initialize
+  Archon in a repo, create or edit Archon commands/workflows, inspect Archon CLI
+  behavior, or customize Archon for Codex usage rather than handling the task
   directly in the current session.
   Triggers: "use archon", "run archon", "archon workflow", "archon assist",
-            "codex archon assist", "have archon handle this", "use archon codex".
-  Also use when the user wants help choosing the Codex-safe Archon workflow for a task.
+            "codex archon assist", "have archon handle this", "use archon codex",
+            "archon init", "create an archon workflow", "create an archon command",
+            "archon config", "archon variables", "archon cli".
+  Also use when the user wants help choosing the Codex-safe Archon workflow or
+  authoring/customization surface for a task.
   NOT for: Direct local implementation when the user wants Codex to do the work here
-  without handing off to Archon.
+  without handing off to Archon or without using Archon surfaces.
 ---
 
 # Archon For Codex
@@ -16,6 +20,19 @@ description: |
 Archon runs long-form workflows through its own CLI and workflow engine. In Codex,
 this skill exists to route work into the right Archon workflow and to avoid
 Claude-specific workflow names or assumptions.
+
+This skill is intentionally narrower than the full Archon product surface:
+
+- it is Codex-first
+- it covers workflow operation, debugging, and Archon customization
+- it does not try to duplicate setup/install or broad platform-adapter docs
+
+Direct workflow routing comes first.
+
+- If the task clearly matches a specific Codex-safe workflow, run that workflow.
+- Use `archon-assist-codex` only when no narrower Codex-safe workflow fits.
+- Do not route guided implementation or interactive review loops through assist
+  first just to "get into Archon."
 
 ## First Step
 
@@ -38,6 +55,13 @@ Choose the smallest surface that matches the user's need:
 | monitor an active workflow | read `references/monitoring.md` |
 | debug a confusing, failed, or stalled run | read `references/log-debugging.md` |
 | relay an interactive workflow cleanly | read `references/interactive-workflows.md` |
+| initialize `.archon/` in a repo | read `references/repo-init.md` |
+| inspect variable substitution | read `references/variables.md` |
+| create or edit Archon commands | read `references/authoring-commands.md` |
+| create or edit Archon workflow YAML | read `references/workflow-dag.md` |
+| inspect Archon CLI surfaces | read `references/cli-commands.md` |
+| inspect or modify Archon config | read `references/configuration.md` |
+| inspect Codex vs Claude capability boundaries | read `references/codex-capability-crosswalk.md` |
 
 ## Codex Naming Convention
 
@@ -47,7 +71,7 @@ the workflow has been tuned or separated for Codex behavior.
 Known Codex-specific lanes in this repo:
 
 - `archon-assist-codex` for general Archon help, debugging, exploration, and
-  one-off questions
+  one-off questions when no narrower Codex-safe lane fits
 - `archon-piv-loop-codex` for guided Plan-Implement-Validate workflows with
   Codex
 
@@ -93,13 +117,79 @@ Rules:
 1. Use `--branch` unless the user explicitly wants `--no-worktree`.
 2. Use descriptive branch names, for example `assist/codex-readme` or
    `piv/codex-auth-refactor`.
-3. For substantial implementation work, prefer `archon-piv-loop-codex`
-   over `archon-assist-codex`.
+3. For substantial implementation work, interactive refinement, or any guided
+   human-in-the-loop build request, prefer `archon-piv-loop-codex` over
+   `archon-assist-codex`.
 4. For read-only questions or exploration, `--no-worktree` is acceptable.
 5. Prefer one Archon workflow per command rather than combining unrelated tasks.
 6. Treat Archon workflows as long-running jobs. Keep the run ID, working path,
    and current status available for follow-up checks instead of assuming the
    launch command alone is the full observability surface.
+
+## Interactive Operator Protocol
+
+Use this protocol for interactive workflows such as `archon-piv-loop-codex`.
+
+### Launch
+
+1. Run the workflow directly with `archon workflow run ...`.
+2. Capture:
+   - workflow name
+   - run ID
+   - working path
+   - branch name if available
+3. Immediately verify the launched run with `archon workflow status --json`.
+
+### State Machine
+
+Treat Codex as the human-facing operator for the workflow run until it reaches a
+terminal state.
+
+| Status | Action |
+| --- | --- |
+| `running` | keep monitoring; report only meaningful changes |
+| `paused` | fetch the latest workflow output, relay it directly, wait for the user's answer |
+| `completed` | report the terminal result and stop |
+| `failed` | report the failure evidence and stop |
+
+### Post-Transition Rule
+
+After every `archon workflow run`, `archon workflow approve`, `archon workflow reject`,
+or `archon workflow resume`:
+
+1. check `archon workflow status --json`
+2. continue until the run is back at one of:
+   - `paused`
+   - `completed`
+   - `failed`
+
+Do not stop after recording approval or rejection alone. The control loop is not
+done until the workflow either pauses again or reaches a terminal state.
+
+### Pause Detection Rule
+
+For interactive loops, treat a new human checkpoint as real only when the run is
+currently `paused`.
+
+Track the paused fingerprint:
+
+- `approval.nodeId`
+- `approval.iteration`
+- `approval.message`
+
+Important nuance:
+
+- approval metadata can persist while the run is `running`
+- do not treat `metadata.approval` by itself as proof that the loop has paused again
+- workflow truth comes from the current `status`, not from stale approval metadata
+
+### Surface Boundaries
+
+- `archon workflow run ...` is the correct direct CLI surface for interactive workflows
+- `archon chat ...` is single-shot orchestration, not a persistent multi-turn workflow chat
+- web foreground runs can resume from natural-language replies in the same thread
+- CLI `workflow approve` and `workflow reject` auto-resume the run
+- `/workflow approve` is a different surface; do not assume it behaves like the CLI command
 
 ## Monitoring
 
@@ -132,6 +222,11 @@ When an interactive workflow pauses, do not summarize the workflow's question.
 Read the latest output and pass the user's answer back through the Archon
 approval or reject command rather than trying to continue locally.
 
+When a paused checkpoint is tied to a mutable artifact such as a plan-review
+loop, reopen the current artifact from disk before relaying any state summary.
+Do not assume a previously read file path or artifact contents are still the
+latest truth.
+
 If the user explicitly wants unattended follow-up and the current Codex surface
 supports thread heartbeat automations, attach one to the current thread and have
 it report only meaningful changes: approval gates, terminal state changes, or a
@@ -146,3 +241,15 @@ Read `references/monitoring.md` for the detailed monitoring contract and
 Do not assume Codex auto-loaded `CLAUDE.md` even if a fallback filename is
 configured globally. If repo conventions are load-bearing for the delegated task,
 read `CLAUDE.md` explicitly before recommending or running the workflow.
+
+For Archon customization requests, keep the boundary clear:
+
+- use the shared Archon authoring docs for commands, workflows, variables, and
+  repo initialization
+- use `references/configuration.md` for repo and global Archon config changes
+- use `references/codex-capability-crosswalk.md` whenever provider capability
+  differences are load-bearing
+- do not imply that Claude-only per-node controls automatically become Codex
+  node features
+- keep `archon chat` documented as single-shot orchestration rather than a
+  persistent workflow conversation

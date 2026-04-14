@@ -1,19 +1,21 @@
 # Archon Log Debugging For Codex
 
-Use this guide when the main job is understanding what Archon just did, why a
-run paused, why it failed, or whether it is stalled.
+Use this guide when the main job is understanding what Archon just did during a
+workflow run, why it failed, why it paused, or where the useful evidence lives.
 
 ## Three Evidence Layers
 
+Archon exposes overlapping but non-interchangeable evidence surfaces.
+
 ### 1. Status and run details
 
-Use first when you need the current high-level state.
+Use this first for the current high-level truth.
 
 - `archon workflow status --json`
 - `archon workflow status --verbose`
 - web or API run details when available
 
-This is the fastest way to confirm:
+Best for:
 
 - run ID
 - current status
@@ -23,7 +25,7 @@ This is the fastest way to confirm:
 
 ### 2. Per-run workflow JSONL
 
-Use when status is ambiguous or you need the actual workflow trace.
+Use this when status is ambiguous or when you need the full workflow trace.
 
 Default location:
 
@@ -36,20 +38,12 @@ Best for:
 - assistant output
 - tool calls
 - node boundaries
+- validation events
 - workflow pause or failure context
-
-Representative commands:
-
-```bash
-find "${ARCHON_HOME:-$HOME/.archon}/workspaces" -name "<run-id>.jsonl" 2>/dev/null
-tail -n 40 "$LOG_FILE"
-rg '"type":"workflow_error"|"type":"node_error"' "$LOG_FILE"
-rg '"type":"assistant"' "$LOG_FILE" | tail -n 5
-```
 
 ### 3. Runtime process logs
 
-Use only when the issue looks like Archon runtime behavior rather than workflow
+Use this when the issue looks like Archon runtime behavior rather than workflow
 logic.
 
 Examples:
@@ -73,8 +67,88 @@ Best for:
 3. per-run JSONL
 4. runtime logs with `LOG_LEVEL=debug`
 
-## Important Note
+## Finding The Run
 
-Status and UI/API events are intentionally lean. They are good for current
-state, but not a replacement for the JSONL trace when you need the workflow's
-actual assistant or tool history.
+For active runs:
+
+```bash
+archon workflow status
+archon workflow status --verbose
+archon workflow status --json
+```
+
+If you already know the run ID:
+
+```bash
+find "${ARCHON_HOME:-$HOME/.archon}/workspaces" -name "<run-id>.jsonl" 2>/dev/null
+```
+
+## Reading The JSONL
+
+Set a shell variable first:
+
+```bash
+LOG_FILE="${ARCHON_HOME:-$HOME/.archon}/workspaces/<owner>/<repo>/logs/<run-id>.jsonl"
+```
+
+Common reads:
+
+```bash
+tail -n 40 "$LOG_FILE"
+rg '"type":"workflow_error"|"type":"node_error"' "$LOG_FILE"
+rg '"type":"assistant"' "$LOG_FILE" | tail -n 5
+rg '"type":"validation"' "$LOG_FILE"
+```
+
+## Common Event Families
+
+Representative JSONL event types include:
+
+- `workflow_start`
+- `workflow_complete`
+- `workflow_error`
+- `assistant`
+- `tool`
+- `validation`
+- `node_start`
+- `node_complete`
+- `node_skipped`
+- `node_error`
+
+Use them as breadcrumbs rather than assuming the UI event names will match
+exactly.
+
+## Filtering Patterns
+
+Assistant messages:
+
+```bash
+rg '"type":"assistant"' "$LOG_FILE"
+```
+
+Tool calls:
+
+```bash
+rg '"type":"tool"' "$LOG_FILE"
+```
+
+Skipped nodes:
+
+```bash
+rg '"type":"node_skipped"' "$LOG_FILE"
+```
+
+If `jq` is available:
+
+```bash
+jq -r 'select(.type=="assistant") | .content' "$LOG_FILE" | tail -n 1
+jq -c 'select(.type=="node_error") | {ts, step, error}' "$LOG_FILE"
+```
+
+## Interpretation Rules
+
+- status and UI/API surfaces are intentionally lean
+- the JSONL trace is the authoritative assistant and tool history for one run
+- current pause state should still come from `archon workflow status --json`
+- use runtime logs only when the issue looks like Archon itself rather than a
+  workflow node decision
