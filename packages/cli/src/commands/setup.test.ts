@@ -489,10 +489,15 @@ describe('detectClaudeExecutablePath probe order', () => {
   });
 
   it('falls through to npm cli.js when native is missing (tier 2 wins)', () => {
-    npmRootSpy.mockReturnValue('/fake/npm/root');
-    fileExistsSpy.mockImplementation((p: string) => p.endsWith('@anthropic-ai/claude-code/cli.js'));
+    // Use path.join so the expected result matches whatever separator the
+    // production code produces on the current platform (backslash on Windows,
+    // forward slash elsewhere).
+    const npmRoot = join('fake', 'npm', 'root');
+    const expectedCliJs = join(npmRoot, '@anthropic-ai', 'claude-code', 'cli.js');
+    npmRootSpy.mockReturnValue(npmRoot);
+    fileExistsSpy.mockImplementation((p: string) => p === expectedCliJs);
     const result = detectClaudeExecutablePath();
-    expect(result).toBe('/fake/npm/root/@anthropic-ai/claude-code/cli.js');
+    expect(result).toBe(expectedCliJs);
     // Tier 3 must not have been consulted.
     expect(whichSpy).not.toHaveBeenCalled();
   });
