@@ -11,6 +11,11 @@ sidebar:
 
 Deploy Archon on a server with Docker. Includes automatic HTTPS, PostgreSQL, and the Web UI.
 
+> **Claude Code is pre-installed in the image.** The official `ghcr.io/coleam00/archon` image
+> ships with Claude Code installed via npm and `CLAUDE_BIN_PATH` pre-set — no extra configuration
+> required. If you build a custom image that omits the npm install, set `CLAUDE_BIN_PATH` yourself
+> to point at a mounted `cli.js` (see [AI Assistants → Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only)).
+
 ---
 
 ## Cloud-Init (Fastest Setup)

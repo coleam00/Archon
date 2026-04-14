@@ -15,6 +15,64 @@ You must configure **at least one** AI assistant. Both can be configured if desi
 
 **Recommended for Claude Pro/Max subscribers.**
 
+Archon does not bundle Claude Code. Install it separately, then in compiled Archon binaries, point Archon at the executable. In dev (`bun run`), Archon finds it automatically via `node_modules`.
+
+### Install Claude Code
+
+Anthropic's native installer is the primary recommended install path:
+
+**macOS / Linux / WSL:**
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://claude.ai/install.ps1 | iex
+```
+
+**Alternatives:**
+
+- macOS via Homebrew: `brew install --cask claude-code`
+- npm (any platform): `npm install -g @anthropic-ai/claude-code`
+- Windows via winget: `winget install Anthropic.ClaudeCode`
+
+See [Anthropic's setup guide](https://code.claude.com/docs/en/setup) for the full list and auto-update caveats per install path.
+
+### Binary path configuration (compiled binaries only)
+
+Compiled Archon binaries cannot auto-discover Claude Code at runtime. Supply the path via either:
+
+1. **Environment variable** (highest precedence):
+   ```ini
+   CLAUDE_BIN_PATH=/absolute/path/to/claude
+   ```
+2. **Config file** (`~/.archon/config.yaml` or a repo-local `.archon/config.yaml`):
+   ```yaml
+   assistants:
+     claude:
+       claudeBinaryPath: /absolute/path/to/claude
+   ```
+
+If neither is set in a compiled binary, Archon throws with install instructions on first Claude query.
+
+The Claude Agent SDK accepts either the native compiled binary or a JS `cli.js`.
+
+**Typical paths by install method:**
+
+| Install method | Typical executable path |
+|---|---|
+| Native curl installer (macOS/Linux) | `~/.local/bin/claude` |
+| Native PowerShell installer (Windows) | `%USERPROFILE%\.local\bin\claude.exe` |
+| Homebrew cask | `$(brew --prefix)/bin/claude` (symlink) |
+| npm global install | `$(npm root -g)/@anthropic-ai/claude-code/cli.js` |
+| Windows winget | Resolvable via `where claude` |
+| Docker (`ghcr.io/coleam00/archon`) | Pre-set via `ENV CLAUDE_BIN_PATH` in the image — no action required |
+
+If in doubt, `which claude` (macOS/Linux) or `where claude` (Windows) will resolve the executable on your PATH after any of the installers above.
+
 ### Authentication Options
 
 Claude Code supports three authentication modes via `CLAUDE_USE_GLOBAL_AUTH`:
@@ -62,6 +120,9 @@ assistants:
     settingSources:
       - project      # Default: only project-level CLAUDE.md
       - user         # Optional: also load ~/.claude/CLAUDE.md
+    # Optional: absolute path to the Claude Code executable.
+    # Required in compiled Archon binaries if CLAUDE_BIN_PATH is not set.
+    # claudeBinaryPath: /absolute/path/to/claude
 ```
 
 The `settingSources` option controls which `CLAUDE.md` files the Claude Code SDK loads. By default, only the project-level `CLAUDE.md` is loaded. Add `user` to also load your personal `~/.claude/CLAUDE.md`.
@@ -76,10 +137,46 @@ DEFAULT_AI_ASSISTANT=claude
 
 ## Codex
 
-### Authenticate with Codex CLI
+Archon does not bundle the Codex CLI. Install it, then authenticate.
+
+### Install the Codex CLI
 
 ```bash
-# Install Codex CLI first: https://docs.codex.com/installation
+# Any platform (primary method):
+npm install -g @openai/codex
+
+# macOS alternative:
+brew install codex
+
+# Windows: npm install works but is experimental.
+# OpenAI recommends WSL2 for the best experience.
+```
+
+Native prebuilt binaries (`.dmg`, `.tar.gz`, `.exe`) are also published on the [Codex releases page](https://github.com/openai/codex/releases) for users who prefer a direct binary — drop one in `~/.archon/vendor/codex/codex` (or `codex.exe` on Windows) and Archon will find it automatically in compiled binary mode.
+
+See [OpenAI's Codex CLI docs](https://developers.openai.com/codex/cli) for the full install matrix.
+
+### Binary path configuration (compiled binaries only)
+
+In compiled Archon binaries, if `codex` is not on the default PATH Archon expects, supply the path via either:
+
+1. **Environment variable** (highest precedence):
+   ```ini
+   CODEX_BIN_PATH=/absolute/path/to/codex
+   ```
+2. **Config file** (`~/.archon/config.yaml`):
+   ```yaml
+   assistants:
+     codex:
+       codexBinaryPath: /absolute/path/to/codex
+   ```
+3. **Vendor directory** (zero-config fallback): drop the native binary at `~/.archon/vendor/codex/codex` (or `codex.exe` on Windows).
+
+Dev mode (`bun run`) does not require any of the above — the SDK resolves `codex` via `node_modules`.
+
+### Authenticate
+
+```bash
 codex login
 
 # Follow browser authentication flow

@@ -27,5 +27,9 @@ export function parseClaudeConfig(raw: Record<string, unknown>): ClaudeProviderD
     }
   }
 
+  if (typeof raw.claudeBinaryPath === 'string') {
+    result.claudeBinaryPath = raw.claudeBinaryPath;
+  }
+
   return result;
 }

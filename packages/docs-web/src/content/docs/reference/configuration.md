@@ -60,12 +60,18 @@ assistants:
     settingSources:   # Which CLAUDE.md files the SDK loads (default: ['project'])
       - project       # Project-level CLAUDE.md (always recommended)
       - user          # Also load ~/.claude/CLAUDE.md (global preferences)
+    # Optional: absolute path to the Claude Code executable.
+    # Required in compiled Archon binaries when CLAUDE_BIN_PATH is not set.
+    # Accepts the native binary (~/.local/bin/claude from the curl installer)
+    # or the npm-installed cli.js. Source/dev mode auto-resolves.
+    # claudeBinaryPath: /absolute/path/to/claude
   codex:
     model: gpt-5.3-codex
     modelReasoningEffort: medium
     webSearchMode: disabled
     additionalDirectories:
       - /absolute/path/to/other/repo
+    # codexBinaryPath: /absolute/path/to/codex  # Optional: Codex CLI path
 
 # Streaming preferences per platform
 streaming:
