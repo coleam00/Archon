@@ -11,6 +11,16 @@ mock.module('./connection', () => ({
   getDialect: () => mockPostgresDialect,
 }));
 
+// Mock config-loader: getOrCreateConversation calls loadConfig() for the default assistant
+mock.module('../config/config-loader', () => ({
+  loadConfig: mock(() =>
+    Promise.resolve({
+      assistant: 'claude',
+      assistants: { claude: {}, codex: {}, ollama: {} },
+    })
+  ),
+}));
+
 import {
   getOrCreateConversation,
   updateConversation,

@@ -5,6 +5,7 @@ import { pool, getDialect } from './connection';
 import type { Conversation } from '../types';
 import { ConversationNotFoundError } from '../types';
 import { createLogger } from '@archon/paths';
+import { loadConfig } from '../config/config-loader';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -72,7 +73,18 @@ export async function getOrCreateConversation(
   // Check if we should inherit from a parent conversation (e.g., Discord thread inheriting from parent channel)
   let inheritedCodebaseId: string | null = null;
   let inheritedCwd: string | null = null;
-  let assistantType = process.env.DEFAULT_AI_ASSISTANT ?? 'claude';
+  const config = await loadConfig();
+  let assistantType: 'claude' | 'codex' | 'ollama' = config.assistant;
+  const envAssistant = process.env.DEFAULT_AI_ASSISTANT;
+  if (envAssistant) {
+    if (envAssistant === 'claude' || envAssistant === 'codex' || envAssistant === 'ollama') {
+      assistantType = envAssistant;
+    } else {
+      throw new Error(
+        `Invalid DEFAULT_AI_ASSISTANT: "${envAssistant}". Must be one of: claude, codex, ollama`
+      );
+    }
+  }
 
   if (parentConversationId) {
     const parent = await pool.query<Conversation>(
@@ -82,7 +94,7 @@ export async function getOrCreateConversation(
     if (parent.rows[0]) {
       inheritedCodebaseId = parent.rows[0].codebase_id;
       inheritedCwd = parent.rows[0].cwd;
-      assistantType = parent.rows[0].ai_assistant_type;
+      assistantType = parent.rows[0].ai_assistant_type as 'claude' | 'codex' | 'ollama';
       getLog().debug(
         { inheritedCodebaseId, inheritedCwd },
         'db.conversation_parent_context_inherited'
@@ -100,7 +112,7 @@ export async function getOrCreateConversation(
       [codebaseId]
     );
     if (codebase.rows[0]) {
-      assistantType = codebase.rows[0].ai_assistant_type;
+      assistantType = codebase.rows[0].ai_assistant_type as 'claude' | 'codex' | 'ollama';
     }
   }
 

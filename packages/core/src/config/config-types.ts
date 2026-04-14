@@ -13,9 +13,13 @@
 
 // Provider config defaults — canonical definitions live in @archon/providers/types.
 // Imported and re-exported here so existing consumers don't break.
-import type { ClaudeProviderDefaults, CodexProviderDefaults } from '@archon/providers/types';
+import type {
+  ClaudeProviderDefaults,
+  CodexProviderDefaults,
+  OllamaProviderDefaults,
+} from '@archon/providers/types';
 
-export type { ClaudeProviderDefaults, CodexProviderDefaults };
+export type { ClaudeProviderDefaults, CodexProviderDefaults, OllamaProviderDefaults };
 
 export interface GlobalConfig {
   /**
@@ -28,7 +32,7 @@ export interface GlobalConfig {
    * Default AI assistant when no codebase-specific preference
    * @default 'claude'
    */
-  defaultAssistant?: 'claude' | 'codex';
+  defaultAssistant?: 'claude' | 'codex' | 'ollama';
 
   /**
    * Assistant-specific defaults (model, reasoning effort, etc.)
@@ -36,6 +40,7 @@ export interface GlobalConfig {
   assistants?: {
     claude?: ClaudeProviderDefaults;
     codex?: CodexProviderDefaults;
+    ollama?: OllamaProviderDefaults;
   };
 
   /**
@@ -85,7 +90,7 @@ export interface RepoConfig {
    * AI assistant preference for this repository
    * Overrides global default
    */
-  assistant?: 'claude' | 'codex';
+  assistant?: 'claude' | 'codex' | 'ollama';
 
   /**
    * Assistant-specific defaults for this repository
@@ -93,6 +98,7 @@ export interface RepoConfig {
   assistants?: {
     claude?: ClaudeProviderDefaults;
     codex?: CodexProviderDefaults;
+    ollama?: OllamaProviderDefaults;
   };
 
   /**
@@ -182,10 +188,11 @@ export interface RepoConfig {
  */
 export interface MergedConfig {
   botName: string;
-  assistant: 'claude' | 'codex';
+  assistant: 'claude' | 'codex' | 'ollama';
   assistants: {
     claude: ClaudeProviderDefaults;
     codex: CodexProviderDefaults;
+    ollama: OllamaProviderDefaults;
   };
   streaming: {
     telegram: 'stream' | 'batch';
@@ -238,10 +245,13 @@ export interface MergedConfig {
  */
 export interface SafeConfig {
   botName: string;
-  assistant: 'claude' | 'codex';
+  assistant: 'claude' | 'codex' | 'ollama';
+  /** Providers that are configured and available on this server. */
+  availableAssistants: ('claude' | 'codex' | 'ollama')[];
   assistants: {
     claude: Pick<ClaudeProviderDefaults, 'model'>;
     codex: Pick<CodexProviderDefaults, 'model' | 'modelReasoningEffort' | 'webSearchMode'>;
+    ollama: Pick<OllamaProviderDefaults, 'model' | 'baseUrl'>;
   };
   streaming: {
     telegram: 'stream' | 'batch';

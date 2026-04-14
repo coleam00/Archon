@@ -19,16 +19,29 @@ export function isClaudeModel(model: string): boolean {
  */
 export function inferProviderFromModel(
   model: string | undefined,
-  defaultProvider: 'claude' | 'codex'
-): 'claude' | 'codex' {
+  defaultProvider: 'claude' | 'codex' | 'ollama'
+): 'claude' | 'codex' | 'ollama' {
   if (!model) return defaultProvider;
   if (isClaudeModel(model)) return 'claude';
   return 'codex';
 }
 
-export function isModelCompatible(provider: 'claude' | 'codex', model?: string): boolean {
+/**
+ * Returns true if the given model string is compatible with the specified provider.
+ *
+ * Rules:
+ * - If `model` is undefined, any provider accepts it (inherit from config defaults).
+ * - Claude provider: accepts only Claude aliases/prefixes (see `isClaudeModel`).
+ * - Ollama provider: accepts any model string except `'inherit'`, which is a Claude-only sentinel.
+ * - Codex provider: accepts any model that is NOT a Claude alias/prefix.
+ */
+export function isModelCompatible(
+  provider: 'claude' | 'codex' | 'ollama',
+  model?: string
+): boolean {
   if (!model) return true;
   if (provider === 'claude') return isClaudeModel(model);
+  if (provider === 'ollama') return model !== 'inherit'; // 'inherit' is a Claude-only sentinel
   // Codex: accept most models, but reject obvious Claude aliases/prefixes
   return !isClaudeModel(model);
 }

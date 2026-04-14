@@ -12,6 +12,8 @@
     "./codex/provider": "./src/codex/provider.ts",
     "./codex/config": "./src/codex/config.ts",
     "./codex/binary-resolver": "./src/codex/binary-resolver.ts",
+    "./ollama/provider": "./src/ollama/provider.ts",
+    "./ollama/config": "./src/ollama/config.ts",
     "./errors": "./src/errors.ts",
     "./factory": "./src/factory.ts"
   },

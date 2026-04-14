@@ -23,10 +23,12 @@ export { UnknownProviderError } from './errors';
 // Provider classes
 export { ClaudeProvider } from './claude/provider';
 export { CodexProvider } from './codex/provider';
+export { OllamaProvider } from './ollama/provider';
 
 // Config parsers
 export { parseClaudeConfig, type ClaudeProviderDefaults } from './claude/config';
 export { parseCodexConfig, type CodexProviderDefaults } from './codex/config';
+export { parseOllamaConfig, type OllamaProviderDefaults } from './ollama/config';
 
 // Utilities (needed by consumers)
 export { resetCodexSingleton } from './codex/provider';

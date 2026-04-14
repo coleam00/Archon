@@ -6,6 +6,13 @@
 // Canonical definitions — @archon/core/config/config-types.ts imports from here.
 // Single source of truth for provider-specific config shapes.
 
+export interface OllamaProviderDefaults {
+  model?: string;
+  /** Ollama server base URL. Overrides OLLAMA_BASE_URL env var.
+   *  @default 'http://localhost:11434' */
+  baseUrl?: string;
+}
+
 export interface ClaudeProviderDefaults {
   model?: string;
   /** Claude Code settingSources — controls which CLAUDE.md files are loaded.

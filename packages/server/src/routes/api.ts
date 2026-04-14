@@ -118,6 +118,7 @@ import {
   updateAssistantConfigResponseSchema,
   configResponseSchema,
   codebaseEnvironmentsResponseSchema,
+  ollamaModelsResponseSchema,
 } from './schemas/config.schemas';
 
 // Read app version: use build-time constant in binary, package.json in dev
@@ -768,6 +769,20 @@ const patchAssistantConfigRoute = createRoute({
     },
     400: jsonError('Invalid request body'),
     500: jsonError('Server error'),
+  },
+});
+
+const getOllamaModelsRoute = createRoute({
+  method: 'get',
+  path: '/api/ollama/models',
+  tags: ['System'],
+  summary: 'List available Ollama models from the configured Ollama server',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: ollamaModelsResponseSchema } },
+      description: 'List of available Ollama model names',
+    },
+    500: jsonError('Server error or Ollama unreachable'),
   },
 });
 
@@ -2449,10 +2464,11 @@ export function registerApiRoutes(
       if (body.assistant !== undefined) {
         updates.defaultAssistant = body.assistant;
       }
-      if (body.claude !== undefined || body.codex !== undefined) {
+      if (body.claude !== undefined || body.codex !== undefined || body.ollama !== undefined) {
         updates.assistants = {
           ...(body.claude ? { claude: body.claude } : {}),
           ...(body.codex ? { codex: body.codex } : {}),
+          ...(body.ollama ? { ollama: body.ollama } : {}),
         };
       }
 
@@ -2466,6 +2482,33 @@ export function registerApiRoutes(
     } catch (error) {
       getLog().error({ err: error }, 'config.assistants_update_failed');
       return apiError(c, 500, 'Failed to update assistant configuration');
+    }
+  });
+
+  // GET /api/ollama/models - List available models from the Ollama server
+  registerOpenApiRoute(getOllamaModelsRoute, async c => {
+    try {
+      const config = await loadConfig();
+      const baseUrl =
+        config.assistants.ollama?.baseUrl ??
+        process.env.OLLAMA_BASE_URL ??
+        'http://localhost:11434';
+      const response = await fetch(`${baseUrl}/api/tags`);
+      if (!response.ok) {
+        getLog().warn({ baseUrl, status: response.status }, 'ollama.models_fetch_failed');
+        return c.json({ models: [], baseUrl });
+      }
+      const data = (await response.json()) as { models?: { name: string }[] };
+      const models = (data.models ?? []).map(m => m.name);
+      return c.json({ models, baseUrl });
+    } catch (error) {
+      getLog().warn({ err: error }, 'ollama.models_fetch_error');
+      const config = await loadConfig().catch(() => null);
+      const baseUrl =
+        config?.assistants.ollama?.baseUrl ??
+        process.env.OLLAMA_BASE_URL ??
+        'http://localhost:11434';
+      return c.json({ models: [], baseUrl });
     }
   });
 

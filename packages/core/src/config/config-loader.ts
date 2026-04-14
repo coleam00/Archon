@@ -176,6 +176,7 @@ function getDefaults(): MergedConfig {
     assistants: {
       claude: {},
       codex: {},
+      ollama: {},
     },
     streaming: {
       telegram: 'stream',
@@ -258,6 +259,7 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
     assistants: {
       claude: { ...defaults.assistants.claude },
       codex: { ...defaults.assistants.codex },
+      ollama: { ...defaults.assistants.ollama },
     },
   };
 
@@ -282,6 +284,9 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
       ...result.assistants.codex,
       ...global.assistants.codex,
     };
+  }
+  if (global.assistants?.ollama !== undefined) {
+    result.assistants.ollama = global.assistants.ollama;
   }
 
   // Streaming preferences
@@ -314,6 +319,7 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
     assistants: {
       claude: { ...merged.assistants.claude },
       codex: { ...merged.assistants.codex },
+      ollama: { ...merged.assistants.ollama },
     },
   };
 
@@ -333,6 +339,9 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
       ...result.assistants.codex,
       ...repo.assistants.codex,
     };
+  }
+  if (repo.assistants?.ollama !== undefined) {
+    result.assistants.ollama = repo.assistants.ollama;
   }
 
   // Commands config
@@ -446,6 +455,8 @@ export async function updateGlobalConfig(updates: Partial<GlobalConfig>): Promis
       merged.assistants = {
         claude: { ...current.assistants?.claude, ...updates.assistants.claude },
         codex: { ...current.assistants?.codex, ...updates.assistants.codex },
+        // Replace ollama section entirely so cleared fields (model, baseUrl) are removed
+        ...(updates.assistants.ollama !== undefined ? { ollama: updates.assistants.ollama } : {}),
       };
     }
 
@@ -484,9 +495,19 @@ export async function updateGlobalConfig(updates: Partial<GlobalConfig>): Promis
  * Strips filesystem paths and any other server-internal fields.
  */
 export function toSafeConfig(config: MergedConfig): SafeConfig {
+  // Determine which providers are available based on configuration and environment.
+  // Claude is always available (API key checked at request time, not config time).
+  // Codex requires the binary to be present; we optimistically include it here.
+  // Ollama is included when a model is configured or OLLAMA_BASE_URL is set.
+  const availableAssistants: ('claude' | 'codex' | 'ollama')[] = ['claude', 'codex'];
+  if (config.assistants.ollama.model || process.env.OLLAMA_BASE_URL) {
+    availableAssistants.push('ollama');
+  }
+
   return {
     botName: config.botName,
     assistant: config.assistant,
+    availableAssistants,
     assistants: {
       claude: {
         model: config.assistants.claude.model,
@@ -495,6 +516,10 @@ export function toSafeConfig(config: MergedConfig): SafeConfig {
         model: config.assistants.codex.model,
         modelReasoningEffort: config.assistants.codex.modelReasoningEffort,
         webSearchMode: config.assistants.codex.webSearchMode,
+      },
+      ollama: {
+        model: config.assistants.ollama.model,
+        baseUrl: config.assistants.ollama.baseUrl,
       },
     },
     streaming: {

@@ -68,8 +68,8 @@ export interface IWorkflowPlatform {
 // ---------------------------------------------------------------------------
 
 export interface WorkflowConfig {
-  /** Default assistant provider ('claude' | 'codex') */
-  assistant: 'claude' | 'codex';
+  /** Default assistant provider ('claude' | 'codex' | 'ollama') */
+  assistant: 'claude' | 'codex' | 'ollama';
   baseBranch?: string;
   docsPath?: string;
   envVars?: Record<string, string>;
@@ -89,6 +89,10 @@ export interface WorkflowConfig {
       webSearchMode?: WebSearchMode;
       additionalDirectories?: string[];
     };
+    ollama: {
+      model?: string;
+      baseUrl?: string;
+    };
   };
 }
 
@@ -96,7 +100,8 @@ export interface WorkflowConfig {
 // Agent provider factory type
 // ---------------------------------------------------------------------------
 
-export type AgentProviderFactory = (provider: 'claude' | 'codex') => IAgentProvider;
+/** Factory that instantiates the correct agent provider for a given provider type. */
+export type AgentProviderFactory = (provider: 'claude' | 'codex' | 'ollama') => IAgentProvider;
 
 // ---------------------------------------------------------------------------
 // WorkflowDeps — the single injection point

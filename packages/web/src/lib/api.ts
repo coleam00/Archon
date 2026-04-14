@@ -441,6 +441,10 @@ export async function updateAssistantConfig(
   });
 }
 
+export async function getOllamaModels(): Promise<{ models: string[]; baseUrl: string }> {
+  return fetchJSON('/api/ollama/models');
+}
+
 export type IsolationEnvironment = components['schemas']['IsolationEnvironment'];
 
 export async function getCodebaseEnvironments(codebaseId: string): Promise<IsolationEnvironment[]> {

@@ -2438,7 +2438,8 @@ export interface components {
     SafeConfig: {
       botName: string;
       /** @enum {string} */
-      assistant: 'claude' | 'codex';
+      assistant: 'claude' | 'codex' | 'ollama';
+      availableAssistants: ('claude' | 'codex' | 'ollama')[];
       assistants: {
         claude: {
           model?: string;
@@ -2449,6 +2450,10 @@ export interface components {
           modelReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
           /** @enum {string} */
           webSearchMode?: 'disabled' | 'cached' | 'live';
+        };
+        ollama: {
+          model?: string;
+          baseUrl?: string;
         };
       };
       streaming: {
@@ -2474,7 +2479,7 @@ export interface components {
     };
     UpdateAssistantConfigBody: {
       /** @enum {string} */
-      assistant?: 'claude' | 'codex';
+      assistant?: 'claude' | 'codex' | 'ollama';
       claude?: {
         model: string;
       };
@@ -2485,6 +2490,14 @@ export interface components {
         /** @enum {string} */
         webSearchMode?: 'disabled' | 'cached' | 'live';
       };
+      ollama?: {
+        model?: string;
+        baseUrl?: string;
+      };
+    };
+    OllamaModelsResponse: {
+      models: string[];
+      baseUrl: string;
     };
     IsolationEnvironment: {
       id: string;
