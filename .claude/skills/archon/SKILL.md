@@ -51,6 +51,10 @@ Check the available workflows before suggesting or running one:
 archon workflow list --json
 ```
 
+This is expected to return clean machine-readable JSON on stdout. If it emits
+non-JSON chatter before the payload, treat that as an Archon CLI regression and
+fall back to human inspection instead of assuming the output is safe to parse.
+
 If `archon` is unavailable, report that the Archon CLI is not installed or not on
 `PATH`. Do not perform setup unless the user explicitly asks.
 
