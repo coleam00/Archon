@@ -164,6 +164,43 @@ function isCommandAvailable(command: string): boolean {
 }
 
 /**
+ * Probe wrappers — exported so tests can spy on each tier independently.
+ * Direct imports of `existsSync` and `execSync` cannot be intercepted by
+ * `spyOn` (esm rebinding limitation), so we route the probes through these
+ * thin wrappers and let the test mock them in isolation.
+ */
+export function probeFileExists(path: string): boolean {
+  return existsSync(path);
+}
+
+export function probeNpmRoot(): string | null {
+  try {
+    const out = execSync('npm root -g', {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+
+export function probeWhichClaude(): string | null {
+  try {
+    const checkCmd = process.platform === 'win32' ? 'where' : 'which';
+    const resolved = execSync(`${checkCmd} claude`, {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    // On Windows, `where` can return multiple lines — take the first.
+    const first = resolved.split(/\r?\n/)[0]?.trim();
+    return first ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Try to locate the Claude Code executable on disk.
  *
  * Compiled Archon binaries need an explicit path because the Claude Agent
@@ -179,42 +216,28 @@ function isCommandAvailable(command: string): boolean {
  *
  * Returns null on total failure so the caller can prompt the user.
  * Detection is best-effort; the caller should let users override.
+ *
+ * Exported so the probe order can be tested directly by spying on the
+ * tier wrappers above (`probeFileExists`, `probeNpmRoot`, `probeWhichClaude`).
  */
-function detectClaudeExecutablePath(): string | null {
+export function detectClaudeExecutablePath(): string | null {
   // 1. Native installer default location (primary Anthropic-recommended path)
   const nativePath =
     process.platform === 'win32'
       ? join(homedir(), '.local', 'bin', 'claude.exe')
       : join(homedir(), '.local', 'bin', 'claude');
-  if (existsSync(nativePath)) return nativePath;
+  if (probeFileExists(nativePath)) return nativePath;
 
   // 2. npm global cli.js
-  try {
-    const npmRoot = execSync('npm root -g', {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    if (npmRoot) {
-      const npmCliJs = join(npmRoot, '@anthropic-ai', 'claude-code', 'cli.js');
-      if (existsSync(npmCliJs)) return npmCliJs;
-    }
-  } catch {
-    // fall through to PATH lookup
+  const npmRoot = probeNpmRoot();
+  if (npmRoot) {
+    const npmCliJs = join(npmRoot, '@anthropic-ai', 'claude-code', 'cli.js');
+    if (probeFileExists(npmCliJs)) return npmCliJs;
   }
 
   // 3. Fallback: resolve via `which` / `where` (Homebrew, winget, custom layouts)
-  try {
-    const checkCmd = process.platform === 'win32' ? 'where' : 'which';
-    const resolved = execSync(`${checkCmd} claude`, {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    // On Windows, `where` can return multiple lines — take the first.
-    const first = resolved.split(/\r?\n/)[0]?.trim();
-    if (first && existsSync(first)) return first;
-  } catch {
-    // no claude on PATH
-  }
+  const fromPath = probeWhichClaude();
+  if (fromPath && probeFileExists(fromPath)) return fromPath;
 
   return null;
 }

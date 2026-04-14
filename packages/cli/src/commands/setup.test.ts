@@ -11,7 +11,9 @@ import {
   generateWebhookSecret,
   spawnTerminalWithSetup,
   copyArchonSkill,
+  detectClaudeExecutablePath,
 } from './setup';
+import * as setupModule from './setup';
 
 // Test directory for file operations
 const TEST_DIR = join(tmpdir(), 'archon-setup-test-' + Date.now());
@@ -451,5 +453,79 @@ CODEX_ACCOUNT_ID=account1
 
       expect(existsSync(join(target, '.claude', 'skills', 'archon', 'SKILL.md'))).toBe(true);
     });
+  });
+});
+
+describe('detectClaudeExecutablePath probe order', () => {
+  // Use spies on the exported probe wrappers so each tier can be controlled
+  // independently without touching the real filesystem or shell.
+  let fileExistsSpy: ReturnType<typeof spyOn>;
+  let npmRootSpy: ReturnType<typeof spyOn>;
+  let whichSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    fileExistsSpy = spyOn(setupModule, 'probeFileExists').mockReturnValue(false);
+    npmRootSpy = spyOn(setupModule, 'probeNpmRoot').mockReturnValue(null);
+    whichSpy = spyOn(setupModule, 'probeWhichClaude').mockReturnValue(null);
+  });
+
+  afterEach(() => {
+    fileExistsSpy.mockRestore();
+    npmRootSpy.mockRestore();
+    whichSpy.mockRestore();
+  });
+
+  it('returns the native installer path when present (tier 1 wins)', () => {
+    // Native path exists; subsequent probes must not be called.
+    fileExistsSpy.mockImplementation(
+      (p: string) => p.includes('.local/bin/claude') || p.includes('.local\\bin\\claude')
+    );
+    const result = detectClaudeExecutablePath();
+    expect(result).toBeTruthy();
+    expect(result).toMatch(/\.local[\\/]bin[\\/]claude/);
+    // Tier 2 / 3 must not have been consulted.
+    expect(npmRootSpy).not.toHaveBeenCalled();
+    expect(whichSpy).not.toHaveBeenCalled();
+  });
+
+  it('falls through to npm cli.js when native is missing (tier 2 wins)', () => {
+    npmRootSpy.mockReturnValue('/fake/npm/root');
+    fileExistsSpy.mockImplementation((p: string) => p.endsWith('@anthropic-ai/claude-code/cli.js'));
+    const result = detectClaudeExecutablePath();
+    expect(result).toBe('/fake/npm/root/@anthropic-ai/claude-code/cli.js');
+    // Tier 3 must not have been consulted.
+    expect(whichSpy).not.toHaveBeenCalled();
+  });
+
+  it('falls through to which/where when native and npm probes both miss (tier 3 wins)', () => {
+    npmRootSpy.mockReturnValue('/fake/npm/root');
+    // Native miss, npm cli.js miss, but `which claude` returns a path that exists.
+    whichSpy.mockReturnValue('/opt/homebrew/bin/claude');
+    fileExistsSpy.mockImplementation((p: string) => p === '/opt/homebrew/bin/claude');
+    const result = detectClaudeExecutablePath();
+    expect(result).toBe('/opt/homebrew/bin/claude');
+  });
+
+  it('returns null when every probe misses', () => {
+    // All defaults already return false/null; nothing to override.
+    expect(detectClaudeExecutablePath()).toBeNull();
+  });
+
+  it('does not return a which-resolved path that fails the existsSync check', () => {
+    // `which` returns a path string but the file is not actually present
+    // (stale PATH entry, dangling symlink, etc.) — must not be returned.
+    npmRootSpy.mockReturnValue('/fake/npm/root');
+    whichSpy.mockReturnValue('/stale/path/claude');
+    fileExistsSpy.mockReturnValue(false);
+    expect(detectClaudeExecutablePath()).toBeNull();
+  });
+
+  it('skips npm tier when probeNpmRoot returns null (e.g. npm not installed)', () => {
+    // npm probe fails; tier 3 must still run.
+    whichSpy.mockReturnValue('/usr/local/bin/claude');
+    fileExistsSpy.mockImplementation((p: string) => p === '/usr/local/bin/claude');
+    const result = detectClaudeExecutablePath();
+    expect(result).toBe('/usr/local/bin/claude');
+    expect(npmRootSpy).toHaveBeenCalled();
   });
 });

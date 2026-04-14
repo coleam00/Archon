@@ -468,7 +468,9 @@ assistants:
     settingSources:  # Controls which CLAUDE.md files Claude SDK loads
       - project      # Default: only project-level CLAUDE.md
       - user         # Optional: also load ~/.claude/CLAUDE.md
-    claudeBinaryPath: /absolute/path/to/cli.js  # Optional: Claude Code SDK cli.js path.
+    claudeBinaryPath: /absolute/path/to/claude  # Optional: Claude Code executable.
+                                                # Native binary (curl installer at
+                                                # ~/.local/bin/claude) or npm cli.js.
                                                 # Required in compiled binaries if
                                                 # CLAUDE_BIN_PATH env var is not set.
   codex:
