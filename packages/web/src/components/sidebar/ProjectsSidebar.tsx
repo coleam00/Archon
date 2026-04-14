@@ -258,9 +258,7 @@ export function ProjectsSidebar({
                   </div>
 
                   <CollapsibleContent>
-                    <div
-                      className="ml-3 border-l border-border pl-2 mt-1 mb-1"
-                                          >
+                    <div className="ml-3 border-l border-border pl-2 mt-1 mb-1">
                       <ProjectDetail
                         codebaseId={project.id}
                         projectName={project.name}

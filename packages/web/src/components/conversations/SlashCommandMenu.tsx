@@ -33,9 +33,7 @@ export function SlashCommandMenu({
   const filtered = useMemo(
     () =>
       (workflows ?? [])
-        .filter((entry) =>
-          entry.workflow.name.toLowerCase().includes(query.toLowerCase())
-        )
+        .filter(entry => entry.workflow.name.toLowerCase().includes(query.toLowerCase()))
         .slice(0, 8),
     [workflows, query]
   );
@@ -98,13 +96,13 @@ export function SlashCommandMenu({
       className="absolute bottom-full left-0 right-0 z-50 mb-1 overflow-y-auto rounded-lg border border-border bg-surface shadow-lg"
       style={{ maxHeight: `${menuMaxHeight}px` }}
       aria-activedescendant={`slash-option-${selectedIndex}`}
-            role="listbox"
+      role="listbox"
       aria-label="Workflow commands"
     >
       {filtered.map((entry, idx) => (
         <button
           id={`slash-option-${idx}`}
-                key={entry.workflow.name}
+          key={entry.workflow.name}
           type="button"
           role="option"
           aria-selected={idx === selectedIndex}

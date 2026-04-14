@@ -1,141 +1,192 @@
-import { useState, useEffect } from 'react';
-import { Outlet, NavLink } from 'react-router';
-import { FolderGit2, LayoutDashboard, Workflow, Settings, X } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Outlet } from 'react-router';
+import { X, Pin, PinOff } from 'lucide-react';
 import { TopNav } from './TopNav';
+import { ProjectsSidebar } from '@/components/sidebar/ProjectsSidebar';
 import { MobileNavContext } from '@/contexts/MobileNavContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useVisualViewport } from '@/lib/useVisualViewport';
 import { cn } from '@/lib/utils';
 
-const navItems = [
-  { to: '/chat', end: false, icon: FolderGit2, label: 'Projects' },
-  { to: '/dashboard', end: true, icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/workflows', end: false, icon: Workflow, label: 'Workflows' },
-] as const;
+const SIDEBAR_PINNED_KEY = 'archon-sidebar-pinned';
+const DESKTOP_BREAKPOINT = 768;
+
+function getIsDesktop(): boolean {
+  return window.innerWidth >= DESKTOP_BREAKPOINT;
+}
+
+function getInitialPinned(): boolean {
+  if (!getIsDesktop()) return false;
+  const stored = localStorage.getItem(SIDEBAR_PINNED_KEY);
+  return stored === null ? true : stored === 'true';
+}
 
 export function Layout(): React.ReactElement {
-  const [open, setOpen] = useState(false);
   const { compactLayout } = useTheme();
-  // Fix 4: Escape key closes the mobile drawer
+
+  // pinned = sidebar locked open as a static column (desktop/tablet only)
+  const [pinned, setPinned] = useState<boolean>(getInitialPinned);
+
+  // open = drawer/overlay sidebar is shown (mobile always, desktop when unpinned)
+  const [open, setOpen] = useState<boolean>(false);
+
+  // isDesktop tracks viewport reactively so the layout adapts on resize
+  const [isDesktop, setIsDesktop] = useState<boolean>(getIsDesktop);
+
+  useEffect(() => {
+    const mq = window.matchMedia(`(min-width: ${DESKTOP_BREAKPOINT}px)`);
+    const handler = (e: MediaQueryListEvent): void => {
+      setIsDesktop(e.matches);
+      if (!e.matches) {
+        // Entering mobile: always close the drawer
+        setOpen(false);
+      }
+    };
+    mq.addEventListener('change', handler);
+    return (): void => {
+      mq.removeEventListener('change', handler);
+    };
+  }, []);
+
+  const togglePin = useCallback((): void => {
+    setPinned(prev => {
+      const next = !prev;
+      localStorage.setItem(SIDEBAR_PINNED_KEY, String(next));
+      if (!next) setOpen(false);
+      return next;
+    });
+  }, []);
+
+  // Escape key closes the drawer
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') setOpen(false);
     };
     document.addEventListener('keydown', handler);
-    return (): void => { document.removeEventListener('keydown', handler); };
+    return (): void => {
+      document.removeEventListener('keydown', handler);
+    };
   }, [open]);
 
-  // Use the visual viewport height instead of h-dvh / h-screen so the layout
-  // correctly shrinks when the soft keyboard appears on mobile (iOS Safari and
-  // Chrome Android). This prevents the chat input from being hidden behind the
-  // keyboard.
+  // After navigation: close drawer on mobile or when unpinned on desktop
+  const handleNavigate = useCallback((): void => {
+    if (!isDesktop || !pinned) {
+      setOpen(false);
+    }
+  }, [isDesktop, pinned]);
+
+  // Desktop + pinned: sidebar is a static column (no overlay needed)
+  const showStaticSidebar = !compactLayout && isDesktop && pinned;
+  // Show overlay drawer: mobile, or desktop+unpinned when open
+  const showOverlay = open && !showStaticSidebar;
+
   const vpHeight = useVisualViewport();
 
   return (
-    <MobileNavContext.Provider value={{ open, setOpen }}>
-      {/* Height is driven by visualViewport so it follows the keyboard on mobile */}
+    <MobileNavContext.Provider value={{ open, setOpen, pinned, togglePin }}>
       <div
         className="flex flex-col bg-background overflow-hidden"
         style={{ height: `${vpHeight}px` }}
       >
         <TopNav />
 
-        {/* ── Mobile nav overlay backdrop ── */}
-        {open && (
-          <div
-            className={cn(
-              'fixed inset-x-0 top-12 bottom-0 z-40 bg-black/60',
-              compactLayout ? '' : 'md:hidden'
-            )}
-            onClick={() => {
-              setOpen(false);
-            }}
-            aria-hidden="true"
-          />
-        )}
-
-        {/* ── Mobile nav drawer ── */}
-        <aside
-          className={cn(
-            'fixed top-12 bottom-0 left-0 z-50 flex w-72 flex-col border-r border-border shadow-2xl',
-            'transition-transform duration-300 ease-in-out',
-            compactLayout ? '' : 'md:hidden',
-            open ? 'translate-x-0' : '-translate-x-full'
-          )}
-          style={{ backgroundColor: 'var(--surface)' }}
-          aria-label="Mobile navigation"
-          aria-modal="true"
-        >
-          {/* Drawer header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-            <div className="flex items-center gap-2">
-              <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary">
-                <span className="text-sm font-semibold text-primary-foreground">A</span>
+        <div className="flex flex-1 overflow-hidden min-h-0">
+          {/* ── Static sidebar: desktop + pinned ── */}
+          {showStaticSidebar && (
+            <aside
+              className="flex flex-col w-72 border-r border-border shrink-0"
+              style={{ backgroundColor: 'var(--surface)' }}
+              aria-label="Projects sidebar"
+            >
+              {/* Header with pin button */}
+              <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+                <div className="flex items-center gap-2">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary">
+                    <span className="text-sm font-semibold text-primary-foreground">A</span>
+                  </div>
+                  <span className="text-sm font-semibold text-text-primary">Archon</span>
+                </div>
+                <button
+                  onClick={togglePin}
+                  className="flex items-center justify-center rounded-md p-1.5 text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
+                  aria-label="Unpin sidebar"
+                  title="Unpin sidebar"
+                >
+                  <PinOff className="h-4 w-4" />
+                </button>
               </div>
-              <span className="text-sm font-semibold text-text-primary">Archon</span>
-            </div>
-            <button
+              <div className="flex flex-1 flex-col overflow-hidden min-h-0">
+                <ProjectsSidebar searchQuery="" onNavigate={handleNavigate} />
+              </div>
+            </aside>
+          )}
+
+          {/* ── Overlay backdrop ── */}
+          {showOverlay && (
+            <div
+              className="fixed inset-x-0 top-12 bottom-0 z-40 bg-black/60"
               onClick={() => {
                 setOpen(false);
               }}
-              className="flex items-center justify-center rounded-md p-1.5 text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
-              aria-label="Close menu"
+              aria-hidden="true"
+            />
+          )}
+
+          {/* ── Overlay/drawer sidebar: mobile or desktop+unpinned ── */}
+          {!showStaticSidebar && (
+            <aside
+              className={cn(
+                'fixed top-12 bottom-0 left-0 z-50 flex w-72 flex-col border-r border-border shadow-2xl',
+                'transition-transform duration-300 ease-in-out',
+                open ? 'translate-x-0' : '-translate-x-full'
+              )}
+              style={{ backgroundColor: 'var(--surface)' }}
+              aria-label="Projects sidebar"
+              aria-modal="true"
             >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
+              {/* Drawer header */}
+              <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+                <div className="flex items-center gap-2">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary">
+                    <span className="text-sm font-semibold text-primary-foreground">A</span>
+                  </div>
+                  <span className="text-sm font-semibold text-text-primary">Archon</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  {/* Pin button: only visible on desktop */}
+                  {isDesktop && (
+                    <button
+                      onClick={togglePin}
+                      className="flex items-center justify-center rounded-md p-1.5 text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
+                      aria-label="Pin sidebar"
+                      title="Pin sidebar open"
+                    >
+                      <Pin className="h-4 w-4" />
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      setOpen(false);
+                    }}
+                    className="flex items-center justify-center rounded-md p-1.5 text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
+                    aria-label="Close menu"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
 
-          {/* Navigation links */}
-          <nav className="flex-1 overflow-y-auto p-2 pt-3">
-            {navItems.map(({ to, end, icon: Icon, label }) => (
-              <NavLink
-                key={to}
-                to={to}
-                end={end}
-                onClick={() => {
-                  setOpen(false);
-                }}
-                className={({ isActive }: { isActive: boolean }): string =>
-                  cn(
-                    'flex items-center gap-3 w-full rounded-md px-3 py-2.5 text-sm font-medium transition-colors mb-0.5',
-                    isActive
-                      ? 'bg-accent text-primary'
-                      : 'text-text-secondary hover:bg-surface-elevated hover:text-text-primary'
-                  )
-                }
-              >
-                <Icon className="h-4 w-4 shrink-0" />
-                {label}
-              </NavLink>
-            ))}
-          </nav>
+              <div className="flex flex-1 flex-col overflow-hidden min-h-0">
+                <ProjectsSidebar searchQuery="" onNavigate={handleNavigate} />
+              </div>
+            </aside>
+          )}
 
-          {/* Settings — pinned at bottom */}
-          <div className="p-2 border-t border-border">
-            <NavLink
-              to="/settings"
-              onClick={() => {
-                setOpen(false);
-              }}
-              className={({ isActive }: { isActive: boolean }): string =>
-                cn(
-                  'flex items-center gap-3 w-full rounded-md px-3 py-2.5 text-sm font-medium transition-colors',
-                  isActive
-                    ? 'bg-accent text-primary'
-                    : 'text-text-secondary hover:bg-surface-elevated hover:text-text-primary'
-                )
-              }
-            >
-              <Settings className="h-4 w-4 shrink-0" />
-              Settings
-            </NavLink>
-          </div>
-        </aside>
-
-        <main className="flex flex-1 flex-col overflow-hidden min-h-0">
-          <Outlet />
-        </main>
+          <main className="flex flex-1 flex-col overflow-hidden min-h-0">
+            <Outlet />
+          </main>
+        </div>
       </div>
     </MobileNavContext.Provider>
   );
