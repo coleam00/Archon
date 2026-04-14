@@ -11,7 +11,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { listConversations, listWorkflows, deleteCodebase, createConversation } from '@/lib/api';
-import type { ConversationResponse, WorkflowListEntry } from '@/lib/api';
+import type { CodebaseResponse, ConversationResponse, WorkflowListEntry } from '@/lib/api';
 import { useProject } from '@/contexts/ProjectContext';
 import { cn } from '@/lib/utils';
 import {
@@ -88,6 +88,63 @@ function groupByPrefix(workflows: WorkflowListEntry[]): WorkflowGroup[] {
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
+
+interface ProjectHeaderProps {
+  project: CodebaseResponse | undefined;
+}
+
+function ProjectHeader({ project }: ProjectHeaderProps): React.ReactElement {
+  const [expanded, setExpanded] = useState(false);
+
+  const metaRef = useRef<HTMLParagraphElement>(null);
+  const [canExpand, setCanExpand] = useState(false);
+
+  // Detect overflow in collapsed state whenever the URL changes
+  useEffect(() => {
+    const el = metaRef.current;
+    if (!el) return;
+    setCanExpand(el.scrollHeight > el.clientHeight + 1);
+  }, [project?.repository_url]);
+
+  const metaText = project?.repository_url ?? '';
+
+  return (
+    <div className="flex items-start gap-3 px-4 py-3 border-b border-border shrink-0 bg-surface">
+      <div className="shrink-0 flex h-10 w-10 items-center justify-center rounded-2xl bg-accent-muted">
+        <FolderGit2 className="h-5 w-5 text-primary" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <h2 className="font-semibold text-sm text-text-primary truncate">
+          {project?.name ?? 'Project'}
+        </h2>
+        {metaText && (
+          <>
+            <p
+              ref={metaRef}
+              className={
+                expanded
+                  ? 'text-xs text-text-secondary break-all'
+                  : 'line-clamp-1 text-xs text-text-secondary'
+              }
+            >
+              {metaText}
+            </p>
+            {(canExpand || expanded) && (
+              <button
+                onClick={(): void => {
+                  setExpanded(e => !e);
+                }}
+                className="text-xs text-primary hover:underline"
+              >
+                {expanded ? 'See less' : 'See more'}
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 interface ConversationRowProps {
   conversation: ConversationResponse;
@@ -376,19 +433,7 @@ export function ProjectPage(): React.ReactElement {
       </div>
 
       {/* ── Project header ── */}
-      <div className="flex flex-col items-center gap-3 px-4 py-3 border-b border-border shrink-0 bg-surface">
-        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-accent-muted">
-          <FolderGit2 className="h-5 w-5 text-primary" />
-        </div>
-        <div className="text-center">
-          <h2 className="text-lg font-semibold text-text-primary">{project?.name ?? 'Project'}</h2>
-          {project?.repository_url && (
-            <p className="mt-0.5 text-xs text-text-tertiary truncate max-w-[280px]">
-              {project.repository_url}
-            </p>
-          )}
-        </div>
-      </div>
+      <ProjectHeader project={project} />
 
       {/* ── Tabs ── */}
       <div className="flex border-b border-border shrink-0 bg-surface">
