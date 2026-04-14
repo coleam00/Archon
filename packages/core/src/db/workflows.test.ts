@@ -559,6 +559,60 @@ describe('workflows database', () => {
       expect(params).toEqual(['/repo/path']);
     });
 
+    test('includes pending rows within the stale-pending age window', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await getActiveWorkflowRunByPath('/repo/path');
+
+      const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
+      // Fresh `pending` counts as active so the lock is held immediately
+      // after pre-create — without this, two near-simultaneous dispatches
+      // both pass the guard.
+      expect(query).toContain("status = 'pending'");
+      // Age window cutoff prevents orphaned pending rows (from crashed
+      // dispatches) from permanently blocking a path.
+      expect(query).toMatch(/started_at >.*INTERVAL.*milliseconds/);
+    });
+
+    test('excludes self and applies older-wins tiebreaker when self is provided', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      const startedAt = new Date('2026-04-14T10:00:00Z');
+
+      await getActiveWorkflowRunByPath('/repo/path', { id: 'self-id', startedAt });
+
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain('id != $2');
+      // PostgreSQL branch: explicit `::timestamptz` cast on the param so
+      // the comparison is chronological, not lexical. SQLite branch wraps
+      // both sides in datetime() — covered by tests in adapters/sqlite.test.ts
+      // because this suite mocks getDatabaseType as 'postgresql'.
+      expect(query).toContain('started_at < $3::timestamptz');
+      expect(query).toContain('started_at = $3::timestamptz AND id < $2');
+      // selfStartedAt serialized to ISO — bun:sqlite rejects Date bindings.
+      expect(params).toEqual(['/repo/path', 'self-id', startedAt.toISOString()]);
+    });
+
+    test('skips self exclusion + tiebreaker when self is omitted (no caller context)', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await getActiveWorkflowRunByPath('/repo/path');
+
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      // Without `self`, neither the id-exclusion nor the tiebreaker apply.
+      expect(query).not.toContain('id !=');
+      expect(query).not.toContain('started_at <');
+      expect(params).toEqual(['/repo/path']);
+    });
+
+    test('orders by (started_at ASC, id ASC) so older-wins is deterministic', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await getActiveWorkflowRunByPath('/repo/path');
+
+      const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain('ORDER BY started_at ASC, id ASC');
+    });
+
     test('returns null when no active run on path', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
@@ -669,6 +723,22 @@ describe('workflows database', () => {
       const [selectQuery, selectParams] = mockQuery.mock.calls[1] as [string, unknown[]];
       expect(selectQuery).toContain('SELECT *');
       expect(selectParams).toEqual(['workflow-run-123']);
+    });
+
+    test('refreshes started_at to NOW so resumed row competes fairly in the path-lock tiebreaker', async () => {
+      // Without this refresh, a resumed row carries its original (potentially
+      // hours-old) started_at and sorts ahead of any currently-active holder
+      // in the older-wins tiebreaker — slipping past the lock and causing
+      // two active workflows on the same working_path.
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([{ ...mockWorkflowRun, status: 'running' as const }])
+      );
+
+      await resumeWorkflowRun('workflow-run-123');
+
+      const [updateQuery] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(updateQuery).toContain('started_at = NOW()');
     });
 
     test('throws when no row matched (run not found)', async () => {

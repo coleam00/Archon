@@ -184,13 +184,76 @@ export async function getPausedWorkflowRun(conversationId: string): Promise<Work
   }
 }
 
-export async function getActiveWorkflowRunByPath(workingPath: string): Promise<WorkflowRun | null> {
+/**
+ * Find the workflow run currently holding the lock on `workingPath`.
+ *
+ * The lock is held by any row in `(running, paused)` or `pending` younger
+ * than `STALE_PENDING_AGE_MS` (orphaned pre-creates beyond that window are
+ * ignored — they're from crashed or resume-replaced dispatches).
+ *
+ * When called from a dispatch that already pre-created its own row, pass
+ * `excludeId` and `selfStartedAt` so:
+ *   1. Self is never returned.
+ *   2. If two dispatches both have rows, the deterministic older-wins
+ *      tiebreaker `(started_at, id)` ensures both agree on which is "first."
+ *      The newer dispatch sees the older row and aborts; the older dispatch
+ *      sees nothing.
+ *
+ * Returns the holding row, or null if the path is free.
+ */
+export const STALE_PENDING_AGE_MS = 5 * 60 * 1000; // 5 minutes
+
+export async function getActiveWorkflowRunByPath(
+  workingPath: string,
+  self?: { id: string; startedAt: Date }
+): Promise<WorkflowRun | null> {
+  const isPostgres = getDatabaseType() === 'postgresql';
+  const stalePendingCutoff = isPostgres
+    ? `NOW() - INTERVAL '${String(STALE_PENDING_AGE_MS)} milliseconds'`
+    : `datetime('now', '-${String(Math.floor(STALE_PENDING_AGE_MS / 1000))} seconds')`;
+
+  // Build params + clauses dynamically. Self exclusion + tiebreaker travel
+  // together — the tiebreaker references both ids and timestamps.
+  const params: unknown[] = [workingPath];
+  const clauses: string[] = [
+    'working_path = $1',
+    `(status IN ('running', 'paused') OR (status = 'pending' AND started_at > ${stalePendingCutoff}))`,
+  ];
+  if (self !== undefined) {
+    params.push(self.id);
+    clauses.push(`id != $${String(params.length)}`);
+  }
+  if (self !== undefined) {
+    // Older-wins tiebreaker. (started_at, id) is a total order so both
+    // dispatches always agree on which is "first." Without this, two rows
+    // with similar timestamps could mutually see each other and both abort.
+    //
+    // Serialize Date to ISO string — bun:sqlite rejects Date bindings.
+    //
+    // Format-aware comparison:
+    //   PostgreSQL: started_at is TIMESTAMPTZ; cast the ISO param to
+    //     timestamptz so the comparison is chronological, not lexical.
+    //   SQLite: started_at is TEXT in "YYYY-MM-DD HH:MM:SS" format. Our
+    //     ISO param has "YYYY-MM-DDTHH:MM:SS.mmmZ". Lexical comparison is
+    //     WRONG: char 11 is space (0x20) in the column vs T (0x54) in the
+    //     param, so every column value lex-sorts before every ISO param —
+    //     making `started_at < $param` always TRUE regardless of actual
+    //     time. Wrap both sides in datetime() to force chronological
+    //     comparison via SQLite's date/time functions.
+    params.push(self.startedAt.toISOString());
+    const startedAtParam = `$${String(params.length)}`;
+    const idParam = `$${String(params.length - 1)}`;
+    const colExpr = isPostgres ? 'started_at' : 'datetime(started_at)';
+    const paramExpr = isPostgres ? `${startedAtParam}::timestamptz` : `datetime(${startedAtParam})`;
+    clauses.push(`(${colExpr} < ${paramExpr} OR (${colExpr} = ${paramExpr} AND id < ${idParam}))`);
+  }
+
   try {
     const result = await pool.query<WorkflowRun>(
       `SELECT * FROM remote_agent_workflow_runs
-       WHERE working_path = $1 AND status IN ('running', 'paused')
-       ORDER BY started_at DESC LIMIT 1`,
-      [workingPath]
+       WHERE ${clauses.join(' AND ')}
+       ORDER BY started_at ASC, id ASC LIMIT 1`,
+      params
     );
     const row = result.rows[0];
     return row ? normalizeWorkflowRun(row) : null;
@@ -309,9 +372,23 @@ export async function resumeWorkflowRun(id: string): Promise<WorkflowRun> {
   // Each phase has its own try/catch to avoid string-sniffing own errors in a shared catch.
   let updateResult: Awaited<ReturnType<typeof pool.query>>;
   try {
+    // Refresh started_at to NOW so the resumed row competes fairly with
+    // currently-active rows in getActiveWorkflowRunByPath's older-wins
+    // tiebreaker. Without this, a resumed row carries its original
+    // (potentially hours-old) started_at and would sort ahead of any
+    // currently-running holder, slipping past the path lock and causing
+    // two active workflows on the same working_path.
+    //
+    // We accept losing the original creation time here — `started_at` for
+    // an active row semantically means "when did this active phase start."
+    // The original creation time can be recovered from workflow_events
+    // history if needed for analytics.
     updateResult = await pool.query(
       `UPDATE remote_agent_workflow_runs
-       SET status = 'running', completed_at = NULL, last_activity_at = ${dialect.now()}
+       SET status = 'running',
+           completed_at = NULL,
+           started_at = ${dialect.now()},
+           last_activity_at = ${dialect.now()}
        WHERE id = $1`,
       [id]
     );
