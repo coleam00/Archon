@@ -9,6 +9,7 @@
     "./types": "./src/types.ts",
     "./claude/provider": "./src/claude/provider.ts",
     "./claude/config": "./src/claude/config.ts",
+    "./claude/binary-resolver": "./src/claude/binary-resolver.ts",
     "./codex/provider": "./src/codex/provider.ts",
     "./codex/config": "./src/codex/config.ts",
     "./codex/binary-resolver": "./src/codex/binary-resolver.ts",

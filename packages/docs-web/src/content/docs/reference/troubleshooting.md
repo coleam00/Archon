@@ -280,6 +280,41 @@ docker compose exec app ls -la /.archon/workspaces
 docker compose exec app git clone https://github.com/user/repo /.archon/workspaces/test-repo
 ```
 
+## "Claude Code not found" When Running Compiled Binary
+
+**Symptom:** A workflow that uses Claude fails with:
+
+```
+Claude Code not found. Archon requires the Claude Code executable to be
+reachable at a configured path in compiled builds.
+```
+
+**Cause:** Compiled Archon binaries (`archon` from the curl/PowerShell installer or Homebrew) do not bundle Claude Code. They need an explicit path to the Claude Code executable. Source/dev mode (`bun run`) auto-resolves via `node_modules` and is unaffected.
+
+**Fix:** Install Claude Code separately and point Archon at it.
+
+```bash
+# macOS / Linux / WSL — Anthropic's recommended native installer
+curl -fsSL https://claude.ai/install.sh | bash
+export CLAUDE_BIN_PATH="$HOME/.local/bin/claude"
+
+# Windows (PowerShell)
+irm https://claude.ai/install.ps1 | iex
+$env:CLAUDE_BIN_PATH = "$env:USERPROFILE\.local\bin\claude.exe"
+```
+
+For a durable setup, set the path in `~/.archon/config.yaml` instead:
+
+```yaml
+assistants:
+  claude:
+    claudeBinaryPath: /absolute/path/to/claude
+```
+
+`archon setup` auto-detects and writes `CLAUDE_BIN_PATH` for you. Docker users do not need to do anything — the image pre-sets the variable.
+
+See the [AI Assistants → Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only) guide for the full install matrix.
+
 ## Workflows Hang Silently When Run Inside Claude Code
 
 **Symptom:** Workflows started from within a Claude Code session (e.g., via the Terminal tool) produce no output, or the CLI emits a warning about `CLAUDECODE=1` before the workflow hangs.
