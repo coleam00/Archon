@@ -216,7 +216,7 @@ function applyEnvOverrides(config: MergedConfig): MergedConfig {
 
   // Assistant override
   const envAssistant = process.env.DEFAULT_AI_ASSISTANT;
-  if (envAssistant === 'claude' || envAssistant === 'codex') {
+  if (envAssistant === 'claude' || envAssistant === 'codex' || envAssistant === 'copilot') {
     config.assistant = envAssistant;
   }
 

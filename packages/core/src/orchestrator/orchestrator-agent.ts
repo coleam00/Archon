@@ -785,7 +785,11 @@ export async function handleMessage(
     }
 
     const requestOptions: SendQueryOptions = {
-      assistantConfig: config.assistants[providerKey] ?? {},
+      assistantConfig:
+        (config.assistants[providerKey as 'claude' | 'codex' | 'copilot'] as Record<
+          string,
+          unknown
+        >) ?? {},
       env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
     };
 

@@ -2473,20 +2473,14 @@ export function registerApiRoutes(
         }
         updates.defaultAssistant = body.assistant;
       }
-      if (body.assistants !== undefined) {
-        const unknownProviders = Object.keys(body.assistants).filter(
-          id => !isRegisteredProvider(id)
-        );
-        if (unknownProviders.length > 0) {
-          return apiError(
-            c,
-            400,
-            `Unknown provider(s) in assistants: ${unknownProviders.join(', ')}. Available: ${getProviderInfoList()
-              .map(p => p.id)
-              .join(', ')}`
-          );
-        }
-        updates.assistants = body.assistants;
+      if (body.claude !== undefined) {
+        updates.assistants = { ...updates.assistants, claude: body.claude };
+      }
+      if (body.codex !== undefined) {
+        updates.assistants = { ...updates.assistants, codex: body.codex };
+      }
+      if (body.copilot !== undefined) {
+        updates.assistants = { ...updates.assistants, copilot: body.copilot };
       }
 
       await updateGlobalConfig(updates);

@@ -30,6 +30,45 @@ export interface CopilotProviderDefaults {
 }
 
 /**
+ * Union type of all provider defaults.
+ */
+export type ProviderDefaults =
+  | ClaudeProviderDefaults
+  | CodexProviderDefaults
+  | CopilotProviderDefaults;
+
+/**
+ * Map of provider IDs to their default configurations.
+ */
+export interface ProviderDefaultsMap {
+  claude: ClaudeProviderDefaults;
+  codex: CodexProviderDefaults;
+  copilot: CopilotProviderDefaults;
+}
+
+/**
+ * Provider registration entry for the registry.
+ */
+export interface ProviderRegistration {
+  id: string;
+  displayName: string;
+  factory: () => IAgentProvider;
+  capabilities: ProviderCapabilities;
+  isModelCompatible: (model: string) => boolean;
+  builtIn: boolean;
+}
+
+/**
+ * Provider info exposed via API (excludes factory function).
+ */
+export interface ProviderInfo {
+  id: string;
+  displayName: string;
+  capabilities: ProviderCapabilities;
+  builtIn: boolean;
+}
+
+/**
  * Token usage statistics from AI provider responses.
  */
 export interface TokenUsage {

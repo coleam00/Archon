@@ -46,6 +46,8 @@ interface SetupConfig {
     claudeOauthToken?: string;
     codex: boolean;
     codexTokens?: CodexTokens;
+    copilot: boolean;
+    copilotToken?: string;
     defaultAssistant: string;
   };
   platforms: {
@@ -95,6 +97,7 @@ interface ExistingConfig {
   hasDatabase: boolean;
   hasClaude: boolean;
   hasCodex: boolean;
+  hasCopilot: boolean;
   platforms: {
     github: boolean;
     telegram: boolean;
@@ -249,6 +252,7 @@ export function checkExistingConfig(): ExistingConfig | null {
       hasEnvValue(content, 'CODEX_ACCESS_TOKEN') &&
       hasEnvValue(content, 'CODEX_REFRESH_TOKEN') &&
       hasEnvValue(content, 'CODEX_ACCOUNT_ID'),
+    hasCopilot: hasEnvValue(content, 'COPILOT_ENABLED'),
     platforms: {
       github: hasEnvValue(content, 'GITHUB_TOKEN') || hasEnvValue(content, 'GH_TOKEN'),
       telegram: hasEnvValue(content, 'TELEGRAM_BOT_TOKEN'),
@@ -531,6 +535,48 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
 }
 
 /**
+ * Collect GitHub Copilot authentication
+ */
+async function collectCopilotAuth(): Promise<string | null> {
+  note(
+    'GitHub Copilot Authentication\n\n' +
+      'GitHub Copilot uses your existing GitHub CLI authentication.\n\n' +
+      'To authenticate:\n' +
+      '1. Run `gh auth login` in your terminal\n' +
+      '2. Complete the authentication flow\n\n' +
+      'The Copilot SDK will use your existing gh CLI credentials.\n' +
+      'No additional tokens are needed.',
+    'GitHub Copilot Setup'
+  );
+
+  const isAuthenticated = await confirm({
+    message: 'Have you authenticated with GitHub CLI (gh auth login)?',
+  });
+
+  if (isCancel(isAuthenticated)) {
+    cancel('Setup cancelled.');
+    process.exit(0);
+  }
+
+  if (!isAuthenticated) {
+    return null;
+  }
+
+  // Verify gh CLI is available
+  if (!isCommandAvailable('gh')) {
+    note(
+      'GitHub CLI (gh) is not installed.\n\n' +
+        'Install it from: https://cli.github.com/\n\n' +
+        'After installation, run `gh auth login` to authenticate.',
+      'GitHub CLI Not Found'
+    );
+    return null;
+  }
+
+  return 'gh-cli';
+}
+
+/**
  * Collect AI assistant configuration
  */
 async function collectAIConfig(): Promise<SetupConfig['ai']> {
@@ -540,6 +586,7 @@ async function collectAIConfig(): Promise<SetupConfig['ai']> {
     options: [
       { value: 'claude', label: 'Claude (Recommended)', hint: 'Anthropic Claude Code SDK' },
       { value: 'codex', label: 'Codex', hint: 'OpenAI Codex SDK' },
+      { value: 'copilot', label: 'GitHub Copilot', hint: 'GitHub Copilot SDK' },
     ],
     required: false,
   });
@@ -551,6 +598,7 @@ async function collectAIConfig(): Promise<SetupConfig['ai']> {
 
   let hasClaude = assistants.includes('claude');
   let hasCodex = assistants.includes('codex');
+  let hasCopilot = assistants.includes('copilot');
 
   // Check if selected CLI tools are installed
   if (hasClaude && !isCommandAvailable('claude')) {
@@ -650,11 +698,12 @@ After upgrading, run 'archon setup' again.`,
     }
   }
 
-  if (!hasClaude && !hasCodex) {
+  if (!hasClaude && !hasCodex && !hasCopilot) {
     log.warning('No AI assistant selected. You can add one later by running `archon setup` again.');
     return {
       claude: false,
       codex: false,
+      copilot: false,
       defaultAssistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
     };
   }
@@ -663,6 +712,7 @@ After upgrading, run 'archon setup' again.`,
   let claudeApiKey: string | undefined;
   let claudeOauthToken: string | undefined;
   let codexTokens: CodexTokens | undefined;
+  let copilotToken: string | undefined;
 
   // Collect Claude auth if selected
   if (hasClaude) {
@@ -678,11 +728,22 @@ After upgrading, run 'archon setup' again.`,
     codexTokens = tokens ?? undefined;
   }
 
+  // Collect Copilot auth if selected
+  if (hasCopilot) {
+    const token = await collectCopilotAuth();
+    if (token === null) {
+      hasCopilot = false;
+    } else {
+      copilotToken = token;
+    }
+  }
+
   // Determine default assistant — use the registry, but keep setup/auth flows built-in only.
   // Default to first registered built-in provider rather than hardcoding 'claude'.
   let defaultAssistant = getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude';
 
-  if (hasClaude && hasCodex) {
+  const selectedCount = [hasClaude, hasCodex, hasCopilot].filter(Boolean).length;
+  if (selectedCount > 1) {
     const providerChoices = getRegisteredProviders()
       .filter(p => p.builtIn)
       .map(p => ({
@@ -701,8 +762,10 @@ After upgrading, run 'archon setup' again.`,
     }
 
     defaultAssistant = defaultChoice;
-  } else if (hasCodex && !hasClaude) {
+  } else if (hasCodex && !hasClaude && !hasCopilot) {
     defaultAssistant = 'codex';
+  } else if (hasCopilot && !hasClaude && !hasCodex) {
+    defaultAssistant = 'copilot';
   }
 
   return {
@@ -712,6 +775,8 @@ After upgrading, run 'archon setup' again.`,
     claudeOauthToken,
     codex: hasCodex,
     codexTokens,
+    copilot: hasCopilot,
+    copilotToken,
     defaultAssistant,
   };
 }
@@ -1084,6 +1149,13 @@ export function generateEnvContent(config: SetupConfig): string {
     lines.push('');
   }
 
+  if (config.ai.copilot) {
+    lines.push('# GitHub Copilot');
+    lines.push('# Uses GitHub CLI authentication (gh auth login)');
+    lines.push('COPILOT_ENABLED=true');
+    lines.push('');
+  }
+
   // Default AI Assistant
   lines.push('# Default AI Assistant');
   lines.push(`DEFAULT_AI_ASSISTANT=${config.ai.defaultAssistant}`);
@@ -1390,6 +1462,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       `Database: ${existing.hasDatabase ? 'PostgreSQL' : 'SQLite'}`,
       `Claude: ${existing.hasClaude ? 'Configured' : 'Not configured'}`,
       `Codex: ${existing.hasCodex ? 'Configured' : 'Not configured'}`,
+      `Copilot: ${existing.hasCopilot ? 'Configured' : 'Not configured'}`,
       `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : 'None'}`,
     ].join('\n');
 
@@ -1427,6 +1500,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       ai: {
         claude: existing?.hasClaude ?? false,
         codex: existing?.hasCodex ?? false,
+        copilot: existing?.hasCopilot ?? false,
         defaultAssistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
       },
       platforms: {
@@ -1595,6 +1669,9 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   }
   if (config.ai.codex && config.ai.codexTokens) {
     aiConfigured.push('Codex');
+  }
+  if (config.ai.copilot) {
+    aiConfigured.push('GitHub Copilot');
   }
 
   const summaryLines = [

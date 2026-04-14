@@ -30,6 +30,10 @@ export function isModelCompatible(
   provider: 'claude' | 'codex' | 'copilot',
   model?: string
 ): boolean {
+  // Validate provider is one of the allowed values
+  if (!['claude', 'codex', 'copilot'].includes(provider)) {
+    throw new Error(`Unknown provider '${provider}'`);
+  }
   if (!model) return true;
   if (provider === 'claude') return isClaudeModel(model);
   if (provider === 'copilot') return true;

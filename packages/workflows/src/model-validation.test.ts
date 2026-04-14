@@ -48,6 +48,12 @@ describe('model-validation (registry-driven)', () => {
       expect(isModelCompatible('copilot', '')).toBe(true);
     });
 
+    it('should accept any model for copilot (copilot accepts all)', () => {
+      expect(isModelCompatible('copilot', 'any-model')).toBe(true);
+      expect(isModelCompatible('copilot', 'sonnet')).toBe(true);
+      expect(isModelCompatible('copilot', 'gpt-4')).toBe(true);
+    });
+
     it('should throw on unknown providers (fail-fast)', () => {
       expect(() => isModelCompatible('my-llm', 'any-model')).toThrow(/Unknown provider 'my-llm'/);
     });

@@ -15,8 +15,10 @@ import type {
 } from './types';
 import { ClaudeProvider } from './claude/provider';
 import { CodexProvider } from './codex/provider';
+import { CopilotProvider } from './copilot/provider';
 import { CLAUDE_CAPABILITIES } from './claude/capabilities';
 import { CODEX_CAPABILITIES } from './codex/capabilities';
+import { COPILOT_CAPABILITIES } from './copilot/capabilities';
 import { UnknownProviderError } from './errors';
 import { createLogger } from '@archon/paths';
 
@@ -128,6 +130,14 @@ export function registerBuiltinProviders(): void {
           !claudeAliases.includes(model) && !model.startsWith('claude-') && model !== 'inherit'
         );
       },
+      builtIn: true,
+    },
+    {
+      id: 'copilot',
+      displayName: 'GitHub Copilot',
+      factory: () => new CopilotProvider(),
+      capabilities: COPILOT_CAPABILITIES,
+      isModelCompatible: (): boolean => true,
       builtIn: true,
     },
   ];

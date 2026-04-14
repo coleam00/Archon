@@ -35,6 +35,7 @@ export { UnknownProviderError } from './errors';
 // Provider classes
 export { ClaudeProvider } from './claude/provider';
 export { CodexProvider } from './codex/provider';
+export { CopilotProvider } from './copilot/provider';
 
 // Config parsers
 export { parseClaudeConfig, type ClaudeProviderDefaults } from './claude/config';

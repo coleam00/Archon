@@ -281,7 +281,7 @@ export async function executeWorkflow(
   let resolvedProvider: 'claude' | 'codex' | 'copilot';
   let providerSource: string;
   if (workflow.provider) {
-    resolvedProvider = workflow.provider;
+    resolvedProvider = workflow.provider as 'claude' | 'codex' | 'copilot';
     providerSource = 'workflow definition';
   } else if (workflow.model) {
     resolvedProvider = inferProviderFromModel(workflow.model, config.assistant);

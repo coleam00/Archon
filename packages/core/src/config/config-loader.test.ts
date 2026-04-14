@@ -245,29 +245,32 @@ streaming:
       expect(config.streaming.telegram).toBe('batch');
     });
 
-    test('throws on unknown DEFAULT_AI_ASSISTANT env var', async () => {
+    test('accepts copilot as DEFAULT_AI_ASSISTANT env var', async () => {
       mockReadConfigFile.mockResolvedValue('');
-      process.env.DEFAULT_AI_ASSISTANT = 'nonexistent-provider';
+      process.env.DEFAULT_AI_ASSISTANT = 'copilot';
 
-      await expect(loadConfig()).rejects.toThrow(/not a registered provider/);
+      const config = await loadConfig();
+      expect(config.assistant).toBe('copilot');
     });
 
-    test('throws on unknown defaultAssistant in global config', async () => {
-      mockReadConfigFile.mockResolvedValue('defaultAssistant: nonexistent-provider');
+    test('accepts copilot in global config', async () => {
+      mockReadConfigFile.mockResolvedValue('defaultAssistant: copilot');
 
-      await expect(loadConfig()).rejects.toThrow(/not a registered provider/);
+      const config = await loadConfig();
+      expect(config.assistant).toBe('copilot');
     });
 
-    test('throws on unknown assistant in repo config', async () => {
+    test('accepts copilot in repo config', async () => {
       mockReadConfigFile.mockImplementation(async (path: string) => {
         const normalized = path.replace(/\\/g, '/');
         if (normalized.includes('/tmp/test-repo/.archon/config.yaml')) {
-          return 'assistant: nonexistent-provider';
+          return 'assistant: copilot';
         }
         return '';
       });
 
-      await expect(loadConfig('/tmp/test-repo')).rejects.toThrow(/not a registered provider/);
+      const config = await loadConfig('/tmp/test-repo');
+      expect(config.assistant).toBe('copilot');
     });
 
     test('repo config overrides global config', async () => {

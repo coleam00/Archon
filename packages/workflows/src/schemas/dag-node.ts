@@ -489,7 +489,7 @@ export const dagNodeSchema = dagNodeBaseSchema
     // Provider/model compatibility (AI nodes only)
     if (!hasBash && !hasLoop && !hasScript && data.provider && data.model) {
       try {
-        if (!isModelCompatible(data.provider, data.model)) {
+        if (!isModelCompatible(data.provider as 'claude' | 'codex' | 'copilot', data.model)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message: `model "${data.model}" is not compatible with provider "${data.provider}"`,
