@@ -521,10 +521,17 @@ function buildBaseClaudeOptions(
 ): Options {
   // `--no-env-file` is a Bun flag that prevents auto-loading `.env` from the
   // target repo cwd into the Claude Code subprocess. It only applies when the
-  // subprocess is spawned through Bun/Node (i.e. the executable is a `.js`
-  // file). For a native Claude Code binary (from the curl/PowerShell
-  // installer), the flag is passed directly to the binary, which rejects
-  // unknown options. We emit `executableArgs` only when targeting a JS file.
+  // subprocess is spawned through Bun/Node (executable is a `.js` file). For
+  // a native Claude Code binary (curl/PowerShell installer), the flag is
+  // passed directly to the binary, which rejects unknown options.
+  //
+  // Dropping the flag for native binaries is verified safe — the native
+  // binary does not auto-load `.env` from CWD (probed end-to-end with a
+  // sentinel `.env` and `.env.local` in the workflow CWD; both arrived UNSET
+  // in the spawned bash tool). The first-layer protection — `stripCwdEnv()`
+  // in `@archon/paths` (#1067) — removes CWD env keys from the parent
+  // process before spawn, so the subprocess inherits a clean env regardless
+  // of executable type.
   const isJsExecutable = cliPath === undefined || cliPath.endsWith('.js');
 
   return {
