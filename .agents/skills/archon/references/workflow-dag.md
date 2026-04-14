@@ -134,9 +134,15 @@ These are workflow-level controls, not node-level controls:
 | Field | Codex status | Notes |
 | --- | --- | --- |
 | `interactive` | supported | workflow-level switch for approval delivery and interactive loop behavior |
-| `modelReasoningEffort` | parsed but not runtime-effective per workflow | current execution still uses `assistants.codex.modelReasoningEffort` from Archon config |
-| `webSearchMode` | parsed but not runtime-effective per workflow | current execution still uses `assistants.codex.webSearchMode` from Archon config |
-| `additionalDirectories` | parsed but not runtime-effective per workflow | current execution still uses `assistants.codex.additionalDirectories` from Archon config |
+| `modelReasoningEffort` | supported | workflow-level override, with `assistants.codex.modelReasoningEffort` as fallback |
+| `webSearchMode` | supported | workflow-level override, with `assistants.codex.webSearchMode` as fallback |
+| `additionalDirectories` | supported | workflow-level override, with `assistants.codex.additionalDirectories` as fallback |
+
+Precedence for these workflow-level Codex tuning fields is:
+
+1. workflow YAML
+2. `assistants.codex.*` from Archon config
+3. SDK defaults
 
 ## Conditions
 

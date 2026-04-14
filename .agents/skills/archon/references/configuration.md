@@ -27,6 +27,12 @@ Use repo config when the change is project-specific:
 - disable bundled defaults for one repo
 - add repo-specific Codex defaults
 
+Use workflow YAML when one Codex workflow should run with its own tuning:
+
+- set workflow-specific `modelReasoningEffort`
+- set workflow-specific `webSearchMode`
+- set workflow-specific `additionalDirectories`
+
 Use global config when the change is user-wide:
 
 - prefer Codex by default across repos
@@ -125,6 +131,26 @@ defaults:
 | `defaults.loadDefaultWorkflows` | whether bundled workflows are loaded at runtime |
 | `docs.path` | repo docs path used by workflow surfaces that care about docs |
 | `env` | per-project env vars merged into workflow execution config; most relevant when a workflow surface consumes `config.envVars` |
+
+## Workflow-Level Codex Overrides
+
+For Codex, these workflow YAML fields override Archon config for that workflow:
+
+- `modelReasoningEffort`
+- `webSearchMode`
+- `additionalDirectories`
+
+Runtime precedence for those fields is:
+
+1. workflow YAML
+2. `assistants.codex.*` in Archon config
+3. SDK defaults
+
+That means:
+
+- use Archon config for shared defaults across many Codex workflows
+- use workflow YAML when one workflow needs a different execution profile
+- do not expect node-level versions of those fields
 
 ## Editing Guidance
 

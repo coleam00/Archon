@@ -19,9 +19,9 @@ truth table for Codex-safe Archon authoring.
 | `skills` | supported per-node | ignored per-node | global or repo `.agents/skills/` | global/repo discovery, not equivalent |
 | `allowed_tools` | supported per-node | ignored | Codex config / MCP config | global-only, not equivalent |
 | `denied_tools` | supported per-node | ignored | Codex config / MCP config | global-only, not equivalent |
-| `modelReasoningEffort` | not the same field | parsed but not runtime-effective per workflow | Archon assistant config | config-only truth today |
-| `webSearchMode` | not the same field | parsed but not runtime-effective per workflow | Archon assistant config | config-only truth today |
-| `additionalDirectories` | not the same field | parsed but not runtime-effective per workflow | Archon assistant config | config-only truth today |
+| `modelReasoningEffort` | not the same field | supported for Codex | workflow YAML or Archon config | workflow-level override with config fallback |
+| `webSearchMode` | not the same field | supported for Codex | workflow YAML or Archon config | workflow-level override with config fallback |
+| `additionalDirectories` | not the same field | supported for Codex | workflow YAML or Archon config | workflow-level override with config fallback |
 
 ## Feature Notes
 
@@ -59,16 +59,21 @@ Loop-node retry is still not valid.
 
 ### `modelReasoningEffort`, `webSearchMode`, and `additionalDirectories`
 
-These fields matter for Codex, but not in the same way the YAML surface may
-suggest.
+These are real workflow-level Codex tuning fields.
 
-- the workflow loader parses them
-- current Codex execution still pulls these values from
+- if the workflow sets them, execution uses the workflow value
+- if the workflow omits them, execution falls back to
   `config.assistants.codex.*`
-- do not treat workflow YAML as an isolated per-workflow tuning surface for
-  these fields unless the runtime is changed to honor them
+- they remain workflow-level controls, not node-level controls
 
-For current Codex behavior, use Archon config:
+Current precedence:
+
+1. workflow YAML
+2. `config.assistants.codex.*`
+3. SDK defaults
+
+Archon config still matters as the default source when the workflow does not set
+these fields:
 
 - `assistants.codex.modelReasoningEffort`
 - `assistants.codex.webSearchMode`
