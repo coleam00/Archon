@@ -6,7 +6,7 @@
 
 import { createHash } from 'crypto';
 import { access, readFile, rm } from 'fs/promises';
-import { join } from 'path';
+import { join, resolve } from 'path';
 
 import { createLogger } from '@archon/paths';
 import {
@@ -484,23 +484,13 @@ export class WorktreeProvider implements IIsolationProvider {
   ): Promise<WorktreeEnvironment | null> {
     // Check if worktree already exists at expected path
     if (await worktreeExists(toWorktreePath(worktreePath))) {
-      // Verify the existing worktree belongs to the same repo root.
-      // Two clones of the same remote resolve to the same worktree base dir,
-      // so a worktree created from clone A is visible from clone B. Without
-      // this check, clone B would silently adopt clone A's environment.
-      const existingRepo = await this.getWorktreeSourceRepo(worktreePath);
-      if (existingRepo && existingRepo !== request.canonicalRepoPath) {
-        getLog().warn(
-          {
-            worktreePath,
-            branchName,
-            existingRepo,
-            requestRepo: request.canonicalRepoPath,
-          },
-          'worktree_adoption_skipped_cross_checkout'
-        );
-        return null;
-      }
+      // Verify the existing worktree belongs to the same repo root before
+      // adopting. Two clones of the same remote resolve to the same worktree
+      // base dir, so a worktree created from clone A is visible from clone B.
+      // Throws on cross-checkout or unverifiable state — surfacing the problem
+      // is safer than falling through to createNewBranch (which would report
+      // a confusing "branch already exists" cascade) or silently adopting.
+      await this.verifyWorktreeOwnership(worktreePath, request.canonicalRepoPath, branchName);
 
       getLog().info({ worktreePath, branchName }, 'worktree_adopted');
       return this.buildAdoptedEnvironment(worktreePath, branchName, request);
@@ -525,17 +515,65 @@ export class WorktreeProvider implements IIsolationProvider {
   }
 
   /**
-   * Read the source repo root from a worktree's .git file.
-   * Returns null if the worktree .git file can't be read (non-fatal).
+   * Verify that the worktree at the given path belongs to the expected repo.
+   *
+   * Throws if the worktree's parent repo doesn't match the request, or if
+   * ownership cannot be determined. The caller relies on the throw-or-return
+   * contract: a successful return means the caller may safely adopt the
+   * worktree. This is intentionally strict — a permissive fallback here
+   * would re-introduce the cross-checkout bug this guard exists to prevent.
+   *
+   * Note: string comparison uses `resolve()` to normalize trailing slashes
+   * and relative components. Symlinked paths (where canonical vs registered
+   * paths differ by symlink resolution) are not equated — callers should
+   * register codebases with consistent path forms.
    */
-  private async getWorktreeSourceRepo(worktreePath: string): Promise<string | null> {
+  private async verifyWorktreeOwnership(
+    worktreePath: string,
+    expectedRepo: string,
+    branchName: string
+  ): Promise<void> {
+    let gitContent: string;
     try {
-      const gitContent = await readFile(join(worktreePath, '.git'), 'utf-8');
-      // gitdir: /path/to/repo/.git/worktrees/branch-name
-      const match = /gitdir: (.+)\/\.git\/worktrees\//.exec(gitContent);
-      return match ? match[1] : null;
-    } catch {
-      return null;
+      gitContent = await readFile(join(worktreePath, '.git'), 'utf-8');
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      // EISDIR: .git is a directory — path holds a full checkout, not a
+      // worktree. Refusing adoption prevents accidentally treating an
+      // unrelated repo at this path as ours.
+      if (err.code === 'EISDIR') {
+        throw new Error(
+          `Cannot adopt ${worktreePath}: path contains a full git checkout, not a worktree.`
+        );
+      }
+      // ENOENT: .git file missing despite worktreeExists() reporting true —
+      // a TOCTOU race or filesystem corruption. Fail fast.
+      // EACCES/EIO/etc.: cannot verify ownership — fail fast rather than
+      // defaulting to permissive adoption.
+      throw new Error(`Cannot verify worktree ownership at ${worktreePath}: ${err.message}`);
+    }
+
+    // gitdir: /path/to/repo/.git/worktrees/branch-name
+    const match = /gitdir: (.+)\/\.git\/worktrees\//.exec(gitContent);
+    if (!match) {
+      // Not a git-worktree pointer (e.g., submodule pointer, or malformed).
+      // We cannot confirm this is our worktree, so refuse adoption.
+      throw new Error(
+        `Cannot adopt ${worktreePath}: .git pointer is not a git-worktree reference.`
+      );
+    }
+
+    const existingRepo = resolve(match[1]);
+    const expectedResolved = resolve(expectedRepo);
+    if (existingRepo !== expectedResolved) {
+      getLog().warn(
+        { worktreePath, branchName, existingRepo, expectedRepo: expectedResolved },
+        'worktree_adoption_refused_cross_checkout'
+      );
+      throw new Error(
+        `Worktree at ${worktreePath} belongs to a different clone (${existingRepo}). ` +
+          'Remove it from that clone or use a different codebase registration.'
+      );
     }
   }
 

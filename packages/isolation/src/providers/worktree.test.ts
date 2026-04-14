@@ -98,6 +98,8 @@ describe('WorktreeProvider', () => {
     getDefaultBranchSpy.mockRestore();
     syncWorkspaceSpy.mockRestore();
     mockAccess.mockClear();
+    mockReadFile.mockClear();
+    mockRm.mockClear();
   });
 
   describe('generateBranchName', () => {
@@ -506,8 +508,10 @@ describe('WorktreeProvider', () => {
       );
     });
 
-    test('adopts existing worktree if found', async () => {
+    test('adopts existing worktree when repo ownership matches', async () => {
       worktreeExistsSpy.mockResolvedValue(true);
+      // .git file points to the same repo root as the request
+      mockReadFile.mockResolvedValue('gitdir: /workspace/repo/.git/worktrees/archon/issue-42\n');
 
       const env = await provider.create(baseRequest);
 
@@ -522,43 +526,53 @@ describe('WorktreeProvider', () => {
       expect(addCalls).toHaveLength(0);
     });
 
-    test('skips adoption when worktree belongs to different repo root', async () => {
-      worktreeExistsSpy.mockResolvedValueOnce(true); // worktree exists at expected path
+    test('throws when worktree belongs to different repo root (cross-checkout)', async () => {
+      worktreeExistsSpy.mockResolvedValue(true);
+      mockReadFile.mockResolvedValue('gitdir: /different/repo/.git/worktrees/archon/issue-42\n');
 
-      // .git file points to a different repo root
-      mockReadFile.mockResolvedValueOnce(
-        'gitdir: /different/repo/.git/worktrees/archon/issue-42\n'
-      );
-
-      const env = await provider.create(baseRequest);
-
-      // Should NOT adopt — should create a new worktree instead
-      expect(env.metadata).toHaveProperty('adopted', false);
+      await expect(provider.create(baseRequest)).rejects.toThrow(/belongs to a different clone/);
     });
 
-    test('adopts worktree when repo root matches', async () => {
-      worktreeExistsSpy.mockResolvedValueOnce(true); // worktree exists at expected path
+    test('throws when .git is a directory (full checkout, not a worktree)', async () => {
+      worktreeExistsSpy.mockResolvedValue(true);
+      const eisdirError = new Error('EISDIR') as NodeJS.ErrnoException;
+      eisdirError.code = 'EISDIR';
+      mockReadFile.mockRejectedValue(eisdirError);
 
-      // .git file points to the same repo root as the request
-      mockReadFile.mockResolvedValueOnce(
-        'gitdir: /workspace/repo/.git/worktrees/archon/issue-42\n'
+      await expect(provider.create(baseRequest)).rejects.toThrow(
+        /path contains a full git checkout/
       );
-
-      const env = await provider.create(baseRequest);
-
-      expect(env.metadata).toHaveProperty('adopted', true);
-      expect(env.workingPath).toContain('issue-42');
     });
 
-    test('adopts worktree when .git file unreadable (backward compat)', async () => {
-      worktreeExistsSpy.mockResolvedValueOnce(true); // worktree exists at expected path
+    test('throws when .git file cannot be read (permission denied)', async () => {
+      worktreeExistsSpy.mockResolvedValue(true);
+      const eaccesError = new Error('EACCES: permission denied') as NodeJS.ErrnoException;
+      eaccesError.code = 'EACCES';
+      mockReadFile.mockRejectedValue(eaccesError);
 
-      // .git file read fails (e.g., not a worktree, corrupt, missing)
-      mockReadFile.mockRejectedValueOnce(new Error('ENOENT: no such file'));
+      await expect(provider.create(baseRequest)).rejects.toThrow(
+        /Cannot verify worktree ownership/
+      );
+    });
 
-      const env = await provider.create(baseRequest);
+    test('throws when .git pointer is not a git-worktree reference (e.g., submodule)', async () => {
+      worktreeExistsSpy.mockResolvedValue(true);
+      mockReadFile.mockResolvedValue('gitdir: /workspace/repo/.git/modules/submodule-name\n');
 
-      // Should still adopt — backward compat when we can't determine repo root
+      await expect(provider.create(baseRequest)).rejects.toThrow(/not a git-worktree reference/);
+    });
+
+    test('adopts across path normalization differences (trailing slash)', async () => {
+      const request: IsolationRequest = {
+        ...baseRequest,
+        canonicalRepoPath: '/workspace/repo/' as IsolationRequest['canonicalRepoPath'],
+      };
+      worktreeExistsSpy.mockResolvedValue(true);
+      // .git file has no trailing slash — resolve() should normalize
+      mockReadFile.mockResolvedValue('gitdir: /workspace/repo/.git/worktrees/archon/issue-42\n');
+
+      const env = await provider.create(request);
+
       expect(env.metadata).toHaveProperty('adopted', true);
     });
 
@@ -645,6 +659,42 @@ describe('WorktreeProvider', () => {
         ]),
         expect.any(Object)
       );
+    });
+
+    test('propagates error if branch -f reset fails (protected branch, etc.)', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        // First worktree add call fails (branch exists)
+        if (args.includes('worktree') && args.includes('add') && args.includes('-b')) {
+          const error = new Error(
+            'fatal: A branch named archon/issue-42 already exists.'
+          ) as Error & { stderr?: string };
+          error.stderr = 'fatal: A branch named archon/issue-42 already exists.';
+          throw error;
+        }
+        // Reset call fails (e.g., branch checked out elsewhere, update hook refused)
+        if (args.includes('branch') && args.includes('-f')) {
+          const error = new Error('fatal: cannot force update the branch') as Error & {
+            stderr?: string;
+          };
+          error.stderr = "fatal: cannot force update the current branch 'archon/issue-42'";
+          throw error;
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      await expect(provider.create(baseRequest)).rejects.toThrow(/cannot force update/);
+
+      // Verify we did NOT retry the worktree add after reset failure
+      const secondWorktreeAdd = execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return (
+          args.includes('worktree') &&
+          args.includes('add') &&
+          !args.includes('-b') &&
+          args.includes('archon/issue-42')
+        );
+      });
+      expect(secondWorktreeAdd).toHaveLength(0);
     });
 
     test('throws error if PR fetch fails (same-repo PR)', async () => {
@@ -1535,6 +1585,9 @@ describe('WorktreeProvider', () => {
 
     test('does not copy files when adopting existing worktree', async () => {
       worktreeExistsSpy.mockResolvedValue(true);
+      mockReadFile.mockResolvedValue(
+        'gitdir: /.archon/workspaces/owner/repo/.git/worktrees/archon/issue-42\n'
+      );
       const configLoader: RepoConfigLoader = async () => ({
         copyFiles: ['.env.example -> .env'],
       });
@@ -1684,6 +1737,7 @@ describe('WorktreeProvider', () => {
       // Simulate valid worktree: directory exists and IS a valid worktree
       accessSpy.mockResolvedValue(undefined); // Directory exists
       worktreeExistsSpy.mockResolvedValue(true); // And IS a valid worktree (will be adopted)
+      mockReadFile.mockResolvedValue('gitdir: /workspace/repo/.git/worktrees/archon/issue-999\n');
 
       await provider.create(request);
 
@@ -1979,6 +2033,9 @@ describe('WorktreeProvider', () => {
     test('does not sync workspace when adopting existing worktree', async () => {
       // Worktree exists - triggers adoption path (skips createWorktree)
       worktreeExistsSpy.mockResolvedValue(true);
+      mockReadFile.mockResolvedValue(
+        'gitdir: /workspace/owner/repo/.git/worktrees/archon/issue-42\n'
+      );
 
       await provider.create(baseRequest);
 

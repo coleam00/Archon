@@ -106,20 +106,22 @@ git status --porcelain
 
 ### 2.2 Branch Decision
 
-**IMPORTANT: Never switch branches or create new branches. The isolation system has already set up the correct branch for this worktree. Work on whatever branch you are currently on.**
-
-```
+```text
 ┌─ IN WORKTREE?
-│  └─ YES → Use current branch as-is
+│  └─ YES → Use current branch AS-IS. Do NOT switch branches. Do NOT create
+│           new branches. The isolation system has already set up the correct
+│           branch; any deviation operates on the wrong code.
 │           Log: "Using worktree at {path} on branch {branch}"
 │
 ├─ ON $BASE_BRANCH? (main, master, or configured base branch)
 │  └─ Q: Working directory clean?
 │     ├─ YES → Create branch: git checkout -b feature/{plan-slug}
+│     │        (only applies outside a worktree — e.g., manual CLI usage)
 │     └─ NO  → STOP: "Stash or commit changes first"
 │
 ├─ ON OTHER BRANCH?
-│  └─ Use it (assume it was set up for this work)
+│  └─ Use it AS-IS. Do NOT switch to another branch (e.g., one shown by
+│     `git branch` but not currently checked out).
 │     Log: "Using existing branch {name}"
 │
 └─ DIRTY STATE?
