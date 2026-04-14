@@ -181,6 +181,26 @@ export class WorktreeProvider implements IIsolationProvider {
       }
     }
 
+    // Prune stale worktree references — runs even when path is already gone,
+    // because git may still have a stale ref for a manually-deleted worktree
+    try {
+      await execFileAsync('git', ['-C', repoPath, 'worktree', 'prune'], { timeout: 15000 });
+    } catch (_error) {
+      // Best-effort — pruning failure is not critical
+      getLog().debug({ repoPath }, 'worktree_prune_failed');
+    }
+
+    // Post-removal verification: confirm worktree is actually gone from git
+    if (result.worktreeRemoved) {
+      const stillRegistered = await this.isWorktreeRegistered(repoPath, worktreePath);
+      if (stillRegistered) {
+        result.worktreeRemoved = false;
+        const warning = `Worktree at ${worktreePath} was reported removed but is still registered in git`;
+        getLog().warn({ worktreePath, repoPath }, 'worktree_removal_verification_failed');
+        result.warnings.push(warning);
+      }
+    }
+
     // Delete associated branch if provided (best-effort cleanup)
     if (options?.branchName) {
       result.branchDeleted = await this.deleteBranchTracked(repoPath, options.branchName, result);
@@ -210,6 +230,30 @@ export class WorktreeProvider implements IIsolationProvider {
       errorText.includes('does not exist') ||
       errorText.includes('is not a working tree')
     );
+  }
+
+  /**
+   * Check if a worktree path is still registered in `git worktree list`.
+   * Used for post-removal verification.
+   */
+  private async isWorktreeRegistered(repoPath: string, worktreePath: string): Promise<boolean> {
+    try {
+      const { stdout } = await execFileAsync(
+        'git',
+        ['-C', repoPath, 'worktree', 'list', '--porcelain'],
+        { timeout: 15000 }
+      );
+      // Porcelain output has "worktree <path>" lines with resolved absolute paths
+      const normalizedTarget = resolve(worktreePath);
+      return stdout.split('\n').some(line => {
+        if (!line.startsWith('worktree ')) return false;
+        const listed = line.slice('worktree '.length).trim();
+        return resolve(listed) === normalizedTarget;
+      });
+    } catch (_error) {
+      // If we can't verify, assume it's gone (don't block on verification failure)
+      return false;
+    }
   }
 
   /**
