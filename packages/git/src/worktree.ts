@@ -318,11 +318,15 @@ export async function verifyWorktreeOwnership(
     throw new Error(`Cannot adopt ${worktreePath}: .git pointer is not a git-worktree reference.`);
   }
 
-  const existingRepo = resolve(match[1]);
-  const expectedResolved = resolve(expectedRepo);
-  if (existingRepo !== expectedResolved) {
+  // Compare on resolved paths (normalizes trailing slashes and relative
+  // components) but display the raw path from the .git pointer so the user
+  // sees the value they'd recognize. On Windows, `resolve()` would prepend
+  // a drive letter to the POSIX-style gitdir, making the error message
+  // misleading and causing platform-specific test breakage.
+  const existingRepoRaw = match[1];
+  if (resolve(existingRepoRaw) !== resolve(expectedRepo)) {
     throw new Error(
-      `Worktree at ${worktreePath} belongs to a different clone (${existingRepo}). ` +
+      `Worktree at ${worktreePath} belongs to a different clone (${existingRepoRaw}). ` +
         'Remove it from that clone or use a different codebase registration.'
     );
   }
