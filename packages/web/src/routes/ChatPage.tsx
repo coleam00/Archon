@@ -1,8 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { useParams } from 'react-router';
-import { Search, PanelLeft, X } from 'lucide-react';
+import { useParams, useNavigate } from 'react-router';
+import { Search, PanelLeft, X, ArrowLeft } from 'lucide-react';
 import { ChatInterface } from '@/components/chat/ChatInterface';
 import { ProjectsSidebar } from '@/components/sidebar/ProjectsSidebar';
+import { useProject } from '@/contexts/ProjectContext';
 import { cn } from '@/lib/utils';
 
 const PANEL_MIN = 220;
@@ -26,6 +27,12 @@ function getInitialWidth(): number {
 export function ChatPage(): React.ReactElement {
   const { '*': rawConversationId } = useParams();
   const conversationId = rawConversationId ? decodeURIComponent(rawConversationId) : undefined;
+  const navigate = useNavigate();
+
+  const { selectedProjectId, codebases } = useProject();
+  const activeProject = selectedProjectId
+    ? (codebases?.find(cb => cb.id === selectedProjectId) ?? null)
+    : null;
 
   const [searchQuery, setSearchQuery] = useState('');
   const [width, setWidth] = useState(getInitialWidth);
@@ -118,7 +125,7 @@ export function ChatPage(): React.ReactElement {
               onChange={(e): void => {
                 setSearchQuery(e.target.value);
               }}
-              placeholder="Search..."
+              placeholder="Rechercher..."
               className="w-full rounded-md border border-border bg-surface-elevated py-1.5 pl-7 pr-2 text-xs text-text-primary placeholder:text-text-tertiary focus:border-primary focus:outline-none"
             />
           </div>
@@ -127,7 +134,7 @@ export function ChatPage(): React.ReactElement {
               setMobileConvOpen(false);
             }}
             className="md:hidden flex items-center justify-center rounded-md p-1.5 text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
-            aria-label="Close projects panel"
+            aria-label="Fermer le panneau projets"
           >
             <X className="h-4 w-4" />
           </button>
@@ -151,16 +158,32 @@ export function ChatPage(): React.ReactElement {
       <div className="flex flex-1 flex-col overflow-hidden min-w-0">
         {/* Mobile-only topbar */}
         <div className="sticky top-0 z-30 flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-2 md:hidden">
-          <button
-            onClick={(): void => {
-              setMobileConvOpen(true);
-            }}
-            className="flex items-center gap-2 rounded-md px-2 py-1.5 text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
-            aria-label="Open projects panel"
-          >
-            <PanelLeft className="h-4 w-4 shrink-0" />
-            <span className="text-xs font-medium">Projects</span>
-          </button>
+          {/* If a project is active and we have a conversationId, show back → project */}
+          {activeProject && conversationId ? (
+            <button
+              onClick={(): void => {
+                navigate(`/projects/${activeProject.id}`);
+              }}
+              className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
+              aria-label={`Retour à ${activeProject.name}`}
+            >
+              <ArrowLeft className="h-4 w-4 shrink-0" />
+              <span className="max-w-[160px] truncate text-xs font-medium">
+                {activeProject.name}
+              </span>
+            </button>
+          ) : (
+            <button
+              onClick={(): void => {
+                setMobileConvOpen(true);
+              }}
+              className="flex items-center gap-2 rounded-md px-2 py-1.5 text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
+              aria-label="Ouvrir le panneau projets"
+            >
+              <PanelLeft className="h-4 w-4 shrink-0" />
+              <span className="text-xs font-medium">Projets</span>
+            </button>
+          )}
         </div>
 
         <ChatInterface key={conversationId ?? 'new'} conversationId={conversationId ?? 'new'} />

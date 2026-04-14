@@ -8,6 +8,7 @@ import { ThemeProvider } from '@/contexts/ThemeContext';
 import { queryClient } from '@/lib/query-client';
 import { DashboardPage } from '@/routes/DashboardPage';
 import { ChatPage } from '@/routes/ChatPage';
+import { ProjectPage } from '@/routes/ProjectPage';
 import { WorkflowsPage } from '@/routes/WorkflowsPage';
 import { WorkflowExecutionPage } from '@/routes/WorkflowExecutionPage';
 import { WorkflowBuilderPage } from '@/routes/WorkflowBuilderPage';
@@ -73,6 +74,7 @@ export function App(): React.ReactElement {
                   <Route path="/" element={<Navigate to="/chat" replace />} />
                   <Route path="/chat" element={<ChatPage />} />
                   <Route path="/chat/*" element={<ChatPage />} />
+                  <Route path="/projects/:projectId" element={<ProjectPage />} />
                   <Route path="/dashboard" element={<DashboardPage />} />
                   <Route path="/workflows" element={<WorkflowsPage />} />
                   <Route path="/workflows/builder" element={<WorkflowBuilderPage />} />
