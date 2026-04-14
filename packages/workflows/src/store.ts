@@ -46,10 +46,14 @@ export interface IWorkflowStore {
   /**
    * Find the workflow run currently holding the lock on `workingPath`.
    *
-   * Pass `excludeId` and `selfStartedAt` from the calling dispatch so:
-   *   1. Self is never returned.
+   * Pass `self` from the calling dispatch so:
+   *   1. Self is never returned (excluded by `id != self.id`).
    *   2. Two near-simultaneous dispatches deterministically agree on which
    *      is "first" via the `(started_at, id)` tiebreaker — newer aborts.
+   *
+   * `id` and `startedAt` must travel together — the tiebreaker requires
+   * both. Bundling them as a single optional struct makes the
+   * paired-or-nothing invariant structural rather than a doc-only contract.
    *
    * Stale `pending` rows (older than ~5 minutes) are treated as orphaned
    * and ignored, so leaks from crashed dispatches don't permanently block
@@ -57,8 +61,7 @@ export interface IWorkflowStore {
    */
   getActiveWorkflowRunByPath(
     workingPath: string,
-    excludeId?: string,
-    selfStartedAt?: Date
+    self?: { id: string; startedAt: Date }
   ): Promise<WorkflowRun | null>;
   findResumableRun(workflowName: string, workingPath: string): Promise<WorkflowRun | null>;
   failOrphanedRuns(): Promise<{ count: number }>;

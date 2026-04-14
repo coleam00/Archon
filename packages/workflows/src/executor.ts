@@ -483,19 +483,21 @@ export async function executeWorkflow(
   // as orphaned, so leaks from crashed dispatches or resume orphans don't
   // permanently block the path.
   try {
-    const activeWorkflow = await deps.store.getActiveWorkflowRunByPath(
-      cwd,
-      workflowRun.id,
-      new Date(parseDbTimestamp(workflowRun.started_at))
-    );
+    const activeWorkflow = await deps.store.getActiveWorkflowRunByPath(cwd, {
+      id: workflowRun.id,
+      startedAt: new Date(parseDbTimestamp(workflowRun.started_at)),
+    });
     if (activeWorkflow) {
-      // We acquired the lock via createWorkflowRun, but lost the older-wins
-      // tiebreaker. Release immediately so we don't sit as a zombie pending.
+      // The lock query found another active row that wins the older-wins
+      // tiebreaker. Mark our own row terminal so it falls out of the
+      // active set immediately — without this, our row sits as
+      // pending/running and blocks the path until the 5-min stale window
+      // (or never, if we'd already promoted it to running via resume).
       await deps.store
         .updateWorkflowRun(workflowRun.id, { status: 'cancelled' })
         .catch((cleanupErr: Error) => {
           getLog().warn(
-            { err: cleanupErr, workflowRunId: workflowRun?.id },
+            { err: cleanupErr, workflowRunId: workflowRun?.id, cwd },
             'workflow.guard_self_cancel_failed'
           );
         });
@@ -537,7 +539,10 @@ export async function executeWorkflow(
     }
   } catch (error) {
     const err = error as Error;
-    getLog().error({ err, conversationId, cwd }, 'db_active_workflow_check_failed');
+    getLog().error(
+      { err, conversationId, cwd, pendingRunId: workflowRun.id },
+      'db_active_workflow_check_failed'
+    );
     // Release the lock token. workflowRun is finalized at this point
     // (pre-created or resumed or freshly created) and would otherwise sit
     // as pending/running, blocking the path. For pending the 5-min stale

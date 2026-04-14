@@ -2,8 +2,10 @@ import { describe, test, expect } from 'bun:test';
 import { formatDuration, parseDbTimestamp } from './duration';
 
 describe('formatDuration', () => {
-  test('returns "0s" for 0 ms', () => {
-    expect(formatDuration(0)).toBe('0s');
+  test('rounds 0ms up to "1s" — a run that just started should not display "0s"', () => {
+    // 0ms in practice means started_at and now are in the same DB second.
+    // Display should show "1s" (active, just started), not the misleading "0s".
+    expect(formatDuration(0)).toBe('1s');
   });
 
   test('rounds sub-second to "1s" so display never reads "0s" for an active run', () => {

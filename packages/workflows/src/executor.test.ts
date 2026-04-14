@@ -228,7 +228,10 @@ describe('executeWorkflow', () => {
         'db-conv-1'
       );
 
-      expect(getActiveSpy).toHaveBeenCalledWith('/tmp', 'self-run-789', expect.any(Date));
+      expect(getActiveSpy).toHaveBeenCalledWith(
+        '/tmp',
+        expect.objectContaining({ id: 'self-run-789', startedAt: expect.any(Date) })
+      );
     });
 
     it('marks self as cancelled when guard fires (no zombie pending row)', async () => {
@@ -293,6 +296,36 @@ describe('executeWorkflow', () => {
       expect(sentMessage).toContain('/workflow status');
       expect(sentMessage).toContain('/workflow cancel abc12345');
       expect(sentMessage).toContain('--branch');
+    });
+
+    it('still returns failure when guard self-cancel update throws (best-effort)', async () => {
+      const selfRun = makeRun({ id: 'self-run', status: 'pending' });
+      const otherRun = makeRun({ id: 'other-run', status: 'running' });
+      const updateSpy = mock(async (id: string) => {
+        // Self-cancel attempt fails — must not crash, must still surface
+        // the "in use" failure to the user.
+        if (id === 'self-run') throw new Error('Update failed');
+      });
+      const store = makeStore({
+        createWorkflowRun: mock(async () => selfRun),
+        getActiveWorkflowRunByPath: mock(async () => otherRun),
+        updateWorkflowRun: updateSpy,
+      });
+      const deps = makeDeps(store);
+
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test',
+        'db-conv-1'
+      );
+
+      // Cleanup failure must not mask the "in use" outcome.
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('already active');
     });
   });
 

@@ -205,40 +205,47 @@ export const STALE_PENDING_AGE_MS = 5 * 60 * 1000; // 5 minutes
 
 export async function getActiveWorkflowRunByPath(
   workingPath: string,
-  excludeId?: string,
-  selfStartedAt?: Date
+  self?: { id: string; startedAt: Date }
 ): Promise<WorkflowRun | null> {
   const isPostgres = getDatabaseType() === 'postgresql';
   const stalePendingCutoff = isPostgres
     ? `NOW() - INTERVAL '${String(STALE_PENDING_AGE_MS)} milliseconds'`
     : `datetime('now', '-${String(Math.floor(STALE_PENDING_AGE_MS / 1000))} seconds')`;
 
-  // Build params + clauses dynamically — null/undefined for $2/$3 doesn't
-  // play well with type inference across both dialects, so structure the
-  // WHERE so each optional param is always-positional when present.
+  // Build params + clauses dynamically. Self exclusion + tiebreaker travel
+  // together — the tiebreaker references both ids and timestamps.
   const params: unknown[] = [workingPath];
   const clauses: string[] = [
     'working_path = $1',
     `(status IN ('running', 'paused') OR (status = 'pending' AND started_at > ${stalePendingCutoff}))`,
   ];
-  if (excludeId !== undefined) {
-    params.push(excludeId);
+  if (self !== undefined) {
+    params.push(self.id);
     clauses.push(`id != $${String(params.length)}`);
   }
-  if (selfStartedAt !== undefined && excludeId !== undefined) {
+  if (self !== undefined) {
     // Older-wins tiebreaker. (started_at, id) is a total order so both
     // dispatches always agree on which is "first." Without this, two rows
     // with similar timestamps could mutually see each other and both abort.
     //
-    // Serialize Date to ISO string — bun:sqlite rejects Date bindings, and
-    // PostgreSQL accepts ISO timestamps for `< / =` comparison against
-    // TIMESTAMPTZ columns.
-    params.push(selfStartedAt.toISOString());
+    // Serialize Date to ISO string — bun:sqlite rejects Date bindings.
+    //
+    // Format-aware comparison:
+    //   PostgreSQL: started_at is TIMESTAMPTZ; cast the ISO param to
+    //     timestamptz so the comparison is chronological, not lexical.
+    //   SQLite: started_at is TEXT in "YYYY-MM-DD HH:MM:SS" format. Our
+    //     ISO param has "YYYY-MM-DDTHH:MM:SS.mmmZ". Lexical comparison is
+    //     WRONG: char 11 is space (0x20) in the column vs T (0x54) in the
+    //     param, so every column value lex-sorts before every ISO param —
+    //     making `started_at < $param` always TRUE regardless of actual
+    //     time. Wrap both sides in datetime() to force chronological
+    //     comparison via SQLite's date/time functions.
+    params.push(self.startedAt.toISOString());
     const startedAtParam = `$${String(params.length)}`;
     const idParam = `$${String(params.length - 1)}`;
-    clauses.push(
-      `(started_at < ${startedAtParam} OR (started_at = ${startedAtParam} AND id < ${idParam}))`
-    );
+    const colExpr = isPostgres ? 'started_at' : 'datetime(started_at)';
+    const paramExpr = isPostgres ? `${startedAtParam}::timestamptz` : `datetime(${startedAtParam})`;
+    clauses.push(`(${colExpr} < ${paramExpr} OR (${colExpr} = ${paramExpr} AND id < ${idParam}))`);
   }
 
   try {

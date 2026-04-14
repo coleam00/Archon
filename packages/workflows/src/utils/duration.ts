@@ -28,9 +28,10 @@ export function parseDbTimestamp(value: Date | string): number {
  * hour-level.
  */
 export function formatDuration(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) return '0s';
+  if (!Number.isFinite(ms) || ms < 0) return '0s';
 
-  // Round sub-second up to 1s so an active run never displays "0s".
+  // Round sub-second (including ms === 0 — treated as a just-started run
+  // rather than literal zero) up to 1s so an active run never displays "0s".
   const totalSeconds = Math.max(1, Math.floor(ms / 1000));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);

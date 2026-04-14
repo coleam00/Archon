@@ -574,40 +574,32 @@ describe('workflows database', () => {
       expect(query).toMatch(/started_at >.*INTERVAL.*milliseconds/);
     });
 
-    test('excludes self by id when excludeId is provided', async () => {
+    test('excludes self and applies older-wins tiebreaker when self is provided', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      const startedAt = new Date('2026-04-14T10:00:00Z');
 
-      await getActiveWorkflowRunByPath('/repo/path', 'self-id');
+      await getActiveWorkflowRunByPath('/repo/path', { id: 'self-id', startedAt });
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain('id != $2');
-      expect(params).toEqual(['/repo/path', 'self-id']);
-    });
-
-    test('applies older-wins tiebreaker when both excludeId and selfStartedAt are provided', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
-      const selfStartedAt = new Date('2026-04-14T10:00:00Z');
-
-      await getActiveWorkflowRunByPath('/repo/path', 'self-id', selfStartedAt);
-
-      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-      // Total order on (started_at, id) — the newer dispatch sees the older
-      // row and aborts; the older sees nothing. Eliminates the both-abort
-      // race where two timestamps land in the same millisecond.
-      expect(query).toContain('started_at < $3');
-      expect(query).toContain('started_at = $3 AND id < $2');
+      // PostgreSQL branch: explicit `::timestamptz` cast on the param so
+      // the comparison is chronological, not lexical. SQLite branch wraps
+      // both sides in datetime() — covered by tests in adapters/sqlite.test.ts
+      // because this suite mocks getDatabaseType as 'postgresql'.
+      expect(query).toContain('started_at < $3::timestamptz');
+      expect(query).toContain('started_at = $3::timestamptz AND id < $2');
       // selfStartedAt serialized to ISO — bun:sqlite rejects Date bindings.
-      expect(params).toEqual(['/repo/path', 'self-id', selfStartedAt.toISOString()]);
+      expect(params).toEqual(['/repo/path', 'self-id', startedAt.toISOString()]);
     });
 
-    test('omits tiebreaker clause when selfStartedAt is provided without excludeId', async () => {
+    test('skips self exclusion + tiebreaker when self is omitted (no caller context)', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
-      await getActiveWorkflowRunByPath('/repo/path', undefined, new Date('2026-04-14T10:00:00Z'));
+      await getActiveWorkflowRunByPath('/repo/path');
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-      // Tiebreaker requires both id and started_at to be meaningful; without
-      // an id to exclude, the started_at param would be dangling.
+      // Without `self`, neither the id-exclusion nor the tiebreaker apply.
+      expect(query).not.toContain('id !=');
       expect(query).not.toContain('started_at <');
       expect(params).toEqual(['/repo/path']);
     });
