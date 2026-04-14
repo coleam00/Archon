@@ -146,6 +146,7 @@ export function ProjectsSidebar({
           }}
           className="p-1 rounded hover:bg-surface-elevated transition-colors"
           title="Add project"
+          aria-label="Add project"
         >
           <Plus className="h-4 w-4 text-text-tertiary hover:text-primary" />
         </button>
@@ -249,7 +250,7 @@ export function ProjectsSidebar({
                         setDeleteError(null);
                         setDeleteTargetId(project.id);
                       }}
-                      className="absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded opacity-0 group-hover/project:opacity-100 transition-opacity hover:bg-surface-elevated"
+                      className="absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded opacity-100 md:opacity-0 md:group-hover/project:opacity-100 transition-opacity hover:bg-surface-elevated"
                       title="Remove project"
                     >
                       <Trash2 className="h-3.5 w-3.5 text-text-tertiary hover:text-error" />
@@ -259,8 +260,7 @@ export function ProjectsSidebar({
                   <CollapsibleContent>
                     <div
                       className="ml-3 border-l border-border pl-2 mt-1 mb-1"
-                      onClick={onNavigate}
-                    >
+                                          >
                       <ProjectDetail
                         codebaseId={project.id}
                         projectName={project.name}

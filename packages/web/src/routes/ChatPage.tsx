@@ -32,14 +32,6 @@ export function ChatPage(): React.ReactElement {
   const [mobileConvOpen, setMobileConvOpen] = useState(false);
   const isResizing = useRef(false);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, String(width));
-    } catch {
-      // localStorage unavailable
-    }
-  }, [width]);
-
   // Close mobile drawer on desktop resize
   useEffect(() => {
     const onResize = (): void => {

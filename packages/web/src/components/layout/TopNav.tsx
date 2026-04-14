@@ -14,6 +14,7 @@ const tabs = [
   { to: '/settings', end: false, icon: Settings, label: 'Settings' },
 ] as const;
 
+const isSafeUrl = (url: string): boolean => /^https?:\/\//i.test(url);
 export function TopNav(): React.ReactElement {
   const { setOpen } = useMobileNav();
   const { theme, toggleTheme } = useTheme();
@@ -82,8 +83,8 @@ export function TopNav(): React.ReactElement {
 
       {/* Version + update badge */}
       <span className="ml-auto text-xs text-text-secondary">
-        v{import.meta.env.VITE_APP_VERSION as string}
-        {updateCheck?.updateAvailable && updateCheck.releaseUrl && (
+        v{(import.meta.env.VITE_APP_VERSION as string | undefined) ?? 'dev'}
+        {updateCheck?.updateAvailable && updateCheck.releaseUrl && isSafeUrl(updateCheck.releaseUrl) && (
           <a
             href={updateCheck.releaseUrl}
             target="_blank"

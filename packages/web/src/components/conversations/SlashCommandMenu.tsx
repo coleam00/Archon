@@ -1,4 +1,4 @@
-import { useState, useEffect, type RefObject } from 'react';
+import { useState, useEffect, useMemo, type RefObject } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { listWorkflows } from '@/lib/api';
 import { useProject } from '@/contexts/ProjectContext';
@@ -9,8 +9,6 @@ interface SlashCommandMenuProps {
   onClose: () => void;
   anchorRef: RefObject<HTMLTextAreaElement | null>;
 }
-
-const MAX_RESULTS = 8;
 
 export function SlashCommandMenu({
   query,
@@ -32,11 +30,15 @@ export function SlashCommandMenu({
     staleTime: 30_000,
   });
 
-  const filtered = (workflows ?? [])
-    .filter(entry =>
-      query ? entry.workflow.name.toLowerCase().includes(query.toLowerCase()) : true
-    )
-    .slice(0, MAX_RESULTS);
+  const filtered = useMemo(
+    () =>
+      (workflows ?? [])
+        .filter((entry) =>
+          entry.workflow.name.toLowerCase().includes(query.toLowerCase())
+        )
+        .slice(0, 8),
+    [workflows, query]
+  );
 
   // Reset selected index when query changes
   useEffect(() => {
@@ -95,12 +97,14 @@ export function SlashCommandMenu({
     <div
       className="absolute bottom-full left-0 right-0 z-50 mb-1 overflow-y-auto rounded-lg border border-border bg-surface shadow-lg"
       style={{ maxHeight: `${menuMaxHeight}px` }}
-      role="listbox"
+      aria-activedescendant={`slash-option-${selectedIndex}`}
+            role="listbox"
       aria-label="Workflow commands"
     >
       {filtered.map((entry, idx) => (
         <button
-          key={entry.workflow.name}
+          id={`slash-option-${idx}`}
+                key={entry.workflow.name}
           type="button"
           role="option"
           aria-selected={idx === selectedIndex}

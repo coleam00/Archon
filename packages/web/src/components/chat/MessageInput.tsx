@@ -384,6 +384,7 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             disabled={disabled}
+            aria-label="Message input"
             placeholder={dragging ? 'Drop files here...' : (disabledReason ?? 'Message Archon...')}
             rows={1}
             className="flex-1 resize-none overflow-hidden rounded-lg border border-border bg-background px-4 py-2 text-base leading-6 text-text-primary placeholder:text-text-tertiary focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
@@ -406,5 +407,7 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
     </div>
   );
 });
+
+messageInput.displayName = 'MessageInput';
 
 export { messageInput as MessageInput };

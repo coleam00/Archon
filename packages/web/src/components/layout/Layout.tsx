@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Outlet, NavLink } from 'react-router';
 import { FolderGit2, LayoutDashboard, Workflow, Settings, X } from 'lucide-react';
 import { TopNav } from './TopNav';
@@ -16,6 +16,15 @@ const navItems = [
 export function Layout(): React.ReactElement {
   const [open, setOpen] = useState(false);
   const { compactLayout } = useTheme();
+  // Fix 4: Escape key closes the mobile drawer
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('keydown', handler);
+    return (): void => { document.removeEventListener('keydown', handler); };
+  }, [open]);
 
   // Use the visual viewport height instead of h-dvh / h-screen so the layout
   // correctly shrinks when the soft keyboard appears on mobile (iOS Safari and
@@ -56,6 +65,7 @@ export function Layout(): React.ReactElement {
           )}
           style={{ backgroundColor: 'var(--surface)' }}
           aria-label="Mobile navigation"
+          aria-modal="true"
         >
           {/* Drawer header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-border">
