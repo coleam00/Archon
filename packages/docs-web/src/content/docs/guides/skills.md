@@ -168,6 +168,7 @@ smaller box with a tastefully curated set of tools."
 |-------|---------|----------------|
 | `remotion-best-practices` | `npx skills add remotion-dev/skills` | Remotion animation patterns, API usage, gotchas (35 rules) |
 | `skill-creator` | `npx skills add anthropics/skills` | How to create new SKILL.md files |
+| `mmx-cli` | `npx skills add MiniMax-AI/cli/skill` | Text, image, video, speech, and music generation via MiniMax AI |
 | Community skills | Browse [skills.sh](https://skills.sh) | Search 500K+ skills for any domain |
 
 ## Multiple Skills Per Node
