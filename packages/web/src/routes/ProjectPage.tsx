@@ -114,9 +114,6 @@ function ProjectHeader({ project }: ProjectHeaderProps): React.ReactElement {
         <FolderGit2 className="h-5 w-5 text-primary" />
       </div>
       <div className="flex-1 min-w-0">
-        <h2 className="font-semibold text-sm text-text-primary truncate">
-          {project?.name ?? 'Project'}
-        </h2>
         {metaText && (
           <>
             <p
@@ -169,9 +166,9 @@ function ConversationRow({ conversation, onClick }: ConversationRowProps): React
   return (
     <button
       onClick={onClick}
-      className="flex items-start gap-3 border-b border-border px-4 py-3.5 text-left hover:bg-surface-elevated transition-colors w-full"
+      className="flex items-center gap-3 border-b border-border px-4 py-3.5 text-left hover:bg-surface-elevated transition-colors w-full"
     >
-      <MessageSquare className="mt-0.5 h-4 w-4 shrink-0 text-text-tertiary" />
+      <MessageSquare className="h-4 w-4 shrink-0 text-text-tertiary" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="truncate text-sm font-semibold text-text-primary">{title}</span>
         <span className="text-xs text-text-tertiary">{lastActivity}</span>
