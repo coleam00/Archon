@@ -44,6 +44,9 @@ interface SetupConfig {
     claudeAuthType?: 'global' | 'apiKey' | 'oauthToken';
     claudeApiKey?: string;
     claudeOauthToken?: string;
+    /** Absolute path to Claude Code SDK's cli.js. Written as CLAUDE_BIN_PATH
+     *  in ~/.archon/.env. Required in compiled Archon binaries; harmless in dev. */
+    claudeBinaryPath?: string;
     codex: boolean;
     codexTokens?: CodexTokens;
     defaultAssistant: string;
@@ -161,6 +164,62 @@ function isCommandAvailable(command: string): boolean {
 }
 
 /**
+ * Try to locate the Claude Code executable on disk.
+ *
+ * Compiled Archon binaries need an explicit path because the Claude Agent
+ * SDK's `import.meta.url` resolution is frozen to the build host's filesystem.
+ * The SDK's `pathToClaudeCodeExecutable` accepts either:
+ *   - A native compiled binary (from the curl/PowerShell/winget installers — current default)
+ *   - A JS `cli.js` (from `npm install -g @anthropic-ai/claude-code` — older path)
+ *
+ * We probe the well-known install locations in order:
+ *   1. Native installer (`~/.local/bin/claude` on macOS/Linux, `%USERPROFILE%\.local\bin\claude.exe` on Windows)
+ *   2. npm global `cli.js`
+ *   3. `which claude` / `where claude` — fallback if the user installed via Homebrew, winget, or a custom layout
+ *
+ * Returns null on total failure so the caller can prompt the user.
+ * Detection is best-effort; the caller should let users override.
+ */
+function detectClaudeExecutablePath(): string | null {
+  // 1. Native installer default location (primary Anthropic-recommended path)
+  const nativePath =
+    process.platform === 'win32'
+      ? join(homedir(), '.local', 'bin', 'claude.exe')
+      : join(homedir(), '.local', 'bin', 'claude');
+  if (existsSync(nativePath)) return nativePath;
+
+  // 2. npm global cli.js
+  try {
+    const npmRoot = execSync('npm root -g', {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (npmRoot) {
+      const npmCliJs = join(npmRoot, '@anthropic-ai', 'claude-code', 'cli.js');
+      if (existsSync(npmCliJs)) return npmCliJs;
+    }
+  } catch {
+    // fall through to PATH lookup
+  }
+
+  // 3. Fallback: resolve via `which` / `where` (Homebrew, winget, custom layouts)
+  try {
+    const checkCmd = process.platform === 'win32' ? 'where' : 'which';
+    const resolved = execSync(`${checkCmd} claude`, {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    // On Windows, `where` can return multiple lines — take the first.
+    const first = resolved.split(/\r?\n/)[0]?.trim();
+    if (first && existsSync(first)) return first;
+  } catch {
+    // no claude on PATH
+  }
+
+  return null;
+}
+
+/**
  * Get Node.js version if installed, or null if not
  */
 function getNodeVersion(): { major: number; minor: number; patch: number } | null {
@@ -210,7 +269,7 @@ After installation, run: claude /login`,
 Install using one of these methods:
 
   Recommended for macOS (no Node.js required):
-    brew install --cask codex
+    brew install codex
 
   Or via npm (requires Node.js 18+):
     npm install -g @openai/codex
@@ -353,6 +412,62 @@ function tryReadCodexAuth(): CodexTokens | null {
 /**
  * Collect Claude authentication method
  */
+/**
+ * Resolve the Claude Code executable path for CLAUDE_BIN_PATH.
+ * Auto-detects common install locations and falls back to prompting the user.
+ * Returns undefined if the user declines to configure (setup continues; the
+ * compiled binary will error with clear instructions on first Claude query).
+ */
+async function collectClaudeBinaryPath(): Promise<string | undefined> {
+  const detected = detectClaudeExecutablePath();
+
+  if (detected) {
+    const useDetected = await confirm({
+      message: `Found Claude Code at ${detected}. Write this to CLAUDE_BIN_PATH?`,
+      initialValue: true,
+    });
+    if (isCancel(useDetected)) {
+      cancel('Setup cancelled.');
+      process.exit(0);
+    }
+    if (useDetected) return detected;
+  }
+
+  const nativeExample =
+    process.platform === 'win32' ? '%USERPROFILE%\\.local\\bin\\claude.exe' : '~/.local/bin/claude';
+
+  note(
+    'Compiled Archon binaries need CLAUDE_BIN_PATH set to the Claude Code executable.\n' +
+      'In dev (`bun run`) this is ignored — the SDK resolves it via node_modules.\n\n' +
+      'Recommended (Anthropic default — native installer):\n' +
+      `  macOS/Linux: ${nativeExample}\n` +
+      '  Windows:     %USERPROFILE%\\.local\\bin\\claude.exe\n\n' +
+      'Alternative (npm global install):\n' +
+      '  $(npm root -g)/@anthropic-ai/claude-code/cli.js',
+    'Claude binary path'
+  );
+
+  const customPath = await text({
+    message: 'Absolute path to the Claude Code executable (leave blank to skip):',
+    placeholder: nativeExample,
+  });
+
+  if (isCancel(customPath)) {
+    cancel('Setup cancelled.');
+    process.exit(0);
+  }
+
+  const trimmed = (customPath ?? '').trim();
+  if (!trimmed) return undefined;
+
+  if (!existsSync(trimmed)) {
+    log.warning(
+      `Path does not exist: ${trimmed}. Saving anyway — the compiled binary will error on first use until this is correct.`
+    );
+  }
+  return trimmed;
+}
+
 async function collectClaudeAuth(): Promise<{
   authType: 'global' | 'apiKey' | 'oauthToken';
   apiKey?: string;
@@ -662,6 +777,7 @@ After upgrading, run 'archon setup' again.`,
   let claudeAuthType: 'global' | 'apiKey' | 'oauthToken' | undefined;
   let claudeApiKey: string | undefined;
   let claudeOauthToken: string | undefined;
+  let claudeBinaryPath: string | undefined;
   let codexTokens: CodexTokens | undefined;
 
   // Collect Claude auth if selected
@@ -670,6 +786,7 @@ After upgrading, run 'archon setup' again.`,
     claudeAuthType = claudeAuth.authType;
     claudeApiKey = claudeAuth.apiKey;
     claudeOauthToken = claudeAuth.oauthToken;
+    claudeBinaryPath = await collectClaudeBinaryPath();
   }
 
   // Collect Codex auth if selected
@@ -710,6 +827,7 @@ After upgrading, run 'archon setup' again.`,
     claudeAuthType,
     claudeApiKey,
     claudeOauthToken,
+    ...(claudeBinaryPath !== undefined ? { claudeBinaryPath } : {}),
     codex: hasCodex,
     codexTokens,
     defaultAssistant,
@@ -1069,6 +1187,9 @@ export function generateEnvContent(config: SetupConfig): string {
     } else if (config.ai.claudeAuthType === 'oauthToken' && config.ai.claudeOauthToken) {
       lines.push('CLAUDE_USE_GLOBAL_AUTH=false');
       lines.push(`CLAUDE_CODE_OAUTH_TOKEN=${config.ai.claudeOauthToken}`);
+    }
+    if (config.ai.claudeBinaryPath) {
+      lines.push(`CLAUDE_BIN_PATH=${config.ai.claudeBinaryPath}`);
     }
   } else {
     lines.push('# Claude not configured');

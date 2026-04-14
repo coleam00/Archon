@@ -176,6 +176,41 @@ CODEX_ACCOUNT_ID=account1
       expect(content).toContain('CLAUDE_API_KEY=sk-test-key');
     });
 
+    it('emits CLAUDE_BIN_PATH when claudeBinaryPath is configured', () => {
+      const content = generateEnvContent({
+        database: { type: 'sqlite' },
+        ai: {
+          claude: true,
+          claudeAuthType: 'global',
+          claudeBinaryPath: '/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js',
+          codex: false,
+          defaultAssistant: 'claude',
+        },
+        platforms: { github: false, telegram: false, slack: false, discord: false },
+        botDisplayName: 'Archon',
+      });
+
+      expect(content).toContain(
+        'CLAUDE_BIN_PATH=/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js'
+      );
+    });
+
+    it('omits CLAUDE_BIN_PATH when not configured', () => {
+      const content = generateEnvContent({
+        database: { type: 'sqlite' },
+        ai: {
+          claude: true,
+          claudeAuthType: 'global',
+          codex: false,
+          defaultAssistant: 'claude',
+        },
+        platforms: { github: false, telegram: false, slack: false, discord: false },
+        botDisplayName: 'Archon',
+      });
+
+      expect(content).not.toContain('CLAUDE_BIN_PATH=');
+    });
+
     it('should include platform configurations', () => {
       const content = generateEnvContent({
         database: { type: 'sqlite' },

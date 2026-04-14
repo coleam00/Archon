@@ -119,6 +119,8 @@ If Bun was just installed in Prerequisites (macOS/Linux), use `~/.bun/bin/bun` i
 3. Verify: `archon version`
 4. Check Claude is installed: `which claude`, then `claude /login` if needed
 
+> **Note — Claude Code binary path.** Archon does not bundle Claude Code. In compiled Archon binaries (quick install, Homebrew), the Claude Code SDK needs `CLAUDE_BIN_PATH` set to the absolute path of its `cli.js`. The `archon setup` wizard in Step 4 auto-detects this via `npm root -g` and writes it to `~/.archon/.env` — no manual action needed in the typical case. Source installs (`bun run`) don't need this; the SDK finds `cli.js` via `node_modules` automatically.
+
 ## Step 4: Configure Credentials
 
 The CLI loads infrastructure config (database, tokens) from `~/.archon/.env` only. This prevents conflicts with project `.env` files that may contain different database URLs.

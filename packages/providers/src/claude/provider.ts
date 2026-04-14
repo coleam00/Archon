@@ -11,6 +11,12 @@
  * - CLAUDE_USE_GLOBAL_AUTH=true: Use global auth from `claude /login`, filter env tokens
  * - CLAUDE_USE_GLOBAL_AUTH=false: Use explicit tokens from env vars
  * - Not set: Auto-detect - use tokens if present in env, otherwise global auth
+ *
+ * Binary resolution:
+ * - In compiled binaries, `pathToClaudeCodeExecutable` is resolved from
+ *   `CLAUDE_BIN_PATH` env or `assistants.claude.claudeBinaryPath` config;
+ *   see ./binary-resolver.ts. In dev mode the SDK resolves cli.js itself
+ *   from node_modules.
  */
 import {
   query,
@@ -18,7 +24,6 @@ import {
   type HookCallback,
   type HookCallbackMatcher,
 } from '@anthropic-ai/claude-agent-sdk';
-import cliPath from '@anthropic-ai/claude-agent-sdk/embed';
 import type {
   IAgentProvider,
   SendQueryOptions,
@@ -29,6 +34,7 @@ import type {
 } from '../types';
 import { parseClaudeConfig } from './config';
 import { CLAUDE_CAPABILITIES } from './capabilities';
+import { resolveClaudeBinaryPath } from './binary-resolver';
 import { createLogger } from '@archon/paths';
 import { readFile } from 'fs/promises';
 import { resolve, isAbsolute } from 'path';
@@ -510,11 +516,14 @@ function buildBaseClaudeOptions(
   controller: AbortController,
   stderrLines: string[],
   toolResultQueue: ToolResultEntry[],
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  cliPath: string | undefined
 ): Options {
   return {
     cwd,
-    pathToClaudeCodeExecutable: cliPath,
+    // In compiled binaries, the resolver supplies an absolute cli.js path;
+    // in dev mode it returns undefined and the SDK resolves from node_modules.
+    ...(cliPath !== undefined ? { pathToClaudeCodeExecutable: cliPath } : {}),
     // Prevent Bun from auto-loading .env from the target repo cwd.
     // Without this, the Claude Code subprocess inherits repo secrets.
     executableArgs: ['--no-env-file'],
@@ -840,6 +849,11 @@ export class ClaudeProvider implements IAgentProvider {
     let lastError: Error | undefined;
     const assistantDefaults = parseClaudeConfig(requestOptions?.assistantConfig ?? {});
 
+    // Resolve Claude CLI path once before the retry loop. In binary mode this
+    // throws immediately if neither env nor config supplies a valid path, so
+    // the user gets a clean error rather than N retries of "Module not found".
+    const resolvedCliPath = await resolveClaudeBinaryPath(assistantDefaults.claudeBinaryPath);
+
     // Build subprocess env once (avoids re-logging auth mode per retry)
     const subprocessEnv = buildSubprocessEnv();
     const env = requestOptions?.env ? { ...subprocessEnv, ...requestOptions.env } : subprocessEnv;
@@ -879,7 +893,7 @@ export class ClaudeProvider implements IAgentProvider {
       const controller = new AbortController();
       currentController = controller;
 
-      // 1. Build SDK options (env pre-computed above)
+      // 1. Build SDK options (env and cliPath pre-computed above)
       const options = buildBaseClaudeOptions(
         cwd,
         requestOptions,
@@ -887,7 +901,8 @@ export class ClaudeProvider implements IAgentProvider {
         controller,
         stderrLines,
         toolResultQueue,
-        env
+        env,
+        resolvedCliPath
       );
 
       // 2. Apply nodeConfig translation (re-applied per attempt since options are fresh)

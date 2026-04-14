@@ -13,6 +13,10 @@ export interface ClaudeProviderDefaults {
    *  @default ['project']
    */
   settingSources?: ('project' | 'user')[];
+  /** Absolute path to the Claude Code SDK's `cli.js`. Required in compiled
+   *  Archon builds when `CLAUDE_BIN_PATH` is not set; optional in dev mode
+   *  (SDK resolves from node_modules). */
+  claudeBinaryPath?: string;
 }
 
 export interface CodexProviderDefaults {
