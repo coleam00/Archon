@@ -1,14 +1,8 @@
-import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { MessageSquarePlus, Search, Plus, Loader2, FolderGit2, PanelLeft, X } from 'lucide-react';
+import { useState, useRef, useCallback, useEffect } from 'react';
+import { useParams } from 'react-router';
+import { Search, PanelLeft, X } from 'lucide-react';
 import { ChatInterface } from '@/components/chat/ChatInterface';
-import { ConversationItem } from '@/components/conversations/ConversationItem';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
-import { useProject } from '@/contexts/ProjectContext';
-import { listConversations, listWorkflowRuns, addCodebase } from '@/lib/api';
-import type { CodebaseResponse } from '@/lib/api';
+import { ProjectsSidebar } from '@/components/sidebar/ProjectsSidebar';
 import { cn } from '@/lib/utils';
 
 const PANEL_MIN = 220;
@@ -17,10 +11,14 @@ const PANEL_DEFAULT = 260;
 const STORAGE_KEY = 'archon-chat-panel-width';
 
 function getInitialWidth(): number {
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored) {
-    const parsed = Number(stored);
-    if (parsed >= PANEL_MIN && parsed <= PANEL_MAX) return parsed;
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      const parsed = Number(stored);
+      if (parsed >= PANEL_MIN && parsed <= PANEL_MAX) return parsed;
+    }
+  } catch {
+    // localStorage unavailable
   }
   return PANEL_DEFAULT;
 }
@@ -29,32 +27,18 @@ export function ChatPage(): React.ReactElement {
   const { '*': rawConversationId } = useParams();
   const conversationId = rawConversationId ? decodeURIComponent(rawConversationId) : undefined;
 
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const { selectedProjectId, setSelectedProjectId, codebases, isLoadingCodebases } = useProject();
-
   const [searchQuery, setSearchQuery] = useState('');
   const [width, setWidth] = useState(getInitialWidth);
   const [mobileConvOpen, setMobileConvOpen] = useState(false);
   const isResizing = useRef(false);
-  const searchInputRef = useRef<HTMLInputElement>(null);
-
-  // Add-project state
-  const [showAddInput, setShowAddInput] = useState(false);
-  const [addValue, setAddValue] = useState('');
-  const [addLoading, setAddLoading] = useState(false);
-  const [addError, setAddError] = useState<string | null>(null);
-  const addInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, String(width));
-  }, [width]);
-
-  useEffect(() => {
-    if (showAddInput) {
-      addInputRef.current?.focus();
+    try {
+      localStorage.setItem(STORAGE_KEY, String(width));
+    } catch {
+      // localStorage unavailable
     }
-  }, [showAddInput]);
+  }, [width]);
 
   // Close mobile drawer on desktop resize
   useEffect(() => {
@@ -77,11 +61,14 @@ export function ChatPage(): React.ReactElement {
       document.body.style.userSelect = 'none';
       document.body.style.cursor = 'col-resize';
 
+      let currentWidth = startWidth;
+
       const onMouseMove = (moveEvent: MouseEvent): void => {
         const newWidth = Math.min(
           PANEL_MAX,
           Math.max(PANEL_MIN, startWidth + moveEvent.clientX - startX)
         );
+        currentWidth = newWidth;
         setWidth(newWidth);
       };
 
@@ -91,6 +78,11 @@ export function ChatPage(): React.ReactElement {
         document.body.style.cursor = '';
         document.removeEventListener('mousemove', onMouseMove);
         document.removeEventListener('mouseup', onMouseUp);
+        try {
+          localStorage.setItem(STORAGE_KEY, String(currentWidth));
+        } catch {
+          // localStorage unavailable
+        }
       };
 
       document.addEventListener('mousemove', onMouseMove);
@@ -99,225 +91,37 @@ export function ChatPage(): React.ReactElement {
     [width]
   );
 
-  const { data: conversations } = useQuery({
-    queryKey: ['conversations', selectedProjectId],
-    queryFn: () => listConversations(selectedProjectId ?? undefined),
-    refetchInterval: 10_000,
-  });
-
-  const { data: runs } = useQuery({
-    queryKey: ['workflow-runs-status'],
-    queryFn: () => listWorkflowRuns({ limit: 50 }),
-    refetchInterval: 10_000,
-  });
-
-  const conversationStatusMap = useMemo((): Map<string, 'running' | 'failed'> => {
-    const map = new Map<string, 'running' | 'failed'>();
-    if (!runs) return map;
-    for (const run of runs) {
-      const key = run.parent_conversation_id ?? run.conversation_id;
-      if (run.status === 'running') {
-        map.set(key, 'running');
-      } else if (run.status === 'failed' && !map.has(key)) {
-        map.set(key, 'failed');
-      }
-    }
-    return map;
-  }, [runs]);
-
-  const codebaseMap = useMemo((): Map<string, CodebaseResponse> => {
-    const map = new Map<string, CodebaseResponse>();
-    if (codebases) {
-      for (const cb of codebases) {
-        map.set(cb.id, cb);
-      }
-    }
-    return map;
-  }, [codebases]);
-
-  const filtered = useMemo(
-    () =>
-      conversations?.filter(conv => {
-        if (!searchQuery) return true;
-        const query = searchQuery.toLowerCase();
-        return (conv.title ?? conv.platform_conversation_id).toLowerCase().includes(query);
-      }),
-    [conversations, searchQuery]
-  );
-
-  const handleNewChat = useCallback((): void => {
-    navigate('/chat');
-  }, [navigate]);
-
-  const handleAddSubmit = useCallback((): void => {
-    const trimmed = addValue.trim();
-    if (!trimmed || addLoading) return;
-
-    setAddLoading(true);
-    setAddError(null);
-
-    const isLocalPath =
-      trimmed.startsWith('/') || trimmed.startsWith('~') || /^[A-Za-z]:[/\\]/.test(trimmed);
-    const input = isLocalPath ? { path: trimmed } : { url: trimmed };
-
-    void addCodebase(input)
-      .then(codebase => {
-        void queryClient.invalidateQueries({ queryKey: ['codebases'] });
-        setSelectedProjectId(codebase.id);
-        setShowAddInput(false);
-        setAddValue('');
-        setAddError(null);
-      })
-      .catch((err: Error) => {
-        setAddError(err.message);
-      })
-      .finally(() => {
-        setAddLoading(false);
-      });
-  }, [addValue, addLoading, queryClient, setSelectedProjectId]);
-
-  const handleAddKeyDown = useCallback(
-    (e: React.KeyboardEvent): void => {
-      if (e.key === 'Enter') {
-        handleAddSubmit();
-      } else if (e.key === 'Escape') {
-        setShowAddInput(false);
-        setAddValue('');
-        setAddError(null);
-      }
-    },
-    [handleAddSubmit]
-  );
-
   return (
     <div className="flex flex-1 overflow-hidden">
-      {/* ── Mobile overlay backdrop ── */}
+      {/* Mobile overlay backdrop */}
       {mobileConvOpen && (
         <div
           className="fixed inset-x-0 top-12 bottom-0 z-40 bg-black/60 md:hidden"
-          onClick={() => {
+          onClick={(): void => {
             setMobileConvOpen(false);
           }}
           aria-hidden="true"
         />
       )}
 
-      {/* ── Conversations panel ──
-           Desktop : sidebar inline (relative, h-full)
-           Mobile  : fixed overlay drawer, slides from left via transform  ── */}
+      {/* Left panel: projects sidebar
+          Desktop : inline sidebar (relative, h-full)
+          Mobile  : fixed overlay drawer, slides from left */}
       <div
         className={cn(
           'flex flex-col border-r border-border overflow-hidden',
-          // Mobile: fixed overlay starting below the sticky topbar
           'fixed top-12 bottom-0 left-0 z-50',
-          // Desktop: back to normal inline flow
           'md:relative md:inset-auto md:z-auto md:h-full',
-          // Slide animation — mobile toggles, desktop always shown
           'transition-transform duration-300 ease-in-out',
           mobileConvOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
         )}
         style={{ width: `${String(width)}px`, flexShrink: 0, backgroundColor: 'var(--surface)' }}
       >
-        {/* New Chat button + mobile close */}
-        <div className="px-3 pt-3 pb-2 flex items-center gap-2">
-          <button
-            onClick={() => {
-              handleNewChat();
-              setMobileConvOpen(false);
-            }}
-            className="flex flex-1 items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-accent-hover transition-colors"
-          >
-            <MessageSquarePlus className="h-4 w-4 shrink-0" />
-            New Chat
-          </button>
-          {/* Close button — mobile only */}
-          <button
-            onClick={() => {
-              setMobileConvOpen(false);
-            }}
-            className="md:hidden flex items-center justify-center rounded-md p-1.5 text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
-            aria-label="Close conversations panel"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        {/* Project filter */}
-        <div className="px-3 pb-2">
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
-              Project
-            </span>
-            <button
-              onClick={(): void => {
-                setShowAddInput(prev => !prev);
-                setAddError(null);
-                setAddValue('');
-              }}
-              className="p-1 rounded hover:bg-surface-elevated transition-colors"
-              title="Add project"
-            >
-              <Plus className="h-3.5 w-3.5 text-text-tertiary hover:text-primary" />
-            </button>
-          </div>
-
-          {showAddInput && (
-            <div className="mb-2">
-              <div className="flex items-center gap-1">
-                <input
-                  ref={addInputRef}
-                  value={addValue}
-                  onChange={(e): void => {
-                    setAddValue(e.target.value);
-                  }}
-                  onKeyDown={handleAddKeyDown}
-                  onBlur={(): void => {
-                    if (!addValue.trim() && !addError) {
-                      setShowAddInput(false);
-                    }
-                  }}
-                  placeholder="GitHub URL or local path"
-                  disabled={addLoading}
-                  className="w-full rounded-md border border-border bg-surface-elevated px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary focus:border-primary focus:outline-none disabled:opacity-50"
-                />
-                {addLoading && (
-                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
-                )}
-              </div>
-              {addError && <p className="mt-1 text-[10px] text-error line-clamp-2">{addError}</p>}
-            </div>
-          )}
-
-          {isLoadingCodebases ? (
-            <div className="flex items-center justify-center py-2">
-              <span className="text-xs text-text-tertiary">Loading...</span>
-            </div>
-          ) : (
-            <select
-              value={selectedProjectId ?? ''}
-              onChange={(e): void => {
-                setSelectedProjectId(e.target.value || null);
-              }}
-              className="w-full rounded-md border border-border bg-surface-elevated px-2 py-1.5 text-xs text-text-primary focus:border-primary focus:outline-none"
-            >
-              <option value="">All Projects</option>
-              {codebases?.map(cb => (
-                <option key={cb.id} value={cb.id}>
-                  {cb.name}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
-
-        <Separator className="bg-border" />
-
-        {/* Search */}
-        <div className="px-3 py-2">
-          <div className="relative">
+        {/* Mobile close + search row */}
+        <div className="px-3 pt-3 pb-2 flex items-center gap-2 shrink-0">
+          <div className="relative flex-1">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-tertiary" />
             <input
-              ref={searchInputRef}
               value={searchQuery}
               onChange={(e): void => {
                 setSearchQuery(e.target.value);
@@ -326,39 +130,23 @@ export function ChatPage(): React.ReactElement {
               className="w-full rounded-md border border-border bg-surface-elevated py-1.5 pl-7 pr-2 text-xs text-text-primary placeholder:text-text-tertiary focus:border-primary focus:outline-none"
             />
           </div>
-        </div>
-
-        {/* Conversation list — clicking any item closes the mobile drawer */}
-        <ScrollArea className="flex-1 min-h-0 px-2 pb-2">
-          <div
-            className="flex flex-col gap-0.5"
-            onClick={() => {
+          <button
+            onClick={(): void => {
               setMobileConvOpen(false);
             }}
+            className="md:hidden flex items-center justify-center rounded-md p-1.5 text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
+            aria-label="Close projects panel"
           >
-            {filtered && filtered.length > 0 ? (
-              filtered.map(conv => (
-                <ConversationItem
-                  key={conv.id}
-                  conversation={conv}
-                  projectName={
-                    conv.codebase_id ? codebaseMap.get(conv.codebase_id)?.name : undefined
-                  }
-                  status={conversationStatusMap.get(conv.id) ?? 'idle'}
-                />
-              ))
-            ) : (
-              <div className="flex flex-col items-center justify-center gap-2 py-8 px-4">
-                <FolderGit2 className="h-8 w-8 text-text-tertiary" />
-                <span className="text-xs text-text-tertiary text-center">
-                  {conversations && conversations.length > 0
-                    ? 'No matching conversations'
-                    : 'No conversations yet — start a new chat!'}
-                </span>
-              </div>
-            )}
-          </div>
-        </ScrollArea>
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <ProjectsSidebar
+          searchQuery={searchQuery}
+          onNavigate={(): void => {
+            setMobileConvOpen(false);
+          }}
+        />
 
         {/* Resize handle — desktop only */}
         <div
@@ -367,29 +155,19 @@ export function ChatPage(): React.ReactElement {
         />
       </div>
 
-      {/* ── Right panel — chat interface, full width on mobile ── */}
+      {/* Right panel — chat interface */}
       <div className="flex flex-1 flex-col overflow-hidden min-w-0">
-        {/* Mobile-only topbar: conversations toggle + new chat shortcut.
-            z-30 keeps it below the drawer overlay (z-50) so the drawer fully
-            covers this bar when it slides in from the left.
-            bg-surface is opaque so content behind it is fully masked. */}
+        {/* Mobile-only topbar */}
         <div className="sticky top-0 z-30 flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-2 md:hidden">
           <button
-            onClick={() => {
+            onClick={(): void => {
               setMobileConvOpen(true);
             }}
             className="flex items-center gap-2 rounded-md px-2 py-1.5 text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
-            aria-label="Open conversations history"
+            aria-label="Open projects panel"
           >
             <PanelLeft className="h-4 w-4 shrink-0" />
-            <span className="text-xs font-medium">Conversations</span>
-          </button>
-          <button
-            onClick={handleNewChat}
-            className="ml-auto flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground hover:bg-accent-hover transition-colors"
-          >
-            <MessageSquarePlus className="h-3.5 w-3.5 shrink-0" />
-            New
+            <span className="text-xs font-medium">Projects</span>
           </button>
         </div>
 

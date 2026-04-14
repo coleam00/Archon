@@ -1,6 +1,6 @@
-﻿import { NavLink, Link } from 'react-router';
+import { NavLink, Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { LayoutDashboard, MessageSquare, Workflow, Settings, Menu, Sun, Moon } from 'lucide-react';
+import { LayoutDashboard, FolderGit2, Workflow, Settings, Menu, Sun, Moon } from 'lucide-react';
 import { listWorkflowRuns, getUpdateCheck } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useMobileNav } from '@/contexts/MobileNavContext';
@@ -8,7 +8,7 @@ import { TunnelPopover } from './TunnelPopover';
 import { useTheme } from '@/contexts/ThemeContext';
 
 const tabs = [
-  { to: '/chat', end: false, icon: MessageSquare, label: 'Chat' },
+  { to: '/chat', end: false, icon: FolderGit2, label: 'Projects' },
   { to: '/dashboard', end: true, icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/workflows', end: false, icon: Workflow, label: 'Workflows' },
   { to: '/settings', end: false, icon: Settings, label: 'Settings' },

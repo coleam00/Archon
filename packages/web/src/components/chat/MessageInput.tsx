@@ -2,6 +2,7 @@ import {
   useState,
   useRef,
   useCallback,
+  useEffect,
   forwardRef,
   useImperativeHandle,
   type KeyboardEvent,
@@ -10,7 +11,7 @@ import {
 } from 'react';
 import { ArrowUp, Loader2, Paperclip, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-
+import { SlashCommandMenu } from '@/components/conversations/SlashCommandMenu';
 /** Binary (non-text) MIME types explicitly accepted */
 const ACCEPTED_BINARY_MIME_TYPES = new Set([
   'image/png',
@@ -120,7 +121,6 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${String(Math.round(bytes / 1024))} KB`;
   return `${String(Math.round(bytes / (1024 * 1024)))} MB`;
 }
-
 const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function MessageInputInner(
   { onSend, disabled, disabledReason }: MessageInputProps,
   ref
@@ -129,14 +129,32 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
   const [files, setFiles] = useState<{ file: File; id: string }[]>([]);
   const [dragging, setDragging] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [slashQuery, setSlashQuery] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const inputContainerRef = useRef<HTMLDivElement>(null);
 
   useImperativeHandle(ref, () => ({
     focus: (): void => {
       textareaRef.current?.focus();
     },
   }));
+
+  // Close slash command menu when clicking outside the input container
+  useEffect(() => {
+    if (slashQuery === null) return;
+
+    const handleMouseDown = (e: MouseEvent): void => {
+      if (inputContainerRef.current && !inputContainerRef.current.contains(e.target as Node)) {
+        setSlashQuery(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleMouseDown);
+    return (): void => {
+      document.removeEventListener('mousedown', handleMouseDown);
+    };
+  }, [slashQuery]);
 
   const addFiles = useCallback((incoming: File[]): void => {
     setFileError(null);
@@ -175,6 +193,7 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
     if (!trimmed || disabled) return;
     onSend(trimmed, files.length > 0 ? files.map(f => f.file) : undefined);
     setValue('');
+    setSlashQuery(null);
     setFiles([]);
     setFileError(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -187,20 +206,60 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
     if (e.key === 'Enter' && !e.shiftKey) {
+      // If the slash command menu is open, let it handle Enter via its window listener
+      if (slashQuery !== null) return;
       e.preventDefault();
       handleSend();
     }
   };
 
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>): void => {
-    setValue(e.target.value);
+    const newValue = e.target.value;
+    setValue(newValue);
     // Auto-expand textarea
     const textarea = e.target;
     textarea.style.height = 'auto';
     const newHeight = Math.min(textarea.scrollHeight, 200);
     textarea.style.height = `${String(newHeight)}px`;
     textarea.style.overflowY = newHeight >= 200 ? 'auto' : 'hidden';
+    // Detect slash command pattern: / at start or after whitespace, followed by non-whitespace
+    const slashIdx = newValue.lastIndexOf('/');
+    if (slashIdx !== -1) {
+      const beforeSlash = newValue.slice(0, slashIdx);
+      const afterSlash = newValue.slice(slashIdx + 1);
+      if ((slashIdx === 0 || /\s$/.test(beforeSlash)) && !/\s/.test(afterSlash)) {
+        setSlashQuery(afterSlash);
+        return;
+      }
+    }
+    setSlashQuery(null);
   };
+
+  const handleSlashSelect = useCallback(
+    (workflowName: string): void => {
+      const slashIdx = value.lastIndexOf('/');
+      if (slashIdx !== -1) {
+        const beforeSlash = value.slice(0, slashIdx);
+        const newValue = `${beforeSlash}/${workflowName} `;
+        setValue(newValue);
+        // Resize textarea to fit new content
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
+          const newHeight = Math.min(textareaRef.current.scrollHeight, 200);
+          textareaRef.current.style.height = `${String(newHeight)}px`;
+          textareaRef.current.style.overflowY = newHeight >= 200 ? 'auto' : 'hidden';
+        }
+      }
+      setSlashQuery(null);
+      textareaRef.current?.focus();
+    },
+    [value]
+  );
+
+  const handleSlashClose = useCallback((): void => {
+    setSlashQuery(null);
+    textareaRef.current?.focus();
+  }, []);
 
   const handleFilePickerChange = (e: React.ChangeEvent<HTMLInputElement>): void => {
     if (e.target.files) addFiles(Array.from(e.target.files));
@@ -239,7 +298,6 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
       addFiles(pastedFiles);
     }
   };
-
   return (
     // flex-shrink-0 prevents this bar from being compressed inside the flex-col ChatInterface.
     // The inline paddingBottom uses env(safe-area-inset-bottom) so it clears the iOS home
@@ -283,8 +341,18 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
         {/* File error */}
         {fileError !== null && <p className="text-xs text-destructive">{fileError}</p>}
 
-        {/* Input row */}
-        <div className="flex items-end gap-2">
+        {/* Input row — relative so the slash command popover can be positioned above it */}
+        <div ref={inputContainerRef} className="relative flex items-end gap-2">
+          {/* Slash command autocomplete popover */}
+          {slashQuery !== null && (
+            <SlashCommandMenu
+              query={slashQuery}
+              onSelect={handleSlashSelect}
+              onClose={handleSlashClose}
+              anchorRef={textareaRef}
+            />
+          )}
+
           {/* Hidden file input */}
           <input
             ref={fileInputRef}
@@ -318,7 +386,7 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
             disabled={disabled}
             placeholder={dragging ? 'Drop files here...' : (disabledReason ?? 'Message Archon...')}
             rows={1}
-            className="flex-1 resize-none overflow-hidden rounded-lg border border-border bg-background px-4 py-2 text-sm leading-6 text-text-primary placeholder:text-text-tertiary focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex-1 resize-none overflow-hidden rounded-lg border border-border bg-background px-4 py-2 text-base leading-6 text-text-primary placeholder:text-text-tertiary focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
             style={{ minHeight: '40px', maxHeight: '200px' }}
           />
           <Button

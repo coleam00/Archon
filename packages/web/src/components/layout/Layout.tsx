@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Outlet, NavLink } from 'react-router';
-import { MessageSquare, LayoutDashboard, Workflow, Settings, X } from 'lucide-react';
+import { FolderGit2, LayoutDashboard, Workflow, Settings, X } from 'lucide-react';
 import { TopNav } from './TopNav';
 import { MobileNavContext } from '@/contexts/MobileNavContext';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -8,7 +8,7 @@ import { useVisualViewport } from '@/lib/useVisualViewport';
 import { cn } from '@/lib/utils';
 
 const navItems = [
-  { to: '/chat', end: false, icon: MessageSquare, label: 'Chat' },
+  { to: '/chat', end: false, icon: FolderGit2, label: 'Projects' },
   { to: '/dashboard', end: true, icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/workflows', end: false, icon: Workflow, label: 'Workflows' },
 ] as const;
