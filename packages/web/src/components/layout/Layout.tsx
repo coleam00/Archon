@@ -15,6 +15,10 @@ const navItems = [
 
 export function Layout(): React.ReactElement {
   const [open, setOpen] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const togglePin = (): void => {
+    setPinned(p => !p);
+  };
   const { compactLayout } = useTheme();
   // Fix 4: Escape key closes the mobile drawer
   useEffect(() => {
@@ -35,7 +39,7 @@ export function Layout(): React.ReactElement {
   const vpHeight = useVisualViewport();
 
   return (
-    <MobileNavContext.Provider value={{ open, setOpen }}>
+    <MobileNavContext.Provider value={{ open, setOpen, pinned, togglePin }}>
       {/* Height is driven by visualViewport so it follows the keyboard on mobile */}
       <div
         className="flex flex-col bg-background overflow-hidden"

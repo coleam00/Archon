@@ -3,6 +3,8 @@ import { createContext, useContext } from 'react';
 export interface MobileNavContextValue {
   open: boolean;
   setOpen: (open: boolean) => void;
+  pinned: boolean;
+  togglePin: () => void;
 }
 
 // eslint-disable-next-line @typescript-eslint/naming-convention

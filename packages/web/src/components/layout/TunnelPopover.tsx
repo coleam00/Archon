@@ -200,3 +200,90 @@ function TunnelPopoverInner(): React.ReactElement {
     </div>
   );
 }
+
+/**
+ * Compact tunnel control for the mobile hamburger menu.
+ * Shows tunnel status icon + label and a start/stop button in a single row.
+ */
+export function TunnelMenuItem(): React.ReactElement | null {
+  const isAlreadyTunneled =
+    window.location.hostname.includes('trycloudflare.com') ||
+    window.location.hostname.includes('cloudflareaccess.com');
+
+  if (isAlreadyTunneled) return null;
+
+  return <TunnelMenuItemInner />;
+}
+
+function TunnelMenuItemInner(): React.ReactElement {
+  const [tunnel, setTunnel] = useState<TunnelState>({ status: 'inactive', url: null });
+
+  useEffect(() => {
+    if (tunnel.status !== 'starting') return;
+
+    const interval = setInterval(async () => {
+      const res = await fetch('/api/tunnel');
+      if (!res.ok) return;
+      const data: unknown = await res.json();
+      if (isTunnelState(data)) {
+        setTunnel(data);
+      }
+    }, 2000);
+
+    return (): void => {
+      clearInterval(interval);
+    };
+  }, [tunnel.status]);
+
+  const handleStart = async (): Promise<void> => {
+    setTunnel(t => ({ ...t, status: 'starting' }));
+    const res = await fetch('/api/tunnel/start', { method: 'POST' });
+    if (!res.ok) {
+      console.error('Failed to start tunnel:', res.status);
+      setTunnel(t => ({ ...t, status: 'error' }));
+    }
+  };
+
+  const handleStop = async (): Promise<void> => {
+    const res = await fetch('/api/tunnel/stop', { method: 'DELETE' });
+    if (!res.ok) {
+      console.error('Failed to stop tunnel:', res.status);
+      return;
+    }
+    setTunnel({ status: 'inactive', url: null });
+  };
+
+  const statusIcon =
+    tunnel.status === 'active' ? Wifi : tunnel.status === 'starting' ? Loader2 : WifiOff;
+  const statusLabel =
+    tunnel.status === 'active'
+      ? 'Tunnel active'
+      : tunnel.status === 'starting'
+        ? 'Starting...'
+        : 'Tunnel';
+
+  return (
+    <div className="flex items-center gap-2 px-3 py-2 text-sm">
+      {createElement(statusIcon, {
+        className: `h-4 w-4 shrink-0 ${tunnel.status === 'active' ? 'text-green-500' : 'text-text-secondary'} ${tunnel.status === 'starting' ? 'animate-spin' : ''}`,
+      })}
+      <span
+        className={`flex-1 ${tunnel.status === 'active' ? 'text-green-500' : 'text-text-secondary'}`}
+      >
+        {statusLabel}
+      </span>
+      {tunnel.status === 'inactive' || tunnel.status === 'error' ? (
+        <button onClick={() => void handleStart()} className="text-xs text-primary hover:underline">
+          Start
+        </button>
+      ) : tunnel.status === 'active' ? (
+        <button
+          onClick={() => void handleStop()}
+          className="text-xs text-text-secondary hover:text-text-primary hover:underline"
+        >
+          Stop
+        </button>
+      ) : null}
+    </div>
+  );
+}
