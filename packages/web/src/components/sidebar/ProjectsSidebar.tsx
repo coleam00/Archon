@@ -1,34 +1,61 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Plus, Loader2, FolderGit2, MessageSquare, ChevronRight } from 'lucide-react';
-import { useNavigate, useLocation } from 'react-router';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  Plus,
+  Loader2,
+  ChevronDown,
+  FolderGit2,
+  Trash2,
+  Settings,
+  MessageSquarePlus,
+} from 'lucide-react';
+import { useNavigate } from 'react-router';
+import { useQueryClient } from '@tanstack/react-query';
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '@/components/ui/collapsible';
+import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { ProjectDetail } from '@/components/sidebar/ProjectDetail';
 import { useProject } from '@/contexts/ProjectContext';
-import { addCodebase, listConversations } from '@/lib/api';
+import { addCodebase, deleteCodebase } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 interface ProjectsSidebarProps {
   searchQuery: string;
   onNavigate?: () => void;
 }
 
-const MAX_VISIBLE = 4;
-
 export function ProjectsSidebar({
   searchQuery,
   onNavigate,
 }: ProjectsSidebarProps): React.ReactElement {
   const navigate = useNavigate();
-  const location = useLocation();
-  const { setSelectedProjectId, codebases, isLoadingCodebases, isErrorCodebases } = useProject();
+  const {
+    selectedProjectId,
+    setSelectedProjectId,
+    codebases,
+    isLoadingCodebases,
+    isErrorCodebases,
+  } = useProject();
   const queryClient = useQueryClient();
 
   const [showAddInput, setShowAddInput] = useState(false);
   const [addValue, setAddValue] = useState('');
   const [addLoading, setAddLoading] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(false);
   const addInputRef = useRef<HTMLInputElement>(null);
+
+  const [settingsOpenId, setSettingsOpenId] = useState<string | null>(null);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     if (showAddInput) {
@@ -48,8 +75,6 @@ export function ProjectsSidebar({
       .then(async codebase => {
         await queryClient.invalidateQueries({ queryKey: ['codebases'] });
         setSelectedProjectId(codebase.id);
-        navigate(`/projects/${codebase.id}`);
-        onNavigate?.();
         setShowAddInput(false);
         setAddValue('');
         setAddError(null);
@@ -60,7 +85,7 @@ export function ProjectsSidebar({
       .finally(() => {
         setAddLoading(false);
       });
-  }, [addValue, addLoading, queryClient, setSelectedProjectId, navigate, onNavigate]);
+  }, [addValue, addLoading, queryClient, setSelectedProjectId]);
 
   const handleAddKeyDown = useCallback(
     (e: React.KeyboardEvent): void => {
@@ -75,49 +100,55 @@ export function ProjectsSidebar({
     [handleAddSubmit]
   );
 
-  // Recent conversations (all projects, no filter)
-  const { data: recentConversations } = useQuery({
-    queryKey: ['conversations', { recent: true }],
-    queryFn: () => listConversations(),
-    refetchInterval: 15_000,
+  const handleDeleteConfirm = useCallback((): void => {
+    if (!deleteTargetId) return;
+    const id = deleteTargetId;
+    setDeleteError(null);
+    void deleteCodebase(id)
+      .then(() => {
+        void queryClient.invalidateQueries({ queryKey: ['codebases'] });
+        if (id === selectedProjectId) {
+          setSelectedProjectId(null);
+        }
+        setDeleteTargetId(null);
+      })
+      .catch((err: Error) => {
+        setDeleteError(err.message);
+      });
+  }, [deleteTargetId, queryClient, selectedProjectId, setSelectedProjectId]);
+
+  const handleUnscopedChat = useCallback((): void => {
+    setSelectedProjectId(null);
+    navigate('/chat');
+    onNavigate?.();
+  }, [setSelectedProjectId, navigate, onNavigate]);
+
+  const filteredCodebases = codebases?.filter(cb => {
+    if (!searchQuery) return true;
+    const q = searchQuery.toLowerCase();
+    return cb.name.toLowerCase().includes(q) || (cb.repository_url ?? '').toLowerCase().includes(q);
   });
 
-  const sortedRecent = [...(recentConversations ?? [])]
-    .sort((a, b) => {
-      const aTime = a.last_activity_at ?? a.created_at;
-      const bTime = b.last_activity_at ?? b.created_at;
-      return bTime.localeCompare(aTime);
-    })
-    .slice(0, 5);
-
-  // Projects sorted desc by created_at, filtered by search
-  const filteredCodebases = [...(codebases ?? [])]
-    .filter(cb => {
-      if (!searchQuery) return true;
-      const q = searchQuery.toLowerCase();
-      return (
-        cb.name.toLowerCase().includes(q) || (cb.repository_url ?? '').toLowerCase().includes(q)
-      );
-    })
-    .sort((a, b) => b.created_at.localeCompare(a.created_at));
-
-  const visibleCodebases = expanded ? filteredCodebases : filteredCodebases.slice(0, MAX_VISIBLE);
-  const hasMore = filteredCodebases.length > MAX_VISIBLE;
+  const deleteTarget = codebases?.find(cb => cb.id === deleteTargetId);
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden min-h-0">
-      {/* New project button */}
-      <div className="px-3 py-2 shrink-0">
+      {/* Section header */}
+      <div className="flex items-center justify-between px-3 py-2 shrink-0">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+          Projects
+        </span>
         <button
           onClick={(): void => {
             setShowAddInput(prev => !prev);
             setAddError(null);
             setAddValue('');
           }}
-          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-text-primary bg-surface-elevated hover:bg-accent transition-colors"
+          className="p-1 rounded hover:bg-surface-elevated transition-colors"
+          title="Add project"
+          aria-label="Add project"
         >
-          <Plus className="h-4 w-4 shrink-0 text-text-secondary" />
-          New project
+          <Plus className="h-4 w-4 text-text-tertiary hover:text-primary" />
         </button>
       </div>
 
@@ -136,9 +167,9 @@ export function ProjectsSidebar({
                   setShowAddInput(false);
                 }
               }}
-              placeholder="GitHub URL ou chemin local"
+              placeholder="GitHub URL or local path"
               disabled={addLoading}
-              className="w-full rounded-md border border-border bg-surface-elevated px-2 py-1.5 text-xs text-text-primary placeholder:text-text-tertiary focus:border-primary focus:outline-none disabled:opacity-50"
+              className="w-full rounded-md border border-border bg-surface-elevated px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary focus:border-primary focus:outline-none disabled:opacity-50"
             />
             {addLoading && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />}
           </div>
@@ -146,109 +177,55 @@ export function ProjectsSidebar({
         </div>
       )}
 
-      <ScrollArea className="flex-1 min-h-0 px-2 py-1">
-        {/* Projects section */}
-        <div className="mb-2">
-          <span className="block px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
-            Projets
-          </span>
-          <div className="flex flex-col gap-0.5">
-            {isLoadingCodebases ? (
-              <div className="flex items-center justify-center py-4">
-                <span className="text-xs text-text-tertiary">Chargement...</span>
-              </div>
-            ) : isErrorCodebases ? (
-              <p className="px-2 text-[10px] text-error">Échec du chargement</p>
-            ) : visibleCodebases.length === 0 ? (
-              <span className="block px-2 py-2 text-xs text-text-tertiary">
-                {codebases && codebases.length > 0
-                  ? 'Aucun projet correspondant'
-                  : 'Aucun projet — cliquez + pour ajouter'}
-              </span>
-            ) : (
-              visibleCodebases.map(project => {
-                const isActive = location.pathname === `/projects/${project.id}`;
-                return (
-                  <button
-                    key={project.id}
-                    onClick={(): void => {
-                      setSelectedProjectId(project.id);
-                      navigate(`/projects/${project.id}`);
-                      onNavigate?.();
-                    }}
-                    className={cn(
-                      'flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors',
-                      isActive
-                        ? 'bg-accent-muted text-primary'
-                        : 'text-text-secondary hover:bg-surface-elevated hover:text-text-primary'
-                    )}
-                  >
-                    <FolderGit2
-                      className={cn(
-                        'h-4 w-4 shrink-0',
-                        isActive ? 'text-primary' : 'text-text-tertiary'
-                      )}
-                    />
-                    <span className="flex-1 truncate font-medium">{project.name}</span>
-                    <ChevronRight
-                      className={cn(
-                        'ml-auto h-3.5 w-3.5 shrink-0 transition-opacity',
-                        isActive ? 'opacity-60' : 'opacity-0'
-                      )}
-                    />
-                  </button>
-                );
-              })
-            )}
+      <div className="px-3 pb-2 shrink-0">
+        <button
+          onClick={handleUnscopedChat}
+          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
+        >
+          <MessageSquarePlus className="h-3.5 w-3.5 shrink-0" />
+          New unscoped chat
+        </button>
+      </div>
 
-            {hasMore && !isLoadingCodebases && !isErrorCodebases && (
-              <button
-                onClick={(): void => {
-                  setExpanded(prev => !prev);
-                }}
-                className="flex items-center gap-2 px-3 py-1.5 text-xs text-text-tertiary hover:text-primary transition-colors"
-              >
-                {expanded
-                  ? 'Voir moins'
-                  : `Voir plus (${String(filteredCodebases.length - MAX_VISIBLE)})`}
-              </button>
+      <Separator className="bg-border shrink-0" />
+
+      <ScrollArea className="flex-1 min-h-0 px-2 py-2">
+        {isLoadingCodebases ? (
+          <div className="flex items-center justify-center py-4">
+            <span className="text-xs text-text-tertiary">Loading projects...</span>
+          </div>
+        ) : isErrorCodebases ? (
+          <p className="px-2 text-[10px] text-error mt-1">Failed to load projects — retrying</p>
+        ) : !filteredCodebases || filteredCodebases.length === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-2 py-6">
+            <FolderGit2 className="h-8 w-8 text-text-tertiary" />
+            <span className="text-xs text-text-tertiary text-center">
+              {codebases && codebases.length > 0 ? 'No matching projects' : 'No projects yet'}
+            </span>
+            {(!codebases || codebases.length === 0) && (
+              <span className="text-[10px] text-text-tertiary">Click + to add a repository</span>
             )}
           </div>
-        </div>
-
-        {/* Recents section */}
-        <div className="mt-1">
-          <span className="block px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
-            Récents
-          </span>
+        ) : (
           <div className="flex flex-col gap-0.5">
-            {sortedRecent.length === 0 ? (
-              <span className="block px-2 py-2 text-xs text-text-tertiary">
-                Aucune conversation
-              </span>
-            ) : (
-              sortedRecent.map(conv => {
-                const convId = conv.platform_conversation_id;
-                const isActive = location.pathname === `/chat/${encodeURIComponent(convId)}`;
-                const title = conv.title ?? 'Conversation sans titre';
-                return (
-                  <button
-                    key={conv.id}
-                    onClick={(): void => {
-                      navigate(`/chat/${encodeURIComponent(convId)}`);
-                      onNavigate?.();
-                    }}
-                    className={cn(
-                      'flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors',
-                      isActive
-                        ? 'bg-accent-muted text-primary'
-                        : 'text-text-secondary hover:bg-surface-elevated hover:text-text-primary'
-                    )}
-                  >
-                    <MessageSquare
+            {filteredCodebases.map(project => (
+              <div key={project.id} className="group/project">
+                <Collapsible
+                  open={selectedProjectId === project.id}
+                  onOpenChange={(open): void => {
+                    setSelectedProjectId(open ? project.id : null);
+                    if (!open && settingsOpenId === project.id) {
+                      setSettingsOpenId(null);
+                    }
+                  }}
+                >
+                  <div className="relative flex items-center">
+                    <CollapsibleTrigger
                       className={cn(
-                        'h-4 w-4 shrink-0',
-                        isActive ? 'text-primary' : 'text-text-tertiary'
+                        'flex flex-1 items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors pr-8',
+                        selectedProjectId === project.id
+                          ? 'bg-accent-muted text-primary'
+                          : 'text-text-secondary hover:bg-surface-elevated hover:text-text-primary'
                       )}
                     >
                       <FolderGit2 className="h-4 w-4 shrink-0" />
@@ -353,8 +330,33 @@ export function ProjectsSidebar({
               </div>
             ))}
           </div>
-        </div>
+        )}
       </ScrollArea>
+
+      <AlertDialog
+        open={deleteTargetId !== null}
+        onOpenChange={(open): void => {
+          if (!open) {
+            setDeleteTargetId(null);
+            setDeleteError(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove project?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will remove <strong>{deleteTarget?.name}</strong> from Archon, delete its
+              workspace directory and worktrees. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {deleteError && <p className="text-sm text-error px-1">{deleteError}</p>}
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteConfirm}>Remove</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

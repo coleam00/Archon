@@ -139,8 +139,8 @@ export function BuilderToolbar({
                 onChange={(e): void => {
                   onNameChange(e.target.value);
                 }}
-                placeholder="workflow-name"
-                className="min-w-[80px] max-w-[160px] rounded-md border border-transparent hover:border-border focus:border-border bg-transparent px-1.5 py-0.5 text-xs font-medium text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-1 focus:ring-accent"
+                placeholder="e.g. dedibox-deploy, git-review"
+                className="min-w-[80px] max-w-[200px] rounded-md border border-transparent hover:border-border focus:border-border bg-transparent px-1.5 py-0.5 text-xs font-medium text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-1 focus:ring-accent"
               />
               {hasUnsavedChanges && (
                 <span
@@ -265,6 +265,14 @@ export function BuilderToolbar({
             <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />
           </div>
         )}
+      </div>
+
+      {/* Naming convention hint */}
+      <div className="px-4 py-1 border-b border-border bg-surface text-[10px] text-text-secondary leading-relaxed">
+        Tip: use a prefix to organize — <code className="font-mono">my-project-</code> for
+        project-local, <code className="font-mono">archon-</code> is reserved for built-ins, or no
+        prefix for global workflows (e.g. <code className="font-mono">dedibox-deploy</code>,{' '}
+        <code className="font-mono">git-review</code>).
       </div>
 
       {workflowsError && (
