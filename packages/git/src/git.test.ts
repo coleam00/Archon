@@ -1894,4 +1894,119 @@ branch refs/heads/feature/auth
       );
     });
   });
+
+  describe('verifyWorktreeOwnership', () => {
+    test('resolves for matching worktree pointer', async () => {
+      await writeFile(
+        join(testDir, '.git'),
+        'gitdir: /workspace/my-repo/.git/worktrees/issue-42\n'
+      );
+
+      await expect(
+        git.verifyWorktreeOwnership(
+          git.toWorktreePath(testDir),
+          git.toRepoPath('/workspace/my-repo')
+        )
+      ).resolves.toBeUndefined();
+    });
+
+    test('throws with "belongs to a different clone" when gitdir points elsewhere', async () => {
+      await writeFile(join(testDir, '.git'), 'gitdir: /other/clone/.git/worktrees/issue-42\n');
+
+      await expect(
+        git.verifyWorktreeOwnership(
+          git.toWorktreePath(testDir),
+          git.toRepoPath('/workspace/my-repo')
+        )
+      ).rejects.toThrow(/belongs to a different clone \(\/other\/clone\)/);
+    });
+
+    test('normalizes trailing slashes in both paths', async () => {
+      await writeFile(
+        join(testDir, '.git'),
+        'gitdir: /workspace/my-repo/.git/worktrees/issue-42\n'
+      );
+
+      await expect(
+        git.verifyWorktreeOwnership(
+          git.toWorktreePath(testDir),
+          git.toRepoPath('/workspace/my-repo/')
+        )
+      ).resolves.toBeUndefined();
+    });
+
+    test('throws EISDIR when .git is a directory (full checkout at path)', async () => {
+      await realMkdir(join(testDir, '.git'));
+
+      const promise = git.verifyWorktreeOwnership(
+        git.toWorktreePath(testDir),
+        git.toRepoPath('/workspace/my-repo')
+      );
+      await expect(promise).rejects.toThrow(/path contains a full git checkout/);
+      // Original errno is preserved on the wrapped error for robust
+      // classification downstream (not just a fragile substring match).
+      try {
+        await git.verifyWorktreeOwnership(
+          git.toWorktreePath(testDir),
+          git.toRepoPath('/workspace/my-repo')
+        );
+      } catch (err) {
+        expect((err as NodeJS.ErrnoException).code).toBe('EISDIR');
+      }
+    });
+
+    test('throws ENOENT when .git file is missing', async () => {
+      await expect(
+        git.verifyWorktreeOwnership(
+          git.toWorktreePath(testDir),
+          git.toRepoPath('/workspace/my-repo')
+        )
+      ).rejects.toThrow(/Cannot verify worktree ownership/);
+      try {
+        await git.verifyWorktreeOwnership(
+          git.toWorktreePath(testDir),
+          git.toRepoPath('/workspace/my-repo')
+        );
+      } catch (err) {
+        expect((err as NodeJS.ErrnoException).code).toBe('ENOENT');
+      }
+    });
+
+    test('throws on submodule pointer (gitdir into .git/modules/...)', async () => {
+      await writeFile(
+        join(testDir, '.git'),
+        'gitdir: /workspace/my-repo/.git/modules/vendor/submodule\n'
+      );
+
+      await expect(
+        git.verifyWorktreeOwnership(
+          git.toWorktreePath(testDir),
+          git.toRepoPath('/workspace/my-repo')
+        )
+      ).rejects.toThrow(/not a git-worktree reference/);
+    });
+
+    test('throws on corrupted .git content (no gitdir prefix)', async () => {
+      await writeFile(join(testDir, '.git'), 'this is not a git pointer at all');
+
+      await expect(
+        git.verifyWorktreeOwnership(
+          git.toWorktreePath(testDir),
+          git.toRepoPath('/workspace/my-repo')
+        )
+      ).rejects.toThrow(/not a git-worktree reference/);
+    });
+
+    test('preserves original error via `cause` chain on fs errors', async () => {
+      try {
+        await git.verifyWorktreeOwnership(
+          git.toWorktreePath(testDir),
+          git.toRepoPath('/workspace/my-repo')
+        );
+      } catch (err) {
+        expect((err as Error).cause).toBeDefined();
+        expect(((err as Error).cause as NodeJS.ErrnoException).code).toBe('ENOENT');
+      }
+    });
+  });
 });

@@ -590,6 +590,8 @@ describe('WorktreeProvider', () => {
       worktreeExistsSpy.mockResolvedValueOnce(false);
       // findWorktreeByBranch finds existing worktree
       findWorktreeByBranchSpy.mockResolvedValue('/workspace/worktrees/repo/feature-auth');
+      // Same-clone ownership match so adoption proceeds
+      mockReadFile.mockResolvedValue('gitdir: /workspace/repo/.git/worktrees/feature-auth\n');
 
       const env = await provider.create(request);
 
@@ -603,6 +605,25 @@ describe('WorktreeProvider', () => {
         return args.includes('add');
       });
       expect(addCalls).toHaveLength(0);
+    });
+
+    test('throws when PR-branch-adopted worktree belongs to a different clone', async () => {
+      const request: PRIsolationRequest = {
+        codebaseId: 'cb-123',
+        canonicalRepoPath: '/workspace/repo',
+        workflowType: 'pr',
+        identifier: '42',
+        prBranch: 'feature/auth',
+        isForkPR: false,
+      };
+
+      // Primary path misses, secondary findWorktreeByBranch hits
+      worktreeExistsSpy.mockResolvedValueOnce(false);
+      findWorktreeByBranchSpy.mockResolvedValue('/workspace/worktrees/repo/feature-auth');
+      // .git points to a different clone
+      mockReadFile.mockResolvedValue('gitdir: /other/clone/.git/worktrees/feature-auth\n');
+
+      await expect(provider.create(request)).rejects.toThrow(/belongs to a different clone/);
     });
 
     test('resets stale branch to start-point when it already exists', async () => {

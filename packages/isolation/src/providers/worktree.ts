@@ -495,8 +495,14 @@ export class WorktreeProvider implements IIsolationProvider {
         await verifyWorktreeOwnership(toWorktreePath(worktreePath), request.canonicalRepoPath);
       } catch (err) {
         getLog().warn(
-          { worktreePath, branchName, err: (err as Error).message },
-          'worktree_adoption_refused_cross_checkout'
+          {
+            worktreePath,
+            branchName,
+            codebaseId: request.codebaseId,
+            canonicalRepoPath: request.canonicalRepoPath,
+            err: (err as Error).message,
+          },
+          'worktree.adoption_refused_cross_checkout'
         );
         throw err;
       }
@@ -512,6 +518,25 @@ export class WorktreeProvider implements IIsolationProvider {
         request.prBranch
       );
       if (existingByBranch) {
+        // Same cross-clone guard as the primary adoption path above — a
+        // worktree matching the PR branch might still belong to a different
+        // clone of the same remote.
+        try {
+          await verifyWorktreeOwnership(existingByBranch, request.canonicalRepoPath);
+        } catch (err) {
+          getLog().warn(
+            {
+              worktreePath: existingByBranch,
+              branchName: request.prBranch,
+              codebaseId: request.codebaseId,
+              canonicalRepoPath: request.canonicalRepoPath,
+              err: (err as Error).message,
+            },
+            'worktree.adoption_refused_cross_checkout'
+          );
+          throw err;
+        }
+
         getLog().info(
           { worktreePath: existingByBranch, branchName: request.prBranch },
           'worktree_adopted'

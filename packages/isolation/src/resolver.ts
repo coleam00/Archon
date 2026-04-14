@@ -16,7 +16,7 @@ import {
   isAncestorOf,
   verifyWorktreeOwnership,
 } from '@archon/git';
-import type { RepoPath, BranchName } from '@archon/git';
+import type { RepoPath, BranchName, WorktreePath } from '@archon/git';
 
 import type {
   IIsolationProvider,
@@ -108,7 +108,27 @@ export class IsolationResolver {
 
     // Compute canonical repo path once — paths 3-6 all need it either for
     // ownership verification (cross-clone guard) or for worktree creation.
-    const canonicalPath = await getCanonicalRepoPath(codebase.defaultCwd);
+    // Wrap failures so they classify as known isolation errors with actionable
+    // messages instead of propagating as unclassified crashes.
+    let canonicalPath: RepoPath;
+    try {
+      canonicalPath = await getCanonicalRepoPath(codebase.defaultCwd);
+    } catch (error) {
+      const err = error as Error;
+      getLog().error(
+        {
+          err,
+          errorType: err.constructor.name,
+          codebaseId: codebase.id,
+          defaultCwd: codebase.defaultCwd,
+        },
+        'isolation.canonical_repo_path_resolution_failed'
+      );
+      throw new Error(
+        `Cannot determine canonical repo path for ${codebase.defaultCwd}: ${err.message}`,
+        { cause: err }
+      );
+    }
 
     // 3. Check for existing environment with same workflow
     const reusable = await this.findReusable(
@@ -217,6 +237,32 @@ export class IsolationResolver {
   }
 
   /**
+   * Verify that an on-disk worktree belongs to the expected repo before
+   * adopting. Wraps the shared `verifyWorktreeOwnership` with logging that
+   * includes structured fields for incident debugging — the error message
+   * alone is not enough because stack traces and call sites vary.
+   *
+   * Throws on mismatch (re-throws the original error so `classifyIsolationError`
+   * and `isKnownIsolationError` pattern-match against the user-facing message).
+   */
+  private async assertWorktreeOwnership(
+    worktreePath: WorktreePath,
+    canonicalRepoPath: RepoPath,
+    logContext: Record<string, unknown>,
+    logEvent: string
+  ): Promise<void> {
+    try {
+      await verifyWorktreeOwnership(worktreePath, canonicalRepoPath);
+    } catch (err) {
+      getLog().warn(
+        { ...logContext, worktreePath, canonicalRepoPath, err: (err as Error).message },
+        logEvent
+      );
+      throw err;
+    }
+  }
+
+  /**
    * Find a reusable environment by workflow identity.
    *
    * Verifies that the on-disk worktree belongs to `canonicalRepoPath` before
@@ -234,21 +280,14 @@ export class IsolationResolver {
     const existing = await this.store.findActiveByWorkflow(codebaseId, workflowType, workflowId);
     if (!existing) return null;
 
-    if (await worktreeExists(toWorktreePath(existing.working_path))) {
-      try {
-        await verifyWorktreeOwnership(toWorktreePath(existing.working_path), canonicalRepoPath);
-      } catch (err) {
-        getLog().warn(
-          {
-            workflowType,
-            workflowId,
-            workingPath: existing.working_path,
-            err: (err as Error).message,
-          },
-          'isolation.reuse_refused_cross_checkout'
-        );
-        throw err;
-      }
+    const worktreePath = toWorktreePath(existing.working_path);
+    if (await worktreeExists(worktreePath)) {
+      await this.assertWorktreeOwnership(
+        worktreePath,
+        canonicalRepoPath,
+        { codebaseId, workflowType, workflowId },
+        'isolation.reuse_refused_cross_checkout'
+      );
 
       getLog().debug({ workflowType, workflowId }, 'isolation_reuse_existing');
       const warnings = await this.collectBaseBranchWarnings(existing, baseBranch, {
@@ -265,11 +304,12 @@ export class IsolationResolver {
   /**
    * Find an environment linked to one of the given issue numbers.
    *
-   * Verifies that each candidate worktree belongs to `canonicalRepoPath`
-   * before adopting. On cross-clone mismatch, throws — the user needs to
-   * know their linked-issue env is owned by another clone; silently skipping
-   * would mask the problem. The DB row is preserved (belongs to the other
-   * clone).
+   * Verifies each candidate worktree belongs to `canonicalRepoPath` before
+   * adopting. On cross-clone mismatch, throws — this stops iteration over any
+   * remaining linked issues. Intentional: if a linked env is owned by another
+   * clone, the user's machine state is anomalous (two clones of the same
+   * remote) and they should resolve it explicitly rather than have us skip
+   * past the signal. For the 99% single-clone case, this path always succeeds.
    */
   private async findLinkedIssueEnv(
     codebaseId: string,
@@ -284,21 +324,14 @@ export class IsolationResolver {
       );
       if (!linkedEnv) continue;
 
-      if (await worktreeExists(toWorktreePath(linkedEnv.working_path))) {
-        try {
-          await verifyWorktreeOwnership(toWorktreePath(linkedEnv.working_path), canonicalRepoPath);
-        } catch (err) {
-          getLog().warn(
-            {
-              issueNum,
-              codebaseId,
-              workingPath: linkedEnv.working_path,
-              err: (err as Error).message,
-            },
-            'isolation.linked_issue_refused_cross_checkout'
-          );
-          throw err;
-        }
+      const worktreePath = toWorktreePath(linkedEnv.working_path);
+      if (await worktreeExists(worktreePath)) {
+        await this.assertWorktreeOwnership(
+          worktreePath,
+          canonicalRepoPath,
+          { codebaseId, issueNum },
+          'isolation.linked_issue_refused_cross_checkout'
+        );
 
         getLog().debug({ issueNum, codebaseId }, 'isolation_share_linked_issue');
         return {
@@ -334,19 +367,12 @@ export class IsolationResolver {
 
     const adoptedPath = await findWorktreeByBranch(canonicalRepoPath, prBranch);
     if (adoptedPath && (await worktreeExists(adoptedPath))) {
-      try {
-        await verifyWorktreeOwnership(adoptedPath, canonicalRepoPath);
-      } catch (err) {
-        getLog().warn(
-          {
-            adoptedPath,
-            prBranch,
-            err: (err as Error).message,
-          },
-          'isolation.branch_adoption_refused_cross_checkout'
-        );
-        throw err;
-      }
+      await this.assertWorktreeOwnership(
+        adoptedPath,
+        canonicalRepoPath,
+        { codebaseId: codebase.id, prBranch },
+        'isolation.branch_adoption_refused_cross_checkout'
+      );
 
       getLog().info({ adoptedPath, prBranch }, 'isolation_worktree_adopted');
       const env = await this.store.create({

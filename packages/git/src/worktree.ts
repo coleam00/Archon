@@ -286,11 +286,20 @@ export async function verifyWorktreeOwnership(
     gitContent = await readFile(join(worktreePath, '.git'), 'utf-8');
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
+    // Preserve the original errno on the wrapped error so downstream
+    // classifiers can match by `.code` instead of substring — resilient to
+    // Node.js message format changes. The original error is also kept via
+    // `cause` for debugging.
+    const wrap = (message: string): Error => {
+      const wrapped = new Error(message, { cause: err });
+      if (err.code) (wrapped as NodeJS.ErrnoException).code = err.code;
+      return wrapped;
+    };
     // EISDIR: .git is a directory — path holds a full checkout, not a
     // worktree. Refusing adoption prevents accidentally treating an
     // unrelated repo at this path as ours.
     if (err.code === 'EISDIR') {
-      throw new Error(
+      throw wrap(
         `Cannot adopt ${worktreePath}: path contains a full git checkout, not a worktree.`
       );
     }
@@ -298,7 +307,7 @@ export async function verifyWorktreeOwnership(
     // a TOCTOU race or filesystem corruption. Fail fast.
     // EACCES/EIO/etc.: cannot verify ownership — fail fast rather than
     // defaulting to permissive adoption.
-    throw new Error(`Cannot verify worktree ownership at ${worktreePath}: ${err.message}`);
+    throw wrap(`Cannot verify worktree ownership at ${worktreePath}: ${err.message}`);
   }
 
   // gitdir: /path/to/repo/.git/worktrees/branch-name

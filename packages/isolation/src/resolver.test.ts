@@ -942,8 +942,8 @@ describe('IsolationResolver', () => {
             'Remove it from that clone or use a different codebase registration.'
         )
       );
-
-      const resolver = createResolver();
+      const createSpy = mock(async () => makeEnvRow());
+      const resolver = createResolver({ store: makeMockStore({ create: createSpy }) });
 
       await expect(
         resolver.resolve({
@@ -957,6 +957,11 @@ describe('IsolationResolver', () => {
           platformType: 'web',
         })
       ).rejects.toThrow(/belongs to a different clone/);
+
+      // Symmetry with paths 1+2: no DB mutation on cross-clone rejection.
+      // Here it's create (vs updateStatus) because tryBranchAdoption writes
+      // a new row rather than reusing an existing one.
+      expect(createSpy).not.toHaveBeenCalled();
     });
 
     test('tryBranchAdoption succeeds when discovered worktree belongs to the same clone', async () => {

@@ -299,3 +299,40 @@ ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING=1 archon workflow run ...
 ```bash
 ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS=120000 archon workflow run ...
 ```
+
+## Worktree Belongs to a Different Clone
+
+**Symptom:** Running a workflow (especially with `--branch <name>`) from one local clone surfaces one of these errors:
+
+- `Worktree at <path> belongs to a different clone (<other-clone-path>). Remove it from that clone or use a different codebase registration.`
+- `Cannot verify worktree ownership at <path>: <reason>`
+- `Cannot adopt <path>: path contains a full git checkout, not a worktree.`
+- `Cannot adopt <path>: .git pointer is not a git-worktree reference.`
+
+**Cause:** Archon derives codebase identity from the remote URL (`owner/repo`), so two local clones of the same remote share one `codebase_id`. Worktrees are stored under a shared path (`~/.archon/workspaces/<owner>/<repo>/worktrees/`), which means a worktree created by clone A is visible on disk from clone B. The isolation system refuses to silently adopt across clones because it would operate on the wrong filesystem state.
+
+**Fix — pick one:**
+
+1. **Remove the other clone's worktree.** If you no longer need the other clone's in-progress work:
+
+   ```bash
+   # From the other clone's directory, find and remove the conflicting worktree
+   archon isolation list
+   archon complete <branch-name>          # graceful cleanup
+   # or, if no work to preserve:
+   git worktree remove <path> --force
+   ```
+
+2. **Use a different branch name** for this run so the two clones don't compete for the same worktree path:
+
+   ```bash
+   archon workflow run <name> --branch <different-name> "task"
+   ```
+
+3. **Work from a single clone.** If both local checkouts are for the same project, consolidate to one. Archon's codebase registration currently assumes one local path per remote; true multi-clone support is tracked in [#1192](https://github.com/coleam00/Archon/issues/1192).
+
+**Other variants:**
+
+- `path contains a full git checkout, not a worktree`: something non-Archon created a full git repo at the worktree path. Remove or move it.
+- `.git pointer is not a git-worktree reference`: the `.git` file at that path points somewhere unexpected (submodule, malformed). Inspect it with `cat <path>/.git` and clean up manually.
+- `Cannot verify worktree ownership`: filesystem permission or I/O error reading `<path>/.git`. Check `ls -la <path>` and file permissions on `~/.archon/workspaces`.
