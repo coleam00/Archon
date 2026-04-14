@@ -733,6 +733,22 @@ describe('workflows database', () => {
       expect(selectParams).toEqual(['workflow-run-123']);
     });
 
+    test('refreshes started_at to NOW so resumed row competes fairly in the path-lock tiebreaker', async () => {
+      // Without this refresh, a resumed row carries its original (potentially
+      // hours-old) started_at and sorts ahead of any currently-active holder
+      // in the older-wins tiebreaker — slipping past the lock and causing
+      // two active workflows on the same working_path.
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([{ ...mockWorkflowRun, status: 'running' as const }])
+      );
+
+      await resumeWorkflowRun('workflow-run-123');
+
+      const [updateQuery] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(updateQuery).toContain('started_at = NOW()');
+    });
+
     test('throws when no row matched (run not found)', async () => {
       // UPDATE returns rowCount 0
       mockQuery.mockResolvedValueOnce(createQueryResult([], 0));

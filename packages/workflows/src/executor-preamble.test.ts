@@ -196,7 +196,7 @@ describe('executeWorkflow preamble', () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('already running');
+      expect(result.error).toContain('already active');
 
       // Actionable rejection message was sent (mentions worktree-in-use,
       // workflow name, and concrete next-action commands)

@@ -365,9 +365,23 @@ export async function resumeWorkflowRun(id: string): Promise<WorkflowRun> {
   // Each phase has its own try/catch to avoid string-sniffing own errors in a shared catch.
   let updateResult: Awaited<ReturnType<typeof pool.query>>;
   try {
+    // Refresh started_at to NOW so the resumed row competes fairly with
+    // currently-active rows in getActiveWorkflowRunByPath's older-wins
+    // tiebreaker. Without this, a resumed row carries its original
+    // (potentially hours-old) started_at and would sort ahead of any
+    // currently-running holder, slipping past the path lock and causing
+    // two active workflows on the same working_path.
+    //
+    // We accept losing the original creation time here — `started_at` for
+    // an active row semantically means "when did this active phase start."
+    // The original creation time can be recovered from workflow_events
+    // history if needed for analytics.
     updateResult = await pool.query(
       `UPDATE remote_agent_workflow_runs
-       SET status = 'running', completed_at = NULL, last_activity_at = ${dialect.now()}
+       SET status = 'running',
+           completed_at = NULL,
+           started_at = ${dialect.now()},
+           last_activity_at = ${dialect.now()}
        WHERE id = $1`,
       [id]
     );

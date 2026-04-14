@@ -203,7 +203,7 @@ describe('executeWorkflow', () => {
         'db-conv-1'
       );
       expect(result.success).toBe(false);
-      expect(result.error).toContain('already running');
+      expect(result.error).toContain('already active');
     });
 
     it('passes self-id and started_at to the lock query so self is excluded', async () => {
@@ -705,6 +705,160 @@ describe('executeWorkflow', () => {
       );
 
       expect(store.getCodebaseEnvVars).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Lock-token cleanup on pre-DAG failure paths (review #1)
+  //
+  // Any failure between row creation and DAG start that returns early must
+  // release the lock token. Without this, ghost pending/running rows block
+  // the path until the 5-min stale window or manual intervention.
+  // -------------------------------------------------------------------------
+
+  describe('lock cleanup on failure paths', () => {
+    it('cancels pre-created row when resumeWorkflowRun throws', async () => {
+      const preCreated = makeRun({ id: 'pre-created-orphan', status: 'pending' });
+      const resumable = makeRun({ id: 'failed-prior-run', status: 'failed' });
+      const updateSpy = mock(async () => {});
+      const store = makeStore({
+        findResumableRun: mock(async () => resumable),
+        getCompletedDagNodeOutputs: mock(async () => new Map([['node1', 'out1']])),
+        resumeWorkflowRun: mock(async () => {
+          throw new Error('DB blew up during resume activation');
+        }),
+        updateWorkflowRun: updateSpy,
+      });
+      const deps = makeDeps(store);
+
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test',
+        'db-conv-1',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        preCreated
+      );
+
+      expect(result.success).toBe(false);
+      const cancelCall = updateSpy.mock.calls.find(
+        (call: unknown[]) =>
+          call[0] === 'pre-created-orphan' &&
+          (call[1] as { status?: string })?.status === 'cancelled'
+      );
+      expect(cancelCall).toBeDefined();
+    });
+
+    it('cancels workflowRun when guard query throws (no zombie row)', async () => {
+      const updateSpy = mock(async () => {});
+      const store = makeStore({
+        getActiveWorkflowRunByPath: mock(async () => {
+          throw new Error('DB connection lost during guard');
+        }),
+        updateWorkflowRun: updateSpy,
+      });
+      const deps = makeDeps(store);
+
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test',
+        'db-conv-1'
+      );
+
+      expect(result.success).toBe(false);
+      const cancelCall = updateSpy.mock.calls.find(
+        (call: unknown[]) => (call[1] as { status?: string })?.status === 'cancelled'
+      );
+      expect(cancelCall).toBeDefined();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Status-aware blocking message (review #3)
+  //
+  // The lock query returns running, paused, AND fresh-pending rows.
+  // Telling a user to "wait" when the holder is `paused` is misleading —
+  // they need to approve/reject to unblock it.
+  // -------------------------------------------------------------------------
+
+  describe('blocking message status awareness', () => {
+    it('uses paused-specific copy when blocker is paused', async () => {
+      const pausedRun = makeRun({
+        id: 'paused-run-id',
+        workflow_name: 'archon-implement',
+        status: 'paused',
+        started_at: new Date(Date.now() - 10000).toISOString(),
+      });
+      const sendMessageSpy = mock(async () => {});
+      const platform = {
+        sendMessage: sendMessageSpy,
+        getPlatformType: mock(() => 'test' as const),
+      } as unknown as IWorkflowPlatform;
+      const store = makeStore({ getActiveWorkflowRunByPath: mock(async () => pausedRun) });
+      const deps = makeDeps(store);
+
+      await executeWorkflow(deps, platform, 'conv-1', '/tmp', makeWorkflow(), 'test', 'db-conv-1');
+
+      const msg = (sendMessageSpy.mock.calls[0] as [string, string])[1];
+      // Wrong action ("wait for it to finish") would let users sit forever
+      // on a workflow waiting for their own approval.
+      expect(msg).toContain('paused');
+      expect(msg).toContain('/workflow approve');
+      expect(msg).toContain('/workflow reject');
+      expect(msg).not.toContain('Wait for it to finish');
+    });
+
+    it('uses pending-specific copy when blocker is just starting', async () => {
+      const pendingRun = makeRun({
+        id: 'pending-run',
+        workflow_name: 'archon-implement',
+        status: 'pending',
+        started_at: new Date(Date.now() - 500).toISOString(),
+      });
+      const sendMessageSpy = mock(async () => {});
+      const platform = {
+        sendMessage: sendMessageSpy,
+        getPlatformType: mock(() => 'test' as const),
+      } as unknown as IWorkflowPlatform;
+      const store = makeStore({ getActiveWorkflowRunByPath: mock(async () => pendingRun) });
+      const deps = makeDeps(store);
+
+      await executeWorkflow(deps, platform, 'conv-1', '/tmp', makeWorkflow(), 'test', 'db-conv-1');
+
+      const msg = (sendMessageSpy.mock.calls[0] as [string, string])[1];
+      expect(msg).toContain('starting');
+    });
+
+    it('uses running copy by default', async () => {
+      const runningRun = makeRun({
+        id: 'running-run',
+        workflow_name: 'archon-implement',
+        status: 'running',
+        started_at: new Date(Date.now() - 60000).toISOString(),
+      });
+      const sendMessageSpy = mock(async () => {});
+      const platform = {
+        sendMessage: sendMessageSpy,
+        getPlatformType: mock(() => 'test' as const),
+      } as unknown as IWorkflowPlatform;
+      const store = makeStore({ getActiveWorkflowRunByPath: mock(async () => runningRun) });
+      const deps = makeDeps(store);
+
+      await executeWorkflow(deps, platform, 'conv-1', '/tmp', makeWorkflow(), 'test', 'db-conv-1');
+
+      const msg = (sendMessageSpy.mock.calls[0] as [string, string])[1];
+      expect(msg).toContain('running 1m');
+      expect(msg).toContain('Wait for it to finish');
     });
   });
 });
