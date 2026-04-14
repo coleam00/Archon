@@ -1,264 +1,264 @@
 ---
 name: archon
 description: |
-  Use when: User wants to run Archon workflows, CREATE workflows or commands,
-  set up Archon, or manage Archon configuration.
-  Triggers (run): "use archon to", "run archon", "archon workflow", "use archon for",
-            "have archon", "let archon", "ask archon to".
-  Triggers (create): "create a workflow", "write a workflow", "make a command",
-            "author a workflow", "new workflow", "new command", "archon workflow yaml".
-  Triggers (setup): "set up archon", "install archon", "how to use archon",
-            "configure archon", "archon setup", "get started with archon".
-  Triggers (config): "change my archon config", "modify archon config", "archon config",
-            "change archon settings", "update my config", "help me change my config",
-            "edit archon config", "archon configuration".
-  Triggers (init): "initialize archon", "set up .archon", "archon init", "add archon to repo".
-  Capability: Runs AI workflows in isolated git worktrees for parallel development.
-  Also: Creates and manages workflow YAML files, command files, and configuration.
-  NOT for: Direct Claude Code work - only for delegating to Archon CLI.
-argument-hint: "[workflow] [message or issue number]"
+  Use when the user wants Codex to run or monitor Archon workflows, initialize
+  Archon in a repo, create or edit Archon commands/workflows, inspect Archon CLI
+  behavior, or customize Archon for Codex usage rather than handling the task
+  directly in the current session.
+  Triggers: "use archon", "run archon", "archon workflow", "archon assist",
+            "codex archon assist", "have archon handle this", "use archon codex",
+            "archon init", "create an archon workflow", "create an archon command",
+            "archon config", "archon variables", "archon cli".
+  Also use when the user wants help choosing the Codex-safe Archon workflow or
+  authoring/customization surface for a task.
+  NOT for: Direct local implementation when the user wants Codex to do the work here
+  without handing off to Archon or without using Archon surfaces.
 ---
 
-# Archon CLI Skill
+# Archon Host Skill
 
-Archon is a remote agentic coding platform that runs AI workflows in isolated git worktrees. This skill teaches you how to run workflows, create new workflows and commands, and manage Archon configuration.
+This skill tree is mirrored in both:
 
-## Available Workflows (live)
+- `.agents/skills/archon/`
+- `.claude/skills/archon/`
 
-!`archon workflow list 2>&1 || echo "Archon CLI not installed. Read guides/setup.md to set it up."`
+Codex and Claude discover different host-skill roots, so both locations exist.
+They must stay byte-identical. In this repo, treat `.agents/skills/archon/` as
+the authored source and sync the `.claude` mirror whenever the skill changes.
+
+Archon runs long-form workflows through its own CLI and workflow engine. This
+mirrored host skill exists to route work into the right Archon workflow from
+either outer assistant while keeping provider-specific assumptions explicit.
+
+This skill is intentionally narrower than the full Archon product surface:
+
+- it is Codex-first
+- it covers workflow operation, debugging, and Archon customization
+- it does not try to duplicate setup/install or broad platform-adapter docs
+
+Direct workflow routing comes first.
+
+- If the task clearly matches a specific Codex-safe workflow, run that workflow.
+- Use `archon-assist-codex` only when no narrower Codex-safe workflow fits.
+- Do not route guided implementation or interactive review loops through assist
+  first just to "get into Archon."
+
+## First Step
+
+Check the available workflows before suggesting or running one:
+
+```bash
+archon workflow list --json
+```
+
+If `archon` is unavailable, report that the Archon CLI is not installed or not on
+`PATH`. Do not perform setup unless the user explicitly asks.
 
 ## Routing
 
-Determine the user's intent and dispatch to the appropriate guide:
+Choose the smallest surface that matches the user's need:
 
 | Intent | Action |
-|--------|--------|
-| **Setup / install / "how to use"** | Read `guides/setup.md` — interactive setup wizard |
-| **Config / settings** | Read `guides/config.md` — interactive config editor |
-| **Initialize .archon/ in a repo** | Read `references/repo-init.md` |
-| **Create a workflow** | Read `references/workflow-dag.md` — the complete workflow authoring guide |
-| **Advanced features (hooks/MCP/skills)** | Read `references/dag-advanced.md` |
-| **Create a command file** | Read `references/authoring-commands.md` |
-| **Variable substitution reference** | Read `references/variables.md` |
-| **CLI command reference** | Read `references/cli-commands.md` |
-| **Debug workflow logs / inspect a run** | Read `references/log-debugging.md` — log locations, layers, filtering, interpretation |
-| **Run an interactive workflow** | Read `references/interactive-workflows.md` — transparent relay protocol |
-| **Run a workflow (default)** | Continue with "Running Workflows" below |
+| --- | --- |
+| pick or run a Codex-safe workflow | continue in this file |
+| monitor an active workflow | read `references/monitoring.md` |
+| debug a confusing, failed, or stalled run | read `references/log-debugging.md` |
+| relay an interactive workflow cleanly | read `references/interactive-workflows.md` |
+| initialize `.archon/` in a repo | read `references/repo-init.md` |
+| inspect variable substitution | read `references/variables.md` |
+| create or edit Archon commands | read `references/authoring-commands.md` |
+| create or edit Archon workflow YAML | read `references/workflow-dag.md` |
+| inspect Archon CLI surfaces | read `references/cli-commands.md` |
+| inspect or modify Archon config | read `references/configuration.md` |
+| inspect Codex vs Claude capability boundaries | read `references/codex-capability-crosswalk.md` |
 
-If the intent is ambiguous, ask the user to clarify.
+## Codex Naming Convention
 
----
+Prefer Archon workflows ending in `-codex` when they exist. That suffix indicates
+the workflow has been tuned or separated for Codex behavior.
+
+Known Codex-specific lanes in this repo:
+
+- `archon-assist-codex` for general Archon help, debugging, exploration, and
+  one-off questions when no narrower Codex-safe lane fits
+- `archon-piv-loop-codex` for guided Plan-Implement-Validate workflows with
+  Codex
+
+If the user asks for a general Archon task and a Codex-specific workflow exists,
+prefer that workflow over the Claude/default variant.
+
+If the user explicitly names a Claude-tuned workflow, respect that request but
+warn when the workflow includes Claude-only features that Codex ignores.
+
+## Codex Limitations In Archon
+
+Archon already warns when a Codex workflow node contains Claude-only features.
+Plan around those limits instead of assuming they work:
+
+- node-level `skills`
+- node-level `hooks`
+- node-level `mcp`
+- node-level `allowed_tools`
+- node-level `denied_tools`
+
+When a workflow relies on those features, prefer a `-codex` workflow if one
+exists. Otherwise tell the user the workflow may run with degraded behavior on
+Codex.
 
 ## Running Workflows
 
-### Core Command
+Use explicit workflow names whenever possible.
+
+General Codex assist:
 
 ```bash
-archon workflow run <workflow-name> --branch <branch-name> "<message>"
+archon workflow run archon-assist-codex --branch <branch-name> "<message>"
 ```
 
-**CRITICAL RULES**:
-
-1. **Always run in background** — Archon workflows are long-running. Always invoke the Bash tool with `run_in_background: true`. Use `/tasks` or the TaskOutput tool to check on progress.
-
-2. **Always use worktree isolation** — Use the `--branch` flag unless the user explicitly requests otherwise. This creates an isolated environment so Archon works without affecting the main branch.
-
-3. **One workflow per shell** — Each workflow blocks its shell. Run multiple workflows as separate background tasks.
-
-### Isolation Modes
-
-| Mode | Flag | When to Use |
-|------|------|-------------|
-| **Worktree (Default)** | `--branch <name>` | Always use this unless told otherwise |
-| **Custom start-point** | `--branch <name> --from <base>` | Start from a specific branch |
-| **Direct checkout** | `--no-worktree` | Only if user explicitly requests no isolation |
-| **Resume failed run** | `--resume` | Resume from the last failure point |
-
-### Workflow Selection
-
-Match the user's intent to a workflow from the live list above. Common patterns:
-
-| User Intent | Typical Workflow | Branch Pattern |
-|-------------|-----------------|----------------|
-| "Fix issue #X" / "Resolve bug" | `archon-fix-github-issue` | `fix/issue-{N}` |
-| "Review PR #X" / "Full review" | `archon-comprehensive-pr-review` | `review/pr-{N}` |
-| "Quick review PR #X" | `archon-smart-pr-review` | `review/pr-{N}` |
-| "Validate PR #X" / "Check PR" | `archon-validate-pr` | `review/pr-{N}` |
-| "Implement from plan" | `archon-feature-development` | `feat/{name}` |
-| "Plan and implement feature" | `archon-idea-to-pr` | `feat/{name}` |
-| "Execute plan file" | `archon-plan-to-pr` | `feat/{name}` |
-| "Run ralph" / "Implement PRD" | `archon-ralph-dag` | `feat/{name}` |
-| "Resolve conflicts" | `archon-resolve-conflicts` | `resolve/pr-{N}` |
-| "Create issue" / "File a bug" | `archon-create-issue` | `issue/{name}` |
-| "Review issue #X fully" | `archon-issue-review-full` | `review/issue-{N}` |
-| "Refactor safely" | `archon-refactor-safely` | `refactor/{name}` |
-| "Architecture review" | `archon-architect` | `review/{name}` |
-| "PIV loop" / "guided dev" | `archon-piv-loop` ⚡ | `piv/{name}` |
-| "Create a PRD" / "interactive PRD" | `archon-interactive-prd` ⚡ | `prd/{name}` |
-| General / debugging | `archon-assist` | `assist/{description}` |
-
-⚡ = **Interactive workflow** — requires the transparent relay protocol. Read `references/interactive-workflows.md` before running.
-
-If no specific workflow matches, use `archon-assist` as the fallback. The live workflow list above is always authoritative — it may include workflows not in this table.
-
-### Multi-Issue Invocation
-
-When the user mentions multiple issues, PRs, or tasks — run each as a **separate background task**:
+Guided Codex PIV:
 
 ```bash
-# Each gets its own worktree — they won't conflict
-archon workflow run archon-fix-github-issue --branch fix/issue-10 "Fix issue #10"
-archon workflow run archon-fix-github-issue --branch fix/issue-11 "Fix issue #11"
-archon workflow run archon-fix-github-issue --branch fix/issue-12 "Fix issue #12"
+archon workflow run archon-piv-loop-codex --branch <branch-name> "<message>"
 ```
 
-Never combine multiple issues into a single command.
+Rules:
 
----
+1. Use `--branch` unless the user explicitly wants `--no-worktree`.
+2. Use descriptive branch names, for example `assist/codex-readme` or
+   `piv/codex-auth-refactor`.
+3. For substantial implementation work, interactive refinement, or any guided
+   human-in-the-loop build request, prefer `archon-piv-loop-codex` over
+   `archon-assist-codex`.
+4. For read-only questions or exploration, `--no-worktree` is acceptable.
+5. Prefer one Archon workflow per command rather than combining unrelated tasks.
+6. Treat Archon workflows as long-running jobs. Keep the run ID, working path,
+   and current status available for follow-up checks instead of assuming the
+   launch command alone is the full observability surface.
 
-## Other CLI Commands
+## Interactive Operator Protocol
+
+Use this protocol for interactive workflows such as `archon-piv-loop-codex`.
+
+### Launch
+
+1. Run the workflow directly with `archon workflow run ...`.
+2. Capture:
+   - workflow name
+   - run ID
+   - working path
+   - branch name if available
+3. Immediately verify the launched run with `archon workflow status --json`.
+
+### State Machine
+
+Treat Codex as the human-facing operator for the workflow run until it reaches a
+terminal state.
+
+| Status | Action |
+| --- | --- |
+| `running` | keep monitoring; report only meaningful changes |
+| `paused` | fetch the latest workflow output, relay it directly, wait for the user's answer |
+| `completed` | report the terminal result and stop |
+| `failed` | report the failure evidence and stop |
+
+### Post-Transition Rule
+
+After every `archon workflow run`, `archon workflow approve`, `archon workflow reject`,
+or `archon workflow resume`:
+
+1. check `archon workflow status --json`
+2. continue until the run is back at one of:
+   - `paused`
+   - `completed`
+   - `failed`
+
+Do not stop after recording approval or rejection alone. The control loop is not
+done until the workflow either pauses again or reaches a terminal state.
+
+### Pause Detection Rule
+
+For interactive loops, treat a new human checkpoint as real only when the run is
+currently `paused`.
+
+Track the paused fingerprint:
+
+- `approval.nodeId`
+- `approval.iteration`
+- `approval.message`
+
+Important nuance:
+
+- approval metadata can persist while the run is `running`
+- do not treat `metadata.approval` by itself as proof that the loop has paused again
+- workflow truth comes from the current `status`, not from stale approval metadata
+
+### Surface Boundaries
+
+- `archon workflow run ...` is the correct direct CLI surface for interactive workflows
+- `archon chat ...` is single-shot orchestration, not a persistent multi-turn workflow chat
+- web foreground runs can resume from natural-language replies in the same thread
+- CLI `workflow approve` and `workflow reject` auto-resume the run
+- `/workflow approve` is a different surface; do not assume it behaves like the CLI command
+
+## Monitoring
+
+Start with:
 
 ```bash
-archon workflow list              # List all available workflows
-archon workflow list --json       # Machine-readable JSON
-archon isolation list             # Show active worktree environments
-archon isolation cleanup          # Remove stale worktrees (default: 7 days)
-archon isolation cleanup --merged # Remove branches merged into main
-archon complete <branch>          # Complete branch lifecycle (remove worktree + branches)
-archon version                    # Show version info
+archon workflow status --json
 ```
 
-For the full CLI reference with all flags: Read `references/cli-commands.md`
+Default live-monitoring cadence:
 
----
+- check once shortly after launch to confirm the run exists
+- if the user is actively waiting, re-check about every 30 seconds
 
-## Authoring Quick Start
+Rationale:
 
-Archon uses a single workflow format: **nodes** (DAG). Workflows are YAML files in `.archon/workflows/`.
+- the web client already has a 15 second fallback poll, but CLI monitoring is
+  heavier because each check is a full Archon CLI invocation with database
+  access
 
-**IMPORTANT**: The examples below are starting points. Always design the workflow around what the user actually needs — the number of nodes, their types, dependencies, and configuration should match the user's requirements, not these templates.
+State handling:
 
-### Workflow Structure
+- `running`: keep monitoring, surface only meaningful progress
+- `paused`: read the latest workflow output and relay it transparently
+- `completed` or `failed`: report the terminal result and stop polling
+- `running` with unchanged `last_activity_at` plus no new JSONL activity for 5
+  minutes: report a possible stall, not a confirmed failure
 
-```yaml
-name: my-workflow
-description: What this workflow does
-provider: claude          # Optional: 'claude' or 'codex'
-model: sonnet             # Optional: model override
-nodes:
-  - id: first-node
-    command: my-command    # Loads .archon/commands/my-command.md
-  - id: second-node
-    prompt: "Use the output: $first-node.output"
-    depends_on: [first-node]
-```
+When an interactive workflow pauses, do not summarize the workflow's question.
+Read the latest output and pass the user's answer back through the Archon
+approval or reject command rather than trying to continue locally.
 
-### Four Node Types
+When a paused checkpoint is tied to a mutable artifact such as a plan-review
+loop, reopen the current artifact from disk before relaying any state summary.
+Do not assume a previously read file path or artifact contents are still the
+latest truth.
 
-Each node has exactly ONE of: `command`, `prompt`, `bash`, or `loop`.
+If the user explicitly wants unattended follow-up and the current Codex surface
+supports thread heartbeat automations, attach one to the current thread and have
+it report only meaningful changes: approval gates, terminal state changes, or a
+possible stall. If automation is unavailable on the current surface, continue
+with in-session polling instead.
 
-**Command node** — runs a `.archon/commands/*.md` file:
-```yaml
-- id: investigate
-  command: investigate-issue
-```
+Read `references/monitoring.md` for the detailed monitoring contract and
+`references/interactive-workflows.md` for the transparent-relay loop.
 
-**Prompt node** — inline AI prompt:
-```yaml
-- id: classify
-  prompt: "Classify this issue: $ARGUMENTS"
-  model: haiku
-  allowed_tools: []
-```
+## Repo Guidance
 
-**Bash node** — shell script, no AI, stdout captured as output:
-```yaml
-- id: fetch-data
-  bash: "gh issue view 42 --json title,body"
-  timeout: 15000
-```
+Do not assume Codex auto-loaded `CLAUDE.md` even if a fallback filename is
+configured globally. If repo conventions are load-bearing for the delegated task,
+read `CLAUDE.md` explicitly before recommending or running the workflow.
 
-**Loop node** — iterates AI prompt until completion:
-```yaml
-- id: implement
-  loop:
-    prompt: "Implement next story. When done: <promise>COMPLETE</promise>"
-    until: COMPLETE
-    max_iterations: 10
-    fresh_context: true
-    until_bash: "bun run test"    # Optional: exit 0 = done
-```
+For Archon customization requests, keep the boundary clear:
 
-For the full authoring guide with all fields, conditions, trigger rules, and patterns: Read `references/workflow-dag.md`
-
-### Creating a Command File
-
-Commands are `.md` files in `.archon/commands/` containing AI prompt templates:
-
-```markdown
----
-description: What this command does
-argument-hint: <expected arguments>
----
-
-# My Command
-
-User request: $ARGUMENTS
-Workflow artifacts: $ARTIFACTS_DIR
-
-[Instructions for the AI agent]
-```
-
-For the full command authoring guide: Read `references/authoring-commands.md`
-
-### Key Variables
-
-| Variable | Description |
-|----------|-------------|
-| `$ARGUMENTS` | User's input message |
-| `$ARTIFACTS_DIR` | Pre-created directory for workflow artifacts |
-| `$BASE_BRANCH` | Base branch (auto-detected from git) |
-| `$WORKFLOW_ID` | Unique workflow run ID |
-| `$nodeId.output` | Output from upstream node |
-
-Full variable reference: Read `references/variables.md`
-
-### Advanced Features (Command/Prompt Nodes, Claude Only)
-
-`hooks` (tool interception), `mcp` (external tool servers), `skills` (domain knowledge injection), `output_format` (structured JSON output), `allowed_tools`/`denied_tools` (tool restrictions).
-
-For details: Read `references/dag-advanced.md`
-
-### Example Files
-
-- `examples/dag-workflow.yaml` — workflow with conditions, bash nodes, structured output
-- `examples/command-template.md` — Command file skeleton with all variables
-
----
-
-## Example Interactions
-
-**User**: "Use Archon to fix issue #42"
-```bash
-archon workflow run archon-fix-github-issue --branch fix/issue-42 "Fix issue #42"
-```
-
-**User**: "Have Archon review PR #15"
-```bash
-archon workflow run archon-comprehensive-pr-review --branch review/pr-15 "Review PR #15"
-```
-
-**User**: "Create a workflow that reviews code and runs tests"
-→ Read `references/workflow-dag.md` and create a workflow with parallel review nodes.
-
-**User**: "Make a workflow with conditional routing"
-→ Read `references/workflow-dag.md` and create nodes with `when:` conditions and `output_format`.
-
-**User**: "Write a command file for investigating bugs"
-→ Read `references/authoring-commands.md` and create an `.md` file in `.archon/commands/`.
-
-**User**: "Set up Archon in this repo"
-→ Read `references/repo-init.md` to create the `.archon/` directory structure.
-
-**User**: "Initialize .archon and create a custom workflow"
-→ First read `references/repo-init.md`, then the appropriate workflow reference.
+- use the shared Archon authoring docs for commands, workflows, variables, and
+  repo initialization
+- use `references/configuration.md` for repo and global Archon config changes
+- use `references/codex-capability-crosswalk.md` whenever provider capability
+  differences are load-bearing
+- do not imply that Claude-only per-node controls automatically become Codex
+  node features
+- keep `archon chat` documented as single-shot orchestration rather than a
+  persistent workflow conversation

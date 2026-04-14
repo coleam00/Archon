@@ -370,16 +370,20 @@ CODEX_ACCOUNT_ID=account1
 
       copyArchonSkill(target);
 
+      expect(existsSync(join(target, '.agents', 'skills', 'archon', 'SKILL.md'))).toBe(true);
       expect(existsSync(join(target, '.claude', 'skills', 'archon', 'SKILL.md'))).toBe(true);
-      expect(existsSync(join(target, '.claude', 'skills', 'archon', 'guides', 'setup.md'))).toBe(
+      expect(existsSync(join(target, '.agents', 'skills', 'archon', 'guides', 'setup.md'))).toBe(
         true
       );
       expect(
-        existsSync(join(target, '.claude', 'skills', 'archon', 'references', 'workflow-dag.md'))
+        existsSync(join(target, '.agents', 'skills', 'archon', 'references', 'workflow-dag.md'))
       ).toBe(true);
       expect(
-        existsSync(join(target, '.claude', 'skills', 'archon', 'examples', 'dag-workflow.yaml'))
+        existsSync(join(target, '.agents', 'skills', 'archon', 'examples', 'dag-workflow.yaml'))
       ).toBe(true);
+      expect(existsSync(join(target, '.claude', 'skills', 'archon', 'guides', 'setup.md'))).toBe(
+        true
+      );
     });
 
     it('should write non-empty content to skill files', () => {
@@ -389,7 +393,7 @@ CODEX_ACCOUNT_ID=account1
       copyArchonSkill(target);
 
       const content = readFileSync(
-        join(target, '.claude', 'skills', 'archon', 'SKILL.md'),
+        join(target, '.agents', 'skills', 'archon', 'SKILL.md'),
         'utf-8'
       );
       expect(content.length).toBeGreaterThan(0);
@@ -398,14 +402,19 @@ CODEX_ACCOUNT_ID=account1
 
     it('should overwrite existing skill files', () => {
       const target = join(TEST_DIR, 'skill-target-overwrite');
-      const skillDir = join(target, '.claude', 'skills', 'archon');
-      mkdirSync(skillDir, { recursive: true });
-      writeFileSync(join(skillDir, 'SKILL.md'), 'old content');
+      const claudeSkillDir = join(target, '.claude', 'skills', 'archon');
+      const agentsSkillDir = join(target, '.agents', 'skills', 'archon');
+      mkdirSync(claudeSkillDir, { recursive: true });
+      mkdirSync(agentsSkillDir, { recursive: true });
+      writeFileSync(join(claudeSkillDir, 'SKILL.md'), 'old content');
+      writeFileSync(join(agentsSkillDir, 'SKILL.md'), 'old content');
 
       copyArchonSkill(target);
 
-      const content = readFileSync(join(skillDir, 'SKILL.md'), 'utf-8');
-      expect(content).not.toBe('old content');
+      const claudeContent = readFileSync(join(claudeSkillDir, 'SKILL.md'), 'utf-8');
+      const agentsContent = readFileSync(join(agentsSkillDir, 'SKILL.md'), 'utf-8');
+      expect(claudeContent).not.toBe('old content');
+      expect(agentsContent).not.toBe('old content');
     });
 
     it('should create skill files even when target directory does not exist', () => {
@@ -414,6 +423,7 @@ CODEX_ACCOUNT_ID=account1
 
       copyArchonSkill(target);
 
+      expect(existsSync(join(target, '.agents', 'skills', 'archon', 'SKILL.md'))).toBe(true);
       expect(existsSync(join(target, '.claude', 'skills', 'archon', 'SKILL.md'))).toBe(true);
     });
   });

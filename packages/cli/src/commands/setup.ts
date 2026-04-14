@@ -1176,19 +1176,27 @@ function writeEnvFiles(
 }
 
 /**
- * Copy the bundled Archon skill files to <targetPath>/.claude/skills/archon/
+ * Copy the bundled Archon skill files to both host-skill roots:
+ * - <targetPath>/.agents/skills/archon/
+ * - <targetPath>/.claude/skills/archon/
  *
  * Always overwrites existing files to ensure the latest skill version is installed.
  */
 export function copyArchonSkill(targetPath: string): void {
-  const skillRoot = join(targetPath, '.claude', 'skills', 'archon');
-  for (const [relativePath, content] of Object.entries(BUNDLED_SKILL_FILES)) {
-    const dest = join(skillRoot, relativePath);
-    const destDir = dirname(dest);
-    if (!existsSync(destDir)) {
-      mkdirSync(destDir, { recursive: true });
+  const skillRoots = [
+    join(targetPath, '.agents', 'skills', 'archon'),
+    join(targetPath, '.claude', 'skills', 'archon'),
+  ];
+
+  for (const skillRoot of skillRoots) {
+    for (const [relativePath, content] of Object.entries(BUNDLED_SKILL_FILES)) {
+      const dest = join(skillRoot, relativePath);
+      const destDir = dirname(dest);
+      if (!existsSync(destDir)) {
+        mkdirSync(destDir, { recursive: true });
+      }
+      writeFileSync(dest, content);
     }
-    writeFileSync(dest, content);
   }
 }
 

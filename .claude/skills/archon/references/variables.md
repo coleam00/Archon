@@ -1,51 +1,70 @@
-# Variable Substitution Reference
+# Variable Substitution Reference For Codex
 
-Variables are placeholders in command files and workflow prompts that get replaced at execution time.
+Variables are placeholders in command files and workflow prompts. Archon
+replaces them at execution time.
 
 ## Variable Table
 
 | Variable | Scope | Description |
-|----------|-------|-------------|
-| `$ARGUMENTS` | All modes | The user's original message passed to the workflow |
-| `$USER_MESSAGE` | All modes | Same as `$ARGUMENTS` — both resolve to the user's message |
-| `$WORKFLOW_ID` | All modes | Unique workflow run ID (for tracking and logging) |
-| `$ARTIFACTS_DIR` | All modes | Pre-created directory for this workflow run's artifacts. Write outputs here |
-| `$BASE_BRANCH` | All modes | Base branch name. Auto-detected from git, or set via `worktree.baseBranch` in config. Throws if referenced but unresolvable |
-| `$CONTEXT` | All modes | GitHub issue/PR context (if available from platform). Empty string if unavailable |
-| `$EXTERNAL_CONTEXT` | All modes | Alias for `$CONTEXT` |
-| `$ISSUE_CONTEXT` | All modes | Alias for `$CONTEXT` |
-| `$nodeId.output` | DAG only | Full text output of a completed upstream node |
-| `$nodeId.output.field` | DAG only | JSON field access on structured output from upstream node (string/number/boolean) |
-
-## Variable Availability
-
-All variables are available in all workflows. The only exception is `$nodeId.output` / `$nodeId.output.field`, which is DAG-only (requires an upstream node to reference).
+| --- | --- | --- |
+| `$ARGUMENTS` | all modes | The original user message passed to the workflow |
+| `$USER_MESSAGE` | all modes | Alias for `$ARGUMENTS` |
+| `$WORKFLOW_ID` | all modes | Unique workflow run ID |
+| `$ARTIFACTS_DIR` | all modes | Pre-created artifact directory for the current run |
+| `$BASE_BRANCH` | all modes | Base branch name, auto-detected or configured via `worktree.baseBranch` |
+| `$DOCS_DIR` | all modes | Repo docs directory, from `docs.path` or default `docs/` |
+| `$CONTEXT` | all modes | GitHub issue or PR context when the platform provides it |
+| `$EXTERNAL_CONTEXT` | all modes | Alias for `$CONTEXT` |
+| `$ISSUE_CONTEXT` | all modes | Alias for `$CONTEXT` |
+| `$LOOP_USER_INPUT` | interactive loop resumes | User feedback injected on the first resumed iteration, empty otherwise |
+| `$REJECTION_REASON` | approval `on_reject` prompts | Reviewer feedback captured when an approval node rejects and re-prompts |
+| `$nodeId.output` | DAG only | Full output from a completed upstream node |
+| `$nodeId.output.field` | DAG only | JSON field access on structured output from an upstream node |
 
 ## Where Variables Are Substituted
 
-- **Command files** (`.archon/commands/*.md`) — all variables except `$nodeId.output`
-- **Inline `prompt:` fields** — in DAG prompt nodes and loop node prompts
-- **`bash:` scripts in DAG nodes** — `$nodeId.output` references are automatically shell-quoted (single-quoted with `'` escaped)
+- command files in `.archon/commands/*.md`
+- inline `prompt:` fields
+- `loop.prompt:` fields
+- approval `on_reject.prompt` fields
+- `bash:` scripts in DAG nodes
+
+In `bash:` nodes, `$nodeId.output` values are automatically shell-quoted before
+injection.
 
 ## Substitution Order
 
-1. Standard workflow variables (`$WORKFLOW_ID`, `$ARGUMENTS`, `$ARTIFACTS_DIR`, `$BASE_BRANCH`, `$CONTEXT`)
-2. Node output references (`$nodeId.output`, `$nodeId.output.field`) — DAG mode only
+1. standard workflow variables such as `$WORKFLOW_ID`, `$ARGUMENTS`,
+   `$ARTIFACTS_DIR`, `$BASE_BRANCH`, `$DOCS_DIR`, and `$CONTEXT`
+2. node output references such as `$nodeId.output` and `$nodeId.output.field`
+
+## Structured Output Notes
+
+`$nodeId.output.field` only works when the upstream node produced structured
+output through `output_format:`.
+
+For Codex, `output_format:` is a real supported workflow surface. It maps to the
+Codex client's structured-output path rather than being a Claude-only feature.
 
 ## Context Auto-Append
 
-If `$CONTEXT` / `$EXTERNAL_CONTEXT` / `$ISSUE_CONTEXT` is NOT present anywhere in the prompt template but context exists (e.g., from a GitHub issue), it is automatically appended at the end after a `---` separator.
+If a prompt template does not mention `$CONTEXT`, `$EXTERNAL_CONTEXT`, or
+`$ISSUE_CONTEXT` anywhere but Archon has external context available, Archon may
+append that context automatically after a separator.
 
-## Escaped Dollar Signs
+## Literal Dollar Signs
 
-Use `\$` to produce a literal `$` in command files (prevents variable substitution).
+Use `\\$` to produce a literal `$` without substitution.
 
-## Node Output Details (DAG Only)
+## Unknown References
 
-`$nodeId.output` resolves to the full text output of the upstream node. If the node used `output_format:` (structured output), the output is the JSON-stringified result.
+Unknown node references resolve to an empty string with a warning in the logs.
+Do not depend on missing-node references as control flow.
 
-`$nodeId.output.field` parses the output as JSON and extracts the named field. Only works when the upstream node produced structured output via `output_format:`. Returns the string representation of the field value.
+## Interactive Workflow Notes
 
-In `bash:` nodes, `$nodeId.output` values are automatically shell-escaped before injection to prevent command injection.
-
-Unknown node references resolve to an empty string (with a warning logged).
+- `$LOOP_USER_INPUT` is only populated when an interactive loop resumes after an
+  approval round-trip
+- `$REJECTION_REASON` is only populated for an approval node's `on_reject`
+  branch
+- outside those contexts, both variables resolve to an empty string

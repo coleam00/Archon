@@ -1,133 +1,152 @@
-# Workflow Authoring
+# Workflow Authoring For Codex
 
-Archon workflows use a DAG (Directed Acyclic Graph) format: nodes with explicit dependency edges. Independent nodes run in parallel, conditions enable routing, and data flows between nodes via `$nodeId.output`. This is the only workflow format — there are no other workflow types.
+Archon workflows use a DAG format: nodes with explicit dependencies. This is a
+shared Archon surface for both Claude and Codex, but some node fields behave
+differently by provider.
 
 ## Schema
 
 ```yaml
-# Required
 name: my-workflow
 description: What this workflow does
 
-# Optional — workflow-level provider/model (inherited by all nodes)
-provider: claude                    # 'claude' or 'codex' (default: from config)
-model: sonnet                       # Model override
+provider: codex                  # optional; 'claude' or 'codex'
+model: gpt-5.4                   # optional model override
 
-# Required — the nodes array
 nodes:
-  - id: node-name                   # Unique identifier
-    prompt: "Inline AI prompt"      # OR command: name  OR bash: "script"  OR loop: {...}
-    depends_on: [other-node]        # Node IDs that must complete first
+  - id: first-node
+    command: my-command
+  - id: second-node
+    prompt: "Use the output: $first-node.output"
+    depends_on: [first-node]
 ```
 
-## Four Node Types (Mutually Exclusive)
+## Seven Node Types
 
-Each node must have exactly ONE of these fields:
+Each node must define exactly one of:
+
+- `command`
+- `prompt`
+- `bash`
+- `script`
+- `loop`
+- `approval`
+- `cancel`
 
 ### Command Node
-Runs a command file from `.archon/commands/`:
+
 ```yaml
 - id: investigate
-  command: investigate-issue         # Loads .archon/commands/investigate-issue.md
+  command: investigate-issue
 ```
 
 ### Prompt Node
-Runs an inline AI prompt:
+
 ```yaml
 - id: classify
-  prompt: |
-    Analyze this issue and classify it.
-    Issue: $ARGUMENTS
+  prompt: "Classify this issue: $ARGUMENTS"
 ```
 
 ### Bash Node
-Runs a shell script without AI:
+
 ```yaml
 - id: fetch-data
-  bash: |
-    gh issue view 123 --json title,body,labels
-  timeout: 30000                    # ms, default: 120000 (2 min)
+  bash: "gh issue view 42 --json title,body"
+  timeout: 15000
 ```
 
-- Script runs via `bash -c`
-- **stdout** captured as node output (available as `$fetch-data.output`)
-- **stderr** forwarded as warning, does not fail the node
-- No AI invoked — AI-specific fields are ignored
-- Use `timeout:` (milliseconds) for execution time limit
+### Script Node
+
+```yaml
+- id: summarize
+  script: scripts/summarize_issue.py
+  runtime: uv
+  deps:
+    - pyyaml
+```
 
 ### Loop Node
-Iterates an AI prompt until a completion signal or max iterations:
+
 ```yaml
 - id: implement
-  depends_on: [setup]
-  idle_timeout: 600000              # Per-iteration idle timeout (ms)
   loop:
-    prompt: |
-      Read the PRD and implement the next unfinished story.
-      When all stories are done: <promise>COMPLETE</promise>
-    until: COMPLETE                 # Completion signal string
-    max_iterations: 10              # Hard limit — node fails if exceeded
-    fresh_context: true             # true = fresh session each iteration
-    until_bash: "bun run test"      # Optional: exit 0 = complete
+    prompt: "Implement the next task. When complete: <promise>DONE</promise>"
+    until: DONE
+    max_iterations: 10
+    fresh_context: true
+    until_bash: "bun run test"
 ```
 
-See the dedicated **Loop Nodes** section below for full details.
-
-## Node Base Fields
-
-All node types share these fields:
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `id` | string | **required** | Unique node identifier |
-| `depends_on` | string[] | `[]` | Node IDs that must settle before this node runs |
-| `when` | string | — | Condition expression. Node **skipped** when false |
-| `trigger_rule` | string | `all_success` | Join semantics for multiple dependencies |
-| `idle_timeout` | number (ms) | 300000 | Per-node idle timeout. On loop nodes, applies per-iteration |
-
-**Command, prompt, and bash nodes** (silently ignored on loop nodes, except `retry` which is a hard error):
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `model` | string | inherited | Per-node model override |
-| `provider` | `claude` / `codex` | inherited | Per-node provider override |
-| `context` | `fresh` / `shared` | — | `fresh` = new session; `shared` = inherit from prior node. Defaults to `fresh` for parallel layers, inherited for sequential |
-| `output_format` | object | — | JSON Schema for structured output |
-| `allowed_tools` | string[] | all | Tool whitelist. `[]` = disable all. Claude only |
-| `denied_tools` | string[] | none | Tool blacklist. Claude only |
-| `retry` | object | 2 retries, 3s | Retry config. **Hard error on loop nodes** |
-| `hooks` | object | — | SDK hooks. Claude only. See `dag-advanced.md` |
-| `mcp` | string | — | MCP config path. Claude only. See `dag-advanced.md` |
-| `skills` | string[] | — | Skill names. Claude only. See `dag-advanced.md` |
-
-## Dependencies and Parallel Execution
-
-Nodes are grouped into topological layers. All nodes in the same layer run **concurrently**.
+### Approval Node
 
 ```yaml
-nodes:
-  # Layer 0 — run in parallel
-  - id: fetch-issue
-    bash: "gh issue view $ARGUMENTS --json title,body"
-  - id: fetch-template
-    bash: "cat .github/PULL_REQUEST_TEMPLATE.md 2>/dev/null || echo 'None'"
-
-  # Layer 1 — depends on layer 0
-  - id: classify
-    prompt: "Classify: $fetch-issue.output"
-    depends_on: [fetch-issue]
+- id: approve-plan
+  approval:
+    message: "Approve the plan draft?"
+    capture_response: true
+    on_reject:
+      prompt: "Revise the plan using this feedback: $REJECTION_REASON"
 ```
 
-## Trigger Rules
+### Cancel Node
 
-| Value | Behavior |
-|-------|----------|
-| `all_success` | ALL deps succeeded **(default)** |
-| `one_success` | At least ONE dep succeeded |
-| `none_failed_min_one_success` | No deps failed AND at least one succeeded (skipped OK) |
-| `all_done` | All deps terminal (completed, failed, or skipped) |
+```yaml
+- id: stop-run
+  cancel: "Human rejected the proposal"
+```
 
-## Conditions (`when:`)
+## Shared Node Fields
+
+| Field | Description |
+| --- | --- |
+| `id` | unique node identifier |
+| `depends_on` | upstream node IDs |
+| `when` | condition expression |
+| `trigger_rule` | join semantics for dependencies |
+| `context` | `fresh` or `shared` assistant-session behavior |
+| `idle_timeout` | per-node or per-iteration idle timeout |
+
+## Provider-Aware Node Fields
+
+These fields are shared and meaningful for Codex:
+
+| Field | Codex status | Notes |
+| --- | --- | --- |
+| `provider` | supported | workflow-level or node-level |
+| `model` | supported | workflow-level and node-level, including loop nodes |
+| `output_format` | supported | structured output works on Codex |
+| `retry` | supported except loop nodes | loop-node retry is still a hard error |
+
+These fields are not Codex per-node parity features:
+
+| Field | Codex status | Notes |
+| --- | --- | --- |
+| `hooks` | ignored | Claude-only node control |
+| `mcp` | ignored per-node | Codex MCP is global, not node-local |
+| `skills` | ignored per-node | Codex skill discovery is global or repo-level |
+| `allowed_tools` | ignored | Claude-only node control |
+| `denied_tools` | ignored | Claude-only node control |
+
+## Workflow-Level Codex Fields
+
+These are workflow-level controls, not node-level controls:
+
+| Field | Codex status | Notes |
+| --- | --- | --- |
+| `interactive` | supported | workflow-level switch for approval delivery and interactive loop behavior |
+| `modelReasoningEffort` | supported | workflow-level override, with `assistants.codex.modelReasoningEffort` as fallback |
+| `webSearchMode` | supported | workflow-level override, with `assistants.codex.webSearchMode` as fallback |
+| `additionalDirectories` | supported | workflow-level override, with `assistants.codex.additionalDirectories` as fallback |
+
+Precedence for these workflow-level Codex tuning fields is:
+
+1. workflow YAML
+2. `assistants.codex.*` from Archon config
+3. SDK defaults
+
+## Conditions
+
+Use `when:` for simple routing:
 
 ```yaml
 - id: investigate
@@ -136,31 +155,16 @@ nodes:
   when: "$classify.output.issue_type == 'bug'"
 ```
 
-**Syntax**: `$nodeId.output OPERATOR 'value'` — operators: `==`, `!=` only. Values single-quoted. Invalid expressions skip the node (fail-closed).
+Supported operators in workflow conditions remain the same regardless of
+provider.
 
-## Node Output Substitution
+## Structured Output
 
-```yaml
-- id: analyze
-  prompt: |
-    Classification: $classify.output
-    Type: $classify.output.issue_type
-```
-
-- `$nodeId.output` — full text output
-- `$nodeId.output.field` — JSON field from structured output
-- In bash scripts, values are auto **shell-quoted**
-- Loop node output = **last iteration only**
-
-## Structured Output (`output_format`)
-
-Command/prompt nodes only:
+Structured output is a real Codex-safe feature:
 
 ```yaml
 - id: classify
-  prompt: "Classify: $ARGUMENTS"
-  allowed_tools: []
-  model: haiku
+  prompt: "Classify this issue"
   output_format:
     type: object
     properties:
@@ -170,186 +174,57 @@ Command/prompt nodes only:
     required: [issue_type]
 ```
 
-Enables `$classify.output.issue_type` field access. Works with Claude and Codex.
+This enables downstream references such as `$classify.output.issue_type`.
 
-## Per-Node Provider and Model
+## Loop Notes
 
-Override on command/prompt nodes:
+Loop nodes support:
 
-```yaml
-nodes:
-  - id: classify
-    prompt: "Quick classification"
-    model: haiku                    # Fast model
-  - id: implement
-    command: implement-changes      # Inherits workflow-level model
-```
+- `loop.prompt`
+- `until`
+- `max_iterations`
+- `fresh_context`
+- `interactive`
+- `gate_message`
+- `until_bash`
 
-Loop nodes accept `provider`/`model` without error but ignore them at runtime.
+Do not treat loop nodes as a place for advanced per-node Codex controls. Fields
+such as `hooks`, `mcp`, `skills`, tool restrictions, and retry either do not
+apply or are ignored.
 
-## Resume on Failure
+## Approval And Cancel Notes
 
-When a workflow fails, already-completed nodes are skipped on the next run:
+- `approval` pauses the workflow for human input
+- `approval.on_reject.prompt` can use `$REJECTION_REASON`
+- `approval.capture_response` preserves the reviewer response for downstream use
+- `cancel` ends the workflow intentionally with a human-readable reason
+
+## Resume On Failure
 
 ```bash
 archon workflow run my-workflow --resume
 ```
 
----
+Completed nodes are skipped on resume.
 
-## Loop Nodes
+## Validation
 
-Loop nodes iterate an AI prompt until a completion condition is met. Use them for autonomous multi-step work: implementing stories from a PRD, iterating until tests pass, or refining output.
-
-### Configuration
-
-```yaml
-- id: my-loop
-  loop:
-    prompt: "..."              # Required. Sent each iteration
-    until: COMPLETE            # Required. Completion signal
-    max_iterations: 10         # Required. Integer >= 1. Fails if exceeded
-    fresh_context: true        # Optional. Default: false
-    until_bash: "..."          # Optional. Exit 0 = complete
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `prompt` | string | Yes | Prompt template. Supports all variable substitution (`$ARGUMENTS`, `$nodeId.output`, etc.) |
-| `until` | string | Yes | Completion signal to detect in AI output |
-| `max_iterations` | number | Yes | Hard limit. Node **fails** if exceeded |
-| `fresh_context` | boolean | No | Default `false`. `true` = fresh AI session each iteration |
-| `until_bash` | string | No | Shell script run after each iteration. Exit 0 = complete |
-
-### Completion Detection
-
-Checked after each iteration:
-1. **AI signal** — `<promise>SIGNAL</promise>` in output (recommended) or plain signal at end
-2. **`until_bash`** — shell script exits 0
-
-Either triggers completion. `<promise>` tags are stripped from output.
-
-### Session Patterns
-
-| `fresh_context` | Behavior | Best for |
-|-----------------|----------|----------|
-| `true` | Fresh session each iteration. No memory. State on disk. | Multi-story PRDs, long loops |
-| `false` (default) | Sessions thread. AI remembers prior iterations. | Fix-iterate cycles, refinement |
-
-First iteration is always fresh regardless.
-
-### What Does NOT Work on Loop Nodes
-
-- `retry` — **hard error** at parse time
-- `hooks`, `mcp`, `skills`, `allowed_tools`, `denied_tools`, `output_format` — silently ignored
-- `context: fresh` — ignored (use `loop.fresh_context` instead)
-- `provider`, `model` — accepted but ignored at runtime
-
-### Loop Output
-
-`$nodeId.output` = last iteration's output only. Accumulate via files in `$ARTIFACTS_DIR`.
-
-### Patterns
-
-**Stateless (Ralph):**
-```yaml
-- id: implement
-  depends_on: [setup]
-  idle_timeout: 600000
-  loop:
-    prompt: |
-      FRESH session — no memory. Read tracking file, implement next story,
-      validate, commit. When done: <promise>COMPLETE</promise>
-      Context: $setup.output
-    until: COMPLETE
-    max_iterations: 15
-    fresh_context: true
-```
-
-**Test-fix cycle:**
-```yaml
-- id: fix-tests
-  loop:
-    prompt: "Run tests, fix failures. When passing: <promise>PASS</promise>"
-    until: PASS
-    max_iterations: 8
-    until_bash: "bun run test"
-    fresh_context: false
-```
-
----
-
-## Validate Before Finishing
-
-Before declaring a workflow complete, validate it:
+Before treating a workflow as done, validate it:
 
 ```bash
 archon validate workflows <name>
 ```
 
-Fix any errors and re-validate until the command returns clean. This checks:
-- YAML syntax and required fields
-- DAG structure (cycles, missing dependencies, invalid `$nodeId.output` refs)
-- All `command:` files exist on disk
-- All `mcp:` config files exist and contain valid JSON
-- All `skills:` directories exist
+This checks YAML structure, dependency references, command existence, and
+provider compatibility warnings.
 
-Use `--json` for machine-readable output. Use `archon validate commands <name>` to validate individual command files.
+## Authoring Rule For Codex
 
-## Validation Rules (Load Time)
+If a workflow depends on per-node hooks, per-node MCP, per-node skills, or
+per-node tool restrictions, do not present it as Codex-safe. Use a Codex
+variant or document the degraded behavior explicitly.
 
-- All node IDs unique
-- All `depends_on` reference existing IDs
-- No cycles
-- `$nodeId.output` refs in `when:`, `prompt:`, `loop.prompt:` must point to known IDs
-- Exactly one of `command`, `prompt`, `bash`, `loop` per node
-- `retry` on loop node = hard error
-- `steps:` format rejected (deprecated — use `nodes:` only)
+## Example
 
-## Complete Example
-
-```yaml
-name: classify-and-fix
-description: Classify a GitHub issue, then route to the appropriate handler
-
-nodes:
-  - id: fetch-issue
-    bash: "gh issue view $ARGUMENTS --json title,body,labels"
-    timeout: 15000
-
-  - id: classify
-    prompt: "Classify this issue: $fetch-issue.output"
-    depends_on: [fetch-issue]
-    model: haiku
-    allowed_tools: []
-    output_format:
-      type: object
-      properties:
-        issue_type:
-          type: string
-          enum: [bug, feature]
-      required: [issue_type]
-
-  - id: investigate
-    command: investigate-bug
-    depends_on: [classify]
-    when: "$classify.output.issue_type == 'bug'"
-    context: fresh
-
-  - id: plan
-    command: plan-feature
-    depends_on: [classify]
-    when: "$classify.output.issue_type == 'feature'"
-    context: fresh
-
-  - id: implement
-    command: implement-changes
-    depends_on: [investigate, plan]
-    trigger_rule: one_success
-    context: fresh
-
-  - id: create-pr
-    command: create-pull-request
-    depends_on: [implement]
-    context: fresh
-```
+See `examples/dag-workflow.yaml` for a Codex-safe reference workflow that keeps
+to shared or explicitly supported Codex surfaces.

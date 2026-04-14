@@ -1,5 +1,5 @@
 ---
-description: Template for a custom Archon command
+description: Template for a Codex-safe Archon command
 argument-hint: <describe expected arguments here>
 ---
 
@@ -7,51 +7,49 @@ argument-hint: <describe expected arguments here>
 
 **Workflow ID**: $WORKFLOW_ID
 
----
+User request: $ARGUMENTS
+Artifacts directory: $ARTIFACTS_DIR
+Base branch: $BASE_BRANCH
 
-## Phase 1: LOAD
+## Phase 1: Load
 
-Gather context and inputs for this command.
+Gather the context you actually need:
 
-- User request: $ARGUMENTS
-- Read any artifacts from previous steps: `$ARTIFACTS_DIR/`
-- Base branch: $BASE_BRANCH
+- read any required files from the repository
+- read prior artifacts from `$ARTIFACTS_DIR` if this command depends on earlier steps
+- confirm the expected output before making changes
 
-### PHASE_1_CHECKPOINT
-- [ ] User request understood
-- [ ] Prior artifacts loaded (if any)
-- [ ] Codebase context gathered
+### Phase 1 Checkpoint
 
-## Phase 2: EXECUTE
+- [ ] request understood
+- [ ] required inputs loaded
+- [ ] expected output identified
 
-Do the main work of this command.
+## Phase 2: Execute
 
-[Replace this section with specific instructions for what the AI should do.
-Be precise about which tools to use, what files to examine, and what
-actions to take.]
+Perform the main task of this command.
 
-### PHASE_2_CHECKPOINT
-- [ ] Main work completed
-- [ ] Changes validated (type-check, lint, tests as appropriate)
+Keep the prompt explicit about:
 
-## Phase 3: GENERATE
+- what to inspect
+- what to change or produce
+- how to validate the result
 
-Write artifacts for downstream steps.
+### Phase 2 Checkpoint
 
-Write your output to `$ARTIFACTS_DIR/output.md` with:
-- Summary of what was done
-- Key decisions made
-- Any issues encountered
+- [ ] main task completed
+- [ ] relevant validation run or intentionally skipped with reason
 
-### PHASE_3_CHECKPOINT
-- [ ] Artifact written to `$ARTIFACTS_DIR/output.md`
-- [ ] Artifact contains actionable information for the next step
+## Phase 3: Report
 
-## Phase 4: REPORT
+If downstream nodes need durable output, write it into `$ARTIFACTS_DIR/output.md`
+with:
 
-Provide a concise summary to the user:
+- what was done
+- key findings or decisions
+- blockers or follow-up notes
 
-1. What was accomplished
-2. Key findings or decisions
-3. Any blockers or warnings
-4. Next steps (if part of a multi-step workflow)
+### Phase 3 Checkpoint
+
+- [ ] durable output written when needed
+- [ ] summary ready for the next step or the user

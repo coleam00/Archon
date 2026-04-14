@@ -15,11 +15,20 @@ description: |
   without handing off to Archon or without using Archon surfaces.
 ---
 
-# Archon For Codex
+# Archon Host Skill
 
-Archon runs long-form workflows through its own CLI and workflow engine. In Codex,
-this skill exists to route work into the right Archon workflow and to avoid
-Claude-specific workflow names or assumptions.
+This skill tree is mirrored in both:
+
+- `.agents/skills/archon/`
+- `.claude/skills/archon/`
+
+Codex and Claude discover different host-skill roots, so both locations exist.
+They must stay byte-identical. In this repo, treat `.agents/skills/archon/` as
+the authored source and sync the `.claude` mirror whenever the skill changes.
+
+Archon runs long-form workflows through its own CLI and workflow engine. This
+mirrored host skill exists to route work into the right Archon workflow from
+either outer assistant while keeping provider-specific assumptions explicit.
 
 This skill is intentionally narrower than the full Archon product surface:
 

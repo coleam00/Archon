@@ -472,7 +472,9 @@ Archon skill into your project. The setup wizard handles this automatically — 
 To install manually instead:
 
 ```bash
-cp -r Archon/.claude/skills/archon /path/to/your/repo/.claude/skills/
+mkdir -p /path/to/your/repo/.claude/skills /path/to/your/repo/.agents/skills
+cp -r Archon/.agents/skills/archon /path/to/your/repo/.agents/skills/
+cp -r Archon/.agents/skills/archon /path/to/your/repo/.claude/skills/
 ```
 
 Then in Claude Code, say things like "use archon to fix issue #42" and it will invoke the appropriate workflow.

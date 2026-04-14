@@ -1,89 +1,90 @@
-# Initializing Archon in a Repository
+# Initializing Archon In A Repository For Codex
 
-Set up the `.archon/` directory structure in any git repository to enable custom workflows and commands.
+Use this when the task is to add `.archon/` to a repository so Codex can create
+or customize Archon commands and workflows there.
 
 ## Directory Structure
 
-Create the following in your repository root:
+Create this in the repository root:
 
-```
+```text
 .archon/
-├── commands/         # Custom command files (.md)
-├── workflows/        # Workflow definitions (.yaml)
-├── mcp/              # MCP server config files (.json) — optional
-└── config.yaml       # Repo-specific configuration — optional
+├── commands/
+├── workflows/
+├── mcp/            # optional; mainly relevant for Claude node-local MCP config
+└── config.yaml     # optional
 ```
+
+Minimum setup:
 
 ```bash
 mkdir -p .archon/commands .archon/workflows
 ```
 
-## Minimal config.yaml
+## Minimal Repo Config
 
-Create `.archon/config.yaml` only if you need to override defaults:
+Create `.archon/config.yaml` only when the repo needs non-default behavior:
 
 ```yaml
-# AI provider for this repo (default: inherited from global config)
-assistant: claude                 # Repo-level key. In ~/.archon/config.yaml, use 'defaultAssistant' instead
+assistant: codex
 
-# Worktree settings
 worktree:
-  baseBranch: main                # Branch to create worktrees from (default: auto-detected)
-  copyFiles:                      # Git-ignored files to copy into new worktrees
+  baseBranch: main
+  copyFiles:
     - .env
     - .env.local
 
-# Control whether bundled defaults are loaded
 defaults:
-  loadDefaultCommands: true       # Include bundled default commands (default: true)
-  loadDefaultWorkflows: true      # Include bundled default workflows (default: true)
+  loadDefaultCommands: true
+  loadDefaultWorkflows: true
 ```
 
-## How Bundled Defaults Work
+Notes:
 
-Archon ships with built-in commands and workflows (like `archon-assist`, `archon-fix-github-issue`). These are loaded at runtime automatically — no files need to be copied into your repo.
+- `assistant: codex` makes this repo prefer Codex under Archon
+- `worktree.copyFiles` is only needed when worktrees need copied local files
+- bundled defaults do not need to be copied into the repo to be available
 
-- **To see bundled workflows**: `archon workflow list`
-- **To override a default**: Create a file with the same name in your repo's `.archon/workflows/` or `.archon/commands/`. Repo files take priority.
-- **To disable defaults**: Set `defaults.loadDefaultWorkflows: false` or `defaults.loadDefaultCommands: false` in config.
+## Bundled Default Behavior
 
-## .gitignore Considerations
+Archon ships bundled workflows and commands. Repo-local files override bundled
+files with the same name.
 
-Add to your `.gitignore`:
+- `archon workflow list` shows discovered workflows
+- repo `.archon/workflows/*` overrides bundled workflows with the same name
+- repo `.archon/commands/*` overrides bundled commands with the same name
 
-```gitignore
-# Archon runtime artifacts (never commit)
-.archon/mcp/          # May contain env var references
-```
+## Optional MCP Directory
 
-The `.archon/commands/` and `.archon/workflows/` directories should be committed — they are part of your project's workflow definitions.
+Keep `.archon/mcp/` optional in Codex-first guidance.
 
-## Global Configuration
+Why:
 
-The global config at `~/.archon/config.yaml` applies to all repositories. Use `guides/config.md` for interactive config editing, or create it manually:
+- Archon supports node-local `mcp:` for Claude workflows
+- Codex does not use `mcp:` as a node-local parity surface
+- Codex MCP configuration belongs in Codex config rather than in workflow YAML
+
+## Global Config Reminder
+
+Global config lives at `~/.archon/config.yaml`.
+
+If the goal is a Codex-first Archon environment more broadly, that file can use:
 
 ```yaml
-botName: Archon
-defaultAssistant: claude
-
+defaultAssistant: codex
 assistants:
-  claude:
-    model: sonnet
   codex:
-    model: gpt-5.3-codex
+    model: gpt-5.4
     modelReasoningEffort: medium
-
-concurrency:
-  maxConversations: 10
+    webSearchMode: live
 ```
 
 ## Verification
 
-After setting up, verify with:
+After initialization:
 
 ```bash
-# Confirm Archon sees your repo
-archon workflow list
-
-# Should show bundled workflows + any custom ones you've added
+archon workflow list --json
 ```
+
+The repo should now expose bundled workflows plus any repo-local custom ones.

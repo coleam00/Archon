@@ -45,7 +45,7 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
   for (const filename of BUN_AUTO_LOADED_ENV_FILES) {
     const filepath = resolve(cwd, filename);
     // dotenv.config with processEnv:{} parses without writing to process.env
-    const result = config({ path: filepath, processEnv: {} });
+    const result = config({ path: filepath, processEnv: {}, quiet: true });
     if (result.error) {
       // ENOENT is expected (file simply doesn't exist) — all others are unexpected
       const code = (result.error as NodeJS.ErrnoException).code;

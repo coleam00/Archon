@@ -61,6 +61,12 @@ In this repo today:
 - Claude-oriented host skill: `.claude/skills/archon/`
 - Codex-oriented host skill: `.agents/skills/archon/`
 
+These two paths exist because Claude and Codex discover different host-skill
+roots. In this fork, they are intended to be mirrored copies of the same
+Archon skill content rather than separately maintained skill variants. See
+[Host Skill Mirroring](/reference/host-skill-mirroring/) for the maintenance
+rule.
+
 This layer is about **how the outer assistant learns to use Archon**. It does **not** decide how workflow nodes run once Archon is executing them.
 
 ## Layer 2: Conversation And Orchestrator Assistant
@@ -359,19 +365,22 @@ Verified additions in this checkout:
 
 There are also fork-local inconsistencies worth knowing:
 
-1. **The setup wizard still installs the Claude skill surface**
-   - it copies `.claude/skills/archon/`
-   - it does not install `.agents/skills/archon/`
+1. **The setup wizard now installs mirrored host-skill surfaces**
+   - it copies the same Archon skill tree into `.claude/skills/archon/`
+   - it also copies the mirrored tree into `.agents/skills/archon/`
 
-2. **The Codex host skill references `archon-piv-loop-codex`**
-   - no matching workflow file exists in this checkout today
+2. **Two host-skill roots still exist**
+   - Claude discovers `.claude/skills/archon/`
+   - Codex discovers `.agents/skills/archon/`
+   - the intent in this fork is to keep them mirrored, not divergent
 
 3. **Repo-local workflow default is not pinned here**
    - this repo's `.archon/config.yaml` does not set `assistant:`
    - so workflow default provider for this repo depends on global config or environment unless a workflow sets its own provider
 
-4. **Docs still overstate some Codex workflow capabilities**
-   - workflow-level Codex YAML options are parsed but not fully consumed by the executor
+4. **JSON CLI surfaces still depend on quiet startup and discovery behavior**
+   - `archon workflow list --json` is only truly machine-readable when startup
+     and discovery logs stay off stdout
 
 5. **Docs still understate some loop-node capabilities**
    - docs say loop-node `provider` / `model` are ignored
