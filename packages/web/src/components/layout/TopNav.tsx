@@ -5,7 +5,7 @@ import { LayoutDashboard, Workflow, Settings, Menu, Sun, Moon, ChevronRight } fr
 import { listWorkflowRuns, getUpdateCheck } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useMobileNav } from '@/contexts/MobileNavContext';
-import { TunnelPopover } from './TunnelPopover';
+import { TunnelPopover, TunnelMenuItem } from './TunnelPopover';
 import { useTheme } from '@/contexts/ThemeContext';
 
 const secondaryNav = [
@@ -103,8 +103,10 @@ export function TopNav(): React.ReactElement {
           )}
       </span>
 
-      {/* ── Tunnel popover ── */}
-      <TunnelPopover />
+      {/* ── Tunnel popover: desktop only (mobile uses TunnelMenuItem in hamburger) ── */}
+      <div className="hidden md:block">
+        <TunnelPopover />
+      </div>
 
       {/* ── Theme toggle ── */}
       <button
@@ -133,7 +135,7 @@ export function TopNav(): React.ReactElement {
         </button>
 
         {menuOpen && (
-          <div className="absolute right-0 top-full mt-1 z-50 w-48 rounded-md border border-border bg-surface shadow-lg py-1">
+          <div className="absolute right-0 top-full mt-1 z-50 w-56 rounded-md border border-border bg-surface shadow-lg py-1">
             {secondaryNav.map(({ to, end, icon: Icon, label }) => (
               <NavLink
                 key={to}
@@ -158,6 +160,10 @@ export function TopNav(): React.ReactElement {
                 )}
               </NavLink>
             ))}
+            {/* Tunnel controls: mobile only (desktop has TunnelPopover in TopNav) */}
+            <div className="md:hidden">
+              <TunnelMenuItem />
+            </div>
           </div>
         )}
       </div>
