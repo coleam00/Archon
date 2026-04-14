@@ -13,6 +13,9 @@ archon workflow status --json
 This command currently includes `last_activity_at`, which makes it usable as the
 first stall-detection surface.
 
+Treat this command as the source of truth for current workflow state. Do not
+infer current pause state from old terminal output alone.
+
 ## Default Cadence
 
 Use this cadence during active live monitoring:
@@ -56,6 +59,35 @@ Treat `paused` as action-required.
 - open the latest workflow output
 - relay it directly
 - wait for the user response
+
+Track the paused fingerprint:
+
+- `approval.nodeId`
+- `approval.iteration`
+- `approval.message`
+
+If any of those change on a later `paused` check, the loop has returned with a
+new checkpoint.
+
+Important nuance:
+
+- interactive-loop approval metadata can persist after approval while the run is
+  back in `running`
+- do not treat persisted `metadata.approval` as proof of a fresh pause
+- current `status` wins
+
+### After approve or reject
+
+After every approval, rejection, or manual resume:
+
+1. re-run `archon workflow status --json`
+2. continue checking until the run reaches:
+   - `paused`
+   - `completed`
+   - `failed`
+
+Recording approval is not the end of the operator loop. The next required state
+change must be observed.
 
 ### Possible stall
 

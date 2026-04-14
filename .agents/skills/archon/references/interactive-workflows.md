@@ -15,16 +15,21 @@ Be a transparent relay.
 - show the workflow's latest question or summary directly
 - do not rewrite or "improve" the workflow's wording
 - pass the user's answer back as directly as possible
+- keep operating the run until it pauses again or reaches a terminal state
 
 ## Basic Loop
 
-1. Launch the workflow and capture the run ID.
-2. Monitor with `archon workflow status --json`.
+1. Launch the workflow and capture:
+   - run ID
+   - workflow name
+   - working path
+2. Verify the launched run with `archon workflow status --json`.
 3. When the run becomes `paused`, read the latest workflow output.
 4. Relay that output directly to the user.
 5. When the user answers, resume with `archon workflow approve` or
    `archon workflow reject`.
-6. Repeat until the run reaches a terminal state.
+6. Immediately re-check `archon workflow status --json`.
+7. Repeat until the run reaches `paused`, `completed`, or `failed`.
 
 ## Commands
 
@@ -44,7 +49,20 @@ When the workflow is paused:
 - pass their response through verbatim unless a safety or formatting issue
   requires intervention
 
+Treat the paused fingerprint as:
+
+- `approval.nodeId`
+- `approval.iteration`
+- `approval.message`
+
+If the workflow pauses again with a new fingerprint, that is a new human
+checkpoint even if the wording looks similar.
+
 Do not replace the workflow's structured questions with your own summary.
+
+If the paused node is reviewing a mutable artifact, reopen the current artifact
+from disk before you speak for the workflow. For example, a plan-review pause
+should use the latest saved plan rather than a stale earlier read.
 
 ## When Still Running
 
@@ -56,6 +74,13 @@ needing user input.
 - if activity stops for the stall window, flag a possible stall and say what
   evidence stopped moving
 
+Important nuance:
+
+- interactive-loop approval metadata can remain present while the run is
+  `running`
+- that does not mean the workflow is paused again
+- only treat the loop as back when the run status itself is `paused`
+
 ## Where To Read The Latest Output
 
 Use the per-run JSONL when status alone is not enough:
@@ -66,3 +91,10 @@ tail -n 40 "<log-file>"
 ```
 
 Read `log-debugging.md` when you need the full trace.
+
+## Surface Boundaries
+
+- `archon workflow run ...` is the direct CLI surface for this interaction model
+- `archon chat ...` is not a persistent multi-turn workflow conversation
+- web foreground workflows can resume from natural-language replies in the same thread
+- CLI `workflow approve` and `workflow reject` resume immediately after recording the decision

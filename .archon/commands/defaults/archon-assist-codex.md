@@ -12,13 +12,18 @@ argument-hint: <any request>
 You are helping with a request that did not match a more specific Codex-safe
 workflow.
 
+This lane is the fallback, not the default bootstrap for all Codex usage.
+
 ## Instructions
 
 1. **Understand the request** - Identify whether this is a question, debugging
    task, repo exploration, a one-off change, or a CI/problem investigation.
-   - If the request is substantial multi-file implementation work that should
-     end in a PR, stop and route to `archon-piv-loop-codex` instead of
-     continuing in assist mode.
+   - If the request is substantial multi-file implementation work, guided
+     development, interactive refinement, or any task that clearly wants a
+     human-in-the-loop build/review cycle, stop and route to
+     `archon-piv-loop-codex` instead of continuing in assist mode.
+   - If the user is explicitly asking to run a specific Archon workflow, honor
+     that direct workflow route rather than staying in assist mode.
 2. **Ground yourself in the repo** - Search the codebase, read the relevant
    files, and understand the current implementation before acting.
 3. **Read repo guidance explicitly when needed**
@@ -63,6 +68,8 @@ When the request is mainly about a failed, paused, or confusing workflow run:
 - Prefer small, reversible changes.
 - Use project-defined validation commands when relevant.
 - Report validation failures honestly.
+- Do not present assist mode as the required entrypoint for Archon. If a direct
+  workflow lane fits, use it.
 - Do not rely on Claude-only workflow-node features such as `skills`, `hooks`,
   `mcp`, `allowed_tools`, or `denied_tools`.
 - If the user explicitly wants the Claude-oriented assist lane instead, say so

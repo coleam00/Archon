@@ -1,0 +1,80 @@
+# Example Codex-safe Archon workflow
+#
+# Demonstrates:
+# - bash node
+# - structured output
+# - conditional routing
+# - command node
+# - loop node
+# - validation node
+#
+# This is a reference example. Adjust nodes, dependencies, and outputs to the
+# actual task rather than copying it literally.
+
+name: codex-smart-issue-fix
+description: |
+  Classify a GitHub issue, route to the right investigation path, implement the
+  change with Codex, and summarize validation results.
+provider: codex
+model: gpt-5.4
+
+nodes:
+  - id: fetch-issue
+    bash: |
+      issue_num=$(echo "$ARGUMENTS" | grep -oE '[0-9]+' | head -1)
+      if [ -z "$issue_num" ]; then
+        echo "No issue number found in: $ARGUMENTS"
+        exit 1
+      fi
+      gh issue view "$issue_num" --json title,body,labels
+    timeout: 15000
+
+  - id: classify
+    prompt: |
+      Classify this issue as bug or feature and return structured output.
+
+      $fetch-issue.output
+    depends_on: [fetch-issue]
+    output_format:
+      type: object
+      properties:
+        issue_type:
+          type: string
+          enum: [bug, feature]
+        title:
+          type: string
+      required: [issue_type, title]
+
+  - id: investigate-bug
+    command: investigate-bug
+    depends_on: [classify]
+    when: "$classify.output.issue_type == 'bug'"
+
+  - id: plan-feature
+    command: plan-feature
+    depends_on: [classify]
+    when: "$classify.output.issue_type == 'feature'"
+
+  - id: implement
+    depends_on: [investigate-bug, plan-feature]
+    trigger_rule: one_success
+    loop:
+      prompt: |
+        Implement the next required change for: $classify.output.title
+
+        Read the relevant artifacts from $ARTIFACTS_DIR.
+        When implementation and validation are complete, output:
+        <promise>DONE</promise>
+      until: DONE
+      max_iterations: 5
+      fresh_context: false
+      until_bash: "bun run test"
+
+  - id: summarize
+    prompt: |
+      Summarize the implementation and validation outcome for:
+      $classify.output.title
+
+      Implementation result:
+      $implement.output
+    depends_on: [implement]

@@ -76,13 +76,16 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-/** Workflow-level Claude SDK options — per-node overrides take precedence via ?? */
+/** Workflow-level execution options. Per-node `provider`/`model` overrides still take precedence. */
 interface WorkflowLevelOptions {
   effort?: EffortLevel;
   thinking?: ThinkingConfig;
   fallbackModel?: string;
   betas?: string[];
   sandbox?: SandboxSettings;
+  modelReasoningEffort?: WorkflowAssistantOptions['modelReasoningEffort'];
+  webSearchMode?: WorkflowAssistantOptions['webSearchMode'];
+  additionalDirectories?: WorkflowAssistantOptions['additionalDirectories'];
 }
 
 /** Internal node execution result — extends NodeOutput with cost data for aggregation. */
@@ -101,6 +104,11 @@ interface SendMessageContext {
   workflowId?: string;
   nodeName?: string;
 }
+
+type WorkflowCodexExecutionOptions = Pick<
+  WorkflowAssistantOptions,
+  'modelReasoningEffort' | 'webSearchMode' | 'additionalDirectories'
+>;
 
 interface BundledScriptExecution {
   cmd: string;
@@ -286,6 +294,24 @@ export function buildSDKHooksFromYAML(nodeHooks: WorkflowNodeHooks): SDKHooksMap
   }
 
   return sdkHooks;
+}
+
+function resolveWorkflowCodexOptions(
+  workflowLevelOptions: WorkflowLevelOptions,
+  config: WorkflowConfig
+): WorkflowCodexExecutionOptions | undefined {
+  const modelReasoningEffort =
+    workflowLevelOptions.modelReasoningEffort ?? config.assistants.codex.modelReasoningEffort;
+  const webSearchMode = workflowLevelOptions.webSearchMode ?? config.assistants.codex.webSearchMode;
+  const additionalDirectories =
+    workflowLevelOptions.additionalDirectories ?? config.assistants.codex.additionalDirectories;
+
+  const resolved: WorkflowCodexExecutionOptions = {};
+  if (modelReasoningEffort !== undefined) resolved.modelReasoningEffort = modelReasoningEffort;
+  if (webSearchMode !== undefined) resolved.webSearchMode = webSearchMode;
+  if (additionalDirectories !== undefined) resolved.additionalDirectories = additionalDirectories;
+
+  return Object.keys(resolved).length > 0 ? resolved : undefined;
 }
 
 /**
@@ -522,13 +548,14 @@ async function resolveNodeProviderAndModel(
   let options: WorkflowAssistantOptions | undefined;
   if (provider === 'codex') {
     options = {
-      model,
-      modelReasoningEffort: config.assistants.codex.modelReasoningEffort,
-      webSearchMode: config.assistants.codex.webSearchMode,
-      additionalDirectories: config.assistants.codex.additionalDirectories,
+      ...(model ? { model } : {}),
+      ...(resolveWorkflowCodexOptions(workflowLevelOptions, config) ?? {}),
     };
     if (node.output_format) {
       options.outputFormat = { type: 'json_schema', schema: node.output_format };
+    }
+    if (Object.keys(options).length === 0) {
+      options = undefined;
     }
   } else {
     const claudeOptions: WorkflowAssistantOptions = {};
@@ -1723,22 +1750,17 @@ async function executeScriptNode(
 }
 
 /**
- * Build WorkflowAssistantOptions from resolved provider, model, and config.
+ * Build WorkflowAssistantOptions from resolved provider, model, workflow-level options, and config.
  * Caller is responsible for resolving per-node overrides before passing model.
  */
 function buildLoopNodeOptions(
   provider: 'claude' | 'codex',
   model: string | undefined,
+  workflowLevelOptions: WorkflowLevelOptions,
   config: WorkflowConfig
 ): WorkflowAssistantOptions | undefined {
   const codexOptions =
-    provider === 'codex'
-      ? {
-          modelReasoningEffort: config.assistants.codex.modelReasoningEffort,
-          webSearchMode: config.assistants.codex.webSearchMode,
-          additionalDirectories: config.assistants.codex.additionalDirectories,
-        }
-      : undefined;
+    provider === 'codex' ? resolveWorkflowCodexOptions(workflowLevelOptions, config) : undefined;
 
   const claudeOptions =
     provider === 'claude' && config.assistants.claude.settingSources
@@ -1868,6 +1890,7 @@ async function executeLoopNode(
   baseBranch: string,
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
+  workflowLevelOptions: WorkflowLevelOptions,
   config: WorkflowConfig,
   issueContext?: string
 ): Promise<NodeExecutionResult> {
@@ -1904,7 +1927,12 @@ async function executeLoopNode(
   let loopTotalNumTurns: number | undefined;
   let previousProgressSnapshot: LoopProgressSnapshot | undefined;
   let noProgressStreak = 0;
-  const resolvedOptions = buildLoopNodeOptions(workflowProvider, workflowModel, config);
+  const resolvedOptions = buildLoopNodeOptions(
+    workflowProvider,
+    workflowModel,
+    workflowLevelOptions,
+    config
+  );
 
   // Helper to log event store errors consistently
   const logEventStoreError = (err: Error, iteration: number): void => {
@@ -2592,6 +2620,9 @@ export async function executeDagWorkflow(
     fallbackModel: workflow.fallbackModel,
     betas: workflow.betas,
     sandbox: workflow.sandbox,
+    modelReasoningEffort: workflow.modelReasoningEffort,
+    webSearchMode: workflow.webSearchMode,
+    additionalDirectories: workflow.additionalDirectories,
   };
   const layers = buildTopologicalLayers(workflow.nodes);
   const nodeOutputs = new Map<string, NodeOutput>();
@@ -2852,6 +2883,7 @@ export async function executeDagWorkflow(
               baseBranch,
               docsDir,
               nodeOutputs,
+              workflowLevelOptions,
               config,
               issueContext
             );

@@ -284,19 +284,25 @@ Current implementation:
   - `denied_tools`
   - `output_format`
 
-### Parsed but not fully applied: workflow-level Codex options
+### Workflow-level Codex tuning
 
-There is one important implementation gap:
+Workflow YAML now supports these Codex tuning fields as real runtime inputs:
 
-- workflow YAML supports `modelReasoningEffort`, `webSearchMode`, and `additionalDirectories`
-- the loader parses them successfully
-- the runtime executor currently pulls Codex options from merged config, not from the workflow object
+- `modelReasoningEffort`
+- `webSearchMode`
+- `additionalDirectories`
 
 Practical effect:
 
 - `model:` on a workflow is effective
-- workflow-level `modelReasoningEffort`, `webSearchMode`, and `additionalDirectories` are currently best treated as **documented intent, not guaranteed runtime behavior**
-- if you need deterministic current behavior, set those in `assistants.codex` config
+- workflow-level `modelReasoningEffort`, `webSearchMode`, and `additionalDirectories` override Archon config for that workflow
+- if the workflow omits them, execution falls back to `assistants.codex.*`
+
+Current precedence is:
+
+1. workflow YAML
+2. `assistants.codex.*` in Archon config
+3. SDK defaults
 
 ## When Codex Can Realistically Replace Claude For A Node
 

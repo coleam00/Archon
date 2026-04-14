@@ -1514,6 +1514,111 @@ describe('executeDagWorkflow -- output_format structured output', () => {
       .filter(msg => typeof msg === 'string' && msg.includes('did not return structured output'));
     expect(warningMessages).toHaveLength(0);
   });
+
+  it('uses workflow-level Codex tuning instead of config defaults for normal nodes', async () => {
+    mockGetAssistantClientDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+    }));
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'workflow scoped codex settings' };
+      yield { type: 'result', sessionId: 'codex-sid-3' };
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('codex-workflow-options-run');
+    const config: WorkflowConfig = {
+      ...minimalConfig,
+      assistant: 'codex',
+      assistants: {
+        ...minimalConfig.assistants,
+        codex: {
+          modelReasoningEffort: 'low',
+          webSearchMode: 'disabled',
+          additionalDirectories: ['/config/default'],
+        },
+      },
+    };
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-codex-workflow-options',
+      testDir,
+      {
+        name: 'codex-workflow-options',
+        modelReasoningEffort: 'xhigh',
+        webSearchMode: 'live',
+        additionalDirectories: ['/workflow/override'],
+        nodes: [{ id: 'classify', command: 'classify' }],
+      },
+      workflowRun,
+      'codex',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      config
+    );
+
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    expect(optionsArg.modelReasoningEffort).toBe('xhigh');
+    expect(optionsArg.webSearchMode).toBe('live');
+    expect(optionsArg.additionalDirectories).toEqual(['/workflow/override']);
+  });
+
+  it('falls back to config Codex tuning when workflow-level values are absent for normal nodes', async () => {
+    mockGetAssistantClientDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+    }));
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'config scoped codex settings' };
+      yield { type: 'result', sessionId: 'codex-sid-4' };
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('codex-config-options-run');
+    const config: WorkflowConfig = {
+      ...minimalConfig,
+      assistant: 'codex',
+      assistants: {
+        ...minimalConfig.assistants,
+        codex: {
+          modelReasoningEffort: 'medium',
+          webSearchMode: 'cached',
+          additionalDirectories: ['/config/fallback'],
+        },
+      },
+    };
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-codex-config-options',
+      testDir,
+      {
+        name: 'codex-config-options',
+        nodes: [{ id: 'classify', command: 'classify' }],
+      },
+      workflowRun,
+      'codex',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      config
+    );
+
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    expect(optionsArg.modelReasoningEffort).toBe('medium');
+    expect(optionsArg.webSearchMode).toBe('cached');
+    expect(optionsArg.additionalDirectories).toEqual(['/config/fallback']);
+  });
 });
 
 describe('executeDagWorkflow -- when condition parse errors (fail-closed)', () => {
@@ -2765,6 +2870,184 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(completeCalls[0][1]).toEqual({
         node_counts: { completed: 1, failed: 0, skipped: 0, total: 1 },
       });
+    });
+
+    it('uses workflow-level Codex tuning instead of config defaults for loop nodes', async () => {
+      mockGetAssistantClientDag.mockImplementation(() => ({
+        sendQuery: mockSendQueryDag,
+        getType: () => 'codex',
+      }));
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: '<promise>DONE</promise>' };
+        yield { type: 'result', sessionId: 'loop-codex-sid-1' };
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('codex-loop-workflow-options-run');
+      const config: WorkflowConfig = {
+        ...minimalConfig,
+        assistant: 'codex',
+        assistants: {
+          ...minimalConfig.assistants,
+          codex: {
+            modelReasoningEffort: 'low',
+            webSearchMode: 'disabled',
+            additionalDirectories: ['/config/loop-default'],
+          },
+        },
+      };
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-codex-loop-workflow-options',
+        testDir,
+        {
+          name: 'codex-loop-workflow-options',
+          modelReasoningEffort: 'high',
+          webSearchMode: 'live',
+          additionalDirectories: ['/workflow/loop-override'],
+          nodes: [
+            {
+              id: 'my-loop',
+              loop: {
+                prompt: 'Do a task. When done, output <promise>DONE</promise>.',
+                until: 'DONE',
+                max_iterations: 1,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'codex',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        config
+      );
+
+      const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+      expect(optionsArg.modelReasoningEffort).toBe('high');
+      expect(optionsArg.webSearchMode).toBe('live');
+      expect(optionsArg.additionalDirectories).toEqual(['/workflow/loop-override']);
+    });
+
+    it('preserves node-level loop provider and model when workflow-level Codex tuning is present', async () => {
+      mockGetAssistantClientDag.mockImplementation(provider => ({
+        sendQuery: mockSendQueryDag,
+        getType: () => provider,
+      }));
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: '<promise>DONE</promise>' };
+        yield { type: 'result', sessionId: 'loop-mixed-provider-sid-1' };
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('codex-loop-mixed-provider-run');
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-codex-loop-mixed-provider',
+        testDir,
+        {
+          name: 'codex-loop-mixed-provider',
+          modelReasoningEffort: 'xhigh',
+          webSearchMode: 'live',
+          additionalDirectories: ['/workflow/codex-override'],
+          nodes: [
+            {
+              id: 'my-loop',
+              provider: 'claude',
+              model: 'sonnet',
+              loop: {
+                prompt: 'Do a task. When done, output <promise>DONE</promise>.',
+                until: 'DONE',
+                max_iterations: 1,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'codex',
+        'gpt-5.3-codex',
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        { ...minimalConfig, assistant: 'codex' }
+      );
+
+      expect(mockGetAssistantClientDag.mock.calls[0]?.[0]).toBe('claude');
+      const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+      expect(optionsArg.model).toBe('sonnet');
+      expect(optionsArg.modelReasoningEffort).toBeUndefined();
+      expect(optionsArg.webSearchMode).toBeUndefined();
+      expect(optionsArg.additionalDirectories).toBeUndefined();
+    });
+
+    it('falls back to config Codex tuning when workflow-level values are absent for loop nodes', async () => {
+      mockGetAssistantClientDag.mockImplementation(() => ({
+        sendQuery: mockSendQueryDag,
+        getType: () => 'codex',
+      }));
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: '<promise>DONE</promise>' };
+        yield { type: 'result', sessionId: 'loop-codex-sid-2' };
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('codex-loop-config-options-run');
+      const config: WorkflowConfig = {
+        ...minimalConfig,
+        assistant: 'codex',
+        assistants: {
+          ...minimalConfig.assistants,
+          codex: {
+            modelReasoningEffort: 'minimal',
+            webSearchMode: 'cached',
+            additionalDirectories: ['/config/loop-fallback'],
+          },
+        },
+      };
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-codex-loop-config-options',
+        testDir,
+        {
+          name: 'codex-loop-config-options',
+          nodes: [
+            {
+              id: 'my-loop',
+              loop: {
+                prompt: 'Do a task. When done, output <promise>DONE</promise>.',
+                until: 'DONE',
+                max_iterations: 1,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'codex',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        config
+      );
+
+      const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+      expect(optionsArg.modelReasoningEffort).toBe('minimal');
+      expect(optionsArg.webSearchMode).toBe('cached');
+      expect(optionsArg.additionalDirectories).toEqual(['/config/loop-fallback']);
     });
 
     it('completes after multiple iterations', async () => {
