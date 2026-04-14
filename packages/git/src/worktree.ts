@@ -1,5 +1,5 @@
 import { readFile, access } from 'fs/promises';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import {
   createLogger,
   getArchonWorktreesPath,
@@ -254,6 +254,69 @@ export async function getCanonicalRepoPath(path: string): Promise<RepoPath> {
     );
   }
   return toRepoPath(path);
+}
+
+/**
+ * Verify that the worktree at the given path belongs to the expected repo.
+ *
+ * Throws if the worktree's parent repo doesn't match the request, or if
+ * ownership cannot be determined. The caller relies on the throw-or-return
+ * contract: a successful return means the caller may safely adopt the
+ * worktree. This is intentionally strict — a permissive fallback here
+ * would re-introduce the cross-checkout bug this guard exists to prevent.
+ *
+ * Paths are normalized with `resolve()` before comparison to handle trailing
+ * slashes and relative components. Symlinked paths (where canonical vs
+ * registered paths differ by symlink resolution) are not equated — callers
+ * should register codebases with consistent path forms.
+ *
+ * Error classification (surfaced via `classifyIsolationError` in
+ * `@archon/isolation/errors.ts`):
+ *   - "path contains a full git checkout" → EISDIR
+ *   - "Cannot verify worktree ownership" → ENOENT / EACCES / EIO
+ *   - "not a git-worktree reference" → submodule pointer or malformed
+ *   - "belongs to a different clone" → cross-checkout
+ */
+export async function verifyWorktreeOwnership(
+  worktreePath: WorktreePath,
+  expectedRepo: RepoPath
+): Promise<void> {
+  let gitContent: string;
+  try {
+    gitContent = await readFile(join(worktreePath, '.git'), 'utf-8');
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    // EISDIR: .git is a directory — path holds a full checkout, not a
+    // worktree. Refusing adoption prevents accidentally treating an
+    // unrelated repo at this path as ours.
+    if (err.code === 'EISDIR') {
+      throw new Error(
+        `Cannot adopt ${worktreePath}: path contains a full git checkout, not a worktree.`
+      );
+    }
+    // ENOENT: .git file missing despite worktreeExists() reporting true —
+    // a TOCTOU race or filesystem corruption. Fail fast.
+    // EACCES/EIO/etc.: cannot verify ownership — fail fast rather than
+    // defaulting to permissive adoption.
+    throw new Error(`Cannot verify worktree ownership at ${worktreePath}: ${err.message}`);
+  }
+
+  // gitdir: /path/to/repo/.git/worktrees/branch-name
+  const match = /gitdir: (.+)\/\.git\/worktrees\//.exec(gitContent);
+  if (!match) {
+    // Not a git-worktree pointer (e.g., submodule pointer, or malformed).
+    // We cannot confirm this is our worktree, so refuse adoption.
+    throw new Error(`Cannot adopt ${worktreePath}: .git pointer is not a git-worktree reference.`);
+  }
+
+  const existingRepo = resolve(match[1]);
+  const expectedResolved = resolve(expectedRepo);
+  if (existingRepo !== expectedResolved) {
+    throw new Error(
+      `Worktree at ${worktreePath} belongs to a different clone (${existingRepo}). ` +
+        'Remove it from that clone or use a different codebase registration.'
+    );
+  }
 }
 
 /**

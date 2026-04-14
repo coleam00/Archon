@@ -14,6 +14,7 @@ import {
   findWorktreeByBranch,
   toBranchName,
   isAncestorOf,
+  verifyWorktreeOwnership,
 } from '@archon/git';
 import type { RepoPath, BranchName } from '@archon/git';
 
@@ -105,8 +106,18 @@ export class IsolationResolver {
     const workflowType: IsolationWorkflowType = hints?.workflowType ?? 'thread';
     const workflowId = hints?.workflowId ?? '';
 
+    // Compute canonical repo path once — paths 3-6 all need it either for
+    // ownership verification (cross-clone guard) or for worktree creation.
+    const canonicalPath = await getCanonicalRepoPath(codebase.defaultCwd);
+
     // 3. Check for existing environment with same workflow
-    const reusable = await this.findReusable(codebase.id, workflowType, workflowId, baseBranch);
+    const reusable = await this.findReusable(
+      codebase.id,
+      canonicalPath,
+      workflowType,
+      workflowId,
+      baseBranch
+    );
     if (reusable) {
       return {
         status: 'resolved',
@@ -119,7 +130,7 @@ export class IsolationResolver {
 
     // 4. Check linked issues for sharing
     if (hints?.linkedIssues?.length) {
-      const linked = await this.findLinkedIssueEnv(codebase.id, hints.linkedIssues);
+      const linked = await this.findLinkedIssueEnv(codebase.id, canonicalPath, hints.linkedIssues);
       if (linked) return linked;
     }
 
@@ -127,6 +138,7 @@ export class IsolationResolver {
     if (hints?.prBranch) {
       const adopted = await this.tryBranchAdoption(
         codebase,
+        canonicalPath,
         hints,
         workflowType,
         workflowId,
@@ -136,7 +148,6 @@ export class IsolationResolver {
     }
 
     // 6. Create new environment
-    const canonicalPath = await getCanonicalRepoPath(codebase.defaultCwd);
     return this.createNewEnvironment(
       codebase,
       workflowType,
@@ -207,9 +218,15 @@ export class IsolationResolver {
 
   /**
    * Find a reusable environment by workflow identity.
+   *
+   * Verifies that the on-disk worktree belongs to `canonicalRepoPath` before
+   * returning. On cross-clone mismatch, throws — the DB row belongs to the
+   * other clone and we must not adopt it. The other clone's row is preserved
+   * (no markDestroyed) so the other clone's work continues.
    */
   private async findReusable(
     codebaseId: string,
+    canonicalRepoPath: RepoPath,
     workflowType: IsolationWorkflowType,
     workflowId: string,
     baseBranch?: BranchName
@@ -218,6 +235,21 @@ export class IsolationResolver {
     if (!existing) return null;
 
     if (await worktreeExists(toWorktreePath(existing.working_path))) {
+      try {
+        await verifyWorktreeOwnership(toWorktreePath(existing.working_path), canonicalRepoPath);
+      } catch (err) {
+        getLog().warn(
+          {
+            workflowType,
+            workflowId,
+            workingPath: existing.working_path,
+            err: (err as Error).message,
+          },
+          'isolation.reuse_refused_cross_checkout'
+        );
+        throw err;
+      }
+
       getLog().debug({ workflowType, workflowId }, 'isolation_reuse_existing');
       const warnings = await this.collectBaseBranchWarnings(existing, baseBranch, {
         workflowType,
@@ -232,9 +264,16 @@ export class IsolationResolver {
 
   /**
    * Find an environment linked to one of the given issue numbers.
+   *
+   * Verifies that each candidate worktree belongs to `canonicalRepoPath`
+   * before adopting. On cross-clone mismatch, throws — the user needs to
+   * know their linked-issue env is owned by another clone; silently skipping
+   * would mask the problem. The DB row is preserved (belongs to the other
+   * clone).
    */
   private async findLinkedIssueEnv(
     codebaseId: string,
+    canonicalRepoPath: RepoPath,
     linkedIssues: number[]
   ): Promise<IsolationResolution | null> {
     for (const issueNum of linkedIssues) {
@@ -246,6 +285,21 @@ export class IsolationResolver {
       if (!linkedEnv) continue;
 
       if (await worktreeExists(toWorktreePath(linkedEnv.working_path))) {
+        try {
+          await verifyWorktreeOwnership(toWorktreePath(linkedEnv.working_path), canonicalRepoPath);
+        } catch (err) {
+          getLog().warn(
+            {
+              issueNum,
+              codebaseId,
+              workingPath: linkedEnv.working_path,
+              err: (err as Error).message,
+            },
+            'isolation.linked_issue_refused_cross_checkout'
+          );
+          throw err;
+        }
+
         getLog().debug({ issueNum, codebaseId }, 'isolation_share_linked_issue');
         return {
           status: 'resolved',
@@ -262,9 +316,14 @@ export class IsolationResolver {
 
   /**
    * Try adopting an existing worktree matching a PR branch.
+   *
+   * Verifies ownership of the discovered worktree before recording it in the
+   * DB. On cross-clone mismatch, throws — adopting another clone's worktree
+   * would create a stale DB row pointing at someone else's filesystem state.
    */
   private async tryBranchAdoption(
     codebase: ResolveRequest['codebase'] & object,
+    canonicalRepoPath: RepoPath,
     hints: IsolationHints,
     workflowType: IsolationWorkflowType,
     workflowId: string,
@@ -273,9 +332,22 @@ export class IsolationResolver {
     const prBranch = hints.prBranch;
     if (!prBranch) return null;
 
-    const canonicalPath = await getCanonicalRepoPath(codebase.defaultCwd);
-    const adoptedPath = await findWorktreeByBranch(canonicalPath, prBranch);
+    const adoptedPath = await findWorktreeByBranch(canonicalRepoPath, prBranch);
     if (adoptedPath && (await worktreeExists(adoptedPath))) {
+      try {
+        await verifyWorktreeOwnership(adoptedPath, canonicalRepoPath);
+      } catch (err) {
+        getLog().warn(
+          {
+            adoptedPath,
+            prBranch,
+            err: (err as Error).message,
+          },
+          'isolation.branch_adoption_refused_cross_checkout'
+        );
+        throw err;
+      }
+
       getLog().info({ adoptedPath, prBranch }, 'isolation_worktree_adopted');
       const env = await this.store.create({
         codebase_id: codebase.id,
