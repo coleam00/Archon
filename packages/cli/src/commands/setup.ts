@@ -1085,8 +1085,8 @@ export function generateEnvContent(config: SetupConfig): string {
   // GitHub
   if (config.platforms.github && config.github) {
     lines.push('# GitHub');
-    lines.push(`GH_TOKEN=${config.github.token}`);
     lines.push(`GITHUB_TOKEN=${config.github.token}`);
+    lines.push('# GH_TOKEN is optional; only set it if you want gh to prefer env auth');
     lines.push(`WEBHOOK_SECRET=${config.github.webhookSecret}`);
     if (config.github.allowedUsers) {
       lines.push(`GITHUB_ALLOWED_USERS=${config.github.allowedUsers}`);

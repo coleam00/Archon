@@ -4,6 +4,7 @@
 import type { TransitionTrigger } from '../state/session-transitions';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import type { McpServerConfig, AgentDefinition } from '@anthropic-ai/claude-agent-sdk';
+import type { GitHubCliAuthPreference } from '@archon/git';
 import { z } from 'zod';
 
 /**
@@ -319,9 +320,16 @@ export interface AssistantRequestOptions {
    */
   settingSources?: ('project' | 'user')[];
   /**
-   * Additional env vars merged into Claude subprocess environment after buildSubprocessEnv().
-   * Final env: { ...buildSubprocessEnv(), ...env } (auth tokens conditionally filtered).
-   * Claude only — Codex SDK does not support env injection.
+   * GitHub CLI auth policy for assistant subprocesses.
+   * `prefer-stored` tells Archon to remove `GH_TOKEN` / `GITHUB_TOKEN` from the
+   * assistant subprocess env when `gh` has stored auth for the target GitHub host.
+   * This prevents env-token shadowing during workflow-driven `gh` usage.
+   */
+  githubCliAuthPolicy?: GitHubCliAuthPreference;
+  /**
+   * Additional env vars merged into the Claude subprocess environment after Archon's
+   * internal auth/env policy is applied. Public requestOptions.env is currently
+   * Claude-only; Codex uses SDK-level env construction internally for auth policy.
    */
   env?: Record<string, string>;
   /**

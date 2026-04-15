@@ -6,7 +6,7 @@ import * as isolationDb from '@archon/core/db/isolation-environments';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as workflowDb from '@archon/core/db/workflows';
 import { loadConfig } from '@archon/core';
-import { execFileAsync } from '@archon/git';
+import { execFileAsync, execGhWithAuthPolicy, toRepoPath } from '@archon/git';
 import { createLogger, getRunArtifactsPath, parseOwnerRepo } from '@archon/paths';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { readdir, readFile, stat } from 'fs/promises';
@@ -264,8 +264,16 @@ async function resolveArtifactsDir(
  */
 async function safeExec(cmd: string, args: string[], cwd?: string): Promise<string> {
   try {
-    const opts = cwd ? { cwd } : undefined;
-    const { stdout } = await execFileAsync(cmd, args, opts);
+    const stdout =
+      cmd === 'gh'
+        ? (
+            await execGhWithAuthPolicy(args, {
+              ...(cwd ? { cwd, repoPath: toRepoPath(cwd) } : {}),
+              preference: 'prefer-stored',
+              timeoutMs: 15_000,
+            })
+          ).stdout
+        : (await execFileAsync(cmd, args, cwd ? { cwd } : undefined)).stdout;
     return stdout;
   } catch {
     return '';

@@ -2,8 +2,7 @@
  * GitHub GraphQL utilities
  * Used for queries not available in REST API
  */
-import { execFile } from 'child_process';
-import { promisify } from 'util';
+import { execGhWithAuthPolicy } from '@archon/git';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -12,8 +11,6 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('github-graphql');
   return cachedLog;
 }
-
-const execFileAsync = promisify(execFile);
 
 /**
  * Get issue numbers that will be closed when a PR is merged
@@ -39,8 +36,7 @@ export async function getLinkedIssueNumbers(
   `;
 
   try {
-    const { stdout } = await execFileAsync(
-      'gh',
+    const { stdout } = await execGhWithAuthPolicy(
       [
         'api',
         'graphql',
@@ -55,7 +51,10 @@ export async function getLinkedIssueNumbers(
         '--jq',
         '.data.repository.pullRequest.closingIssuesReferences.nodes[].number',
       ],
-      { timeout: 10000 }
+      {
+        preference: 'prefer-stored',
+        timeoutMs: 10_000,
+      }
     );
 
     // Parse output: each line is an issue number

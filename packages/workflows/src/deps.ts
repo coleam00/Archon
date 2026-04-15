@@ -12,6 +12,7 @@ import type {
   ThinkingConfig,
   SandboxSettings,
 } from './schemas';
+import type { GitHubCliAuthPreference } from '@archon/git';
 
 // ---------------------------------------------------------------------------
 // Workflow-local type copies — structurally identical to the originals in
@@ -65,6 +66,12 @@ export interface WorkflowAssistantOptions {
   modelReasoningEffort?: ModelReasoningEffort;
   webSearchMode?: WebSearchMode;
   additionalDirectories?: string[];
+  /**
+   * GitHub CLI auth policy for assistant subprocesses.
+   * `prefer-stored` tells Archon to remove `GH_TOKEN` / `GITHUB_TOKEN` from the
+   * assistant subprocess env when stored `gh` auth exists for the target host.
+   */
+  githubCliAuthPolicy?: GitHubCliAuthPreference;
   /**
    * Controls which CLAUDE.md files the SDK loads.
    * Mirrors Claude Agent SDK Options.settingSources.
@@ -135,8 +142,9 @@ export interface WorkflowAssistantOptions {
   agent?: string;
   /**
    * Additional env vars to merge into the Claude subprocess environment.
-   * Merged after buildSubprocessEnv() (auth tokens conditionally filtered): { ...buildSubprocessEnv(), ...env }.
-   * Claude only — ignored for Codex (Codex SDK does not expose env injection).
+   * Merged after Archon's internal auth/env policy is applied.
+   * Public workflow env injection remains Claude-only; Codex uses SDK-level env
+   * construction internally for auth policy.
    */
   env?: Record<string, string>;
   abortSignal?: AbortSignal;

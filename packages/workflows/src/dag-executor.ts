@@ -107,7 +107,7 @@ interface SendMessageContext {
 
 type WorkflowCodexExecutionOptions = Pick<
   WorkflowAssistantOptions,
-  'modelReasoningEffort' | 'webSearchMode' | 'additionalDirectories'
+  'modelReasoningEffort' | 'webSearchMode' | 'additionalDirectories' | 'githubCliAuthPolicy'
 >;
 
 interface BundledScriptExecution {
@@ -323,6 +323,7 @@ function resolveWorkflowCodexOptions(
     workflowLevelOptions.additionalDirectories ?? config.assistants.codex.additionalDirectories;
 
   const resolved: WorkflowCodexExecutionOptions = {};
+  resolved.githubCliAuthPolicy = 'prefer-stored';
   if (modelReasoningEffort !== undefined) resolved.modelReasoningEffort = modelReasoningEffort;
   if (webSearchMode !== undefined) resolved.webSearchMode = webSearchMode;
   if (additionalDirectories !== undefined) resolved.additionalDirectories = additionalDirectories;
@@ -574,7 +575,7 @@ async function resolveNodeProviderAndModel(
       options = undefined;
     }
   } else {
-    const claudeOptions: WorkflowAssistantOptions = {};
+    const claudeOptions: WorkflowAssistantOptions = { githubCliAuthPolicy: 'prefer-stored' };
     if (model) claudeOptions.model = model;
     // Propagate settingSources from config (controls which CLAUDE.md files the SDK loads)
     if (config.assistants.claude.settingSources) {
@@ -1434,10 +1435,12 @@ async function executeBashNode(
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
+  const subprocessEnv = buildWorkflowSubprocessEnv(workflowRun, artifactsDir, baseBranch, docsDir);
 
   try {
     const { stdout, stderr } = await execFileAsync('bash', ['-c', finalScript], {
       cwd,
+      env: subprocessEnv,
       timeout,
     });
 
@@ -1584,6 +1587,7 @@ async function executeScriptNode(
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, false);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
+  const subprocessEnv = buildWorkflowSubprocessEnv(workflowRun, artifactsDir, baseBranch, docsDir);
 
   // Build the command and args based on runtime and inline vs named
   let cmd = '';
@@ -1666,6 +1670,7 @@ async function executeScriptNode(
     try {
       const result = await execFileAsync(cmd, args, {
         cwd,
+        env: subprocessEnv,
         timeout,
       });
       stdout = result.stdout;
@@ -1779,12 +1784,36 @@ function buildLoopNodeOptions(
     provider === 'codex' ? resolveWorkflowCodexOptions(workflowLevelOptions, config) : undefined;
 
   const claudeOptions =
-    provider === 'claude' && config.assistants.claude.settingSources
-      ? { settingSources: config.assistants.claude.settingSources }
+    provider === 'claude'
+      ? {
+          githubCliAuthPolicy: 'prefer-stored' as const,
+          ...(config.assistants.claude.settingSources
+            ? { settingSources: config.assistants.claude.settingSources }
+            : {}),
+        }
       : undefined;
 
   if (!model && !codexOptions && !claudeOptions) return undefined;
   return { ...(model ? { model } : {}), ...codexOptions, ...claudeOptions };
+}
+
+function buildWorkflowSubprocessEnv(
+  workflowRun: WorkflowRun,
+  artifactsDir: string,
+  baseBranch: string,
+  docsDir: string
+): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    WORKFLOW_ID: workflowRun.id,
+    ARTIFACTS_DIR: artifactsDir,
+    BASE_BRANCH: baseBranch,
+    DOCS_DIR: docsDir,
+    ARCHON_WORKFLOW_ID: workflowRun.id,
+    ARCHON_ARTIFACTS_DIR: artifactsDir,
+    ARCHON_BASE_BRANCH: baseBranch,
+    ARCHON_DOCS_DIR: docsDir,
+  };
 }
 
 interface LoopProgressSnapshot {

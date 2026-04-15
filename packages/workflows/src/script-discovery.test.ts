@@ -164,15 +164,22 @@ describe('discoverScripts', () => {
 });
 
 describe('getDefaultScripts', () => {
-  test('returns the bundled detect-project script', () => {
+  test('returns bundled default scripts', () => {
     const defaults = getDefaultScripts();
     expect(defaults).toBeInstanceOf(Map);
     expect(defaults.size).toBeGreaterThan(0);
+
     const detectProject = defaults.get('detect-project');
     expect(detectProject).toBeDefined();
     expect(detectProject?.runtime).toBe('bun');
     expect(detectProject?.path).toBe('[bundled:detect-project]');
     expect(detectProject?.content).toContain('function detectProject()');
+
+    const githubPr = defaults.get('github-pr');
+    expect(githubPr).toBeDefined();
+    expect(githubPr?.runtime).toBe('bun');
+    expect(githubPr?.path).toBe('[bundled:github-pr]');
+    expect(githubPr?.content).toContain('pr-request.json');
   });
 
   test('returns a new Map each call', () => {

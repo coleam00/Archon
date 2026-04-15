@@ -11,6 +11,7 @@ import {
   type TurnOptions,
   type TurnCompletedEvent,
 } from '@openai/codex-sdk';
+import { findRepoRoot, resolveGitHubCliAuthDecision } from '@archon/git';
 import {
   type AssistantRequestOptions,
   type IAssistantClient,
@@ -30,38 +31,106 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-// Singleton Codex instance (async because binary path resolution is async)
-let codexInstance: Codex | null = null;
-let codexInitPromise: Promise<Codex> | null = null;
+let cachedCodexPathOverride: string | undefined;
+let codexPathResolved = false;
+let codexPathInitPromise: Promise<string | undefined> | null = null;
 
-/** Reset singleton state. Exported for tests only. */
+/** Reset cached binary-path resolution state. Exported for tests only. */
 export function resetCodexSingleton(): void {
-  codexInstance = null;
-  codexInitPromise = null;
+  cachedCodexPathOverride = undefined;
+  codexPathResolved = false;
+  codexPathInitPromise = null;
 }
 
 /**
- * Get or create Codex SDK instance.
- * Async because in compiled binary mode, binary path resolution is async.
- * Once initialized, the binary path is fixed for the process lifetime.
+ * Resolve the Codex binary path once per process.
+ *
+ * We create a fresh SDK client per query because the constructor accepts an
+ * env override, and that env may differ by repo/auth policy.
  */
-async function getCodex(configCodexBinaryPath?: string): Promise<Codex> {
-  if (codexInstance) return codexInstance;
+async function resolveCodexPathOverride(
+  configCodexBinaryPath?: string
+): Promise<string | undefined> {
+  if (codexPathResolved) return cachedCodexPathOverride;
 
-  // Prevent concurrent initialization race
-  if (!codexInitPromise) {
-    codexInitPromise = (async (): Promise<Codex> => {
-      const codexPathOverride = await resolveCodexBinaryPath(configCodexBinaryPath);
-      const instance = new Codex({ codexPathOverride });
-      codexInstance = instance;
-      return instance;
-    })().catch(err => {
-      // Clear promise so next call can retry (e.g. after user installs Codex)
-      codexInitPromise = null;
-      throw err;
-    });
+  if (!codexPathInitPromise) {
+    codexPathInitPromise = resolveCodexBinaryPath(configCodexBinaryPath)
+      .then(path => {
+        cachedCodexPathOverride = path;
+        codexPathResolved = true;
+        return path;
+      })
+      .catch(err => {
+        codexPathInitPromise = null;
+        throw err;
+      });
   }
-  return codexInitPromise;
+
+  return codexPathInitPromise;
+}
+
+function toCodexEnvRecord(env: NodeJS.ProcessEnv): Record<string, string> {
+  const nextEnv: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (typeof value === 'string') {
+      nextEnv[key] = value;
+    }
+  }
+  return nextEnv;
+}
+
+async function buildCodexProcessEnv(
+  cwd: string,
+  options?: AssistantRequestOptions
+): Promise<Record<string, string> | undefined> {
+  const baseEnv = options?.env ? { ...process.env, ...options.env } : process.env;
+  const githubCliAuthPolicy = options?.githubCliAuthPolicy ?? 'inherit';
+
+  if (githubCliAuthPolicy === 'inherit') {
+    return options?.env ? toCodexEnvRecord(baseEnv) : undefined;
+  }
+
+  const repoRoot = await findRepoRoot(cwd).catch(() => null);
+  const decision = await resolveGitHubCliAuthDecision({
+    preference: githubCliAuthPolicy,
+    env: baseEnv,
+    ...(repoRoot ? { repoPath: repoRoot } : {}),
+  });
+
+  if (decision.chosenAuthSource === 'stored') {
+    getLog().info(
+      {
+        host: decision.host,
+        envTokenNames: decision.envTokenNames,
+        activeLogin: decision.activeLogin,
+        storedLogin: decision.storedLogin,
+        actorSwitchDetected: decision.actorSwitchDetected,
+      },
+      'github_cli_auth.prefer_stored'
+    );
+  } else {
+    getLog().debug(
+      {
+        host: decision.host,
+        envTokenNames: decision.envTokenNames,
+        reason: decision.reason,
+      },
+      'github_cli_auth.preference_not_applied'
+    );
+  }
+
+  return toCodexEnvRecord(decision.env);
+}
+
+async function createCodex(
+  configCodexBinaryPath?: string,
+  env?: Record<string, string>
+): Promise<Codex> {
+  const codexPathOverride = await resolveCodexPathOverride(configCodexBinaryPath);
+  return new Codex({
+    ...(codexPathOverride ? { codexPathOverride } : {}),
+    ...(env ? { env } : {}),
+  });
 }
 
 /**
@@ -207,7 +276,11 @@ export class CodexClient implements IAssistantClient {
     // Initialize Codex SDK with binary path override (resolved from env/config/vendor).
     // In dev mode, resolveCodexBinaryPath returns undefined and the SDK uses node_modules.
     // In binary mode, it resolves from env/config/vendor or throws with install instructions.
-    const codex = await getCodex(mergedConfig?.assistants.codex.codexBinaryPath);
+    const codexProcessEnv = await buildCodexProcessEnv(cwd, options);
+    const codex = await createCodex(
+      mergedConfig?.assistants.codex.codexBinaryPath,
+      codexProcessEnv
+    );
     const threadOptions = buildThreadOptions(cwd, options);
 
     // Check if already aborted before starting

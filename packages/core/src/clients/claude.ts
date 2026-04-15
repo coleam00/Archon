@@ -19,6 +19,7 @@ import {
   type HookCallback,
   type HookCallbackMatcher,
 } from '@anthropic-ai/claude-agent-sdk';
+import { findRepoRoot, resolveGitHubCliAuthDecision } from '@archon/git';
 // The `/embed` entry point uses `import ... with { type: 'file' }` to embed
 // the SDK's `cli.js` into the compiled binary's $bunfs virtual filesystem,
 // then extracts it to a temp path at runtime so the subprocess can exec it.
@@ -96,7 +97,10 @@ function normalizeClaudeUsage(usage?: {
  * We log the detected mode for diagnostics but don't filter — the user's
  * config is trusted. See coleam00/Archon#1067 for design rationale.
  */
-function buildSubprocessEnv(): NodeJS.ProcessEnv {
+async function buildSubprocessEnv(
+  cwd: string,
+  requestOptions?: AssistantRequestOptions
+): Promise<NodeJS.ProcessEnv> {
   const hasExplicitTokens = Boolean(
     process.env.CLAUDE_CODE_OAUTH_TOKEN ?? process.env.CLAUDE_API_KEY
   );
@@ -106,7 +110,41 @@ function buildSubprocessEnv(): NodeJS.ProcessEnv {
     authMode === 'global' ? 'using_global_auth' : 'using_explicit_tokens'
   );
 
-  return { ...process.env };
+  const baseEnv = { ...process.env };
+  const githubCliAuthPolicy = requestOptions?.githubCliAuthPolicy ?? 'inherit';
+  if (githubCliAuthPolicy === 'inherit') {
+    return baseEnv;
+  }
+
+  const repoRoot = await findRepoRoot(cwd).catch(() => null);
+  const decision = await resolveGitHubCliAuthDecision({
+    preference: githubCliAuthPolicy,
+    env: baseEnv,
+    ...(repoRoot ? { repoPath: repoRoot } : {}),
+  });
+  if (decision.chosenAuthSource === 'stored') {
+    getLog().info(
+      {
+        host: decision.host,
+        envTokenNames: decision.envTokenNames,
+        activeLogin: decision.activeLogin,
+        storedLogin: decision.storedLogin,
+        actorSwitchDetected: decision.actorSwitchDetected,
+      },
+      'github_cli_auth.prefer_stored'
+    );
+  } else {
+    getLog().debug(
+      {
+        host: decision.host,
+        envTokenNames: decision.envTokenNames,
+        reason: decision.reason,
+      },
+      'github_cli_auth.preference_not_applied'
+    );
+  }
+
+  return decision.env;
 }
 
 /** Max retries for transient subprocess failures (3 = 4 total attempts).
@@ -327,12 +365,14 @@ export class ClaudeClient implements IAssistantClient {
         );
       }
 
+      const subprocessEnv = requestOptions?.env
+        ? { ...(await buildSubprocessEnv(cwd, requestOptions)), ...requestOptions.env }
+        : await buildSubprocessEnv(cwd, requestOptions);
+
       const options: Options = {
         cwd,
         pathToClaudeCodeExecutable: cliPath,
-        env: requestOptions?.env
-          ? { ...buildSubprocessEnv(), ...requestOptions.env }
-          : buildSubprocessEnv(),
+        env: subprocessEnv,
         model: requestOptions?.model,
         abortController: controller,
         ...(requestOptions?.tools !== undefined ? { tools: requestOptions.tools } : {}),

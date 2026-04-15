@@ -297,7 +297,7 @@ export async function cloneRepository(
 
   // Build clone command with authentication if GitHub token is available
   let cloneUrl = workingUrl;
-  const ghToken = process.env.GH_TOKEN;
+  const ghToken = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
 
   if (ghToken && workingUrl.includes('github.com')) {
     if (workingUrl.startsWith('https://github.com')) {

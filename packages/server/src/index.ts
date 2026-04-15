@@ -728,14 +728,37 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
  * Helps diagnose expired tokens or missing auth before workflows fail.
  */
 async function checkGhAuth(): Promise<void> {
-  const { execFileAsync } = await import('@archon/git');
+  const { execFileAsync, resolveGitHubCliAuthDecision } = await import('@archon/git');
+  const decision = await resolveGitHubCliAuthDecision({ preference: 'prefer-stored' });
   try {
-    await execFileAsync('gh', ['auth', 'status'], { timeout: 10_000 });
-    getLog().info('gh_auth.status_ok');
-  } catch {
+    const args = ['auth', 'status'];
+    if (decision.host) {
+      args.push('--hostname', decision.host);
+    }
+    await execFileAsync('gh', args, {
+      timeout: 10_000,
+      env: decision.env,
+    });
+    getLog().info(
+      {
+        host: decision.host,
+        authSource: decision.chosenAuthSource,
+        envTokenNames: decision.envTokenNames,
+        actorSwitchDetected: decision.actorSwitchDetected,
+      },
+      'gh_auth.status_ok'
+    );
+  } catch (error) {
     getLog().warn(
-      'gh_auth.status_failed — gh CLI is not authenticated. Workflows using gh commands may fail. ' +
-        'Run `gh auth login` or set GH_TOKEN in .env to fix this.'
+      {
+        err: error,
+        host: decision.host,
+        authSource: decision.chosenAuthSource,
+        envTokenNames: decision.envTokenNames,
+        authPreferenceReason: decision.reason,
+        actorSwitchDetected: decision.actorSwitchDetected,
+      },
+      'gh_auth.status_failed'
     );
   }
 }

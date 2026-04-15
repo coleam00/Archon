@@ -13,6 +13,24 @@ export { toRepoPath, toBranchName, toWorktreePath } from './types';
 // Process and filesystem wrappers
 export { execFileAsync, mkdirAsync } from './exec';
 
+// GitHub CLI auth policy
+export {
+  GITHUB_CLI_TOKEN_ENV_VARS,
+  stripGitHubCliTokens,
+  parseGitHubHostFromRemoteUrl,
+  getGitHubHostForRepo,
+  resolveGitHubCliAuthDecision,
+  execGhWithAuthPolicy,
+} from './github-cli-auth';
+export type {
+  GitHubCliAuthPreference,
+  GitHubCliAuthSource,
+  GitHubCliAuthDecision,
+  GitHubCliAuthOptions,
+  ExecGhWithAuthOptions,
+  ExecGhWithAuthResult,
+} from './github-cli-auth';
+
 // Worktree operations
 export {
   extractOwnerRepo,

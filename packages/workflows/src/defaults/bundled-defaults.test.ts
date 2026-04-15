@@ -24,6 +24,8 @@ describe('bundled-defaults', () => {
         'archon-assist-codex',
         'archon-code-review-agent',
         'archon-comment-quality-agent',
+        'archon-compose-finalize-pr',
+        'archon-compose-pr',
         'archon-create-pr',
         'archon-docs-impact-agent',
         'archon-error-handling-agent',
@@ -48,7 +50,7 @@ describe('bundled-defaults', () => {
         expect(BUNDLED_COMMANDS).toHaveProperty(cmd);
       }
 
-      expect(Object.keys(BUNDLED_COMMANDS)).toHaveLength(22);
+      expect(Object.keys(BUNDLED_COMMANDS)).toHaveLength(24);
     });
 
     it('should have non-empty content for all commands', () => {
@@ -147,6 +149,13 @@ describe('bundled-defaults', () => {
       expect(BUNDLED_SCRIPTS['detect-project'].runtime).toBe('bun');
       expect(BUNDLED_SCRIPTS['detect-project'].extension).toBe('.ts');
       expect(BUNDLED_SCRIPTS['detect-project'].content).toContain('PROJECT_TYPE=');
+    });
+
+    it('should include the github-pr helper used by default workflows', () => {
+      expect(BUNDLED_SCRIPTS).toHaveProperty('github-pr');
+      expect(BUNDLED_SCRIPTS['github-pr'].runtime).toBe('bun');
+      expect(BUNDLED_SCRIPTS['github-pr'].extension).toBe('.ts');
+      expect(BUNDLED_SCRIPTS['github-pr'].content).toContain('pr-request.json');
     });
   });
 });

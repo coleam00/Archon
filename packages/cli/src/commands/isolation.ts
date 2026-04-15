@@ -11,6 +11,7 @@ import {
   hasUncommittedChanges,
   toWorktreePath,
   getDefaultBranch,
+  execGhWithAuthPolicy,
 } from '@archon/git';
 import { getIsolationProvider } from '@archon/isolation';
 import { removeEnvironment } from '@archon/core/services/cleanup-service';
@@ -231,10 +232,14 @@ export async function isolationCompleteCommand(
 
       // Check 3: open PRs on this branch (requires gh CLI)
       try {
-        const ghResult = await execFileAsync(
-          'gh',
+        const ghResult = await execGhWithAuthPolicy(
           ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,title'],
-          { timeout: 15000 }
+          {
+            cwd: env.codebase_default_cwd,
+            repoPath: toRepoPath(env.codebase_default_cwd),
+            preference: 'prefer-stored',
+            timeoutMs: 15_000,
+          }
         );
         const prs = JSON.parse(ghResult.stdout) as { number: number; title: string }[];
         for (const pr of prs) {

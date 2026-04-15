@@ -204,8 +204,10 @@ CODEX_ACCOUNT_ID=account1
         botDisplayName: 'Archon',
       });
 
-      expect(content).toContain('GH_TOKEN=ghp_testtoken');
       expect(content).toContain('GITHUB_TOKEN=ghp_testtoken');
+      expect(content).toContain(
+        '# GH_TOKEN is optional; only set it if you want gh to prefer env auth'
+      );
       expect(content).toContain('WEBHOOK_SECRET=testsecret123');
       expect(content).toContain('GITHUB_ALLOWED_USERS=user1,user2');
       expect(content).toContain('GITHUB_BOT_MENTION=mybot');

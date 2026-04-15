@@ -11,13 +11,15 @@
 import { BUNDLED_IS_BINARY } from '@archon/paths';
 
 // =============================================================================
-// Default Commands (22 total)
+// Default Commands (24 total)
 // =============================================================================
 
 import archonAssistCmd from '../../../../.archon/commands/defaults/archon-assist.md' with { type: 'text' };
 import archonAssistCodexCmd from '../../../../.archon/commands/defaults/archon-assist-codex.md' with { type: 'text' };
 import archonCodeReviewAgentCmd from '../../../../.archon/commands/defaults/archon-code-review-agent.md' with { type: 'text' };
 import archonCommentQualityAgentCmd from '../../../../.archon/commands/defaults/archon-comment-quality-agent.md' with { type: 'text' };
+import archonComposeFinalizePrCmd from '../../../../.archon/commands/defaults/archon-compose-finalize-pr.md' with { type: 'text' };
+import archonComposePrCmd from '../../../../.archon/commands/defaults/archon-compose-pr.md' with { type: 'text' };
 import archonCreatePrCmd from '../../../../.archon/commands/defaults/archon-create-pr.md' with { type: 'text' };
 import archonDocsImpactAgentCmd from '../../../../.archon/commands/defaults/archon-docs-impact-agent.md' with { type: 'text' };
 import archonErrorHandlingAgentCmd from '../../../../.archon/commands/defaults/archon-error-handling-agent.md' with { type: 'text' };
@@ -44,6 +46,9 @@ import archonValidatePrReportCmd from '../../../../.archon/commands/defaults/arc
 // @ts-expect-error Bun text import of a TypeScript source asset is valid at runtime,
 // but TypeScript rejects the .ts extension in import-attribute mode.
 import detectProjectScript from '../../../../.archon/scripts/detect-project.ts' with { type: 'text' };
+// @ts-expect-error Bun text import of a TypeScript source asset is valid at runtime,
+// but TypeScript rejects the .ts extension in import-attribute mode.
+import githubPrScript from '../../../../.archon/scripts/github-pr.ts' with { type: 'text' };
 
 // =============================================================================
 // Default Workflows (15 total)
@@ -77,6 +82,8 @@ export const BUNDLED_COMMANDS: Record<string, string> = {
   'archon-assist-codex': archonAssistCodexCmd,
   'archon-code-review-agent': archonCodeReviewAgentCmd,
   'archon-comment-quality-agent': archonCommentQualityAgentCmd,
+  'archon-compose-finalize-pr': archonComposeFinalizePrCmd,
+  'archon-compose-pr': archonComposePrCmd,
   'archon-create-pr': archonCreatePrCmd,
   'archon-docs-impact-agent': archonDocsImpactAgentCmd,
   'archon-error-handling-agent': archonErrorHandlingAgentCmd,
@@ -109,6 +116,11 @@ export interface BundledScriptAsset {
 export const BUNDLED_SCRIPTS: Record<string, BundledScriptAsset> = {
   'detect-project': {
     content: detectProjectScript,
+    runtime: 'bun',
+    extension: '.ts',
+  },
+  'github-pr': {
+    content: githubPrScript,
     runtime: 'bun',
     extension: '.ts',
   },

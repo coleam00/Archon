@@ -5,8 +5,8 @@
  * checks miss. The `gh` CLI is a soft dependency — if it's missing or fails,
  * we return 'NONE' and let callers fall back to git-only signals.
  */
-import { execFileAsync } from '@archon/git';
 import type { BranchName, RepoPath } from '@archon/git';
+import { execGhWithAuthPolicy, getGitHubHostForRepo } from '@archon/git';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -38,12 +38,9 @@ export async function getPrState(
   }
 
   // Check whether the remote is on GitHub. Non-GitHub remotes are out of scope.
-  let remoteUrl = '';
+  let githubHost: string | null = null;
   try {
-    const { stdout } = await execFileAsync('git', ['-C', repoPath, 'remote', 'get-url', 'origin'], {
-      timeout: 10000,
-    });
-    remoteUrl = stdout.trim();
+    githubHost = await getGitHubHostForRepo(repoPath);
   } catch (error) {
     getLog().debug(
       { err: error as Error, repoPath, branch },
@@ -53,8 +50,8 @@ export async function getPrState(
     return 'NONE';
   }
 
-  if (!remoteUrl.toLowerCase().includes('github.com')) {
-    getLog().debug({ repoPath, branch, remoteUrl }, 'isolation.pr_state_github_only');
+  if (!githubHost) {
+    getLog().debug({ repoPath, branch }, 'isolation.pr_state_github_only');
     cache?.set(branch, 'NONE');
     return 'NONE';
   }
@@ -62,10 +59,15 @@ export async function getPrState(
   let result: PrState = 'NONE';
   let ghStdout = '';
   try {
-    const { stdout } = await execFileAsync(
-      'gh',
+    const { stdout } = await execGhWithAuthPolicy(
       ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'state', '--limit', '1'],
-      { timeout: 15000, cwd: repoPath }
+      {
+        cwd: repoPath,
+        repoPath,
+        host: githubHost,
+        preference: 'prefer-stored',
+        timeoutMs: 15_000,
+      }
     );
     ghStdout = stdout;
     const parsed = JSON.parse(stdout) as { state?: string }[];
