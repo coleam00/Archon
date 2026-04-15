@@ -709,10 +709,33 @@ describe('runScheduledCleanup', () => {
         metadata: {},
       },
     ]);
-    // First env: internal worktreeExists returns false
-    mockExecFileAsync.mockRejectedValueOnce(new Error('not a git repo'));
-    // Second env: internal worktreeExists returns false
-    mockExecFileAsync.mockRejectedValueOnce(new Error('not a git repo'));
+    // worktreeExists returns false for both (already default)
+    // env-error: removeEnvironment needs getById + getCodebase
+    mockGetById.mockResolvedValueOnce({
+      id: 'env-error',
+      codebase_id: 'codebase-1',
+      working_path: '/bad/path',
+      branch_name: 'bad-branch',
+      status: 'active',
+    });
+    mockGetCodebase.mockResolvedValueOnce({
+      id: 'codebase-1',
+      name: 'test-repo',
+      default_cwd: '/workspace/repo',
+    });
+    // env-good: removeEnvironment needs getById + getCodebase
+    mockGetById.mockResolvedValueOnce({
+      id: 'env-good',
+      codebase_id: 'codebase-1',
+      working_path: '/workspace/repo/worktrees/pr-1',
+      branch_name: 'pr-1',
+      status: 'active',
+    });
+    mockGetCodebase.mockResolvedValueOnce({
+      id: 'codebase-1',
+      name: 'test-repo',
+      default_cwd: '/workspace/repo',
+    });
 
     const report = await runScheduledCleanup();
 
