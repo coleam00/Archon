@@ -17,6 +17,17 @@ Be a transparent relay.
 - pass the user's answer back as directly as possible
 - keep operating the run until it pauses again or reaches a terminal state
 
+## Important Boundary
+
+Archon's internal CLI conversation is not the same thing as the current outer
+Codex UI thread.
+
+- a pause can be real even if the user did not see a new outer-thread message
+- the host must explicitly relay the paused prompt into the current Codex
+  conversation
+- do not assume Archon's stdout or persisted worker messages are visible to the
+  user by themselves
+
 ## Basic Loop
 
 1. Launch the workflow and capture:
@@ -25,7 +36,7 @@ Be a transparent relay.
    - working path
 2. Verify the launched run with `archon workflow status --json`.
 3. When the run becomes `paused`, read the latest workflow output.
-4. Relay that output directly to the user.
+4. Relay that output directly in the current Codex conversation.
 5. When the user answers, resume with `archon workflow approve` or
    `archon workflow reject`.
 6. Immediately re-check `archon workflow status --json`.
@@ -48,6 +59,10 @@ When the workflow is paused:
 - wait for the user
 - pass their response through verbatim unless a safety or formatting issue
   requires intervention
+
+If `archon workflow status --json` already includes the exact paused prompt in
+`approval.message`, use that first. Fall back to the persisted assistant message
+or the run log when you need the exact rendered wording that Archon showed.
 
 Treat the paused fingerprint as:
 
@@ -91,6 +106,10 @@ tail -n 40 "<log-file>"
 ```
 
 Read `log-debugging.md` when you need the full trace.
+
+Remember: finding the prompt in Archon state is not the final step. Repost it in
+the current Codex conversation so the user can answer without switching
+surfaces.
 
 ## Surface Boundaries
 

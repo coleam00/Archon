@@ -57,8 +57,16 @@ Do not spam the user with identical "still running" updates.
 Treat `paused` as action-required.
 
 - open the latest workflow output
-- relay it directly
+- relay it directly in the current Codex conversation
 - wait for the user response
+
+Important boundary:
+
+- a paused prompt can already exist in Archon's internal CLI conversation or
+  run log without appearing in the outer Codex UI thread
+- do not assume the user saw Archon's stdout or worker-conversation history
+- the operator must explicitly repost the paused prompt into the current Codex
+  conversation
 
 Track the paused fingerprint:
 
@@ -87,7 +95,8 @@ After every approval, rejection, or manual resume:
    - `failed`
 
 Recording approval is not the end of the operator loop. The next required state
-change must be observed.
+change must be observed and, if paused, relayed into the outer Codex
+conversation.
 
 ### Possible stall
 

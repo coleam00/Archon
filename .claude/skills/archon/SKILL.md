@@ -179,6 +179,18 @@ or `archon workflow resume`:
 Do not stop after recording approval or rejection alone. The control loop is not
 done until the workflow either pauses again or reaches a terminal state.
 
+### Relay Boundary
+
+Archon's internal CLI conversation is not the same thing as the current outer
+Codex UI thread.
+
+- a workflow can pause correctly and persist its question inside Archon without
+  creating a new message in the outer Codex conversation
+- when status returns to `paused`, fetch the paused prompt and repost it in the
+  current Codex conversation yourself
+- do not assume the user saw Archon's stdout or the internal worker
+  conversation history
+
 ### Pause Detection Rule
 
 For interactive loops, treat a new human checkpoint as real only when the run is
