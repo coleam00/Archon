@@ -77,7 +77,6 @@ import {
   loadConfig,
   logConfig,
   getPort,
-  createWorkflowStore,
 } from '@archon/core';
 import type { IPlatformAdapter } from '@archon/core';
 import { createLogger, logArchonPaths, validateAppDefaultsPaths } from '@archon/paths';
@@ -208,12 +207,14 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // Start cleanup scheduler
   startCleanupScheduler();
 
-  // Mark workflow runs orphaned by previous process termination as failed
-  void createWorkflowStore()
-    .failOrphanedRuns()
-    .catch(err => {
-      getLog().error({ err }, 'workflow.fail_orphans_failed');
-    });
+  // Note: orphaned-run cleanup intentionally NOT called at server startup.
+  // Running it here killed parallel workflow runs from other processes
+  // (CLI, adapters) by flipping their `running` rows to `failed` mid-flight.
+  // Same lesson the CLI already learned — see packages/cli/src/cli.ts:256-258.
+  // Per CLAUDE.md "No Autonomous Lifecycle Mutation Across Process Boundaries":
+  // surface ambiguous state to users and provide a one-click action instead.
+  // Users invoke explicit cleanup via `archon workflow cleanup` or the per-row
+  // Cancel/Abandon buttons in the Web UI dashboard. See #1216.
 
   // Log Archon paths configuration
   logArchonPaths();
