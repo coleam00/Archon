@@ -9,18 +9,7 @@ import {
   thinkingConfigSchema,
   sandboxSettingsSchema,
 } from './dag-node';
-
-// ---------------------------------------------------------------------------
-// Shared enum schemas
-// ---------------------------------------------------------------------------
-
-export const modelReasoningEffortSchema = z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']);
-
-export type ModelReasoningEffort = z.infer<typeof modelReasoningEffortSchema>;
-
-export const webSearchModeSchema = z.enum(['disabled', 'cached', 'live']);
-
-export type WebSearchMode = z.infer<typeof webSearchModeSchema>;
+import { modelReasoningEffortSchema, webSearchModeSchema } from './codex-options';
 
 // ---------------------------------------------------------------------------
 // WorkflowBase — common fields shared by all workflow types
