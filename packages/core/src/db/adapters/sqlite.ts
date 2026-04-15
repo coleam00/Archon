@@ -230,7 +230,11 @@ export class SqliteAdapter implements IDatabase {
         'CREATE UNIQUE INDEX IF NOT EXISTS idx_codebases_name_cwd ON remote_agent_codebases (name, default_cwd)'
       );
     } catch (e: unknown) {
-      getLog().warn({ err: e as Error }, 'db.sqlite_migration_codebase_identity_failed');
+      const err = e as Error;
+      getLog().error({ err }, 'db.sqlite_migration_codebase_identity_failed');
+      throw new Error(
+        'Failed to enforce unique codebase identity. Resolve duplicate (name, default_cwd) rows in remote_agent_codebases before restarting.'
+      );
     }
   }
 

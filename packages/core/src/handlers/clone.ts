@@ -110,7 +110,7 @@ async function registerRepoAtPath(
     return {
       codebaseId: existing.id,
       name: existing.name,
-      repositoryUrl: existing.repository_url,
+      repositoryUrl: existing.repository_url ?? repositoryUrl,
       defaultCwd: existing.default_cwd,
       commandCount: commandsLoaded,
       alreadyExisted: true,
