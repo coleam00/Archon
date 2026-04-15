@@ -23,7 +23,7 @@ Local development with SQLite is the recommended default. No database setup is n
 
 - [Bun](https://bun.sh) 1.0+
 - At least one AI assistant configured (Claude Code or Codex)
-- A GitHub token for repository cloning (`GH_TOKEN` / `GITHUB_TOKEN`)
+- A GitHub token for repository cloning (`GITHUB_TOKEN`; optional `GH_TOKEN` override)
 
 ### Setup
 

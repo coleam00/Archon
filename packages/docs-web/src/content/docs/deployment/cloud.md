@@ -265,9 +265,9 @@ Set these required variables:
 # Database - Use remote managed PostgreSQL
 DATABASE_URL=postgresql://user:password@host:5432/dbname
 
-# GitHub tokens (same value for both)
-GH_TOKEN=ghp_your_token_here
+# GitHub token
 GITHUB_TOKEN=ghp_your_token_here
+# GH_TOKEN=ghp_your_token_here  # Optional gh-specific override
 
 # Server settings
 PORT=3090
@@ -280,7 +280,7 @@ ARCHON_HOME=/tmp/archon  # Override base directory (optional)
 2. Click "Generate new token (classic)"
 3. Select scope: **`repo`**
 4. Copy token (starts with `ghp_...`)
-5. Set both `GH_TOKEN` and `GITHUB_TOKEN` in `.env`
+5. Set `GITHUB_TOKEN` in `.env` (and only set `GH_TOKEN` if you intentionally want `gh` to use env auth)
 
 **Database Options:**
 

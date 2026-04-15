@@ -91,14 +91,14 @@ psql $DATABASE_URL -c "\dt"
 
 **Verify GitHub token:**
 ```bash
-cat .env | grep GH_TOKEN
-# Should have both GH_TOKEN and GITHUB_TOKEN set
+cat .env | grep GITHUB_TOKEN
+# GH_TOKEN is optional
 ```
 
 **Test token validity:**
 ```bash
 # Test GitHub API access
-curl -H "Authorization: token $GH_TOKEN" https://api.github.com/user
+curl -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/user
 ```
 
 **Check workspace permissions:**

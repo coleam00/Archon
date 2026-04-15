@@ -242,8 +242,8 @@ When `CLAUDE_USE_GLOBAL_AUTH` is unset, Archon auto-detects: it uses explicit to
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `GITHUB_TOKEN` | GitHub personal access token (also used by `gh` CLI) | -- |
-| `GH_TOKEN` | Alias for `GITHUB_TOKEN` (used by GitHub CLI) | -- |
+| `GITHUB_TOKEN` | GitHub personal access token used by Archon and available to `gh` when env auth is needed | -- |
+| `GH_TOKEN` | Optional `gh`-specific override; set only when you intentionally want `gh` to prefer env auth over stored login | -- |
 | `WEBHOOK_SECRET` | HMAC SHA-256 secret for GitHub webhook signature verification | -- |
 | `GITHUB_ALLOWED_USERS` | Comma-separated GitHub usernames for whitelist (case-insensitive) | Open access |
 | `GITHUB_BOT_MENTION` | @mention name the bot responds to in issues/PRs | Falls back to `BOT_DISPLAY_NAME` |

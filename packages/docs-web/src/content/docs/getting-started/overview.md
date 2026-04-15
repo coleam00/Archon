@@ -117,12 +117,14 @@ Follow the browser flow to log in. This stores credentials globally — no API k
 cp .env.example .env
 ```
 
-Open `.env` in your editor and set these two values:
+Open `.env` in your editor and set this value:
 
 ```ini
-# Paste your GitHub token in both (they serve different parts of the system)
-GH_TOKEN=ghp_your_token_here
+# GitHub token for Archon and GitHub adapter access
 GITHUB_TOKEN=ghp_your_token_here
+
+# Optional: only set GH_TOKEN if you intentionally want gh to prefer env auth
+# GH_TOKEN=ghp_your_token_here
 
 # Use your existing Claude Code login
 CLAUDE_USE_GLOBAL_AUTH=true
@@ -134,7 +136,7 @@ That's it. Everything else has sensible defaults:
 - **Port:** 3090 for the API server, 5173 for the Web UI dev server
 - **AI assistant:** Claude (default)
 
-> **Why two GitHub token variables?** `GH_TOKEN` is used by the GitHub CLI (`gh`), and `GITHUB_TOKEN` is used by Archon's GitHub adapter. Set them to the same value.
+> **GitHub CLI note:** `gh` can use stored credentials from `gh auth login` or an env token. Keep `GITHUB_TOKEN` as the default Archon token, and only set `GH_TOKEN` if you intentionally want the CLI to prefer env auth.
 
 ---
 
@@ -529,7 +531,7 @@ Your GitHub token is missing or invalid. Verify:
 
 ```bash
 # Test your token
-curl -H "Authorization: token $(grep GH_TOKEN .env | cut -d= -f2)" https://api.github.com/user
+curl -H "Authorization: token $(grep GITHUB_TOKEN .env | cut -d= -f2)" https://api.github.com/user
 ```
 
 If it returns your GitHub profile, the token works. If not, regenerate it.
