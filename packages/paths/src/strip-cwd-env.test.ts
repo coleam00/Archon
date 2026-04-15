@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { writeFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { stripCwdEnv } from './strip-cwd-env';
@@ -71,6 +71,19 @@ describe('stripCwdEnv', () => {
     // Do NOT set process.env.TEST_STRIP_KEY — simulate key parsed but not auto-loaded
     stripCwdEnv(tmpDir);
     expect(process.env.TEST_STRIP_KEY).toBeUndefined(); // still undefined, no error
+  });
+
+  it('does not emit dotenv chatter while scanning cwd env files', () => {
+    writeFileSync(join(tmpDir, '.env'), 'TEST_STRIP_KEY=leaked\n');
+    const logSpy = spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      stripCwdEnv(tmpDir);
+    } finally {
+      logSpy.mockRestore();
+    }
+
+    expect(logSpy).not.toHaveBeenCalled();
   });
 
   it('strips distinct keys from different .env files', () => {

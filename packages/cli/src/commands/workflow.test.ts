@@ -24,6 +24,8 @@ const mockLogger = {
   trace: mock(() => undefined),
   child: mock(() => mockLogger),
 };
+const mockSetLogLevel = mock(() => undefined);
+const mockGetLogLevel = mock(() => 'info');
 
 const mockFsAccess = mock(() => Promise.resolve());
 
@@ -35,6 +37,8 @@ mock.module('fs/promises', () => ({
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonHome: mock(() => '/home/test/.archon'),
+  getLogLevel: mockGetLogLevel,
+  setLogLevel: mockSetLogLevel,
 }));
 
 // Mock @archon/isolation (getIsolationProvider moved here from @archon/core)
@@ -153,6 +157,8 @@ describe('workflowListCommand', () => {
 
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    mockSetLogLevel.mockClear();
+    mockGetLogLevel.mockClear();
   });
 
   afterEach(() => {
@@ -266,6 +272,20 @@ describe('workflowListCommand', () => {
     expect(output).not.toContain('Discovering workflows');
     // Output must be valid JSON
     expect(() => JSON.parse(output)).not.toThrow();
+  });
+
+  it('suppresses workflow discovery logs while rendering JSON output', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [],
+      errors: [],
+    });
+
+    await workflowListCommand('/test/path', true);
+
+    expect(mockGetLogLevel).toHaveBeenCalledTimes(1);
+    expect(mockSetLogLevel).toHaveBeenNthCalledWith(1, 'fatal');
+    expect(mockSetLogLevel).toHaveBeenNthCalledWith(2, 'info');
   });
 
   it('should include modelReasoningEffort and webSearchMode in JSON output when present', async () => {

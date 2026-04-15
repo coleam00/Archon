@@ -13,7 +13,7 @@ import {
 } from '@archon/core';
 import { WORKFLOW_EVENT_TYPES, type WorkflowEventType } from '@archon/workflows/store';
 import { configureIsolation, getIsolationProvider } from '@archon/isolation';
-import { createLogger, getArchonHome } from '@archon/paths';
+import { createLogger, getArchonHome, getLogLevel, setLogLevel } from '@archon/paths';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
@@ -198,7 +198,21 @@ interface WorkflowJsonEntry {
  * List available workflows in the current directory
  */
 export async function workflowListCommand(cwd: string, json?: boolean): Promise<void> {
-  const { workflows: workflowEntries, errors } = await loadWorkflows(cwd);
+  const previousLogLevel = getLogLevel();
+  if (json) {
+    // Keep stdout machine-readable for JSON consumers by suppressing info/warn
+    // logs from startup and workflow discovery during the listing call.
+    setLogLevel('fatal');
+  }
+  let workflowEntries: WorkflowLoadResult['workflows'];
+  let errors: WorkflowLoadResult['errors'];
+  try {
+    ({ workflows: workflowEntries, errors } = await loadWorkflows(cwd));
+  } finally {
+    if (json) {
+      setLogLevel(previousLogLevel);
+    }
+  }
 
   if (json) {
     const output = {

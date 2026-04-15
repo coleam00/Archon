@@ -21,7 +21,7 @@ import { existsSync } from 'fs';
 // affects shell-inherited values, which is the intended behavior.
 const globalEnvPath = resolve(process.env.HOME ?? '~', '.archon', '.env');
 if (existsSync(globalEnvPath)) {
-  const result = config({ path: globalEnvPath, override: true });
+  const result = config({ path: globalEnvPath, override: true, quiet: true });
   if (result.error) {
     // Logger may not be available yet (early startup), so use console for user-facing error
     console.error(`Error loading .env from ${globalEnvPath}: ${result.error.message}`);

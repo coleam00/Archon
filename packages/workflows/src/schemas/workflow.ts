@@ -10,6 +10,8 @@ import {
   sandboxSettingsSchema,
 } from './dag-node';
 import { modelReasoningEffortSchema, webSearchModeSchema } from './codex-options';
+export { modelReasoningEffortSchema, webSearchModeSchema } from './codex-options';
+export type { ModelReasoningEffort, WebSearchMode } from './codex-options';
 
 // ---------------------------------------------------------------------------
 // WorkflowBase — common fields shared by all workflow types
