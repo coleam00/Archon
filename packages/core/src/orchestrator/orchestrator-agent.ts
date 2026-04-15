@@ -809,7 +809,16 @@ export async function handleMessage(
       attachedFiles,
       workflowContext
     );
-    const cwd = getArchonWorkspacesPath();
+    // For codebase-scoped chat, use the worktree path (conversation.cwd) if set,
+    // otherwise the codebase's default working directory.
+    // Non-scoped chat falls back to the Archon workspaces root.
+    let cwd = getArchonWorkspacesPath();
+    if (conversation.codebase_id) {
+      const attachedCodebase = codebases.find(c => c.id === conversation.codebase_id);
+      if (attachedCodebase) {
+        cwd = conversation.cwd ?? attachedCodebase.default_cwd;
+      }
+    }
 
     // 4. Update activity and get/create session
     await db.touchConversation(conversation.id);

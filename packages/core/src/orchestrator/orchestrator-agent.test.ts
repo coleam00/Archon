@@ -1043,6 +1043,53 @@ describe('discoverAllWorkflows — remote sync', () => {
     const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
     expect(requestOptions.env).toEqual({ FILE_SECRET: 'file-value' });
   });
+
+  describe('provider cwd resolution', () => {
+    test('passes codebase.default_cwd to provider when conversation is codebase-scoped', async () => {
+      const codebase = makeCodebaseForSync();
+      const conversation = makeConversation({ codebase_id: 'codebase-1', cwd: null });
+      mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+      mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+      mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+
+      const platform = makePlatform();
+      await handleMessage(platform, 'conv-1', 'What files are in src/?');
+
+      expect(mockSendQuery).toHaveBeenCalled();
+      const calledCwd = mockSendQuery.mock.calls[0][1] as string;
+      expect(calledCwd).toBe('/repos/test-repo');
+    });
+
+    test('prefers conversation.cwd over codebase.default_cwd when set (worktree)', async () => {
+      const codebase = makeCodebaseForSync();
+      const conversation = makeConversation({
+        codebase_id: 'codebase-1',
+        cwd: '/home/test/.archon/workspaces/owner/repo/worktrees/feature-branch',
+      });
+      mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+      mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+      mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+
+      const platform = makePlatform();
+      await handleMessage(platform, 'conv-1', 'What files are in src/?');
+
+      expect(mockSendQuery).toHaveBeenCalled();
+      const calledCwd = mockSendQuery.mock.calls[0][1] as string;
+      expect(calledCwd).toBe('/home/test/.archon/workspaces/owner/repo/worktrees/feature-branch');
+    });
+
+    test('falls back to getArchonWorkspacesPath when conversation has no codebase', async () => {
+      const conversation = makeConversation({ codebase_id: null, cwd: null });
+      mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+
+      const platform = makePlatform();
+      await handleMessage(platform, 'conv-1', 'Hello');
+
+      expect(mockSendQuery).toHaveBeenCalled();
+      const calledCwd = mockSendQuery.mock.calls[0][1] as string;
+      expect(calledCwd).toBe('/home/test/.archon/workspaces');
+    });
+  });
 });
 
 // ─── Workflow dispatch routing — interactive flag ─────────────────────────────
