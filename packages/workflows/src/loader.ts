@@ -6,7 +6,7 @@ import { isLoopNode, isApprovalNode, isCancelNode, isScriptNode } from './schema
 import { createLogger } from '@archon/paths';
 import { isModelCompatible } from './model-validation';
 import { dagNodeSchema, BASH_NODE_AI_FIELDS, SCRIPT_NODE_AI_FIELDS } from './schemas/dag-node';
-import { modelReasoningEffortSchema, webSearchModeSchema } from './schemas/workflow';
+import { modelReasoningEffortSchema, webSearchModeSchema } from './schemas/codex-options';
 import { workflowNodeHooksSchema } from './schemas/hooks';
 import { z } from '@hono/zod-openapi';
 
