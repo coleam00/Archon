@@ -212,6 +212,26 @@ describe('TelegramAdapter', () => {
 
       expect(() => adapter.getConversationId(ctx)).toThrow('No chat in context');
     });
+
+    test('should return "chatId:threadId" for forum topic messages', () => {
+      const adapter = new TelegramAdapter('fake-token-for-testing');
+      const ctx = {
+        chat: { id: -1001234567890 },
+        message: { message_thread_id: 42 },
+      } as unknown as import('telegraf').Context;
+
+      expect(adapter.getConversationId(ctx)).toBe('-1001234567890:42');
+    });
+
+    test('should return plain chatId for messages without message_thread_id', () => {
+      const adapter = new TelegramAdapter('fake-token-for-testing');
+      const ctx = {
+        chat: { id: -1001234567890 },
+        message: {},
+      } as unknown as import('telegraf').Context;
+
+      expect(adapter.getConversationId(ctx)).toBe('-1001234567890');
+    });
   });
 
   describe('ensureThread', () => {

@@ -85,6 +85,11 @@ export interface OrchestratorCommands {
   projectRegistration: ProjectRegistration | null;
 }
 
+/** Internal extension of HandleMessageContext that carries recursion depth for auto-compact retry. */
+interface InternalHandleMessageContext extends HandleMessageContext {
+  readonly _retryDepth?: number;
+}
+
 // ─── Command Parsing ────────────────────────────────────────────────────────
 
 /**
@@ -885,8 +890,7 @@ export async function handleMessage(
     // Auto-compact on expired session: save summary from messages, reset, and retry
     const isSessionExpired =
       err.message.includes('No conversation found with session ID') ||
-      err.message.includes('not a valid UUID') ||
-      (err.message.includes('session') && err.message.includes('not found'));
+      err.message.includes('not a valid UUID');
     if (conversation && isSessionExpired) {
       getLog().info({ conversationId }, 'session.expired_auto_compacting');
       try {
@@ -905,16 +909,19 @@ export async function handleMessage(
         );
 
         // Retry once (guard against infinite recursion)
-        const retryDepth =
-          ((context as Record<string, unknown> | undefined)?._retryDepth as number | undefined) ??
-          0;
+        const retryDepth = (context as InternalHandleMessageContext | undefined)?._retryDepth ?? 0;
         if (retryDepth > 0) {
           getLog().error({ conversationId, retryDepth }, 'session.auto_compact_retry_limit');
+          await platform.sendMessage(
+            conversationId,
+            'Session expired and auto-recovery failed. Please use /reset to start a fresh session.'
+          );
+          return;
         } else {
           await handleMessage(platform, conversationId, message, {
             ...context,
             _retryDepth: retryDepth + 1,
-          } as HandleMessageContext);
+          } as InternalHandleMessageContext);
           return;
         }
       } catch (compactError) {
@@ -1452,12 +1459,13 @@ async function saveSessionLogToVault(
 
 /**
  * Compute the path to Claude Code's per-project memory directory.
- * CLI encodes the CWD by replacing '/' and spaces with '-' as the project folder name.
+ * CLI encodes the CWD by replacing '/' with '-' as the project folder name.
+ * Dots and spaces are preserved to match the Claude CLI exactly.
  * Example: /Users/anton/Claude workspace/ai-ofm
- *   → ~/.claude/projects/-Users-anton-Claude-workspace-ai-ofm/memory/
+ *   → ~/.claude/projects/-Users-anton-Claude workspace-ai-ofm/memory/
  */
 export function computeMemoryPath(cwd: string): string {
-  const encoded = cwd.replace(/[/. ]/g, '-');
+  const encoded = cwd.replace(/\//g, '-');
   const home = process.env.HOME ?? '';
   return join(home, '.claude', 'projects', encoded, 'memory');
 }
@@ -1516,42 +1524,47 @@ async function persistConversationMessages(
  * Returns the vault path on success, null if no messages or on failure.
  */
 async function saveSessionToObsidian(conversation: Conversation): Promise<string | null> {
-  const messages = await messageDb.listMessages(conversation.id, 50);
-  if (messages.length === 0) return null;
-
-  const codebase = conversation.codebase_id
-    ? await codebaseDb.getCodebase(conversation.codebase_id)
-    : null;
-  if (!codebase) return null;
-
-  const transcript = messages.map(m => `[${m.role}]: ${m.content.slice(0, 500)}`).join('\n\n');
-
-  const aiClient = getAgentProvider(conversation.ai_assistant_type);
-  const cwd = conversation.cwd ?? getArchonWorkspacesPath();
-  let summary = '';
-
   try {
-    for await (const chunk of aiClient.sendQuery(
-      `Summarize this conversation transcript concisely. Include: key decisions, current state of work, important context, and pending items. Output ONLY the summary, no preamble.\n\n---\n\n${transcript}`,
-      cwd,
-      undefined,
-      { nodeConfig: { allowed_tools: [] } }
-    )) {
-      if (chunk.type === 'assistant') summary += chunk.content;
+    const messages = await messageDb.listMessages(conversation.id, 50);
+    if (messages.length === 0) return null;
+
+    const codebase = conversation.codebase_id
+      ? await codebaseDb.getCodebase(conversation.codebase_id)
+      : null;
+    if (!codebase) return null;
+
+    const transcript = messages.map(m => `[${m.role}]: ${m.content.slice(0, 500)}`).join('\n\n');
+
+    const aiClient = getAgentProvider(conversation.ai_assistant_type);
+    const cwd = conversation.cwd ?? getArchonWorkspacesPath();
+    let summary = '';
+
+    try {
+      for await (const chunk of aiClient.sendQuery(
+        `Summarize this conversation transcript concisely. Include: key decisions, current state of work, important context, and pending items. Output ONLY the summary, no preamble.\n\n---\n\n${transcript}`,
+        cwd,
+        undefined,
+        { nodeConfig: { allowed_tools: [] } }
+      )) {
+        if (chunk.type === 'assistant') summary += chunk.content;
+      }
+    } catch (error) {
+      getLog().warn({ err: error as Error }, 'session.summary_generation_failed');
+      return null;
     }
+
+    if (!summary.trim()) return null;
+
+    return await saveSessionLogToVault(
+      getProjectSlug(codebase),
+      summary.trim(),
+      conversation.platform_type,
+      conversation.title
+    );
   } catch (error) {
-    getLog().warn({ err: error as Error }, 'session.summary_generation_failed');
+    getLog().warn({ err: error as Error }, 'session.obsidian_save_failed');
     return null;
   }
-
-  if (!summary.trim()) return null;
-
-  return saveSessionLogToVault(
-    getProjectSlug(codebase),
-    summary.trim(),
-    conversation.platform_type,
-    conversation.title
-  );
 }
 
 /**
@@ -1569,9 +1582,16 @@ async function handleResetWithSessionLog(
     return;
   }
 
-  // Save session log to Obsidian before resetting
-  const vaultPath = await saveSessionToObsidian(conversation);
+  // Deactivate session first so /reset never silently fails if vault save throws
   await sessionDb.deactivateSession(session.id, 'reset-requested');
+
+  // Save session log to Obsidian (best-effort — vault save must not block reset)
+  let vaultPath: string | null = null;
+  try {
+    vaultPath = await saveSessionToObsidian(conversation);
+  } catch (vaultError) {
+    getLog().warn({ err: toError(vaultError), conversationId }, 'session.obsidian_save_failed');
+  }
 
   const logNote = vaultPath ? `\nSession log saved to Obsidian: ${vaultPath}` : '';
   await platform.sendMessage(
@@ -1582,8 +1602,8 @@ async function handleResetWithSessionLog(
 
 /**
  * Handle /compact command.
- * Summarizes the current conversation via AI, saves the summary, and resets the session.
- * Next message will include the summary as context for continuity.
+ * Summarizes the current conversation via AI, saves the summary to the Obsidian vault, and resets
+ * the session. Context continuity on the next message comes from MEMORY.md, not from this summary.
  */
 async function handleCompact(
   platform: IPlatformAdapter,
@@ -1629,12 +1649,18 @@ async function handleCompact(
 
     const fallbackPrompt = `Summarize this conversation transcript. Include: key decisions, current state of work, important context, and pending items. Be concise but complete. Output ONLY the summary.\n\n---\n\n${transcript}`;
 
-    for await (const chunk of aiClient.sendQuery(fallbackPrompt, cwd, undefined, {
-      nodeConfig: { allowed_tools: [] },
-    })) {
-      if (chunk.type === 'assistant') {
-        summary += chunk.content;
+    try {
+      for await (const chunk of aiClient.sendQuery(fallbackPrompt, cwd, undefined, {
+        nodeConfig: { allowed_tools: [] },
+      })) {
+        if (chunk.type === 'assistant') {
+          summary += chunk.content;
+        }
       }
+    } catch {
+      getLog().warn({ conversationId }, 'session.compact_fallback_failed');
+      await platform.sendMessage(conversationId, 'Failed to generate summary. Session not reset.');
+      return;
     }
   }
 

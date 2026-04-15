@@ -861,14 +861,7 @@ const getUpdateCheckRoute = createRoute({
  * Register all /api/* routes on the Hono app.
  */
 /** Which platform adapters are currently active (instantiated and started). */
-export interface ActiveAdapters {
-  slack: boolean;
-  telegram: boolean;
-  discord: boolean;
-  github: boolean;
-  gitea: boolean;
-  gitlab: boolean;
-}
+export type ActiveAdapters = z.infer<typeof adaptersSchema>;
 
 export function registerApiRoutes(
   app: OpenAPIHono,

@@ -1493,4 +1493,52 @@ describe('orchestrator-agent handleMessage', () => {
       expect(mockGenerateAndSetTitle).not.toHaveBeenCalled();
     });
   });
+
+  // ─── /compact ─────────────────────────────────────────────────────────────
+
+  describe('/compact', () => {
+    test('sends "No active session to compact." when no active session exists', async () => {
+      mockGetActiveSession.mockResolvedValueOnce(null);
+
+      await handleMessage(platform, 'chat-456', '/compact');
+
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'chat-456',
+        'No active session to compact.'
+      );
+    });
+  });
+
+  // ─── /setproject ──────────────────────────────────────────────────────────
+
+  describe('/setproject', () => {
+    test('updates conversation when codebase is found', async () => {
+      mockListCodebases.mockResolvedValueOnce([mockCodebase]);
+      mockParseCommand.mockReturnValueOnce({ command: 'setproject', args: ['test-project'] });
+
+      await handleMessage(platform, 'chat-456', '/setproject test-project');
+
+      expect(mockUpdateConversation).toHaveBeenCalledWith(
+        mockConversation.id,
+        expect.objectContaining({ codebase_id: mockCodebase.id })
+      );
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'chat-456',
+        expect.stringContaining('test-project')
+      );
+    });
+
+    test('sends error containing "not found" when project name does not match', async () => {
+      mockListCodebases.mockResolvedValueOnce([mockCodebase]);
+      mockParseCommand.mockReturnValueOnce({ command: 'setproject', args: ['unknown-project'] });
+
+      await handleMessage(platform, 'chat-456', '/setproject unknown-project');
+
+      expect(mockUpdateConversation).not.toHaveBeenCalled();
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'chat-456',
+        expect.stringContaining('not found')
+      );
+    });
+  });
 });
