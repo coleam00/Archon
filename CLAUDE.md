@@ -77,6 +77,12 @@ These are implementation constraints, not slogans. Apply them by default.
 - Never silently broaden permissions or capabilities
 - Document fallback behavior with a comment when a fallback is intentional and safe; otherwise throw
 
+**No Autonomous Lifecycle Mutation Across Process Boundaries**
+- When a process cannot reliably distinguish "actively running elsewhere" from "orphaned by a crash" — typically because the work was started by a different process or input source (CLI, adapter, webhook, web UI, cron) — it must not autonomously mark that work as failed/cancelled/abandoned based on a timer or staleness guess.
+- Surface the ambiguous state to the user and provide a one-click action.
+- Heuristics for *recoverable* operations (retry backoff, subprocess timeouts, hygiene cleanup of terminal-status data) remain appropriate; the rule is about destructive mutation of *non-terminal* state owned by an unknowable other party.
+- Reference: #1216 and the CLI orphan-cleanup precedent at `packages/cli/src/cli.ts:256-258`.
+
 **Determinism + Reproducibility**
 - Prefer reproducible commands and locked dependency behavior in CI-sensitive paths
 - Keep tests deterministic — no flaky timing or network dependence without guardrails
@@ -265,7 +271,7 @@ packages/
 ├── providers/                # @archon/providers - AI agent providers (SDK deps live here)
 │   └── src/
 │       ├── types.ts          # Contract layer (IAgentProvider, SendQueryOptions, MessageChunk — ZERO SDK deps)
-│       ├── factory.ts        # getAgentProvider() switch (built-in: claude, codex)
+│       ├── registry.ts       # Typed provider registry (ProviderRegistration records)
 │       ├── errors.ts         # UnknownProviderError
 │       ├── claude/           # ClaudeProvider + parseClaudeConfig + MCP/hooks/skills translation
 │       ├── codex/            # CodexProvider + parseCodexConfig + binary-resolver
@@ -468,6 +474,11 @@ assistants:
     settingSources:  # Controls which CLAUDE.md files Claude SDK loads
       - project      # Default: only project-level CLAUDE.md
       - user         # Optional: also load ~/.claude/CLAUDE.md
+    claudeBinaryPath: /absolute/path/to/claude  # Optional: Claude Code executable.
+                                                # Native binary (curl installer at
+                                                # ~/.local/bin/claude) or npm cli.js.
+                                                # Required in compiled binaries if
+                                                # CLAUDE_BIN_PATH env var is not set.
   codex:
     model: gpt-5.3-codex
     modelReasoningEffort: medium  # 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
@@ -775,6 +786,9 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 
 **Command Listing:**
 - `GET /api/commands` - List available command names (bundled + project-defined); optional `?cwd=`; returns `{ commands: [{ name, source: 'bundled' | 'project' }] }`
+
+**Providers:**
+- `GET /api/providers` - List registered AI providers; returns `{ providers: [{ id, displayName, capabilities, builtIn }] }`
 
 **System:**
 - `GET /api/health` - Health check with adapter/system status

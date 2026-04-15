@@ -6,7 +6,7 @@
 
 import { createHash } from 'crypto';
 import { access, rm } from 'fs/promises';
-import { join } from 'path';
+import { join, resolve } from 'path';
 
 import { createLogger } from '@archon/paths';
 import {
@@ -20,6 +20,7 @@ import {
   mkdirAsync,
   removeWorktree,
   syncWorkspace,
+  verifyWorktreeOwnership,
   worktreeExists,
   toRepoPath,
   toWorktreePath,
@@ -180,6 +181,26 @@ export class WorktreeProvider implements IIsolationProvider {
       }
     }
 
+    // Prune stale worktree references — runs even when path is already gone,
+    // because git may still have a stale ref for a manually-deleted worktree
+    try {
+      await execFileAsync('git', ['-C', repoPath, 'worktree', 'prune'], { timeout: 15000 });
+    } catch (_error) {
+      // Best-effort — pruning failure is not critical
+      getLog().debug({ repoPath }, 'worktree_prune_failed');
+    }
+
+    // Post-removal verification: confirm worktree is actually gone from git
+    if (result.worktreeRemoved) {
+      const stillRegistered = await this.isWorktreeRegistered(repoPath, worktreePath);
+      if (stillRegistered) {
+        result.worktreeRemoved = false;
+        const warning = `Worktree at ${worktreePath} was reported removed but is still registered in git`;
+        getLog().warn({ worktreePath, repoPath }, 'worktree_removal_verification_failed');
+        result.warnings.push(warning);
+      }
+    }
+
     // Delete associated branch if provided (best-effort cleanup)
     if (options?.branchName) {
       result.branchDeleted = await this.deleteBranchTracked(repoPath, options.branchName, result);
@@ -209,6 +230,30 @@ export class WorktreeProvider implements IIsolationProvider {
       errorText.includes('does not exist') ||
       errorText.includes('is not a working tree')
     );
+  }
+
+  /**
+   * Check if a worktree path is still registered in `git worktree list`.
+   * Used for post-removal verification.
+   */
+  private async isWorktreeRegistered(repoPath: string, worktreePath: string): Promise<boolean> {
+    try {
+      const { stdout } = await execFileAsync(
+        'git',
+        ['-C', repoPath, 'worktree', 'list', '--porcelain'],
+        { timeout: 15000 }
+      );
+      // Porcelain output has "worktree <path>" lines with resolved absolute paths
+      const normalizedTarget = resolve(worktreePath);
+      return stdout.split('\n').some(line => {
+        if (!line.startsWith('worktree ')) return false;
+        const listed = line.slice('worktree '.length).trim();
+        return resolve(listed) === normalizedTarget;
+      });
+    } catch (_error) {
+      // If we can't verify, assume it's gone (don't block on verification failure)
+      return false;
+    }
   }
 
   /**
@@ -484,6 +529,28 @@ export class WorktreeProvider implements IIsolationProvider {
   ): Promise<WorktreeEnvironment | null> {
     // Check if worktree already exists at expected path
     if (await worktreeExists(toWorktreePath(worktreePath))) {
+      // Verify the existing worktree belongs to the same repo root before
+      // adopting. Two clones of the same remote resolve to the same worktree
+      // base dir, so a worktree created from clone A is visible from clone B.
+      // Throws on cross-checkout or unverifiable state — surfacing the problem
+      // is safer than falling through to createNewBranch (which would report
+      // a confusing "branch already exists" cascade) or silently adopting.
+      try {
+        await verifyWorktreeOwnership(toWorktreePath(worktreePath), request.canonicalRepoPath);
+      } catch (err) {
+        getLog().warn(
+          {
+            worktreePath,
+            branchName,
+            codebaseId: request.codebaseId,
+            canonicalRepoPath: request.canonicalRepoPath,
+            err: (err as Error).message,
+          },
+          'worktree.adoption_refused_cross_checkout'
+        );
+        throw err;
+      }
+
       getLog().info({ worktreePath, branchName }, 'worktree_adopted');
       return this.buildAdoptedEnvironment(worktreePath, branchName, request);
     }
@@ -495,6 +562,25 @@ export class WorktreeProvider implements IIsolationProvider {
         request.prBranch
       );
       if (existingByBranch) {
+        // Same cross-clone guard as the primary adoption path above — a
+        // worktree matching the PR branch might still belong to a different
+        // clone of the same remote.
+        try {
+          await verifyWorktreeOwnership(existingByBranch, request.canonicalRepoPath);
+        } catch (err) {
+          getLog().warn(
+            {
+              worktreePath: existingByBranch,
+              branchName: request.prBranch,
+              codebaseId: request.codebaseId,
+              canonicalRepoPath: request.canonicalRepoPath,
+              err: (err as Error).message,
+            },
+            'worktree.adoption_refused_cross_checkout'
+          );
+          throw err;
+        }
+
         getLog().info(
           { worktreePath: existingByBranch, branchName: request.prBranch },
           'worktree_adopted'
@@ -907,7 +993,7 @@ export class WorktreeProvider implements IIsolationProvider {
       );
     } catch (error) {
       const err = error as Error & { stderr?: string };
-      // Branch already exists - use existing branch
+      // Branch already exists - reset to intended start-point and use it
       if (err.stderr?.includes('already exists')) {
         const taskFromBranch = request.workflowType === 'task' ? request.fromBranch : undefined;
         if (taskFromBranch) {
@@ -918,6 +1004,17 @@ export class WorktreeProvider implements IIsolationProvider {
               'Either choose a different --branch name or omit --from.'
           );
         }
+
+        // Branch exists but no explicit start-point override — reset it to the
+        // intended start-point before checking out, so we don't inherit stale
+        // commits from a previous run or external tool.
+        getLog().warn(
+          { branchName, startPoint, repoPath },
+          'worktree.branch_exists_resetting_to_start_point'
+        );
+        await execFileAsync('git', ['-C', repoPath, 'branch', '-f', branchName, startPoint], {
+          timeout: 10000,
+        });
         await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, branchName], {
           timeout: 30000,
         });

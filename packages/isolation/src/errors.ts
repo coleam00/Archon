@@ -69,6 +69,24 @@ export function classifyIsolationError(err: Error): string {
         'or use the `--from` flag to select a branch (e.g., `--from dev`).',
     },
     {
+      pattern: 'belongs to a different clone',
+      message:
+        '**Error:** A worktree at the target path was created by a different local clone. ' +
+        'Remove it from that clone, or register this codebase from the same local path.',
+    },
+    {
+      pattern: 'cannot verify worktree ownership',
+      message:
+        '**Error:** Cannot verify ownership of an existing worktree at the target path. ' +
+        'Check file system permissions and remove any unrelated git directories at that path.',
+    },
+    {
+      pattern: 'cannot adopt',
+      message:
+        '**Error:** Refused to adopt an existing directory at the worktree path. ' +
+        'Remove it or choose a different branch/codebase registration.',
+    },
+    {
       pattern: 'submodule initialization failed',
       message:
         '**Error:** Submodule initialization failed. Check credentials and network access to ' +
@@ -106,6 +124,9 @@ export function isKnownIsolationError(err: Error): boolean {
     'not a git repository',
     'branch not found',
     'no base branch configured',
+    'belongs to a different clone',
+    'cannot verify worktree ownership',
+    'cannot adopt',
     'submodule initialization failed',
   ];
 

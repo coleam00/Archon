@@ -16,8 +16,38 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => ({
   query: mockQuery,
 }));
 
-import { ClaudeProvider } from './provider';
+import { ClaudeProvider, shouldPassNoEnvFile } from './provider';
 import * as claudeModule from './provider';
+
+describe('shouldPassNoEnvFile', () => {
+  test('returns true when cliPath is undefined (dev mode — SDK spawns cli.js via Bun)', () => {
+    expect(shouldPassNoEnvFile(undefined)).toBe(true);
+  });
+
+  test('returns true for an explicit cli.js path (npm-installed, SDK spawns via Bun/Node)', () => {
+    expect(
+      shouldPassNoEnvFile('/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js')
+    ).toBe(true);
+  });
+
+  test('returns false for a native binary path (curl installer, SDK execs directly)', () => {
+    expect(shouldPassNoEnvFile('/Users/test/.local/bin/claude')).toBe(false);
+  });
+
+  test('returns false for a Windows native binary path', () => {
+    expect(shouldPassNoEnvFile('C:\\Users\\test\\.local\\bin\\claude.exe')).toBe(false);
+  });
+
+  test('returns false for a Homebrew symlink path', () => {
+    expect(shouldPassNoEnvFile('/opt/homebrew/bin/claude')).toBe(false);
+  });
+
+  test('extension match is suffix-only (paths ending in cli.js but not literally `.js` extension are still rejected)', () => {
+    // Defensive: only string-suffix matches `.js` count as JS executables.
+    expect(shouldPassNoEnvFile('/path/to/cli.json')).toBe(false);
+    expect(shouldPassNoEnvFile('/path/to/cli.js.bak')).toBe(false);
+  });
+});
 
 describe('ClaudeProvider', () => {
   let client: ClaudeProvider;

@@ -51,7 +51,7 @@ Create `~/.archon/config.yaml` for user-wide preferences:
 
 ```yaml
 # Default AI assistant
-defaultAssistant: claude # or 'codex'
+defaultAssistant: claude # must match a registered provider (e.g. claude, codex)
 
 # Assistant defaults
 assistants:
@@ -60,12 +60,18 @@ assistants:
     settingSources:   # Which CLAUDE.md files the SDK loads (default: ['project'])
       - project       # Project-level CLAUDE.md (always recommended)
       - user          # Also load ~/.claude/CLAUDE.md (global preferences)
+    # Optional: absolute path to the Claude Code executable.
+    # Required in compiled Archon binaries when CLAUDE_BIN_PATH is not set.
+    # Accepts the native binary (~/.local/bin/claude from the curl installer)
+    # or the npm-installed cli.js. Source/dev mode auto-resolves.
+    # claudeBinaryPath: /absolute/path/to/claude
   codex:
     model: gpt-5.3-codex
     modelReasoningEffort: medium
     webSearchMode: disabled
     additionalDirectories:
       - /absolute/path/to/other/repo
+    # codexBinaryPath: /absolute/path/to/codex  # Optional: Codex CLI path
 
 # Streaming preferences per platform
 streaming:
@@ -177,7 +183,7 @@ Environment variables override all other configuration. They are organized by ca
 | `PORT` | HTTP server listen port | `3090` (auto-allocated in worktrees) |
 | `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`) | `info` |
 | `BOT_DISPLAY_NAME` | Bot name shown in batch-mode "starting" messages | `Archon` |
-| `DEFAULT_AI_ASSISTANT` | Default AI assistant (`claude` or `codex`) | `claude` |
+| `DEFAULT_AI_ASSISTANT` | Default AI assistant (must match a registered provider) | `claude` |
 | `MAX_CONCURRENT_CONVERSATIONS` | Maximum concurrent AI conversations | `10` |
 | `SESSION_RETENTION_DAYS` | Delete inactive sessions older than N days | `30` |
 | `ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING` | When set to `1`, suppresses the stderr warning emitted when `archon` is run inside a Claude Code session | -- |

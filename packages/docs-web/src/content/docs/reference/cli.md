@@ -171,7 +171,7 @@ archon workflow resume <run-id>
 
 ### `workflow abandon`
 
-Discard a workflow run (marks it as failed). Use this to unblock a worktree when you don't want to resume.
+Discard a workflow run (marks it as `cancelled`). Use this to unblock a worktree when you don't want to resume — the path lock is released immediately so a new workflow can start.
 
 ```bash
 archon workflow abandon <run-id>

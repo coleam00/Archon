@@ -142,7 +142,7 @@ The database has 8 tables, all prefixed with `remote_agent_`:
 
 5. **`remote_agent_workflow_runs`** - Workflow execution tracking
    - Tracks active workflows per conversation
-   - Prevents concurrent workflow execution
+   - Locks concurrent execution per `working_path`: a second dispatch on a path with an active run (status `pending`/`running`/`paused`) is auto-cancelled with an actionable message. Stale `pending` rows older than 5 minutes are treated as orphaned and ignored.
    - Stores workflow state, step progress, and parent conversation linkage
 
 6. **`remote_agent_workflow_events`** - Step-level workflow event log

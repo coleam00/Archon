@@ -112,13 +112,26 @@ gh repo view --json nameWithOwner -q .nameWithOwner
 
 ### 2.3 Branch Decision
 
-| Current State | Action |
-|---------------|--------|
-| Already on correct feature branch | Use it, log "Using existing branch: {name}" |
-| On base branch, clean working directory | Create and checkout: `git checkout -b {branch-name}` |
-| On base branch, dirty working directory | STOP with error: "Uncommitted changes on base branch. Stash or commit first." |
-| On different feature branch | STOP with error: "On branch {X}, expected {Y}. Switch branches or adjust plan." |
-| In a worktree | Use the worktree's branch, log "Using worktree branch: {name}" |
+Evaluate in order (first matching case wins):
+
+```text
+┌─ IN WORKTREE?
+│  └─ YES → Use current branch AS-IS. Do NOT switch branches. Do NOT create
+│           new branches. The isolation system has already set up the correct
+│           branch; any deviation operates on the wrong code.
+│           Log: "Using worktree branch: {name}"
+│
+├─ ON $BASE_BRANCH? (main, master, or configured base branch)
+│  └─ Q: Working directory clean?
+│     ├─ YES → Create and checkout: `git checkout -b {branch-name}`
+│     │        (only applies outside a worktree — e.g., manual CLI usage)
+│     └─ NO  → STOP: "Uncommitted changes on $BASE_BRANCH. Stash or commit first."
+│
+└─ ON OTHER BRANCH?
+   └─ Q: Does it match the expected branch for this plan?
+      ├─ YES → Use it, log "Using existing branch: {name}"
+      └─ NO  → STOP: "On branch {X}, expected {Y}. Switch branches or adjust plan."
+```
 
 ### 2.4 Sync with Remote
 

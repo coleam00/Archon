@@ -11,6 +11,12 @@
  * - CLAUDE_USE_GLOBAL_AUTH=true: Use global auth from `claude /login`, filter env tokens
  * - CLAUDE_USE_GLOBAL_AUTH=false: Use explicit tokens from env vars
  * - Not set: Auto-detect - use tokens if present in env, otherwise global auth
+ *
+ * Binary resolution:
+ * - In compiled binaries, `pathToClaudeCodeExecutable` is resolved from
+ *   `CLAUDE_BIN_PATH` env or `assistants.claude.claudeBinaryPath` config;
+ *   see ./binary-resolver.ts. In dev mode the SDK resolves cli.js itself
+ *   from node_modules.
  */
 import {
   query,
@@ -18,7 +24,6 @@ import {
   type HookCallback,
   type HookCallbackMatcher,
 } from '@anthropic-ai/claude-agent-sdk';
-import cliPath from '@anthropic-ai/claude-agent-sdk/embed';
 import type {
   IAgentProvider,
   SendQueryOptions,
@@ -28,6 +33,8 @@ import type {
   NodeConfig,
 } from '../types';
 import { parseClaudeConfig } from './config';
+import { CLAUDE_CAPABILITIES } from './capabilities';
+import { resolveClaudeBinaryPath } from './binary-resolver';
 import { createLogger } from '@archon/paths';
 import { readFile } from 'fs/promises';
 import { resolve, isAbsolute } from 'path';
@@ -499,6 +506,33 @@ interface ToolResultEntry {
 }
 
 /**
+ * Decide whether the Claude subprocess should be spawned with `--no-env-file`.
+ *
+ * `--no-env-file` is a Bun flag that prevents auto-loading `.env` from the
+ * target repo cwd into the spawned process. It only applies when the SDK
+ * spawns the executable via Bun/Node — i.e. when the executable is a `.js`
+ * file (dev mode resolves cli.js, npm-installed resolves cli.js). For a
+ * native Claude Code binary (curl/PowerShell installer at
+ * `~/.local/bin/claude`), the SDK execs the binary directly and the flag
+ * gets passed to the native binary, which rejects unknown options and
+ * exits code 1.
+ *
+ * Returning `false` for native binaries is verified safe — the native
+ * binary does not auto-load `.env` from CWD (probed end-to-end with
+ * sentinel `.env` and `.env.local` in the workflow CWD; both arrived
+ * UNSET in the spawned bash tool). The first-layer protection —
+ * `stripCwdEnv()` in `@archon/paths` (#1067) — removes CWD env keys from
+ * the parent process before spawn, so the subprocess inherits a clean
+ * env regardless of executable type.
+ *
+ * Exported so the decision can be unit-tested without needing to mock
+ * `BUNDLED_IS_BINARY` or run the full provider sendQuery pathway.
+ */
+export function shouldPassNoEnvFile(cliPath: string | undefined): boolean {
+  return cliPath === undefined || cliPath.endsWith('.js');
+}
+
+/**
  * Build base Claude SDK options from cwd, request options, and assistant defaults.
  * Does not include nodeConfig translation — that is handled by applyNodeConfig.
  */
@@ -509,14 +543,21 @@ function buildBaseClaudeOptions(
   controller: AbortController,
   stderrLines: string[],
   toolResultQueue: ToolResultEntry[],
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  cliPath: string | undefined
 ): Options {
+  const isJsExecutable = shouldPassNoEnvFile(cliPath);
+  getLog().debug(
+    { cliPath: cliPath ?? null, isJsExecutable, passesNoEnvFile: isJsExecutable },
+    'claude.subprocess_env_file_flag'
+  );
+
   return {
     cwd,
-    pathToClaudeCodeExecutable: cliPath,
-    // Prevent Bun from auto-loading .env from the target repo cwd.
-    // Without this, the Claude Code subprocess inherits repo secrets.
-    executableArgs: ['--no-env-file'],
+    // In compiled binaries, the resolver supplies an absolute executable path;
+    // in dev mode it returns undefined and the SDK resolves from node_modules.
+    ...(cliPath !== undefined ? { pathToClaudeCodeExecutable: cliPath } : {}),
+    ...(isJsExecutable ? { executableArgs: ['--no-env-file'] } : {}),
     env,
     model: requestOptions?.model ?? assistantDefaults.model,
     abortController: controller,
@@ -819,20 +860,7 @@ export class ClaudeProvider implements IAgentProvider {
   }
 
   getCapabilities(): ProviderCapabilities {
-    return {
-      sessionResume: true,
-      mcp: true,
-      hooks: true,
-      skills: true,
-      toolRestrictions: true,
-      structuredOutput: true,
-      envInjection: true,
-      costControl: true,
-      effortControl: true,
-      thinkingControl: true,
-      fallbackModel: true,
-      sandbox: true,
-    };
+    return CLAUDE_CAPABILITIES;
   }
 
   /**
@@ -851,6 +879,11 @@ export class ClaudeProvider implements IAgentProvider {
   ): AsyncGenerator<MessageChunk> {
     let lastError: Error | undefined;
     const assistantDefaults = parseClaudeConfig(requestOptions?.assistantConfig ?? {});
+
+    // Resolve Claude CLI path once before the retry loop. In binary mode this
+    // throws immediately if neither env nor config supplies a valid path, so
+    // the user gets a clean error rather than N retries of "Module not found".
+    const resolvedCliPath = await resolveClaudeBinaryPath(assistantDefaults.claudeBinaryPath);
 
     // Build subprocess env once (avoids re-logging auth mode per retry)
     const subprocessEnv = buildSubprocessEnv();
@@ -891,7 +924,7 @@ export class ClaudeProvider implements IAgentProvider {
       const controller = new AbortController();
       currentController = controller;
 
-      // 1. Build SDK options (env pre-computed above)
+      // 1. Build SDK options (env and cliPath pre-computed above)
       const options = buildBaseClaudeOptions(
         cwd,
         requestOptions,
@@ -899,7 +932,8 @@ export class ClaudeProvider implements IAgentProvider {
         controller,
         stderrLines,
         toolResultQueue,
-        env
+        env,
+        resolvedCliPath
       );
 
       // 2. Apply nodeConfig translation (re-applied per attempt since options are fresh)

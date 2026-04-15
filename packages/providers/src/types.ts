@@ -7,14 +7,20 @@
 // Single source of truth for provider-specific config shapes.
 
 export interface ClaudeProviderDefaults {
+  [key: string]: unknown;
   model?: string;
   /** Claude Code settingSources — controls which CLAUDE.md files are loaded.
    *  @default ['project']
    */
   settingSources?: ('project' | 'user')[];
+  /** Absolute path to the Claude Code SDK's `cli.js`. Required in compiled
+   *  Archon builds when `CLAUDE_BIN_PATH` is not set; optional in dev mode
+   *  (SDK resolves from node_modules). */
+  claudeBinaryPath?: string;
 }
 
 export interface CodexProviderDefaults {
+  [key: string]: unknown;
   model?: string;
   /** Structurally matches @archon/workflows ModelReasoningEffort */
   modelReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
@@ -24,6 +30,12 @@ export interface CodexProviderDefaults {
   /** Path to the Codex CLI binary. Overrides auto-detection in compiled Archon builds. */
   codexBinaryPath?: string;
 }
+
+/** Generic per-provider defaults bag used by config surfaces and UI. */
+export type ProviderDefaults = Record<string, unknown>;
+
+/** Provider-keyed defaults map. Built-ins may refine individual entries. */
+export type ProviderDefaultsMap = Record<string, ProviderDefaults>;
 
 /**
  * Token usage statistics from AI provider responses.
@@ -144,6 +156,46 @@ export interface ProviderCapabilities {
   thinkingControl: boolean;
   fallbackModel: boolean;
   sandbox: boolean;
+}
+
+/**
+ * Registration entry for a provider in the provider registry.
+ * Each entry carries metadata, a factory, and model-compatibility logic.
+ * The registry is the source of truth for provider identity, capabilities, and display.
+ */
+export interface ProviderRegistration {
+  /** Unique provider identifier — used in YAML, config, DB */
+  id: string;
+
+  /** Human-readable name for UI display */
+  displayName: string;
+
+  /** Instantiate a provider */
+  factory: () => IAgentProvider;
+
+  /** Static capability declaration — used for dag-executor warnings */
+  capabilities: ProviderCapabilities;
+
+  /**
+   * Model compatibility check. Returns true if the model string
+   * is valid for this provider. Used by workflow validation and
+   * provider inference from model names.
+   */
+  isModelCompatible: (model: string) => boolean;
+
+  /** Whether this is a built-in (maintained by core team) or community provider */
+  builtIn: boolean;
+}
+
+/**
+ * API-safe projection of ProviderRegistration (excludes non-serializable fields).
+ * Used by GET /api/providers and consumed by the Web UI.
+ */
+export interface ProviderInfo {
+  id: string;
+  displayName: string;
+  capabilities: ProviderCapabilities;
+  builtIn: boolean;
 }
 
 /**

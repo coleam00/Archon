@@ -28,8 +28,66 @@ export async function writeConfigFile(
 ): Promise<void> {
   await writeFile(path, content, { encoding: 'utf-8', ...options });
 }
-import type { GlobalConfig, RepoConfig, MergedConfig, SafeConfig } from './config-types';
+import type {
+  GlobalConfig,
+  RepoConfig,
+  MergedConfig,
+  SafeConfig,
+  AssistantDefaults,
+  AssistantDefaultsConfig,
+} from './config-types';
 import { createLogger } from '@archon/paths';
+import {
+  isRegisteredProvider,
+  getRegisteredProviders,
+  registerBuiltinProviders,
+} from '@archon/providers';
+
+function getRegisteredProviderNames(): string[] {
+  registerBuiltinProviders();
+  return getRegisteredProviders().map(p => p.id);
+}
+
+function mergeAssistantDefaults(
+  base: AssistantDefaults,
+  overrides?: AssistantDefaultsConfig
+): AssistantDefaults {
+  const merged: AssistantDefaults = {
+    ...base,
+    claude: { ...(base.claude ?? {}) },
+    codex: { ...(base.codex ?? {}) },
+  };
+
+  if (!overrides) return merged;
+
+  for (const [providerId, providerDefaults] of Object.entries(overrides)) {
+    if (!providerDefaults || typeof providerDefaults !== 'object') continue;
+    merged[providerId] = {
+      ...(merged[providerId] ?? {}),
+      ...providerDefaults,
+    };
+  }
+
+  return merged;
+}
+
+function toSafeAssistantDefaults(assistants: AssistantDefaults): SafeConfig['assistants'] {
+  const safeAssistants: SafeConfig['assistants'] = {};
+
+  for (const [providerId, providerDefaults] of Object.entries(assistants)) {
+    if (!providerDefaults || typeof providerDefaults !== 'object') continue;
+    const safeDefaults: Record<string, unknown> = { ...providerDefaults };
+
+    // Server-internal or local-path settings should never be exposed to the web UI.
+    delete safeDefaults.additionalDirectories;
+    delete safeDefaults.settingSources;
+    delete safeDefaults.codexBinaryPath;
+
+    safeAssistants[providerId] = safeDefaults;
+  }
+
+  return safeAssistants;
+}
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -57,7 +115,7 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 # Bot display name (shown in messages)
 # botName: Archon
 
-# Default AI assistant (claude or codex)
+# Default AI assistant (must match a registered provider, e.g. claude, codex)
 # defaultAssistant: claude
 
 # Assistant defaults
@@ -170,13 +228,22 @@ export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
  * Get default configuration
  */
 function getDefaults(): MergedConfig {
+  // Initialize assistant defaults from registered providers rather than hardcoding.
+  // Built-in providers always exist (registerBuiltinProviders called before loadConfig).
+  const registeredAssistants: AssistantDefaults = {
+    claude: {},
+    codex: {},
+  };
+  for (const provider of getRegisteredProviders()) {
+    if (!(provider.id in registeredAssistants)) {
+      registeredAssistants[provider.id] = {};
+    }
+  }
+
   return {
     botName: 'Archon',
-    assistant: 'claude',
-    assistants: {
-      claude: {},
-      codex: {},
-    },
+    assistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
+    assistants: registeredAssistants,
     streaming: {
       telegram: 'stream',
       discord: 'batch',
@@ -211,10 +278,17 @@ function applyEnvOverrides(config: MergedConfig): MergedConfig {
     config.botName = envBotName;
   }
 
-  // Assistant override
+  // Assistant override — validate against registry, error on unknown provider
   const envAssistant = process.env.DEFAULT_AI_ASSISTANT;
-  if (envAssistant === 'claude' || envAssistant === 'codex') {
-    config.assistant = envAssistant;
+  if (envAssistant && envAssistant.length > 0) {
+    if (isRegisteredProvider(envAssistant)) {
+      config.assistant = envAssistant;
+    } else {
+      throw new Error(
+        `DEFAULT_AI_ASSISTANT='${envAssistant}' is not a registered provider. ` +
+          `Available providers: ${getRegisteredProviderNames().join(', ')}`
+      );
+    }
   }
 
   // Streaming overrides
@@ -255,10 +329,7 @@ function applyEnvOverrides(config: MergedConfig): MergedConfig {
 function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): MergedConfig {
   const result: MergedConfig = {
     ...defaults,
-    assistants: {
-      claude: { ...defaults.assistants.claude },
-      codex: { ...defaults.assistants.codex },
-    },
+    assistants: mergeAssistantDefaults(defaults.assistants),
   };
 
   // Bot name preference
@@ -266,23 +337,19 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
     result.botName = global.botName;
   }
 
-  // Assistant preference
+  // Assistant preference — validate against registry
   if (global.defaultAssistant) {
-    result.assistant = global.defaultAssistant;
+    if (isRegisteredProvider(global.defaultAssistant)) {
+      result.assistant = global.defaultAssistant;
+    } else {
+      throw new Error(
+        `defaultAssistant: '${global.defaultAssistant}' in global config (~/.archon/config.yaml) ` +
+          `is not a registered provider. Available: ${getRegisteredProviderNames().join(', ')}`
+      );
+    }
   }
 
-  if (global.assistants?.claude?.model) {
-    result.assistants.claude.model = global.assistants.claude.model;
-  }
-  if (global.assistants?.claude?.settingSources) {
-    result.assistants.claude.settingSources = global.assistants.claude.settingSources;
-  }
-  if (global.assistants?.codex) {
-    result.assistants.codex = {
-      ...result.assistants.codex,
-      ...global.assistants.codex,
-    };
-  }
+  result.assistants = mergeAssistantDefaults(result.assistants, global.assistants);
 
   // Streaming preferences
   if (global.streaming) {
@@ -311,29 +378,22 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
 function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
   const result: MergedConfig = {
     ...merged,
-    assistants: {
-      claude: { ...merged.assistants.claude },
-      codex: { ...merged.assistants.codex },
-    },
+    assistants: mergeAssistantDefaults(merged.assistants),
   };
 
-  // Assistant override (repo-level takes precedence)
+  // Assistant override (repo-level takes precedence) — validate against registry
   if (repo.assistant) {
-    result.assistant = repo.assistant;
+    if (isRegisteredProvider(repo.assistant)) {
+      result.assistant = repo.assistant;
+    } else {
+      throw new Error(
+        `assistant: '${repo.assistant}' in repo config (.archon/config.yaml) ` +
+          `is not a registered provider. Available: ${getRegisteredProviderNames().join(', ')}`
+      );
+    }
   }
 
-  if (repo.assistants?.claude?.model) {
-    result.assistants.claude.model = repo.assistants.claude.model;
-  }
-  if (repo.assistants?.claude?.settingSources) {
-    result.assistants.claude.settingSources = repo.assistants.claude.settingSources;
-  }
-  if (repo.assistants?.codex) {
-    result.assistants.codex = {
-      ...result.assistants.codex,
-      ...repo.assistants.codex,
-    };
-  }
+  result.assistants = mergeAssistantDefaults(result.assistants, repo.assistants);
 
   // Commands config
   if (repo.commands) {
@@ -385,6 +445,8 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
  * @returns Merged configuration with all overrides applied
  */
 export async function loadConfig(repoPath?: string): Promise<MergedConfig> {
+  registerBuiltinProviders();
+
   // 1. Start with defaults
   let config = getDefaults();
 
@@ -443,10 +505,10 @@ export async function updateGlobalConfig(updates: Partial<GlobalConfig>): Promis
     if (updates.defaultAssistant !== undefined) merged.defaultAssistant = updates.defaultAssistant;
 
     if (updates.assistants) {
-      merged.assistants = {
-        claude: { ...current.assistants?.claude, ...updates.assistants.claude },
-        codex: { ...current.assistants?.codex, ...updates.assistants.codex },
-      };
+      merged.assistants = mergeAssistantDefaults(
+        mergeAssistantDefaults(getDefaults().assistants, current.assistants),
+        updates.assistants
+      );
     }
 
     if (updates.streaming) {
@@ -487,16 +549,7 @@ export function toSafeConfig(config: MergedConfig): SafeConfig {
   return {
     botName: config.botName,
     assistant: config.assistant,
-    assistants: {
-      claude: {
-        model: config.assistants.claude.model,
-      },
-      codex: {
-        model: config.assistants.codex.model,
-        modelReasoningEffort: config.assistants.codex.modelReasoningEffort,
-        webSearchMode: config.assistants.codex.webSearchMode,
-      },
-    },
+    assistants: toSafeAssistantDefaults(config.assistants),
     streaming: {
       telegram: config.streaming.telegram,
       discord: config.streaming.discord,

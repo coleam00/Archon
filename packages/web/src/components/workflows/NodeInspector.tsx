@@ -5,6 +5,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import type { DagNodeData } from './DagNodeComponent';
 import type { CommandEntry, DagNode } from '@/lib/api';
+import { useProviders } from '@/hooks/useProviders';
 
 // Keep in sync with triggerRuleSchema.options in @archon/workflows/schemas/dag-node.ts
 // (api.generated.d.ts is type-only and cannot export runtime values)
@@ -56,6 +57,36 @@ function Field({
       <label className={labelClass}>{label}</label>
       {children}
     </div>
+  );
+}
+
+function ProviderField({
+  node,
+  onUpdate,
+  selectClass: cls,
+}: {
+  node: DagNodeData;
+  onUpdate: (updates: Partial<DagNodeData>) => void;
+  selectClass: string;
+}): React.ReactElement {
+  const { providers } = useProviders();
+  return (
+    <Field label="Provider">
+      <select
+        value={node.provider ?? ''}
+        onChange={(e): void => {
+          onUpdate({ provider: e.target.value || undefined });
+        }}
+        className={cls}
+      >
+        <option value="">Inherit</option>
+        {providers.map(p => (
+          <option key={p.id} value={p.id}>
+            {p.displayName}
+          </option>
+        ))}
+      </select>
+    </Field>
   );
 }
 
@@ -316,21 +347,7 @@ function ExecutionTab({
     <div className="flex flex-col gap-3 p-3">
       {!isBash && (
         <>
-          <Field label="Provider">
-            <select
-              value={node.provider ?? ''}
-              onChange={(e): void => {
-                onUpdate({
-                  provider: (e.target.value || undefined) as 'claude' | 'codex' | undefined,
-                });
-              }}
-              className={selectClass}
-            >
-              <option value="">Inherit</option>
-              <option value="claude">Claude</option>
-              <option value="codex">Codex</option>
-            </select>
-          </Field>
+          <ProviderField node={node} onUpdate={onUpdate} selectClass={selectClass} />
 
           <Field label="Model">
             <input

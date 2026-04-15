@@ -20,6 +20,7 @@ import type {
   ProviderCapabilities,
   TokenUsage,
 } from '@archon/providers/types';
+import { getProviderCapabilities } from '@archon/providers';
 import type {
   DagNode,
   ApprovalNode,
@@ -47,7 +48,7 @@ import { formatToolCall } from './utils/tool-formatter';
 import { createLogger } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { evaluateCondition } from './condition-evaluator';
-import { isClaudeModel, isModelCompatible } from './model-validation';
+import { inferProviderFromModel, isModelCompatible } from './model-validation';
 import {
   logNodeStart,
   logNodeComplete,
@@ -243,35 +244,27 @@ export function substituteNodeOutputRefs(
  */
 async function resolveNodeProviderAndModel(
   node: DagNode,
-  workflowProvider: 'claude' | 'codex',
+  workflowProvider: string,
   workflowModel: string | undefined,
   config: WorkflowConfig,
   platform: IWorkflowPlatform,
   conversationId: string,
   workflowRunId: string,
   _cwd: string,
-  workflowLevelOptions: WorkflowLevelOptions,
-  deps: WorkflowDeps
+  workflowLevelOptions: WorkflowLevelOptions
 ): Promise<{
-  provider: 'claude' | 'codex';
+  provider: string;
   model: string | undefined;
   options: SendQueryOptions | undefined;
 }> {
-  let provider: 'claude' | 'codex';
+  const provider: string = node.provider ?? inferProviderFromModel(node.model, workflowProvider);
 
-  if (node.provider) {
-    provider = node.provider;
-  } else if (node.model && isClaudeModel(node.model)) {
-    provider = 'claude';
-  } else if (node.model) {
-    provider = 'codex';
-  } else {
-    provider = workflowProvider;
-  }
-
-  const model =
+  const providerAssistantConfig = config.assistants[provider];
+  const model: string | undefined =
     node.model ??
-    (provider === workflowProvider ? workflowModel : config.assistants[provider]?.model);
+    (provider === workflowProvider
+      ? workflowModel
+      : (providerAssistantConfig?.model as string | undefined));
 
   if (!isModelCompatible(provider, model)) {
     throw new Error(
@@ -279,9 +272,8 @@ async function resolveNodeProviderAndModel(
     );
   }
 
-  // Get provider capabilities for capability warnings
-  const aiClient = deps.getAgentProvider(provider);
-  const caps = aiClient.getCapabilities();
+  // Get provider capabilities for capability warnings (static lookup, no instantiation)
+  const caps = getProviderCapabilities(provider);
 
   // Capability warnings — inform users when features are unsupported
   const capChecks: [string, keyof ProviderCapabilities, boolean][] = [
@@ -362,7 +354,7 @@ async function resolveNodeProviderAndModel(
   const options: SendQueryOptions = {
     ...baseOptions,
     nodeConfig,
-    assistantConfig: assistantConfig as Record<string, unknown>,
+    assistantConfig,
   };
 
   return { provider, model, options };
@@ -464,7 +456,7 @@ async function executeNodeInternal(
   cwd: string,
   workflowRun: WorkflowRun,
   node: CommandNode | PromptNode,
-  provider: 'claude' | 'codex',
+  provider: string,
   nodeOptions: SendQueryOptions | undefined,
   artifactsDir: string,
   logDir: string,
@@ -1416,7 +1408,7 @@ async function executeScriptNode(
  * Uses the same nodeConfig + assistantConfig pattern as resolveNodeProviderAndModel.
  */
 function buildLoopNodeOptions(
-  provider: 'claude' | 'codex',
+  provider: string,
   model: string | undefined,
   config: WorkflowConfig,
   workflowLevelOptions?: WorkflowLevelOptions
@@ -1426,7 +1418,7 @@ function buildLoopNodeOptions(
   if (config.envVars && Object.keys(config.envVars).length > 0) {
     options.env = config.envVars;
   }
-  options.assistantConfig = (config.assistants[provider] ?? {}) as Record<string, unknown>;
+  options.assistantConfig = config.assistants[provider] ?? {};
   // Pass workflow-level options as nodeConfig so providers can apply them
   if (workflowLevelOptions) {
     options.nodeConfig = {
@@ -1455,7 +1447,7 @@ async function executeLoopNode(
   cwd: string,
   workflowRun: WorkflowRun,
   node: LoopNode,
-  workflowProvider: 'claude' | 'codex',
+  workflowProvider: string,
   workflowModel: string | undefined,
   artifactsDir: string,
   logDir: string,
@@ -1951,7 +1943,7 @@ async function executeApprovalNode(
   deps: WorkflowDeps,
   platform: IWorkflowPlatform,
   conversationId: string,
-  workflowProvider: 'claude' | 'codex',
+  workflowProvider: string,
   workflowModel: string | undefined,
   cwd: string,
   artifactsDir: string,
@@ -2040,8 +2032,7 @@ async function executeApprovalNode(
       conversationId,
       workflowRun.id,
       cwd,
-      workflowLevelOptions,
-      deps
+      workflowLevelOptions
     );
 
     const output = await executeNodeInternal(
@@ -2122,7 +2113,7 @@ export async function executeDagWorkflow(
   cwd: string,
   workflow: { name: string; nodes: readonly DagNode[] } & WorkflowLevelOptions,
   workflowRun: WorkflowRun,
-  workflowProvider: 'claude' | 'codex',
+  workflowProvider: string,
   workflowModel: string | undefined,
   artifactsDir: string,
   logDir: string,
@@ -2360,21 +2351,14 @@ export async function executeDagWorkflow(
           // 3b. Loop node dispatch — manages its own AI sessions and iteration
           if (isLoopNode(node)) {
             // Resolve per-node provider/model overrides (same logic as other node types)
-            let loopProvider: 'claude' | 'codex';
-            if (node.provider) {
-              loopProvider = node.provider;
-            } else if (node.model && isClaudeModel(node.model)) {
-              loopProvider = 'claude';
-            } else if (node.model) {
-              loopProvider = 'codex';
-            } else {
-              loopProvider = workflowProvider;
-            }
-            const loopModel =
+            const loopProvider: string =
+              node.provider ?? inferProviderFromModel(node.model, workflowProvider);
+            const loopAssistantConfig = config.assistants[loopProvider];
+            const loopModel: string | undefined =
               node.model ??
               (loopProvider === workflowProvider
                 ? workflowModel
-                : config.assistants[loopProvider]?.model);
+                : (loopAssistantConfig?.model as string | undefined));
 
             if (!isModelCompatible(loopProvider, loopModel)) {
               return {
@@ -2494,8 +2478,7 @@ export async function executeDagWorkflow(
             conversationId,
             workflowRun.id,
             cwd,
-            workflowLevelOptions,
-            deps
+            workflowLevelOptions
           );
 
           // 5. Determine session — parallel or context:fresh → always fresh
