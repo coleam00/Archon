@@ -310,8 +310,10 @@ async function prCreate(args: string[]): Promise<void> {
     }
     case 'gitlab': {
       const pid = await gitlabProjectId(ownerRepo);
+      // GitLab doesn't accept 'draft' as an input param — use title prefix instead
+      const gitlabTitle = draft ? `Draft: ${title}` : title;
       const data = await apiPost(`${FORGE_API_BASE}/projects/${pid}/merge_requests`, {
-        title, description: body, source_branch: head, target_branch: base, draft,
+        title: gitlabTitle, description: body, source_branch: head, target_branch: base,
       });
       outputNormalized(data, normalizeGitlabMr, undefined);
       break;
@@ -404,15 +406,16 @@ async function prDiff(args: string[]): Promise<void> {
     }
     case 'gitlab': {
       const pid = await gitlabProjectId(ownerRepo);
-      const mr = (await apiGet(
-        `${FORGE_API_BASE}/projects/${pid}/merge_requests/${number}`,
-      )) as { source_branch: string; target_branch: string };
-      const compare = (await apiGet(
-        `${FORGE_API_BASE}/projects/${pid}/repository/compare?from=${mr.target_branch}&to=${mr.source_branch}`,
-      )) as { diffs: { old_path: string; new_path: string; diff: string }[] };
-      for (const d of compare.diffs) {
-        console.log(`diff --git a/${d.old_path} b/${d.new_path}\n${d.diff}`);
+      // Use raw_diffs endpoint (GitLab 17+) for the actual MR diff,
+      // rather than repository/compare which drifts as branches move
+      const res = await fetch(
+        `${FORGE_API_BASE}/projects/${pid}/merge_requests/${number}/raw_diffs`,
+        { headers: { ...authHeaders(), Accept: 'text/plain' } },
+      );
+      if (!res.ok) {
+        throw new Error(`API ${res.status}: ${await res.text()}`);
       }
+      console.log(await res.text());
       break;
     }
   }
