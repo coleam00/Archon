@@ -14,6 +14,7 @@ import { z } from '@hono/zod-openapi';
 import { stepRetryConfigSchema } from './retry';
 import { loopNodeConfigSchema } from './loop';
 import { workflowNodeHooksSchema } from './hooks';
+import { modelReasoningEffortSchema } from './codex-options';
 import { isValidCommandName } from '../command-validation';
 import { isModelCompatible } from '../model-validation';
 
@@ -117,6 +118,7 @@ export const dagNodeBaseSchema = z.object({
   trigger_rule: triggerRuleSchema.optional(),
   model: z.string().optional(),
   provider: z.enum(['claude', 'codex']).optional(),
+  modelReasoningEffort: modelReasoningEffortSchema.optional(),
   context: z.enum(['fresh', 'shared']).optional(),
   output_format: z.record(z.unknown()).optional(),
   allowed_tools: z.array(z.string()).optional(),
@@ -298,6 +300,7 @@ export type DagNode =
 export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'provider',
   'model',
+  'modelReasoningEffort',
   'context',
   'output_format',
   'allowed_tools',
@@ -519,6 +522,9 @@ export const dagNodeSchema = dagNodeBaseSchema
     const aiOnly = {
       ...(data.model !== undefined ? { model: data.model } : {}),
       ...(data.provider !== undefined ? { provider: data.provider } : {}),
+      ...(data.modelReasoningEffort !== undefined
+        ? { modelReasoningEffort: data.modelReasoningEffort }
+        : {}),
       ...(data.context !== undefined ? { context: data.context } : {}),
       ...(data.output_format !== undefined ? { output_format: data.output_format } : {}),
       ...(data.allowed_tools !== undefined ? { allowed_tools: data.allowed_tools } : {}),

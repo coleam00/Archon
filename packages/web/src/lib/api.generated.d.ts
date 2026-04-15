@@ -2049,6 +2049,8 @@ export interface components {
       /** @enum {string} */
       provider?: 'claude' | 'codex';
       /** @enum {string} */
+      modelReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+      /** @enum {string} */
       context?: 'fresh' | 'shared';
       output_format?: {
         [key: string]: unknown;
@@ -2272,6 +2274,8 @@ export interface components {
         /** @default false */
         fresh_context: boolean;
         until_bash?: string;
+        progress_file?: string;
+        stuck_after_no_progress_iterations?: number;
         interactive?: boolean;
         gate_message?: string;
       };

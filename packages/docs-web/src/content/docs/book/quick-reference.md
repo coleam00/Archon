@@ -110,9 +110,9 @@ archon workflow run my-workflow "auth refresh-tokens"
 | `nodes` | Yes | array | DAG nodes (see Node Options below) |
 | `provider` | No | `claude` \| `codex` | AI provider for all nodes (default: `claude`) |
 | `model` | No | string | Model for all nodes (`sonnet`, `opus`, `haiku`, or full model ID) |
-| `modelReasoningEffort` | No | string | Codex only: `minimal` \| `low` \| `medium` \| `high` \| `xhigh` |
-| `webSearchMode` | No | string | Codex only: `disabled` \| `cached` \| `live` |
-| `additionalDirectories` | No | string[] | Extra directories available to the AI |
+| `modelReasoningEffort` | No | string | Codex only: workflow default for `command`/`prompt` nodes (`minimal` \| `low` \| `medium` \| `high` \| `xhigh`) |
+| `webSearchMode` | No | string | Codex only: workflow-level `disabled` \| `cached` \| `live` |
+| `additionalDirectories` | No | string[] | Workflow-level extra directories available to the AI |
 
 ### Node Options (DAG)
 
@@ -139,6 +139,12 @@ All nodes share these base fields:
 | `hooks` | No | object | SDK hook callbacks (Claude only; see Hook Schema) |
 | `mcp` | No | string | Path to MCP server config JSON file (Claude only) |
 | `skills` | No | string[] | Skill names to preload into this node's context (Claude only) |
+
+AI nodes also support these provider-specific fields:
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `modelReasoningEffort` | No | string | Codex `command`/`prompt` only: node override with `node > workflow > config` precedence |
 
 > **bash node timeout**: The `timeout` field on bash nodes is in **milliseconds** (default: 120000). This differs from hook `timeout`, which is in seconds.
 

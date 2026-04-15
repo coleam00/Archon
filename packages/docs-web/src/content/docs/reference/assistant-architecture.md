@@ -251,11 +251,12 @@ Supported today:
 - `provider: codex`
 - `model: <openai-model>`
 - `output_format`
-- config-level Codex defaults:
-  - `assistants.codex.model`
-  - `assistants.codex.modelReasoningEffort`
-  - `assistants.codex.webSearchMode`
-  - `assistants.codex.additionalDirectories`
+- Codex tuning inputs:
+  - workflow-level `modelReasoningEffort`
+  - workflow-level `webSearchMode`
+  - workflow-level `additionalDirectories`
+  - command/prompt-node `modelReasoningEffort`
+  - config fallback from `assistants.codex.model`, `assistants.codex.modelReasoningEffort`, `assistants.codex.webSearchMode`, and `assistants.codex.additionalDirectories`
 
 ### Ignored with warnings on Codex command/prompt nodes
 
@@ -282,7 +283,9 @@ Loop nodes have a separate limitation set.
 Current implementation:
 
 - `provider` and `model` do work for loop nodes
+- node-level `modelReasoningEffort` does **not** affect loop execution
 - these still do **not** apply to loop iterations:
+  - node-level `modelReasoningEffort`
   - `hooks`
   - `mcp`
   - `skills`
@@ -290,25 +293,30 @@ Current implementation:
   - `denied_tools`
   - `output_format`
 
-### Workflow-level Codex tuning
+Loop nodes still use workflow/config-level Codex tuning only. This slice does not add loop-node reasoning parity.
 
-Workflow YAML now supports these Codex tuning fields as real runtime inputs:
+### Codex tuning precedence
 
-- `modelReasoningEffort`
-- `webSearchMode`
-- `additionalDirectories`
+Codex tuning is split between workflow defaults and a narrow node-level override:
+
+- workflow-level `modelReasoningEffort`
+- workflow-level `webSearchMode`
+- workflow-level `additionalDirectories`
+- command/prompt-node `modelReasoningEffort`
 
 Practical effect:
 
 - `model:` on a workflow is effective
-- workflow-level `modelReasoningEffort`, `webSearchMode`, and `additionalDirectories` override Archon config for that workflow
-- if the workflow omits them, execution falls back to `assistants.codex.*`
+- on `command` and `prompt` nodes, `modelReasoningEffort` resolves as `node > workflow > assistants.codex.*`
+- `webSearchMode` and `additionalDirectories` remain workflow-level only and resolve as `workflow > assistants.codex.*`
+- if workflow YAML omits those fields, execution falls back to `assistants.codex.*`
 
 Current precedence is:
 
-1. workflow YAML
-2. `assistants.codex.*` in Archon config
-3. SDK defaults
+1. command/prompt node `modelReasoningEffort` for reasoning only
+2. workflow YAML
+3. `assistants.codex.*` in Archon config
+4. SDK defaults
 
 ## When Codex Can Realistically Replace Claude For A Node
 

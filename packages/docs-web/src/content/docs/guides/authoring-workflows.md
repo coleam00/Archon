@@ -117,8 +117,10 @@ description: |
 # Optional workflow-level configuration
 provider: claude
 model: sonnet
-modelReasoningEffort: medium     # Codex only
-webSearchMode: live              # Codex only
+modelReasoningEffort: medium     # Codex only; default for command/prompt nodes
+webSearchMode: live              # Codex only; workflow-level only
+additionalDirectories:           # Codex only; workflow-level only
+  - /absolute/path/to/shared/repo
 interactive: true                # Web only: run in foreground instead of background
 
 # Required for DAG-based
@@ -190,6 +192,7 @@ nodes:
 |-------|------|---------|-------------|
 | `provider` | `'claude'` \| `'codex'` | inherited | Per-node provider override |
 | `model` | string | inherited | Per-node model override |
+| `modelReasoningEffort` | `'minimal'`\|`'low'`\|`'medium'`\|`'high'`\|`'xhigh'` | inherited | Codex only. Per-node reasoning override for `command`/`prompt` nodes. Resolves as `node > workflow > assistants.codex.*` |
 | `output_format` | object | — | JSON Schema for structured output (Claude and Codex) |
 | `allowed_tools` | string[] | — | Whitelist of built-in tools. `[]` = no tools. Claude only |
 | `denied_tools` | string[] | — | Tools to remove. Applied after `allowed_tools`. Claude only |
@@ -203,6 +206,8 @@ nodes:
 | `fallbackModel` | string | — | Model to use if primary model fails. Claude only. Also settable at workflow level |
 | `betas` | string[] | — | SDK beta feature flags (e.g., `'context-1m-2025-08-07'`). Claude only. Also settable at workflow level |
 | `sandbox` | object | — | OS-level filesystem/network restrictions for the Claude subprocess. Claude only. Also settable at workflow level |
+
+Codex `webSearchMode` and `additionalDirectories` stay workflow-level only. They are not per-node overrides.
 
 ### Claude SDK Advanced Options
 
@@ -563,24 +568,39 @@ model: sonnet        # Model override (default: from config assistants.claude.mo
 name: my-workflow
 provider: codex
 model: gpt-5.3-codex
-modelReasoningEffort: medium    # 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
-webSearchMode: live             # 'disabled' | 'cached' | 'live'
+modelReasoningEffort: medium    # Workflow default for command/prompt nodes
+webSearchMode: live             # Workflow-level only: 'disabled' | 'cached' | 'live'
 additionalDirectories:
   - /absolute/path/to/other/repo
   - /path/to/shared/library
+
+nodes:
+  - id: fast-pass
+    command: summarize-repo
+
+  - id: deep-pass
+    prompt: "Review $fast-pass.output for risks"
+    modelReasoningEffort: xhigh  # Command/prompt nodes only
 ```
 
 **Model reasoning effort:**
+- Available on the workflow and on `command`/`prompt` nodes
+- Resolves as `node > workflow > assistants.codex.*`
+- Loop nodes still use workflow/config defaults only
 - `minimal`, `low` - Fast, cheaper
 - `medium` - Balanced (default)
 - `high`, `xhigh` - More thorough, expensive
 
 **Web search mode:**
+- Workflow-level only
+- Resolves as `workflow > assistants.codex.*`
 - `disabled` - No web access (default)
 - `cached` - Use cached search results
 - `live` - Real-time web search
 
 **Additional directories:**
+- Workflow-level only
+- Resolves as `workflow > assistants.codex.*`
 - Codex can access files outside the codebase
 - Useful for shared libraries, documentation repos
 - Must be absolute paths
