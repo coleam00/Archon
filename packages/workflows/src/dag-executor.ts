@@ -314,6 +314,23 @@ function resolveWorkflowCodexOptions(
   return Object.keys(resolved).length > 0 ? resolved : undefined;
 }
 
+function resolveNodeCodexOptions(
+  node: DagNode,
+  workflowLevelOptions: WorkflowLevelOptions,
+  config: WorkflowConfig
+): WorkflowCodexExecutionOptions | undefined {
+  const resolved = resolveWorkflowCodexOptions(workflowLevelOptions, config);
+
+  if (node.modelReasoningEffort === undefined) {
+    return resolved;
+  }
+
+  return {
+    ...(resolved ?? {}),
+    modelReasoningEffort: node.modelReasoningEffort,
+  };
+}
+
 /**
  * Load MCP server config from a JSON file and expand environment variables.
  * Format: Record<string, McpServerConfig> matching the SDK's expected shape.
@@ -549,7 +566,7 @@ async function resolveNodeProviderAndModel(
   if (provider === 'codex') {
     options = {
       ...(model ? { model } : {}),
-      ...(resolveWorkflowCodexOptions(workflowLevelOptions, config) ?? {}),
+      ...(resolveNodeCodexOptions(node, workflowLevelOptions, config) ?? {}),
     };
     if (node.output_format) {
       options.outputFormat = { type: 'json_schema', schema: node.output_format };
