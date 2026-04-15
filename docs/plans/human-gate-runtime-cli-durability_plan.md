@@ -613,6 +613,24 @@ Error example:
   - at least one approve example and one reject example are frozen in the plan
   - no ambiguity remains for hosts parsing approve/reject JSON
 
+### P0-T5 Record the freeze checkpoint
+
+- Goal: make Phase 0 completion explicit and auditable before any runtime work
+  starts
+- Recorded freeze artifact:
+  - this plan document is the canonical contract record for v1
+  - the current canonical peer-review sidecar under
+    `docs/plans/_peer-reviews/` is the review checkpoint for that frozen text
+- Verify Commands:
+  - `rg -n "## Decision A|## Decision B|## Decision C|## Decision D|## Decision E|### P0-T2 Freeze compatibility rules|LEGACY_GATE_TOKEN_UNAVAILABLE|Approve example|Reject example|Error example|# Repo Browser Preflight" docs/plans/human-gate-runtime-cli-durability_plan.md`
+  - `test -s docs/plans/_peer-reviews/human-gate-runtime-cli-durability_plan-peer-review.json`
+- Exit Criteria:
+  - the required contract sections and examples are present in the plan artifact
+  - all frozen Phase 0 decisions and legacy expected-token compatibility rules
+    are present in the recorded artifact
+  - a current peer-review sidecar exists for the frozen text before Phase 1
+    begins
+
 ## Phase 1 — Runtime Snapshot Foundation
 
 ### P1-T1 Add pause-instance identity
@@ -791,6 +809,8 @@ Commands to Run:
   - prove them through targeted CLI integration coverage in
     `packages/cli/src/commands/workflow.test.ts`
 - Exact verify commands to add during implementation and freeze:
+  - `bun test packages/cli/src/commands/workflow.test.ts -t "workflow run --json returns paused outcome with humanGate"`
+  - `bun test packages/cli/src/commands/workflow.test.ts -t "workflow resume --json returns paused or terminal outcome envelope"`
   - `bun test packages/cli/src/commands/workflow.test.ts -t "workflow show --json returns active humanGate snapshot for paused run"`
   - `bun test packages/cli/src/commands/workflow.test.ts -t "workflow approve --json returns post-resume paused outcome with humanGate"`
   - `bun test packages/cli/src/commands/workflow.test.ts -t "workflow reject --json returns post-resume outcome or cancellation envelope"`
@@ -805,6 +825,10 @@ Exit Criteria:
 
 - paused gate is recoverable by run ID after the original pause moment
 - returned gate message matches the workflow reality
+- `workflow run --json` is parse-safe and returns the expected paused or
+  terminal outcome envelope
+- `workflow resume --json` is parse-safe and returns the expected paused or
+  terminal outcome envelope
 - stale token mismatch is reproducible and explicit
 - stale token rejection is proven on both approve and reject command paths
 - legacy paused runs reject supplied expected gate tokens with the defined
@@ -819,6 +843,8 @@ E2E Mode: automated
 Evidence:
 
 - targeted CLI test evidence and captured JSON fixtures for:
+  - run -> paused or terminal JSON outcome
+  - resume -> paused or terminal JSON outcome
   - paused run read-back
   - approve -> paused-again outcome
   - reject -> resumed or cancelled outcome
@@ -829,6 +855,8 @@ Evidence:
 
 Verify Commands:
 
+- `bun test packages/cli/src/commands/workflow.test.ts -t "workflow run --json returns paused outcome with humanGate"`
+- `bun test packages/cli/src/commands/workflow.test.ts -t "workflow resume --json returns paused or terminal outcome envelope"`
 - `bun test packages/cli/src/commands/workflow.test.ts -t "workflow show --json returns active humanGate snapshot for paused run"`
 - `bun test packages/cli/src/commands/workflow.test.ts -t "workflow approve --json returns post-resume paused outcome with humanGate"`
 - `bun test packages/cli/src/commands/workflow.test.ts -t "workflow reject --json returns post-resume outcome or cancellation envelope"`
@@ -893,6 +921,39 @@ Verify Commands:
 - `bun test packages/server/src/routes/api.workflow-runs.test.ts -t "reject route rejects expected gate token for legacy paused run"`
 - `bun test packages/server/src/routes/api.workflow-runs.test.ts -t "reject route preserves compatibility when no expected gate token is supplied"`
 
+### P99-T3 Repo-Wide Validation Gate
+
+Prerequisite Contract:
+
+```json
+{
+  "targeted_phase_tests_passing": true,
+  "repo_validation_commands_available": true
+}
+```
+
+Commands to Run:
+
+- `bun run type-check`
+- `bun run validate`
+
+Exit Criteria:
+
+- targeted runtime, CLI, and API contract tests have already passed
+- repo-wide TypeScript and validation checks pass after the contract slice lands
+
+E2E Mode: automated
+
+Evidence:
+
+- final repo-wide validation output proving the cross-package contract changes do
+  not leave type or validation drift behind
+
+Verify Commands:
+
+- `bun run type-check`
+- `bun run validate`
+
 # Acceptance Criteria
 
 - A host can recover the active human gate from a run ID without reading chat
@@ -907,6 +968,8 @@ Verify Commands:
 - Legacy paused runs have explicit expected-token behavior.
 - Existing human-readable CLI output remains usable.
 - API/server duplication risk is handled explicitly rather than ignored.
+- Final implementation handoff requires a repo-wide validation pass after the
+  targeted tests.
 
 # Risks And Gotchas
 
@@ -1100,3 +1163,25 @@ Reason:
   - added exact Phase 1 foundation-test homes and verify commands
   - added CLI and API verify commands for legacy expected-token rejection on
     approve and reject
+
+## Cycle 7
+
+- Status: final handoff hardening
+- Trigger:
+  - warning-level peer-review tightening after the refreshed sidecar
+- Revisions applied:
+  - added an explicit Phase 0 recorded freeze checkpoint with verify commands
+  - added a repo-wide post-implementation validation gate (`bun run type-check`
+    and `bun run validate`)
+
+## Cycle 8
+
+- Status: final-gate coverage correction
+- Trigger:
+  - latest peer review found Phase 0 checkpoint coverage gaps and missing final
+    gate proof for `workflow run --json` and `workflow resume --json`
+- Revisions applied:
+  - broadened the P0-T5 freeze checkpoint to cover all Phase 0 decisions plus
+    legacy expected-token compatibility
+  - added final-gate CLI verify commands, evidence, and exit criteria for
+    `workflow run --json` and `workflow resume --json`

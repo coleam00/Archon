@@ -1,8 +1,8 @@
 {
   "schema_version": "peer-review-v1",
-  "review_id": "peer-review-cff0cbfaf533",
+  "review_id": "peer-review-fb7323196e3d",
   "plan_path": "/Users/mase/Codebase/Personal-Projects/Archon/docs/plans/human-gate-runtime-cli-durability_plan.md",
-  "plan_sha256": "0fa61714b302a6b49dadbe9cff06fa1dd3837bbd523c211be372ffd7560baa96",
+  "plan_sha256": "dbf9ca2d9b834a4ea791524e11c388b9cefb8ab0323a394437b8a0af951e73e2",
   "mode": "workflow-plan-gate",
   "sidecar_dir": "/Users/mase/Codebase/Personal-Projects/Archon/docs/plans/_peer-reviews",
   "engine": "GPT",
@@ -27,54 +27,64 @@
       "returncode": 0
     }
   ],
-  "review_round": 5,
+  "review_round": 8,
   "max_rounds": 3,
-  "prior_review_id": "peer-review-c80e960c966f",
+  "prior_review_id": "peer-review-8b197e5f0c8c",
   "caller_disposition_summary": "",
   "addressed_issues": [],
   "deferred_issues": [],
-  "recheck_requests": [],
+  "recheck_requests": [
+    "Phase 0 freeze checkpoint does not audit the full frozen contract",
+    "Declared in-scope `workflow run --json` and `workflow resume --json` surfaces lack end-gate proof"
+  ],
   "model": "codex",
   "verdict": "Sound",
   "stance": null,
   "issues_count": 0,
-  "ran_at": "2026-04-15T10:10:41.012845+00:00",
-  "raw_review_excerpt": "Current-artifact-first review passes on the requested focus. The plan now explicitly requires stale-token rejection symmetry on both approve and reject paths for both CLI and API, and it carries matching Phase 99 verify commands, exit criteria, evidence expectations, and prior-round closure notes. Coverage is slice-only: I reviewed the supplied plan text and prior-round claim packet, not the full campaign or directly inspected repo files.",
+  "ran_at": "2026-04-15T10:18:01.289078+00:00",
+  "raw_review_excerpt": "Current artifact resolves both carried issues in the inspected slice. The plan is repo-grounded against the current CLI/workflow/API/test surfaces, and I did not find a remaining freeze blocker.",
   "error": null,
-  "closure_verification": "The carried prior-round concern about reject-path symmetry is resolved in the current artifact.",
+  "closure_verification": "Both carried issues are resolved in the current artifact. No remaining freeze blocker was verified in the inspected slice.",
   "prior_round_closure": [
     {
-      "title": "Symmetric stale-token rejection proof",
+      "title": "Phase 0 freeze checkpoint does not audit the full frozen contract",
       "severity": "WARN",
-      "caller_claim": "The plan was updated to add symmetric CLI and API reject-path stale-token verify commands and to tighten exit/evidence language so both approve and reject are explicitly proven.",
+      "caller_claim": "P0 freeze coverage was previously too narrow.",
       "verification_status": "resolved",
-      "verification_notes": "Verified in the current artifact: CLI P99-T1 includes both approve and reject stale-token test commands; API P99-T2 includes both approve and reject stale-token test commands; both exit-criteria sections require proof on both paths; Cycle 5 records the same revision."
+      "verification_notes": "Current artifact broadens P0-T5 with a recorded freeze checkpoint, explicit verify commands, and exit criteria covering the frozen decision set and legacy expected-token compatibility. I did not find a remaining blocker on this point in the inspected slice."
+    },
+    {
+      "title": "Declared in-scope workflow run --json and workflow resume --json surfaces lack end-gate proof",
+      "severity": "WARN",
+      "caller_claim": "The plan previously lacked final-gate proof for run/resume JSON surfaces.",
+      "verification_status": "resolved",
+      "verification_notes": "Current artifact now adds explicit P99 CLI verify commands, evidence, and exit criteria for both workflow run --json and workflow resume --json, and those surfaces align with the currently inspected CLI/runtime split."
     }
   ],
   "rerun_recommendation": "stop",
   "review": {
     "mode": "workflow-plan-gate",
-    "summary": "Current-artifact-first review passes on the requested focus. The plan now explicitly requires stale-token rejection symmetry on both approve and reject paths for both CLI and API, and it carries matching Phase 99 verify commands, exit criteria, evidence expectations, and prior-round closure notes. Coverage is slice-only: I reviewed the supplied plan text and prior-round claim packet, not the full campaign or directly inspected repo files.",
+    "summary": "Current artifact resolves both carried issues in the inspected slice. The plan is repo-grounded against the current CLI/workflow/API/test surfaces, and I did not find a remaining freeze blocker.",
     "rubric_cards": [
       {
         "title": "Claim Anchoring",
-        "anchor": "P99-T1, P99-T2, Cycle 5",
-        "claim": "The artifact now freezes symmetric stale-token rejection proof for approve and reject.",
-        "evidence": "P99-T1 adds both CLI verify commands for approve and reject stale-token rejection; P99-T2 adds both API verify commands; both exit-criteria blocks require proof on both paths; Cycle 5 states those additions explicitly.",
-        "disposition": "present"
+        "anchor": "card-1",
+        "claim": "The plan\u2019s load-bearing repo-state claims are anchored to the current artifact and to directly inspected workflow, CLI, operations, API, bridge, and test files.",
+        "evidence": "Verified against packages/workflows/src/executor.ts, packages/workflows/src/dag-executor.ts, packages/workflows/src/schemas/workflow-run.ts, packages/workflows/src/schemas/workflow.ts, packages/cli/src/commands/workflow.ts, packages/core/src/operations/workflow-operations.ts, packages/server/src/routes/api.ts, packages/server/src/adapters/web/workflow-bridge.ts, packages/cli/src/commands/workflow.test.ts, and packages/server/src/routes/api.workflow-runs.test.ts.",
+        "disposition": "pass"
       },
       {
         "title": "Disposition Matrix",
-        "anchor": "artifact/conversation/campaign",
-        "claim": "Artifact evidence is strong for the focused slice; conversation evidence is limited to the prior-round packet; campaign coverage is not full-thread.",
-        "evidence": "Current plan text contains the operative requirements and closure notes; no broader thread or campaign artifacts were inspected in this review.",
-        "disposition": "artifact-present, conversation-partial, campaign-slice-only"
+        "anchor": "card-2",
+        "claim": "Artifact evidence is strong; conversation and campaign evidence were used only in a scoped way.",
+        "evidence": "Current plan text was reviewed first, then only the directly implicated local files were inspected to verify repo reality and the two carried issues.",
+        "disposition": "artifact-present conversation-partial campaign-partial"
       },
       {
         "title": "Coverage Scope",
-        "anchor": "review scope",
-        "claim": "This review covers the current plan artifact and the supplied prior-round claims only.",
-        "evidence": "No repo-file inspection, shell verification, or full campaign transcript review was performed.",
+        "anchor": "card-3",
+        "claim": "This review covered the current artifact plus a repo-grounding slice, not the full campaign/thread.",
+        "evidence": "I used the supplied prior-round packet only to verify the two carried issues and did not audit the full peer-review history or full campaign transcript.",
         "disposition": "slice-only"
       }
     ],
@@ -91,91 +101,124 @@
       ],
       "cells": [
         [
-          "symmetric stale-token proof is explicit in current artifact",
-          "repo/code anchors not independently re-verified in this review",
+          "current-plan-and-implicated-files",
+          "sidecar-existence-only",
           "none"
         ],
         [
-          "prior-round claim packet used only for closure check",
-          "no broader thread transcript was reviewed",
-          "none"
+          "prior-round-packet-used",
+          "no-full-thread-context",
+          "full-thread-transcript"
         ],
         [
-          "current plan slice was assessed",
-          "coverage is slice-only rather than full-campaign",
-          "full campaign/repo pass not assessed"
+          "current-artifact-slice",
+          "selected-repo-surfaces-only",
+          "full-campaign-and-sidecar-content"
         ]
       ]
     },
     "conversation_evidence": {
       "used": true,
       "sources": [
-        "Prior-round context in the user prompt (review round 5/3, prior review id peer-review-c80e960c966f)"
+        "PRIOR ROUND CONTEXT block in the prompt"
       ],
-      "summary": "Used only as claims to verify. Closure status was determined against the current artifact text, not the caller narrative.",
+      "summary": "Used only as hypotheses to re-check the two carried issues against the current plan artifact.",
       "gaps": [
-        "No full thread transcript was provided.",
-        "No campaign-side artifacts beyond the supplied plan text were reviewed."
+        "No full thread transcript was reviewed.",
+        "No prior sidecar contents were treated as authoritative evidence."
       ]
     },
     "campaign_coverage": {
       "scope": "slice-only",
       "covered": [
-        "Current artifact: /Users/mase/Codebase/Personal-Projects/Archon/docs/plans/human-gate-runtime-cli-durability_plan.md",
-        "Prior-round claim packet in the prompt"
+        "Current plan artifact",
+        "Directly implicated workflow runtime files",
+        "CLI command surface",
+        "Operations layer",
+        "API routes",
+        "Web workflow bridge pause event shape",
+        "Existing CLI/API test homes",
+        "Peer-review sidecar file existence",
+        "Pause-capable workflow fixture existence"
       ],
       "missing": [
         "Full campaign/thread history",
-        "Direct inspection of cited repo files and test files"
+        "Peer-review sidecar contents",
+        "Any implementation artifacts beyond the inspected file slice"
       ],
       "gaps": [
-        "This review cannot certify end-to-end repo alignment beyond what the current artifact states."
+        "This is not a full-campaign audit.",
+        "No claim is made about uninspected rounds or artifacts outside the reviewed slice."
       ]
     },
     "issues": [],
     "verification_gaps": [
-      "Direct inspection of the cited runtime and test files was not performed in this review, so repo-reality confirmation remains outside the assessed slice."
+      "Did not review the full campaign transcript or full peer-review sidecar contents.",
+      "Did not execute verify commands; assessed command realism and coverage from current file reality only."
     ],
     "recommended_fixes": [],
     "evidence_sources": [
-      "/Users/mase/Codebase/Personal-Projects/Archon/docs/plans/human-gate-runtime-cli-durability_plan.md :: Phase 2 / P2-T3 Add stale-gate guard",
-      "/Users/mase/Codebase/Personal-Projects/Archon/docs/plans/human-gate-runtime-cli-durability_plan.md :: Phase 99 / P99-T1 Verify Commands",
-      "/Users/mase/Codebase/Personal-Projects/Archon/docs/plans/human-gate-runtime-cli-durability_plan.md :: Phase 99 / P99-T1 Exit Criteria",
-      "/Users/mase/Codebase/Personal-Projects/Archon/docs/plans/human-gate-runtime-cli-durability_plan.md :: Phase 99 / P99-T2 Verify Commands",
-      "/Users/mase/Codebase/Personal-Projects/Archon/docs/plans/human-gate-runtime-cli-durability_plan.md :: Phase 99 / P99-T2 Exit Criteria",
-      "/Users/mase/Codebase/Personal-Projects/Archon/docs/plans/human-gate-runtime-cli-durability_plan.md :: Peer Review Loop Log / Cycle 5"
+      "docs/plans/human-gate-runtime-cli-durability_plan.md",
+      "packages/workflows/src/executor.ts",
+      "packages/workflows/src/dag-executor.ts",
+      "packages/workflows/src/schemas/workflow-run.ts",
+      "packages/workflows/src/schemas/workflow.ts",
+      "packages/cli/src/commands/workflow.ts",
+      "packages/core/src/operations/workflow-operations.ts",
+      "packages/server/src/routes/api.ts",
+      "packages/server/src/adapters/web/workflow-bridge.ts",
+      "packages/cli/src/commands/workflow.test.ts",
+      "packages/server/src/routes/api.workflow-runs.test.ts",
+      ".archon/workflows/defaults/archon-interactive-prd.yaml"
     ],
     "error": null,
     "prior_round_closure": [
       {
-        "title": "Symmetric stale-token rejection proof",
+        "title": "Phase 0 freeze checkpoint does not audit the full frozen contract",
         "severity": "WARN",
-        "caller_claim": "The plan was updated to add symmetric CLI and API reject-path stale-token verify commands and to tighten exit/evidence language so both approve and reject are explicitly proven.",
+        "caller_claim": "P0 freeze coverage was previously too narrow.",
         "verification_status": "resolved",
-        "verification_notes": "Verified in the current artifact: CLI P99-T1 includes both approve and reject stale-token test commands; API P99-T2 includes both approve and reject stale-token test commands; both exit-criteria sections require proof on both paths; Cycle 5 records the same revision."
+        "verification_notes": "Current artifact broadens P0-T5 with a recorded freeze checkpoint, explicit verify commands, and exit criteria covering the frozen decision set and legacy expected-token compatibility. I did not find a remaining blocker on this point in the inspected slice."
+      },
+      {
+        "title": "Declared in-scope workflow run --json and workflow resume --json surfaces lack end-gate proof",
+        "severity": "WARN",
+        "caller_claim": "The plan previously lacked final-gate proof for run/resume JSON surfaces.",
+        "verification_status": "resolved",
+        "verification_notes": "Current artifact now adds explicit P99 CLI verify commands, evidence, and exit criteria for both workflow run --json and workflow resume --json, and those surfaces align with the currently inspected CLI/runtime split."
       }
     ],
-    "closure_verification": "The carried prior-round concern about reject-path symmetry is resolved in the current artifact.",
+    "closure_verification": "Both carried issues are resolved in the current artifact. No remaining freeze blocker was verified in the inspected slice.",
     "rerun_recommendation": "stop",
     "verdict": "Sound",
     "workflow_compliance": [
-      "The plan is freeze-ready on the requested focus because it now states explicit verify commands, exit criteria, and evidence for symmetric stale-token rejection on approve and reject.",
-      "Exit criteria and verify commands are materially aligned with the stated acceptance criteria for the stale-gate safety requirement."
+      "Plan remains plan-only and does not drift into implementation steps.",
+      "Phase structure includes explicit exit criteria across freeze, runtime, CLI, parity, and repo-wide validation gates.",
+      "Current artifact now includes explicit end-gate proof for run/resume JSON surfaces.",
+      "The plan correctly distinguishes durable read-back, mutating JSON envelopes, and v1 API raw-read-back parity boundaries."
     ],
     "technical_reality": [
-      "Within the current artifact, stale-gate protection is defined as optional-token validation in v1 and is required to fail clearly when used.",
-      "The plan now treats approve and reject symmetrically at both CLI and API surfaces for stale-token rejection proof."
+      "Current executor/schema surface still collapses paused execution to { success: true, paused: true, workflowRunId } in packages/workflows/src/executor.ts and packages/workflows/src/schemas/workflow.ts.",
+      "Current CLI run/resume/approve/reject surfaces are prose-first and do not currently expose JSON contracts; only list/status currently expose json flags in packages/cli/src/commands/workflow.ts.",
+      "Current operations layer exposes status/resume/approve/reject/abandon behavior but no durable per-run show/read-back contract in packages/core/src/operations/workflow-operations.ts.",
+      "Current API already exposes raw GET /api/workflows/runs/:runId and inline approve/reject logic in packages/server/src/routes/api.ts.",
+      "Current web bridge already emits a paused approval-shaped SSE event in packages/server/src/adapters/web/workflow-bridge.ts.",
+      "The cited CLI/API test homes are real and already adjacent to the behaviors the plan intends to extend."
     ],
     "assumptions_to_verify": [
-      "The cited CLI and server test files still exist and remain the correct test homes at implementation time.",
-      "Current approve/reject routes and CLI paths can accept an expected-gate-token style parameter without conflicting with existing command contracts."
+      "Adding gate token/version to persisted approval metadata can be done compatibly for legacy paused runs.",
+      "A single snapshot builder can be shared or kept behaviorally identical across CLI and API surfaces without introducing drift.",
+      "JSON-mode suppression can be wired so stdout stays parse-clean while stderr remains available for human diagnostics."
     ],
     "verification_sufficiency": [
-      "Sufficient to judge the current plan artifact on the requested focus.",
-      "Not sufficient to certify full repo-code alignment or full-campaign closure because this review did not inspect repo files directly."
+      "Sufficient to judge the current artifact\u2019s compliance with the two carried issues and its main load-bearing repo-grounding claims.",
+      "Not sufficient to claim full-thread or full-campaign coverage.",
+      "Because no commands were executed, this review verifies plan grounding and test-home realism, not runtime pass/fail."
     ],
     "downstream_risks": [
-      "If repo reality has drifted since the artifact's own preflight, the frozen verify commands may need mechanical adjustment even though the plan logic is sound."
+      "Implementation still spans workflow runtime, CLI, operations, and API; drift risk remains if snapshot building and stale-gate validation are not centralized or kept strictly equivalent.",
+      "Legacy paused-run compatibility is planned clearly, but correctness still depends on the future tests actually being added and passing.",
+      "JSON parse-safety will depend on suppressing existing prose output paths during new json-mode flows."
     ],
     "freeze_recommendation": "Safe to freeze. No blocker-level issues were identified."
   }
