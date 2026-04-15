@@ -77,6 +77,12 @@ These are implementation constraints, not slogans. Apply them by default.
 - Never silently broaden permissions or capabilities
 - Document fallback behavior with a comment when a fallback is intentional and safe; otherwise throw
 
+**No Autonomous Lifecycle Mutation Across Process Boundaries**
+- When a process cannot reliably distinguish "actively running elsewhere" from "orphaned by a crash" — typically because the work was started by a different process or input source (CLI, adapter, webhook, web UI, cron) — it must not autonomously mark that work as failed/cancelled/abandoned based on a timer or staleness guess.
+- Surface the ambiguous state to the user and provide a one-click action.
+- Heuristics for *recoverable* operations (retry backoff, subprocess timeouts, hygiene cleanup of terminal-status data) remain appropriate; the rule is about destructive mutation of *non-terminal* state owned by an unknowable other party.
+- Reference: #1216 and the CLI orphan-cleanup precedent at `packages/cli/src/cli.ts:256-258`.
+
 **Determinism + Reproducibility**
 - Prefer reproducible commands and locked dependency behavior in CI-sensitive paths
 - Keep tests deterministic — no flaky timing or network dependence without guardrails
