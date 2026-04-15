@@ -287,6 +287,7 @@ nodes:
 - `allowed_tools` / `denied_tools` — tool restrictions are not enforced on loop iterations
 - `output_format` — structured JSON output is not supported for loop nodes
 - `provider` / `model` — accepted in YAML without error but silently ignored at runtime. Loop nodes always use the workflow-level provider and model.
+- `modelReasoningEffort` — may appear in YAML now that `command` and `prompt` nodes support per-node Codex reasoning, but loop nodes still ignore node-level values at runtime. Loop iterations keep using workflow-level Codex reasoning, falling back to `assistants.codex.modelReasoningEffort` from config.
 
 These fields (except `retry`) are silently discarded at parse time with a
 loader warning — the workflow still loads but the fields have no effect.
