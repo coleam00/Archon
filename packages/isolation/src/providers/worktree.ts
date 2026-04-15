@@ -564,8 +564,11 @@ export class WorktreeProvider implements IIsolationProvider {
       await this.createNewBranch(request, repoPath, worktreePath, branchName, baseBranch);
     }
 
-    // Initialize submodules if configured and .gitmodules exists
-    if (worktreeConfig?.initSubmodules) {
+    // Initialize submodules unless explicitly opted out. The check is free
+    // when `.gitmodules` is absent (access-based short-circuit), so repos
+    // without submodules pay nothing. Default-on matches git's own intent
+    // with `clone --recurse-submodules` / `submodule.recurse`.
+    if (worktreeConfig?.initSubmodules !== false) {
       await this.initSubmodules(worktreePath);
     }
 
@@ -925,21 +928,25 @@ export class WorktreeProvider implements IIsolationProvider {
   }
 
   /**
-   * Initialize git submodules in a worktree.
+   * Initialize git submodules in a worktree when the repo uses them.
    *
-   * Only runs when the worktree contains a .gitmodules file (i.e., the repo
-   * actually uses submodules). Skips silently otherwise.
+   * Absence of `.gitmodules` → skip silently (zero-cost for non-submodule repos).
+   * Presence but git init failure → throw. Silent success on a half-initialized
+   * worktree is the exact class of bug this PR exists to prevent: the user
+   * enabled submodule init (or left the default on), so they need to know when
+   * it didn't happen. The thrown error is classified by `classifyIsolationError`
+   * into an actionable message (permission/network/timeout).
+   *
+   * Non-ENOENT errors on the `.gitmodules` read itself (e.g., EACCES on a file
+   * we ourselves just placed) remain non-fatal — attempting the git command
+   * would fail the same way, so we log and skip instead of double-erroring.
    */
   private async initSubmodules(worktreePath: string): Promise<void> {
-    // Check if .gitmodules exists before running submodule commands.
-    // Both the access check and the git command are wrapped in non-fatal
-    // try/catch blocks — submodule init failure must never block worktree creation.
     try {
       await access(join(worktreePath, '.gitmodules'));
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code !== 'ENOENT') {
-        // Non-ENOENT (e.g., EACCES) — log but don't block worktree creation
         getLog().warn({ err, worktreePath }, 'worktree.submodule_check_failed');
       }
       return;
@@ -953,10 +960,10 @@ export class WorktreeProvider implements IIsolationProvider {
       );
       getLog().info({ worktreePath }, 'worktree.submodule_init_completed');
     } catch (error) {
-      const err = error as Error;
-      // Non-fatal: the worktree is still usable without submodules.
-      // Log a warning so the user can diagnose if workflows fail.
-      getLog().warn({ err, worktreePath }, 'worktree.submodule_init_failed');
+      const err = error as Error & { stderr?: string };
+      getLog().error({ err, worktreePath }, 'worktree.submodule_init_failed');
+      const detail = err.stderr?.trim() || err.message;
+      throw new Error(`Submodule initialization failed: ${detail}`);
     }
   }
 

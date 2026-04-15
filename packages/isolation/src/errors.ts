@@ -68,6 +68,13 @@ export function classifyIsolationError(err: Error): string {
         '**Error:** No base branch configured. Set `worktree.baseBranch` in `.archon/config.yaml` ' +
         'or use the `--from` flag to select a branch (e.g., `--from dev`).',
     },
+    {
+      pattern: 'submodule initialization failed',
+      message:
+        '**Error:** Submodule initialization failed. Check credentials and network access to ' +
+        'submodule remotes, or set `worktree.initSubmodules: false` in `.archon/config.yaml` ' +
+        'to opt out if submodules are not needed for your workflows.',
+    },
   ];
 
   for (const { pattern, message } of errorPatterns) {
@@ -99,6 +106,7 @@ export function isKnownIsolationError(err: Error): boolean {
     'not a git repository',
     'branch not found',
     'no base branch configured',
+    'submodule initialization failed',
   ];
 
   return knownPatterns.some(pattern => errorLower.includes(pattern));
