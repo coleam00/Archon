@@ -392,6 +392,10 @@ export class SqliteAdapter implements IDatabase {
         ON remote_agent_sessions(parent_session_id);
       CREATE INDEX IF NOT EXISTS idx_sessions_conversation_started
         ON remote_agent_sessions(conversation_id, started_at DESC);
+
+      -- From PG migration 022: composite codebase identity (name + path)
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_codebases_name_cwd
+        ON remote_agent_codebases (name, default_cwd);
     `);
     getLog().info('db.sqlite_schema_initialized');
   }
