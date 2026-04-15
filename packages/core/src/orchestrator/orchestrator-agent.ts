@@ -817,6 +817,12 @@ export async function handleMessage(
       const attachedCodebase = codebases.find(c => c.id === conversation.codebase_id);
       if (attachedCodebase) {
         cwd = conversation.cwd ?? attachedCodebase.default_cwd;
+      } else {
+        // Intentional fallback: codebase may have been deleted; run with workspaces root.
+        getLog().warn(
+          { codebaseId: conversation.codebase_id, conversationId },
+          'orchestrator.codebase_not_found_cwd_fallback'
+        );
       }
     }
 

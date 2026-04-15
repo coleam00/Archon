@@ -902,10 +902,12 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockSendQuery.mockClear();
     mockGetCodebaseEnvVars.mockReset();
     mockLoadConfig.mockReset();
+    mockListCodebases.mockReset();
     // Reset mocks between tests in this suite and restore safe defaults
     mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null));
     mockGetCodebase.mockImplementation(() => Promise.resolve(null));
     mockGetCodebaseEnvVars.mockImplementation(() => Promise.resolve({}));
+    mockListCodebases.mockImplementation(() => Promise.resolve([]));
     mockLoadConfig.mockImplementation(() =>
       Promise.resolve({
         assistants: { claude: {}, codex: {} },
@@ -1081,6 +1083,19 @@ describe('discoverAllWorkflows — remote sync', () => {
     test('falls back to getArchonWorkspacesPath when conversation has no codebase', async () => {
       const conversation = makeConversation({ codebase_id: null, cwd: null });
       mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+
+      const platform = makePlatform();
+      await handleMessage(platform, 'conv-1', 'Hello');
+
+      expect(mockSendQuery).toHaveBeenCalled();
+      const calledCwd = mockSendQuery.mock.calls[0][1] as string;
+      expect(calledCwd).toBe('/home/test/.archon/workspaces');
+    });
+
+    test('falls back to getArchonWorkspacesPath when codebase_id is set but codebase not in list', async () => {
+      const conversation = makeConversation({ codebase_id: 'codebase-1', cwd: null });
+      mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+      mockListCodebases.mockReturnValueOnce(Promise.resolve([]));
 
       const platform = makePlatform();
       await handleMessage(platform, 'conv-1', 'Hello');

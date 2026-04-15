@@ -678,7 +678,7 @@ describe('runScheduledCleanup', () => {
     expect(report.removed).toHaveLength(0);
   });
 
-  test('continues processing after error on one environment', async () => {
+  test('processes all environments in batch (both paths missing)', async () => {
     mockListAllActiveWithCodebase.mockResolvedValueOnce([
       {
         id: 'env-error',
