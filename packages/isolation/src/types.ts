@@ -242,6 +242,12 @@ export interface IsolationEnvironmentRow {
 export interface WorktreeCreateConfig {
   baseBranch?: string;
   copyFiles?: string[];
+  /**
+   * Initialize git submodules in the worktree. Defaults to enabled — a worktree
+   * with uninitialized submodules is a silent broken state for monorepos.
+   * Set to `false` to opt out. No-op when `.gitmodules` is absent.
+   */
+  initSubmodules?: boolean;
 }
 
 export type RepoConfigLoader = (repoPath: string) => Promise<WorktreeCreateConfig | null>;

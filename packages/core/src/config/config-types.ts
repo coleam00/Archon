@@ -143,6 +143,18 @@ export interface RepoConfig {
      * @example [".env", ".archon", "data/fixtures/"]
      */
     copyFiles?: string[];
+
+    /**
+     * Initialize git submodules in new worktrees.
+     * Runs `git submodule update --init --recursive` after worktree creation
+     * when the repo contains a `.gitmodules` file. Repos without submodules
+     * pay zero cost (the check short-circuits).
+     *
+     * Set to `false` to skip submodule init (e.g., when submodules are not
+     * needed by any workflow or when fetch cost is prohibitive).
+     * @default true
+     */
+    initSubmodules?: boolean;
   };
 
   /**

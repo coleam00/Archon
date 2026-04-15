@@ -6,7 +6,7 @@
 
 import { createHash } from 'crypto';
 import { access, rm } from 'fs/promises';
-import { join } from 'path';
+import { join, resolve } from 'path';
 
 import { createLogger } from '@archon/paths';
 import {
@@ -650,6 +650,14 @@ export class WorktreeProvider implements IIsolationProvider {
       await this.createNewBranch(request, repoPath, worktreePath, branchName, baseBranch);
     }
 
+    // Initialize submodules unless explicitly opted out. The check is free
+    // when `.gitmodules` is absent (access-based short-circuit), so repos
+    // without submodules pay nothing. Default-on matches git's own intent
+    // with `clone --recurse-submodules` / `submodule.recurse`.
+    if (worktreeConfig?.initSubmodules !== false) {
+      await this.initSubmodules(worktreePath);
+    }
+
     // Copy git-ignored files based on repo config
     const { configLoadFailed } = await this.copyConfiguredFiles(
       repoPath,
@@ -1013,6 +1021,45 @@ export class WorktreeProvider implements IIsolationProvider {
       } else {
         throw error;
       }
+    }
+  }
+
+  /**
+   * Initialize git submodules in a worktree when the repo uses them.
+   *
+   * ENOENT on `.gitmodules` → skip (zero-cost for non-submodule repos).
+   * Any other error (EACCES, EIO, git failure, timeout) → throw. Silent
+   * success on a half-initialized worktree is the exact class of bug this
+   * function exists to prevent; an unreadable `.gitmodules` is materially
+   * the same as a failed git op. The thrown error is classified by
+   * `classifyIsolationError` into an actionable message.
+   */
+  private async initSubmodules(worktreePath: string): Promise<void> {
+    try {
+      await access(join(worktreePath, '.gitmodules'));
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') {
+        return;
+      }
+      getLog().error({ err, worktreePath }, 'worktree.submodule_check_failed');
+      throw new Error(
+        `Submodule initialization failed: cannot read .gitmodules (${err.code ?? 'unknown error'})`
+      );
+    }
+
+    try {
+      await execFileAsync(
+        'git',
+        ['-C', worktreePath, 'submodule', 'update', '--init', '--recursive'],
+        { timeout: 120000 }
+      );
+      getLog().info({ worktreePath }, 'worktree.submodule_init_completed');
+    } catch (error) {
+      const err = error as Error & { stderr?: string };
+      getLog().error({ err, worktreePath }, 'worktree.submodule_init_failed');
+      const detail = err.stderr?.trim() || err.message;
+      throw new Error(`Submodule initialization failed: ${detail}`);
     }
   }
 

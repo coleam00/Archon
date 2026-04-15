@@ -73,7 +73,17 @@ describe('WorktreeProvider', () => {
     listWorktreesSpy.mockResolvedValue([]);
     findWorktreeByBranchSpy.mockResolvedValue(null);
     getCanonicalRepoPathSpy.mockImplementation(async path => path);
-    mockAccess.mockResolvedValue(undefined); // Path exists by default
+    // Most paths exist by default (directoryExists checks for destroy etc.),
+    // but .gitmodules is absent by default — most repos don't use submodules,
+    // and default-on submodule init must skip cleanly in that case.
+    mockAccess.mockImplementation(async (path: unknown) => {
+      if (typeof path === 'string' && path.endsWith('.gitmodules')) {
+        const err = new Error('ENOENT') as NodeJS.ErrnoException;
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return undefined;
+    });
     mockReadFile.mockRejectedValue(new Error('ENOENT')); // .git file not readable by default
     mockRm.mockResolvedValue(undefined);
 
@@ -946,6 +956,158 @@ describe('WorktreeProvider', () => {
       expect(mkdirSpy).toHaveBeenCalledWith(
         join(TEST_ARCHON_HOME, 'workspaces', 'Widinglabs', 'sasha-demo', 'worktrees'),
         { recursive: true }
+      );
+    });
+
+    // Helper: make .gitmodules "exist" (access resolves) while other paths
+    // retain the default behavior set in beforeEach.
+    const makeGitmodulesPresent = (): void => {
+      mockAccess.mockImplementation(async () => undefined);
+    };
+
+    const countSubmoduleExecCalls = (): number =>
+      execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('submodule') && args.includes('update');
+      }).length;
+
+    const getSubmoduleCallArgs = (): string[] | undefined =>
+      execSpy.mock.calls.find((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('submodule') && args.includes('update');
+      })?.[1] as string[] | undefined;
+
+    test('initializes submodules by default when .gitmodules exists', async () => {
+      // Default provider has no initSubmodules in config — should run.
+      makeGitmodulesPresent();
+
+      await provider.create(baseRequest);
+
+      expect(countSubmoduleExecCalls()).toBe(1);
+      expect(getSubmoduleCallArgs()).toEqual(
+        expect.arrayContaining([
+          '-C',
+          expect.any(String),
+          'submodule',
+          'update',
+          '--init',
+          '--recursive',
+        ])
+      );
+    });
+
+    test('initializes submodules when explicitly opted in and .gitmodules exists', async () => {
+      const configLoader: RepoConfigLoader = async () => ({
+        baseBranch: 'main',
+        initSubmodules: true,
+      });
+      const submoduleProvider = new WorktreeProvider(configLoader);
+      makeGitmodulesPresent();
+
+      await submoduleProvider.create(baseRequest);
+
+      expect(countSubmoduleExecCalls()).toBe(1);
+      expect(getSubmoduleCallArgs()).toEqual(
+        expect.arrayContaining(['submodule', 'update', '--init', '--recursive'])
+      );
+    });
+
+    test('skips submodule init when initSubmodules is false', async () => {
+      const configLoader: RepoConfigLoader = async () => ({
+        baseBranch: 'main',
+        initSubmodules: false,
+      });
+      const noSubmoduleProvider = new WorktreeProvider(configLoader);
+      // Even when .gitmodules exists, explicit opt-out must win.
+      makeGitmodulesPresent();
+
+      await noSubmoduleProvider.create(baseRequest);
+
+      expect(countSubmoduleExecCalls()).toBe(0);
+    });
+
+    test('skips submodule init when .gitmodules does not exist', async () => {
+      // Default mock from beforeEach already returns ENOENT for .gitmodules.
+      await provider.create(baseRequest);
+
+      expect(countSubmoduleExecCalls()).toBe(0);
+    });
+
+    test('throws classifiable error when submodule init fails (fail-fast)', async () => {
+      const configLoader: RepoConfigLoader = async () => ({
+        baseBranch: 'main',
+        initSubmodules: true,
+      });
+      const submoduleProvider = new WorktreeProvider(configLoader);
+      makeGitmodulesPresent();
+
+      const gitError = Object.assign(new Error('git submodule update failed'), {
+        stderr: 'fatal: could not read from remote repository',
+      });
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('submodule')) {
+          throw gitError;
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      // A worktree with uninitialized submodules is a silent broken state;
+      // the error must surface rather than be swallowed.
+      await expect(submoduleProvider.create(baseRequest)).rejects.toThrow(
+        /Submodule initialization failed/
+      );
+    });
+
+    test('throws when .gitmodules read fails with EACCES (fail-fast, no silent skip)', async () => {
+      const configLoader: RepoConfigLoader = async () => ({
+        baseBranch: 'main',
+        initSubmodules: true,
+      });
+      const submoduleProvider = new WorktreeProvider(configLoader);
+
+      // .gitmodules read fails with a non-ENOENT error. Silently skipping
+      // would produce a worktree with empty submodule dirs — the exact
+      // silent-broken-state this feature exists to prevent.
+      mockAccess.mockImplementation(async (path: unknown) => {
+        if (typeof path === 'string' && path.endsWith('.gitmodules')) {
+          const err = new Error('EACCES') as NodeJS.ErrnoException;
+          err.code = 'EACCES';
+          throw err;
+        }
+        return undefined;
+      });
+
+      await expect(submoduleProvider.create(baseRequest)).rejects.toThrow(
+        /Submodule initialization failed: cannot read \.gitmodules \(EACCES\)/
+      );
+      // Skipped the git op since we couldn't even read .gitmodules.
+      expect(countSubmoduleExecCalls()).toBe(0);
+    });
+
+    test('throws classifiable error when submodule init times out', async () => {
+      const configLoader: RepoConfigLoader = async () => ({
+        baseBranch: 'main',
+        initSubmodules: true,
+      });
+      const submoduleProvider = new WorktreeProvider(configLoader);
+      makeGitmodulesPresent();
+
+      // Simulate execFileAsync timeout: the error surface matches what node's
+      // child_process produces when a command exceeds its timeout.
+      const timeoutError = Object.assign(new Error('Command failed: git submodule update'), {
+        killed: true,
+        signal: 'SIGTERM',
+        stderr: '',
+      });
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('submodule')) {
+          throw timeoutError;
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      await expect(submoduleProvider.create(baseRequest)).rejects.toThrow(
+        /Submodule initialization failed/
       );
     });
   });
