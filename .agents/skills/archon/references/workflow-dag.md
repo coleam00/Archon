@@ -129,12 +129,11 @@ These fields are not Codex per-node parity features:
 
 ## Workflow-Level Codex Fields
 
-These are workflow-level controls, not node-level controls:
+These remain workflow-level controls, not node-level controls:
 
 | Field | Codex status | Notes |
 | --- | --- | --- |
 | `interactive` | supported | workflow-level switch for approval delivery and interactive loop behavior |
-| `modelReasoningEffort` | supported | workflow-level override, with `assistants.codex.modelReasoningEffort` as fallback |
 | `webSearchMode` | supported | workflow-level override, with `assistants.codex.webSearchMode` as fallback |
 | `additionalDirectories` | supported | workflow-level override, with `assistants.codex.additionalDirectories` as fallback |
 
@@ -143,6 +142,19 @@ Precedence for these workflow-level Codex tuning fields is:
 1. workflow YAML
 2. `assistants.codex.*` from Archon config
 3. SDK defaults
+
+## Node-Level Codex Reasoning
+
+`modelReasoningEffort` is the one Codex tuning field that `command` and
+`prompt` nodes can override directly:
+
+| Field | Codex status | Notes |
+| --- | --- | --- |
+| `modelReasoningEffort` | supported on `command` and `prompt` nodes | precedence is node -> workflow -> `assistants.codex.modelReasoningEffort` -> SDK defaults |
+
+Loop nodes do not gain node-level reasoning control in this slice. If you need
+Codex reasoning for a loop, keep using the workflow-level value or the
+`assistants.codex.modelReasoningEffort` config fallback.
 
 ## Conditions
 
@@ -190,7 +202,8 @@ Loop nodes support:
 
 Do not treat loop nodes as a place for advanced per-node Codex controls. Fields
 such as `hooks`, `mcp`, `skills`, tool restrictions, and retry either do not
-apply or are ignored.
+apply or are ignored. Node-level `modelReasoningEffort` also remains out of
+scope for loops; loop execution still uses workflow/config Codex tuning only.
 
 ## Approval And Cancel Notes
 
