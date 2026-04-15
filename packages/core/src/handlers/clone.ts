@@ -125,16 +125,44 @@ async function registerRepoAtPath(
     const isExistingPathManaged = nameMatch.default_cwd.includes('/.archon/workspaces/');
     if (isNewPathLocal && isExistingPathManaged) {
       // Upgrade managed clone to local path (single identity, new path)
-      await codebaseDb.updateCodebase(nameMatch.id, { default_cwd: targetPath });
+      const updates: { default_cwd: string; repository_url?: string | null } = {
+        default_cwd: targetPath,
+      };
       if (!nameMatch.repository_url && repositoryUrl) {
-        await codebaseDb.updateCodebase(nameMatch.id, { repository_url: repositoryUrl });
+        updates.repository_url = repositoryUrl;
       }
+      await codebaseDb.updateCodebase(nameMatch.id, updates);
+
+      // Reload commands from the new local path
+      let commandsLoaded = 0;
+      for (const folder of getCommandFolderSearchPaths()) {
+        const commandPath = join(targetPath, folder);
+        try {
+          await access(commandPath);
+        } catch {
+          continue;
+        }
+        const markdownFiles = await findMarkdownFilesRecursive(commandPath);
+        if (markdownFiles.length > 0) {
+          const commands = { ...(await codebaseDb.getCodebaseCommands(nameMatch.id)) };
+          markdownFiles.forEach(({ commandName, relativePath }) => {
+            commands[commandName] = {
+              path: join(folder, relativePath),
+              description: `From ${folder}`,
+            };
+          });
+          await codebaseDb.updateCodebaseCommands(nameMatch.id, commands);
+          commandsLoaded = markdownFiles.length;
+          break;
+        }
+      }
+
       return {
         codebaseId: nameMatch.id,
         name: nameMatch.name,
         repositoryUrl: nameMatch.repository_url ?? repositoryUrl,
         defaultCwd: targetPath,
-        commandCount: 0,
+        commandCount: commandsLoaded,
         alreadyExisted: true,
       };
     }

@@ -851,7 +851,7 @@ describe('composite identity deduplication', () => {
     const managedCodebase = makeCodebase({
       id: 'existing-id',
       name: 'owner/repo',
-      repository_url: 'https://github.com/owner/repo',
+      repository_url: null,
       default_cwd: '/home/test/.archon/workspaces/owner/repo/source',
     });
     spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
@@ -860,6 +860,17 @@ describe('composite identity deduplication', () => {
         return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });
     });
+    // access(): command folder at local path succeeds
+    spyFsAccess.mockImplementation((path: string) => {
+      const normalized = typeof path === 'string' ? path.replace(/\\/g, '/') : '';
+      if (normalized.includes('.archon/commands')) {
+        return Promise.resolve(undefined);
+      }
+      return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    });
+    mockFindMarkdownFilesRecursive.mockResolvedValue([
+      { commandName: 'deploy', relativePath: 'deploy.md' },
+    ]);
     mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
     // Composite lookup: no match (name matches but path differs)
     mockFindCodebaseByNameAndPath.mockResolvedValueOnce(null);
@@ -872,10 +883,18 @@ describe('composite identity deduplication', () => {
     expect(result.alreadyExisted).toBe(true);
     expect(result.codebaseId).toBe('existing-id');
     expect(result.defaultCwd).toBe('/home/user/repo');
-    expect(mockUpdateCodebase.mock.calls.length).toBeGreaterThanOrEqual(1);
-    const updateArgs = mockUpdateCodebase.mock.calls[0] as [string, { default_cwd?: string }];
+    // Batched update: default_cwd + repository_url in one call
+    expect(mockUpdateCodebase.mock.calls.length).toBe(1);
+    const updateArgs = mockUpdateCodebase.mock.calls[0] as [
+      string,
+      { default_cwd?: string; repository_url?: string | null },
+    ];
     expect(updateArgs[0]).toBe('existing-id');
     expect(updateArgs[1].default_cwd).toBe('/home/user/repo');
+    expect(updateArgs[1].repository_url).toBe('https://github.com/owner/repo');
+    // Commands loaded from new local path
+    expect(result.commandCount).toBe(1);
+    expect(mockUpdateCodebaseCommands.mock.calls.length).toBe(1);
   });
 
   test('should fill in repository_url on existing codebase if missing', async () => {
