@@ -1027,26 +1027,25 @@ export class WorktreeProvider implements IIsolationProvider {
   /**
    * Initialize git submodules in a worktree when the repo uses them.
    *
-   * Absence of `.gitmodules` → skip silently (zero-cost for non-submodule repos).
-   * Presence but git init failure → throw. Silent success on a half-initialized
-   * worktree is the exact class of bug this PR exists to prevent: the user
-   * enabled submodule init (or left the default on), so they need to know when
-   * it didn't happen. The thrown error is classified by `classifyIsolationError`
-   * into an actionable message (permission/network/timeout).
-   *
-   * Non-ENOENT errors on the `.gitmodules` read itself (e.g., EACCES on a file
-   * we ourselves just placed) remain non-fatal — attempting the git command
-   * would fail the same way, so we log and skip instead of double-erroring.
+   * ENOENT on `.gitmodules` → skip (zero-cost for non-submodule repos).
+   * Any other error (EACCES, EIO, git failure, timeout) → throw. Silent
+   * success on a half-initialized worktree is the exact class of bug this
+   * function exists to prevent; an unreadable `.gitmodules` is materially
+   * the same as a failed git op. The thrown error is classified by
+   * `classifyIsolationError` into an actionable message.
    */
   private async initSubmodules(worktreePath: string): Promise<void> {
     try {
       await access(join(worktreePath, '.gitmodules'));
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
-      if (err.code !== 'ENOENT') {
-        getLog().warn({ err, worktreePath }, 'worktree.submodule_check_failed');
+      if (err.code === 'ENOENT') {
+        return;
       }
-      return;
+      getLog().error({ err, worktreePath }, 'worktree.submodule_check_failed');
+      throw new Error(
+        `Submodule initialization failed: cannot read .gitmodules (${err.code ?? 'unknown error'})`
+      );
     }
 
     try {

@@ -971,18 +971,20 @@ describe('WorktreeProvider', () => {
         return args.includes('submodule') && args.includes('update');
       }).length;
 
+    const getSubmoduleCallArgs = (): string[] | undefined =>
+      execSpy.mock.calls.find((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('submodule') && args.includes('update');
+      })?.[1] as string[] | undefined;
+
     test('initializes submodules by default when .gitmodules exists', async () => {
       // Default provider has no initSubmodules in config — should run.
       makeGitmodulesPresent();
 
       await provider.create(baseRequest);
 
-      const calls = execSpy.mock.calls.filter((call: unknown[]) => {
-        const args = call[1] as string[];
-        return args.includes('submodule');
-      });
-      expect(calls).toHaveLength(1);
-      expect(calls[0][1]).toEqual(
+      expect(countSubmoduleExecCalls()).toBe(1);
+      expect(getSubmoduleCallArgs()).toEqual(
         expect.arrayContaining([
           '-C',
           expect.any(String),
@@ -1005,6 +1007,9 @@ describe('WorktreeProvider', () => {
       await submoduleProvider.create(baseRequest);
 
       expect(countSubmoduleExecCalls()).toBe(1);
+      expect(getSubmoduleCallArgs()).toEqual(
+        expect.arrayContaining(['submodule', 'update', '--init', '--recursive'])
+      );
     });
 
     test('skips submodule init when initSubmodules is false', async () => {
@@ -1053,16 +1058,16 @@ describe('WorktreeProvider', () => {
       );
     });
 
-    test('worktree creation succeeds when .gitmodules has permission error (EACCES)', async () => {
+    test('throws when .gitmodules read fails with EACCES (fail-fast, no silent skip)', async () => {
       const configLoader: RepoConfigLoader = async () => ({
         baseBranch: 'main',
         initSubmodules: true,
       });
       const submoduleProvider = new WorktreeProvider(configLoader);
 
-      // .gitmodules read itself fails with EACCES — distinct from the git op
-      // failing. Log and skip; attempting the git command would fail the
-      // same way, and double-erroring adds no value.
+      // .gitmodules read fails with a non-ENOENT error. Silently skipping
+      // would produce a worktree with empty submodule dirs — the exact
+      // silent-broken-state this feature exists to prevent.
       mockAccess.mockImplementation(async (path: unknown) => {
         if (typeof path === 'string' && path.endsWith('.gitmodules')) {
           const err = new Error('EACCES') as NodeJS.ErrnoException;
@@ -1072,9 +1077,38 @@ describe('WorktreeProvider', () => {
         return undefined;
       });
 
-      const env = await submoduleProvider.create(baseRequest);
-      expect(env.status).toBe('active');
+      await expect(submoduleProvider.create(baseRequest)).rejects.toThrow(
+        /Submodule initialization failed: cannot read \.gitmodules \(EACCES\)/
+      );
+      // Skipped the git op since we couldn't even read .gitmodules.
       expect(countSubmoduleExecCalls()).toBe(0);
+    });
+
+    test('throws classifiable error when submodule init times out', async () => {
+      const configLoader: RepoConfigLoader = async () => ({
+        baseBranch: 'main',
+        initSubmodules: true,
+      });
+      const submoduleProvider = new WorktreeProvider(configLoader);
+      makeGitmodulesPresent();
+
+      // Simulate execFileAsync timeout: the error surface matches what node's
+      // child_process produces when a command exceeds its timeout.
+      const timeoutError = Object.assign(new Error('Command failed: git submodule update'), {
+        killed: true,
+        signal: 'SIGTERM',
+        stderr: '',
+      });
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('submodule')) {
+          throw timeoutError;
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      await expect(submoduleProvider.create(baseRequest)).rejects.toThrow(
+        /Submodule initialization failed/
+      );
     });
   });
 

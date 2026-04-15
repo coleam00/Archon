@@ -120,6 +120,8 @@ worktree:
   copyFiles:  # Optional: Additional files to copy to worktrees
     - .env.example -> .env  # Rename during copy
     - .vscode               # Copy entire directory
+  initSubmodules: true  # Optional: default true — auto-detects .gitmodules and runs
+                        # `git submodule update --init --recursive`. Set false to opt out.
 
 # Documentation directory
 docs:
@@ -163,6 +165,8 @@ This is useful when you maintain coding style or identity preferences in `~/.cla
 **Default behavior:** The `.archon/` directory is always copied to worktrees automatically (contains artifacts, plans, workflows). Use `copyFiles` only for additional files like `.env` or `.vscode`.
 
 **Defaults behavior:** The app's bundled default commands and workflows are loaded at runtime and merged with repo-specific ones. Repo commands/workflows override app defaults by name. Set `defaults.loadDefaultCommands: false` or `defaults.loadDefaultWorkflows: false` to disable runtime loading.
+
+**Submodule behavior:** When a repo contains `.gitmodules`, submodules are initialized in new worktrees by default (git's `worktree add` does not do this). The check is a cheap filesystem probe — repos without submodules pay zero cost. Submodule init failure throws a classified error (credentials, network, timeout) rather than silently producing a worktree with empty submodule directories. Set `worktree.initSubmodules: false` to opt out.
 
 **Base branch behavior:** Before creating a worktree, the canonical workspace is synced to the latest code. Resolution order:
 1. If `worktree.baseBranch` is set: Uses the configured branch. **Fails with an error** if the branch doesn't exist on remote (no silent fallback).
