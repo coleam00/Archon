@@ -865,6 +865,35 @@ describe('ClaudeProvider', () => {
       expect(callArgs.options.sandbox).toEqual(sandbox);
     });
 
+    test('passes hooks to SDK via nodeConfig without crashing on warning extraction', async () => {
+      // Regression for a TypeError that surfaced whenever a workflow node declared
+      // `hooks:` in its nodeConfig: applyNodeConfig ran twice — once against a
+      // throwaway Options `{}` for warning extraction, and once against the real
+      // Options — and the first pass crashed because it wrote into an undefined
+      // `options.hooks` map.
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      for await (const _ of client.sendQuery('test', '/tmp', undefined, {
+        nodeConfig: {
+          hooks: {
+            PreToolUse: [{ matcher: 'Write', response: { decision: 'approve' } }],
+          },
+        },
+      })) {
+        // consume
+      }
+
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      const callArgs = mockQuery.mock.calls[0][0] as {
+        options: { hooks?: Record<string, Array<{ matcher?: string }>> };
+      };
+      // Node hooks land alongside the provider's own PostToolUse capture hook.
+      expect(callArgs.options.hooks?.PreToolUse?.[0]?.matcher).toBe('Write');
+      expect(callArgs.options.hooks?.PostToolUse).toBeDefined();
+    });
+
     test('ignores empty text blocks', async () => {
       mockQuery.mockImplementation(async function* () {
         yield {

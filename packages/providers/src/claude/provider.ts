@@ -381,6 +381,12 @@ async function applyNodeConfig(
     if (Object.keys(builtHooks).length > 0) {
       // Merge with existing hooks (PostToolUse capture hook)
       const existingHooks = options.hooks as SDKHooksMap | undefined;
+      // sendQuery's warning-extraction path passes `{} as Options` (no `hooks`
+      // field), so direct property assignment below would crash with
+      // "undefined is not an object". Ensure the map exists before writing.
+      if (!options.hooks) {
+        options.hooks = {} as SDKHooksMap;
+      }
       for (const [event, matchers] of Object.entries(builtHooks)) {
         if (!matchers) continue;
         const existing = existingHooks?.[event] as HookCallbackMatcher[] | undefined;
